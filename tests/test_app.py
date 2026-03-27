@@ -1021,6 +1021,106 @@ def test_load_tcga_example_endpoint_returns_real_public_cohort() -> None:
     assert {"os_months", "os_event", "age", "pathologic_stage", "stage_group", "smoking_status"}.issubset(column_names)
 
 
+def test_upload_ready_real_tcga_file_runs_classical_and_ml_smoke() -> None:
+    example_path = Path(__file__).resolve().parents[1] / "examples" / "tcga_luad_nature2014_upload_ready.csv"
+    payload = example_path.read_bytes()
+
+    upload_response = client.post(
+        "/api/upload",
+        files={"file": (example_path.name, payload, "text/csv")},
+    )
+
+    assert upload_response.status_code == 200
+    dataset = upload_response.json()
+    assert dataset["n_rows"] == 609
+
+    km_response = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "group_column": "stage_group",
+        },
+    )
+    assert km_response.status_code == 200
+    assert km_response.json()["analysis"]["curves"]
+
+    cox_response = client.post(
+        "/api/cox",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "covariates": ["age", "sex", "stage_group", "smoking_status"],
+            "categorical_covariates": ["sex", "stage_group", "smoking_status"],
+        },
+    )
+    assert cox_response.status_code == 200
+    assert cox_response.json()["analysis"]["results_table"]
+
+    ml_response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "sex", "stage_group", "smoking_status"],
+            "categorical_features": ["sex", "stage_group", "smoking_status"],
+            "model_type": "rsf",
+            "n_estimators": 20,
+            "max_depth": 3,
+            "random_state": 13,
+        },
+    )
+    assert ml_response.status_code == 200
+    assert ml_response.json()["analysis"]["model_stats"]["n_evaluation_patients"] > 0
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_upload_ready_real_tcga_file_runs_deep_smoke() -> None:
+    example_path = Path(__file__).resolve().parents[1] / "examples" / "tcga_luad_nature2014_upload_ready.csv"
+    payload = example_path.read_bytes()
+
+    upload_response = client.post(
+        "/api/upload",
+        files={"file": (example_path.name, payload, "text/csv")},
+    )
+
+    assert upload_response.status_code == 200
+    dataset = upload_response.json()
+
+    deep_response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "sex", "stage_group", "smoking_status"],
+            "categorical_features": ["sex", "stage_group", "smoking_status"],
+            "model_type": "deepsurv",
+            "hidden_layers": [16],
+            "dropout": 0.1,
+            "learning_rate": 0.001,
+            "epochs": 10,
+            "batch_size": 32,
+            "random_seed": 13,
+            "num_time_bins": 10,
+            "n_heads": 2,
+            "d_model": 16,
+            "n_layers": 1,
+            "latent_dim": 4,
+            "n_clusters": 3,
+        },
+    )
+    assert deep_response.status_code == 200
+    assert deep_response.json()["analysis"]["n_samples"] > 0
+
+
 def test_dev_extra_includes_ml_and_dl_dependencies() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
