@@ -37,6 +37,10 @@ The app includes two example datasets:
 - a bundled public TCGA LUAD cohort curated from UCSC Xena
 - useful for a more realistic demo with a real public dataset
 
+If you want a file that you can upload manually instead of clicking a built-in loader, use:
+- [examples/tcga_luad_nature2014_upload_ready.csv](examples/tcga_luad_nature2014_upload_ready.csv)
+- dataset notes: [examples/README.md](examples/README.md)
+
 ## Requirements
 
 - Python `3.11` or newer
