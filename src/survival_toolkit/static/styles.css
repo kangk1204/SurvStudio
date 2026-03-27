@@ -175,6 +175,12 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  cursor: pointer;
+  transition: opacity 140ms ease;
+}
+
+.brand-line:hover {
+  opacity: 0.7;
 }
 
 .brand-mark {
@@ -1309,17 +1315,19 @@ h3 {
 }
 
 table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 0.82rem;
 }
 
 th,
 td {
-  padding: 8px 10px;
+  padding: 8px 12px;
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--line);
+  white-space: nowrap;
 }
 
 th {

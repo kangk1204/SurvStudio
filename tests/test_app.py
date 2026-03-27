@@ -241,7 +241,8 @@ def test_optimal_cutpoint_endpoint_reports_adjusted_p_value() -> None:
     assert result["raw_p_value"] is not None
     assert result["p_value"] == result["selection_adjusted_p_value"]
     assert result["p_value_label"] == "selection_adjusted_p_value"
-    assert "Selection-adjusted p" in payload["figure"]["layout"]["title"]["text"]
+    annotations = payload["figure"]["layout"].get("annotations", [])
+    assert any("Adj. p" in (a.get("text", "") or "") for a in annotations)
 
 
 def test_optimal_cutpoint_derive_group_returns_inline_scan_figure() -> None:

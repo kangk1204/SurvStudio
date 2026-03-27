@@ -87,7 +87,7 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-Click `Load Example` first.
+Click `Synthetic Example` first.
 
 ### Easiest Path For A New Ubuntu Machine
 
@@ -189,7 +189,7 @@ If `python -m survival_toolkit` does not start the server, check:
 
 If this is your first time:
 
-1. Click `Load Example` or `Load TCGA LUAD`
+1. Click `Synthetic Example` or `TCGA LUAD (Real)`
 2. Set:
    - time column: for example `os_months`
    - event column: for example `os_event`
