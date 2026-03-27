@@ -354,6 +354,17 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
     </div>`;
 }
 
+function humanizeHeader(key) {
+  return key
+    .replace(/_/g, " ")
+    .replace(/\bc index\b/gi, "C-Index")
+    .replace(/\bp value\b/gi, "P-Value")
+    .replace(/\bhr\b/gi, "HR")
+    .replace(/\bci\b/gi, "CI")
+    .replace(/\b(\w)/g, (c) => c.toUpperCase())
+    .trim();
+}
+
 function renderTable(shell, rows, columns = null) {
   if (!rows || rows.length === 0) {
     shell.innerHTML = '<div class="empty-state">No rows returned.</div>';
@@ -366,7 +377,8 @@ function renderTable(shell, rows, columns = null) {
   const headerRow = document.createElement("tr");
   visibleColumns.forEach((column) => {
     const th = document.createElement("th");
-    th.textContent = column;
+    th.textContent = humanizeHeader(column);
+    th.title = column;
     headerRow.appendChild(th);
   });
   thead.appendChild(headerRow);
@@ -657,7 +669,19 @@ function applyDatasetPreset(mode) {
   setCheckedValues(refs.categoricalChecklist, categoricals);
   setCheckedValues(refs.cohortVariableChecklist, preset.tableVariables || covariates);
   updateDatasetBadge();
-  showToast(`${preset.name} applied`, "success", 2500);
+
+  // Highlight active preset button
+  if (refs.applyBasicPresetButton && refs.applyModelPresetButton) {
+    if (mode === "basic") {
+      refs.applyBasicPresetButton.className = "button primary compact-btn";
+      refs.applyModelPresetButton.className = "button ghost compact-btn";
+    } else {
+      refs.applyBasicPresetButton.className = "button ghost compact-btn";
+      refs.applyModelPresetButton.className = "button primary compact-btn";
+    }
+  }
+
+  showToast(`${preset.name} — ${mode === "basic" ? "KM/Cox" : "ML/DL"} preset applied`, "success", 2500);
 }
 
 function updateDatasetPresetBar() {
@@ -1112,7 +1136,9 @@ async function runCompareModels() {
   state.ml = payload;
 
   if (payload.analysis?.comparison_table) {
-    renderTable(refs.mlComparisonShell, payload.analysis.comparison_table);
+    const mlDisplayCols = ["model", "c_index", "evaluation_mode", "n_features", "training_time_ms", "rank"];
+    const mlCols = mlDisplayCols.filter((c) => payload.analysis.comparison_table[0]?.[c] !== undefined);
+    renderTable(refs.mlComparisonShell, payload.analysis.comparison_table, mlCols);
   }
   if (payload.analysis?.manuscript_tables?.model_performance_table) {
     renderTable(refs.mlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
@@ -1241,7 +1267,11 @@ async function runDlCompareModels() {
   });
   state.dl = payload;
 
-  renderTable(refs.dlComparisonShell, payload.analysis?.comparison_table || []);
+  if (payload.analysis?.comparison_table?.length) {
+    const dlDisplayCols = ["model", "c_index", "evaluation_mode", "epochs_trained", "n_features", "training_time_ms", "rank"];
+    const dlCols = dlDisplayCols.filter((c) => payload.analysis.comparison_table[0]?.[c] !== undefined);
+    renderTable(refs.dlComparisonShell, payload.analysis.comparison_table, dlCols);
+  }
   if (payload.analysis?.manuscript_tables?.model_performance_table) {
     renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
   }
@@ -1493,7 +1523,26 @@ function initKeyboardShortcuts() {
   });
 }
 
+function goHome() {
+  state.dataset = null;
+  state.km = null;
+  state.cox = null;
+  state.cohort = null;
+  state.signature = null;
+  state.ml = null;
+  state.dl = null;
+  refs.workspace.classList.add("hidden");
+  refs.landing.classList.remove("hidden", "fade-out");
+  refs.datasetBadge.classList.add("hidden");
+  refs.datasetFile.value = "";
+  setRuntimeBanner("");
+}
+
 function initListeners() {
+  const brandHome = document.getElementById("brandHome");
+  if (brandHome) {
+    brandHome.addEventListener("click", (e) => { e.preventDefault(); goHome(); });
+  }
   refs.datasetFile.addEventListener("change", () => {
     if (refs.datasetFile.files?.length) withLoading(refs.uploadButton, uploadDataset);
   });

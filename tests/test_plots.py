@@ -60,7 +60,9 @@ def test_build_cutpoint_scan_figure_with_data() -> None:
     figure = build_cutpoint_scan_figure(result, variable_name="biomarker")
     assert "data" in figure
     assert len(figure["data"]) >= 2  # line + optimal marker
-    assert "Selection-adjusted p" in figure["layout"]["title"]["text"]
+    # p-values are now in a right-aligned annotation, not in the title
+    annotations = figure["layout"].get("annotations", [])
+    assert any("Adj. p" in (a.get("text", "") or "") for a in annotations)
 
 
 def test_build_cutpoint_scan_figure_empty() -> None:

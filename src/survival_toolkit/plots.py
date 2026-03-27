@@ -79,22 +79,26 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
                 )
             )
 
-    subtitle = ""
-    if km_result.get("test"):
-        test = km_result["test"]
-        subtitle = f"<br><sup>{test['test'].replace('_', ' ').title()} test: p = {test['p_value']:.4g}</sup>"
-
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 70, "r": 30, "t": 80, "b": 70},
         title={
-            "text": f"Kaplan-Meier Survival Curve{subtitle}",
+            "text": "Kaplan-Meier Survival Curve",
             "font": {"family": "Source Serif 4, serif", "size": 24, "color": INK},
             "x": 0.02,
         },
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0.01},
         hovermode="x unified",
     )
+    if km_result.get("test"):
+        test = km_result["test"]
+        fig.add_annotation(
+            text=f"{test['test'].replace('_', ' ').title()} test: p = {test['p_value']:.4g}",
+            xref="paper", yref="paper", x=0.98, y=0.98,
+            showarrow=False, font={"size": 12, "color": INK},
+            align="right", xanchor="right", yanchor="top",
+            bgcolor="rgba(255,255,255,0.85)", borderpad=4,
+        )
     fig.update_xaxes(title=f"Time ({time_unit_label})", **_COMMON_AXES, range=[0, km_result["display_horizon"]])
     fig.update_yaxes(title="Survival probability", tickformat=".0%", range=[0, 1.02], **_COMMON_AXES)
     return figure_to_json(fig)
@@ -122,19 +126,25 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
     )
 
     stats = cox_result["model_stats"]
-    if stats["c_index"] is not None:
-        subtitle = f"<br><sup>N = {stats['n']}, events = {stats['events']}, C-index = {stats['c_index']:.3f}</sup>"
-    else:
-        subtitle = f"<br><sup>N = {stats['n']}, events = {stats['events']}</sup>"
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 220, "r": 40, "t": 90, "b": 70},
         title={
-            "text": f"Cox PH Forest Plot{subtitle}",
+            "text": "Cox PH Forest Plot",
             "font": {"family": "Source Serif 4, serif", "size": 24, "color": INK},
             "x": 0.02,
         },
         height=max(420, 90 + 46 * len(rows)),
+    )
+    stat_parts = [f"N = {stats['n']}", f"events = {stats['events']}"]
+    if stats.get("c_index") is not None:
+        stat_parts.append(f"C-index = {stats['c_index']:.3f}")
+    fig.add_annotation(
+        text=", ".join(stat_parts),
+        xref="paper", yref="paper", x=0.98, y=0.98,
+        showarrow=False, font={"size": 11, "color": INK},
+        align="right", xanchor="right", yanchor="top",
+        bgcolor="rgba(255,255,255,0.85)", borderpad=4,
     )
     fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_COMMON_AXES)
     fig.update_yaxes(**_COMMON_AXES)
@@ -168,13 +178,6 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
         opt_stat = result.get("statistic", 0)
         adjusted_p = result.get("selection_adjusted_p_value")
         raw_p = result.get("raw_p_value", result.get("p_value"))
-        subtitle = ""
-        if adjusted_p is not None and raw_p is not None:
-            subtitle = f"<br><sup>Selection-adjusted p = {adjusted_p:.4g}; raw scan p = {raw_p:.4g}</sup>"
-        elif adjusted_p is not None:
-            subtitle = f"<br><sup>Selection-adjusted p = {adjusted_p:.4g}</sup>"
-        elif raw_p is not None:
-            subtitle = f"<br><sup>Raw p = {raw_p:.4g}</sup>"
         fig.add_trace(
             go.Scatter(
                 x=[optimal],
@@ -196,12 +199,26 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
         **_COMMON_LAYOUT,
         margin={"l": 70, "r": 30, "t": 80, "b": 70},
         title={
-            "text": f"Optimal Cutpoint Scan: {variable_name}" + (subtitle if optimal is not None else ""),
+            "text": f"Optimal Cutpoint Scan: {variable_name}",
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
             "x": 0.02,
         },
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0.01},
     )
+    if optimal is not None:
+        p_parts = []
+        if adjusted_p is not None:
+            p_parts.append(f"Adj. p = {adjusted_p:.4g}")
+        if raw_p is not None:
+            p_parts.append(f"Raw p = {raw_p:.4g}")
+        if p_parts:
+            fig.add_annotation(
+                text=" | ".join(p_parts),
+                xref="paper", yref="paper", x=0.98, y=0.98,
+                showarrow=False, font={"size": 11, "color": INK},
+                align="right", xanchor="right", yanchor="top",
+                bgcolor="rgba(255,255,255,0.85)", borderpad=4,
+            )
     fig.update_xaxes(title=variable_name, **_COMMON_AXES)
     fig.update_yaxes(title="Log-rank chi-square statistic", **_COMMON_AXES)
     return figure_to_json(fig)
