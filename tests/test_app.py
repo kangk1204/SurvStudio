@@ -730,6 +730,25 @@ def test_frontend_exposes_real_dataset_loader_buttons() -> None:
     assert 'applyDatasetPreset("models")' in app_js
 
 
+def test_frontend_uses_dataset_aware_download_filenames() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function buildDownloadFilename(stem, ext" in app_js
+    assert "function currentDatasetSlug()" in app_js
+    assert "function currentOutcomeSlug()" in app_js
+    assert 'buildDownloadFilename("km_summary", "csv", { includeGroup: true })' in app_js
+    assert 'buildDownloadFilename("cox_results", "csv")' in app_js
+    assert 'buildDownloadFilename("ml_manuscript_table", "docx", { template: currentMlJournalTemplate() })' in app_js
+    assert 'buildDownloadFilename("dl_manuscript_table", "docx", { template: currentDlJournalTemplate() })' in app_js
+    assert 'buildDownloadFilename("km_curve", "png", { includeGroup: true })' in app_js
+
+
 def test_frontend_covariate_picker_keeps_all_unique_continuous_columns() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
@@ -1189,6 +1208,107 @@ def test_upload_ready_real_gbsg2_file_runs_classical_and_ml_smoke() -> None:
     )
     assert ml_response.status_code == 200
     assert ml_response.json()["analysis"]["model_stats"]["n_evaluation_patients"] > 0
+
+
+def test_export_endpoints_can_be_saved_to_nonempty_files(tmp_path: Path) -> None:
+    load_response = client.post("/api/load-gbsg2-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+
+    cox_response = client.post(
+        "/api/cox",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "covariates": ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+            "categorical_covariates": ["horTh", "menostat", "tgrade"],
+        },
+    )
+    assert cox_response.status_code == 200
+    cox_rows = cox_response.json()["analysis"]["results_table"]
+    cox_path = tmp_path / "cox_results.csv"
+    cox_path.write_text(
+        "\n".join(
+            [
+                ",".join(cox_rows[0].keys()),
+                *[",".join(str(row.get(col, "")) for col in cox_rows[0].keys()) for row in cox_rows[:3]],
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert cox_path.stat().st_size > 0
+
+    ml_response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "features": ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+            "categorical_features": ["horTh", "menostat", "tgrade"],
+            "model_type": "compare",
+            "evaluation_strategy": "holdout",
+            "n_estimators": 20,
+            "max_depth": 3,
+            "learning_rate": 0.05,
+            "random_state": 17,
+        },
+    )
+    assert ml_response.status_code == 200
+    manuscript = ml_response.json()["analysis"]["manuscript_tables"]
+
+    for fmt, ext in [("markdown", "md"), ("latex", "tex"), ("docx", "docx")]:
+        export_response = client.post(
+            "/api/export-table",
+            json={
+                "rows": manuscript["model_performance_table"],
+                "format": fmt,
+                "style": "journal",
+                "template": "jco",
+                "caption": manuscript["caption"],
+                "notes": manuscript["table_notes"],
+            },
+        )
+        assert export_response.status_code == 200
+        out_path = tmp_path / f"ml_manuscript.{ext}"
+        if fmt == "docx":
+            out_path.write_bytes(export_response.content)
+        else:
+            out_path.write_text(export_response.text, encoding="utf-8")
+        assert out_path.stat().st_size > 0
+
+
+def test_km_figure_can_be_rendered_to_png_and_svg_when_kaleido_available(tmp_path: Path) -> None:
+    pytest.importorskip("kaleido")
+    go = pytest.importorskip("plotly.graph_objects")
+
+    load_response = client.post("/api/load-gbsg2-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+
+    km_response = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "group_column": "horTh",
+        },
+    )
+    assert km_response.status_code == 200
+    figure = go.Figure(km_response.json()["figure"])
+
+    png_path = tmp_path / "km_plot.png"
+    svg_path = tmp_path / "km_plot.svg"
+    figure.write_image(str(png_path), format="png", width=1400, height=900, scale=2)
+    figure.write_image(str(svg_path), format="svg", width=1400, height=900, scale=1)
+
+    assert png_path.stat().st_size > 0
+    assert svg_path.stat().st_size > 0
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")

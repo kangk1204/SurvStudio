@@ -395,6 +395,39 @@ function downloadText(filename, text, mimeType = "text/plain;charset=utf-8;") {
   triggerBlobDownload(filename, blob);
 }
 
+function slugifyDownloadToken(value, fallback = "na") {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return fallback;
+  const slug = text
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  return slug || fallback;
+}
+
+function currentDatasetSlug() {
+  return slugifyDownloadToken(state.dataset?.filename || "survstudio_dataset", "survstudio_dataset");
+}
+
+function currentOutcomeSlug() {
+  return [
+    slugifyDownloadToken(refs.timeColumn?.value || "time", "time"),
+    slugifyDownloadToken(refs.eventColumn?.value || "event", "event"),
+  ].join("_");
+}
+
+function currentGroupSlug() {
+  return slugifyDownloadToken(refs.groupColumn?.value || "overall", "overall");
+}
+
+function buildDownloadFilename(stem, ext, { includeGroup = false, template = null } = {}) {
+  const parts = [currentDatasetSlug(), currentOutcomeSlug()];
+  if (includeGroup) parts.push(currentGroupSlug());
+  parts.push(slugifyDownloadToken(stem, "export"));
+  if (template) parts.push(slugifyDownloadToken(template, "default"));
+  return `${parts.filter(Boolean).join("_")}.${ext}`;
+}
+
 function triggerBlobDownload(filename, blob) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -476,7 +509,17 @@ function downloadPlotImage(plotEl, filename, format) {
 }
 
 function plotConfig(filename) {
-  return { responsive: true, displaylogo: false, toImageButtonOptions: { format: "svg", filename, height: 900, width: 1400, scale: 1 } };
+  return {
+    responsive: true,
+    displaylogo: false,
+    toImageButtonOptions: {
+      format: "svg",
+      filename: buildDownloadFilename(filename, "svg").replace(/\.svg$/, ""),
+      height: 900,
+      width: 1400,
+      scale: 1,
+    },
+  };
 }
 
 function updateMlEvaluationControls() {
@@ -1208,16 +1251,16 @@ async function runDlCompareModels() {
 // ── Downloads ──────────────────────────────────────────────────
 
 function wireDownloads() {
-  refs.downloadKmSummaryButton.addEventListener("click", () => { if (state.km) downloadCsv("km_summary.csv", state.km.analysis.summary_table); });
-  refs.downloadKmPairwiseButton.addEventListener("click", () => { if (state.km) downloadCsv("km_pairwise.csv", state.km.analysis.pairwise_table); });
-  refs.downloadSignatureButton.addEventListener("click", () => { if (state.signature) downloadCsv("signature_ranking.csv", state.signature.results_table); });
-  refs.downloadCoxResultsButton.addEventListener("click", () => { if (state.cox) downloadCsv("cox_results.csv", state.cox.analysis.results_table); });
-  refs.downloadCoxDiagnosticsButton.addEventListener("click", () => { if (state.cox) downloadCsv("cox_diagnostics.csv", state.cox.analysis.diagnostics_table); });
-  refs.downloadCohortTableButton.addEventListener("click", () => { if (state.cohort) downloadCsv("cohort_summary.csv", state.cohort.analysis.rows, state.cohort.analysis.columns); });
+  refs.downloadKmSummaryButton.addEventListener("click", () => { if (state.km) downloadCsv(buildDownloadFilename("km_summary", "csv", { includeGroup: true }), state.km.analysis.summary_table); });
+  refs.downloadKmPairwiseButton.addEventListener("click", () => { if (state.km) downloadCsv(buildDownloadFilename("km_pairwise", "csv", { includeGroup: true }), state.km.analysis.pairwise_table); });
+  refs.downloadSignatureButton.addEventListener("click", () => { if (state.signature) downloadCsv(buildDownloadFilename("signature_ranking", "csv"), state.signature.results_table); });
+  refs.downloadCoxResultsButton.addEventListener("click", () => { if (state.cox) downloadCsv(buildDownloadFilename("cox_results", "csv"), state.cox.analysis.results_table); });
+  refs.downloadCoxDiagnosticsButton.addEventListener("click", () => { if (state.cox) downloadCsv(buildDownloadFilename("cox_diagnostics", "csv"), state.cox.analysis.diagnostics_table); });
+  refs.downloadCohortTableButton.addEventListener("click", () => { if (state.cohort) downloadCsv(buildDownloadFilename("cohort_summary", "csv", { includeGroup: true }), state.cohort.analysis.rows, state.cohort.analysis.columns); });
   refs.downloadMlComparisonButton.addEventListener("click", () => {
     const rows = state.ml?.analysis?.comparison_table;
     if (!rows) return;
-    void downloadServerTable("ml_model_comparison.csv", {
+    void downloadServerTable(buildDownloadFilename("ml_model_comparison", "csv"), {
       rows,
       format: "csv",
       style: "plain",
@@ -1228,7 +1271,7 @@ function wireDownloads() {
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
-      "ml_manuscript_table.csv",
+      buildDownloadFilename("ml_manuscript_table", "csv", { template: currentMlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "csv", currentMlJournalTemplate(), "Model discrimination summary"),
       "text/csv;charset=utf-8;",
     ).catch((error) => showError(error.message));
@@ -1238,7 +1281,7 @@ function wireDownloads() {
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
-      "ml_manuscript_table.md",
+      buildDownloadFilename("ml_manuscript_table", "md", { template: currentMlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "markdown", currentMlJournalTemplate(), "Model discrimination summary"),
       "text/markdown;charset=utf-8;",
     ).catch((error) => showError(error.message));
@@ -1248,7 +1291,7 @@ function wireDownloads() {
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
-      "ml_manuscript_table.tex",
+      buildDownloadFilename("ml_manuscript_table", "tex", { template: currentMlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "latex", currentMlJournalTemplate(), "Model discrimination summary"),
       "text/x-tex;charset=utf-8;",
     ).catch((error) => showError(error.message));
@@ -1258,7 +1301,7 @@ function wireDownloads() {
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
-      "ml_manuscript_table.docx",
+      buildDownloadFilename("ml_manuscript_table", "docx", { template: currentMlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "docx", currentMlJournalTemplate(), "Model discrimination summary"),
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ).catch((error) => showError(error.message));
@@ -1266,7 +1309,7 @@ function wireDownloads() {
   refs.downloadDlComparisonButton.addEventListener("click", () => {
     const rows = state.dl?.analysis?.comparison_table;
     if (!rows) return;
-    void downloadServerTable("dl_model_comparison.csv", {
+    void downloadServerTable(buildDownloadFilename("dl_model_comparison", "csv"), {
       rows,
       format: "csv",
       style: "plain",
@@ -1277,7 +1320,7 @@ function wireDownloads() {
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
-      "dl_manuscript_table.csv",
+      buildDownloadFilename("dl_manuscript_table", "csv", { template: currentDlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "csv", currentDlJournalTemplate(), "Deep model discrimination summary"),
       "text/csv;charset=utf-8;",
     ).catch((error) => showError(error.message));
@@ -1287,7 +1330,7 @@ function wireDownloads() {
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
-      "dl_manuscript_table.md",
+      buildDownloadFilename("dl_manuscript_table", "md", { template: currentDlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "markdown", currentDlJournalTemplate(), "Deep model discrimination summary"),
       "text/markdown;charset=utf-8;",
     ).catch((error) => showError(error.message));
@@ -1297,7 +1340,7 @@ function wireDownloads() {
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
-      "dl_manuscript_table.tex",
+      buildDownloadFilename("dl_manuscript_table", "tex", { template: currentDlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "latex", currentDlJournalTemplate(), "Deep model discrimination summary"),
       "text/x-tex;charset=utf-8;",
     ).catch((error) => showError(error.message));
@@ -1307,13 +1350,13 @@ function wireDownloads() {
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
-      "dl_manuscript_table.docx",
+      buildDownloadFilename("dl_manuscript_table", "docx", { template: currentDlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "docx", currentDlJournalTemplate(), "Deep model discrimination summary"),
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ).catch((error) => showError(error.message));
   });
-  if (refs.downloadKmPngButton) refs.downloadKmPngButton.addEventListener("click", () => downloadPlotImage(refs.kmPlot, "km_curve", "png"));
-  if (refs.downloadKmSvgButton) refs.downloadKmSvgButton.addEventListener("click", () => downloadPlotImage(refs.kmPlot, "km_curve", "svg"));
+  if (refs.downloadKmPngButton) refs.downloadKmPngButton.addEventListener("click", () => downloadPlotImage(refs.kmPlot, buildDownloadFilename("km_curve", "png", { includeGroup: true }).replace(/\.png$/, ""), "png"));
+  if (refs.downloadKmSvgButton) refs.downloadKmSvgButton.addEventListener("click", () => downloadPlotImage(refs.kmPlot, buildDownloadFilename("km_curve", "svg", { includeGroup: true }).replace(/\.svg$/, ""), "svg"));
 }
 
 // ── Utilities ──────────────────────────────────────────────────
