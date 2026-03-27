@@ -31,11 +31,15 @@ ml = [
 dl = [
   "torch>=2.0.0",
 ]
+e2e = [
+  "playwright>=1.52.0",
+]
 all = [
   "scikit-survival>=0.23.0",
   "shap>=0.45.0",
   "torch>=2.0.0",
   "httpx>=0.28.1",
+  "playwright>=1.52.0",
   "pytest>=8.3.5",
 ]
 dev = [

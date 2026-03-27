@@ -197,7 +197,7 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
 
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": 70, "r": 30, "t": 80, "b": 70},
+        margin={"l": 70, "r": 30, "t": 110, "b": 70},
         title={
             "text": f"Optimal Cutpoint Scan: {variable_name}",
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
@@ -211,13 +211,28 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
             p_parts.append(f"Adj. p = {adjusted_p:.4g}")
         if raw_p is not None:
             p_parts.append(f"Raw p = {raw_p:.4g}")
+        group_parts = []
+        label_below = result.get("label_below_cutpoint")
+        label_above = result.get("label_above_cutpoint")
+        if label_below is not None:
+            group_parts.append(f"<= cutpoint: {label_below}")
+        if label_above is not None:
+            group_parts.append(f"> cutpoint: {label_above}")
+        if group_parts:
+            fig.add_annotation(
+                text=" | ".join(group_parts),
+                xref="paper", yref="paper", x=0.98, y=1.13,
+                showarrow=False, font={"size": 12, "color": INK},
+                align="right", xanchor="right", yanchor="top",
+                bgcolor="rgba(255,255,255,0.92)", borderpad=4,
+            )
         if p_parts:
             fig.add_annotation(
                 text=" | ".join(p_parts),
                 xref="paper", yref="paper", x=0.98, y=0.98,
-                showarrow=False, font={"size": 11, "color": INK},
+                showarrow=False, font={"size": 14, "color": INK},
                 align="right", xanchor="right", yanchor="top",
-                bgcolor="rgba(255,255,255,0.85)", borderpad=4,
+                bgcolor="rgba(255,255,255,0.92)", borderpad=5,
             )
     fig.update_xaxes(title=variable_name, **_COMMON_AXES)
     fig.update_yaxes(title="Log-rank chi-square statistic", **_COMMON_AXES)

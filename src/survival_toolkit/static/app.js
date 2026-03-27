@@ -342,15 +342,15 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
   const counts = summary?.counts || [];
   refs.deriveSummary.classList.remove("hidden");
   refs.deriveSummary.innerHTML = `
+    <div class="count-strip">
+      ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(item.group)}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
+    </div>
     <div class="signature-summary-grid">
       <div><strong>Derived column</strong><br/>${escapeHtml(derivedColumn || "NA")}</div>
       <div><strong>Method</strong><br/>${escapeHtml(summary?.method || "NA")}</div>
       <div><strong>Cutoff</strong><br/>${escapeHtml(formatValue(summary?.cutoff))}</div>
-      ${summary?.p_value != null ? `<div><strong>p-value</strong><br/>${escapeHtml(formatValue(summary.p_value))}</div>` : ""}
+      ${summary?.p_value != null ? `<div class="pvalue-card"><strong>p-value</strong><br/>${escapeHtml(formatValue(summary.p_value))}</div>` : ""}
       <div><strong>Groups</strong><br/>${escapeHtml(formatValue(summary?.n_groups || counts.length || "NA"))}</div>
-    </div>
-    <div class="count-strip">
-      ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(item.group)}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
     </div>`;
 }
 
