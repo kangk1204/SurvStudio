@@ -56,13 +56,20 @@ def test_build_cutpoint_scan_figure_with_data() -> None:
         "raw_p_value": 0.03,
         "selection_adjusted_p_value": 0.08,
         "p_value": 0.08,
+        "label_below_cutpoint": "Low",
+        "label_above_cutpoint": "High",
     }
     figure = build_cutpoint_scan_figure(result, variable_name="biomarker")
     assert "data" in figure
     assert len(figure["data"]) >= 2  # line + optimal marker
-    # p-values are now in a right-aligned annotation, not in the title
+    # group labels and p-values are shown as stacked right-aligned annotations
     annotations = figure["layout"].get("annotations", [])
     assert any("Adj. p" in (a.get("text", "") or "") for a in annotations)
+    assert any("<= cutpoint: Low" in (a.get("text", "") or "") for a in annotations)
+    p_annotation = next(a for a in annotations if "Adj. p" in (a.get("text", "") or ""))
+    group_annotation = next(a for a in annotations if "<= cutpoint: Low" in (a.get("text", "") or ""))
+    assert p_annotation["font"]["size"] == 14
+    assert group_annotation["y"] > p_annotation["y"]
 
 
 def test_build_cutpoint_scan_figure_empty() -> None:

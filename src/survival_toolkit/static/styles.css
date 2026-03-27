@@ -1404,7 +1404,7 @@ tr:nth-child(even) td {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  margin: 0 0 10px;
 }
 
 .count-pill {
@@ -1421,6 +1421,16 @@ tr:nth-child(even) td {
   margin-bottom: 4px;
   color: var(--muted);
   font-size: 0.7rem;
+}
+
+.signature-summary-grid > .pvalue-card {
+  font-size: 0.92rem;
+  border-color: rgba(219, 88, 59, 0.28);
+  background: rgba(219, 88, 59, 0.08);
+}
+
+.signature-summary-grid > .pvalue-card strong {
+  font-size: 0.86rem;
 }
 
 .note-box {

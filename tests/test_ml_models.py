@@ -173,6 +173,34 @@ def test_compare_models_returns_table() -> None:
     assert result["manuscript_tables"]["model_performance_table"]
 
 
+@pytest.mark.skipif(
+    not _sksurv_available(),
+    reason="scikit-survival not installed",
+)
+def test_compare_models_handles_common_categorical_presets_without_cox_singularity() -> None:
+    from survival_toolkit.ml_models import compare_survival_models
+
+    df = make_example_dataset(seed=202, n_patients=200)
+    result = compare_survival_models(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "sex", "stage", "treatment", "biomarker_score"],
+        categorical_features=["sex", "stage", "treatment"],
+        n_estimators=30,
+        max_depth=4,
+        learning_rate=0.08,
+        random_state=13,
+    )
+
+    assert {row["model"] for row in result["comparison_table"]} == {
+        "Cox PH",
+        "Random Survival Forest",
+        "Gradient Boosted Survival",
+    }
+    assert result["errors"] == []
+
+
 def test_compare_models_passes_requested_hyperparameters(monkeypatch) -> None:
     import survival_toolkit.ml_models as ml_models
 
@@ -245,6 +273,36 @@ def test_cross_validated_compare_models_returns_manuscript_tables() -> None:
         "Empirical repeat interval (repeat means)" in row
         for row in result["manuscript_tables"]["model_performance_table"]
     )
+
+
+@pytest.mark.skipif(
+    not _sksurv_available(),
+    reason="scikit-survival not installed",
+)
+def test_cross_validated_compare_models_handles_common_categorical_presets_without_cox_singularity() -> None:
+    from survival_toolkit.ml_models import cross_validate_survival_models
+
+    df = make_example_dataset(seed=203, n_patients=180)
+    result = cross_validate_survival_models(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "sex", "stage", "treatment", "biomarker_score"],
+        categorical_features=["sex", "stage", "treatment"],
+        n_estimators=20,
+        max_depth=3,
+        learning_rate=0.1,
+        cv_folds=2,
+        cv_repeats=2,
+        random_state=5,
+    )
+
+    assert {row["model"] for row in result["comparison_table"]} == {
+        "Cox PH",
+        "Random Survival Forest",
+        "Gradient Boosted Survival",
+    }
+    assert result["errors"] == []
 
 
 def test_cross_validated_compare_models_pass_requested_hyperparameters(monkeypatch) -> None:

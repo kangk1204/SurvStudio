@@ -67,6 +67,7 @@ Before you start:
 - if another virtual environment is active, run `deactivate`
 - if Conda is active, run `conda deactivate`
 - the commands below create a project-local `.venv` and do not overwrite your system Python
+- this install path is for the app itself and does not require Playwright
 
 ```bash
 brew install python@3.11
@@ -99,6 +100,7 @@ Before you start:
 - if another virtual environment is active, run `deactivate`
 - if Conda is active, run `conda deactivate`
 - the commands below create a project-local `.venv` and do not overwrite your system Python
+- this install path is for the app itself and does not require Playwright
 
 ```bash
 sudo apt update
@@ -138,6 +140,8 @@ python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
+This path is for running the app and the normal test suite. It does **not** install Playwright or browser binaries.
+
 ### Smaller installs
 
 If you only want part of the stack:
@@ -166,6 +170,21 @@ pip install -e ".[dl]"
 pip install -e ".[all]"
 ```
 
+### Optional Browser E2E Test Install
+
+Only use this if you want to run the headless browser download test.
+
+```bash
+pip install -e ".[dev,e2e]"
+python -m playwright install chromium
+```
+
+On Ubuntu CI or a fresh Linux machine, if Chromium system dependencies are missing, use:
+
+```bash
+python -m playwright install --with-deps chromium
+```
+
 ## Run
 
 Start the local app:
@@ -184,6 +203,13 @@ If `python -m survival_toolkit` does not start the server, check:
 - the virtual environment is activated
 - installation finished without errors
 - you are inside the project directory
+
+## Installation Notes
+
+- The beginner install path is `pip install -e ".[dev]"`.
+- That path installs the app, ML support, DL support, and the normal pytest suite.
+- Browser E2E testing is optional and uses the separate `e2e` extra.
+- The app itself does not need Playwright.
 
 ## First 5 Minutes
 

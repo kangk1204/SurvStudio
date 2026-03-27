@@ -89,6 +89,140 @@ def test_upload_dataset_accepts_tsv_files() -> None:
     assert {column["name"] for column in body["columns"]} >= {"os_months", "os_event", "age"}
 
 
+def test_endpoints_accept_boundary_configuration_values() -> None:
+    load_response = client.post("/api/load-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+
+    km_response = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "group_column": None,
+            "confidence_level": 0.998,
+            "max_time": 36,
+            "risk_table_points": 12,
+            "show_confidence_bands": True,
+            "logrank_weight": "fleming_harrington",
+            "fh_p": 5.0,
+        },
+    )
+    assert km_response.status_code == 200
+    assert km_response.json()["analysis"]["summary_table"]
+
+    ml_response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "sex", "stage", "biomarker_score"],
+            "categorical_features": ["sex", "stage"],
+            "model_type": "compare",
+            "n_estimators": 10,
+            "learning_rate": 0.002,
+            "evaluation_strategy": "repeated_cv",
+            "cv_folds": 2,
+            "cv_repeats": 1,
+        },
+    )
+    assert ml_response.status_code == 200
+    assert ml_response.json()["analysis"]["comparison_table"]
+
+    deep_response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "sex", "stage", "biomarker_score"],
+            "categorical_features": ["sex", "stage"],
+            "model_type": "compare",
+            "hidden_layers": [16],
+            "dropout": 0.0,
+            "learning_rate": 0.001,
+            "epochs": 10,
+            "batch_size": 8,
+            "random_seed": 11,
+            "evaluation_strategy": "repeated_cv",
+            "cv_folds": 2,
+            "cv_repeats": 1,
+            "early_stopping_patience": 1,
+            "early_stopping_min_delta": 0.0,
+            "parallel_jobs": 1,
+            "num_time_bins": 10,
+            "n_heads": 1,
+            "d_model": 16,
+            "n_layers": 1,
+            "latent_dim": 2,
+            "n_clusters": 2,
+        },
+    )
+    assert deep_response.status_code == 200
+    assert deep_response.json()["analysis"]["comparison_table"]
+
+
+@pytest.mark.parametrize(
+    ("path", "payload_overrides"),
+    [
+        ("/api/kaplan-meier", {"confidence_level": 0.5}),
+        ("/api/ml-model", {"model_type": "rsf", "features": ["age"], "n_estimators": 9}),
+        ("/api/deep-model", {"model_type": "deepsurv", "features": ["age"], "batch_size": 7}),
+        ("/api/deep-model", {"model_type": "compare", "features": ["age"], "parallel_jobs": 17}),
+    ],
+)
+def test_endpoints_reject_out_of_bounds_values(path: str, payload_overrides: dict[str, object]) -> None:
+    load_response = client.post("/api/load-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+
+    base_payload: dict[str, object] = {
+        "dataset_id": dataset["dataset_id"],
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "event_positive_value": 1,
+        "features": ["age", "sex", "stage", "biomarker_score"],
+        "categorical_features": ["sex", "stage"],
+        "covariates": ["age", "sex", "stage", "biomarker_score"],
+        "categorical_covariates": ["sex", "stage"],
+        "hidden_layers": [16],
+        "dropout": 0.1,
+        "learning_rate": 0.001,
+        "epochs": 10,
+        "batch_size": 8,
+        "random_seed": 11,
+        "evaluation_strategy": "holdout",
+        "cv_folds": 2,
+        "cv_repeats": 1,
+        "early_stopping_patience": 1,
+        "early_stopping_min_delta": 0.0,
+        "parallel_jobs": 1,
+        "num_time_bins": 10,
+        "n_heads": 1,
+        "d_model": 16,
+        "n_layers": 1,
+        "latent_dim": 2,
+        "n_clusters": 2,
+        "confidence_level": 0.95,
+        "risk_table_points": 6,
+        "show_confidence_bands": True,
+        "logrank_weight": "logrank",
+        "fh_p": 1.0,
+        "model_type": "compare",
+        "n_estimators": 10,
+    }
+    base_payload.update(payload_overrides)
+
+    response = client.post(path, json=base_payload)
+
+    assert response.status_code == 422
+
+
 def test_missing_dataset_returns_404() -> None:
     response = client.get("/api/dataset/does-not-exist")
 

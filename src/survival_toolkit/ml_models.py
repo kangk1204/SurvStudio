@@ -456,6 +456,29 @@ def _encode_train_test_features(
     return train_encoded, test_encoded, encoder
 
 
+def _drop_constant_train_columns(
+    train_encoded: pd.DataFrame,
+    eval_encoded: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Drop encoded columns that are constant in the training split.
+
+    Cox PH can fail with singular matrices when the train split contains
+    all-zero unknown buckets or other constant encoded features. The
+    evaluation matrix is reduced to the same column set.
+    """
+    varying_columns = [
+        column
+        for column in train_encoded.columns
+        if train_encoded[column].nunique(dropna=False) > 1
+    ]
+    if not varying_columns:
+        raise ValueError("No non-constant encoded features remain for Cox PH.")
+    return (
+        train_encoded.loc[:, varying_columns].copy(),
+        eval_encoded.loc[:, varying_columns].copy(),
+    )
+
+
 def _prepare_model_evaluation_split(
     frame: pd.DataFrame,
     *,
@@ -1221,6 +1244,7 @@ def _fit_evaluate_cox_split(
         features,
         categorical_features,
     )
+    train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
     train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
     test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
     if train_encoded.empty or test_encoded.empty:
