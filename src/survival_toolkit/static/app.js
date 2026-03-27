@@ -21,7 +21,9 @@ const refs = {
   datasetBadge: document.getElementById("datasetBadge"),
   datasetFile: document.getElementById("datasetFile"),
   uploadButton: document.getElementById("uploadButton"),
+  loadTcgaUploadReadyButton: document.getElementById("loadTcgaUploadReadyButton"),
   loadTcgaButton: document.getElementById("loadTcgaButton"),
+  loadGbsg2Button: document.getElementById("loadGbsg2Button"),
   loadExampleButton: document.getElementById("loadExampleButton"),
   datasetPreviewShell: document.getElementById("datasetPreviewShell"),
   stepIndicator: document.getElementById("stepIndicator"),
@@ -679,8 +681,20 @@ async function loadExampleDataset() {
   activateTab("km");
 }
 
+async function loadTcgaUploadReadyDataset() {
+  const payload = await fetchJSON("/api/load-tcga-upload-ready", { method: "POST" });
+  updateAfterDataset(payload);
+  activateTab("km");
+}
+
 async function loadTcgaDataset() {
   const payload = await fetchJSON("/api/load-tcga-example", { method: "POST" });
+  updateAfterDataset(payload);
+  activateTab("km");
+}
+
+async function loadGbsg2Dataset() {
+  const payload = await fetchJSON("/api/load-gbsg2-example", { method: "POST" });
   updateAfterDataset(payload);
   activateTab("km");
 }
@@ -1325,7 +1339,9 @@ function initListeners() {
     if (!refs.datasetFile.files?.length) { e.stopPropagation(); return; }
     withLoading(refs.uploadButton, uploadDataset);
   });
+  refs.loadTcgaUploadReadyButton.addEventListener("click", () => withLoading(refs.loadTcgaUploadReadyButton, loadTcgaUploadReadyDataset));
   refs.loadTcgaButton.addEventListener("click", () => withLoading(refs.loadTcgaButton, loadTcgaDataset));
+  refs.loadGbsg2Button.addEventListener("click", () => withLoading(refs.loadGbsg2Button, loadGbsg2Dataset));
   refs.loadExampleButton.addEventListener("click", () => withLoading(refs.loadExampleButton, loadExampleDataset));
   refs.timeColumn.addEventListener("change", () => { refreshVariableSelections(); updateDatasetBadge(); });
   refs.eventColumn.addEventListener("change", () => { updateEventPositiveOptions(); refreshVariableSelections(); updateDatasetBadge(); });

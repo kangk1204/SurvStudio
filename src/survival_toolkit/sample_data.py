@@ -85,3 +85,17 @@ def load_tcga_luad_example_dataset() -> pd.DataFrame:
     if not dataset_path.exists():
         raise FileNotFoundError(f"Missing bundled TCGA example dataset: {dataset_path}")
     return pd.read_csv(dataset_path)
+
+
+def load_tcga_luad_upload_ready_dataset() -> pd.DataFrame:
+    dataset_path = DATA_DIR / "tcga_luad_upload_ready.csv"
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Missing bundled upload-ready TCGA dataset: {dataset_path}")
+    return pd.read_csv(dataset_path)
+
+
+def load_gbsg2_upload_ready_dataset() -> pd.DataFrame:
+    dataset_path = DATA_DIR / "gbsg2_upload_ready.csv"
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Missing bundled upload-ready GBSG2 dataset: {dataset_path}")
+    return pd.read_csv(dataset_path)

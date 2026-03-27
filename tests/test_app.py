@@ -700,6 +700,30 @@ def test_frontend_ml_compare_forwards_visible_hyperparameters() -> None:
     assert 'learning_rate: Number(refs.mlLearningRate.value)' in run_compare_body
 
 
+def test_frontend_exposes_real_dataset_loader_buttons() -> None:
+    index_html = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "templates"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="loadTcgaUploadReadyButton"' in index_html
+    assert 'Upload-Ready TCGA' in index_html
+    assert 'id="loadGbsg2Button"' in index_html
+    assert 'GBSG2 (Real)' in index_html
+    assert 'fetchJSON("/api/load-tcga-upload-ready"' in app_js
+    assert 'fetchJSON("/api/load-gbsg2-example"' in app_js
+
+
 def test_frontend_covariate_picker_keeps_all_unique_continuous_columns() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
@@ -1021,6 +1045,28 @@ def test_load_tcga_example_endpoint_returns_real_public_cohort() -> None:
     assert {"os_months", "os_event", "age", "pathologic_stage", "stage_group", "smoking_status"}.issubset(column_names)
 
 
+def test_load_tcga_upload_ready_endpoint_returns_compact_real_cohort() -> None:
+    response = client.post("/api/load-tcga-upload-ready")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["filename"] == "tcga_luad_upload_ready"
+    assert payload["n_rows"] == 609
+    column_names = {column["name"] for column in payload["columns"]}
+    assert {"os_months", "os_event", "age", "sex", "stage_group", "smoking_status"}.issubset(column_names)
+
+
+def test_load_gbsg2_example_endpoint_returns_real_public_cohort() -> None:
+    response = client.post("/api/load-gbsg2-example")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["filename"] == "gbsg2_upload_ready"
+    assert payload["n_rows"] == 686
+    column_names = {column["name"] for column in payload["columns"]}
+    assert {"rfs_days", "rfs_event", "age", "horTh", "menostat", "pnodes", "tgrade", "tsize"}.issubset(column_names)
+
+
 def test_upload_ready_real_tcga_file_runs_classical_and_ml_smoke() -> None:
     example_path = Path(__file__).resolve().parents[1] / "examples" / "tcga_luad_nature2014_upload_ready.csv"
     payload = example_path.read_bytes()
@@ -1074,6 +1120,65 @@ def test_upload_ready_real_tcga_file_runs_classical_and_ml_smoke() -> None:
             "n_estimators": 20,
             "max_depth": 3,
             "random_state": 13,
+        },
+    )
+    assert ml_response.status_code == 200
+    assert ml_response.json()["analysis"]["model_stats"]["n_evaluation_patients"] > 0
+
+
+def test_upload_ready_real_gbsg2_file_runs_classical_and_ml_smoke() -> None:
+    example_path = Path(__file__).resolve().parents[1] / "examples" / "gbsg2_jco1994_upload_ready.csv"
+    payload = example_path.read_bytes()
+
+    upload_response = client.post(
+        "/api/upload",
+        files={"file": (example_path.name, payload, "text/csv")},
+    )
+
+    assert upload_response.status_code == 200
+    dataset = upload_response.json()
+    assert dataset["n_rows"] == 686
+
+    km_response = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "group_column": "horTh",
+        },
+    )
+    assert km_response.status_code == 200
+    assert km_response.json()["analysis"]["curves"]
+
+    cox_response = client.post(
+        "/api/cox",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "covariates": ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+            "categorical_covariates": ["horTh", "menostat", "tgrade"],
+        },
+    )
+    assert cox_response.status_code == 200
+    assert cox_response.json()["analysis"]["results_table"]
+
+    ml_response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "features": ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+            "categorical_features": ["horTh", "menostat", "tgrade"],
+            "model_type": "rsf",
+            "n_estimators": 20,
+            "max_depth": 3,
+            "random_state": 17,
         },
     )
     assert ml_response.status_code == 200
