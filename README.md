@@ -555,10 +555,14 @@ Available exports:
 - Cox PH:
   - results table as `CSV`
   - diagnostics table as `CSV`
+  - forest plot as `PNG`
+  - forest plot as `SVG`
 - Cohort Table:
   - table as `CSV`
 - ML and DL comparison:
   - comparison table as `CSV`
+  - comparison plot as `PNG`
+  - comparison plot as `SVG`
   - manuscript table as `CSV`
   - manuscript table as `Markdown`
   - manuscript table as `LaTeX`

@@ -95,6 +95,8 @@ const refs = {
   coxDiagnosticsShell: document.getElementById("coxDiagnosticsShell"),
   downloadCoxResultsButton: document.getElementById("downloadCoxResultsButton"),
   downloadCoxDiagnosticsButton: document.getElementById("downloadCoxDiagnosticsButton"),
+  downloadCoxPngButton: document.getElementById("downloadCoxPngButton"),
+  downloadCoxSvgButton: document.getElementById("downloadCoxSvgButton"),
   cohortVariableChecklist: document.getElementById("cohortVariableChecklist"),
   runCohortTableButton: document.getElementById("runCohortTableButton"),
   cohortTableShell: document.getElementById("cohortTableShell"),
@@ -107,6 +109,8 @@ const refs = {
   downloadMlManuscriptMarkdownButton: document.getElementById("downloadMlManuscriptMarkdownButton"),
   downloadMlManuscriptLatexButton: document.getElementById("downloadMlManuscriptLatexButton"),
   downloadMlManuscriptDocxButton: document.getElementById("downloadMlManuscriptDocxButton"),
+  downloadMlComparisonPngButton: document.getElementById("downloadMlComparisonPngButton"),
+  downloadMlComparisonSvgButton: document.getElementById("downloadMlComparisonSvgButton"),
   mlModelType: document.getElementById("mlModelType"),
   mlNEstimators: document.getElementById("mlNEstimators"),
   mlLearningRate: document.getElementById("mlLearningRate"),
@@ -131,6 +135,8 @@ const refs = {
   downloadDlManuscriptMarkdownButton: document.getElementById("downloadDlManuscriptMarkdownButton"),
   downloadDlManuscriptLatexButton: document.getElementById("downloadDlManuscriptLatexButton"),
   downloadDlManuscriptDocxButton: document.getElementById("downloadDlManuscriptDocxButton"),
+  downloadDlComparisonPngButton: document.getElementById("downloadDlComparisonPngButton"),
+  downloadDlComparisonSvgButton: document.getElementById("downloadDlComparisonSvgButton"),
   dlModelType: document.getElementById("dlModelType"),
   dlEpochs: document.getElementById("dlEpochs"),
   dlLearningRate: document.getElementById("dlLearningRate"),
@@ -792,10 +798,16 @@ function updateAfterDataset(payload) {
   refs.downloadSignatureButton.disabled = true;
   refs.downloadCoxResultsButton.disabled = true;
   refs.downloadCoxDiagnosticsButton.disabled = true;
+  if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.disabled = true;
+  if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.disabled = true;
   refs.downloadCohortTableButton.disabled = true;
   refs.downloadMlComparisonButton.disabled = true;
+  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = true;
+  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = true;
   setMlManuscriptDownloadsEnabled(false);
   refs.downloadDlComparisonButton.disabled = true;
+  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
+  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
   setDlManuscriptDownloadsEnabled(false);
   updateControlsFromDataset();
 }
@@ -999,6 +1011,8 @@ async function runCox() {
   refs.coxMetaBanner.textContent = `N=${stats.n}, events=${stats.events}, parameters=${stats.parameters}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricLabel}=${formatValue(stats.c_index)}, AIC=${formatValue(stats.aic)}`;
   refs.downloadCoxResultsButton.disabled = false;
   refs.downloadCoxDiagnosticsButton.disabled = false;
+  if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.disabled = false;
+  if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.disabled = false;
   activateTab("cox");
   requestAnimationFrame(() => refs.coxPlot.scrollIntoView({ behavior: "smooth", block: "center" }));
   showToast("Cox PH model fitted", "success", 3000);
@@ -1041,6 +1055,8 @@ async function runMlModel() {
   });
   state.ml = payload;
   refs.downloadMlComparisonButton.disabled = true;
+  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = true;
+  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = true;
   setMlManuscriptDownloadsEnabled(false);
   refs.mlComparisonShell.innerHTML = '<div class="empty-state">Run a comparison to populate the cross-model table.</div>';
   refs.mlManuscriptShell.innerHTML = '<div class="empty-state">Run a comparison to populate manuscript-ready rows.</div>';
@@ -1115,6 +1131,8 @@ async function runCompareModels() {
     : evaluationMode;
   refs.mlMetaBanner.textContent = `Best=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}`;
   refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
+  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !(payload.figure?.data?.length);
+  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !(payload.figure?.data?.length);
   setMlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
   activateTab("ml");
   showToast("Model comparison complete", "success", 3000);
@@ -1172,6 +1190,8 @@ async function runDlModel() {
   refs.dlComparisonPlot.innerHTML = "";
   refs.dlComparisonPlot.classList.add("hidden");
   refs.downloadDlComparisonButton.disabled = true;
+  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
+  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
   setDlManuscriptDownloadsEnabled(false);
   // Backend may emit either `scientific_summary` or `insight_board` depending on model implementation.
   const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
@@ -1242,6 +1262,8 @@ async function runDlCompareModels() {
   const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Best holdout-comparable" : "Best";
   refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}`;
   refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
+  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !(payload.figures?.comparison?.data?.length);
+  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !(payload.figures?.comparison?.data?.length);
   setDlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
   updateStepIndicator(3);
   activateTab("dl");
@@ -1256,6 +1278,8 @@ function wireDownloads() {
   refs.downloadSignatureButton.addEventListener("click", () => { if (state.signature) downloadCsv(buildDownloadFilename("signature_ranking", "csv"), state.signature.results_table); });
   refs.downloadCoxResultsButton.addEventListener("click", () => { if (state.cox) downloadCsv(buildDownloadFilename("cox_results", "csv"), state.cox.analysis.results_table); });
   refs.downloadCoxDiagnosticsButton.addEventListener("click", () => { if (state.cox) downloadCsv(buildDownloadFilename("cox_diagnostics", "csv"), state.cox.analysis.diagnostics_table); });
+  if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.addEventListener("click", () => downloadPlotImage(refs.coxPlot, buildDownloadFilename("cox_forest", "png").replace(/\.png$/, ""), "png"));
+  if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.addEventListener("click", () => downloadPlotImage(refs.coxPlot, buildDownloadFilename("cox_forest", "svg").replace(/\.svg$/, ""), "svg"));
   refs.downloadCohortTableButton.addEventListener("click", () => { if (state.cohort) downloadCsv(buildDownloadFilename("cohort_summary", "csv", { includeGroup: true }), state.cohort.analysis.rows, state.cohort.analysis.columns); });
   refs.downloadMlComparisonButton.addEventListener("click", () => {
     const rows = state.ml?.analysis?.comparison_table;
@@ -1266,6 +1290,8 @@ function wireDownloads() {
       style: "plain",
     }, "text/csv;charset=utf-8;").catch((error) => showError(error.message));
   });
+  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.addEventListener("click", () => downloadPlotImage(refs.mlComparisonPlot, buildDownloadFilename("ml_model_comparison", "png").replace(/\.png$/, ""), "png"));
+  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.addEventListener("click", () => downloadPlotImage(refs.mlComparisonPlot, buildDownloadFilename("ml_model_comparison", "svg").replace(/\.svg$/, ""), "svg"));
   refs.downloadMlManuscriptCsvButton.addEventListener("click", () => {
     const manuscript = state.ml?.analysis?.manuscript_tables;
     const rows = manuscript?.model_performance_table;
@@ -1315,6 +1341,8 @@ function wireDownloads() {
       style: "plain",
     }, "text/csv;charset=utf-8;").catch((error) => showError(error.message));
   });
+  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.addEventListener("click", () => downloadPlotImage(refs.dlComparisonPlot, buildDownloadFilename("dl_model_comparison", "png").replace(/\.png$/, ""), "png"));
+  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.addEventListener("click", () => downloadPlotImage(refs.dlComparisonPlot, buildDownloadFilename("dl_model_comparison", "svg").replace(/\.svg$/, ""), "svg"));
   refs.downloadDlManuscriptCsvButton.addEventListener("click", () => {
     const manuscript = state.dl?.analysis?.manuscript_tables;
     const rows = manuscript?.model_performance_table;

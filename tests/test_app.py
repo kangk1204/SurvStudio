@@ -36,12 +36,18 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="downloadMlManuscriptMarkdownButton"' in response.text
     assert 'id="downloadMlManuscriptLatexButton"' in response.text
     assert 'id="downloadMlManuscriptDocxButton"' in response.text
+    assert 'id="downloadMlComparisonPngButton"' in response.text
+    assert 'id="downloadMlComparisonSvgButton"' in response.text
     assert 'id="mlJournalTemplate"' in response.text
+    assert 'id="downloadCoxPngButton"' in response.text
+    assert 'id="downloadCoxSvgButton"' in response.text
     assert 'id="runDlCompareButton"' in response.text
     assert 'id="dlEvaluationStrategy"' in response.text
     assert 'id="downloadDlManuscriptMarkdownButton"' in response.text
     assert 'id="downloadDlManuscriptLatexButton"' in response.text
     assert 'id="downloadDlManuscriptDocxButton"' in response.text
+    assert 'id="downloadDlComparisonPngButton"' in response.text
+    assert 'id="downloadDlComparisonSvgButton"' in response.text
     assert 'id="dlEarlyStoppingPatience"' in response.text
     assert 'id="dlParallelJobs"' in response.text
     assert 'id="dlJournalTemplate"' in response.text
@@ -744,8 +750,14 @@ def test_frontend_uses_dataset_aware_download_filenames() -> None:
     assert "function currentOutcomeSlug()" in app_js
     assert 'buildDownloadFilename("km_summary", "csv", { includeGroup: true })' in app_js
     assert 'buildDownloadFilename("cox_results", "csv")' in app_js
+    assert 'buildDownloadFilename("cox_forest", "png")' in app_js
+    assert 'buildDownloadFilename("cox_forest", "svg")' in app_js
     assert 'buildDownloadFilename("ml_manuscript_table", "docx", { template: currentMlJournalTemplate() })' in app_js
+    assert 'buildDownloadFilename("ml_model_comparison", "png")' in app_js
+    assert 'buildDownloadFilename("ml_model_comparison", "svg")' in app_js
     assert 'buildDownloadFilename("dl_manuscript_table", "docx", { template: currentDlJournalTemplate() })' in app_js
+    assert 'buildDownloadFilename("dl_model_comparison", "png")' in app_js
+    assert 'buildDownloadFilename("dl_model_comparison", "svg")' in app_js
     assert 'buildDownloadFilename("km_curve", "png", { includeGroup: true })' in app_js
 
 
@@ -1304,6 +1316,121 @@ def test_km_figure_can_be_rendered_to_png_and_svg_when_kaleido_available(tmp_pat
 
     png_path = tmp_path / "km_plot.png"
     svg_path = tmp_path / "km_plot.svg"
+    figure.write_image(str(png_path), format="png", width=1400, height=900, scale=2)
+    figure.write_image(str(svg_path), format="svg", width=1400, height=900, scale=1)
+
+    assert png_path.stat().st_size > 0
+    assert svg_path.stat().st_size > 0
+
+
+def test_cox_figure_can_be_rendered_to_png_and_svg_when_kaleido_available(tmp_path: Path) -> None:
+    pytest.importorskip("kaleido")
+    go = pytest.importorskip("plotly.graph_objects")
+
+    load_response = client.post("/api/load-gbsg2-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+
+    cox_response = client.post(
+        "/api/cox",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "covariates": ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+            "categorical_covariates": ["horTh", "menostat", "tgrade"],
+        },
+    )
+    assert cox_response.status_code == 200
+    figure = go.Figure(cox_response.json()["figure"])
+
+    png_path = tmp_path / "cox_plot.png"
+    svg_path = tmp_path / "cox_plot.svg"
+    figure.write_image(str(png_path), format="png", width=1400, height=900, scale=2)
+    figure.write_image(str(svg_path), format="svg", width=1400, height=900, scale=1)
+
+    assert png_path.stat().st_size > 0
+    assert svg_path.stat().st_size > 0
+
+
+def test_ml_comparison_figure_can_be_rendered_to_png_and_svg_when_kaleido_available(tmp_path: Path) -> None:
+    pytest.importorskip("kaleido")
+    go = pytest.importorskip("plotly.graph_objects")
+
+    load_response = client.post("/api/load-gbsg2-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+
+    ml_response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "features": ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+            "categorical_features": ["horTh", "menostat", "tgrade"],
+            "model_type": "compare",
+            "evaluation_strategy": "holdout",
+            "n_estimators": 20,
+            "max_depth": 3,
+            "learning_rate": 0.05,
+            "random_state": 17,
+        },
+    )
+    assert ml_response.status_code == 200
+    figure = go.Figure(ml_response.json()["figure"])
+
+    png_path = tmp_path / "ml_comparison.png"
+    svg_path = tmp_path / "ml_comparison.svg"
+    figure.write_image(str(png_path), format="png", width=1400, height=900, scale=2)
+    figure.write_image(str(svg_path), format="svg", width=1400, height=900, scale=1)
+
+    assert png_path.stat().st_size > 0
+    assert svg_path.stat().st_size > 0
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_dl_comparison_figure_can_be_rendered_to_png_and_svg_when_kaleido_available(tmp_path: Path) -> None:
+    pytest.importorskip("kaleido")
+    go = pytest.importorskip("plotly.graph_objects")
+
+    stored = store.create(
+        make_example_dataset(seed=84, n_patients=72),
+        filename="dl_compare_render.csv",
+        copy_dataframe=False,
+    )
+
+    dl_response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "stage", "treatment", "biomarker_score"],
+            "categorical_features": ["stage", "treatment"],
+            "model_type": "compare",
+            "hidden_layers": [8],
+            "dropout": 0.1,
+            "learning_rate": 0.001,
+            "epochs": 10,
+            "batch_size": 8,
+            "random_seed": 21,
+            "num_time_bins": 10,
+            "n_heads": 2,
+            "d_model": 16,
+            "n_layers": 1,
+            "latent_dim": 4,
+            "n_clusters": 3,
+        },
+    )
+    assert dl_response.status_code == 200
+    figure = go.Figure(dl_response.json()["figures"]["comparison"])
+
+    png_path = tmp_path / "dl_comparison.png"
+    svg_path = tmp_path / "dl_comparison.svg"
     figure.write_image(str(png_path), format="png", width=1400, height=900, scale=2)
     figure.write_image(str(svg_path), format="svg", width=1400, height=900, scale=1)
 
