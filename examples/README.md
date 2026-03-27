@@ -2,7 +2,12 @@
 
 This folder contains a real public cohort that can be uploaded directly into SurvStudio for a first end-to-end test.
 
-## Dataset
+Files included:
+
+- `tcga_luad_nature2014_upload_ready.csv`
+- `gbsg2_jco1994_upload_ready.csv`
+
+## Dataset 1: TCGA LUAD
 
 - File: `tcga_luad_nature2014_upload_ready.csv`
 - Rows: `609`
@@ -51,3 +56,37 @@ Data provenance:
 - This is a single-event right-censored cohort.
 - Some columns from the larger bundled TCGA example were intentionally removed so the upload example stays simple.
 - If you want a larger feature set, use the built-in `Load TCGA LUAD` button in the app.
+
+## Dataset 2: GBSG2
+
+- File: `gbsg2_jco1994_upload_ready.csv`
+- Rows: `686`
+- Survival outcome:
+  - time column: `rfs_days`
+  - event column: `rfs_event`
+  - event-positive value: `1`
+
+Study citation:
+
+- Schumacher M, Basert G, Bojar H, et al. *Randomized 2 × 2 trial evaluating hormonal treatment and the duration of chemotherapy in node-positive breast cancer patients*. Journal of Clinical Oncology. 1994;12(10):2086-2093.
+
+Why this file is useful:
+
+- no missing values in the upload-ready version
+- one row per patient
+- compact feature set
+- good for a fast Kaplan-Meier, Cox, ML, or DL smoke test
+
+Recommended first settings:
+
+1. Upload `gbsg2_jco1994_upload_ready.csv`
+2. Set:
+   - time column: `rfs_days`
+   - event column: `rfs_event`
+   - event-positive value: `1`
+3. Start with:
+   - Kaplan-Meier
+   - group column: `horTh` or `menostat`
+4. Then run Cox PH with:
+   - covariates: `age`, `horTh`, `menostat`, `pnodes`, `tgrade`, `tsize`
+   - categorical covariates: `horTh`, `menostat`, `tgrade`

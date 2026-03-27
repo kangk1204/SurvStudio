@@ -25,7 +25,7 @@ The current scope is:
 
 ## What The Built-In Example Data Is
 
-The app includes two example datasets:
+The app includes four built-in example datasets:
 
 1. `Load Example`
 - a synthetic cohort generated inside the package
@@ -37,8 +37,17 @@ The app includes two example datasets:
 - a bundled public TCGA LUAD cohort curated from UCSC Xena
 - useful for a more realistic demo with a real public dataset
 
+3. `Upload-Ready TCGA`
+- a compact TCGA LUAD overall-survival table intended for immediate upload-style testing
+- useful when you want a smaller real cohort without the extra clinical columns
+
+4. `GBSG2`
+- a real public breast-cancer recurrence dataset
+- useful for a fast end-to-end Kaplan-Meier, Cox, and ML smoke test with no missing values
+
 If you want a file that you can upload manually instead of clicking a built-in loader, use:
 - [examples/tcga_luad_nature2014_upload_ready.csv](examples/tcga_luad_nature2014_upload_ready.csv)
+- [examples/gbsg2_jco1994_upload_ready.csv](examples/gbsg2_jco1994_upload_ready.csv)
 - dataset notes: [examples/README.md](examples/README.md)
 
 ## Requirements

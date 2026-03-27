@@ -26,7 +26,12 @@ from survival_toolkit.analysis import (
     profile_dataframe,
 )
 from survival_toolkit.plots import build_cox_forest_figure, build_km_figure
-from survival_toolkit.sample_data import load_tcga_luad_example_dataset, make_example_dataset
+from survival_toolkit.sample_data import (
+    load_gbsg2_upload_ready_dataset,
+    load_tcga_luad_example_dataset,
+    load_tcga_luad_upload_ready_dataset,
+    make_example_dataset,
+)
 from survival_toolkit.store import DatasetStore
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -566,6 +571,20 @@ async def load_example() -> dict[str, Any]:
 async def load_tcga_example() -> dict[str, Any]:
     dataframe = load_tcga_luad_example_dataset()
     stored = store.create(dataframe, filename="tcga_luad_xena_example", copy_dataframe=False)
+    return dataset_response(stored.dataset_id)
+
+
+@app.post("/api/load-tcga-upload-ready")
+async def load_tcga_upload_ready() -> dict[str, Any]:
+    dataframe = load_tcga_luad_upload_ready_dataset()
+    stored = store.create(dataframe, filename="tcga_luad_upload_ready", copy_dataframe=False)
+    return dataset_response(stored.dataset_id)
+
+
+@app.post("/api/load-gbsg2-example")
+async def load_gbsg2_example() -> dict[str, Any]:
+    dataframe = load_gbsg2_upload_ready_dataset()
+    stored = store.create(dataframe, filename="gbsg2_upload_ready", copy_dataframe=False)
     return dataset_response(stored.dataset_id)
 
 
