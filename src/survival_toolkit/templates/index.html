@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Survival Analysis Toolkit</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23db583b'/><text x='50' y='68' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='44' fill='white'>SA</text></svg>" />
+    <meta name="description" content="Upload clinical data and generate exploratory Kaplan-Meier curves, Cox regression, ML/DL comparisons, and cohort summary tables." />
+    <link rel="stylesheet" href="../static/styles.css" />
+    <script src="../static/vendor/plotly-3.4.0.min.js" defer></script>
+    <script src="../static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="shell-header">
+      <div class="brand-line">
+        <div class="brand-mark">SA</div>
+        <h1>Survival Analysis Toolkit</h1>
+      </div>
+      <div class="header-right">
+        <span class="dataset-badge hidden" id="datasetBadge"></span>
+        <label class="upload-inline" for="datasetFile">
+          <input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" />
+          <span class="button ghost compact-btn" id="uploadButton">Upload</span>
+        </label>
+      </div>
+    </header>
+
+    <div class="runtime-banner hidden" id="runtimeBanner"></div>
+
+    <section class="landing" id="landing">
+      <div class="landing-card">
+        <div class="landing-hero">
+          <div class="hero-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          </div>
+          <h2>Survival Analysis, Made Simple</h2>
+          <p>Upload your clinical data and generate exploratory Kaplan-Meier curves, Cox regression, ML/DL models, and cohort summaries in one local workflow.</p>
+        </div>
+
+        <label class="upload-zone" for="datasetFile" id="uploadZone">
+          <svg class="upload-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span>Drop a file here or click to browse</span>
+          <small>CSV, TSV, Excel, or Parquet</small>
+        </label>
+
+        <div class="landing-divider"><span>or try a sample dataset</span></div>
+        <div class="landing-actions">
+          <button class="button primary" id="loadTcgaButton">
+            <span class="btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </span>
+            TCGA LUAD (Real)
+          </button>
+          <button class="button ghost" id="loadExampleButton">
+            <span class="btn-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </span>
+            Synthetic Example
+          </button>
+        </div>
+
+        <div class="feature-cards">
+          <div class="feature-card">
+            <div class="feature-icon fc-km">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </div>
+            <strong>Kaplan-Meier</strong>
+            <span>Survival curves with log-rank tests and confidence intervals</span>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon fc-cox">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            </div>
+            <strong>Cox + ML/DL</strong>
+            <span>Cox PH, Random Forest, Gradient Boosting, DeepSurv, Transformers</span>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon fc-table">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+            </div>
+            <strong>Cohort Tables</strong>
+            <span>Descriptive statistics grouped by study arms</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <main class="workspace hidden" id="workspace">
+      <!-- Step Indicator -->
+      <div class="step-indicator" id="stepIndicator">
+        <div class="step completed" data-step="1">
+          <div class="step-circle">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <span class="step-label">Upload Data</span>
+        </div>
+        <div class="step-connector completed"></div>
+        <div class="step active" data-step="2">
+          <div class="step-circle">2</div>
+          <span class="step-label">Configure Columns</span>
+        </div>
+        <div class="step-connector"></div>
+        <div class="step" data-step="3">
+          <div class="step-circle">3</div>
+          <span class="step-label">Run Analysis</span>
+        </div>
+      </div>
+
+      <!-- Smart Detection Banner -->
+      <div class="smart-banner hidden" id="smartBanner">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        <span id="smartBannerText">Columns auto-detected from your data.</span>
+        <button class="smart-banner-close" id="smartBannerClose">&times;</button>
+      </div>
+
+      <div class="config-strip" id="configStrip">
+        <div class="config-strip-header">
+          <h3 class="config-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Study Design
+          </h3>
+          <span class="config-hint">Tell us which columns represent time-to-event data</span>
+        </div>
+        <div class="config-row">
+          <label class="config-field">
+            <span>Time Column <button class="help-dot" type="button" data-tooltip="How long each patient was observed (e.g., months until death or last follow-up)">?</button></span>
+            <select id="timeColumn"></select>
+          </label>
+          <label class="config-field">
+            <span>Event Column <button class="help-dot" type="button" data-tooltip="Whether the event of interest occurred (e.g., death=1, alive=0)">?</button></span>
+            <select id="eventColumn"></select>
+          </label>
+          <label class="config-field narrow">
+            <span>Event Value <button class="help-dot" type="button" data-tooltip="Which value in the event column means the event happened (usually 1)">?</button></span>
+            <select id="eventPositiveValue"></select>
+          </label>
+          <label class="config-field">
+            <span>Group By <button class="help-dot" type="button" data-tooltip="Split patients into groups for comparison (e.g., treatment vs control)">?</button></span>
+            <select id="groupColumn"></select>
+          </label>
+          <label class="config-field narrow">
+            <span>Time Unit</span>
+            <input id="timeUnitLabel" type="text" value="Months" />
+          </label>
+          <label class="config-field narrow">
+            <span>Max Time <button class="help-dot" type="button" data-tooltip="Optional: truncate analysis at this time point. Leave blank for auto.">?</button></span>
+            <input id="maxTime" type="number" min="0" step="0.1" placeholder="Auto" />
+          </label>
+          <label class="config-field narrow">
+            <span>CI Level <button class="help-dot" type="button" data-tooltip="Confidence interval level for KM curves (90%, 95%, or 99%)">?</button></span>
+            <select id="confidenceLevel">
+              <option value="0.90">90%</option>
+              <option value="0.95" selected>95%</option>
+              <option value="0.99">99%</option>
+            </select>
+          </label>
+          <button class="button ghost compact-btn" type="button" id="deriveToggle">Derive Group</button>
+        </div>
+
+        <div class="derive-panel hidden" id="derivePanel">
+          <label class="config-field">
+            <span>Source variable</span>
+            <select id="deriveSource"></select>
+          </label>
+          <label class="config-field">
+            <span>Method</span>
+            <select id="deriveMethod">
+              <option value="optimal_cutpoint">Optimal cutpoint (log-rank)</option>
+              <option value="median_split">Median split</option>
+              <option value="tertile_split">Tertile split</option>
+              <option value="quartile_split">Quartile split</option>
+              <option value="custom_cutoff">Custom cutoff</option>
+            </select>
+          </label>
+          <label class="config-field narrow hidden" id="cutoffWrap">
+            <span>Cutoff</span>
+            <input id="deriveCutoff" type="number" step="0.01" />
+          </label>
+          <label class="config-field">
+            <span>Column name</span>
+            <input id="deriveColumnName" type="text" placeholder="biomarker_group" />
+          </label>
+          <button class="button primary compact-btn" id="deriveButton">Create</button>
+          <div class="derive-status" id="deriveStatus"></div>
+        </div>
+
+        <div class="derive-result hidden" id="deriveSummary"></div>
+        <div class="plot-shell hidden" id="cutpointPlot"></div>
+      </div>
+
+      <nav class="tab-strip" role="tablist" aria-label="Analysis views">
+        <button class="tab-button active" type="button" data-tab="km" role="tab" aria-selected="true" aria-controls="panel-km">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+          Kaplan-Meier
+          <span class="tab-desc">Survival curves</span>
+        </button>
+        <button class="tab-button" type="button" data-tab="cox" role="tab" aria-selected="false" aria-controls="panel-cox">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
+          Cox PH
+          <span class="tab-desc">Risk factors</span>
+        </button>
+        <button class="tab-button" type="button" data-tab="ml" role="tab" aria-selected="false" aria-controls="panel-ml">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg></span>
+          ML Models
+          <span class="tab-desc">RSF, GBS, SHAP</span>
+        </button>
+        <button class="tab-button" type="button" data-tab="dl" role="tab" aria-selected="false" aria-controls="panel-dl">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/></svg></span>
+          Deep Learning
+          <span class="tab-desc">DeepSurv, Transformer</span>
+        </button>
+        <button class="tab-button" type="button" data-tab="tables" role="tab" aria-selected="false" aria-controls="panel-tables">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/></svg></span>
+          Cohort Table
+          <span class="tab-desc">Demographics</span>
+        </button>
+        <button class="tab-button" type="button" data-tab="data" role="tab" aria-selected="false" aria-controls="panel-data">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+          Data Preview
+          <span class="tab-desc">Raw data</span>
+        </button>
+      </nav>
+
+      <!-- KM Panel -->
+      <section class="tab-panel active" data-panel="km" id="panel-km" role="tabpanel">
+        <article class="workspace-card">
+          <div class="card-head">
+            <div class="card-head-left">
+              <h2>Kaplan-Meier Analysis</h2>
+              <p class="card-subtitle">Estimate survival probability over time and compare groups</p>
+            </div>
+            <div class="button-row compact">
+              <button class="button primary pulse-hint" id="runKmButton">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run Analysis
+              </button>
+              <button class="button ghost" id="downloadKmSummaryButton" disabled>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Summary
+              </button>
+              <button class="button ghost" id="downloadKmPairwiseButton" disabled>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Pairwise
+              </button>
+              <button class="button ghost" id="downloadKmPngButton" disabled title="Download chart as PNG">PNG</button>
+              <button class="button ghost" id="downloadKmSvgButton" disabled title="Download chart as SVG">SVG</button>
+            </div>
+          </div>
+
+          <div class="toolbar-row">
+            <label class="toggle">
+              <input id="showConfidenceBands" type="checkbox" checked />
+              <span>CI bands</span>
+            </label>
+            <label class="toolbar-field">
+              <span>Risk ticks</span>
+              <input id="riskTablePoints" type="number" min="4" max="12" step="1" value="6" />
+            </label>
+            <label class="toolbar-field">
+              <span>Test</span>
+              <select id="logrankWeight">
+                <option value="logrank">Log-rank</option>
+                <option value="gehan_breslow">Gehan-Breslow</option>
+                <option value="tarone_ware">Tarone-Ware</option>
+                <option value="fleming_harrington">Fleming-Harrington</option>
+              </select>
+            </label>
+            <label class="toolbar-field hidden" id="fhPowerWrap">
+              <span>FH power</span>
+              <input id="fhPower" type="number" min="0" max="5" step="0.1" value="1" />
+            </label>
+          </div>
+
+          <details class="signature-details">
+            <summary class="signature-toggle">
+              <span>Auto-discover Signature</span>
+              <small>Feature combination search with bootstrap &amp; permutation validation</small>
+            </summary>
+            <div class="toolbar-grid signature-toolbar">
+              <label><span>Max depth</span><input id="signatureMaxDepth" type="number" min="1" max="4" step="1" value="3" /></label>
+              <label><span>Min group frac</span><input id="signatureMinFraction" type="number" min="0.02" max="0.45" step="0.01" value="0.1" /></label>
+              <label><span>Top K</span><input id="signatureTopK" type="number" min="3" max="50" step="1" value="15" /></label>
+              <label><span>Bootstrap iter</span><input id="signatureBootstrapIterations" type="number" min="0" max="120" step="1" value="30" /></label>
+              <label><span>Permutation iter</span><input id="signaturePermutationIterations" type="number" min="0" max="400" step="10" value="120" /></label>
+              <label><span>Validation iter</span><input id="signatureValidationIterations" type="number" min="0" max="80" step="1" value="12" /></label>
+              <label><span>Validation frac</span><input id="signatureValidationFraction" type="number" min="0.2" max="0.6" step="0.05" value="0.35" /></label>
+              <label><span>Alpha</span><input id="signatureSignificanceLevel" type="number" min="0.005" max="0.2" step="0.005" value="0.05" /></label>
+              <label><span>Operator</span>
+                <select id="signatureOperator">
+                  <option value="mixed">Mixed (AND + OR)</option>
+                  <option value="and">AND only</option>
+                  <option value="or">OR only</option>
+                </select>
+              </label>
+              <label><span>Seed</span><input id="signatureRandomSeed" type="number" min="0" step="1" value="20260311" /></label>
+              <div class="button-row compact">
+                <button class="button ghost" id="runSignatureSearchButton">Discover</button>
+                <button class="button ghost" id="downloadSignatureButton" disabled>Signature CSV</button>
+              </div>
+            </div>
+          </details>
+
+          <div class="plot-shell" id="kmPlot">
+            <div class="empty-state plot-empty">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              <span>Click <strong>Run Analysis</strong> above to generate your survival curve</span>
+              <small>Tip: Press Ctrl+Enter as a shortcut</small>
+            </div>
+          </div>
+          <div class="analysis-banner" id="kmMetaBanner">Configure your study columns above, then click Run Analysis.</div>
+          <div class="insight-board" id="kmInsightBoard">
+            <div class="empty-state">AI-powered interpretation will appear here after analysis.</div>
+          </div>
+
+          <div class="table-grid">
+            <div class="table-card"><h3>KM Summary</h3><div class="table-shell" id="kmSummaryShell"><div class="empty-state">Run KM analysis.</div></div></div>
+            <div class="table-card"><h3>Risk Table</h3><div class="table-shell" id="kmRiskShell"><div class="empty-state">Risk counts will appear here.</div></div></div>
+            <div class="table-card full-width"><h3>Pairwise Comparisons</h3><div class="table-shell" id="kmPairwiseShell"><div class="empty-state">Pairwise tests appear with 2+ groups.</div></div></div>
+            <div class="table-card full-width"><h3>Signature Interpretation</h3><div class="insight-board compact" id="signatureInsightBoard"><div class="empty-state">Run auto-discovery to assess robustness.</div></div></div>
+            <div class="table-card full-width"><h3>Signature Ranking</h3><div class="table-shell" id="signatureShell"><div class="empty-state">Run auto-discovery to find feature combinations.</div></div></div>
+          </div>
+        </article>
+      </section>
+
+      <!-- Cox Panel -->
+      <section class="tab-panel" data-panel="cox" id="panel-cox" role="tabpanel">
+        <article class="workspace-card">
+          <div class="card-head">
+            <div class="card-head-left">
+              <h2>Cox Proportional Hazards</h2>
+              <p class="card-subtitle">Identify which risk factors independently affect survival</p>
+            </div>
+            <div class="button-row compact">
+              <button class="button primary" id="runCoxButton">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run Analysis
+              </button>
+              <button class="button ghost" id="downloadCoxResultsButton" disabled>Results</button>
+              <button class="button ghost" id="downloadCoxDiagnosticsButton" disabled>Diagnostics</button>
+            </div>
+          </div>
+          <div class="checklist-grid">
+            <div class="selection-card">
+              <h3>Model Covariates <button class="help-dot" type="button" data-tooltip="Variables to include in the model. Check the ones you want to test as potential risk factors.">?</button></h3>
+              <div class="checklist" id="covariateChecklist"></div>
+            </div>
+            <div class="selection-card">
+              <h3>Treat as Categorical <button class="help-dot" type="button" data-tooltip="Check variables that represent categories (e.g., gender, stage) rather than continuous values.">?</button></h3>
+              <div class="checklist" id="categoricalChecklist"></div>
+            </div>
+          </div>
+          <div class="plot-shell" id="coxPlot">
+            <div class="empty-state plot-empty">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              <span>Select covariates and click <strong>Run Analysis</strong> to see the forest plot</span>
+            </div>
+          </div>
+          <div class="analysis-banner" id="coxMetaBanner">Select covariates above, then click Run Analysis.</div>
+          <div class="insight-board" id="coxInsightBoard"><div class="empty-state">AI-powered model diagnostics will appear here after analysis.</div></div>
+          <div class="table-grid stacked">
+            <div class="table-card full-width"><h3>Hazard Ratios</h3><div class="table-shell" id="coxResultsShell"><div class="empty-state">Fit a Cox model.</div></div></div>
+            <div class="table-card full-width"><h3>PH Diagnostics</h3><div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Schoenfeld residual correlations appear here.</div></div></div>
+          </div>
+        </article>
+      </section>
+
+      <!-- ML Models Panel -->
+      <section class="tab-panel" data-panel="ml" id="panel-ml" role="tabpanel">
+        <article class="workspace-card">
+          <div class="card-head">
+            <div class="card-head-left">
+              <h2>Machine Learning Survival Models</h2>
+              <p class="card-subtitle">Random Survival Forest, Gradient Boosted Survival, SHAP interpretability</p>
+            </div>
+            <div class="button-row compact">
+              <button class="button primary" id="runMlButton">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Train Model
+              </button>
+              <button class="button ghost" id="runCompareButton">Compare All</button>
+              <button class="button ghost" id="downloadMlComparisonButton" disabled>Comparison CSV</button>
+              <button class="button ghost" id="downloadMlManuscriptCsvButton" disabled>Manuscript CSV</button>
+              <button class="button ghost" id="downloadMlManuscriptMarkdownButton" disabled>Manuscript MD</button>
+              <button class="button ghost" id="downloadMlManuscriptLatexButton" disabled>LaTeX</button>
+              <button class="button ghost" id="downloadMlManuscriptDocxButton" disabled>DOCX</button>
+            </div>
+          </div>
+          <div class="toolbar-row">
+            <label class="toolbar-field">
+              <span>Model</span>
+              <select id="mlModelType">
+                <option value="rsf">Random Survival Forest</option>
+                <option value="gbs">Gradient Boosted Survival</option>
+              </select>
+            </label>
+            <label class="toolbar-field">
+              <span>Trees</span>
+              <input id="mlNEstimators" type="number" min="10" max="1000" step="10" value="100" />
+            </label>
+            <label class="toolbar-field">
+              <span>Learning Rate</span>
+              <input id="mlLearningRate" type="number" min="0.001" max="1" step="0.01" value="0.1" />
+            </label>
+            <label class="toolbar-field">
+              <span>Comparison Evaluation</span>
+              <select id="mlEvaluationStrategy">
+                <option value="holdout">Deterministic Holdout</option>
+                <option value="repeated_cv">Repeated Stratified CV</option>
+              </select>
+            </label>
+            <label class="toolbar-field hidden" id="mlCvFoldsWrap">
+              <span>CV Folds</span>
+              <input id="mlCvFolds" type="number" min="2" max="10" step="1" value="5" />
+            </label>
+            <label class="toolbar-field hidden" id="mlCvRepeatsWrap">
+              <span>CV Repeats</span>
+              <input id="mlCvRepeats" type="number" min="1" max="20" step="1" value="3" />
+            </label>
+            <label class="toolbar-field">
+              <span>Journal Template</span>
+              <select id="mlJournalTemplate">
+                <option value="default">Default</option>
+                <option value="nejm">NEJM</option>
+                <option value="lancet">Lancet</option>
+                <option value="jco">JCO</option>
+              </select>
+            </label>
+          </div>
+          <div class="ml-plots-grid">
+            <div class="plot-shell" id="mlImportancePlot">
+              <div class="empty-state plot-empty">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                <span>Train a model to see feature importance</span>
+              </div>
+            </div>
+            <div class="plot-shell" id="mlShapPlot">
+              <div class="empty-state plot-empty">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83"/></svg>
+                <span>SHAP values will appear after training</span>
+              </div>
+            </div>
+          </div>
+          <div class="plot-shell hidden" id="mlComparisonPlot"></div>
+          <div class="analysis-banner" id="mlMetaBanner">Select features from the Cox tab, then train a model.</div>
+          <div class="insight-board" id="mlInsightBoard"><div class="empty-state">ML model interpretation will appear here after training.</div></div>
+          <div class="table-grid stacked">
+            <div class="table-card full-width"><h3>Model Comparison</h3><div class="table-shell" id="mlComparisonShell"><div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div></div></div>
+            <div class="table-card full-width"><h3>Manuscript Table</h3><div class="table-shell" id="mlManuscriptShell"><div class="empty-state">Comparison-ready manuscript rows appear after running a comparison.</div></div></div>
+          </div>
+        </article>
+      </section>
+
+      <!-- Deep Learning Panel -->
+      <section class="tab-panel" data-panel="dl" id="panel-dl" role="tabpanel">
+        <article class="workspace-card">
+          <div class="card-head">
+            <div class="card-head-left">
+              <h2>Deep Learning Survival Models</h2>
+              <p class="card-subtitle">DeepSurv, DeepHit, Neural MTLR, Survival Transformer, Survival VAE</p>
+            </div>
+            <div class="button-row compact">
+              <button class="button primary" id="runDlButton">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Train Model
+              </button>
+              <button class="button ghost" id="runDlCompareButton">Compare All</button>
+              <button class="button ghost" id="downloadDlComparisonButton" disabled>Comparison CSV</button>
+              <button class="button ghost" id="downloadDlManuscriptCsvButton" disabled>Manuscript CSV</button>
+              <button class="button ghost" id="downloadDlManuscriptMarkdownButton" disabled>Manuscript MD</button>
+              <button class="button ghost" id="downloadDlManuscriptLatexButton" disabled>LaTeX</button>
+              <button class="button ghost" id="downloadDlManuscriptDocxButton" disabled>DOCX</button>
+            </div>
+          </div>
+          <div class="toolbar-row">
+            <label class="toolbar-field">
+              <span>Model</span>
+              <select id="dlModelType">
+                <option value="deepsurv">DeepSurv (Neural Cox)</option>
+                <option value="deephit">DeepHit (Discrete-time)</option>
+                <option value="mtlr">Neural MTLR</option>
+                <option value="transformer">Survival Transformer</option>
+                <option value="vae">Survival VAE (Clustering)</option>
+              </select>
+            </label>
+            <label class="toolbar-field">
+              <span>Epochs</span>
+              <input id="dlEpochs" type="number" min="10" max="500" step="10" value="100" />
+            </label>
+            <label class="toolbar-field">
+              <span>Learning Rate</span>
+              <input id="dlLearningRate" type="number" min="0.0001" max="0.1" step="0.0001" value="0.001" />
+            </label>
+            <label class="toolbar-field">
+              <span>Hidden Layers</span>
+              <input id="dlHiddenLayers" type="text" value="64,64" placeholder="64,64" />
+            </label>
+            <label class="toolbar-field">
+              <span>Dropout</span>
+              <input id="dlDropout" type="number" min="0" max="0.5" step="0.05" value="0.1" />
+            </label>
+            <label class="toolbar-field">
+              <span>Comparison Evaluation</span>
+              <select id="dlEvaluationStrategy">
+                <option value="holdout">Deterministic Holdout</option>
+                <option value="repeated_cv">Repeated Stratified CV</option>
+              </select>
+            </label>
+            <label class="toolbar-field hidden" id="dlCvFoldsWrap">
+              <span>CV Folds</span>
+              <input id="dlCvFolds" type="number" min="2" max="10" step="1" value="5" />
+            </label>
+            <label class="toolbar-field hidden" id="dlCvRepeatsWrap">
+              <span>CV Repeats</span>
+              <input id="dlCvRepeats" type="number" min="1" max="20" step="1" value="3" />
+            </label>
+            <label class="toolbar-field">
+              <span>Early Stop Patience</span>
+              <input id="dlEarlyStoppingPatience" type="number" min="1" max="100" step="1" value="10" />
+            </label>
+            <label class="toolbar-field">
+              <span>Min Delta</span>
+              <input id="dlEarlyStoppingMinDelta" type="number" min="0" max="0.1" step="0.0001" value="0.0001" />
+            </label>
+            <label class="toolbar-field">
+              <span>Parallel Jobs</span>
+              <input id="dlParallelJobs" type="number" min="1" max="16" step="1" value="1" />
+            </label>
+            <label class="toolbar-field">
+              <span>Journal Template</span>
+              <select id="dlJournalTemplate">
+                <option value="default">Default</option>
+                <option value="nejm">NEJM</option>
+                <option value="lancet">Lancet</option>
+                <option value="jco">JCO</option>
+              </select>
+            </label>
+          </div>
+          <div class="ml-plots-grid">
+            <div class="plot-shell" id="dlImportancePlot">
+              <div class="empty-state plot-empty">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/></svg>
+                <span>Train a deep learning model to see results</span>
+                <small>Requires PyTorch: pip install torch</small>
+              </div>
+            </div>
+            <div class="plot-shell" id="dlLossPlot">
+              <div class="empty-state plot-empty">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                <span>Training loss curve will appear here</span>
+              </div>
+            </div>
+          </div>
+          <div class="analysis-banner" id="dlMetaBanner">Select features from the Cox tab, configure hyperparameters, then train.</div>
+          <div class="insight-board" id="dlInsightBoard"><div class="empty-state">Deep learning model interpretation will appear here after training.</div></div>
+          <div class="plot-shell hidden" id="dlComparisonPlot"></div>
+          <div class="table-grid stacked">
+            <div class="table-card full-width"><h3>Deep Model Comparison</h3><div class="table-shell" id="dlComparisonShell"><div class="empty-state">Click "Compare All" to benchmark DeepSurv, DeepHit, Neural MTLR, Transformer, and VAE.</div></div></div>
+            <div class="table-card full-width"><h3>Deep Manuscript Table</h3><div class="table-shell" id="dlManuscriptShell"><div class="empty-state">Comparison-ready manuscript rows appear after running a deep comparison.</div></div></div>
+          </div>
+        </article>
+      </section>
+
+      <!-- Cohort Table Panel -->
+      <section class="tab-panel" data-panel="tables" id="panel-tables" role="tabpanel">
+        <article class="workspace-card">
+          <div class="card-head">
+            <div class="card-head-left">
+              <h2>Cohort Summary Table</h2>
+              <p class="card-subtitle">Generate a Table 1 with demographics and baseline characteristics</p>
+            </div>
+            <div class="button-row compact">
+              <button class="button primary" id="runCohortTableButton">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Build Table
+              </button>
+              <button class="button ghost" id="downloadCohortTableButton" disabled>CSV</button>
+            </div>
+          </div>
+          <div class="table-builder-grid">
+            <div class="selection-card">
+              <h3>Variables <button class="help-dot" type="button" data-tooltip="Select the variables you want to summarize in your cohort table (e.g., age, gender, stage).">?</button></h3>
+              <div class="checklist tall" id="cohortVariableChecklist"></div>
+            </div>
+            <div class="table-card">
+              <h3>Output</h3>
+              <div class="table-shell" id="cohortTableShell"><div class="empty-state">Check variables on the left, then click <strong>Build Table</strong>.</div></div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- Data Preview Panel -->
+      <section class="tab-panel" data-panel="data" id="panel-data" role="tabpanel">
+        <article class="workspace-card">
+          <div class="card-head">
+            <div class="card-head-left">
+              <h2>Dataset Preview</h2>
+              <p class="card-subtitle">Browse the first rows of your uploaded dataset</p>
+            </div>
+          </div>
+          <div class="table-shell preview-shell" id="datasetPreviewShell">
+            <div class="empty-state">Upload or load a dataset to see a preview.</div>
+          </div>
+        </article>
+      </section>
+    </main>
+    <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+    <div class="tooltip-popup hidden" id="tooltipPopup"></div>
+  </body>
+</html>

@@ -1,0 +1,610 @@
+patient_id,cohort,os_months,os_event,age,sex,pathologic_stage,stage_group,smoking_status,pack_years_smoked,tumor_longest_dimension_cm,histology,kras_status,egfr_status,expression_subtype
+TCGA-35-3615,TCGA-LUAD,0.46,0.0,57.0,Male,Stage IB,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-NJ-A55A,TCGA-LUAD,0.49,0.0,76.0,Female,Stage IB,Stage I,Former smoker >15y,25.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-A493,TCGA-LUAD,0.92,0.0,54.0,Female,Stage IB,Stage I,Current smoker,53.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-8499,TCGA-LUAD,1.18,0.0,76.0,Female,Stage IA,Stage I,Current smoker,90.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-99-8032,TCGA-LUAD,1.45,0.0,61.0,Male,Stage IA,Stage I,Current smoker,90.0,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8616,TCGA-LUAD,1.58,0.0,58.0,Female,Stage IB,Stage I,Former smoker <=15y,,0.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-NJ-A4YP,TCGA-LUAD,1.64,0.0,52.0,Male,Stage IB,Stage I,Former smoker (duration unknown),60.0,,Lung Papillary Adenocarcinoma,,,
+TCGA-05-5715,TCGA-LUAD,2.04,0.0,69.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,0.9,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-91-6835,TCGA-LUAD,2.6,0.0,81.0,Female,Stage IA,Stage I,Former smoker >15y,25.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-91-6835,TCGA-LUAD,2.6,0.0,81.0,Female,Stage IA,Stage I,Former smoker >15y,25.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-MN-A4N5,TCGA-LUAD,2.76,0.0,63.0,Male,Stage IA,Stage I,Former smoker <=15y,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-69-8255,TCGA-LUAD,4.24,0.0,71.0,Male,Stage IA,Stage I,Current smoker,40.0,1.0,Lung Solid Pattern Predominant Adenocarcinoma,,,
+TCGA-38-A44F,TCGA-LUAD,4.37,0.0,80.0,Male,Stage IB,Stage I,Former smoker >15y,12.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-67-6216,TCGA-LUAD,4.63,0.0,57.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-67-6215,TCGA-LUAD,5.72,0.0,52.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,0.6,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-35-4123,TCGA-LUAD,5.98,0.0,38.0,Male,Stage IA,Stage I,Former smoker <=15y,20.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-69-7761,TCGA-LUAD,6.11,0.0,84.0,Male,Stage IB,Stage I,Former smoker >15y,20.0,1.3,Lung Acinar Adenocarcinoma,Wildtype,Wildtype,Squamoid
+TCGA-93-8067,TCGA-LUAD,6.11,0.0,77.0,Male,Stage IB,Stage I,Former smoker <=15y,20.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-7662,TCGA-LUAD,7.16,0.0,61.0,Male,Stage IB,Stage I,Current smoker,50.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-44-7662,TCGA-LUAD,7.16,0.0,61.0,Male,Stage IB,Stage I,Current smoker,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-35-4122,TCGA-LUAD,7.39,0.0,69.0,Male,Stage IA,Stage I,Former smoker <=15y,45.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-69-7973,TCGA-LUAD,7.56,0.0,42.0,Female,Stage IB,Stage I,Former smoker <=15y,25.0,0.9,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-71-6725,TCGA-LUAD,8.41,0.0,48.0,Female,Stage IB,Stage I,Current smoker,,2.0,Lung Papillary Adenocarcinoma,Wildtype,Wildtype,Bronchioid
+TCGA-44-8120,TCGA-LUAD,8.54,0.0,58.0,Male,Stage IB,Stage I,Former smoker (duration unknown),30.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-A47B,TCGA-LUAD,9.43,0.0,79.0,Male,Stage IB,Stage I,Former smoker >15y,4.5,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-L9-A444,TCGA-LUAD,10.09,0.0,60.0,Female,Stage IA,Stage I,Current smoker,10.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-6831,TCGA-LUAD,10.18,0.0,66.0,Male,Stage IB,Stage I,Current smoker,,0.6,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-6831,TCGA-LUAD,10.18,0.0,66.0,Male,Stage IB,Stage I,Current smoker,,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-6828,TCGA-LUAD,10.61,0.0,70.0,Male,Stage IA,Stage I,Former smoker >15y,,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-91-6828,TCGA-LUAD,10.61,0.0,70.0,Male,Stage IA,Stage I,Former smoker >15y,,1.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-44-A47G,TCGA-LUAD,11.53,0.0,73.0,Female,Stage IA,Stage I,Former smoker <=15y,28.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-8585,TCGA-LUAD,11.6,0.0,57.0,Male,Stage IB,Stage I,Lifelong Non-smoker,,2.2,Lung Solid Pattern Predominant Adenocarcinoma,,,
+TCGA-69-7980,TCGA-LUAD,11.89,0.0,70.0,Female,Stage I,Stage I,Former smoker <=15y,80.0,1.6,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-05-4422,TCGA-LUAD,11.99,0.0,68.0,Male,Stage IB,Stage I,Former smoker <=15y,147.0,1.5,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-91-6840,TCGA-LUAD,12.22,0.0,59.0,Female,Stage IA,Stage I,Former smoker >15y,50.0,0.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-95-7944,TCGA-LUAD,12.39,0.0,71.0,Male,Stage IA,Stage I,Current smoker,50.0,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-8117,TCGA-LUAD,12.65,0.0,54.0,Female,Stage IB,Stage I,Former smoker <=15y,54.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-67-3774,TCGA-LUAD,12.65,0.0,73.0,Female,Stage IB,Stage I,Former smoker >15y,,0.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-69-7979,TCGA-LUAD,13.4,0.0,71.0,Female,Stage IB,Stage I,Current smoker,28.0,,Lung Acinar Adenocarcinoma,,,
+TCGA-69-7764,TCGA-LUAD,13.6,0.0,75.0,Male,Stage IA,Stage I,Former smoker >15y,30.0,0.6,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-44-A4SS,TCGA-LUAD,13.63,0.0,73.0,Male,Stage IA,Stage I,Former smoker <=15y,90.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-A4P7,TCGA-LUAD,13.63,0.0,63.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-6836,TCGA-LUAD,13.7,0.0,52.0,Female,Stage IB,Stage I,Current smoker,50.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-6836,TCGA-LUAD,13.7,0.0,52.0,Female,Stage IB,Stage I,Current smoker,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8507,TCGA-LUAD,13.73,0.0,53.0,Male,Stage IA,Stage I,Current smoker,120.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-8668,TCGA-LUAD,13.9,0.0,61.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,2.0,Lung Bronchioloalveolar Carcinoma Mucinous,,,
+TCGA-67-3773,TCGA-LUAD,14.03,0.0,84.0,Female,Stage IB,Stage I,Former smoker >15y,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-55-6543,TCGA-LUAD,14.29,0.0,60.0,Female,Stage IA,Stage I,Former smoker <=15y,60.0,1.0,Lung Bronchioloalveolar Carcinoma Mucinous,Wildtype,Wildtype,Bronchioid
+TCGA-97-8179,TCGA-LUAD,14.29,0.0,72.0,Male,Stage IA,Stage I,Former smoker >15y,60.0,0.8,Lung Acinar Adenocarcinoma,,,
+TCGA-L4-A4E6,TCGA-LUAD,14.29,0.0,67.0,Male,Stage IA,Stage I,Former smoker >15y,30.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7725,TCGA-LUAD,14.52,0.0,68.0,Female,Stage IA,Stage I,Former smoker >15y,16.0,0.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-55-7725,TCGA-LUAD,14.52,0.0,68.0,Female,Stage IA,Stage I,Former smoker >15y,16.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-05-4417,TCGA-LUAD,14.95,0.0,51.0,Female,Stage IB,Stage I,Former smoker <=15y,56.0,1.4,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Magnoid
+TCGA-55-8087,TCGA-LUAD,15.18,0.0,59.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-A47A,TCGA-LUAD,15.31,0.0,78.0,Female,Stage IB,Stage I,Former smoker <=15y,80.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8097,TCGA-LUAD,15.64,0.0,60.0,Female,Stage IA,Stage I,Former smoker <=15y,35.0,0.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-95-7948,TCGA-LUAD,15.64,0.0,42.0,Female,Stage IB,Stage I,Former smoker >15y,0.2,1.3,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-L9-A8F4,TCGA-LUAD,15.64,0.0,64.0,Female,Stage IB,Stage I,Current smoker,14.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-95-7947,TCGA-LUAD,15.67,0.0,67.0,Male,Stage IA,Stage I,Former smoker <=15y,100.0,1.2,Lung Adenocarcinoma Mixed Subtype,Wildtype,Mutated,Squamoid
+TCGA-55-8302,TCGA-LUAD,15.7,0.0,54.0,Male,Stage IB,Stage I,Current smoker,59.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-A494,TCGA-LUAD,15.8,0.0,61.0,Female,Stage IB,Stage I,Former smoker >15y,7.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-97-7941,TCGA-LUAD,15.9,0.0,72.0,Female,Stage IA,Stage I,Former smoker >15y,22.5,1.3,Lung Acinar Adenocarcinoma,Mutated,Wildtype,Bronchioid
+TCGA-44-A479,TCGA-LUAD,15.97,0.0,73.0,Female,Stage IB,Stage I,Former smoker <=15y,40.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7573,TCGA-LUAD,16.0,0.0,72.0,Female,Stage IA,Stage I,Former smoker >15y,,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-97-8177,TCGA-LUAD,16.39,0.0,59.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,2.4,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-91-8496,TCGA-LUAD,16.59,0.0,63.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,2.0,Lung Bronchioloalveolar Carcinoma Nonmucinous,,,
+TCGA-S2-AA1A,TCGA-LUAD,16.85,0.0,68.0,Female,Stage IA,Stage I,Former smoker >15y,95.0,,Lung Bronchioloalveolar Carcinoma Mucinous,,,
+TCGA-55-8204,TCGA-LUAD,16.92,0.0,87.0,Female,Stage IB,Stage I,Former smoker >15y,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8621,TCGA-LUAD,16.92,0.0,75.0,Female,Stage IA,Stage I,Former smoker <=15y,30.0,0.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8514,TCGA-LUAD,17.08,0.0,70.0,Female,Stage IB,Stage I,Former smoker <=15y,20.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-93-A4JQ,TCGA-LUAD,17.28,0.0,49.0,Male,Stage IA,Stage I,Former smoker >15y,,,Lung Acinar Adenocarcinoma,,,
+TCGA-93-7348,TCGA-LUAD,17.44,0.0,75.0,Female,Stage IA,Stage I,Former smoker <=15y,42.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-93-7348,TCGA-LUAD,17.44,0.0,75.0,Female,Stage IA,Stage I,Former smoker <=15y,42.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-55-8301,TCGA-LUAD,17.54,0.0,58.0,Male,Stage IB,Stage I,Current smoker,100.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8614,TCGA-LUAD,17.61,0.0,76.0,Male,Stage IB,Stage I,Former smoker >15y,40.0,0.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7911,TCGA-LUAD,17.64,0.0,70.0,Female,Stage IA,Stage I,Former smoker >15y,96.0,0.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-55-7911,TCGA-LUAD,17.64,0.0,70.0,Female,Stage IA,Stage I,Former smoker >15y,96.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-55-8510,TCGA-LUAD,17.71,0.0,55.0,Female,Stage IB,Stage I,Current smoker,,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-97-A4M3,TCGA-LUAD,17.74,0.0,69.0,Female,Stage IA,Stage I,Former smoker >15y,37.5,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-97-8172,TCGA-LUAD,17.9,0.0,75.0,Female,Stage IB,Stage I,Former smoker >15y,20.0,1.7,Lung Acinar Adenocarcinoma,,,
+TCGA-55-A57B,TCGA-LUAD,17.94,0.0,80.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-55-8203,TCGA-LUAD,17.97,0.0,69.0,Female,Stage IA,Stage I,Current smoker,50.0,0.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-97-8175,TCGA-LUAD,18.1,0.0,55.0,Female,Stage IB,Stage I,Former smoker >15y,,2.0,Lung Solid Pattern Predominant Adenocarcinoma,,,
+TCGA-55-8511,TCGA-LUAD,18.13,0.0,73.0,Female,Stage IB,Stage I,Current smoker,58.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-97-7937,TCGA-LUAD,18.53,0.0,65.0,Male,Stage IB,Stage I,Former smoker >15y,35.0,1.1,Lung Micropapillary Adenocarcinoma,Wildtype,Wildtype,Squamoid
+TCGA-55-7903,TCGA-LUAD,18.63,0.0,64.0,Male,Stage IA,Stage I,Current smoker,40.0,0.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-7903,TCGA-LUAD,18.63,0.0,64.0,Male,Stage IA,Stage I,Current smoker,40.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-97-A4M6,TCGA-LUAD,18.66,0.0,45.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-67-3772,TCGA-LUAD,18.82,0.0,82.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-05-4403,TCGA-LUAD,18.99,0.0,76.0,Male,Stage IB,Stage I,Former smoker >15y,,1.5,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Bronchioid
+TCGA-L4-A4E5,TCGA-LUAD,18.99,0.0,48.0,Female,Stage I,Stage I,Former smoker <=15y,33.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-7660,TCGA-LUAD,19.45,0.0,72.0,Male,Stage IB,Stage I,Current smoker,124.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-7660,TCGA-LUAD,19.45,0.0,72.0,Male,Stage IB,Stage I,Current smoker,124.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-6145,TCGA-LUAD,19.55,0.0,62.0,Female,Stage IA,Stage I,Former smoker <=15y,75.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-44-6145,TCGA-LUAD,19.55,0.0,62.0,Female,Stage IA,Stage I,Former smoker <=15y,75.0,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-55-A492,TCGA-LUAD,19.58,0.0,70.0,Female,Stage IA,Stage I,Former smoker >15y,35.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8091,TCGA-LUAD,19.71,0.0,74.0,Male,Stage IB,Stage I,Former smoker >15y,,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-97-A4M1,TCGA-LUAD,19.74,0.0,52.0,Female,Stage IA,Stage I,Former smoker >15y,3.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-NJ-A55R,TCGA-LUAD,19.81,0.0,67.0,Male,Stage IA,Stage I,Former smoker >15y,5.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-7954,TCGA-LUAD,19.88,0.0,68.0,Female,Stage IB,Stage I,Former smoker >15y,8.0,1.1,Lung Bronchioloalveolar Carcinoma Nonmucinous,,,
+TCGA-05-4382,TCGA-LUAD,19.94,0.0,68.0,Male,Stage IB,Stage I,Former smoker <=15y,62.0,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Mutated,Squamoid
+TCGA-55-A4DG,TCGA-LUAD,19.97,0.0,71.0,Male,Stage IA,Stage I,Former smoker <=15y,100.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-05-4405,TCGA-LUAD,20.04,0.0,74.0,Female,Stage IB,Stage I,Former smoker <=15y,65.0,0.9,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-67-3770,TCGA-LUAD,20.04,0.0,70.0,Female,Stage IA,Stage I,Former smoker >15y,,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-67-3771,TCGA-LUAD,20.04,0.0,77.0,Female,Stage IA,Stage I,Former smoker <=15y,,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-97-A4LX,TCGA-LUAD,20.17,0.0,81.0,Male,Stage IB,Stage I,Former smoker >15y,120.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-97-A4M2,TCGA-LUAD,20.5,0.0,66.0,Male,Stage IA,Stage I,Current smoker,100.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-55-A491,TCGA-LUAD,20.57,0.0,81.0,Female,Stage IA,Stage I,Former smoker >15y,45.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-97-8552,TCGA-LUAD,20.57,0.0,55.0,Female,Stage I,Stage I,Lifelong Non-smoker,,1.6,Lung Bronchioloalveolar Carcinoma Nonmucinous,,,
+TCGA-97-A4M7,TCGA-LUAD,20.66,0.0,74.0,Male,Stage IA,Stage I,Former smoker >15y,40.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-97-A4M5,TCGA-LUAD,20.83,0.0,83.0,Male,Stage IA,Stage I,Former smoker >15y,6.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-55-7726,TCGA-LUAD,21.42,0.0,72.0,Female,Stage IA,Stage I,Former smoker >15y,30.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-55-7726,TCGA-LUAD,21.42,0.0,72.0,Female,Stage IA,Stage I,Former smoker >15y,30.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-97-A4M0,TCGA-LUAD,21.42,0.0,60.0,Female,Stage IB,Stage I,Former smoker <=15y,34.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-86-8358,TCGA-LUAD,21.45,0.0,44.0,Male,Stage IB,Stage I,Current smoker,20.0,1.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-99-AA5R,TCGA-LUAD,21.62,0.0,70.0,Female,Stage IA,Stage I,Current smoker,46.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7576,TCGA-LUAD,22.01,0.0,54.0,Male,Stage IB,Stage I,Current smoker,,0.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-55-7576,TCGA-LUAD,22.01,0.0,54.0,Male,Stage IB,Stage I,Current smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-55-8208,TCGA-LUAD,22.14,0.0,73.0,Female,Stage IA,Stage I,Current smoker,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-93-7347,TCGA-LUAD,22.44,0.0,76.0,Female,Stage IA,Stage I,Former smoker >15y,11.0,1.0,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Bronchioid
+TCGA-69-7763,TCGA-LUAD,22.67,0.0,69.0,Male,Stage IA,Stage I,Former smoker <=15y,7.5,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-44-7659,TCGA-LUAD,22.7,0.0,70.0,Male,Stage IA,Stage I,Current smoker,40.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-44-7659,TCGA-LUAD,22.7,0.0,70.0,Male,Stage IA,Stage I,Current smoker,40.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-44-6148,TCGA-LUAD,23.13,0.0,60.0,Male,Stage IA,Stage I,Former smoker >15y,60.0,1.5,Lung Mucinous Adenocarcinoma,,,
+TCGA-44-6148,TCGA-LUAD,23.13,0.0,60.0,Male,Stage IA,Stage I,Former smoker >15y,60.0,2.3,Lung Mucinous Adenocarcinoma,,,
+TCGA-55-7728,TCGA-LUAD,23.13,0.0,64.0,Female,Stage IB,Stage I,Former smoker <=15y,30.0,1.0,Mucinous (Colloid) Carcinoma,Mutated,Wildtype,Bronchioid
+TCGA-44-6775,TCGA-LUAD,23.16,0.0,72.0,Female,Stage IB,Stage I,Former smoker <=15y,25.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-7724,TCGA-LUAD,23.16,0.0,76.0,Female,Stage IB,Stage I,Former smoker <=15y,50.0,0.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-7724,TCGA-LUAD,23.16,0.0,76.0,Female,Stage IB,Stage I,Former smoker <=15y,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-44-7672,TCGA-LUAD,23.62,0.0,52.0,Female,Stage IA,Stage I,Current smoker,20.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-44-7672,TCGA-LUAD,23.62,0.0,52.0,Female,Stage IA,Stage I,Current smoker,20.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-44-6144,TCGA-LUAD,23.75,0.0,58.0,Male,Stage IA,Stage I,Current smoker,67.5,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-6144,TCGA-LUAD,23.75,0.0,58.0,Male,Stage IA,Stage I,Current smoker,67.5,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-05-4433,TCGA-LUAD,23.98,0.0,82.0,Male,Stage IB,Stage I,Former smoker >15y,1.0,1.1,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Bronchioid
+TCGA-86-8073,TCGA-LUAD,24.31,0.0,58.0,Male,Stage IB,Stage I,Current smoker,40.0,1.8,Lung Bronchioloalveolar Carcinoma Nonmucinous,,,
+TCGA-MP-A4TH,TCGA-LUAD,24.34,0.0,70.0,Female,Stage IA,Stage I,Former smoker >15y,20.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-05-4430,TCGA-LUAD,25.0,0.0,59.0,Female,Stage IB,Stage I,Former smoker <=15y,80.0,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-55-7815,TCGA-LUAD,25.39,0.0,76.0,Male,Stage IB,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-05-4426,TCGA-LUAD,25.99,0.0,71.0,Male,Stage IB,Stage I,Former smoker >15y,20.0,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-55-7570,TCGA-LUAD,27.07,0.0,60.0,Male,Stage IA,Stage I,Current smoker,,0.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7570,TCGA-LUAD,27.07,0.0,60.0,Male,Stage IA,Stage I,Current smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-83-5908,TCGA-LUAD,27.07,0.0,59.0,Female,Stage IA,Stage I,Former smoker <=15y,69.0,1.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-8460,TCGA-LUAD,27.23,0.0,74.0,Male,Stage IA,Stage I,,,1.3,Lung Papillary Adenocarcinoma,,,
+TCGA-95-8039,TCGA-LUAD,27.27,0.0,72.0,Male,Stage IA,Stage I,Lifelong Non-smoker,,0.9,Lung Acinar Adenocarcinoma,,,
+TCGA-91-6847,TCGA-LUAD,27.66,0.0,62.0,Female,Stage IB,Stage I,Former smoker >15y,,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-91-6847,TCGA-LUAD,27.66,0.0,62.0,Female,Stage IB,Stage I,Former smoker >15y,,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-44-6147,TCGA-LUAD,27.76,0.0,67.0,Female,Stage IA,Stage I,Former smoker >15y,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-44-6147,TCGA-LUAD,27.76,0.0,67.0,Female,Stage IA,Stage I,Former smoker >15y,,2.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-44-5645,TCGA-LUAD,27.99,0.0,61.0,Female,Stage IA,Stage I,Former smoker >15y,5.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-44-5645,TCGA-LUAD,27.99,0.0,61.0,Female,Stage IA,Stage I,Former smoker >15y,5.0,2.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-86-8673,TCGA-LUAD,28.32,0.0,61.0,Male,Stage IB,Stage I,Current smoker,54.0,2.9,Lung Bronchioloalveolar Carcinoma Nonmucinous,,,
+TCGA-44-5644,TCGA-LUAD,28.35,0.0,51.0,Female,Stage IB,Stage I,Current smoker,17.5,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7281,TCGA-LUAD,28.65,0.0,70.0,Female,Stage IA,Stage I,Former smoker <=15y,20.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-55-8206,TCGA-LUAD,29.17,0.0,56.0,Male,Stage IA,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-7671,TCGA-LUAD,29.2,0.0,64.0,Male,Stage IB,Stage I,Former smoker >15y,,,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Magnoid
+TCGA-44-7671,TCGA-LUAD,29.2,0.0,64.0,Male,Stage IB,Stage I,Former smoker >15y,,,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Magnoid
+TCGA-55-7995,TCGA-LUAD,29.2,0.0,73.0,Female,Stage IA,Stage I,Former smoker <=15y,60.0,0.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-A456,TCGA-LUAD,29.43,0.0,78.0,Female,Stage IA,Stage I,Former smoker <=15y,,,Lung Papillary Adenocarcinoma,,,
+TCGA-55-8085,TCGA-LUAD,29.7,0.0,64.0,Male,Stage IA,Stage I,Current smoker,,0.7,Lung Papillary Adenocarcinoma,,,
+TCGA-05-4420,TCGA-LUAD,29.96,0.0,41.0,Male,Stage IB,Stage I,Current smoker,38.0,0.8,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-86-8669,TCGA-LUAD,30.81,0.0,64.0,Male,Stage IA,Stage I,Current smoker,47.0,2.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8207,TCGA-LUAD,32.1,0.0,73.0,Male,Stage IB,Stage I,Former smoker >15y,,0.9,Lung Acinar Adenocarcinoma,,,
+TCGA-J2-A4AG,TCGA-LUAD,32.46,0.0,66.0,Female,Stage IA,Stage I,Former smoker >15y,25.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-8076,TCGA-LUAD,32.62,0.0,42.0,Male,Stage IA,Stage I,Lifelong Non-smoker,,1.7,Lung Papillary Adenocarcinoma,,,
+TCGA-86-7953,TCGA-LUAD,32.75,0.0,69.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,3.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-3918,TCGA-LUAD,34.03,0.0,60.0,Female,Stage IA,Stage I,Former smoker >15y,20.0,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-3918,TCGA-LUAD,34.03,0.0,60.0,Female,Stage IA,Stage I,Former smoker >15y,20.0,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-7955,TCGA-LUAD,35.22,0.0,62.0,Male,Stage IB,Stage I,Lifelong Non-smoker,,2.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-J2-A4AE,TCGA-LUAD,35.45,0.0,77.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-99-8028,TCGA-LUAD,36.73,0.0,50.0,Female,Stage IA,Stage I,Former smoker <=15y,30.0,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-8457,TCGA-LUAD,36.96,0.0,63.0,Female,Stage IA,Stage I,Former smoker <=15y,30.0,1.2,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-05-4390,TCGA-LUAD,36.99,0.0,58.0,Female,Stage IB,Stage I,Former smoker <=15y,15.0,1.8,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Magnoid
+TCGA-44-2661,TCGA-LUAD,38.07,0.0,69.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-44-2661,TCGA-LUAD,38.07,0.0,69.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-44-3398,TCGA-LUAD,38.21,0.0,77.0,Female,Stage IA,Stage I,Former smoker <=15y,60.0,1.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-3398,TCGA-LUAD,38.21,0.0,77.0,Female,Stage IA,Stage I,Former smoker <=15y,60.0,1.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-MN-A4N4,TCGA-LUAD,38.6,0.0,57.0,Male,Stage IA,Stage I,Current smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-3917,TCGA-LUAD,38.86,0.0,33.0,Female,Stage IB,Stage I,Current smoker,16.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-73-7498,TCGA-LUAD,39.06,0.0,58.0,Female,Stage IA,Stage I,Former smoker <=15y,28.0,1.0,Lung Bronchioloalveolar Carcinoma Nonmucinous,Mutated,Wildtype,Bronchioid
+TCGA-55-6985,TCGA-LUAD,40.51,0.0,58.0,Female,Stage IB,Stage I,Former smoker <=15y,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-6985,TCGA-LUAD,40.51,0.0,58.0,Female,Stage IB,Stage I,Former smoker <=15y,50.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-6969,TCGA-LUAD,40.7,0.0,52.0,Male,Stage IB,Stage I,Former smoker <=15y,,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-6969,TCGA-LUAD,40.7,0.0,52.0,Male,Stage IB,Stage I,Former smoker <=15y,,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-2664,TCGA-LUAD,41.1,0.0,66.0,Female,Stage IA,Stage I,Current smoker,23.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-2662,TCGA-LUAD,42.05,0.0,65.0,Male,Stage IB,Stage I,Former smoker >15y,56.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-44-2662,TCGA-LUAD,42.05,0.0,65.0,Male,Stage IB,Stage I,Former smoker >15y,56.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-97-7546,TCGA-LUAD,42.21,0.0,76.0,Female,Stage IA,Stage I,Former smoker >15y,25.0,1.2,Lung Acinar Adenocarcinoma,Wildtype,Wildtype,Bronchioid
+TCGA-64-5778,TCGA-LUAD,42.87,0.0,60.0,Male,Stage IB,Stage I,Former smoker <=15y,68.0,1.2,Lung Bronchioloalveolar Carcinoma Nonmucinous,Mutated,Wildtype,Squamoid
+TCGA-44-2655,TCGA-LUAD,43.5,0.0,65.0,Female,Stage IA,Stage I,Former smoker >15y,30.0,0.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-44-2655,TCGA-LUAD,43.5,0.0,65.0,Female,Stage IA,Stage I,Former smoker >15y,30.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-44-2657,TCGA-LUAD,44.38,0.0,74.0,Female,Stage IB,Stage I,Former smoker <=15y,25.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-44-2657,TCGA-LUAD,44.38,0.0,74.0,Female,Stage IB,Stage I,Former smoker <=15y,25.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-05-4389,TCGA-LUAD,44.97,0.0,70.0,Male,Stage IA,Stage I,Former smoker >15y,43.0,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-55-6971,TCGA-LUAD,45.99,0.0,59.0,Female,Stage IB,Stage I,Former smoker <=15y,60.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-55-6971,TCGA-LUAD,45.99,0.0,59.0,Female,Stage IB,Stage I,Former smoker <=15y,60.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-44-2656,TCGA-LUAD,46.94,0.0,59.0,Male,Stage IB,Stage I,Former smoker <=15y,23.0,0.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-44-2656,TCGA-LUAD,46.94,0.0,59.0,Male,Stage IB,Stage I,Former smoker <=15y,23.0,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-NJ-A4YQ,TCGA-LUAD,47.04,0.0,69.0,Female,Stage IA,Stage I,Former smoker <=15y,40.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-5066,TCGA-LUAD,47.37,0.0,72.0,Male,Stage IB,Stage I,Lifelong Non-smoker,,1.5,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-50-5066,TCGA-LUAD,47.37,0.0,72.0,Male,Stage IB,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-55-1595,TCGA-LUAD,48.59,0.0,74.0,Female,Stage IA,Stage I,Former smoker <=15y,,,Lung Clear Cell Adenocarcinoma,,,
+TCGA-55-1595,TCGA-LUAD,48.59,0.0,74.0,Female,Stage IA,Stage I,Former smoker <=15y,,0.4,Lung Clear Cell Adenocarcinoma,,,
+TCGA-05-4249,TCGA-LUAD,50.03,0.0,67.0,Male,Stage IB,Stage I,Former smoker >15y,52.0,1.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-64-5781,TCGA-LUAD,51.22,0.0,55.0,Female,Stage IB,Stage I,Former smoker <=15y,25.0,1.0,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-50-5946,TCGA-LUAD,53.12,0.0,62.0,Male,Stage IA,Stage I,Former smoker <=15y,,1.5,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-50-5946,TCGA-LUAD,53.12,0.0,62.0,Male,Stage IA,Stage I,Former smoker <=15y,,1.9,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-49-4514,TCGA-LUAD,55.85,0.0,79.0,Female,Stage IA,Stage I,Former smoker >15y,65.0,1.4,Lung Papillary Adenocarcinoma,Wildtype,Wildtype,Magnoid
+TCGA-64-1676,TCGA-LUAD,56.77,0.0,58.0,Male,Stage IA,Stage I,Current smoker,60.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-50-5944,TCGA-LUAD,57.49,0.0,69.0,Female,Stage IA,Stage I,,,,Lung Acinar Adenocarcinoma,Wildtype,Mutated,Bronchioid
+TCGA-50-5942,TCGA-LUAD,60.68,0.0,67.0,Female,Stage IA,Stage I,Former smoker <=15y,30.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-44-6778,TCGA-LUAD,61.24,0.0,59.0,Male,Stage IA,Stage I,Former smoker <=15y,15.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-6778,TCGA-LUAD,61.24,0.0,59.0,Male,Stage IA,Stage I,Former smoker <=15y,15.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-97-7553,TCGA-LUAD,61.43,0.0,58.0,Female,Stage IA,Stage I,Current smoker,20.0,1.5,Lung Bronchioloalveolar Carcinoma Nonmucinous,Wildtype,Wildtype,Bronchioid
+TCGA-97-7552,TCGA-LUAD,63.47,0.0,70.0,Male,Stage IB,Stage I,Former smoker >15y,40.0,,Lung Bronchioloalveolar Carcinoma Mucinous,Wildtype,Wildtype,Bronchioid
+TCGA-97-7547,TCGA-LUAD,64.55,0.0,67.0,Female,Stage IB,Stage I,Former smoker >15y,30.0,0.7,Lung Papillary Adenocarcinoma,,,
+TCGA-78-7159,TCGA-LUAD,64.85,0.0,60.0,Female,Stage IA,Stage I,Former smoker <=15y,21.0,1.1,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-55-6980,TCGA-LUAD,69.28,0.0,56.0,Male,Stage IA,Stage I,Lifelong Non-smoker,,0.7,Lung Bronchioloalveolar Carcinoma Nonmucinous,Wildtype,Mutated,Bronchioid
+TCGA-55-6980,TCGA-LUAD,69.28,0.0,56.0,Male,Stage IA,Stage I,Lifelong Non-smoker,,1.0,Lung Bronchioloalveolar Carcinoma Nonmucinous,Wildtype,Mutated,Bronchioid
+TCGA-55-6987,TCGA-LUAD,70.2,0.0,77.0,Male,Stage IA,Stage I,Former smoker <=15y,,0.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-NJ-A4YF,TCGA-LUAD,70.99,0.0,50.0,Female,Stage IA,Stage I,Former smoker >15y,30.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-62-A46V,TCGA-LUAD,72.24,0.0,78.0,Female,Stage IB,Stage I,Former smoker >15y,,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-49-AAR2,TCGA-LUAD,73.06,0.0,64.0,Male,Stage IB,Stage I,Former smoker <=15y,,,Lung Acinar Adenocarcinoma,,,
+TCGA-MP-A5C7,TCGA-LUAD,73.85,0.0,76.0,Female,Stage IB,Stage I,Former smoker >15y,15.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-NJ-A4YG,TCGA-LUAD,74.28,0.0,65.0,Male,Stage IB,Stage I,Former smoker <=15y,104.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-78-8655,TCGA-LUAD,77.53,0.0,77.0,Female,Stage IA,Stage I,Former smoker <=15y,10.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-55-6642,TCGA-LUAD,80.45,0.0,63.0,Male,Stage IB,Stage I,Current smoker,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-73-4662,TCGA-LUAD,82.62,0.0,65.0,Female,Stage IA,Stage I,Former smoker >15y,10.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-73-4662,TCGA-LUAD,82.62,0.0,65.0,Female,Stage IA,Stage I,Former smoker >15y,10.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-44-6776,TCGA-LUAD,85.94,0.0,60.0,Female,Stage IA,Stage I,Former smoker <=15y,45.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-44-6776,TCGA-LUAD,85.94,0.0,60.0,Female,Stage IA,Stage I,Former smoker <=15y,45.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-64-5774,TCGA-LUAD,87.91,0.0,60.0,Male,Stage IB,Stage I,Former smoker <=15y,45.0,1.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-38-4625,TCGA-LUAD,97.67,0.0,66.0,Female,Stage IB,Stage I,Current smoker,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-38-4625,TCGA-LUAD,97.67,0.0,66.0,Female,Stage IB,Stage I,Current smoker,50.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-5049,TCGA-LUAD,101.64,0.0,70.0,Male,Stage IA,Stage I,,,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-6986,TCGA-LUAD,107.13,0.0,74.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,,Lung Bronchioloalveolar Carcinoma Nonmucinous,Wildtype,Wildtype,Bronchioid
+TCGA-55-6986,TCGA-LUAD,107.13,0.0,74.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,0.7,Lung Bronchioloalveolar Carcinoma Nonmucinous,Wildtype,Wildtype,Bronchioid
+TCGA-78-7153,TCGA-LUAD,119.42,0.0,65.0,Female,Stage IB,Stage I,Former smoker <=15y,20.0,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-49-AARO,TCGA-LUAD,123.49,0.0,39.0,Female,Stage IA,Stage I,Current smoker,,,Lung Papillary Adenocarcinoma,,,
+TCGA-49-AAR0,TCGA-LUAD,156.54,0.0,57.0,Male,Stage IA,Stage I,Current smoker,37.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-49-AARR,TCGA-LUAD,163.99,0.0,68.0,Male,Stage IA,Stage I,Former smoker >15y,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-49-AARQ,TCGA-LUAD,221.16,0.0,41.0,Female,Stage I,Stage I,Former smoker <=15y,60.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-78-7163,TCGA-LUAD,238.11,0.0,60.0,Male,Stage IB,Stage I,Former smoker <=15y,41.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-78-7163,TCGA-LUAD,238.11,0.0,60.0,Male,Stage IB,Stage I,Former smoker <=15y,41.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-97-7938,TCGA-LUAD,0.59,1.0,76.0,Female,Stage IA,Stage I,Former smoker >15y,40.0,1.2,Lung Bronchioloalveolar Carcinoma Nonmucinous,Mutated,Wildtype,Bronchioid
+TCGA-50-6673,TCGA-LUAD,0.72,1.0,84.0,Female,Stage I,Stage I,Lifelong Non-smoker,,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-93-A4JO,TCGA-LUAD,1.08,1.0,70.0,Male,Stage IA,Stage I,Former smoker <=15y,50.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-44-2666,TCGA-LUAD,3.19,1.0,43.0,Male,Stage IB,Stage I,Current smoker,30.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-L9-A443,TCGA-LUAD,6.34,1.0,63.0,Female,Stage IA,Stage I,Former smoker <=15y,90.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-71-8520,TCGA-LUAD,6.9,1.0,60.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-4B-A93V,TCGA-LUAD,9.86,1.0,52.0,Female,Stage IA,Stage I,Former smoker <=15y,30.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-50-7109,TCGA-LUAD,10.12,1.0,60.0,Male,Stage IA,Stage I,Current smoker,120.0,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-50-7109,TCGA-LUAD,10.12,1.0,60.0,Male,Stage IA,Stage I,Current smoker,120.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-78-7542,TCGA-LUAD,10.55,1.0,56.0,Male,Stage IB,Stage I,Current smoker,60.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-MP-A4TJ,TCGA-LUAD,11.14,1.0,62.0,Female,Stage IA,Stage I,Current smoker,,,Lung Signet Ring Adenocarcinoma,,,
+TCGA-38-4631,TCGA-LUAD,11.63,1.0,72.0,Female,Stage IB,Stage I,Former smoker <=15y,40.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-38-4631,TCGA-LUAD,11.63,1.0,72.0,Female,Stage IB,Stage I,Former smoker <=15y,40.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-44-A4SU,TCGA-LUAD,13.44,1.0,67.0,Female,Stage IA,Stage I,Former smoker <=15y,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-5931,TCGA-LUAD,14.26,1.0,75.0,Female,Stage IB,Stage I,Former smoker <=15y,40.0,1.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-50-5931,TCGA-LUAD,14.26,1.0,75.0,Female,Stage IB,Stage I,Former smoker <=15y,40.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-91-8497,TCGA-LUAD,14.26,1.0,75.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,1.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-5939,TCGA-LUAD,15.11,1.0,85.0,Male,Stage IB,Stage I,Former smoker >15y,15.0,1.2,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-50-5939,TCGA-LUAD,15.11,1.0,85.0,Male,Stage IB,Stage I,Former smoker >15y,15.0,2.5,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-55-8299,TCGA-LUAD,15.41,1.0,61.0,Female,Stage IA,Stage I,Former smoker <=15y,20.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-95-7043,TCGA-LUAD,16.52,1.0,63.0,Female,Stage IA,Stage I,Former smoker <=15y,40.0,0.6,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-J2-A4AD,TCGA-LUAD,18.07,1.0,61.0,Female,Stage IA,Stage I,Current smoker,120.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-7661,TCGA-LUAD,18.3,1.0,69.0,Female,Stage IB,Stage I,Former smoker >15y,22.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-7661,TCGA-LUAD,18.3,1.0,69.0,Female,Stage IB,Stage I,Former smoker >15y,22.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7913,TCGA-LUAD,18.43,1.0,61.0,Female,Stage IA,Stage I,Current smoker,40.0,0.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-62-A46P,TCGA-LUAD,19.51,1.0,65.0,Male,Stage IB,Stage I,Former smoker <=15y,40.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-55-8090,TCGA-LUAD,19.65,1.0,80.0,Male,Stage IA,Stage I,Current smoker,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-A4DF,TCGA-LUAD,20.17,1.0,88.0,Male,Stage IA,Stage I,Former smoker >15y,60.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-5935,TCGA-LUAD,21.45,1.0,86.0,Female,Stage IA,Stage I,,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-50-5935,TCGA-LUAD,21.45,1.0,86.0,Female,Stage IA,Stage I,,,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-86-8075,TCGA-LUAD,22.8,1.0,66.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,1.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-1592,TCGA-LUAD,23.03,1.0,65.0,Male,Stage IA,Stage I,Former smoker <=15y,,1.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-55-1592,TCGA-LUAD,23.03,1.0,65.0,Male,Stage IA,Stage I,Former smoker <=15y,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-55-8089,TCGA-LUAD,23.06,1.0,56.0,Male,Stage IA,Stage I,Current smoker,97.0,0.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8096,TCGA-LUAD,23.62,1.0,67.0,Female,Stage IB,Stage I,Current smoker,104.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-2668,TCGA-LUAD,25.0,1.0,51.0,Male,Stage IB,Stage I,Former smoker <=15y,60.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-2668,TCGA-LUAD,25.0,1.0,51.0,Male,Stage IB,Stage I,Former smoker <=15y,60.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-6592,TCGA-LUAD,25.53,1.0,71.0,Female,Stage IB,Stage I,Former smoker <=15y,,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-6592,TCGA-LUAD,25.53,1.0,71.0,Female,Stage IB,Stage I,Former smoker <=15y,,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-38-7271,TCGA-LUAD,26.28,1.0,72.0,Female,Stage IA,Stage I,Former smoker <=15y,25.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-4112,TCGA-LUAD,26.54,1.0,60.0,Female,Stage IB,Stage I,Former smoker >15y,30.0,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-44-4112,TCGA-LUAD,26.54,1.0,60.0,Female,Stage IB,Stage I,Former smoker >15y,30.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-49-4487,TCGA-LUAD,28.09,1.0,72.0,Female,Stage IA,Stage I,Former smoker <=15y,40.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-49-4488,TCGA-LUAD,28.55,1.0,74.0,Female,Stage IA,Stage I,Former smoker >15y,,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-49-4488,TCGA-LUAD,28.55,1.0,74.0,Female,Stage IA,Stage I,Former smoker >15y,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-78-7535,TCGA-LUAD,31.18,1.0,45.0,Male,Stage IB,Stage I,Current smoker,35.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-MP-A4TA,TCGA-LUAD,31.21,1.0,75.0,Female,Stage IA,Stage I,Former smoker <=15y,55.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-6777,TCGA-LUAD,32.42,1.0,85.0,Female,Stage IB,Stage I,Former smoker <=15y,64.0,1.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-44-6777,TCGA-LUAD,32.42,1.0,85.0,Female,Stage IB,Stage I,Former smoker <=15y,64.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-55-7574,TCGA-LUAD,32.69,1.0,64.0,Female,Stage IB,Stage I,Former smoker <=15y,2.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-55-7574,TCGA-LUAD,32.69,1.0,64.0,Female,Stage IB,Stage I,Former smoker <=15y,2.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-44-3919,TCGA-LUAD,33.71,1.0,71.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-44-3919,TCGA-LUAD,33.71,1.0,71.0,Female,Stage IA,Stage I,Lifelong Non-smoker,,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-38-4630,TCGA-LUAD,35.25,1.0,75.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,1.6,Lung Papillary Adenocarcinoma,,,
+TCGA-38-4630,TCGA-LUAD,35.25,1.0,75.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,1.2,Lung Papillary Adenocarcinoma,,,
+TCGA-49-AARN,TCGA-LUAD,37.29,1.0,56.0,Female,Stage IA,Stage I,Former smoker (duration unknown),,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-MP-A4T2,TCGA-LUAD,37.32,1.0,71.0,Male,Stage IA,Stage I,Former smoker <=15y,75.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-64-1681,TCGA-LUAD,38.34,1.0,61.0,Female,Stage IA,Stage I,Former smoker >15y,,0.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-78-7155,TCGA-LUAD,38.47,1.0,68.0,Male,Stage IB,Stage I,Former smoker <=15y,48.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-62-A470,TCGA-LUAD,39.22,1.0,84.0,Male,Stage IB,Stage I,Former smoker >15y,30.0,,Lung Acinar Adenocarcinoma,,,
+TCGA-78-7540,TCGA-LUAD,39.32,1.0,66.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,1.3,Lung Bronchioloalveolar Carcinoma Mucinous,Mutated,Wildtype,Bronchioid
+TCGA-78-7540,TCGA-LUAD,39.32,1.0,66.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,,Lung Bronchioloalveolar Carcinoma Mucinous,Mutated,Wildtype,Bronchioid
+TCGA-78-7152,TCGA-LUAD,39.91,1.0,65.0,Male,Stage IB,Stage I,Former smoker <=15y,40.0,0.9,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-49-AARE,TCGA-LUAD,40.37,1.0,51.0,Female,Stage IA,Stage I,Former smoker <=15y,15.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-6829,TCGA-LUAD,41.33,1.0,78.0,Male,Stage IB,Stage I,Former smoker <=15y,94.5,0.9,Lung Bronchioloalveolar Carcinoma Nonmucinous,Wildtype,Wildtype,Squamoid
+TCGA-91-6829,TCGA-LUAD,41.33,1.0,78.0,Male,Stage IB,Stage I,Former smoker <=15y,94.5,1.1,Lung Bronchioloalveolar Carcinoma Nonmucinous,Wildtype,Wildtype,Squamoid
+TCGA-50-6597,TCGA-LUAD,41.66,1.0,79.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-50-6590,TCGA-LUAD,42.31,1.0,72.0,Female,Stage IB,Stage I,Former smoker <=15y,50.0,1.6,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-49-4501,TCGA-LUAD,46.68,1.0,67.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-49-4501,TCGA-LUAD,46.68,1.0,67.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-62-A46O,TCGA-LUAD,47.77,1.0,65.0,Female,Stage IB,Stage I,Current smoker,48.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-78-7633,TCGA-LUAD,50.2,1.0,67.0,Male,Stage IB,Stage I,Former smoker <=15y,94.0,1.0,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-73-7499,TCGA-LUAD,50.3,1.0,81.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,2.3,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-73-4658,TCGA-LUAD,52.56,1.0,80.0,Female,Stage IB,Stage I,Former smoker >15y,25.0,1.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-73-4658,TCGA-LUAD,52.56,1.0,80.0,Female,Stage IB,Stage I,Former smoker >15y,25.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-78-7537,TCGA-LUAD,53.29,1.0,72.0,Male,Stage IB,Stage I,Former smoker >15y,20.0,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-55-6972,TCGA-LUAD,53.61,1.0,72.0,Male,Stage IB,Stage I,Current smoker,,0.6,Lung Papillary Adenocarcinoma,Wildtype,Wildtype,Magnoid
+TCGA-55-6972,TCGA-LUAD,53.61,1.0,72.0,Male,Stage IB,Stage I,Current smoker,,0.7,Lung Papillary Adenocarcinoma,Wildtype,Wildtype,Magnoid
+TCGA-62-A46S,TCGA-LUAD,54.3,1.0,73.0,Male,Stage IB,Stage I,Former smoker <=15y,40.0,,Lung Papillary Adenocarcinoma,,,
+TCGA-62-A46R,TCGA-LUAD,56.67,1.0,54.0,Female,Stage IB,Stage I,Former smoker <=15y,25.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-O1-A52J,TCGA-LUAD,59.07,1.0,74.0,Female,Stage IA,Stage I,Former smoker >15y,45.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-49-4486,TCGA-LUAD,76.15,1.0,72.0,Male,Stage IA,Stage I,Former smoker >15y,17.5,1.6,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-49-4486,TCGA-LUAD,76.15,1.0,72.0,Male,Stage IA,Stage I,Former smoker >15y,17.5,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-MP-A4SV,TCGA-LUAD,86.07,1.0,67.0,Male,Stage IB,Stage I,Current smoker,110.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-78-7162,TCGA-LUAD,104.11,1.0,75.0,Male,Stage IA,Stage I,Current smoker,12.0,0.7,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-78-8662,TCGA-LUAD,110.41,1.0,53.0,Female,Stage IB,Stage I,Current smoker,45.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-78-7143,TCGA-LUAD,162.98,1.0,62.0,Female,Stage IB,Stage I,Lifelong Non-smoker,,1.1,Lung Bronchioloalveolar Carcinoma Nonmucinous,Wildtype,Wildtype,Bronchioid
+TCGA-55-8506,TCGA-LUAD,0.36,0.0,62.0,Female,Stage IIB,Stage II,Current smoker,,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-NJ-A55O,TCGA-LUAD,0.43,0.0,56.0,Female,Stage IIA,Stage II,Former smoker <=15y,30.0,,Mucinous (Colloid) Carcinoma,,,
+TCGA-86-8074,TCGA-LUAD,0.79,0.0,62.0,Female,Stage IIA,Stage II,Current smoker,40.0,2.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-A4BC,TCGA-LUAD,1.45,0.0,59.0,Male,Stage IIA,Stage II,Former smoker <=15y,30.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-6830,TCGA-LUAD,1.97,0.0,65.0,Female,Stage IIA,Stage II,Former smoker <=15y,12.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-95-8494,TCGA-LUAD,2.76,0.0,67.0,Male,Stage IIA,Stage II,Former smoker (duration unknown),,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-69-7978,TCGA-LUAD,4.4,0.0,59.0,Male,Stage IIB,Stage II,Current smoker,80.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-05-5423,TCGA-LUAD,4.96,0.0,65.0,Male,Stage IIB,Stage II,Former smoker >15y,72.0,1.4,Lung Adenocarcinoma Mixed Subtype,Wildtype,Mutated,Bronchioid
+TCGA-86-6851,TCGA-LUAD,5.88,0.0,73.0,Female,Stage IIA,Stage II,Current smoker,52.0,1.0,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-69-7760,TCGA-LUAD,6.64,0.0,73.0,Male,Stage IIB,Stage II,Lifelong Non-smoker,,1.1,Lung Adenocarcinoma Mixed Subtype,Wildtype,Mutated,Magnoid
+TCGA-44-8119,TCGA-LUAD,9.36,0.0,73.0,Male,Stage IIB,Stage II,Current smoker,50.0,2.6,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-A47F,TCGA-LUAD,11.07,0.0,74.0,Male,Stage IIB,Stage II,Former smoker >15y,20.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8619,TCGA-LUAD,13.67,0.0,72.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,1.2,Mucinous (Colloid) Carcinoma,,,
+TCGA-67-6217,TCGA-LUAD,13.86,0.0,73.0,Female,Stage IIA,Stage II,Former smoker >15y,,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-69-8253,TCGA-LUAD,13.99,0.0,59.0,Female,Stage IIA,Stage II,Former smoker <=15y,7.8,1.2,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-73-4668,TCGA-LUAD,15.34,0.0,66.0,Female,Stage IIB,Stage II,Former smoker <=15y,55.0,0.6,Lung Micropapillary Adenocarcinoma,,,
+TCGA-73-4668,TCGA-LUAD,15.34,0.0,66.0,Female,Stage IIB,Stage II,Former smoker <=15y,55.0,0.8,Lung Micropapillary Adenocarcinoma,,,
+TCGA-91-7771,TCGA-LUAD,16.16,0.0,62.0,Male,Stage IIB,Stage II,Former smoker <=15y,75.0,3.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-69-A59K,TCGA-LUAD,17.15,0.0,60.0,Female,Stage IIB,Stage II,Former smoker <=15y,25.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-95-A4VN,TCGA-LUAD,18.17,0.0,62.0,Female,Stage IIA,Stage II,Former smoker <=15y,42.0,,Lung Solid Pattern Predominant Adenocarcinoma,,,
+TCGA-L9-A7SV,TCGA-LUAD,18.56,0.0,69.0,Male,Stage IIA,Stage II,Former smoker >15y,93.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-95-7567,TCGA-LUAD,18.66,0.0,61.0,Male,Stage IIB,Stage II,Former smoker <=15y,,1.0,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Squamoid
+TCGA-55-8205,TCGA-LUAD,19.68,0.0,76.0,Female,Stage IIA,Stage II,Former smoker <=15y,30.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7994,TCGA-LUAD,19.81,0.0,81.0,Male,Stage IIB,Stage II,Current smoker,28.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-A4BD,TCGA-LUAD,19.81,0.0,78.0,Male,Stage IIA,Stage II,Former smoker >15y,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8508,TCGA-LUAD,20.27,0.0,60.0,Female,Stage IIA,Stage II,Current smoker,,1.0,Mucinous (Colloid) Carcinoma,,,
+TCGA-55-A48Y,TCGA-LUAD,20.7,0.0,69.0,Male,Stage IIA,Stage II,Current smoker,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-L9-A743,TCGA-LUAD,21.81,0.0,56.0,Male,Stage IIA,Stage II,Current smoker,40.5,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-05-5428,TCGA-LUAD,22.01,0.0,57.0,Male,Stage IIA,Stage II,Former smoker >15y,30.0,1.0,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-49-6767,TCGA-LUAD,22.24,0.0,46.0,Female,Stage IIB,Stage II,Current smoker,30.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-A48X,TCGA-LUAD,22.63,0.0,63.0,Female,Stage IIA,Stage II,Former smoker <=15y,36.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-8280,TCGA-LUAD,23.03,0.0,54.0,Female,Stage IIA,Stage II,Lifelong Non-smoker,,2.8,Lung Bronchioloalveolar Carcinoma Nonmucinous,,,
+TCGA-J2-8194,TCGA-LUAD,23.78,0.0,69.0,Female,Stage IIB,Stage II,Former smoker >15y,20.0,0.8,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-44-6146,TCGA-LUAD,23.92,0.0,64.0,Male,Stage IIB,Stage II,Former smoker >15y,15.0,2.0,Lung Mucinous Adenocarcinoma,Mutated,Wildtype,Bronchioid
+TCGA-44-6146,TCGA-LUAD,23.92,0.0,64.0,Male,Stage IIB,Stage II,Former smoker >15y,15.0,1.5,Lung Mucinous Adenocarcinoma,Mutated,Wildtype,Bronchioid
+TCGA-J2-8192,TCGA-LUAD,24.28,0.0,65.0,Female,Stage IIA,Stage II,Lifelong Non-smoker,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-05-4432,TCGA-LUAD,25.0,0.0,66.0,Male,Stage IIB,Stage II,Current smoker,58.0,1.0,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-05-4427,TCGA-LUAD,25.99,0.0,65.0,Female,Stage IIB,Stage II,Former smoker <=15y,8.0,1.7,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-55-8513,TCGA-LUAD,25.99,0.0,77.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,1.0,Mucinous (Colloid) Carcinoma,,,
+TCGA-78-7539,TCGA-LUAD,25.99,0.0,75.0,Female,Stage IIA,Stage II,Former smoker >15y,2.2,0.9,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Bronchioid
+TCGA-86-8674,TCGA-LUAD,26.48,0.0,50.0,Male,Stage IIA,Stage II,Former smoker <=15y,37.5,2.5,Lung Papillary Adenocarcinoma,,,
+TCGA-69-8453,TCGA-LUAD,26.71,0.0,77.0,Male,Stage IIB,Stage II,Former smoker >15y,12.0,,Mucinous (Colloid) Carcinoma,,,
+TCGA-MN-A4N1,TCGA-LUAD,27.17,0.0,60.0,Male,Stage IIA,Stage II,Current smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-8671,TCGA-LUAD,27.56,0.0,72.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,0.9,Lung Papillary Adenocarcinoma,,,
+TCGA-64-5815,TCGA-LUAD,28.45,0.0,74.0,Male,Stage IIB,Stage II,Former smoker >15y,30.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-05-5425,TCGA-LUAD,28.98,0.0,68.0,Male,Stage IIB,Stage II,Former smoker >15y,40.0,1.2,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-44-7670,TCGA-LUAD,28.98,0.0,47.0,Female,Stage IIA,Stage II,Current smoker,30.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-44-7670,TCGA-LUAD,28.98,0.0,47.0,Female,Stage IIA,Stage II,Current smoker,30.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-62-A472,TCGA-LUAD,29.89,0.0,70.0,Male,Stage IIB,Stage II,Current smoker,60.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-05-4424,TCGA-LUAD,29.99,0.0,70.0,Male,Stage IIB,Stage II,Former smoker <=15y,50.0,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-86-8278,TCGA-LUAD,31.01,0.0,63.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-8279,TCGA-LUAD,31.18,0.0,46.0,Male,Stage IIA,Stage II,Lifelong Non-smoker,,1.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7910,TCGA-LUAD,34.17,0.0,50.0,Female,Stage IIA,Stage II,Former smoker <=15y,15.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7910,TCGA-LUAD,34.17,0.0,50.0,Female,Stage IIA,Stage II,Former smoker <=15y,15.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-53-A4EZ,TCGA-LUAD,35.18,0.0,63.0,Male,Stage IIA,Stage II,Former smoker >15y,40.0,,Lung Acinar Adenocarcinoma,,,
+TCGA-44-7667,TCGA-LUAD,36.04,0.0,49.0,Female,Stage IIB,Stage II,Current smoker,50.0,1.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-7667,TCGA-LUAD,36.04,0.0,49.0,Female,Stage IIB,Stage II,Current smoker,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-8459,TCGA-LUAD,36.76,0.0,68.0,Male,Stage IIB,Stage II,Current smoker,10.0,1.2,Mucinous (Colloid) Carcinoma,,,
+TCGA-86-8054,TCGA-LUAD,37.71,0.0,61.0,Male,Stage IIB,Stage II,Current smoker,9.0,1.7,Lung Acinar Adenocarcinoma,,,
+TCGA-86-7713,TCGA-LUAD,38.01,0.0,70.0,Male,Stage IIA,Stage II,Lifelong Non-smoker,,3.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-86-7713,TCGA-LUAD,38.01,0.0,70.0,Male,Stage IIA,Stage II,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-62-8395,TCGA-LUAD,39.95,0.0,80.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,1.0,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-62-A471,TCGA-LUAD,40.93,0.0,64.0,Male,Stage IIB,Stage II,Former smoker <=15y,30.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-95-7039,TCGA-LUAD,41.79,0.0,54.0,Female,Stage IIB,Stage II,Current smoker,34.0,0.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Mutated,Squamoid
+TCGA-62-8397,TCGA-LUAD,42.35,0.0,70.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,0.6,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-44-2665,TCGA-LUAD,42.74,0.0,55.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-44-2665,TCGA-LUAD,42.74,0.0,55.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,1.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-44-2659,TCGA-LUAD,44.91,0.0,65.0,Female,Stage IIB,Stage II,Former smoker <=15y,57.0,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-44-2659,TCGA-LUAD,44.91,0.0,65.0,Female,Stage IIB,Stage II,Former smoker <=15y,57.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-49-6744,TCGA-LUAD,55.29,0.0,64.0,Female,Stage IIA,Stage II,Former smoker <=15y,20.0,2.1,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-49-6744,TCGA-LUAD,55.29,0.0,64.0,Female,Stage IIA,Stage II,Former smoker <=15y,20.0,1.0,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-49-AAR3,TCGA-LUAD,62.19,0.0,69.0,Male,Stage IIB,Stage II,,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-1596,TCGA-LUAD,67.84,0.0,55.0,Male,Stage IIB,Stage II,Current smoker,50.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-55-1596,TCGA-LUAD,67.84,0.0,55.0,Male,Stage IIB,Stage II,Current smoker,50.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-62-A46U,TCGA-LUAD,67.9,0.0,71.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-55-6983,TCGA-LUAD,92.74,0.0,81.0,Male,Stage IIB,Stage II,Former smoker <=15y,60.0,0.5,Mucinous (Colloid) Carcinoma,Mutated,Wildtype,Magnoid
+TCGA-55-6983,TCGA-LUAD,92.74,0.0,81.0,Male,Stage IIB,Stage II,Former smoker <=15y,60.0,1.1,Mucinous (Colloid) Carcinoma,Mutated,Wildtype,Magnoid
+TCGA-78-8640,TCGA-LUAD,232.0,0.0,59.0,Male,Stage IIA,Stage II,Current smoker,45.0,0.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-8672,TCGA-LUAD,0.62,1.0,59.0,Male,Stage IIB,Stage II,Lifelong Non-smoker,,2.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-95-7562,TCGA-LUAD,2.86,1.0,71.0,Male,Stage IIA,Stage II,Former smoker >15y,10.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-A490,TCGA-LUAD,3.25,1.0,78.0,Male,Stage IIA,Stage II,Former smoker >15y,34.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-A4D0,TCGA-LUAD,3.81,1.0,48.0,Male,Stage IIA,Stage II,Current smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-6975,TCGA-LUAD,3.88,1.0,61.0,Male,Stage IIB,Stage II,Former smoker <=15y,,0.2,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-55-6975,TCGA-LUAD,3.88,1.0,61.0,Male,Stage IIB,Stage II,Former smoker <=15y,,0.9,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-86-8055,TCGA-LUAD,4.07,1.0,79.0,Male,Stage IIA,Stage II,Current smoker,60.0,3.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8092,TCGA-LUAD,5.06,1.0,75.0,Male,Stage IIB,Stage II,Former smoker <=15y,40.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-97-8174,TCGA-LUAD,5.39,1.0,67.0,Male,Stage IIA,Stage II,Former smoker >15y,40.0,1.5,Lung Papillary Adenocarcinoma,,,
+TCGA-55-6712,TCGA-LUAD,5.62,1.0,71.0,Male,Stage IIA,Stage II,Former smoker <=15y,,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-6978,TCGA-LUAD,5.78,1.0,81.0,Male,Stage IIA,Stage II,Lifelong Non-smoker,,0.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-6978,TCGA-LUAD,5.78,1.0,81.0,Male,Stage IIA,Stage II,Lifelong Non-smoker,,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-7914,TCGA-LUAD,6.14,1.0,71.0,Female,Stage IIA,Stage II,Current smoker,5.0,0.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-55-7914,TCGA-LUAD,6.14,1.0,71.0,Female,Stage IIA,Stage II,Current smoker,5.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-55-6979,TCGA-LUAD,7.79,1.0,59.0,Female,Stage IIB,Stage II,Former smoker >15y,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-6979,TCGA-LUAD,7.79,1.0,59.0,Female,Stage IIB,Stage II,Former smoker >15y,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-7284,TCGA-LUAD,7.98,1.0,74.0,Male,Stage IIB,Stage II,Former smoker >15y,,0.9,Lung Bronchioloalveolar Carcinoma Nonmucinous,,,
+TCGA-78-7166,TCGA-LUAD,8.48,1.0,84.0,Male,Stage IIB,Stage II,Former smoker >15y,38.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-49-AAR9,TCGA-LUAD,8.54,1.0,61.0,Male,Stage IIB,Stage II,Current smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-73-4676,TCGA-LUAD,9.23,1.0,45.0,Male,Stage IIA,Stage II,Former smoker <=15y,48.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-73-4676,TCGA-LUAD,9.23,1.0,45.0,Male,Stage IIA,Stage II,Former smoker <=15y,48.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-78-7161,TCGA-LUAD,9.56,1.0,69.0,Female,Stage IIB,Stage II,Former smoker <=15y,27.8,1.0,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Magnoid
+TCGA-78-8660,TCGA-LUAD,10.55,1.0,69.0,Male,Stage IIB,Stage II,Former smoker <=15y,11.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-MP-A4TF,TCGA-LUAD,11.04,1.0,58.0,Female,Stage IIA,Stage II,Former smoker <=15y,40.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-73-A9RS,TCGA-LUAD,11.17,1.0,41.0,Male,Stage IIB,Stage II,Current smoker,11.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-7907,TCGA-LUAD,11.27,1.0,77.0,Male,Stage IIA,Stage II,Former smoker >15y,80.0,0.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-86-6562,TCGA-LUAD,12.35,1.0,52.0,Male,Stage IIA,Stage II,Lifelong Non-smoker,,1.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-49-4505,TCGA-LUAD,14.06,1.0,61.0,Female,Stage IIB,Stage II,Former smoker <=15y,74.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-49-4505,TCGA-LUAD,14.06,1.0,61.0,Female,Stage IIB,Stage II,Former smoker <=15y,74.0,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-MP-A4TI,TCGA-LUAD,14.09,1.0,72.0,Male,Stage IIA,Stage II,Former smoker >15y,35.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-L9-A50W,TCGA-LUAD,14.52,1.0,75.0,Male,Stage IIA,Stage II,Former smoker >15y,19.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-49-6742,TCGA-LUAD,16.03,1.0,70.0,Male,Stage IIA,Stage II,Former smoker >15y,10.0,2.1,Mucinous (Colloid) Carcinoma,Wildtype,Wildtype,Magnoid
+TCGA-49-6742,TCGA-LUAD,16.03,1.0,70.0,Male,Stage IIA,Stage II,Former smoker >15y,10.0,1.0,Mucinous (Colloid) Carcinoma,Wildtype,Wildtype,Magnoid
+TCGA-44-6779,TCGA-LUAD,16.43,1.0,50.0,Female,Stage IIB,Stage II,Former smoker <=15y,15.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-44-7669,TCGA-LUAD,18.86,1.0,59.0,Male,Stage IIA,Stage II,Current smoker,20.0,1.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-7669,TCGA-LUAD,18.86,1.0,59.0,Male,Stage IIA,Stage II,Current smoker,20.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-MP-A4TK,TCGA-LUAD,19.12,1.0,56.0,Female,Stage IIB,Stage II,Former smoker <=15y,28.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-78-7147,TCGA-LUAD,19.25,1.0,67.0,Female,Stage IIB,Stage II,Current smoker,50.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-78-7148,TCGA-LUAD,20.57,1.0,71.0,Male,Stage IIB,Stage II,Current smoker,57.0,0.9,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Magnoid
+TCGA-78-7150,TCGA-LUAD,21.88,1.0,59.0,Male,Stage IIB,Stage II,Former smoker <=15y,37.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-49-AAQV,TCGA-LUAD,22.24,1.0,63.0,Female,Stage II,Stage II,Lifelong Non-smoker,,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-05-4397,TCGA-LUAD,24.01,1.0,65.0,Male,Stage IIB,Stage II,Current smoker,45.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-86-A4JF,TCGA-LUAD,24.21,1.0,56.0,Male,Stage IIB,Stage II,Former smoker <=15y,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-6984,TCGA-LUAD,24.97,1.0,71.0,Female,Stage IIB,Stage II,,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-6984,TCGA-LUAD,24.97,1.0,71.0,Female,Stage IIB,Stage II,,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-38-4629,TCGA-LUAD,28.38,1.0,68.0,Male,Stage IIB,Stage II,Former smoker <=15y,100.0,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-38-4629,TCGA-LUAD,28.38,1.0,68.0,Male,Stage IIB,Stage II,Former smoker <=15y,100.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-49-4510,TCGA-LUAD,29.43,1.0,51.0,Female,Stage IIB,Stage II,Current smoker,55.5,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-49-4510,TCGA-LUAD,29.43,1.0,51.0,Female,Stage IIB,Stage II,Current smoker,55.5,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-MP-A4TE,TCGA-LUAD,29.43,1.0,56.0,Male,Stage IIA,Stage II,Former smoker <=15y,40.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-53-7626,TCGA-LUAD,30.52,1.0,76.0,Female,Stage IIA,Stage II,Former smoker <=15y,35.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-55-6982,TCGA-LUAD,32.69,1.0,79.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,0.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-6982,TCGA-LUAD,32.69,1.0,79.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,0.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-49-4506,TCGA-LUAD,32.82,1.0,68.0,Female,Stage IIB,Stage II,Current smoker,100.0,0.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-49-4506,TCGA-LUAD,32.82,1.0,68.0,Female,Stage IIB,Stage II,Current smoker,100.0,2.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-86-7711,TCGA-LUAD,34.36,1.0,70.0,Male,Stage IIA,Stage II,Current smoker,50.0,1.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-7711,TCGA-LUAD,34.36,1.0,70.0,Male,Stage IIA,Stage II,Current smoker,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-38-4627,TCGA-LUAD,37.68,1.0,64.0,Female,Stage IIA,Stage II,Former smoker <=15y,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-38-4627,TCGA-LUAD,37.68,1.0,64.0,Female,Stage IIA,Stage II,Former smoker <=15y,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-78-8648,TCGA-LUAD,39.72,1.0,58.0,Female,Stage IIB,Stage II,Current smoker,45.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-5932,TCGA-LUAD,40.57,1.0,75.0,Male,Stage IIB,Stage II,,,1.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-50-5932,TCGA-LUAD,40.57,1.0,75.0,Male,Stage IIB,Stage II,,,2.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-38-4628,TCGA-LUAD,49.01,1.0,65.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,0.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-38-4628,TCGA-LUAD,49.01,1.0,65.0,Female,Stage IIB,Stage II,Lifelong Non-smoker,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-50-5068,TCGA-LUAD,49.24,1.0,59.0,Female,Stage IIB,Stage II,,,1.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-MP-A4SY,TCGA-LUAD,49.31,1.0,61.0,Male,Stage IIB,Stage II,Former smoker <=15y,40.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-MP-A4SW,TCGA-LUAD,58.41,1.0,53.0,Male,Stage IIB,Stage II,Former smoker >15y,15.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-5055,TCGA-LUAD,60.12,1.0,79.0,Female,Stage IIA,Stage II,,,1.9,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-MP-A4T4,TCGA-LUAD,85.97,1.0,68.0,Female,Stage IIB,Stage II,Current smoker,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-91-6849,TCGA-LUAD,1.15,0.0,75.0,Female,Stage IIIA,Stage III,Former smoker >15y,30.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-91-6849,TCGA-LUAD,1.15,0.0,75.0,Female,Stage IIIA,Stage III,Former smoker >15y,30.0,0.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Bronchioid
+TCGA-55-7727,TCGA-LUAD,3.91,0.0,70.0,Male,Stage IIIA,Stage III,Current smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-86-8056,TCGA-LUAD,4.57,0.0,63.0,Female,Stage IIIA,Stage III,Former smoker >15y,36.0,1.4,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-69-7974,TCGA-LUAD,6.04,0.0,54.0,Female,Stage IIIA,Stage III,Former smoker <=15y,30.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-91-6848,TCGA-LUAD,7.36,0.0,59.0,Male,Stage IIIA,Stage III,Former smoker <=15y,,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-35-5375,TCGA-LUAD,8.67,0.0,61.0,Male,Stage IIIA,Stage III,Former smoker <=15y,35.0,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-49-6761,TCGA-LUAD,11.63,0.0,68.0,Female,Stage IIIA,Stage III,Former smoker <=15y,50.0,2.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-49-6761,TCGA-LUAD,11.63,0.0,68.0,Female,Stage IIIA,Stage III,Former smoker <=15y,50.0,1.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-53-7813,TCGA-LUAD,13.93,0.0,51.0,Female,Stage IIIB,Stage III,Former smoker <=15y,35.0,,Lung Bronchioloalveolar Carcinoma Nonmucinous,Mutated,Wildtype,Magnoid
+TCGA-05-4384,TCGA-LUAD,13.99,0.0,66.0,Male,Stage IIIA,Stage III,Former smoker >15y,20.0,0.8,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-55-8505,TCGA-LUAD,14.45,0.0,62.0,Male,Stage IIIA,Stage III,Lifelong Non-smoker,,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8615,TCGA-LUAD,14.65,0.0,67.0,Male,Stage IIIA,Stage III,Current smoker,67.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-38-6178,TCGA-LUAD,14.72,0.0,70.0,Female,Stage IIIA,Stage III,Lifelong Non-smoker,,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-05-5420,TCGA-LUAD,15.01,0.0,67.0,Male,Stage IIIA,Stage III,Former smoker <=15y,40.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-05-5420,TCGA-LUAD,15.01,0.0,67.0,Male,Stage IIIA,Stage III,Former smoker <=15y,40.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-49-6745,TCGA-LUAD,17.15,0.0,82.0,Male,Stage IIIA,Stage III,Former smoker <=15y,20.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-49-6745,TCGA-LUAD,17.15,0.0,82.0,Male,Stage IIIA,Stage III,Former smoker <=15y,20.0,2.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-95-A4VP,TCGA-LUAD,19.88,0.0,66.0,Female,Stage IIIA,Stage III,Former smoker <=15y,20.0,,Lung Acinar Adenocarcinoma,,,
+TCGA-55-7283,TCGA-LUAD,20.01,0.0,76.0,Female,Stage IIIA,Stage III,Former smoker >15y,5.0,0.1,Lung Bronchioloalveolar Carcinoma Nonmucinous,Mutated,Wildtype,Bronchioid
+TCGA-55-7283,TCGA-LUAD,20.01,0.0,76.0,Female,Stage IIIA,Stage III,Former smoker >15y,5.0,,Lung Bronchioloalveolar Carcinoma Nonmucinous,Mutated,Wildtype,Bronchioid
+TCGA-NJ-A7XG,TCGA-LUAD,20.27,0.0,49.0,Male,Stage IIIA,Stage III,Former smoker >15y,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-A48Z,TCGA-LUAD,21.39,0.0,60.0,Female,Stage IIIB,Stage III,Former smoker <=15y,40.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-95-A4VK,TCGA-LUAD,21.39,0.0,74.0,Female,Stage IIIA,Stage III,Former smoker >15y,45.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-97-8547,TCGA-LUAD,21.58,0.0,78.0,Female,Stage IIIA,Stage III,Lifelong Non-smoker,,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-44-6774,TCGA-LUAD,21.62,0.0,56.0,Female,Stage IIIA,Stage III,Current smoker,20.0,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-99-7458,TCGA-LUAD,24.54,0.0,74.0,Female,Stage IIIA,Stage III,Former smoker <=15y,52.0,1.2,Lung Bronchioloalveolar Carcinoma Nonmucinous,Mutated,Wildtype,Bronchioid
+TCGA-97-7554,TCGA-LUAD,25.46,0.0,83.0,Female,Stage IIIA,Stage III,Former smoker >15y,30.0,,Lung Papillary Adenocarcinoma,Mutated,Wildtype,Squamoid
+TCGA-86-A4P8,TCGA-LUAD,26.45,0.0,59.0,Female,Stage IIIA,Stage III,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-64-5779,TCGA-LUAD,28.38,0.0,61.0,Male,Stage IIIA,Stage III,Former smoker <=15y,40.0,1.3,Lung Acinar Adenocarcinoma,,,
+TCGA-44-5643,TCGA-LUAD,33.28,0.0,53.0,Male,Stage IIIA,Stage III,Current smoker,20.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-5643,TCGA-LUAD,33.28,0.0,53.0,Male,Stage IIIA,Stage III,Current smoker,20.0,1.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-99-8025,TCGA-LUAD,34.82,0.0,72.0,Female,Stage IIIA,Stage III,Former smoker <=15y,20.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-44-3396,TCGA-LUAD,37.12,0.0,74.0,Female,Stage IIIA,Stage III,Current smoker,50.0,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-44-3396,TCGA-LUAD,37.12,0.0,74.0,Female,Stage IIIA,Stage III,Current smoker,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-55-1594,TCGA-LUAD,38.7,0.0,68.0,Male,Stage IIIA,Stage III,Current smoker,,2.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-55-1594,TCGA-LUAD,38.7,0.0,68.0,Male,Stage IIIA,Stage III,Current smoker,,3.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-05-4398,TCGA-LUAD,47.01,0.0,47.0,Female,Stage IIIB,Stage III,Current smoker,72.0,1.5,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-50-5941,TCGA-LUAD,48.42,0.0,55.0,Female,Stage IIIA,Stage III,Current smoker,25.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-49-6743,TCGA-LUAD,53.25,0.0,81.0,Female,Stage IIIA,Stage III,Former smoker <=15y,50.0,1.2,Lung Clear Cell Adenocarcinoma,,,
+TCGA-49-6743,TCGA-LUAD,53.25,0.0,81.0,Female,Stage IIIA,Stage III,Former smoker <=15y,50.0,1.5,Lung Clear Cell Adenocarcinoma,,,
+TCGA-64-1679,TCGA-LUAD,81.73,0.0,58.0,Female,Stage IIIA,Stage III,Current smoker,40.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-62-8399,TCGA-LUAD,88.57,0.0,62.0,Male,Stage IIIA,Stage III,Former smoker <=15y,70.0,,Lung Papillary Adenocarcinoma,,,
+TCGA-78-7149,TCGA-LUAD,129.43,0.0,71.0,Male,Stage IIIB,Stage III,Current smoker,115.0,1.0,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-NJ-A4YI,TCGA-LUAD,0.13,1.0,87.0,Female,Stage IIIA,Stage III,Former smoker >15y,3.0,,Lung Papillary Adenocarcinoma,,,
+TCGA-64-5775,TCGA-LUAD,2.04,1.0,71.0,Male,Stage IIIA,Stage III,Current smoker,110.0,1.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-MP-A4TC,TCGA-LUAD,2.43,1.0,77.0,Male,Stage IIIA,Stage III,Former smoker >15y,125.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-05-4415,TCGA-LUAD,2.99,1.0,57.0,Male,Stage IIIB,Stage III,Former smoker <=15y,29.0,1.1,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Magnoid
+TCGA-05-4250,TCGA-LUAD,3.98,1.0,79.0,Female,Stage IIIA,Stage III,Former smoker <=15y,47.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-62-8394,TCGA-LUAD,4.57,1.0,65.0,Female,Stage IIIB,Stage III,Lifelong Non-smoker,,0.7,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-MP-A4T8,TCGA-LUAD,5.29,1.0,68.0,Male,Stage IIIA,Stage III,Former smoker >15y,25.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-78-7146,TCGA-LUAD,5.68,1.0,71.0,Female,Stage IIIA,Stage III,Former smoker <=15y,6.0,0.8,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-78-7158,TCGA-LUAD,5.88,1.0,59.0,Female,Stage IIIB,Stage III,Former smoker <=15y,14.0,1.1,Lung Adenocarcinoma Mixed Subtype,Wildtype,Mutated,Bronchioid
+TCGA-50-6595,TCGA-LUAD,6.21,1.0,74.0,Female,Stage IIIA,Stage III,Former smoker >15y,,1.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-50-6595,TCGA-LUAD,6.21,1.0,74.0,Female,Stage IIIA,Stage III,Former smoker >15y,,1.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-78-7536,TCGA-LUAD,8.02,1.0,69.0,Male,Stage IIIA,Stage III,Former smoker <=15y,44.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-50-5072,TCGA-LUAD,8.21,1.0,74.0,Male,Stage IIIA,Stage III,Former smoker >15y,15.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-50-5936,TCGA-LUAD,8.44,1.0,58.0,Male,Stage IIIA,Stage III,,,0.9,Mucinous (Colloid) Carcinoma,Wildtype,Wildtype,Magnoid
+TCGA-50-5936,TCGA-LUAD,8.44,1.0,58.0,Male,Stage IIIA,Stage III,,,2.2,Mucinous (Colloid) Carcinoma,Wildtype,Wildtype,Magnoid
+TCGA-49-4507,TCGA-LUAD,8.8,1.0,73.0,Female,Stage IIIA,Stage III,Former smoker <=15y,78.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-49-4507,TCGA-LUAD,8.8,1.0,73.0,Female,Stage IIIA,Stage III,Former smoker <=15y,78.0,1.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-05-4418,TCGA-LUAD,9.0,1.0,69.0,Male,Stage IIIA,Stage III,Current smoker,25.0,1.2,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Magnoid
+TCGA-05-5429,TCGA-LUAD,9.03,1.0,60.0,Male,Stage IIIA,Stage III,Lifelong Non-smoker,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-50-5930,TCGA-LUAD,9.26,1.0,47.0,Male,Stage IIIA,Stage III,,,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-50-5930,TCGA-LUAD,9.26,1.0,47.0,Male,Stage IIIA,Stage III,,,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-05-4396,TCGA-LUAD,9.95,1.0,76.0,Male,Stage IIIB,Stage III,Former smoker >15y,19.0,1.6,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-MP-A4TD,TCGA-LUAD,10.09,1.0,71.0,Male,Stage IIIA,Stage III,Former smoker >15y,20.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-6593,TCGA-LUAD,11.04,1.0,49.0,Female,Stage IIIA,Stage III,Former smoker <=15y,,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-50-6593,TCGA-LUAD,11.04,1.0,49.0,Female,Stage IIIA,Stage III,Former smoker <=15y,,1.5,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-50-6594,TCGA-LUAD,12.16,1.0,79.0,Female,Stage IIIA,Stage III,Former smoker <=15y,,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-6594,TCGA-LUAD,12.16,1.0,79.0,Female,Stage IIIA,Stage III,Former smoker <=15y,,1.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-49-4490,TCGA-LUAD,12.65,1.0,45.0,Female,Stage IIIA,Stage III,Former smoker >15y,5.0,0.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-49-4490,TCGA-LUAD,12.65,1.0,45.0,Female,Stage IIIA,Stage III,Former smoker >15y,5.0,1.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Bronchioid
+TCGA-62-A46Y,TCGA-LUAD,13.6,1.0,70.0,Female,Stage IIIA,Stage III,Lifelong Non-smoker,,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-62-8398,TCGA-LUAD,14.59,1.0,55.0,Male,Stage IIIA,Stage III,Former smoker <=15y,20.0,1.0,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-86-8359,TCGA-LUAD,14.59,1.0,52.0,Male,Stage IIIA,Stage III,Current smoker,36.0,2.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-6970,TCGA-LUAD,15.24,1.0,67.0,Female,Stage IIIA,Stage III,Former smoker <=15y,,1.1,Lung Papillary Adenocarcinoma,Mutated,Wildtype,Magnoid
+TCGA-55-6970,TCGA-LUAD,15.24,1.0,67.0,Female,Stage IIIA,Stage III,Former smoker <=15y,,0.8,Lung Papillary Adenocarcinoma,Mutated,Wildtype,Magnoid
+TCGA-97-8176,TCGA-LUAD,15.37,1.0,63.0,Male,Stage IIIA,Stage III,Former smoker <=15y,40.0,,Lung Acinar Adenocarcinoma,,,
+TCGA-50-5051,TCGA-LUAD,15.7,1.0,42.0,Female,Stage IIIA,Stage III,Former smoker <=15y,30.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-78-7154,TCGA-LUAD,19.48,1.0,72.0,Male,Stage IIIA,Stage III,Former smoker <=15y,112.5,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-50-5044,TCGA-LUAD,20.5,1.0,72.0,Female,Stage IIIB,Stage III,,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-86-7714,TCGA-LUAD,20.53,1.0,61.0,Female,Stage IIIA,Stage III,Current smoker,43.0,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-64-1677,TCGA-LUAD,20.63,1.0,77.0,Female,Stage IIIA,Stage III,Current smoker,50.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-73-4659,TCGA-LUAD,23.36,1.0,66.0,Male,Stage IIIA,Stage III,Former smoker >15y,12.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-73-4659,TCGA-LUAD,23.36,1.0,66.0,Male,Stage IIIA,Stage III,Former smoker >15y,12.0,2.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Magnoid
+TCGA-78-7220,TCGA-LUAD,26.51,1.0,53.0,Female,Stage IIIA,Stage III,Current smoker,35.0,,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-49-AAR4,TCGA-LUAD,28.88,1.0,51.0,Male,Stage IIIA,Stage III,Current smoker,35.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-49-4512,TCGA-LUAD,29.73,1.0,69.0,Female,Stage IIIA,Stage III,Lifelong Non-smoker,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-49-4512,TCGA-LUAD,29.73,1.0,69.0,Female,Stage IIIA,Stage III,Lifelong Non-smoker,,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Bronchioid
+TCGA-73-4675,TCGA-LUAD,30.29,1.0,59.0,Male,Stage IIIA,Stage III,Former smoker <=15y,41.0,1.6,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-73-4675,TCGA-LUAD,30.29,1.0,59.0,Male,Stage IIIA,Stage III,Former smoker <=15y,41.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Magnoid
+TCGA-55-7227,TCGA-LUAD,31.27,1.0,77.0,Male,Stage IIIA,Stage III,Former smoker >15y,,0.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-49-4494,TCGA-LUAD,35.51,1.0,77.0,Male,Stage IIIA,Stage III,Former smoker >15y,50.0,2.5,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Magnoid
+TCGA-49-4494,TCGA-LUAD,35.51,1.0,77.0,Male,Stage IIIA,Stage III,Former smoker >15y,50.0,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Magnoid
+TCGA-MP-A4T9,TCGA-LUAD,41.56,1.0,54.0,Female,Stage IIIA,Stage III,Former smoker <=15y,24.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-6981,TCGA-LUAD,45.3,1.0,53.0,Female,Stage IIIA,Stage III,Former smoker >15y,,0.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-55-6981,TCGA-LUAD,45.3,1.0,53.0,Female,Stage IIIA,Stage III,Former smoker >15y,,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Mutated,Squamoid
+TCGA-62-8402,TCGA-LUAD,49.21,1.0,73.0,Female,Stage IIIA,Stage III,Lifelong Non-smoker,,0.7,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-MP-A4T6,TCGA-LUAD,58.8,1.0,76.0,Female,Stage IIIA,Stage III,Former smoker >15y,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-5933,TCGA-LUAD,78.61,1.0,72.0,Male,Stage IIIB,Stage III,,,1.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-50-5933,TCGA-LUAD,78.61,1.0,72.0,Male,Stage IIIB,Stage III,,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-73-4670,TCGA-LUAD,4.3,0.0,69.0,Female,Stage IV,Stage IV,Former smoker <=15y,30.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-73-4670,TCGA-LUAD,4.3,0.0,69.0,Female,Stage IV,Stage IV,Former smoker <=15y,30.0,1.1,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8094,TCGA-LUAD,17.77,0.0,51.0,Male,Stage IV,Stage IV,Former smoker <=15y,70.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-97-8171,TCGA-LUAD,18.66,0.0,81.0,Male,Stage IV,Stage IV,Current smoker,65.0,1.9,Lung Papillary Adenocarcinoma,,,
+TCGA-93-A4JP,TCGA-LUAD,18.99,0.0,64.0,Male,Stage IV,Stage IV,Lifelong Non-smoker,,,Lung Papillary Adenocarcinoma,,,
+TCGA-05-4425,TCGA-LUAD,21.98,0.0,70.0,Female,Stage IV,Stage IV,Former smoker >15y,28.0,,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Squamoid
+TCGA-93-A4JN,TCGA-LUAD,23.59,0.0,71.0,Male,Stage IV,Stage IV,Former smoker >15y,40.0,,Lung Acinar Adenocarcinoma,,,
+TCGA-73-4666,TCGA-LUAD,26.28,0.0,52.0,Female,Stage IV,Stage IV,Former smoker <=15y,10.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-73-4666,TCGA-LUAD,26.28,0.0,52.0,Female,Stage IV,Stage IV,Former smoker <=15y,10.0,1.2,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-86-7701,TCGA-LUAD,31.11,0.0,66.0,Male,Stage IV,Stage IV,Lifelong Non-smoker,,1.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-64-1680,TCGA-LUAD,36.99,0.0,63.0,Male,Stage IV,Stage IV,Former smoker >15y,50.0,1.2,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Bronchioid
+TCGA-L9-A5IP,TCGA-LUAD,1.91,1.0,40.0,Female,Stage IV,Stage IV,Former smoker <=15y,,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-6591,TCGA-LUAD,3.91,1.0,63.0,Female,Stage IV,Stage IV,Lifelong Non-smoker,,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-50-6591,TCGA-LUAD,3.91,1.0,63.0,Female,Stage IV,Stage IV,Lifelong Non-smoker,,1.8,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-MP-A4T7,TCGA-LUAD,5.49,1.0,75.0,Female,Stage IV,Stage IV,Former smoker <=15y,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-05-4402,TCGA-LUAD,8.02,1.0,57.0,Female,Stage IV,Stage IV,Lifelong Non-smoker,,1.6,Lung Adenocarcinoma Mixed Subtype,Wildtype,Mutated,Bronchioid
+TCGA-55-8620,TCGA-LUAD,12.32,1.0,60.0,Male,Stage IV,Stage IV,Former smoker <=15y,154.0,1.0,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-05-4434,TCGA-LUAD,15.01,1.0,67.0,Female,Stage IV,Stage IV,Current smoker,15.0,1.3,Lung Adenocarcinoma Mixed Subtype,,,
+TCGA-55-7816,TCGA-LUAD,15.37,1.0,49.0,Female,Stage IV,Stage IV,Lifelong Non-smoker,,0.3,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-8512,TCGA-LUAD,19.94,1.0,41.0,Male,Stage IV,Stage IV,Current smoker,19.0,,Lung Bronchioloalveolar Carcinoma Nonmucinous,,,
+TCGA-99-8033,TCGA-LUAD,21.55,1.0,74.0,Female,Stage IV,Stage IV,Lifelong Non-smoker,,0.6,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-78-7160,TCGA-LUAD,22.9,1.0,61.0,Male,Stage IV,Stage IV,Former smoker <=15y,43.8,,Lung Adenocarcinoma Mixed Subtype,Mutated,Wildtype,Magnoid
+TCGA-78-7145,TCGA-LUAD,27.14,1.0,52.0,Female,Stage IV,Stage IV,Former smoker <=15y,25.0,1.4,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Mutated,Wildtype,Squamoid
+TCGA-78-7156,TCGA-LUAD,32.06,1.0,62.0,Male,Stage IV,Stage IV,Former smoker >15y,84.0,1.1,Lung Adenocarcinoma Mixed Subtype,Wildtype,Wildtype,Magnoid
+TCGA-53-7624,TCGA-LUAD,34.26,1.0,40.0,Female,Stage IV,Stage IV,Current smoker,50.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-6968,TCGA-LUAD,42.48,1.0,61.0,Male,Stage IV,Stage IV,Current smoker,,0.7,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-55-6968,TCGA-LUAD,42.48,1.0,61.0,Male,Stage IV,Stage IV,Current smoker,,0.9,Lung Adenocarcinoma- Not Otherwise Specified (NOS),,,
+TCGA-38-4632,TCGA-LUAD,44.58,1.0,42.0,Male,Stage IV,Stage IV,Former smoker <=15y,10.0,,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-38-4632,TCGA-LUAD,44.58,1.0,42.0,Male,Stage IV,Stage IV,Former smoker <=15y,10.0,1.6,Lung Adenocarcinoma- Not Otherwise Specified (NOS),Wildtype,Wildtype,Squamoid
+TCGA-78-7167,TCGA-LUAD,88.07,1.0,77.0,Male,Stage IV,Stage IV,Current smoker,64.0,0.7,Lung Papillary Adenocarcinoma,Mutated,Wildtype,Magnoid
