@@ -40,29 +40,69 @@ The app includes two example datasets:
 ## Requirements
 
 - Python `3.11` or newer
+- internet access during the first install so `pip` can download dependencies
 
 ## Install
 
-### Standard install
+### Easiest Path For A New Mac
 
-This is the easiest path. It installs the dashboard plus the optional ML and DL features.
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
-
-If you want the shortest copy-paste path:
+Tested path target:
+- macOS on Apple Silicon
+- Homebrew available
 
 ```bash
-python3 -m venv .venv
+brew install python@3.11
+git clone https://github.com/kangk1204/SurvStudio.git
+cd SurvStudio
+python3.11 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -e ".[dev]"
 python -m survival_toolkit
 ```
 
-Then open `http://127.0.0.1:8000` and click `Load Example`.
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+Click `Load Example` first.
+
+### Easiest Path For A New Ubuntu Machine
+
+Test target for CI:
+- `ubuntu-latest`
+- recommended for users: Ubuntu `24.04` or newer
+
+```bash
+sudo apt update
+sudo apt install -y python3.11 python3.11-venv python3-pip build-essential git
+git clone https://github.com/kangk1204/SurvStudio.git
+cd SurvStudio
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+python -m survival_toolkit
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+### Standard install
+
+This is the easiest path once Python is already available. It installs the dashboard plus the optional ML and DL features.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+```
 
 ### Smaller installs
 
@@ -105,6 +145,11 @@ Then open:
 ```text
 http://127.0.0.1:8000
 ```
+
+If `python -m survival_toolkit` does not start the server, check:
+- the virtual environment is activated
+- installation finished without errors
+- you are inside the project directory
 
 ## First 5 Minutes
 
