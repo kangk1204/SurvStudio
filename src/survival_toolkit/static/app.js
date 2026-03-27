@@ -30,6 +30,11 @@ const refs = {
   smartBanner: document.getElementById("smartBanner"),
   smartBannerText: document.getElementById("smartBannerText"),
   smartBannerClose: document.getElementById("smartBannerClose"),
+  datasetPresetBar: document.getElementById("datasetPresetBar"),
+  datasetPresetTitle: document.getElementById("datasetPresetTitle"),
+  datasetPresetText: document.getElementById("datasetPresetText"),
+  applyBasicPresetButton: document.getElementById("applyBasicPresetButton"),
+  applyModelPresetButton: document.getElementById("applyModelPresetButton"),
   tooltipPopup: document.getElementById("tooltipPopup"),
   configStrip: document.getElementById("configStrip"),
   timeColumn: document.getElementById("timeColumn"),
@@ -534,6 +539,90 @@ function refreshVariableSelections() {
   renderSelect(refs.deriveSource, numericOptions, { selected: numericOptions.includes(refs.deriveSource.value) ? refs.deriveSource.value : numericOptions[0] || null });
 }
 
+function setCheckedValues(container, values) {
+  const wanted = new Set(values || []);
+  container.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+    input.checked = wanted.has(input.value);
+  });
+}
+
+function datasetPresetForCurrentDataset() {
+  const filename = (state.dataset?.filename || "").toLowerCase();
+  const columns = new Set((state.dataset?.columns || []).map((column) => column.name));
+  const looksLikeGbsg2 = ["rfs_days", "rfs_event", "horTh", "menostat", "tgrade"].every((name) => columns.has(name));
+  const looksLikeTcgaLung = ["os_months", "os_event", "stage_group", "smoking_status"].every((name) => columns.has(name));
+  if (filename.includes("gbsg2") || looksLikeGbsg2) {
+    return {
+      name: "GBSG2 preset",
+      summary: "RFS in days with horTh as the first KM split and a compact Cox or ML feature set.",
+      timeColumn: "rfs_days",
+      eventColumn: "rfs_event",
+      eventPositiveValue: "1",
+      timeUnitLabel: "Days",
+      basicGroup: "horTh",
+      tableVariables: ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+      coxCovariates: ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+      coxCategoricals: ["horTh", "menostat", "tgrade"],
+      modelFeatures: ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+      modelCategoricals: ["horTh", "menostat", "tgrade"],
+    };
+  }
+  if (filename.includes("tcga_luad") || looksLikeTcgaLung) {
+    return {
+      name: "TCGA LUAD preset",
+      summary: "Overall survival in months with stage_group for Kaplan-Meier and a compact smoking-aware feature set.",
+      timeColumn: "os_months",
+      eventColumn: "os_event",
+      eventPositiveValue: "1",
+      timeUnitLabel: "Months",
+      basicGroup: "stage_group",
+      tableVariables: ["age", "sex", "stage_group", "smoking_status"],
+      coxCovariates: ["age", "sex", "stage_group", "smoking_status"],
+      coxCategoricals: ["sex", "stage_group", "smoking_status"],
+      modelFeatures: ["age", "sex", "stage_group", "smoking_status"],
+      modelCategoricals: ["sex", "stage_group", "smoking_status"],
+    };
+  }
+  return null;
+}
+
+function applyDatasetPreset(mode) {
+  const preset = datasetPresetForCurrentDataset();
+  if (!preset) {
+    showToast("No dataset-specific preset is available for this file.", "error");
+    return;
+  }
+
+  const columnNames = state.dataset.columns.map((c) => c.name);
+  if (columnNames.includes(preset.timeColumn)) refs.timeColumn.value = preset.timeColumn;
+  if (columnNames.includes(preset.eventColumn)) refs.eventColumn.value = preset.eventColumn;
+  if (preset.timeUnitLabel && refs.timeUnitLabel) refs.timeUnitLabel.value = preset.timeUnitLabel;
+  updateEventPositiveOptions();
+  if (refs.eventPositiveValue) refs.eventPositiveValue.value = preset.eventPositiveValue;
+  refreshVariableSelections();
+  if (columnNames.includes(preset.basicGroup)) refs.groupColumn.value = preset.basicGroup;
+
+  const covariates = mode === "models" ? preset.modelFeatures : preset.coxCovariates;
+  const categoricals = mode === "models" ? preset.modelCategoricals : preset.coxCategoricals;
+  setCheckedValues(refs.covariateChecklist, covariates);
+  setCheckedValues(refs.categoricalChecklist, categoricals);
+  setCheckedValues(refs.cohortVariableChecklist, preset.tableVariables || covariates);
+  updateDatasetBadge();
+  showToast(`${preset.name} applied`, "success", 2500);
+}
+
+function updateDatasetPresetBar() {
+  const preset = datasetPresetForCurrentDataset();
+  if (!refs.datasetPresetBar || !refs.datasetPresetTitle || !refs.datasetPresetText) return;
+  if (!preset) {
+    refs.datasetPresetBar.classList.add("hidden");
+    return;
+  }
+  refs.datasetPresetTitle.textContent = preset.name;
+  refs.datasetPresetText.textContent = preset.summary;
+  refs.datasetPresetBar.classList.remove("hidden");
+}
+
 function currentBaseConfig() {
   if (!state.dataset) throw new Error("Load a dataset first.");
   const timeColumn = refs.timeColumn.value;
@@ -602,6 +691,7 @@ function updateControlsFromDataset() {
   refreshVariableSelections();
   updateDatasetBadge();
   renderDatasetPreview();
+  updateDatasetPresetBar();
   refs.downloadSignatureButton.disabled = true;
   showWorkspace();
   updateStepIndicator(2);
@@ -626,6 +716,7 @@ function updateAfterDataset(payload) {
   refs.dlMetaBanner.textContent = "Select features from the Cox tab, configure hyperparameters, then train.";
   refs.deriveSummary.innerHTML = "";
   refs.deriveSummary.classList.add("hidden");
+  refs.datasetPresetBar?.classList.add("hidden");
   refs.deriveStatus.textContent = "";
   if (refs.cutpointPlot) { refs.cutpointPlot.innerHTML = ""; refs.cutpointPlot.classList.add("hidden"); }
   refs.kmSummaryShell.innerHTML = '<div class="empty-state">Survival statistics will appear after you run the analysis.</div>';
@@ -1343,6 +1434,8 @@ function initListeners() {
   refs.loadTcgaButton.addEventListener("click", () => withLoading(refs.loadTcgaButton, loadTcgaDataset));
   refs.loadGbsg2Button.addEventListener("click", () => withLoading(refs.loadGbsg2Button, loadGbsg2Dataset));
   refs.loadExampleButton.addEventListener("click", () => withLoading(refs.loadExampleButton, loadExampleDataset));
+  refs.applyBasicPresetButton?.addEventListener("click", () => applyDatasetPreset("basic"));
+  refs.applyModelPresetButton?.addEventListener("click", () => applyDatasetPreset("models"));
   refs.timeColumn.addEventListener("change", () => { refreshVariableSelections(); updateDatasetBadge(); });
   refs.eventColumn.addEventListener("change", () => { updateEventPositiveOptions(); refreshVariableSelections(); updateDatasetBadge(); });
   refs.groupColumn.addEventListener("change", updateDatasetBadge);
