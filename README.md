@@ -50,12 +50,19 @@ Tested path target:
 - macOS on Apple Silicon
 - Homebrew available
 
+Before you start:
+- if another virtual environment is active, run `deactivate`
+- if Conda is active, run `conda deactivate`
+- the commands below create a project-local `.venv` and do not overwrite your system Python
+
 ```bash
 brew install python@3.11
 git clone https://github.com/kangk1204/SurvStudio.git
 cd SurvStudio
 python3.11 -m venv .venv
 source .venv/bin/activate
+which python
+python --version
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 python -m survival_toolkit
@@ -75,6 +82,11 @@ Test target for CI:
 - `ubuntu-latest`
 - recommended for users: Ubuntu `24.04` or newer
 
+Before you start:
+- if another virtual environment is active, run `deactivate`
+- if Conda is active, run `conda deactivate`
+- the commands below create a project-local `.venv` and do not overwrite your system Python
+
 ```bash
 sudo apt update
 sudo apt install -y python3.11 python3.11-venv python3-pip build-essential git
@@ -82,6 +94,8 @@ git clone https://github.com/kangk1204/SurvStudio.git
 cd SurvStudio
 python3.11 -m venv .venv
 source .venv/bin/activate
+which python
+python --version
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 python -m survival_toolkit
@@ -97,9 +111,16 @@ http://127.0.0.1:8000
 
 This is the easiest path once Python is already available. It installs the dashboard plus the optional ML and DL features.
 
+Before you start:
+- if another virtual environment is active, run `deactivate`
+- if Conda is active, run `conda deactivate`
+- after activation, confirm that `which python` points to `.venv/bin/python`
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+which python
+python --version
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ```
