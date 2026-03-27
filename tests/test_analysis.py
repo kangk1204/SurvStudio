@@ -1,0 +1,289 @@
+from __future__ import annotations
+
+import pytest
+import pandas as pd
+
+from survival_toolkit.__main__ import main as cli_main
+from survival_toolkit.analysis import (
+    compute_cohort_table,
+    compute_cox_analysis,
+    compute_km_analysis,
+    coerce_event,
+    discover_feature_signature,
+    derive_group_column,
+    load_dataframe_from_path,
+)
+from survival_toolkit.sample_data import make_example_dataset
+
+
+def test_derive_group_column_creates_named_split() -> None:
+    df = make_example_dataset(seed=7, n_patients=80)
+    updated, column_name, summary = derive_group_column(
+        df,
+        source_column="biomarker_score",
+        method="median_split",
+        new_column_name="biomarker_group",
+    )
+    assert column_name == "biomarker_group"
+    assert "biomarker_group" in updated.columns
+    assert summary["counts"]
+
+
+def test_make_example_dataset_small_n_is_supported() -> None:
+    df = make_example_dataset(seed=3, n_patients=10)
+    assert df.shape[0] == 10
+
+
+def test_load_dataframe_from_path_rejects_unknown_suffix(tmp_path) -> None:
+    path = tmp_path / "cohort.weird"
+    path.write_text("age,os_months,os_event\n60,12,1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported input file extension"):
+        load_dataframe_from_path(path)
+
+
+def test_cli_inspect_reports_profile(tmp_path, capsys) -> None:
+    path = tmp_path / "cohort.csv"
+    path.write_text("age,os_months,os_event\n60,12,1\n", encoding="utf-8")
+
+    exit_code = cli_main(["inspect", str(path)])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert '"filename": "cohort.csv"' in output
+    assert '"n_rows": 1' in output
+
+
+def test_cli_inspect_reports_controlled_error_for_missing_file(capsys) -> None:
+    exit_code = cli_main(["inspect", "does_not_exist.csv"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "Input file not found" in captured.err
+
+
+def test_coerce_event_handles_mixed_coding() -> None:
+    series = pd.Series(["0", "1", "event", "censored", None])
+    coerced = coerce_event(series, event_positive_value=1)
+
+    assert coerced.tolist()[:4] == [0.0, 1.0, 1.0, 0.0]
+
+
+def test_coerce_event_rejects_unknown_tokens_when_explicit_positive_value_is_standard() -> None:
+    series = pd.Series([1, 0, "dead", "alive", "maybe"])
+    with pytest.raises(ValueError, match="unrecognized tokens|normalize|infer event coding"):
+        coerce_event(series, event_positive_value=1)
+
+
+def test_coerce_event_rejects_multistate_numeric_status_columns() -> None:
+    series = pd.Series([0, 1, 2, 1, 0])
+    with pytest.raises(ValueError, match="more than two distinct states|pre-binarized"):
+        coerce_event(series, event_positive_value=1)
+
+
+def test_km_analysis_returns_grouped_results() -> None:
+    df = make_example_dataset(seed=11, n_patients=180)
+    updated, column_name, _ = derive_group_column(
+        df,
+        source_column="biomarker_score",
+        method="median_split",
+        new_column_name="biomarker_group",
+    )
+    result = compute_km_analysis(
+        updated,
+        time_column="os_months",
+        event_column="os_event",
+        group_column=column_name,
+        event_positive_value=1,
+    )
+    assert len(result["curves"]) == 2
+    assert result["test"] is not None
+    assert result["test"]["p_value"] < 0.05
+    assert result["scientific_summary"]["headline"]
+    assert result["scientific_summary"]["status"] in {"robust", "review", "caution"}
+    assert result["scientific_summary"]["metrics"]
+
+
+def test_cox_analysis_recovers_expected_directions() -> None:
+    df = make_example_dataset(seed=21, n_patients=260)
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age", "stage", "treatment", "biomarker_score"],
+        categorical_covariates=["stage", "treatment"],
+    )
+    rows = {row["Label"]: row for row in result["results_table"]}
+    assert rows["age"]["Hazard ratio"] > 1.0
+    assert rows["biomarker_score"]["Hazard ratio"] > 1.0
+    treatment_row = next(row for row in result["results_table"] if row["Variable"] == "treatment")
+    assert treatment_row["Reference"] == "Combination"
+    assert treatment_row["Label"] == "treatment: Standard vs Combination"
+    assert treatment_row["Hazard ratio"] > 1.0
+    assert result["model_stats"]["evaluation_mode"] == "apparent"
+    assert result["model_stats"]["c_index_label"] == "Apparent C-index"
+    assert result["model_stats"]["apparent_c_index"] == result["model_stats"]["c_index"]
+    assert result["scientific_summary"]["headline"]
+    assert result["scientific_summary"]["status"] in {"robust", "review", "caution"}
+    assert result["scientific_summary"]["metrics"]
+    assert any(metric["label"] == "Apparent C-index" for metric in result["scientific_summary"]["metrics"])
+    assert any("apparent" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
+def test_cox_analysis_keeps_low_cardinality_numeric_covariates_continuous_by_default() -> None:
+    df = make_example_dataset(seed=23, n_patients=180)
+    df["dose_level"] = (df["age"] // 10).astype(int)
+
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["dose_level"],
+    )
+
+    assert len(result["results_table"]) == 1
+    assert result["results_table"][0]["Label"] == "dose_level"
+    assert result["results_table"][0]["Reference"] is None
+
+
+def test_cohort_table_includes_overall_column() -> None:
+    df = make_example_dataset(seed=5, n_patients=120)
+    table = compute_cohort_table(df, variables=["age", "sex", "stage"], group_column="treatment")
+    assert "Overall" in table["columns"]
+    assert any(row["Variable"] == "age" for row in table["rows"])
+
+
+def test_tertile_split_handles_tied_quantile_edges() -> None:
+    df = make_example_dataset(seed=31, n_patients=90)
+    pattern = [0, 0, 1, 1, 2]
+    df["biomarker_score"] = [pattern[idx % len(pattern)] for idx in range(len(df))]
+
+    updated, column_name, summary = derive_group_column(
+        df,
+        source_column="biomarker_score",
+        method="tertile_split",
+        new_column_name="biomarker_tertile",
+    )
+
+    values = set(updated[column_name].dropna().astype(str).unique().tolist())
+    assert values.issubset({"T1", "T2", "T3"})
+    assert summary["method"] == "tertile_split"
+    assert 2 <= summary["n_groups"] <= 3
+
+
+def test_quartile_split_rejects_constant_series() -> None:
+    df = make_example_dataset(seed=37, n_patients=60)
+    df["biomarker_score"] = 3.14
+
+    with pytest.raises(ValueError, match="enough unique values"):
+        derive_group_column(
+            df,
+            source_column="biomarker_score",
+            method="quartile_split",
+            new_column_name="biomarker_quartile",
+        )
+
+
+def test_discover_feature_signature_ranks_and_persists_best_group() -> None:
+    df = make_example_dataset(seed=41, n_patients=320)
+    updated, column_name, payload = discover_feature_signature(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        candidate_columns=["age", "stage", "treatment", "biomarker_score", "immune_index"],
+        max_combination_size=3,
+        top_k=12,
+        min_group_fraction=0.1,
+        bootstrap_iterations=10,
+        bootstrap_sample_fraction=0.8,
+        permutation_iterations=20,
+        validation_iterations=6,
+        validation_fraction=0.35,
+        significance_level=0.05,
+        combination_operator="and",
+        random_seed=1234,
+        new_column_name="signature_group",
+    )
+
+    assert column_name == "signature_group"
+    assert "signature_group" in updated.columns
+    assert payload["results_table"]
+    assert payload["best_split"]["Signature"] == payload["results_table"][0]["Signature"]
+    assert payload["best_split"]["Stability score"] is not None
+    assert payload["search_space"]["min_events_per_group"] >= 3
+    assert payload["search_space"]["bootstrap_iterations"] == 10
+    assert payload["search_space"]["bootstrap_scored_signatures"] >= 1
+    assert payload["search_space"]["permutation_iterations"] == 20
+    assert payload["search_space"]["permutation_scored_signatures"] >= 1
+    assert payload["search_space"]["validation_iterations"] == 6
+    assert payload["search_space"]["validation_fraction"] == 0.35
+    assert payload["search_space"]["validation_scored_signatures"] >= 1
+    assert payload["search_space"]["significance_level"] == 0.05
+    assert payload["search_space"]["combination_operator"] == "and"
+    assert payload["search_space"]["random_seed"] == 1234
+    assert payload["search_space"]["significant_signatures"] >= 0
+    support = payload["best_split"]["Bootstrap support (p<0.05)"]
+    assert support is None or 0.0 <= support <= 1.0
+    permutation_p = payload["best_split"]["Permutation p"]
+    assert permutation_p is None or 0.0 <= permutation_p <= 1.0
+    direction_consistency = payload["best_split"]["Bootstrap HR direction consistency"]
+    assert direction_consistency is None or 0.0 <= direction_consistency <= 1.0
+    assert isinstance(payload["best_split"]["Statistically significant"], bool)
+    assert payload["best_split"]["Combination operator"] == "AND"
+    assert payload["scientific_summary"]["headline"]
+    assert payload["scientific_summary"]["status"] in {"robust", "review", "caution"}
+    assert payload["scientific_summary"]["metrics"]
+    if payload["search_space"]["significant_signatures"] > 0:
+        assert payload["best_split"]["Statistically significant"] is True
+    observed_groups = set(updated[column_name].dropna().astype(str).unique().tolist())
+    assert observed_groups.issubset({"Signature+", "Signature-"})
+
+
+def test_signature_rules_do_not_repeat_same_feature_within_combo() -> None:
+    df = make_example_dataset(seed=55, n_patients=280)
+    _, _, payload = discover_feature_signature(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        candidate_columns=["age", "biomarker_score", "immune_index"],
+        max_combination_size=3,
+        top_k=20,
+        min_group_fraction=0.1,
+        bootstrap_iterations=0,
+        permutation_iterations=0,
+    )
+
+    for row in payload["results_table"]:
+        features = row["Features"]
+        assert len(features) == len(set(features))
+
+
+def test_discover_feature_signature_is_reproducible_with_fixed_seed() -> None:
+    df = make_example_dataset(seed=71, n_patients=260)
+    params = dict(
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        candidate_columns=["age", "stage", "treatment", "biomarker_score", "immune_index"],
+        max_combination_size=3,
+        top_k=8,
+        min_group_fraction=0.1,
+        bootstrap_iterations=8,
+        permutation_iterations=12,
+        validation_iterations=5,
+        validation_fraction=0.35,
+        significance_level=0.05,
+        combination_operator="mixed",
+        random_seed=2026,
+    )
+    _, _, payload_first = discover_feature_signature(df, **params)
+    _, _, payload_second = discover_feature_signature(df, **params)
+
+    assert payload_first["best_split"]["Signature"] == payload_second["best_split"]["Signature"]
+    assert payload_first["best_split"]["Combination operator"] == payload_second["best_split"]["Combination operator"]
+    assert payload_first["best_split"]["Stability score"] == payload_second["best_split"]["Stability score"]
