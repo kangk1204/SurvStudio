@@ -720,8 +720,14 @@ def test_frontend_exposes_real_dataset_loader_buttons() -> None:
     assert 'Upload-Ready TCGA' in index_html
     assert 'id="loadGbsg2Button"' in index_html
     assert 'GBSG2 (Real)' in index_html
+    assert 'id="datasetPresetBar"' in index_html
+    assert 'id="applyBasicPresetButton"' in index_html
+    assert 'id="applyModelPresetButton"' in index_html
     assert 'fetchJSON("/api/load-tcga-upload-ready"' in app_js
     assert 'fetchJSON("/api/load-gbsg2-example"' in app_js
+    assert "function datasetPresetForCurrentDataset()" in app_js
+    assert 'applyDatasetPreset("basic")' in app_js
+    assert 'applyDatasetPreset("models")' in app_js
 
 
 def test_frontend_covariate_picker_keeps_all_unique_continuous_columns() -> None:

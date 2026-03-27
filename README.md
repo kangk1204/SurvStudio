@@ -205,6 +205,71 @@ If this is your first time:
    - optimal cutpoint
 5. Move to ML or DL comparison only after the classical analysis makes sense
 
+## Recommended Real-Data Workflows
+
+If you use one of the built-in real datasets, the UI now exposes dataset-specific preset buttons:
+- `Apply KM/Cox Preset`
+- `Apply ML/DL Preset`
+
+These presets fill the most useful starting columns and feature sets for the selected cohort.
+
+### TCGA LUAD Workflow
+
+Best starting dataset choices:
+- `Upload-Ready TCGA`
+- `Load TCGA LUAD`
+
+Recommended study columns:
+- time column: `os_months`
+- event column: `os_event`
+- event-positive value: `1`
+- group column: `stage_group`
+
+Recommended first figures and tables:
+1. Kaplan-Meier by `stage_group`
+2. Cohort Table grouped by `stage_group`
+3. Cox PH with:
+   - covariates: `age`, `sex`, `stage_group`, `smoking_status`
+   - categorical covariates: `sex`, `stage_group`, `smoking_status`
+4. ML comparison with:
+   - features: `age`, `sex`, `stage_group`, `smoking_status`
+   - categorical features: `sex`, `stage_group`, `smoking_status`
+5. DL smoke or comparison with the same feature set
+
+Recommended manuscript outputs:
+- Kaplan-Meier plot by stage
+- Cox hazard-ratio forest plot
+- cohort summary table stratified by stage
+- ML comparison table or repeated-CV manuscript table
+
+### GBSG2 Workflow
+
+Best starting dataset choice:
+- `GBSG2 (Real)`
+
+Recommended study columns:
+- time column: `rfs_days`
+- event column: `rfs_event`
+- event-positive value: `1`
+- group column: `horTh`
+
+Recommended first figures and tables:
+1. Kaplan-Meier by `horTh`
+2. Kaplan-Meier by `menostat`
+3. Cohort Table grouped by `horTh`
+4. Cox PH with:
+   - covariates: `age`, `horTh`, `menostat`, `pnodes`, `tgrade`, `tsize`
+   - categorical covariates: `horTh`, `menostat`, `tgrade`
+5. ML comparison with:
+   - features: `age`, `horTh`, `menostat`, `pnodes`, `tgrade`, `tsize`
+   - categorical features: `horTh`, `menostat`, `tgrade`
+
+Recommended manuscript outputs:
+- Kaplan-Meier plot for hormonal therapy groups
+- Cox forest plot for recurrence-free survival
+- cohort table grouped by hormonal therapy
+- ML comparison table for recurrence discrimination
+
 ## Input Data Format
 
 Supported file types:
