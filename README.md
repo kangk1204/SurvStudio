@@ -544,7 +544,27 @@ These outputs are useful, but should be interpreted carefully:
 
 ## Export
 
-You can export comparison tables as:
+You can save results directly from the dashboard.
+
+Available exports:
+- Kaplan-Meier:
+  - summary table as `CSV`
+  - pairwise table as `CSV`
+  - curve as `PNG`
+  - curve as `SVG`
+- Cox PH:
+  - results table as `CSV`
+  - diagnostics table as `CSV`
+- Cohort Table:
+  - table as `CSV`
+- ML and DL comparison:
+  - comparison table as `CSV`
+  - manuscript table as `CSV`
+  - manuscript table as `Markdown`
+  - manuscript table as `LaTeX`
+  - manuscript table as `DOCX`
+
+You can export comparison tables and manuscript tables as:
 - CSV
 - Markdown
 - LaTeX
@@ -557,6 +577,33 @@ The app also supports manuscript-style templates:
 - `JCO`
 
 These are formatting helpers, not official publisher-certified house styles.
+
+### Download File Names
+
+Downloaded files now use dataset-aware names.
+
+Typical pattern:
+- `{dataset}_{time}_{event}_{analysis}.{ext}`
+
+Examples:
+- `gbsg2_upload_ready_rfs_days_rfs_event_cox_results.csv`
+- `tcga_luad_upload_ready_os_months_os_event_stage_group_km_curve.png`
+- `gbsg2_upload_ready_rfs_days_rfs_event_ml_manuscript_table_jco.docx`
+
+This makes it easier to keep multiple cohorts and endpoints organized in the same download folder.
+
+### Practical Save Check
+
+If you want to verify saving on your machine:
+1. load `GBSG2 (Real)` or `Upload-Ready TCGA`
+2. run Kaplan-Meier once
+3. click `PNG` or `SVG`
+4. run Cox PH once
+5. click `Results`
+6. run ML `Compare All`
+7. click one of the manuscript export buttons
+
+If the browser download dialog is blocked, allow downloads for `http://127.0.0.1:8000`.
 
 ## CLI
 
