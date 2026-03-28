@@ -189,9 +189,18 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             page.locator("#workspace").wait_for(state="visible")
+            page.locator("#timeUnitLabel").fill("Days")
+            page.locator("#maxTime").fill("24")
+            page.locator("#groupColumn").select_option("stage")
+            page.locator("#covariateChecklist input[value='immune_index']").check()
+            page.locator("#covariateChecklist input[value='age']").uncheck()
             page.locator("#runKmButton").click()
             page.wait_for_function(
                 "!document.getElementById('downloadKmSummaryButton').disabled"
+            )
+            page.locator('[data-tab="ml"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"ml\"]').getAttribute('aria-selected') === 'true'"
             )
 
             page.go_back(wait_until="networkidle")
@@ -202,6 +211,12 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
             page.go_forward(wait_until="networkidle")
             page.locator("#workspace").wait_for(state="visible")
             assert not page.locator("#downloadKmSummaryButton").is_disabled()
+            assert page.locator('[data-tab="ml"]').get_attribute("aria-selected") == "true"
+            assert page.locator("#timeUnitLabel").input_value() == "Days"
+            assert page.locator("#maxTime").input_value() == "24"
+            assert page.locator("#groupColumn").input_value() == "stage"
+            assert page.locator("#covariateChecklist input[value='immune_index']").is_checked()
+            assert not page.locator("#covariateChecklist input[value='age']").is_checked()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
