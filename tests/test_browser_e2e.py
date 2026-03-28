@@ -251,3 +251,30 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
         pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_dl_epoch_validation_message_is_human_readable(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator('[data-tab="dl"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'"
+            )
+            page.locator("#dlEpochs").fill("1001")
+            page.locator("#runDlButton").click()
+            page.wait_for_function(
+                "document.getElementById('toastContainer').textContent.includes('Epochs must be between 10 and 1000')"
+            )
+            assert "Epochs must be between 10 and 1000" in page.locator("#toastContainer").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")

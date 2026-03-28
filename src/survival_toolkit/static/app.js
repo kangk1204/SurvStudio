@@ -199,8 +199,23 @@ async function fetchJSON(url, options = {}) {
     ...options,
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.detail || "Request failed.");
+  if (!response.ok) throw new Error(extractErrorMessage(payload));
   return payload;
+}
+
+function extractErrorMessage(payload) {
+  const detail = payload?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail.map((item) => {
+      const path = Array.isArray(item?.loc)
+        ? item.loc.filter((part) => part !== "body").join(" > ")
+        : "";
+      const message = item?.msg || "Invalid input.";
+      return path ? `${path}: ${message}` : message;
+    }).join(" | ");
+  }
+  return "Request failed.";
 }
 
 function setRuntimeBanner(text = "", tone = "info") {
@@ -1069,6 +1084,52 @@ function currentBaseConfig() {
   };
 }
 
+function validateDlControls() {
+  const epochs = Number(refs.dlEpochs?.value);
+  if (!Number.isFinite(epochs) || epochs < 10 || epochs > 1000) {
+    throw new Error(`Epochs must be between 10 and 1000. Current value: ${formatValue(epochs)}.`);
+  }
+  const learningRate = Number(refs.dlLearningRate?.value);
+  if (!Number.isFinite(learningRate) || learningRate <= 0 || learningRate > 0.1) {
+    throw new Error(`Learning rate must be greater than 0 and at most 0.1. Current value: ${formatValue(learningRate)}.`);
+  }
+  const dropout = Number(refs.dlDropout?.value);
+  if (!Number.isFinite(dropout) || dropout < 0 || dropout > 0.5) {
+    throw new Error(`Dropout must be between 0 and 0.5. Current value: ${formatValue(dropout)}.`);
+  }
+  const hiddenLayerText = refs.dlHiddenLayers?.value?.trim() || "";
+  if (!hiddenLayerText) {
+    throw new Error("Hidden layers must be a comma-separated list of positive integers, for example 64,64.");
+  }
+  const hiddenLayers = hiddenLayerText.split(",").map((value) => Number(value.trim()));
+  if (!hiddenLayers.length || hiddenLayers.some((value) => !Number.isInteger(value) || value <= 0)) {
+    throw new Error(`Hidden layers must be a comma-separated list of positive integers. Current value: ${hiddenLayerText}.`);
+  }
+  const patience = Number(refs.dlEarlyStoppingPatience?.value);
+  if (!Number.isFinite(patience) || patience < 1 || patience > 100) {
+    throw new Error(`Early stop patience must be between 1 and 100. Current value: ${formatValue(patience)}.`);
+  }
+  const minDelta = Number(refs.dlEarlyStoppingMinDelta?.value);
+  if (!Number.isFinite(minDelta) || minDelta < 0 || minDelta > 0.1) {
+    throw new Error(`Min delta must be between 0 and 0.1. Current value: ${formatValue(minDelta)}.`);
+  }
+  const evaluationStrategy = refs.dlEvaluationStrategy?.value || "holdout";
+  if (evaluationStrategy === "repeated_cv") {
+    const cvFolds = Number(refs.dlCvFolds?.value);
+    if (!Number.isFinite(cvFolds) || cvFolds < 2 || cvFolds > 10) {
+      throw new Error(`CV folds must be between 2 and 10. Current value: ${formatValue(cvFolds)}.`);
+    }
+    const cvRepeats = Number(refs.dlCvRepeats?.value);
+    if (!Number.isFinite(cvRepeats) || cvRepeats < 1 || cvRepeats > 20) {
+      throw new Error(`CV repeats must be between 1 and 20. Current value: ${formatValue(cvRepeats)}.`);
+    }
+    const parallelJobs = Number(refs.dlParallelJobs?.value);
+    if (!Number.isFinite(parallelJobs) || parallelJobs < 1 || parallelJobs > 16) {
+      throw new Error(`Parallel jobs must be between 1 and 16. Current value: ${formatValue(parallelJobs)}.`);
+    }
+  }
+}
+
 function renderDatasetPreview() {
   renderTable(refs.datasetPreviewShell, state.dataset.preview);
 }
@@ -1094,6 +1155,8 @@ function activateTab(tabName) {
     const isActive = button.dataset.tab === tabName;
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-selected", isActive ? "true" : "false");
+    button.setAttribute("tabindex", isActive ? "0" : "-1");
+    if (isActive) button.focus();
   });
   refs.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tabName));
   if (state.dataset) syncHistoryState("replace");
@@ -1542,6 +1605,7 @@ async function runCompareModels() {
 
 async function runDlModel() {
   const base = currentBaseConfig();
+  validateDlControls();
   const features = selectedCheckboxValues(refs.covariateChecklist);
   if (!features.length) { showToast("Select at least one feature (from Cox tab covariates).", "error"); return; }
   const categoricalFeatures = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => features.includes(v));
@@ -1607,6 +1671,7 @@ async function runDlModel() {
 
 async function runDlCompareModels() {
   const base = currentBaseConfig();
+  validateDlControls();
   const features = selectedCheckboxValues(refs.covariateChecklist);
   if (!features.length) { showToast("Select at least one feature (from Cox tab covariates).", "error"); return; }
   const categoricalFeatures = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => features.includes(v));
@@ -1853,23 +1918,60 @@ function showSmartBanner(text) {
   refs.smartBanner.classList.remove("hidden");
 }
 
+function initTabKeyboard() {
+  const strip = document.querySelector(".tab-strip");
+  if (!strip) return;
+  strip.addEventListener("keydown", (e) => {
+    const tabs = refs.tabButtons;
+    const idx = tabs.indexOf(e.target);
+    if (idx < 0) return;
+    let next = -1;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (idx + 1) % tabs.length;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx - 1 + tabs.length) % tabs.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = tabs.length - 1;
+    if (next >= 0) { e.preventDefault(); activateTab(tabs[next].dataset.tab); }
+  });
+}
+
+function showTooltipAt(dot) {
+  const popup = refs.tooltipPopup;
+  if (!popup || !dot) return;
+  popup.textContent = dot.dataset.tooltip;
+  popup.setAttribute("role", "tooltip");
+  popup.classList.remove("hidden");
+  const rect = dot.getBoundingClientRect();
+  popup.style.left = `${Math.min(rect.left, window.innerWidth - 280)}px`;
+  popup.style.top = `${rect.bottom + 8}px`;
+}
+
+function hideTooltip() {
+  if (refs.tooltipPopup) refs.tooltipPopup.classList.add("hidden");
+}
+
 function initTooltips() {
   const popup = refs.tooltipPopup;
   if (!popup) return;
   let activeTarget = null;
+  // Mouse
   document.addEventListener("mouseenter", (e) => {
     const dot = e.target.closest("[data-tooltip]");
     if (!dot) return;
     activeTarget = dot;
-    popup.textContent = dot.dataset.tooltip;
-    popup.classList.remove("hidden");
-    const rect = dot.getBoundingClientRect();
-    popup.style.left = `${Math.min(rect.left, window.innerWidth - 280)}px`;
-    popup.style.top = `${rect.bottom + 8}px`;
+    showTooltipAt(dot);
   }, true);
   document.addEventListener("mouseleave", (e) => {
     const dot = e.target.closest("[data-tooltip]");
-    if (dot && dot === activeTarget) { popup.classList.add("hidden"); activeTarget = null; }
+    if (dot && dot === activeTarget) { hideTooltip(); activeTarget = null; }
+  }, true);
+  // Keyboard: focus/blur on help-dot buttons
+  document.addEventListener("focusin", (e) => {
+    const dot = e.target.closest("[data-tooltip]");
+    if (dot) { activeTarget = dot; showTooltipAt(dot); }
+  }, true);
+  document.addEventListener("focusout", (e) => {
+    const dot = e.target.closest("[data-tooltip]");
+    if (dot) { hideTooltip(); activeTarget = null; }
   }, true);
 }
 
@@ -2010,6 +2112,7 @@ initListeners();
 initDragDrop();
 initKeyboardShortcuts();
 initTooltips();
+initTabKeyboard();
 updateMethodVisibility();
 updateWeightVisibility();
 updateMlEvaluationControls();

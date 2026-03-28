@@ -147,7 +147,7 @@ class DeepModelRequest(BaseModel):
     hidden_layers: list[int] = Field(default=[64, 64])
     dropout: float = Field(default=0.1, ge=0.0, le=0.5)
     learning_rate: float = Field(default=0.001, gt=0.0, le=0.1)
-    epochs: int = Field(default=100, ge=10, le=500)
+    epochs: int = Field(default=100, ge=10, le=1000)
     batch_size: int = Field(default=64, ge=8, le=512)
     random_seed: int = 42
     evaluation_strategy: Literal["holdout", "repeated_cv"] = "holdout"
@@ -200,7 +200,14 @@ def fail_bad_request(exc: Exception) -> NoReturn:
     if isinstance(exc, ImportError):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if isinstance(exc, KeyError):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raw = str(exc)
+        if "not in index" in raw:
+            detail = f"Column not found in dataset. {raw}"
+        elif "Unknown dataset" in raw:
+            detail = raw
+        else:
+            detail = f"Not found: {raw}"
+        raise HTTPException(status_code=404, detail=detail) from exc
     if isinstance(exc, (ValueError, TypeError)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise exc
