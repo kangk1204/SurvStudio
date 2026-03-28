@@ -296,15 +296,28 @@ def _export_columns(rows: list[dict[str, Any]]) -> list[str]:
     return columns
 
 
+def _sanitize_csv_cell(value: Any) -> str:
+    text = "" if value is None else str(value)
+    stripped = text.lstrip()
+    if stripped.startswith(("=", "+", "-", "@")):
+        return f"'{text}"
+    return text
+
+
 def _export_rows_to_csv(rows: list[dict[str, Any]], style: str) -> str:
     if not rows:
         raise ValueError("No rows available for export.")
     columns = _export_columns(rows)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(columns)
+    writer.writerow([_sanitize_csv_cell(column) for column in columns])
     for row in rows:
-        writer.writerow([_format_export_value(row.get(column), style) for column in columns])
+        writer.writerow(
+            [
+                _sanitize_csv_cell(_format_export_value(row.get(column), style))
+                for column in columns
+            ]
+        )
     return buffer.getvalue()
 
 

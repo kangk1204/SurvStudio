@@ -633,8 +633,16 @@ function renderTable(shell, rows, columns = null) {
 function downloadCsv(filename, rows, columns = null) {
   if (!rows || rows.length === 0) return;
   const visibleColumns = columns || Object.keys(rows[0]);
-  const escapeCell = (value) => {
+  const sanitizeCsvCell = (value) => {
     const text = value === null || value === undefined ? "" : String(value);
+    const trimmed = text.trimStart();
+    if (trimmed.startsWith("=") || trimmed.startsWith("+") || trimmed.startsWith("-") || trimmed.startsWith("@")) {
+      return `'${text}`;
+    }
+    return text;
+  };
+  const escapeCell = (value) => {
+    const text = sanitizeCsvCell(value);
     return `"${text.replaceAll('"', '""')}"`;
   };
   const lines = [visibleColumns.map(escapeCell).join(","), ...rows.map((row) => visibleColumns.map((column) => escapeCell(row[column])).join(","))];

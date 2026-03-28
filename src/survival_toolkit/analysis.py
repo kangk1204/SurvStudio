@@ -680,7 +680,10 @@ def _signature_scientific_summary(
         search_space["permutation_iterations"] > 0 or search_space["validation_iterations"] > 0
     )
     if is_significant and has_internal_confirmation:
-        headline = "Top-ranked signature passes the current internal significance and robustness gates."
+        headline = (
+            "Top-ranked signature remains an internally supported screening result "
+            "and still needs external validation before it is framed as a biomarker claim."
+        )
         next_steps.append("Validate the locked signature on an external cohort before presenting it as a biomarker claim.")
     elif is_significant:
         headline = (
