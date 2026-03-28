@@ -5,7 +5,7 @@ import io
 from pathlib import Path
 import tempfile
 import zipfile
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn, Sequence
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -191,7 +191,60 @@ class TableExportRequest(BaseModel):
 
 def dataset_response(dataset_id: str) -> dict[str, Any]:
     stored = store.get(dataset_id)
-    return profile_dataframe(stored.dataframe, dataset_id=stored.dataset_id, filename=stored.filename)
+    payload = profile_dataframe(stored.dataframe, dataset_id=stored.dataset_id, filename=stored.filename)
+    payload["dataset_source"] = stored.source
+    payload["preset_eligible"] = stored.source == "builtin_demo"
+    return payload
+
+
+def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -> list[str]:
+    features = [str(value) for value in request_config.get("features") or []]
+    categorical = [str(value) for value in request_config.get("categorical_features") or []]
+    evaluation_strategy = str(request_config.get("evaluation_strategy", "holdout"))
+    settings = [
+        f"evaluation={evaluation_strategy}",
+        f"random_state={request_config.get('random_state')}",
+        f"n_estimators={request_config.get('n_estimators')}",
+        (
+            f"max_depth={request_config.get('max_depth')}"
+            if request_config.get("max_depth") is not None
+            else "max_depth=auto"
+        ),
+    ]
+    if request_config.get("learning_rate") is not None:
+        settings.append(f"learning_rate={request_config.get('learning_rate')}")
+    if evaluation_strategy == "repeated_cv":
+        settings.append(
+            f"cv={request_config.get('cv_repeats', 1)}x{request_config.get('cv_folds', 1)}"
+        )
+
+    notes = [
+        (
+            "Replay dataset: "
+            f"{dataset_filename}. Outcome: time={request_config.get('time_column')}, "
+            f"event={request_config.get('event_column')}={request_config.get('event_positive_value')}."
+        ),
+        "Replay settings: " + "; ".join(settings) + ".",
+    ]
+    if features:
+        notes.append("Replay features: " + ", ".join(features) + ".")
+    if categorical:
+        notes.append("Replay categorical features: " + ", ".join(categorical) + ".")
+    return notes
+
+
+def _attach_manuscript_notes(
+    analysis: dict[str, Any],
+    extra_notes: Sequence[str],
+) -> None:
+    manuscript = analysis.get("manuscript_tables")
+    if not isinstance(manuscript, dict):
+        return
+    existing = list(manuscript.get("table_notes", []))
+    for note in extra_notes:
+        if note not in existing:
+            existing.append(note)
+    manuscript["table_notes"] = existing
 
 
 def fail_bad_request(exc: Exception) -> NoReturn:
@@ -568,7 +621,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
                     raise HTTPException(status_code=413, detail="Upload exceeds the 200 MB limit.")
                 temp_file.write(chunk)
         dataframe = await run_in_threadpool(load_dataframe_from_path, temp_path)
-        stored = store.create(dataframe, filename=filename, copy_dataframe=False)
+        stored = store.create(dataframe, filename=filename, source="upload", copy_dataframe=False)
         return await run_in_threadpool(dataset_response, stored.dataset_id)
     except HTTPException:
         raise
@@ -583,28 +636,28 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
 @app.post("/api/load-example")
 async def load_example() -> dict[str, Any]:
     dataframe = make_example_dataset()
-    stored = store.create(dataframe, filename="example_survival_cohort", copy_dataframe=False)
+    stored = store.create(dataframe, filename="example_survival_cohort", source="builtin_demo", copy_dataframe=False)
     return dataset_response(stored.dataset_id)
 
 
 @app.post("/api/load-tcga-example")
 async def load_tcga_example() -> dict[str, Any]:
     dataframe = load_tcga_luad_example_dataset()
-    stored = store.create(dataframe, filename="tcga_luad_xena_example", copy_dataframe=False)
+    stored = store.create(dataframe, filename="tcga_luad_xena_example", source="builtin_demo", copy_dataframe=False)
     return dataset_response(stored.dataset_id)
 
 
 @app.post("/api/load-tcga-upload-ready")
 async def load_tcga_upload_ready() -> dict[str, Any]:
     dataframe = load_tcga_luad_upload_ready_dataset()
-    stored = store.create(dataframe, filename="tcga_luad_upload_ready", copy_dataframe=False)
+    stored = store.create(dataframe, filename="tcga_luad_upload_ready", source="builtin_demo", copy_dataframe=False)
     return dataset_response(stored.dataset_id)
 
 
 @app.post("/api/load-gbsg2-example")
 async def load_gbsg2_example() -> dict[str, Any]:
     dataframe = load_gbsg2_upload_ready_dataset()
-    stored = store.create(dataframe, filename="gbsg2_upload_ready", copy_dataframe=False)
+    stored = store.create(dataframe, filename="gbsg2_upload_ready", source="builtin_demo", copy_dataframe=False)
     return dataset_response(stored.dataset_id)
 
 
@@ -864,6 +917,10 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                         learning_rate=request_model.learning_rate,
                         random_state=request_model.random_state,
                     )
+                _attach_manuscript_notes(
+                    comparison,
+                    _ml_replay_notes(request_config, dataset_filename=stored.filename),
+                )
                 figure = build_model_comparison_figure(comparison)
                 return {"analysis": comparison, "figure": figure, "request_config": request_config}
 
@@ -966,18 +1023,22 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                     "request_config": request_config,
                 }
 
-            if request_model.model_type == "deepsurv":
-                result = deep_models.train_deepsurv(**base, hidden_layers=request_model.hidden_layers, dropout=request_model.dropout)
-            elif request_model.model_type == "deephit":
-                result = deep_models.train_deephit(**base, hidden_layers=request_model.hidden_layers, dropout=request_model.dropout, num_time_bins=request_model.num_time_bins)
-            elif request_model.model_type == "mtlr":
-                result = deep_models.train_neural_mtlr(**base, hidden_layers=request_model.hidden_layers, num_time_bins=request_model.num_time_bins)
-            elif request_model.model_type == "transformer":
-                result = deep_models.train_survival_transformer(**base, d_model=request_model.d_model, n_heads=request_model.n_heads, n_layers=request_model.n_layers, dropout=request_model.dropout)
-            elif request_model.model_type == "vae":
-                result = deep_models.train_survival_vae(**base, latent_dim=request_model.latent_dim, hidden_dim=request_model.hidden_layers[0] if request_model.hidden_layers else 64, n_clusters=request_model.n_clusters, dropout=request_model.dropout)
-            else:
-                raise ValueError(f"Unknown model type: {request_model.model_type}")
+            result = deep_models.evaluate_single_deep_survival_model(
+                request_model.model_type,
+                **base,
+                hidden_layers=request_model.hidden_layers,
+                dropout=request_model.dropout,
+                num_time_bins=request_model.num_time_bins,
+                d_model=request_model.d_model,
+                n_heads=request_model.n_heads,
+                n_layers=request_model.n_layers,
+                latent_dim=request_model.latent_dim,
+                n_clusters=request_model.n_clusters,
+                evaluation_strategy=request_model.evaluation_strategy,
+                cv_folds=request_model.cv_folds,
+                cv_repeats=request_model.cv_repeats,
+                parallel_jobs=request_model.parallel_jobs,
+            )
 
             figures = {}
             if result.get("feature_importance"):

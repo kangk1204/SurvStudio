@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import builtins
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -236,6 +239,20 @@ def test_discrete_survival_helper_keeps_tail_mass() -> None:
     assert survival_at_edges[0, -1].item() == pytest.approx(0.4)
     assert survival_at_edges[0, -1].item() > 0.0
     assert risk_scores.shape == (1,)
+
+
+def test_digitize_time_bins_preserves_tail_bucket_for_overflow_times() -> None:
+    from survival_toolkit.deep_models import _digitize_time_bins
+
+    bin_edges = np.array([0.0, 10.0, 20.0, 30.0], dtype=float)
+    indices = _digitize_time_bins(
+        np.array([5.0, 15.0, 30.0, 42.0], dtype=float),
+        bin_edges,
+        num_time_bins=3,
+        preserve_tail_overflow=True,
+    )
+
+    assert indices.tolist() == [0, 1, 2, 3]
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -810,6 +827,11 @@ def test_compare_deep_survival_models_supports_parallel_repeated_cv() -> None:
     assert result["comparison_table"]
     assert result["fold_results"]
     assert result["manuscript_tables"]["model_performance_table"]
+    first_row = result["comparison_table"][0]
+    assert first_row["training_seeds"]
+    assert first_row["split_seeds"]
+    assert first_row["monitor_seeds"]
+    assert "Training seeds" in result["manuscript_tables"]["model_performance_table"][0]
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -846,3 +868,78 @@ def test_parallel_repeated_cv_is_reproducible_with_fixed_seed() -> None:
     first_rows = [(row["model"], row["c_index"]) for row in first["comparison_table"]]
     second_rows = [(row["model"], row["c_index"]) for row in second["comparison_table"]]
     assert first_rows == second_rows
+
+
+def test_evaluate_single_deep_survival_model_repeated_cv_reuses_compare_path(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    def _fake_compare(*args, **kwargs):
+        assert kwargs["included_models"] == ["Neural MTLR"]
+        assert kwargs["evaluation_strategy"] == "repeated_cv"
+        return {
+            "comparison_table": [{
+                "model": "Neural MTLR",
+                "c_index": 0.713,
+                "evaluation_mode": "repeated_cv",
+                "n_features": 4,
+                "epochs_trained": 8,
+                "training_time_ms": 123.4,
+                "training_seed": None,
+                "split_seed": None,
+                "monitor_seed": None,
+                "training_seeds": [42, 43],
+                "split_seeds": [42, 43],
+                "monitor_seeds": [42, 43],
+                "n_evaluations": 4,
+                "n_failures": 0,
+                "repeat_results": [{"repeat": 1, "c_index": 0.71}, {"repeat": 2, "c_index": 0.716}],
+            }],
+            "fold_results": [
+                {"model": "Neural MTLR", "repeat": 1, "fold": 1, "c_index": 0.71},
+                {"model": "DeepSurv", "repeat": 1, "fold": 1, "c_index": 0.69},
+            ],
+            "manuscript_tables": {"model_performance_table": [{"Model": "Neural MTLR"}]},
+            "scientific_summary": {"status": "review", "strengths": ["summary"], "cautions": [], "next_steps": []},
+        }
+
+    monkeypatch.setattr(deep_models, "compare_deep_survival_models", _fake_compare)
+
+    result = deep_models.evaluate_single_deep_survival_model(
+        "mtlr",
+        df=pd.DataFrame(),
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "stage"],
+        evaluation_strategy="repeated_cv",
+        cv_folds=2,
+        cv_repeats=2,
+    )
+
+    assert result["evaluation_mode"] == "repeated_cv"
+    assert result["model"] == "Neural MTLR"
+    assert result["comparison_table"][0]["model"] == "Neural MTLR"
+    assert result["training_seeds"] == [42, 43]
+    assert result["fold_results"] == [{"model": "Neural MTLR", "repeat": 1, "fold": 1, "c_index": 0.71}]
+    assert "aggregate repeated-cv estimate" in result["scientific_summary"]["cautions"][-1].lower()
+
+
+def test_deep_models_module_can_load_when_torch_is_missing(monkeypatch) -> None:
+    module_path = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "deep_models.py"
+    source = module_path.read_text(encoding="utf-8")
+    real_import = builtins.__import__
+
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "torch" or name.startswith("torch."):
+            raise ImportError("torch intentionally unavailable for test")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+    module_globals: dict[str, object] = {
+        "__name__": "deep_models_no_torch_test",
+        "__file__": str(module_path),
+    }
+    exec(compile(source, str(module_path), "exec"), module_globals, module_globals)
+
+    assert module_globals["TORCH_AVAILABLE"] is False
+    assert module_globals["DeepSurvNet"]
+    assert module_globals["SurvivalTransformerNet"]

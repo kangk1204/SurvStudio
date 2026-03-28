@@ -38,6 +38,8 @@ const refs = {
   datasetPresetStatusTitle: document.getElementById("datasetPresetStatusTitle"),
   datasetPresetStatusText: document.getElementById("datasetPresetStatusText"),
   datasetPresetChips: document.getElementById("datasetPresetChips"),
+  groupingDetails: document.getElementById("groupingDetails"),
+  groupingSummaryText: document.getElementById("groupingSummaryText"),
   applyBasicPresetButton: document.getElementById("applyBasicPresetButton"),
   applyModelPresetButton: document.getElementById("applyModelPresetButton"),
   tooltipPopup: document.getElementById("tooltipPopup"),
@@ -81,6 +83,8 @@ const refs = {
   kmInsightBoard: document.getElementById("kmInsightBoard"),
   kmPlot: document.getElementById("kmPlot"),
   kmMetaBanner: document.getElementById("kmMetaBanner"),
+  kmDependencyText: document.getElementById("kmDependencyText"),
+  kmDependencyChips: document.getElementById("kmDependencyChips"),
   kmSummaryShell: document.getElementById("kmSummaryShell"),
   kmRiskShell: document.getElementById("kmRiskShell"),
   kmPairwiseShell: document.getElementById("kmPairwiseShell"),
@@ -96,6 +100,8 @@ const refs = {
   coxInsightBoard: document.getElementById("coxInsightBoard"),
   coxPlot: document.getElementById("coxPlot"),
   coxMetaBanner: document.getElementById("coxMetaBanner"),
+  coxDependencyText: document.getElementById("coxDependencyText"),
+  coxDependencyChips: document.getElementById("coxDependencyChips"),
   coxResultsShell: document.getElementById("coxResultsShell"),
   coxDiagnosticsShell: document.getElementById("coxDiagnosticsShell"),
   downloadCoxResultsButton: document.getElementById("downloadCoxResultsButton"),
@@ -105,6 +111,8 @@ const refs = {
   cohortVariableChecklist: document.getElementById("cohortVariableChecklist"),
   runCohortTableButton: document.getElementById("runCohortTableButton"),
   cohortTableShell: document.getElementById("cohortTableShell"),
+  tableDependencyText: document.getElementById("tableDependencyText"),
+  tableDependencyChips: document.getElementById("tableDependencyChips"),
   downloadCohortTableButton: document.getElementById("downloadCohortTableButton"),
   // ML
   runMlButton: document.getElementById("runMlButton"),
@@ -572,19 +580,26 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
   const counts = summary?.counts || [];
   const assignmentRule = summary?.assignment_rule || null;
   const pValueLabel = humanizePValueLabel(summary?.p_value_label);
+  const summaryCell = (label, value, extraClass = "") => `
+      <div class="${extraClass}">
+        <strong>${escapeHtml(label)}</strong>
+        <span class="summary-value" title="${escapeHtml(String(value ?? "NA"))}">${escapeHtml(String(value ?? "NA"))}</span>
+      </div>`;
   refs.deriveSummary.classList.remove("hidden");
   refs.deriveSummary.innerHTML = `
     <div class="count-strip">
       ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(deriveGroupCountLabel(item.group))}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
     </div>
     ${summary?.method === "optimal_cutpoint" ? '<div class="note-box">High/Low indicate risk direction, not whether the source value itself is numerically high or low.</div>' : ""}
+    <div class="note-box">The derived column was set as Group by. ML and DL feature selections did not change automatically.</div>
+    ${summary?.method === "optimal_cutpoint" ? '<div class="note-box">This optimal cutpoint used outcome information. Use it for grouping or visualization, not as an ML/DL training feature.</div>' : ""}
     <div class="signature-summary-grid">
-      <div><strong>Derived column</strong><br/>${escapeHtml(derivedColumn || "NA")}</div>
-      <div><strong>Method</strong><br/>${escapeHtml(summary?.method || "NA")}</div>
-      <div><strong>Cutoff</strong><br/>${escapeHtml(formatValue(summary?.cutoff))}</div>
-      ${summary?.p_value != null ? `<div class="pvalue-card"><strong>${escapeHtml(pValueLabel)}</strong><br/>${escapeHtml(formatValue(summary.p_value))}</div>` : ""}
-      <div><strong>Groups</strong><br/>${escapeHtml(formatValue(summary?.n_groups || counts.length || "NA"))}</div>
-      ${assignmentRule ? `<div class="wide-card"><strong>Assignment rule</strong><br/>${escapeHtml(assignmentRule)}</div>` : ""}
+      ${summaryCell("Derived column", derivedColumn || "NA")}
+      ${summaryCell("Method", summary?.method || "NA")}
+      ${summaryCell("Cutoff", formatValue(summary?.cutoff))}
+      ${summary?.p_value != null ? summaryCell(pValueLabel, formatValue(summary.p_value), "pvalue-card") : ""}
+      ${summaryCell("Groups", formatValue(summary?.n_groups || counts.length || "NA"))}
+      ${assignmentRule ? summaryCell("Assignment rule", assignmentRule, "wide-card") : ""}
     </div>`;
 }
 
@@ -857,6 +872,7 @@ function summarizeFeatureNames(values, limit = 4) {
 }
 
 function datasetPresetForCurrentDataset() {
+  if (!state.dataset?.preset_eligible) return null;
   const filename = (state.dataset?.filename || "").toLowerCase();
   const columns = new Set((state.dataset?.columns || []).map((column) => column.name));
   const looksLikeGbsg2 = ["rfs_days", "rfs_event", "horTh", "menostat", "tgrade"].every((name) => columns.has(name));
@@ -905,38 +921,123 @@ function setDatasetPresetButtonState(mode = null) {
 function renderDatasetPresetStatus(title, text, chips = []) {
   if (refs.datasetPresetStatusTitle) refs.datasetPresetStatusTitle.textContent = title;
   if (refs.datasetPresetStatusText) refs.datasetPresetStatusText.textContent = text;
-  if (!refs.datasetPresetChips) return;
-  refs.datasetPresetChips.innerHTML = "";
+  renderChipList(refs.datasetPresetChips, chips);
+}
+
+function renderChipList(container, chips = []) {
+  if (!container) return;
+  container.innerHTML = "";
   if (!chips.length) {
-    refs.datasetPresetChips.classList.add("hidden");
+    container.classList.add("hidden");
     return;
   }
   chips.forEach((label) => {
     const chip = document.createElement("span");
     chip.className = "dataset-preset-chip";
     chip.textContent = label;
-    refs.datasetPresetChips.appendChild(chip);
+    container.appendChild(chip);
   });
-  refs.datasetPresetChips.classList.remove("hidden");
+  container.classList.remove("hidden");
+}
+
+function formatOutcomeChip(timeLabel, eventLabel, eventValue) {
+  return `Outcome: ${timeLabel} / ${eventLabel}=${eventValue}`;
+}
+
+function mlPendingBannerText({ modelType, nEstimators, rowCount }) {
+  const label = modelType === "gbs" ? "Gradient Boosted Survival" : "Random Survival Forest";
+  const treeSuffix = Number.isFinite(nEstimators) ? ` with ${nEstimators} trees` : "";
+  const cohortSuffix = Number.isFinite(rowCount) ? ` on ${rowCount} rows` : "";
+  let message = `Training ${label}${treeSuffix}${cohortSuffix}.`;
+  if (modelType === "rsf" && Number(nEstimators) >= 100 && Number(rowCount) >= 500) {
+    message += " This can take longer on a local CPU for real cohorts.";
+  } else {
+    message += " This usually finishes quickly on small cohorts.";
+  }
+  message += " SHAP is computed after fitting and can add a short delay.";
+  return message;
+}
+
+function formatGroupChip(groupLabel) {
+  return `Grouping only: ${groupLabel}`;
+}
+
+function formatMaxTimeChip(maxTimeValue) {
+  return maxTimeValue ? `Max time: ${maxTimeValue}` : "Max time: Auto";
+}
+
+function renderContextCards({
+  hasDataset,
+  timeLabel,
+  eventLabel,
+  eventValue,
+  groupLabel,
+  features,
+  categoricals,
+  tableVariables,
+}) {
+  if (refs.groupingSummaryText) {
+    refs.groupingSummaryText.textContent = !hasDataset
+      ? "Used mainly for Kaplan-Meier and grouped tables. Group by does not change Cox, ML, or DL inputs."
+      : `Current Group by: ${groupLabel}. These settings mainly affect Kaplan-Meier and grouped tables. Cox, ML, and DL use the outcome definition plus the Cox-tab covariates.`;
+  }
+
+  if (refs.kmDependencyText) {
+    refs.kmDependencyText.textContent = !hasDataset
+      ? "Kaplan-Meier uses the Study Design outcome definition and the current Group by setting."
+      : "Kaplan-Meier uses the Study Design outcome definition, the current Group by field, and the display settings below.";
+    renderChipList(refs.kmDependencyChips, hasDataset ? [
+      formatOutcomeChip(timeLabel, eventLabel, eventValue),
+      `Group: ${groupLabel}`,
+      `Time unit: ${refs.timeUnitLabel?.value || "Months"}`,
+      formatMaxTimeChip(refs.maxTime?.value || ""),
+      `CI: ${refs.confidenceLevel?.selectedOptions?.[0]?.textContent || "95%"}`,
+    ] : []);
+  }
+
+  if (refs.coxDependencyText) {
+    refs.coxDependencyText.textContent = !hasDataset
+      ? "Cox uses the Study Design outcome definition and the covariates selected below."
+      : "Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate.";
+    renderChipList(refs.coxDependencyChips, hasDataset ? [
+      formatOutcomeChip(timeLabel, eventLabel, eventValue),
+      formatGroupChip(groupLabel),
+      `Covariates: ${features.length}`,
+      `Categorical: ${categoricals.length}`,
+    ] : []);
+  }
+
+  if (refs.tableDependencyText) {
+    refs.tableDependencyText.textContent = !hasDataset
+      ? "The cohort table uses the selected variables below and applies Group by only when grouping is set."
+      : "The cohort table uses the selected variables below and applies Group by only when grouping is set.";
+    renderChipList(refs.tableDependencyChips, hasDataset ? [
+      `Variables: ${tableVariables.length}`,
+      `Group: ${groupLabel}`,
+    ] : []);
+  }
 }
 
 function renderSharedFeatureSummary() {
   const hasDataset = Boolean(state.dataset);
   const features = hasDataset ? selectedCheckboxValues(refs.covariateChecklist) : [];
   const categoricals = hasDataset ? selectedCheckboxValues(refs.categoricalChecklist).filter((value) => features.includes(value)) : [];
+  const tableVariables = hasDataset ? selectedCheckboxValues(refs.cohortVariableChecklist) : [];
   const timeLabel = hasDataset ? (refs.timeColumn?.value || "time") : "time";
   const eventLabel = hasDataset ? (refs.eventColumn?.value || "event") : "event";
+  const eventValue = hasDataset ? (refs.eventPositiveValue?.value || "1") : "1";
+  const groupLabel = hasDataset ? (refs.groupColumn?.value || "overall only") : "overall only";
   const summaryText = !hasDataset
     ? "Load a dataset first. ML and DL use the shared covariate and categorical selections defined on the Cox tab."
     : features.length
-      ? `Shared across ML and DL. Current training inputs come from the Cox tab selections: ${summarizeFeatureNames(features)}.`
+      ? `Training inputs come only from the Cox tab selections: ${summarizeFeatureNames(features)}. Group by is shown below for context only.`
       : "No shared feature set selected yet. Choose covariates on the Cox tab before training ML or DL models.";
   const finalChips = !hasDataset
     ? []
     : [
-        `Time: ${timeLabel}`,
-        `Event: ${eventLabel}`,
-        `Features: ${features.length}`,
+        formatOutcomeChip(timeLabel, eventLabel, eventValue),
+        formatGroupChip(groupLabel),
+        `Model features: ${features.length}`,
         `Categorical: ${categoricals.length}`,
         features.length ? `Preview: ${summarizeFeatureNames(features)}` : "Preview: none selected",
         categoricals.length ? `Categoricals: ${summarizeFeatureNames(categoricals, 3)}` : "Categoricals: none",
@@ -947,16 +1048,24 @@ function renderSharedFeatureSummary() {
     [refs.dlFeatureSummaryText, refs.dlFeatureSummaryChips],
   ].forEach(([textNode, chipContainer]) => {
     if (textNode) textNode.textContent = summaryText;
-    if (!chipContainer) return;
-    chipContainer.innerHTML = "";
-    finalChips.forEach((label) => {
-      const chip = document.createElement("span");
-      chip.className = "dataset-preset-chip";
-      chip.textContent = label;
-      chipContainer.appendChild(chip);
-    });
-    chipContainer.classList.remove("hidden");
+    renderChipList(chipContainer, finalChips);
   });
+
+  renderContextCards({
+    hasDataset,
+    timeLabel,
+    eventLabel,
+    eventValue,
+    groupLabel,
+    features,
+    categoricals,
+    tableVariables,
+  });
+}
+
+function updateGroupingDetailsVisibility(tabName = activeTabName()) {
+  if (!refs.groupingDetails) return;
+  refs.groupingDetails.open = ["km", "tables"].includes(tabName);
 }
 
 function focusSharedFeatureEditor() {
@@ -1148,6 +1257,16 @@ function updateDatasetBadge() {
   refs.datasetBadge.classList.remove("hidden");
 }
 
+function scrollWorkspaceEntryToTop() {
+  const resetScroll = () => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  };
+  requestAnimationFrame(resetScroll);
+  window.setTimeout(resetScroll, 300);
+}
+
 function showWorkspace() {
   if (!refs.landing.classList.contains("hidden")) {
     refs.landing.classList.add("fade-out");
@@ -1167,6 +1286,7 @@ function activateTab(tabName) {
     if (isActive) button.focus();
   });
   refs.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tabName));
+  updateGroupingDetailsVisibility(tabName);
   if (state.dataset) syncHistoryState("replace");
   requestAnimationFrame(() => {
     if (tabName === "km" && state.km) Plotly.Plots.resize(refs.kmPlot);
@@ -1183,7 +1303,7 @@ function activateTab(tabName) {
   });
 }
 
-function updateControlsFromDataset() {
+function updateControlsFromDataset({ scrollToTop = false } = {}) {
   const columnNames = state.dataset.columns.map((c) => c.name);
   const suggestions = state.dataset.suggestions;
   renderSelect(refs.timeColumn, columnNames, { selected: inferDefault(columnNames, suggestions.time_columns, 0) });
@@ -1197,6 +1317,7 @@ function updateControlsFromDataset() {
   updateDatasetPresetBar();
   refs.downloadSignatureButton.disabled = true;
   showWorkspace();
+  if (scrollToTop) scrollWorkspaceEntryToTop();
   updateStepIndicator(2);
   const timeSugg = suggestions.time_columns?.[0];
   const eventSugg = suggestions.event_columns?.[0];
@@ -1205,7 +1326,7 @@ function updateControlsFromDataset() {
   }
 }
 
-function updateAfterDataset(payload) {
+function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   state.dataset = payload;
   state.km = null;
   state.cox = null;
@@ -1263,7 +1384,7 @@ function updateAfterDataset(payload) {
   if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
   if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
   setDlManuscriptDownloadsEnabled(false);
-  updateControlsFromDataset();
+  updateControlsFromDataset({ scrollToTop });
 }
 
 async function uploadDataset() {
@@ -1271,7 +1392,7 @@ async function uploadDataset() {
   const formData = new FormData();
   formData.append("file", refs.datasetFile.files[0]);
   const payload = await fetchJSON("/api/upload", { method: "POST", body: formData });
-  updateAfterDataset(payload);
+  updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
   activateTab("km");
   runtime.historySyncPaused = false;
@@ -1280,7 +1401,7 @@ async function uploadDataset() {
 
 async function loadExampleDataset() {
   const payload = await fetchJSON("/api/load-example", { method: "POST" });
-  updateAfterDataset(payload);
+  updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
   activateTab("km");
   runtime.historySyncPaused = false;
@@ -1289,7 +1410,7 @@ async function loadExampleDataset() {
 
 async function loadTcgaUploadReadyDataset() {
   const payload = await fetchJSON("/api/load-tcga-upload-ready", { method: "POST" });
-  updateAfterDataset(payload);
+  updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
   activateTab("km");
   runtime.historySyncPaused = false;
@@ -1298,7 +1419,7 @@ async function loadTcgaUploadReadyDataset() {
 
 async function loadTcgaDataset() {
   const payload = await fetchJSON("/api/load-tcga-example", { method: "POST" });
-  updateAfterDataset(payload);
+  updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
   activateTab("km");
   runtime.historySyncPaused = false;
@@ -1307,7 +1428,7 @@ async function loadTcgaDataset() {
 
 async function loadGbsg2Dataset() {
   const payload = await fetchJSON("/api/load-gbsg2-example", { method: "POST" });
-  updateAfterDataset(payload);
+  updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
   activateTab("km");
   runtime.historySyncPaused = false;
@@ -1344,9 +1465,14 @@ async function deriveGroup() {
 
   const payload = await fetchJSON("/api/derive-group", { method: "POST", body: JSON.stringify(body) });
   updateAfterDataset(payload);
-  refs.deriveStatus.textContent = `Created ${payload.derived_column}`;
+  const featureUseMessage = isOptimal
+    ? "Set as Group by. ML/DL features were not changed. This cutpoint used outcome information, so keep it for grouping or visualization rather than predictive training."
+    : "Set as Group by. ML/DL features were not changed. Add it manually on the Cox tab only if you want models to use it.";
+  refs.deriveStatus.textContent = `Created ${payload.derived_column}. ${featureUseMessage}`;
   refs.groupColumn.value = payload.derived_column;
   renderDerivedGroupSummary(payload.derived_column, payload.derive_summary);
+  renderSharedFeatureSummary();
+  showToast(`Created ${payload.derived_column}. ${featureUseMessage}`, "success", 5200);
 
   // If optimal cutpoint, also show the scan plot
   if (isOptimal && (payload.cutpoint_figure || payload.derive_summary?.scan_data)) {
@@ -1527,6 +1653,11 @@ async function runMlModel() {
   if (!features.length) { showToast("Select at least one feature (from Cox tab covariates).", "error"); return; }
   const categoricalFeatures = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => features.includes(v));
   setShimmer(refs.mlImportancePlot);
+  refs.mlMetaBanner.textContent = mlPendingBannerText({
+    modelType: refs.mlModelType.value,
+    nEstimators: Number(refs.mlNEstimators.value),
+    rowCount: Number(state.dataset?.n_rows),
+  });
 
   const payload = await fetchJSON("/api/ml-model", {
     method: "POST",
@@ -1654,42 +1785,68 @@ async function runDlModel() {
       early_stopping_patience: Number(refs.dlEarlyStoppingPatience.value),
       early_stopping_min_delta: Number(refs.dlEarlyStoppingMinDelta.value),
       parallel_jobs: Number(refs.dlParallelJobs.value),
+      evaluation_strategy: refs.dlEvaluationStrategy.value,
+      cv_folds: Number(refs.dlCvFolds.value),
+      cv_repeats: Number(refs.dlCvRepeats.value),
       batch_size: 64,
       random_seed: 42,
     }),
   });
   state.dl = payload;
+  const stats = payload.analysis || {};
 
   if (payload.figures?.importance) {
     purgePlot(refs.dlImportancePlot);
     refs.dlImportancePlot.innerHTML = "";
     await Plotly.newPlot(refs.dlImportancePlot, payload.figures.importance.data, payload.figures.importance.layout, plotConfig("dl_importance"));
   } else {
-    clearPlotShell(refs.dlImportancePlot, '<div class="empty-state plot-empty"><span>No feature importance available</span></div>');
+    const importanceEmpty = stats?.evaluation_mode === "repeated_cv"
+      ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit single-fit feature importance.</span></div>'
+      : '<div class="empty-state plot-empty"><span>No feature importance available</span></div>';
+    clearPlotShell(refs.dlImportancePlot, importanceEmpty);
   }
   if (payload.figures?.loss) {
     purgePlot(refs.dlLossPlot);
     refs.dlLossPlot.innerHTML = "";
     await Plotly.newPlot(refs.dlLossPlot, payload.figures.loss.data, payload.figures.loss.layout, plotConfig("dl_loss"));
   } else {
-    clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>No loss curve available</span></div>');
+    const lossEmpty = stats?.evaluation_mode === "repeated_cv"
+      ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit a single training loss curve.</span></div>'
+      : '<div class="empty-state plot-empty"><span>No loss curve available</span></div>';
+    clearPlotShell(refs.dlLossPlot, lossEmpty);
   }
-  refs.dlComparisonShell.innerHTML = '<div class="empty-state">Run "Compare All" to benchmark all deep models on the same feature set.</div>';
-  refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Run "Compare All" to populate manuscript-ready deep comparison rows.</div>';
+  if (stats.evaluation_mode === "repeated_cv" && Array.isArray(stats.repeat_results) && stats.repeat_results.length) {
+    renderTable(refs.dlComparisonShell, stats.repeat_results);
+  } else {
+    refs.dlComparisonShell.innerHTML = '<div class="empty-state">Run "Compare All" to benchmark all deep models on the same feature set.</div>';
+  }
+  if (stats.evaluation_mode === "repeated_cv" && payload.analysis?.manuscript_tables?.model_performance_table) {
+    renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
+  } else {
+    refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Run "Compare All" to populate manuscript-ready deep comparison rows.</div>';
+  }
   refs.dlComparisonPlot.innerHTML = "";
   refs.dlComparisonPlot.classList.add("hidden");
-  refs.downloadDlComparisonButton.disabled = true;
+  refs.downloadDlComparisonButton.disabled = !(Array.isArray(stats.comparison_table) && stats.comparison_table.length);
   if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
   if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
-  setDlManuscriptDownloadsEnabled(false);
+  setDlManuscriptDownloadsEnabled(!!(stats.evaluation_mode === "repeated_cv" && payload.analysis?.manuscript_tables?.model_performance_table?.length));
   // Backend may emit either `scientific_summary` or `insight_board` depending on model implementation.
   const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
   renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning results.");
-  const stats = payload.analysis || {};
   const epochsTrained = stats.epochs_trained || stats.epochs || refs.dlEpochs.value;
-  const dlMetricLabel = stats.evaluation_mode === "holdout" ? "Holdout C-index" : "Apparent C-index";
-  const dlSeedSuffix = stats.training_seed != null ? `, seed=${formatValue(stats.training_seed)}` : "";
-  refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(stats.evaluation_mode)}, epochs=${formatValue(epochsTrained)}${dlSeedSuffix}`;
+  const dlMetricLabel = stats.evaluation_mode === "repeated_cv"
+    ? "Mean repeated-CV C-index"
+    : (stats.evaluation_mode === "holdout" ? "Holdout C-index" : "Apparent C-index");
+  const dlEvalLabel = stats.evaluation_mode === "repeated_cv"
+    ? `${formatValue(stats.cv_repeats || refs.dlCvRepeats.value)}x${formatValue(stats.cv_folds || refs.dlCvFolds.value)} repeated CV`
+    : formatValue(stats.evaluation_mode);
+  const dlSeedSuffix = stats.evaluation_mode === "repeated_cv"
+    ? (Array.isArray(stats.training_seeds) && stats.training_seeds.length
+      ? `, repeat seeds=${stats.training_seeds.join(", ")}`
+      : "")
+    : (stats.training_seed != null ? `, seed=${formatValue(stats.training_seed)}` : "");
+  refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlSeedSuffix}`;
   updateStepIndicator(3);
   activateTab("dl");
   showToast(`${refs.dlModelType.value.toUpperCase()} model trained`, "success", 3000);
@@ -1758,7 +1915,10 @@ async function runDlCompareModels() {
   const rerunSeedSuffix = (bestRow.training_seed != null && dlEvalMode !== "repeated_cv")
     ? `, rerun seed=${formatValue(bestRow.training_seed)}`
     : "";
-  refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}${rerunSeedSuffix}`;
+  const repeatedCvRerunNote = dlEvalMode === "repeated_cv"
+    ? ", rerun a single architecture with Train Model while keeping repeated CV selected"
+    : "";
+  refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
   refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
   if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !(payload.figures?.comparison?.data?.length);
   if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !(payload.figures?.comparison?.data?.length);
@@ -2066,10 +2226,14 @@ function initListeners() {
   refs.applyModelPresetButton?.addEventListener("click", () => applyDatasetPreset("models"));
   refs.timeColumn.addEventListener("change", () => { refreshVariableSelections(); updateDatasetBadge(); queueHistorySync(); });
   refs.eventColumn.addEventListener("change", () => { updateEventPositiveOptions(); refreshVariableSelections(); updateDatasetBadge(); queueHistorySync(); });
-  refs.groupColumn.addEventListener("change", () => { updateDatasetBadge(); queueHistorySync(); });
+  refs.eventPositiveValue.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.groupColumn.addEventListener("change", () => { updateDatasetBadge(); renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.timeUnitLabel.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.maxTime.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.confidenceLevel.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.covariateChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.categoricalChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.cohortVariableChecklist?.addEventListener("change", queueHistorySync);
+  refs.cohortVariableChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.reviewMlFeaturesButton?.addEventListener("click", focusSharedFeatureEditor);
   refs.reviewDlFeaturesButton?.addEventListener("click", focusSharedFeatureEditor);
   refs.deriveMethod.addEventListener("change", () => { updateMethodVisibility(); queueHistorySync(); });
@@ -2078,6 +2242,7 @@ function initListeners() {
   refs.mlEvaluationStrategy.addEventListener("change", () => { updateMlEvaluationControls(); queueHistorySync(); });
   refs.dlEvaluationStrategy.addEventListener("change", () => { updateDlEvaluationControls(); queueHistorySync(); });
   refs.deriveToggle.addEventListener("click", () => {
+    if (refs.groupingDetails) refs.groupingDetails.open = true;
     refs.derivePanel.classList.toggle("hidden");
     refs.deriveToggle.textContent = refs.derivePanel.classList.contains("hidden") ? "Derive Group" : "Close";
     queueHistorySync();

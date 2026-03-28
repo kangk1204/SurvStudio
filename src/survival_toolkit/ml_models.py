@@ -871,11 +871,19 @@ def train_random_survival_forest(
         # sksurv >=0.24 removed built-in importances for RSF
         from sklearn.inspection import permutation_importance as _perm_imp
 
+        perm_eval_encoded = eval_encoded
+        perm_y_eval = y_eval
+        if int(eval_encoded.shape[0]) > 120:
+            perm_rng = np.random.default_rng(random_state)
+            sampled_idx = np.sort(perm_rng.choice(eval_encoded.shape[0], size=120, replace=False))
+            perm_eval_encoded = eval_encoded.iloc[sampled_idx].reset_index(drop=True)
+            perm_y_eval = y_eval[sampled_idx]
+        perm_repeats = 3 if int(perm_eval_encoded.shape[1]) <= 20 else 2
         perm_result = _perm_imp(
             model,
-            eval_encoded.to_numpy(),
-            y_eval,
-            n_repeats=5,
+            perm_eval_encoded.to_numpy(),
+            perm_y_eval,
+            n_repeats=perm_repeats,
             random_state=random_state,
             n_jobs=1,
         )
@@ -1400,12 +1408,25 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     comparison_table = list(result.get("comparison_table", []))
 
+    def _format_seed_values(values: Any) -> str | None:
+        if not values:
+            return None
+        try:
+            ints = [int(value) for value in values]
+        except Exception:
+            return None
+        return ", ".join(str(value) for value in ints) if ints else None
+
     if evaluation_mode == "repeated_cv":
         interval_label = "Empirical repeat interval (repeat means)"
+        include_provenance = any(
+            row.get("training_seeds") or row.get("split_seeds") or row.get("monitor_seeds")
+            for row in comparison_table
+        )
         for rank, row in enumerate(comparison_table, start=1):
             interval_lower = _safe_float(row.get("c_index_interval_lower"))
             interval_upper = _safe_float(row.get("c_index_interval_upper"))
-            rows.append({
+            manuscript_row = {
                 "Rank": rank,
                 "Model": row["model"],
                 "Validation Strategy": f"{row.get('cv_repeats', 1)}x{row.get('cv_folds', 1)} repeated stratified CV",
@@ -1421,13 +1442,22 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
                 "Failures, n": row.get("n_failures"),
                 "Features, n": row.get("n_features"),
                 "Mean Training Time, ms": _safe_float(row.get("training_time_ms")),
-            })
+            }
+            if include_provenance:
+                manuscript_row["Training seeds"] = _format_seed_values(row.get("training_seeds"))
+                manuscript_row["Split seeds"] = _format_seed_values(row.get("split_seeds"))
+                manuscript_row["Monitor seeds"] = _format_seed_values(row.get("monitor_seeds"))
+            rows.append(manuscript_row)
         table_notes = [
             "C-index values summarize repeat-level means from repeated stratified cross-validation.",
             "The empirical repeat interval reports the 2.5th to 97.5th percentiles of repeat mean C-index values.",
             "The repeat interval is descriptive across repeats and should not be interpreted as a formal confidence interval.",
             "Blank C-index fields indicate incomplete repeated-CV evaluation because one or more folds failed.",
         ]
+        if include_provenance:
+            table_notes.append(
+                "Training, split, and monitor seed columns record the exact repeated-CV partitioning used for replay under the same model settings."
+            )
     else:
         row_modes = {str(row.get("evaluation_mode", evaluation_mode)) for row in comparison_table}
         for rank, row in enumerate(comparison_table, start=1):
@@ -1701,12 +1731,13 @@ def compute_shap_values(
         shap_values = explainer.shap_values(X_array)
     except Exception:
         # scikit-survival estimators are often unsupported by TreeExplainer.
-        # Fall back to a capped KernelExplainer run to provide an approximate signal.
+        # Fall back to a tightly capped KernelExplainer run so single-model
+        # training does not appear hung on larger cohorts.
         shap_method = "kernel"
         rng = np.random.default_rng(20260311)
         n = int(X_array.shape[0])
-        bg_n = min(50, n)
-        eval_n = min(200, n)
+        bg_n = min(20, n)
+        eval_n = min(20, n)
         bg_idx = rng.choice(n, size=bg_n, replace=False) if n > bg_n else np.arange(n)
         X_bg = X_array[bg_idx]
         X_eval = X_array[:eval_n]
@@ -1715,7 +1746,15 @@ def compute_shap_values(
             return np.asarray(model.predict(x), dtype=float)
 
         explainer = shap.KernelExplainer(_predict_fn, X_bg)
-        shap_values = explainer.shap_values(X_eval, nsamples=min(200, X_bg.shape[1] * 20))
+        kernel_nsamples = min(60, max(20, X_bg.shape[1] * 8))
+        try:
+            shap_values = explainer.shap_values(
+                X_eval,
+                nsamples=kernel_nsamples,
+                silent=True,
+            )
+        except TypeError:
+            shap_values = explainer.shap_values(X_eval, nsamples=kernel_nsamples)
 
     # shap_values may be 2-D (n_samples, n_features) or 3-D for multi-output
     if shap_values.ndim == 3:
@@ -2210,12 +2249,12 @@ def compute_time_dependent_importance(
 ) -> dict[str, Any]:
     """Compute how feature importance changes over time.
 
-    This is an approximation of the SurvSHAP(t) concept from the survey:
-    different features dominate at different time horizons.  For each
-    evaluation time point *t*, patients censored before *t* are excluded,
-    the remaining known status labels are binarised (event before *t* → 1,
-    else → 0), and a simple tree-based classifier is fitted.  Feature
-    importances from each classifier form rows of the importance matrix.
+    This is a proxy time-slice importance analysis, not a formal
+    survival-specific attribution method. For each evaluation time point
+    *t*, patients censored before *t* are excluded, the remaining known
+    status labels are binarised (event before *t* → 1, else → 0), and a
+    simple tree-based classifier is fitted. Feature importances from each
+    classifier form rows of the importance matrix.
 
     Parameters
     ----------
@@ -2341,11 +2380,11 @@ def compute_time_dependent_importance(
 
     strengths: list[str] = [
         f"Importance computed at {len(eval_times_arr)} time points for {len(feature_names)} features.",
-        "Reveals how predictive features shift across early vs late follow-up.",
+        "Provides a proxy view of how feature rankings change across early vs late follow-up.",
         "Patients censored before a given time point are excluded from that time-specific classifier.",
     ]
     cautions: list[str] = [
-        "Binary-outcome approximation is still a simplified proxy for true SurvSHAP(t).",
+        "This is a proxy time-slice analysis and should not be described as formal SurvSHAP(t) or a survival-specific attribution method.",
     ]
     next_steps: list[str] = []
 
@@ -2374,7 +2413,7 @@ def compute_time_dependent_importance(
     scientific_summary = {
         "status": status,
         "headline": (
-            f"Time-dependent importance computed with censoring-aware time slices; most frequently dominant feature: {headline_feature}."
+            f"Proxy time-slice importance summary computed with censoring-aware slices; most frequently dominant feature: {headline_feature}."
         ),
         "strengths": strengths,
         "cautions": cautions,

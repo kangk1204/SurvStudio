@@ -147,7 +147,7 @@
             <div class="dataset-preset-chips hidden" id="datasetPresetChips"></div>
           </div>
         </div>
-        <div class="button-row">
+        <div class="button-row dataset-preset-actions">
           <button class="button ghost compact-btn" id="applyBasicPresetButton">Apply KM/Cox Preset</button>
           <button class="button ghost compact-btn" id="applyModelPresetButton">Apply ML/DL Preset</button>
         </div>
@@ -159,35 +159,55 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             Study Design
           </h3>
-          <span class="config-hint">Tell us which columns represent time-to-event data</span>
+          <span class="config-hint">Define the outcome once, then adjust grouping only where it matters.</span>
         </div>
-        <div class="config-row">
+        <div class="study-design-board">
+          <div class="study-design-card">
+            <strong>Used everywhere</strong>
+            <span>Time column, event column, and event value define the endpoint for KM, Cox, ML, and DL.</span>
+          </div>
+          <div class="study-design-card study-design-card-muted">
+            <strong>Used mainly for grouping and display</strong>
+            <span>Group by, derived groups, time unit, max time, and CI level mostly affect KM and grouped tables.</span>
+          </div>
+        </div>
+        <div class="config-row config-row-primary">
           <label class="config-field">
-            <span>Time Column <button class="help-dot" type="button" data-tooltip="How long each patient was observed (e.g., months until death or last follow-up)">?</button></span>
+            <span>Time Column <span class="scope-tag scope-global">Global</span> <button class="help-dot" type="button" data-tooltip="How long each patient was observed (e.g., months until death or last follow-up)">?</button></span>
             <select id="timeColumn"></select>
           </label>
           <label class="config-field">
-            <span>Event Column <button class="help-dot" type="button" data-tooltip="Whether the event of interest occurred (e.g., death=1, alive=0)">?</button></span>
+            <span>Event Column <span class="scope-tag scope-global">Global</span> <button class="help-dot" type="button" data-tooltip="Whether the event of interest occurred (e.g., death=1, alive=0)">?</button></span>
             <select id="eventColumn"></select>
           </label>
           <label class="config-field narrow">
-            <span>Event Value <button class="help-dot" type="button" data-tooltip="Which value in the event column means the event happened (usually 1)">?</button></span>
+            <span>Event Value <span class="scope-tag scope-global">Global</span> <button class="help-dot" type="button" data-tooltip="Which value in the event column means the event happened (usually 1)">?</button></span>
             <select id="eventPositiveValue"></select>
           </label>
+        </div>
+
+        <details class="grouping-details" id="groupingDetails">
+          <summary class="grouping-summary">
+            <div class="grouping-summary-copy">
+              <strong>KM / grouped summary settings</strong>
+              <span id="groupingSummaryText">Used mainly for Kaplan-Meier and grouped tables. Group by does not change Cox, ML, or DL inputs.</span>
+            </div>
+          </summary>
+          <div class="config-row config-row-secondary">
           <label class="config-field">
-            <span>Group By <button class="help-dot" type="button" data-tooltip="Split patients into groups for comparison (e.g., treatment vs control)">?</button></span>
+            <span>Group By <span class="scope-tag scope-grouping">KM/Table</span> <button class="help-dot" type="button" data-tooltip="Split patients into groups for comparison (e.g., treatment vs control). This is used mainly in Kaplan-Meier and grouped summaries.">?</button></span>
             <select id="groupColumn"></select>
           </label>
           <label class="config-field narrow">
-            <span>Time Unit</span>
+            <span>Time Unit <span class="scope-tag scope-grouping">Display</span></span>
             <input id="timeUnitLabel" type="text" value="Months" />
           </label>
           <label class="config-field narrow">
-            <span>Max Time <button class="help-dot" type="button" data-tooltip="Optional: truncate analysis at this time point. Leave blank for auto.">?</button></span>
+            <span>Max Time <span class="scope-tag scope-grouping">KM</span> <button class="help-dot" type="button" data-tooltip="Optional: truncate Kaplan-Meier display at this time point. Leave blank for auto.">?</button></span>
             <input id="maxTime" type="number" min="0" step="0.1" placeholder="Auto" />
           </label>
           <label class="config-field narrow">
-            <span>CI Level <button class="help-dot" type="button" data-tooltip="Confidence interval level for KM curves (90%, 95%, or 99%)">?</button></span>
+            <span>CI Level <span class="scope-tag scope-grouping">KM</span> <button class="help-dot" type="button" data-tooltip="Confidence interval level for KM curves (90%, 95%, or 99%)">?</button></span>
             <select id="confidenceLevel">
               <option value="0.90">90%</option>
               <option value="0.95" selected>95%</option>
@@ -195,34 +215,34 @@
             </select>
           </label>
           <button class="button ghost compact-btn" type="button" id="deriveToggle">Derive Group</button>
-        </div>
-
-        <div class="derive-panel hidden" id="derivePanel">
-          <label class="config-field">
-            <span>Source variable</span>
-            <select id="deriveSource"></select>
-          </label>
-          <label class="config-field">
-            <span>Method</span>
-            <select id="deriveMethod">
-              <option value="optimal_cutpoint">Optimal cutpoint (log-rank)</option>
-              <option value="median_split">Median split</option>
-              <option value="tertile_split">Tertile split</option>
-              <option value="quartile_split">Quartile split</option>
-              <option value="custom_cutoff">Custom cutoff</option>
-            </select>
-          </label>
-          <label class="config-field narrow hidden" id="cutoffWrap">
-            <span>Cutoff</span>
-            <input id="deriveCutoff" type="number" step="0.01" />
-          </label>
-          <label class="config-field">
-            <span>Column name</span>
-            <input id="deriveColumnName" type="text" placeholder="biomarker_group" />
-          </label>
-          <button class="button primary compact-btn" id="deriveButton">Create</button>
-          <div class="derive-status" id="deriveStatus"></div>
-        </div>
+          </div>
+          <div class="derive-panel hidden" id="derivePanel">
+            <label class="config-field">
+              <span>Source variable <span class="scope-tag scope-grouping">Grouping</span></span>
+              <select id="deriveSource"></select>
+            </label>
+            <label class="config-field">
+              <span>Method <span class="scope-tag scope-grouping">Grouping</span></span>
+              <select id="deriveMethod">
+                <option value="optimal_cutpoint">Optimal cutpoint (log-rank)</option>
+                <option value="median_split">Median split</option>
+                <option value="tertile_split">Tertile split</option>
+                <option value="quartile_split">Quartile split</option>
+                <option value="custom_cutoff">Custom cutoff</option>
+              </select>
+            </label>
+            <label class="config-field narrow hidden" id="cutoffWrap">
+              <span>Cutoff <span class="scope-tag scope-grouping">Grouping</span></span>
+              <input id="deriveCutoff" type="number" step="0.01" />
+            </label>
+            <label class="config-field">
+              <span>Column name <span class="scope-tag scope-grouping">Grouping</span></span>
+              <input id="deriveColumnName" type="text" placeholder="biomarker_group" />
+            </label>
+            <button class="button primary compact-btn" id="deriveButton">Create</button>
+            <div class="derive-status" id="deriveStatus"></div>
+          </div>
+        </details>
 
         <div class="derive-result hidden" id="deriveSummary"></div>
         <div class="plot-shell hidden" id="cutpointPlot"></div>
@@ -284,6 +304,13 @@
               </button>
               <button class="button ghost" id="downloadKmPngButton" disabled title="Download chart as PNG">PNG</button>
               <button class="button ghost" id="downloadKmSvgButton" disabled title="Download chart as SVG">SVG</button>
+            </div>
+          </div>
+          <div class="dependency-card" id="kmDependencyCard">
+            <div class="dependency-copy">
+              <strong>What this tab uses</strong>
+              <span id="kmDependencyText">Kaplan-Meier uses the Study Design outcome definition and the current Group by setting.</span>
+              <div class="dataset-preset-chips hidden" id="kmDependencyChips"></div>
             </div>
           </div>
 
@@ -381,6 +408,13 @@
               <button class="button ghost" id="downloadCoxSvgButton" disabled title="Download forest plot as SVG">SVG</button>
             </div>
           </div>
+          <div class="dependency-card" id="coxDependencyCard">
+            <div class="dependency-copy">
+              <strong>What this tab uses</strong>
+              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate.</span>
+              <div class="dataset-preset-chips hidden" id="coxDependencyChips"></div>
+            </div>
+          </div>
           <div class="checklist-grid">
             <div class="selection-card">
               <h3>Model Covariates <button class="help-dot" type="button" data-tooltip="Variables to include in the model. Check the ones you want to test as potential risk factors.">?</button></h3>
@@ -473,8 +507,8 @@
           <div class="toolbar-note">Compare All Evaluation affects only <strong>Compare All</strong>. <strong>Train Model</strong> uses the single-model training path and reports its own evaluation mode in the result banner.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">
-              <strong>Shared feature selection</strong>
-              <span id="mlFeatureSummaryText">ML and DL use the covariate and categorical selections defined on the Cox tab.</span>
+              <strong>What this tab uses</strong>
+              <span id="mlFeatureSummaryText">ML uses the Study Design outcome definition and the shared covariates selected on the Cox tab.</span>
               <div class="dataset-preset-chips hidden" id="mlFeatureSummaryChips"></div>
             </div>
             <div class="button-row">
@@ -596,8 +630,8 @@
           <div class="toolbar-note">Allowed ranges: <strong>Epochs 10-1000</strong>, <strong>Learning rate 0-0.1</strong>, <strong>Dropout 0-0.5</strong>, <strong>CV folds 2-10</strong>, <strong>CV repeats 1-20</strong>, <strong>Patience 1-100</strong>, <strong>Min delta 0-0.1</strong>, and <strong>Parallel jobs 1-16</strong>. Hidden layers should be comma-separated positive integers such as <strong>64,64</strong>.</div>
           <div class="shared-feature-card" id="dlFeatureSummaryCard">
             <div class="shared-feature-copy">
-              <strong>Shared feature selection</strong>
-              <span id="dlFeatureSummaryText">ML and DL use the covariate and categorical selections defined on the Cox tab.</span>
+              <strong>What this tab uses</strong>
+              <span id="dlFeatureSummaryText">DL uses the Study Design outcome definition and the shared covariates selected on the Cox tab.</span>
               <div class="dataset-preset-chips hidden" id="dlFeatureSummaryChips"></div>
             </div>
             <div class="button-row">
@@ -643,6 +677,13 @@
                 Build Table
               </button>
               <button class="button ghost" id="downloadCohortTableButton" disabled>CSV</button>
+            </div>
+          </div>
+          <div class="dependency-card" id="tableDependencyCard">
+            <div class="dependency-copy">
+              <strong>What this tab uses</strong>
+              <span id="tableDependencyText">The cohort table uses the selected variables below and applies Group by only when grouping is set.</span>
+              <div class="dataset-preset-chips hidden" id="tableDependencyChips"></div>
             </div>
           </div>
           <div class="table-builder-grid">
