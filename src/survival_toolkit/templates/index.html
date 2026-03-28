@@ -217,32 +217,32 @@
       </div>
 
       <nav class="tab-strip" role="tablist" aria-label="Analysis views">
-        <button class="tab-button active" type="button" data-tab="km" role="tab" aria-selected="true" aria-controls="panel-km">
+        <button class="tab-button active" type="button" data-tab="km" role="tab" id="tab-km" aria-selected="true" aria-controls="panel-km" tabindex="0">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
           Kaplan-Meier
           <span class="tab-desc">Survival curves</span>
         </button>
-        <button class="tab-button" type="button" data-tab="cox" role="tab" aria-selected="false" aria-controls="panel-cox">
+        <button class="tab-button" type="button" data-tab="cox" role="tab" id="tab-cox" aria-selected="false" aria-controls="panel-cox" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
           Cox PH
           <span class="tab-desc">Risk factors</span>
         </button>
-        <button class="tab-button" type="button" data-tab="ml" role="tab" aria-selected="false" aria-controls="panel-ml">
+        <button class="tab-button" type="button" data-tab="ml" role="tab" id="tab-ml" aria-selected="false" aria-controls="panel-ml" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg></span>
           ML Models
           <span class="tab-desc">RSF, GBS, SHAP</span>
         </button>
-        <button class="tab-button" type="button" data-tab="dl" role="tab" aria-selected="false" aria-controls="panel-dl">
-          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/></svg></span>
+        <button class="tab-button" type="button" data-tab="dl" role="tab" id="tab-dl" aria-selected="false" aria-controls="panel-dl" tabindex="-1">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v5M7.5 17.5l3-4.5M16.5 17.5l-3-4.5"/><circle cx="12" cy="12" r="1.5"/></svg></span>
           Deep Learning
           <span class="tab-desc">DeepSurv, Transformer</span>
         </button>
-        <button class="tab-button" type="button" data-tab="tables" role="tab" aria-selected="false" aria-controls="panel-tables">
+        <button class="tab-button" type="button" data-tab="tables" role="tab" id="tab-tables" aria-selected="false" aria-controls="panel-tables" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/></svg></span>
           Cohort Table
           <span class="tab-desc">Demographics</span>
         </button>
-        <button class="tab-button" type="button" data-tab="data" role="tab" aria-selected="false" aria-controls="panel-data">
+        <button class="tab-button" type="button" data-tab="data" role="tab" id="tab-data" aria-selected="false" aria-controls="panel-data" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
           Data Preview
           <span class="tab-desc">Raw data</span>
@@ -250,7 +250,7 @@
       </nav>
 
       <!-- KM Panel -->
-      <section class="tab-panel active" data-panel="km" id="panel-km" role="tabpanel">
+      <section class="tab-panel active" data-panel="km" id="panel-km" role="tabpanel" aria-labelledby="tab-km">
         <article class="workspace-card">
           <div class="card-head">
             <div class="card-head-left">
@@ -258,7 +258,7 @@
               <p class="card-subtitle">Estimate survival probability over time and compare groups</p>
             </div>
             <div class="button-row compact">
-              <button class="button primary pulse-hint" id="runKmButton">
+              <button class="button primary" id="runKmButton">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 Run Analysis
               </button>
@@ -351,7 +351,7 @@
       </section>
 
       <!-- Cox Panel -->
-      <section class="tab-panel" data-panel="cox" id="panel-cox" role="tabpanel">
+      <section class="tab-panel" data-panel="cox" id="panel-cox" role="tabpanel" aria-labelledby="tab-cox">
         <article class="workspace-card">
           <div class="card-head">
             <div class="card-head-left">
@@ -395,7 +395,7 @@
       </section>
 
       <!-- ML Models Panel -->
-      <section class="tab-panel" data-panel="ml" id="panel-ml" role="tabpanel">
+      <section class="tab-panel" data-panel="ml" id="panel-ml" role="tabpanel" aria-labelledby="tab-ml">
         <article class="workspace-card">
           <div class="card-head">
             <div class="card-head-left">
@@ -494,7 +494,7 @@
       </section>
 
       <!-- Deep Learning Panel -->
-      <section class="tab-panel" data-panel="dl" id="panel-dl" role="tabpanel">
+      <section class="tab-panel" data-panel="dl" id="panel-dl" role="tabpanel" aria-labelledby="tab-dl">
         <article class="workspace-card">
           <div class="card-head">
             <div class="card-head-left">
@@ -529,7 +529,7 @@
             </label>
             <label class="toolbar-field">
               <span>Epochs</span>
-              <input id="dlEpochs" type="number" min="10" max="500" step="10" value="100" />
+              <input id="dlEpochs" type="number" min="10" max="1000" step="10" value="100" />
             </label>
             <label class="toolbar-field">
               <span>Learning Rate</span>
@@ -581,6 +581,7 @@
             </label>
           </div>
           <div class="toolbar-note">Compare All Evaluation affects only <strong>Compare All</strong>. <strong>Train Model</strong> keeps the single-model path and reports its own evaluation mode after training.</div>
+          <div class="toolbar-note">Allowed ranges: <strong>Epochs 10-1000</strong>, <strong>Learning rate 0-0.1</strong>, <strong>Dropout 0-0.5</strong>, <strong>CV folds 2-10</strong>, <strong>CV repeats 1-20</strong>, <strong>Patience 1-100</strong>, <strong>Min delta 0-0.1</strong>, and <strong>Parallel jobs 1-16</strong>. Hidden layers should be comma-separated positive integers such as <strong>64,64</strong>.</div>
           <div class="shared-feature-card" id="dlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>Shared feature selection</strong>
@@ -617,7 +618,7 @@
       </section>
 
       <!-- Cohort Table Panel -->
-      <section class="tab-panel" data-panel="tables" id="panel-tables" role="tabpanel">
+      <section class="tab-panel" data-panel="tables" id="panel-tables" role="tabpanel" aria-labelledby="tab-tables">
         <article class="workspace-card">
           <div class="card-head">
             <div class="card-head-left">
@@ -646,7 +647,7 @@
       </section>
 
       <!-- Data Preview Panel -->
-      <section class="tab-panel" data-panel="data" id="panel-data" role="tabpanel">
+      <section class="tab-panel" data-panel="data" id="panel-data" role="tabpanel" aria-labelledby="tab-data">
         <article class="workspace-card">
           <div class="card-head">
             <div class="card-head-left">

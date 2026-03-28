@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
-from survival_toolkit.app import app, fail_bad_request, store
+from survival_toolkit.app import DeepModelRequest, app, fail_bad_request, store
 from survival_toolkit.sample_data import make_example_dataset
 
 
@@ -89,6 +89,34 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "controls: captureControlSnapshot()" in text
     assert "applyControlSnapshot(historyState.controls || null);" in text
     assert "queueHistorySync()" in text
+
+
+def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function extractErrorMessage(payload)" in text
+    assert 'item.loc.filter((part) => part !== "body").join(" > ")' in text
+    assert "Epochs must be between 10 and 1000." in text
+    assert "Hidden layers must be a comma-separated list of positive integers." in text
+    assert "CV folds must be between 2 and 10." in text
+    assert "Parallel jobs must be between 1 and 16." in text
+    assert "validateDlControls();" in text
+
+
+def test_deep_model_request_accepts_1000_epochs() -> None:
+    request_model = DeepModelRequest(
+        dataset_id="demo",
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "stage"],
+        categorical_features=["stage"],
+        model_type="deepsurv",
+        hidden_layers=[64, 64],
+        epochs=1000,
+    )
+
+    assert request_model.epochs == 1000
 
 
 def test_health_allows_null_origin_for_file_preview() -> None:
