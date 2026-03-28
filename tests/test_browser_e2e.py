@@ -176,3 +176,33 @@ def test_browser_cox_results_table_stays_within_card(browser_server: str) -> Non
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
         pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page()
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#runKmButton").click()
+            page.wait_for_function(
+                "!document.getElementById('downloadKmSummaryButton').disabled"
+            )
+
+            page.go_back(wait_until="networkidle")
+            page.locator("#landing").wait_for(state="visible")
+            assert page.locator("#workspace").is_hidden()
+            assert "Drop a file here or click to browse" in page.locator("#landing").inner_text()
+
+            page.go_forward(wait_until="networkidle")
+            page.locator("#workspace").wait_for(state="visible")
+            assert not page.locator("#downloadKmSummaryButton").is_disabled()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")

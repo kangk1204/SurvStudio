@@ -11,6 +11,7 @@ const state = {
 const runtime = {
   isFilePreview: window.location.protocol === "file:",
   apiBase: window.location.protocol === "file:" ? "http://127.0.0.1:8000" : "",
+  historySyncPaused: false,
 };
 
 
@@ -210,6 +211,55 @@ function setRuntimeBanner(text = "", tone = "info") {
   }
   refs.runtimeBanner.textContent = text;
   refs.runtimeBanner.className = `runtime-banner runtime-banner-${tone}`;
+}
+
+function activeTabName() {
+  return document.querySelector(".tab-button.active")?.dataset.tab || "km";
+}
+
+function currentHistoryState() {
+  if (!state.dataset) return { view: "home" };
+  return {
+    view: "workspace",
+    datasetId: state.dataset.dataset_id,
+    tab: activeTabName(),
+  };
+}
+
+function syncHistoryState(mode = "replace") {
+  if (runtime.historySyncPaused || !window.history?.replaceState) return;
+  const nextState = currentHistoryState();
+  if (mode === "push") {
+    window.history.pushState(nextState, "", window.location.href);
+    return;
+  }
+  window.history.replaceState(nextState, "", window.location.href);
+}
+
+async function restoreHistoryState(historyState) {
+  if (!historyState || historyState.view === "home") {
+    goHome({ syncHistory: false });
+    return;
+  }
+  if (historyState.view !== "workspace" || !historyState.datasetId) {
+    goHome({ syncHistory: false });
+    return;
+  }
+
+  runtime.historySyncPaused = true;
+  try {
+    if (!state.dataset || state.dataset.dataset_id !== historyState.datasetId) {
+      const payload = await fetchJSON(`/api/dataset/${historyState.datasetId}`);
+      updateAfterDataset(payload);
+    } else {
+      showWorkspace();
+    }
+    activateTab(historyState.tab || "km");
+  } catch {
+    goHome({ syncHistory: false });
+  } finally {
+    runtime.historySyncPaused = false;
+  }
 }
 
 function setButtonLoading(button, isLoading) {
@@ -887,6 +937,7 @@ function activateTab(tabName) {
     button.setAttribute("aria-selected", isActive ? "true" : "false");
   });
   refs.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tabName));
+  if (state.dataset) syncHistoryState("replace");
   requestAnimationFrame(() => {
     if (tabName === "km" && state.km) Plotly.Plots.resize(refs.kmPlot);
     if (tabName === "cox" && state.cox) Plotly.Plots.resize(refs.coxPlot);
@@ -991,31 +1042,46 @@ async function uploadDataset() {
   formData.append("file", refs.datasetFile.files[0]);
   const payload = await fetchJSON("/api/upload", { method: "POST", body: formData });
   updateAfterDataset(payload);
+  runtime.historySyncPaused = true;
   activateTab("km");
+  runtime.historySyncPaused = false;
+  syncHistoryState("push");
 }
 
 async function loadExampleDataset() {
   const payload = await fetchJSON("/api/load-example", { method: "POST" });
   updateAfterDataset(payload);
+  runtime.historySyncPaused = true;
   activateTab("km");
+  runtime.historySyncPaused = false;
+  syncHistoryState("push");
 }
 
 async function loadTcgaUploadReadyDataset() {
   const payload = await fetchJSON("/api/load-tcga-upload-ready", { method: "POST" });
   updateAfterDataset(payload);
+  runtime.historySyncPaused = true;
   activateTab("km");
+  runtime.historySyncPaused = false;
+  syncHistoryState("push");
 }
 
 async function loadTcgaDataset() {
   const payload = await fetchJSON("/api/load-tcga-example", { method: "POST" });
   updateAfterDataset(payload);
+  runtime.historySyncPaused = true;
   activateTab("km");
+  runtime.historySyncPaused = false;
+  syncHistoryState("push");
 }
 
 async function loadGbsg2Dataset() {
   const payload = await fetchJSON("/api/load-gbsg2-example", { method: "POST" });
   updateAfterDataset(payload);
+  runtime.historySyncPaused = true;
   activateTab("km");
+  runtime.historySyncPaused = false;
+  syncHistoryState("push");
 }
 
 async function deriveGroup() {
@@ -1575,6 +1641,7 @@ async function withLoading(button, action) {
 }
 
 async function initializeRuntime() {
+  syncHistoryState("replace");
   if (!runtime.isFilePreview) { setRuntimeBanner(""); return; }
   try {
     await fetchJSON("/api/health");
@@ -1672,7 +1739,7 @@ function initKeyboardShortcuts() {
   });
 }
 
-function goHome() {
+function goHome({ syncHistory = true } = {}) {
   state.dataset = null;
   state.km = null;
   state.cox = null;
@@ -1686,6 +1753,7 @@ function goHome() {
   refs.datasetFile.value = "";
   renderSharedFeatureSummary();
   setRuntimeBanner("");
+  if (syncHistory) syncHistoryState("replace");
 }
 
 function initListeners() {
@@ -1693,6 +1761,9 @@ function initListeners() {
   if (brandHome) {
     brandHome.addEventListener("click", (e) => { e.preventDefault(); goHome(); });
   }
+  window.addEventListener("popstate", (event) => {
+    void restoreHistoryState(event.state);
+  });
   refs.datasetFile.addEventListener("change", () => {
     if (refs.datasetFile.files?.length) withLoading(refs.uploadButton, uploadDataset);
   });
