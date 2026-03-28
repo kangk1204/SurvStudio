@@ -123,6 +123,10 @@ const refs = {
   mlCvFolds: document.getElementById("mlCvFolds"),
   mlCvRepeats: document.getElementById("mlCvRepeats"),
   mlJournalTemplate: document.getElementById("mlJournalTemplate"),
+  mlFeatureSummaryCard: document.getElementById("mlFeatureSummaryCard"),
+  mlFeatureSummaryText: document.getElementById("mlFeatureSummaryText"),
+  mlFeatureSummaryChips: document.getElementById("mlFeatureSummaryChips"),
+  reviewMlFeaturesButton: document.getElementById("reviewMlFeaturesButton"),
   mlImportancePlot: document.getElementById("mlImportancePlot"),
   mlShapPlot: document.getElementById("mlShapPlot"),
   mlComparisonPlot: document.getElementById("mlComparisonPlot"),
@@ -154,6 +158,10 @@ const refs = {
   dlEarlyStoppingMinDelta: document.getElementById("dlEarlyStoppingMinDelta"),
   dlParallelJobs: document.getElementById("dlParallelJobs"),
   dlJournalTemplate: document.getElementById("dlJournalTemplate"),
+  dlFeatureSummaryCard: document.getElementById("dlFeatureSummaryCard"),
+  dlFeatureSummaryText: document.getElementById("dlFeatureSummaryText"),
+  dlFeatureSummaryChips: document.getElementById("dlFeatureSummaryChips"),
+  reviewDlFeaturesButton: document.getElementById("reviewDlFeaturesButton"),
   dlImportancePlot: document.getElementById("dlImportancePlot"),
   dlLossPlot: document.getElementById("dlLossPlot"),
   dlComparisonPlot: document.getElementById("dlComparisonPlot"),
@@ -601,6 +609,7 @@ function refreshVariableSelections() {
   renderChecklist(refs.cohortVariableChecklist, availableCovariates, previousTableVars.length ? previousTableVars : availableCovariates.slice(0, 6));
   const numericOptions = state.dataset.numeric_columns.filter((c) => !excluded.includes(c));
   renderSelect(refs.deriveSource, numericOptions, { selected: numericOptions.includes(refs.deriveSource.value) ? refs.deriveSource.value : numericOptions[0] || null });
+  renderSharedFeatureSummary();
 }
 
 function setCheckedValues(container, values) {
@@ -608,6 +617,12 @@ function setCheckedValues(container, values) {
   container.querySelectorAll('input[type="checkbox"]').forEach((input) => {
     input.checked = wanted.has(input.value);
   });
+}
+
+function summarizeFeatureNames(values, limit = 4) {
+  if (!values.length) return "none selected";
+  if (values.length <= limit) return values.join(", ");
+  return `${values.slice(0, limit).join(", ")} +${values.length - limit} more`;
 }
 
 function datasetPresetForCurrentDataset() {
@@ -674,6 +689,53 @@ function renderDatasetPresetStatus(title, text, chips = []) {
   refs.datasetPresetChips.classList.remove("hidden");
 }
 
+function renderSharedFeatureSummary() {
+  const hasDataset = Boolean(state.dataset);
+  const features = hasDataset ? selectedCheckboxValues(refs.covariateChecklist) : [];
+  const categoricals = hasDataset ? selectedCheckboxValues(refs.categoricalChecklist).filter((value) => features.includes(value)) : [];
+  const timeLabel = hasDataset ? (refs.timeColumn?.value || "time") : "time";
+  const eventLabel = hasDataset ? (refs.eventColumn?.value || "event") : "event";
+  const summaryText = !hasDataset
+    ? "Load a dataset first. ML and DL use the shared covariate and categorical selections defined on the Cox tab."
+    : features.length
+      ? `Shared across ML and DL. Current training inputs come from the Cox tab selections: ${summarizeFeatureNames(features)}.`
+      : "No shared feature set selected yet. Choose covariates on the Cox tab before training ML or DL models.";
+  const finalChips = !hasDataset
+    ? []
+    : [
+        `Time: ${timeLabel}`,
+        `Event: ${eventLabel}`,
+        `Features: ${features.length}`,
+        `Categorical: ${categoricals.length}`,
+        features.length ? `Preview: ${summarizeFeatureNames(features)}` : "Preview: none selected",
+        categoricals.length ? `Categoricals: ${summarizeFeatureNames(categoricals, 3)}` : "Categoricals: none",
+      ];
+
+  [
+    [refs.mlFeatureSummaryText, refs.mlFeatureSummaryChips],
+    [refs.dlFeatureSummaryText, refs.dlFeatureSummaryChips],
+  ].forEach(([textNode, chipContainer]) => {
+    if (textNode) textNode.textContent = summaryText;
+    if (!chipContainer) return;
+    chipContainer.innerHTML = "";
+    finalChips.forEach((label) => {
+      const chip = document.createElement("span");
+      chip.className = "dataset-preset-chip";
+      chip.textContent = label;
+      chipContainer.appendChild(chip);
+    });
+    chipContainer.classList.remove("hidden");
+  });
+}
+
+function focusSharedFeatureEditor() {
+  activateTab("cox");
+  requestAnimationFrame(() => {
+    refs.covariateChecklist?.closest(".selection-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    flashPresetTargets([refs.covariateChecklist, refs.categoricalChecklist]);
+  });
+}
+
 function flashPresetTargets(targets) {
   targets.filter(Boolean).forEach((target) => {
     const shell = target.closest(".config-field, .selection-card") || target;
@@ -723,6 +785,7 @@ function applyDatasetPreset(mode) {
     `Table vars: ${tableVariables.length}`,
   ];
   renderDatasetPresetStatus(summaryTitle, summaryText, summaryChips);
+  renderSharedFeatureSummary();
 
   flashPresetTargets([
     refs.timeColumn,
@@ -733,13 +796,21 @@ function applyDatasetPreset(mode) {
     refs.covariateChecklist,
     refs.categoricalChecklist,
     refs.cohortVariableChecklist,
+    refs.mlFeatureSummaryCard,
+    refs.dlFeatureSummaryCard,
   ]);
 
   if (mode === "models") {
-    activateTab("cox");
-    requestAnimationFrame(() => {
-      refs.covariateChecklist?.closest(".selection-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
+    const activeTab = document.querySelector(".tab-button.active")?.dataset.tab;
+    if (activeTab === "ml") {
+      requestAnimationFrame(() => {
+        refs.mlFeatureSummaryCard?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    } else if (activeTab === "dl") {
+      requestAnimationFrame(() => {
+        refs.dlFeatureSummaryCard?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    }
   } else {
     requestAnimationFrame(() => {
       refs.configStrip?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -840,6 +911,7 @@ function updateControlsFromDataset() {
   updateEventPositiveOptions();
   refreshVariableSelections();
   updateDatasetBadge();
+  renderSharedFeatureSummary();
   renderDatasetPreview();
   updateDatasetPresetBar();
   refs.downloadSignatureButton.disabled = true;
@@ -1612,6 +1684,7 @@ function goHome() {
   refs.landing.classList.remove("hidden", "fade-out");
   refs.datasetBadge.classList.add("hidden");
   refs.datasetFile.value = "";
+  renderSharedFeatureSummary();
   setRuntimeBanner("");
 }
 
@@ -1636,6 +1709,10 @@ function initListeners() {
   refs.timeColumn.addEventListener("change", () => { refreshVariableSelections(); updateDatasetBadge(); });
   refs.eventColumn.addEventListener("change", () => { updateEventPositiveOptions(); refreshVariableSelections(); updateDatasetBadge(); });
   refs.groupColumn.addEventListener("change", updateDatasetBadge);
+  refs.covariateChecklist?.addEventListener("change", renderSharedFeatureSummary);
+  refs.categoricalChecklist?.addEventListener("change", renderSharedFeatureSummary);
+  refs.reviewMlFeaturesButton?.addEventListener("click", focusSharedFeatureEditor);
+  refs.reviewDlFeaturesButton?.addEventListener("click", focusSharedFeatureEditor);
   refs.deriveMethod.addEventListener("change", updateMethodVisibility);
   refs.logrankWeight.addEventListener("change", updateWeightVisibility);
   refs.mlEvaluationStrategy.addEventListener("change", updateMlEvaluationControls);

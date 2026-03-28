@@ -731,6 +731,34 @@ body {
   transition: box-shadow 0.25s ease, border-color 0.25s ease;
 }
 
+.shared-feature-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(41, 77, 98, 0.14);
+  background: rgba(41, 77, 98, 0.05);
+}
+
+.shared-feature-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.shared-feature-copy strong {
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.shared-feature-copy span {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 /* ─── Config Strip ─── */
 
 .config-strip {
@@ -1069,6 +1097,7 @@ label > span {
   border-radius: var(--radius);
   padding: 22px 24px;
   box-shadow: var(--shadow);
+  min-width: 0;
 }
 
 .card-head {
@@ -1340,6 +1369,7 @@ h3 {
   border-radius: var(--radius);
   background: rgba(0, 0, 0, 0.02);
   border: 1px solid var(--line);
+  min-width: 0;
 }
 
 .table-card.full-width {
@@ -1348,6 +1378,8 @@ h3 {
 
 .table-shell {
   overflow: auto;
+  max-width: 100%;
+  min-width: 0;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   background: var(--surface);
