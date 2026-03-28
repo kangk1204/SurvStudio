@@ -53,6 +53,10 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="dlJournalTemplate"' in response.text
     assert "publication-ready" not in response.text
     assert "exploratory Kaplan-Meier curves" in response.text
+    assert 'class="button ghost" id="loadTcgaUploadReadyButton"' in response.text
+    assert 'class="button ghost" id="loadTcgaButton"' in response.text
+    assert 'class="button ghost" id="loadGbsg2Button"' in response.text
+    assert 'class="button ghost" id="loadExampleButton"' in response.text
 
 
 def test_index_exposes_dataset_preset_feedback_ui() -> None:
