@@ -5,6 +5,7 @@ import pandas as pd
 
 from survival_toolkit.__main__ import main as cli_main
 from survival_toolkit.analysis import (
+    _signature_scientific_summary,
     compute_cohort_table,
     compute_cox_analysis,
     compute_km_analysis,
@@ -287,3 +288,26 @@ def test_discover_feature_signature_is_reproducible_with_fixed_seed() -> None:
     assert payload_first["best_split"]["Signature"] == payload_second["best_split"]["Signature"]
     assert payload_first["best_split"]["Combination operator"] == payload_second["best_split"]["Combination operator"]
     assert payload_first["best_split"]["Stability score"] == payload_second["best_split"]["Stability score"]
+
+
+def test_signature_summary_stays_exploratory_without_permutation_or_holdout_confirmation() -> None:
+    summary = _signature_scientific_summary(
+        best_split={
+            "N signature+": 42,
+            "Statistically significant": True,
+            "Bootstrap support (p<0.05)": None,
+            "Bootstrap HR direction consistency": None,
+            "Validation support (p<alpha)": None,
+            "Permutation p": None,
+        },
+        search_space={
+            "truncated": False,
+            "permutation_iterations": 0,
+            "validation_iterations": 0,
+            "significance_level": 0.05,
+            "min_group_size": 10,
+        },
+    )
+
+    assert "remains exploratory" in summary["headline"].lower()
+    assert any("optimistic" in caution.lower() for caution in summary["cautions"])
