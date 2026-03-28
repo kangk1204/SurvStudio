@@ -30,6 +30,13 @@ def _wait_for_server(base_url: str, timeout_seconds: float = 30.0) -> None:
     raise RuntimeError(f"Timed out waiting for test server at {base_url}")
 
 
+def _switch_to_expert(page) -> None:
+    page.locator("#workspace").wait_for(state="visible")
+    if page.locator("#guidedShell").is_visible():
+        page.locator("#expertModeButton").click()
+        page.wait_for_function("document.body.dataset.uiMode === 'expert'")
+
+
 @pytest.fixture
 def browser_server() -> str:
     project_root = Path(__file__).resolve().parents[1]
@@ -76,7 +83,7 @@ def test_browser_downloads_km_summary_csv_and_png(browser_server: str, tmp_path:
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
 
             page.locator("#runKmButton").click()
             page.wait_for_function(
@@ -115,7 +122,7 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadGbsg2Button").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
             page.locator("#datasetPresetBar").wait_for(state="visible")
             page.locator('[data-tab="dl"]').click()
             page.wait_for_function(
@@ -160,7 +167,7 @@ def test_browser_cox_results_table_stays_within_card(browser_server: str) -> Non
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadTcgaButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
             page.locator("#runCoxButton").click()
             page.wait_for_function(
                 "!document.getElementById('downloadCoxResultsButton').disabled"
@@ -189,7 +196,7 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
             page.locator("#timeUnitLabel").fill("Days")
             page.locator("#maxTime").fill("24")
             page.locator("#groupColumn").select_option("stage")
@@ -234,7 +241,7 @@ def test_browser_study_design_collapses_grouping_controls_outside_km(browser_ser
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
 
             assert page.locator("#groupingDetails").evaluate("(el) => el.open") is True
             assert "Current Group by: overall only" in page.locator("#groupingSummaryText").inner_text().lower()
@@ -271,9 +278,17 @@ def test_browser_guided_mode_goal_cards_and_mode_toggle(browser_server: str) -> 
             page.locator("#workspace").wait_for(state="visible")
             page.locator("#guidedShell").wait_for(state="visible")
 
+            assert "Confirm outcome" in page.locator("#guidedSummaryTitle").inner_text()
+            assert page.locator("#configStrip").is_visible()
+            assert page.locator("#tabStrip").is_hidden()
+            page.locator('[data-guided-action="next-step"]').click()
+            page.wait_for_function(
+                "document.getElementById('guidedSummaryTitle').textContent.includes('Choose analysis')"
+            )
             assert "Choose analysis" in page.locator("#guidedSummaryTitle").inner_text()
             assert "Event:" in page.locator("#guidedSummaryChips").inner_text()
             assert "Group by: Overall only" in page.locator("#guidedSummaryChips").inner_text()
+            assert page.locator("#configStrip").is_hidden()
 
             page.locator('[data-guided-action="choose-goal"][data-goal="cox"]').click()
             page.wait_for_function(
@@ -281,6 +296,10 @@ def test_browser_guided_mode_goal_cards_and_mode_toggle(browser_server: str) -> 
             )
             assert "Configure Cox PH" in page.locator("#guidedPanel").inner_text()
             assert "Goal: Cox PH" in page.locator("#guidedSummaryChips").inner_text()
+            assert page.locator("#tabStrip").is_hidden()
+            assert page.locator("#configStrip").is_hidden()
+            assert page.locator('#panel-cox').is_visible()
+            assert page.locator('#panel-km').is_hidden()
 
             page.locator("#expertModeButton").click()
             page.wait_for_function(
@@ -292,6 +311,8 @@ def test_browser_guided_mode_goal_cards_and_mode_toggle(browser_server: str) -> 
                 "document.body.dataset.uiMode === 'guided' && !document.getElementById('guidedShell').classList.contains('hidden')"
             )
             assert "Configure Cox PH" in page.locator("#guidedPanel").inner_text()
+            assert page.locator("#tabStrip").is_hidden()
+            assert page.locator('#panel-cox').is_visible()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -308,7 +329,7 @@ def test_browser_model_features_stay_separate_from_cox_and_keep_non_endpoint_inp
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
             page.locator("#groupColumn").select_option("sex")
 
             model_features = page.eval_on_selector_all(
@@ -378,7 +399,7 @@ def test_browser_event_column_defaults_to_event_like_fields_and_advanced_toggle_
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadTcgaButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
 
             default_options = page.locator("#eventColumn option").evaluate_all(
                 "(options) => options.map((option) => option.value)"
@@ -420,7 +441,7 @@ def test_browser_event_value_requires_explicit_choice_for_ambiguous_binary_codes
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadTcgaButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
 
             page.locator("#showAllEventColumns").check()
             page.locator("#eventColumn").select_option("egfr_status")
@@ -428,6 +449,49 @@ def test_browser_event_value_requires_explicit_choice_for_ambiguous_binary_codes
                 "document.getElementById('eventValueWarning').textContent.includes('Choose which value means the event happened') || document.getElementById('eventValueWarning').textContent.includes('could not safely guess')"
             )
             assert page.locator("#eventPositiveValue").input_value() == ""
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_km_derive_defaults_to_group_when_current_group_is_overall_only(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _switch_to_expert(page)
+
+            page.locator("#runKmButton").click()
+            page.wait_for_function(
+                "document.getElementById('kmMetaBanner').textContent.includes('N=')"
+            )
+            assert "p=" not in page.locator("#kmMetaBanner").inner_text()
+
+            assert page.locator("#groupColumn").input_value() == ""
+            page.locator("#deriveToggle").click()
+            assert page.locator("#deriveApplyToGroup").is_checked()
+
+            page.locator("#deriveSource").select_option("age")
+            page.locator("#deriveMethod").select_option("median_split")
+            page.locator("#deriveColumnName").fill("age_guided_split")
+            page.locator("#deriveButton").click()
+            page.wait_for_function(
+                "document.getElementById('groupColumn').value === 'age_guided_split'"
+            )
+            page.wait_for_function(
+                "document.getElementById('kmMetaBanner').textContent.includes('p=')"
+            )
+
+            assert page.locator("#groupColumn").input_value() == "age_guided_split"
+            assert "Refreshing Kaplan-Meier with the new grouping" in page.locator("#deriveStatus").inner_text()
+            assert "Group by now uses age_guided_split" in page.locator("#deriveSummary").inner_text()
+            assert "p=" in page.locator("#kmMetaBanner").inner_text()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -460,6 +524,107 @@ def test_browser_dataset_entry_resets_scroll_to_top(browser_server: str) -> None
         pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
 
 
+def test_browser_guided_mode_back_button_walks_previous_steps(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 900})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#guidedShell").wait_for(state="visible")
+
+            page.wait_for_function("document.body.dataset.guidedStep === '2'")
+            page.locator('[data-guided-action="next-step"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            page.locator('[data-guided-action="choose-goal"][data-goal="km"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+
+            page.go_back(wait_until="networkidle")
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            assert "Choose one analysis path" in page.locator("#guidedPanel").inner_text()
+
+            page.go_back(wait_until="networkidle")
+            page.wait_for_function("document.body.dataset.guidedStep === '2'")
+            assert "Confirm outcome" in page.locator("#guidedPanel").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_guided_step_rail_allows_navigation_to_reached_steps(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 900})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#guidedShell").wait_for(state="visible")
+
+            page.wait_for_function("document.body.dataset.guidedStep === '2'")
+            page.locator('[data-guided-action="next-step"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            page.locator('[data-guided-action="choose-goal"][data-goal="km"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+
+            page.locator('#stepIndicator .step[data-step="3"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            assert "Choose one analysis path" in page.locator("#guidedPanel").inner_text()
+
+            page.locator('#stepIndicator .step[data-step="2"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '2'")
+            assert "Confirm outcome" in page.locator("#guidedPanel").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_guided_and_expert_mode_back_forward_restores_mode_and_step(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 900})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#guidedShell").wait_for(state="visible")
+
+            page.wait_for_function("document.body.dataset.guidedStep === '2'")
+            page.locator('[data-guided-action="next-step"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            page.locator('[data-guided-action="choose-goal"][data-goal="ml"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+
+            page.locator("#expertModeButton").click()
+            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
+            page.locator('[data-tab="dl"]').click()
+            page.wait_for_function("document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'")
+
+            page.go_back(wait_until="networkidle")
+            page.wait_for_function("document.body.dataset.uiMode === 'guided' && document.body.dataset.guidedStep === '4'")
+            assert "Configure ML models" in page.locator("#guidedPanel").inner_text()
+
+            page.go_forward(wait_until="networkidle")
+            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
+            assert page.locator('[data-tab="dl"]').get_attribute("aria-selected") == "true"
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
 def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
@@ -470,7 +635,7 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadGbsg2Button").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
 
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("age")
@@ -503,7 +668,7 @@ def test_browser_optimal_cutpoint_summary_wraps_long_derived_column(browser_serv
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadTcgaButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
 
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("pack_years_smoked")
@@ -539,7 +704,7 @@ def test_browser_ml_importance_plot_stays_inside_its_section(browser_server: str
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
             page.locator('[data-tab="ml"]').click()
             page.locator("#mlModelType").select_option("rsf")
             page.locator("#mlNEstimators").fill("10")
@@ -572,7 +737,7 @@ def test_browser_risk_table_ticks_change_columns_and_flash_table(browser_server:
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
 
             page.locator("#runKmButton").click()
             page.wait_for_function("!document.getElementById('downloadKmSummaryButton').disabled")
@@ -605,7 +770,7 @@ def test_browser_dl_epoch_validation_message_is_human_readable(browser_server: s
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
-            page.locator("#workspace").wait_for(state="visible")
+            _switch_to_expert(page)
             page.locator('[data-tab="dl"]').click()
             page.wait_for_function(
                 "document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'"

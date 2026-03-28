@@ -58,6 +58,14 @@ except ImportError:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+_EXPECTED_CUTPOINT_SCAN_ERRORS = (
+    ValueError,
+    ZeroDivisionError,
+    FloatingPointError,
+    OverflowError,
+    np.linalg.LinAlgError,
+)
+
 
 def _prepare_sksurv_data(
     df: pd.DataFrame,
@@ -626,7 +634,7 @@ def find_optimal_cutpoint(
         try:
             groups = np.where(high_mask, upper_label, lower_label)
             chisq, p_value = survdiff(time_values, event_values, groups)
-        except Exception:
+        except _EXPECTED_CUTPOINT_SCAN_ERRORS:
             continue
 
         record = {
@@ -737,7 +745,7 @@ def find_optimal_cutpoint(
                     continue
                 try:
                     chisq_perm, _ = survdiff(time_values, event_values, np.where(high_mask_perm, "A", "B"))
-                except Exception:
+                except _EXPECTED_CUTPOINT_SCAN_ERRORS:
                     continue
                 if float(chisq_perm) > perm_best:
                     perm_best = float(chisq_perm)

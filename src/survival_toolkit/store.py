@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 from uuid import uuid4
 
 import pandas as pd
@@ -19,6 +21,7 @@ class StoredDataset:
     source: str
     dataframe: pd.DataFrame
     created_at: datetime
+    metadata: dict[str, Any]
 
 
 class DatasetStore:
@@ -58,13 +61,24 @@ class DatasetStore:
                 dataset_id=dataset_id,
                 filename=filename,
                 source=source,
-                dataframe=dataframe.copy() if copy_dataframe else dataframe,
+                dataframe=dataframe.copy(deep=True) if copy_dataframe else dataframe,
                 created_at=datetime.now(timezone.utc),
+                metadata={},
             )
             self._datasets[dataset_id] = stored
-            return stored
+            return self._clone_stored(stored, copy_dataframe=copy_dataframe)
 
-    def get(self, dataset_id: str) -> StoredDataset:
+    def _clone_stored(self, stored: StoredDataset, *, copy_dataframe: bool = True) -> StoredDataset:
+        return StoredDataset(
+            dataset_id=stored.dataset_id,
+            filename=stored.filename,
+            source=stored.source,
+            dataframe=stored.dataframe.copy(deep=True) if copy_dataframe else stored.dataframe,
+            created_at=stored.created_at,
+            metadata=copy.deepcopy(stored.metadata),
+        )
+
+    def get(self, dataset_id: str, *, copy_dataframe: bool = True) -> StoredDataset:
         with self._lock:
             self._evict_expired()
             try:
@@ -72,7 +86,7 @@ class DatasetStore:
             except KeyError as exc:
                 raise KeyError(f"Unknown dataset id: {dataset_id}") from exc
             self._datasets.move_to_end(dataset_id)
-            return stored
+            return self._clone_stored(stored, copy_dataframe=copy_dataframe)
 
     def delete(self, dataset_id: str) -> None:
         with self._lock:
@@ -89,8 +103,19 @@ class DatasetStore:
             except KeyError as exc:
                 raise KeyError(f"Unknown dataset id: {dataset_id}") from exc
             self._datasets.move_to_end(dataset_id)
-            stored.dataframe = dataframe.copy() if copy_dataframe else dataframe
-            return stored
+            stored.dataframe = dataframe.copy(deep=True) if copy_dataframe else dataframe
+            return self._clone_stored(stored, copy_dataframe=copy_dataframe)
+
+    def update_metadata(self, dataset_id: str, metadata: dict[str, Any]) -> StoredDataset:
+        with self._lock:
+            self._evict_expired()
+            try:
+                stored = self._datasets[dataset_id]
+            except KeyError as exc:
+                raise KeyError(f"Unknown dataset id: {dataset_id}") from exc
+            self._datasets.move_to_end(dataset_id)
+            stored.metadata = copy.deepcopy(metadata)
+            return self._clone_stored(stored, copy_dataframe=False)
 
     @property
     def count(self) -> int:

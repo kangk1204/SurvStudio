@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import pandas as pd
 
 from survival_toolkit.__main__ import main as cli_main
 from survival_toolkit.analysis import (
+    _pointwise_km_ci,
     _signature_scientific_summary,
+    _safe_float,
     compute_cohort_table,
     compute_cox_analysis,
     compute_km_analysis,
@@ -113,6 +116,25 @@ def test_km_analysis_returns_grouped_results() -> None:
     assert result["scientific_summary"]["metrics"]
 
 
+def test_pointwise_km_ci_handles_survival_near_one_without_blowing_up() -> None:
+    lower, upper = _pointwise_km_ci(
+        np.asarray([1.0 - 1e-16], dtype=float),
+        np.asarray([0.2], dtype=float),
+        alpha=0.05,
+    )
+
+    assert lower[0] == pytest.approx(1.0 - 1e-16)
+    assert upper[0] == pytest.approx(1.0 - 1e-16)
+
+
+def test_safe_float_returns_none_on_overflowing_float_conversion() -> None:
+    class _OverflowingValue:
+        def __float__(self) -> float:
+            raise OverflowError("too large")
+
+    assert _safe_float(_OverflowingValue()) is None
+
+
 def test_cox_analysis_recovers_expected_directions() -> None:
     df = make_example_dataset(seed=21, n_patients=260)
     result = compute_cox_analysis(
@@ -157,6 +179,60 @@ def test_cox_analysis_keeps_low_cardinality_numeric_covariates_continuous_by_def
     assert result["results_table"][0]["Reference"] is None
 
 
+def test_cox_analysis_caps_extreme_hazard_ratios_instead_of_crashing(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    df = make_example_dataset(seed=23, n_patients=40)
+    frame = pd.DataFrame(
+        {
+            "os_months": np.linspace(1.0, 40.0, 40),
+            "os_event": [1] * 20 + [0] * 20,
+            "age": np.linspace(50.0, 80.0, 40),
+        }
+    )
+
+    class _FakeResults:
+        params = np.asarray([10_000.0], dtype=float)
+        bse = np.asarray([1.0], dtype=float)
+        tvalues = np.asarray([2.0], dtype=float)
+        pvalues = np.asarray([0.01], dtype=float)
+        schoenfeld_residuals = np.ones((40, 1), dtype=float)
+        llf = -10.0
+        model = type("_FakeModelMeta", (), {"exog_names": ["Q(\"age\")"], "exog": np.ones((40, 1), dtype=float)})()
+
+        def conf_int(self):
+            return np.asarray([[9_000.0, 11_000.0]], dtype=float)
+
+    class _FakePHReg:
+        @staticmethod
+        def from_formula(*args, **kwargs):
+            class _FakeFit:
+                @staticmethod
+                def fit(disp=False):
+                    return _FakeResults()
+
+            return _FakeFit()
+
+    monkeypatch.setattr(analysis, "_prepare_cox_frame", lambda *args, **kwargs: frame.copy())
+    monkeypatch.setattr(analysis, "PHReg", _FakePHReg)
+    monkeypatch.setattr(analysis, "_reference_levels", lambda *args, **kwargs: {})
+    monkeypatch.setattr(analysis, "_harrell_c_index", lambda *args, **kwargs: 0.61)
+
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age"],
+    )
+
+    row = result["results_table"][0]
+    assert np.isfinite(row["Hazard ratio"])
+    assert row["Hazard ratio"] == np.finfo(float).max
+    assert row["CI lower"] == np.finfo(float).max
+    assert row["CI upper"] == np.finfo(float).max
+
+
 def test_cohort_table_includes_overall_column() -> None:
     df = make_example_dataset(seed=5, n_patients=120)
     table = compute_cohort_table(df, variables=["age", "sex", "stage"], group_column="treatment")
@@ -180,6 +256,25 @@ def test_tertile_split_handles_tied_quantile_edges() -> None:
     assert values.issubset({"T1", "T2", "T3"})
     assert summary["method"] == "tertile_split"
     assert 2 <= summary["n_groups"] <= 3
+
+
+def test_derive_group_column_generates_unique_default_name_on_repeat() -> None:
+    df = make_example_dataset(seed=31, n_patients=90)
+
+    updated_first, first_name, _ = derive_group_column(
+        df,
+        source_column="biomarker_score",
+        method="median_split",
+    )
+    updated_second, second_name, _ = derive_group_column(
+        updated_first,
+        source_column="biomarker_score",
+        method="median_split",
+    )
+
+    assert first_name == "biomarker_score__median_split"
+    assert second_name == "biomarker_score__median_split_2"
+    assert second_name in updated_second.columns
 
 
 def test_quartile_split_rejects_constant_series() -> None:
@@ -295,6 +390,32 @@ def test_discover_feature_signature_is_reproducible_with_fixed_seed() -> None:
     assert payload_first["best_split"]["Signature"] == payload_second["best_split"]["Signature"]
     assert payload_first["best_split"]["Combination operator"] == payload_second["best_split"]["Combination operator"]
     assert payload_first["best_split"]["Stability score"] == payload_second["best_split"]["Stability score"]
+
+
+def test_discover_feature_signature_generates_unique_default_name_on_repeat() -> None:
+    df = make_example_dataset(seed=71, n_patients=260)
+    params = dict(
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        candidate_columns=["age", "stage", "treatment", "biomarker_score", "immune_index"],
+        max_combination_size=2,
+        top_k=6,
+        min_group_fraction=0.1,
+        bootstrap_iterations=0,
+        permutation_iterations=0,
+        validation_iterations=0,
+        significance_level=0.05,
+        combination_operator="mixed",
+        random_seed=2026,
+    )
+
+    updated_first, first_name, _ = discover_feature_signature(df, **params)
+    updated_second, second_name, _ = discover_feature_signature(updated_first, **params)
+
+    assert first_name == "auto_signature_group"
+    assert second_name == "auto_signature_group_2"
+    assert second_name in updated_second.columns
 
 
 def test_signature_summary_stays_exploratory_without_permutation_or_holdout_confirmation() -> None:

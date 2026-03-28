@@ -195,6 +195,7 @@ def dataset_response(dataset_id: str) -> dict[str, Any]:
     payload = profile_dataframe(stored.dataframe, dataset_id=stored.dataset_id, filename=stored.filename)
     payload["dataset_source"] = stored.source
     payload["preset_eligible"] = stored.source == "builtin_demo"
+    payload["derived_column_provenance"] = dict(stored.metadata.get("derived_column_provenance", {}))
     return payload
 
 
@@ -622,7 +623,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
                     raise HTTPException(status_code=413, detail="Upload exceeds the 200 MB limit.")
                 temp_file.write(chunk)
         dataframe = await run_in_threadpool(load_dataframe_from_path, temp_path)
-        stored = store.create(dataframe, filename=filename, source="upload", copy_dataframe=False)
+        stored = store.create(dataframe, filename=filename, source="upload")
         return await run_in_threadpool(dataset_response, stored.dataset_id)
     except HTTPException:
         raise
@@ -637,28 +638,28 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
 @app.post("/api/load-example")
 async def load_example() -> dict[str, Any]:
     dataframe = make_example_dataset()
-    stored = store.create(dataframe, filename="example_survival_cohort", source="builtin_demo", copy_dataframe=False)
+    stored = store.create(dataframe, filename="example_survival_cohort", source="builtin_demo")
     return dataset_response(stored.dataset_id)
 
 
 @app.post("/api/load-tcga-example")
 async def load_tcga_example() -> dict[str, Any]:
     dataframe = load_tcga_luad_example_dataset()
-    stored = store.create(dataframe, filename="tcga_luad_xena_example", source="builtin_demo", copy_dataframe=False)
+    stored = store.create(dataframe, filename="tcga_luad_xena_example", source="builtin_demo")
     return dataset_response(stored.dataset_id)
 
 
 @app.post("/api/load-tcga-upload-ready")
 async def load_tcga_upload_ready() -> dict[str, Any]:
     dataframe = load_tcga_luad_upload_ready_dataset()
-    stored = store.create(dataframe, filename="tcga_luad_upload_ready", source="builtin_demo", copy_dataframe=False)
+    stored = store.create(dataframe, filename="tcga_luad_upload_ready", source="builtin_demo")
     return dataset_response(stored.dataset_id)
 
 
 @app.post("/api/load-gbsg2-example")
 async def load_gbsg2_example() -> dict[str, Any]:
     dataframe = load_gbsg2_upload_ready_dataset()
-    stored = store.create(dataframe, filename="gbsg2_upload_ready", source="builtin_demo", copy_dataframe=False)
+    stored = store.create(dataframe, filename="gbsg2_upload_ready", source="builtin_demo")
     return dataset_response(stored.dataset_id)
 
 
@@ -727,7 +728,16 @@ async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
             event_column=request_model.event_column,
             event_positive_value=request_model.event_positive_value,
         )
-        store.update_dataframe(request_model.dataset_id, updated, copy_dataframe=False)
+        store.update_dataframe(request_model.dataset_id, updated)
+        stored = store.get(request_model.dataset_id)
+        provenance = dict(stored.metadata.get("derived_column_provenance", {}))
+        provenance[column_name] = {
+            "outcome_informed": bool(summary.get("outcome_informed")),
+        }
+        store.update_metadata(request_model.dataset_id, {
+            **stored.metadata,
+            "derived_column_provenance": provenance,
+        })
         payload = dataset_response(request_model.dataset_id)
         payload["derived_column"] = column_name
         payload["derive_summary"] = summary
@@ -742,6 +752,7 @@ async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
 async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
     try:
         stored = store.get(request_model.dataset_id)
+        request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
             analysis = compute_km_analysis(
@@ -761,7 +772,7 @@ async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
                 time_unit_label=request_model.time_unit_label,
                 show_confidence_bands=request_model.show_confidence_bands,
             )
-            return {"analysis": analysis, "figure": figure}
+            return {"analysis": analysis, "figure": figure, "request_config": request_config}
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -772,6 +783,7 @@ async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
 async def cox(request_model: CoxRequest) -> dict[str, Any]:
     try:
         stored = store.get(request_model.dataset_id)
+        request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
             analysis = compute_cox_analysis(
@@ -783,7 +795,7 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
                 categorical_covariates=request_model.categorical_covariates,
             )
             figure = build_cox_forest_figure(analysis)
-            return {"analysis": analysis, "figure": figure}
+            return {"analysis": analysis, "figure": figure, "request_config": request_config}
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -794,13 +806,14 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
 async def cohort_table(request_model: CohortTableRequest) -> dict[str, Any]:
     try:
         stored = store.get(request_model.dataset_id)
+        request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
             return {"analysis": compute_cohort_table(
                 stored.dataframe,
                 variables=request_model.variables,
                 group_column=request_model.group_column,
-            )}
+            ), "request_config": request_config}
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -834,7 +847,14 @@ async def discover_signature(request_model: SignatureSearchRequest) -> dict[str,
             )
 
         updated, column_name, analysis = await run_in_threadpool(_run)
-        store.update_dataframe(request_model.dataset_id, updated, copy_dataframe=False)
+        store.update_dataframe(request_model.dataset_id, updated)
+        stored = store.get(request_model.dataset_id)
+        provenance = dict(stored.metadata.get("derived_column_provenance", {}))
+        provenance[column_name] = {"outcome_informed": True}
+        store.update_metadata(request_model.dataset_id, {
+            **stored.metadata,
+            "derived_column_provenance": provenance,
+        })
         payload = dataset_response(request_model.dataset_id)
         payload["derived_column"] = column_name
         payload["signature_analysis"] = analysis

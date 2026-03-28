@@ -141,6 +141,70 @@ def test_deep_models_fall_back_to_apparent_evaluation_for_small_cohorts() -> Non
     assert result["evaluation_samples"] == result["n_samples"]
 
 
+def test_run_deep_compare_task_passes_none_dataframe_when_prepared_data_is_supplied(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    seen: dict[str, object] = {}
+
+    def _fake_train(
+        df,
+        **kwargs,
+    ):
+        seen["df"] = df
+        seen["prepared_data"] = kwargs["prepared_data"]
+        return {
+            "c_index": 0.61,
+            "n_features": 3,
+            "training_samples": 20,
+            "evaluation_samples": 10,
+            "epochs_trained": 1,
+        }
+
+    monkeypatch.setattr(deep_models, "train_deepsurv", _fake_train)
+
+    result = deep_models._run_deep_compare_task(
+        {
+            "model_name": "DeepSurv",
+            "repeat": 1,
+            "fold": 2,
+            "seed": 123,
+            "split_seed": 456,
+            "monitor_seed": 789,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "features": ["age", "biomarker_score", "immune_index"],
+            "categorical_features": [],
+            "event_positive_value": 1,
+            "learning_rate": 0.001,
+            "epochs": 1,
+            "batch_size": 8,
+            "early_stopping_patience": 2,
+            "early_stopping_min_delta": 1e-4,
+            "prepared_data": {"n_features": 3},
+            "evaluation_split": {"train_idx": np.array([0, 1]), "eval_idx": np.array([2]), "evaluation_mode": "holdout", "evaluation_note": "ok"},
+            "monitor_indices": np.array([0, 1]),
+            "extra_kwargs": {"hidden_layers": [8], "dropout": 0.1},
+        }
+    )
+
+    assert seen["df"] is None
+    assert seen["prepared_data"] == {"n_features": 3}
+    assert result["model"] == "DeepSurv"
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_prepare_deep_inputs_reports_missing_columns_cleanly() -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        deep_models._prepare_deep_training_inputs(
+            pd.DataFrame(),
+            time_column="os_months",
+            event_column="os_event",
+            features=["age"],
+        )
+
+
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 @pytest.mark.parametrize(
     "trainer_name, trainer_kwargs, curve_key",

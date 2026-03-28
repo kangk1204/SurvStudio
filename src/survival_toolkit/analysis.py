@@ -51,6 +51,8 @@ KM_WEIGHT_MAP = {
 }
 TERM_CATEGORICAL_PATTERN = re.compile(r'C\(Q\("(?P<var>.+)"\)\)\[T\.(?P<level>.+)\]')
 TERM_NUMERIC_PATTERN = re.compile(r'Q\("(?P<var>.+)"\)')
+_MAX_EXP_INPUT = math.log(np.finfo(float).max)
+_MIN_EXP_INPUT = math.log(np.finfo(float).tiny)
 
 
 def make_unique_columns(columns: Iterable[Any]) -> list[str]:
@@ -386,6 +388,18 @@ def quote_name(name: str) -> str:
     return f'Q("{escaped}")'
 
 
+def _next_available_column_name(existing_columns: Iterable[Any], base_name: str) -> str:
+    used = {str(column) for column in existing_columns}
+    if base_name not in used:
+        return base_name
+    suffix = 2
+    while True:
+        candidate = f"{base_name}_{suffix}"
+        if candidate not in used:
+            return candidate
+        suffix += 1
+
+
 def _ensure_positive_times(time_values: pd.Series) -> pd.Series:
     positive = time_values > 0
     if positive.sum() == 0:
@@ -436,12 +450,24 @@ def _pointwise_km_ci(survival: np.ndarray, se: np.ndarray, alpha: float) -> tupl
             lower[idx] = 0.0
             upper[idx] = 0.0
             continue
-        if s_value >= 1 or not np.isfinite(se_value) or se_value <= 0:
+        log_s = math.log(s_value)
+        denominator = s_value * log_s
+        if (
+            s_value >= 1 - 1e-12
+            or not np.isfinite(se_value)
+            or se_value <= 0
+            or not np.isfinite(log_s)
+            or abs(denominator) <= 1e-12
+        ):
             lower[idx] = s_value
             upper[idx] = s_value
             continue
         transformed = np.log(-np.log(s_value))
-        transformed_se = abs(se_value / (s_value * np.log(s_value)))
+        transformed_se = abs(se_value / denominator)
+        if not np.isfinite(transformed_se):
+            lower[idx] = s_value
+            upper[idx] = s_value
+            continue
         low = np.exp(-np.exp(transformed + z_value * transformed_se))
         high = np.exp(-np.exp(transformed - z_value * transformed_se))
         lower[idx] = np.clip(low, 0.0, 1.0)
@@ -474,11 +500,20 @@ def _restricted_mean_survival_time(timeline: np.ndarray, survival: np.ndarray, h
 def _safe_float(value: Any) -> float | None:
     try:
         float_value = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not np.isfinite(float_value):
         return None
     return float_value
+
+
+def _safe_exp(value: Any) -> float:
+    exponent = float(value)
+    if exponent >= _MAX_EXP_INPUT:
+        return float(np.finfo(float).max)
+    if exponent <= _MIN_EXP_INPUT:
+        return float(np.finfo(float).tiny)
+    return math.exp(exponent)
 
 
 def _summarize_labels(labels: Sequence[str], max_items: int = 3) -> str:
@@ -799,6 +834,8 @@ def derive_group_column(
             "n_groups": n_groups,
         }
 
+    outcome_informed = False
+
     if method == "optimal_cutpoint":
         if not time_column or not event_column:
             raise ValueError("optimal_cutpoint requires time_column and event_column.")
@@ -834,6 +871,7 @@ def derive_group_column(
             "selection_adjustment": result.get("selection_adjustment"),
             "scan_data": result["scan_data"],
         }
+        outcome_informed = True
     elif method == "median_split":
         split_point = float(usable.median())
         labels = np.where(numeric_series <= split_point, lower_label, upper_label)
@@ -854,7 +892,15 @@ def derive_group_column(
     label_series = pd.Series(labels, index=df.index, dtype="string")
     label_series.loc[numeric_series.isna()] = pd.NA
 
-    column_name = new_column_name or f"{source_column}__{method}"
+    requested_name = (new_column_name or "").strip() or None
+    if requested_name is not None:
+        column_name = requested_name
+    else:
+        column_name = _next_available_column_name(df.columns, f"{source_column}__{method}")
+    if requested_name is not None and column_name in df.columns:
+        raise ValueError(
+            f'"{column_name}" already exists. Choose a new derived-column name instead of overwriting an existing field.'
+        )
     updated = df.copy()
     updated[column_name] = label_series
 
@@ -868,6 +914,7 @@ def derive_group_column(
         .to_dict(orient="records")
     )
     summary["column_name"] = column_name
+    summary["outcome_informed"] = outcome_informed
     summary["counts"] = counts
     return updated, column_name, summary
 
@@ -1104,7 +1151,7 @@ def _bootstrap_signature_metrics(
         valid_resamples += 1
         p_float = float(p_value)
         p_values.append(p_float)
-        hazard_ratios.append(math.exp(float(cox_results.params[0])))
+        hazard_ratios.append(_safe_exp(cox_results.params[0]))
         if p_float < 0.05:
             significant_count += 1
 
@@ -1237,12 +1284,12 @@ def _validation_signature_metrics(
         except Exception:
             continue
 
-        ci_low = math.exp(float(conf_int[0, 0]))
-        ci_high = math.exp(float(conf_int[0, 1]))
+        ci_low = _safe_exp(conf_int[0, 0])
+        ci_high = _safe_exp(conf_int[0, 1])
         valid_folds += 1
         p_float = float(p_value)
         p_values.append(p_float)
-        hazard_ratios.append(math.exp(float(cox_results.params[0])))
+        hazard_ratios.append(_safe_exp(cox_results.params[0]))
         if p_float <= significance_level and not (ci_low <= 1.0 <= ci_high):
             significant_count += 1
 
@@ -1376,9 +1423,9 @@ def discover_feature_signature(
                 except Exception:
                     continue
                 conf_int = cox_results.conf_int()
-                hr = math.exp(float(cox_results.params[0]))
-                ci_low = math.exp(float(conf_int[0, 0]))
-                ci_high = math.exp(float(conf_int[0, 1]))
+                hr = _safe_exp(cox_results.params[0])
+                ci_low = _safe_exp(conf_int[0, 0])
+                ci_high = _safe_exp(conf_int[0, 1])
 
                 sf_high = SurvfuncRight(times[mask], events[mask])
                 sf_low = SurvfuncRight(times[~mask], events[~mask])
@@ -1523,7 +1570,15 @@ def discover_feature_signature(
     best_operator = valid_combinations[best_idx]["operator"]
 
     output_df = df.copy()
-    best_column_name = new_column_name or "auto_signature_group"
+    requested_name = (new_column_name or "").strip() or None
+    if requested_name is not None:
+        best_column_name = requested_name
+    else:
+        best_column_name = _next_available_column_name(output_df.columns, "auto_signature_group")
+    if requested_name is not None and best_column_name in output_df.columns:
+        raise ValueError(
+            f'"{best_column_name}" already exists. Choose a new derived-column name instead of overwriting an existing field.'
+        )
     indicator_values_list = [_evaluate_indicator(output_df, indicator) for indicator in best_combo]
     missing = pd.Series(False, index=output_df.index, dtype=bool)
     for indicator_values in indicator_values_list:
@@ -1590,6 +1645,7 @@ def discover_feature_signature(
         "derived_group": {
             "column_name": best_column_name,
             "counts": counts,
+            "outcome_informed": True,
         },
         "scientific_summary": scientific_summary,
     }
@@ -1884,9 +1940,9 @@ def compute_cox_analysis(
     for idx, term in enumerate(results.model.exog_names):
         variable, label, reference = _clean_term(term, reference_levels)
         beta = float(results.params[idx])
-        hr = math.exp(beta)
-        ci_low = math.exp(float(conf_int[idx, 0]))
-        ci_high = math.exp(float(conf_int[idx, 1]))
+        hr = _safe_exp(beta)
+        ci_low = _safe_exp(conf_int[idx, 0])
+        ci_high = _safe_exp(conf_int[idx, 1])
         model_rows.append(
             {
                 "Variable": variable,

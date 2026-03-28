@@ -628,6 +628,24 @@ def test_store_lru_eviction() -> None:
     store.get(ids[-1])
 
 
+def test_store_create_and_get_are_defensive_against_shared_mutation() -> None:
+    from survival_toolkit.store import DatasetStore
+
+    original = make_example_dataset(seed=4, n_patients=30)
+    store = DatasetStore()
+    stored = store.create(original, filename="shared.csv")
+
+    original.loc[:, "age"] = -1
+    fetched = store.get(stored.dataset_id)
+    fetched.dataframe.loc[:, "age"] = -2
+    fetched.metadata["flag"] = True
+
+    refetched = store.get(stored.dataset_id)
+
+    assert (refetched.dataframe["age"] >= 0).all()
+    assert "flag" not in refetched.metadata
+
+
 def test_store_delete() -> None:
     from survival_toolkit.store import DatasetStore
 
@@ -637,6 +655,20 @@ def test_store_delete() -> None:
     store.delete(stored.dataset_id)
     with pytest.raises(KeyError):
         store.get(stored.dataset_id)
+
+
+def test_store_update_dataframe_copies_input_by_default() -> None:
+    from survival_toolkit.store import DatasetStore
+
+    store = DatasetStore()
+    stored = store.create(make_example_dataset(seed=6, n_patients=30), filename="baseline.csv")
+    replacement = make_example_dataset(seed=7, n_patients=30)
+
+    store.update_dataframe(stored.dataset_id, replacement)
+    replacement.loc[:, "age"] = -5
+
+    refetched = store.get(stored.dataset_id)
+    assert (refetched.dataframe["age"] >= 0).all()
 
 
 def test_compute_shap_values_caps_kernel_fallback_work(monkeypatch) -> None:
@@ -751,6 +783,57 @@ def test_rsf_permutation_importance_caps_rows_and_repeats(monkeypatch) -> None:
     assert seen["perm_shape"] == (120, 24)
     assert seen["perm_y_shape"] == (120,)
     assert seen["n_repeats"] == 2
+
+
+def test_find_optimal_cutpoint_does_not_swallow_unexpected_errors(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    df = make_example_dataset(seed=8, n_patients=80)
+    raised = False
+
+    def _boom(*args, **kwargs):
+        nonlocal raised
+        if not raised:
+            raised = True
+            raise AssertionError("unexpected failure")
+        return (1.0, 0.05)
+
+    monkeypatch.setattr(ml_models, "survdiff", _boom)
+
+    with pytest.raises(AssertionError, match="unexpected failure"):
+        ml_models.find_optimal_cutpoint(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            variable="age",
+            event_positive_value=1,
+        )
+
+
+def test_find_optimal_cutpoint_permutation_loop_does_not_swallow_unexpected_errors(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    df = make_example_dataset(seed=18, n_patients=80)
+    call_count = 0
+
+    def _boom(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise AssertionError("unexpected permutation failure")
+        return (1.0, 0.05)
+
+    monkeypatch.setattr(ml_models, "survdiff", _boom)
+
+    with pytest.raises(AssertionError, match="unexpected permutation failure"):
+        ml_models.find_optimal_cutpoint(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            variable="age",
+            event_positive_value=1,
+            permutation_iterations=1,
+        )
 
 
 def test_time_dependent_importance_uses_proxy_language() -> None:
