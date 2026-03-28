@@ -313,3 +313,28 @@ def test_signature_summary_stays_exploratory_without_permutation_or_holdout_conf
 
     assert "remains exploratory" in summary["headline"].lower()
     assert any("optimistic" in caution.lower() for caution in summary["cautions"])
+
+
+def test_signature_summary_keeps_internal_confirmation_language_conservative() -> None:
+    summary = _signature_scientific_summary(
+        best_split={
+            "N signature+": 42,
+            "Statistically significant": True,
+            "Bootstrap support (p<0.05)": 0.82,
+            "Bootstrap HR direction consistency": 0.91,
+            "Validation support (p<alpha)": 0.67,
+            "Permutation p": 0.021,
+        },
+        search_space={
+            "truncated": False,
+            "permutation_iterations": 50,
+            "validation_iterations": 5,
+            "significance_level": 0.05,
+            "min_group_size": 10,
+            "tested_combinations": 24,
+            "significant_signatures": 3,
+        },
+    )
+
+    assert "passes the current internal significance" not in summary["headline"].lower()
+    assert "external validation" in summary["headline"].lower()

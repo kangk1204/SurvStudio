@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import io
 from pathlib import Path
 import tomllib
@@ -1002,6 +1003,24 @@ def test_frontend_uses_dataset_aware_download_filenames() -> None:
     assert 'buildDownloadFilename("km_curve", "png", { includeGroup: true })' in app_js
 
 
+def test_frontend_csv_download_sanitizes_formula_like_cells() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function downloadCsv(filename, rows, columns = null)" in app_js
+    assert "const sanitizeCsvCell = (value) => {" in app_js
+    assert 'trimmed.startsWith("=")' in app_js
+    assert 'trimmed.startsWith("+")' in app_js
+    assert 'trimmed.startsWith("-")' in app_js
+    assert 'trimmed.startsWith("@")' in app_js
+    assert "return `'${text}`;" in app_js
+
+
 def test_frontend_covariate_picker_keeps_all_unique_continuous_columns() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
@@ -1069,6 +1088,29 @@ def test_export_table_endpoint_preserves_union_of_row_keys() -> None:
     assert response.status_code == 200
     assert "Mean C-index" in response.text.splitlines()[0]
     assert "0.7011" in response.text
+
+
+def test_export_table_endpoint_sanitizes_formula_like_csv_cells() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [
+                {"Sample": "=cmd|'/C calc'!A0", "Model": "+SUM(1,1)", "Note": "@risk"},
+                {"Sample": "-10", "Model": "RSF", "Note": "safe"},
+            ],
+            "format": "csv",
+            "style": "plain",
+        },
+    )
+
+    assert response.status_code == 200
+    lines = response.text.splitlines()
+    first_row = next(csv.reader([lines[1]]))
+    second_row = next(csv.reader([lines[2]]))
+    assert first_row[0] == "'=cmd|'/C calc'!A0"
+    assert first_row[1] == "'+SUM(1,1)"
+    assert first_row[2] == "'@risk"
+    assert second_row[0] == "'-10"
 
 
 def test_export_table_endpoint_returns_journal_latex() -> None:
