@@ -81,6 +81,8 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="tableDependencyText"' in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
+    assert 'id="deriveApplyToGroup"' in response.text
+    assert "Use new column as Group by" in response.text
 
 
 def test_index_exposes_dataset_preset_feedback_ui() -> None:
@@ -94,11 +96,13 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'id="mlFeatureSummaryChips"' in response.text
     assert 'id="dlFeatureSummaryText"' in response.text
     assert 'id="dlFeatureSummaryChips"' in response.text
+    assert 'id="modelFeatureChecklist"' in response.text
+    assert 'id="modelCategoricalChecklist"' in response.text
     assert 'id="reviewMlFeaturesButton"' in response.text
     assert 'id="reviewDlFeaturesButton"' in response.text
     assert 'id="mlSkipShap"' in response.text
     assert "Fast mode (skip SHAP)" in response.text
-    assert "ML uses the Study Design outcome definition and the shared covariates selected on the Cox tab." in response.text
+    assert "ML uses the Study Design outcome definition and the model features selected below." in response.text
     assert "No preset applied yet." in response.text
     assert "Applying a preset updates recommended columns and checkbox selections only." in response.text
     assert 'class="button ghost compact-btn" id="applyBasicPresetButton"' in response.text
@@ -115,6 +119,7 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "applyControlSnapshot(historyState.controls || null);" in text
     assert "queueHistorySync()" in text
     assert "showAllEventColumns: Boolean(refs.showAllEventColumns?.checked)" in text
+    assert "deriveApplyToGroup: Boolean(refs.deriveApplyToGroup?.checked)" in text
     assert "updateGroupingDetailsVisibility(tabName);" in text
     assert "function scrollWorkspaceEntryToTop()" in text
     assert "updateAfterDataset(payload, { scrollToTop: true });" in text
@@ -1264,11 +1269,46 @@ def test_frontend_derive_group_explains_that_dl_features_do_not_change() -> None
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    assert "ML/DL features were not changed." in app_js
+    assert 'const applyToGroup = Boolean(refs.deriveApplyToGroup?.checked);' in app_js
+    assert 'Group by stayed as ${previousGroup}.' in app_js
+    assert 'Use "Set as Group by" only if you want Kaplan-Meier and grouped tables to switch.' in app_js
+    assert "Set as Group by. ML/DL features were not changed." in app_js
     assert "Use it for grouping or visualization, not as an ML/DL training feature." in app_js
     assert "Grouping only:" in app_js
-    assert "Training inputs come only from the Cox tab selections" in app_js
-    assert "Cox, ML, and DL use the outcome definition plus the Cox-tab covariates." in app_js
+    assert "Training inputs come only from the ML/DL model feature selections" in app_js
+    assert "Cox, ML, and DL use the outcome definition plus their own feature selections." in app_js
+
+
+def test_frontend_derive_group_preserves_existing_group_unless_user_applies_new_column() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    derive_start = app_js.index("async function deriveGroup()")
+    derive_end = app_js.index("function updateMethodVisibility()", derive_start)
+    derive_body = app_js[derive_start:derive_end]
+    assert "const preservedGroup = refs.groupColumn.value || \"\";" in derive_body
+    assert "setSelectValueIfPresent(refs.groupColumn, preservedGroup);" in derive_body
+    assert "Use \"Set as Group by\" only if you want Kaplan-Meier and grouped tables to switch." in derive_body
+
+
+def test_frontend_caps_importance_plot_container_height() -> None:
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert "#mlImportancePlot," in styles
+    assert "#dlImportancePlot" in styles
+    assert "max-height: 720px;" in styles
+    assert "overflow: auto;" in styles
 
 
 def test_export_table_endpoint_returns_journal_markdown() -> None:

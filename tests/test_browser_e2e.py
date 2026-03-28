@@ -136,7 +136,7 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
 
             page.locator("#applyModelPresetButton").click()
             page.wait_for_function(
-                "document.getElementById('dlFeatureSummaryText').textContent.includes('Training inputs come only from the Cox tab selections')"
+                "document.getElementById('dlFeatureSummaryText').textContent.includes('Training inputs come only from the ML/DL model feature selections')"
             )
             assert page.locator('[data-tab="dl"]').get_attribute("aria-selected") == "true"
             assert "feature checklists used by ML and DL" in page.locator("#datasetPresetStatusText").inner_text()
@@ -245,13 +245,83 @@ def test_browser_study_design_collapses_grouping_controls_outside_km(browser_ser
             )
             assert page.locator("#groupingDetails").evaluate("(el) => el.open") is False
             assert "Grouping only:" in page.locator("#dlFeatureSummaryChips").inner_text()
-            assert "Training inputs come only from the Cox tab selections" in page.locator("#dlFeatureSummaryText").inner_text()
+            assert "Training inputs come only from the ML/DL model feature selections" in page.locator("#dlFeatureSummaryText").inner_text()
 
             page.locator('[data-tab="tables"]').click()
             page.wait_for_function(
                 "document.querySelector('[data-tab=\"tables\"]').getAttribute('aria-selected') === 'true'"
             )
             assert page.locator("#groupingDetails").evaluate("(el) => el.open") is True
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_model_features_stay_separate_from_cox_and_keep_non_endpoint_inputs(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1400})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#groupColumn").select_option("sex")
+
+            model_features = page.eval_on_selector_all(
+                "#modelFeatureChecklist input",
+                "els => els.filter(e => e.checked).map(e => e.value)",
+            )
+            assert "pfs_months" not in model_features
+            assert "pfs_event" not in model_features
+            assert "biomarker_score" in model_features
+            assert "immune_index" in model_features
+
+            page.locator('[data-tab="cox"]').click()
+            page.locator("#covariateChecklist input[value='age']").uncheck()
+            cox_covariates = page.eval_on_selector_all(
+                "#covariateChecklist input",
+                "els => els.filter(e => e.checked).map(e => e.value)",
+            )
+            assert "age" not in cox_covariates
+            assert page.eval_on_selector_all(
+                "#modelFeatureChecklist input",
+                "els => els.filter(e => e.checked).map(e => e.value)",
+            ) == model_features
+
+            page.locator("#deriveToggle").click()
+            page.locator("#deriveSource").select_option("age")
+            page.locator("#deriveMethod").select_option("optimal_cutpoint")
+            page.locator("#deriveButton").click()
+            page.wait_for_function(
+                "document.getElementById('deriveStatus').textContent.includes('Created')"
+            )
+            assert page.locator("#groupColumn").input_value() == "sex"
+            assert "Group by stayed as sex" in page.locator("#deriveStatus").inner_text()
+            assert "Set as Group by" in page.locator("#deriveSummary").inner_text()
+
+            updated_model_features = page.eval_on_selector_all(
+                "#modelFeatureChecklist input",
+                "els => els.filter(e => e.checked).map(e => e.value)",
+            )
+            assert updated_model_features == model_features
+
+            page.locator('[data-tab="dl"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'"
+            )
+            assert "Model features: 7" in page.locator("#dlFeatureSummaryChips").inner_text()
+            assert "Grouping only: sex" in page.locator("#dlFeatureSummaryChips").inner_text()
+
+            page.locator("#deriveSummary #applyDerivedGroupButton").click()
+            page.wait_for_function(
+                "document.getElementById('groupColumn').value === 'age__optimal_cutpoint'"
+            )
+            assert page.locator("#groupColumn").input_value() == "age__optimal_cutpoint"
+            assert "Grouping only: age__optimal_cutpoint" in page.locator("#dlFeatureSummaryChips").inner_text()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -351,6 +421,7 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
             assert ("Selection-adjusted p-value" in derive_text) or ("Raw p-value" in derive_text)
             assert "ML and DL feature selections did not change automatically" in derive_text
             assert "not as an ML/DL training feature" in derive_text
+            assert "Set as Group by" in derive_text
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -387,6 +458,39 @@ def test_browser_optimal_cutpoint_summary_wraps_long_derived_column(browser_serv
                 "(el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth })"
             )
             assert overflow["scrollWidth"] <= overflow["clientWidth"] + 1
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_ml_importance_plot_stays_inside_its_section(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1400})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator('[data-tab="ml"]').click()
+            page.locator("#mlModelType").select_option("rsf")
+            page.locator("#mlNEstimators").fill("10")
+            page.locator("#runMlButton").click()
+            page.wait_for_function(
+                "document.getElementById('mlMetaBanner').textContent.includes('eval=')"
+            )
+
+            importance_box = page.locator("#mlImportancePlot").bounding_box()
+            shap_box = page.locator("#mlShapPlot").bounding_box()
+            banner_box = page.locator("#mlMetaBanner").bounding_box()
+            assert importance_box is not None
+            assert shap_box is not None
+            assert banner_box is not None
+            assert importance_box["y"] + importance_box["height"] <= banner_box["y"] + 1.0
+            assert shap_box["y"] + shap_box["height"] <= banner_box["y"] + 1.0
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path

@@ -1075,6 +1075,16 @@ body {
   flex-shrink: 0;
 }
 
+.derive-toggle-option {
+  align-self: flex-end;
+  min-height: 34px;
+}
+
+.derive-toggle-option span:last-child {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 .derive-status {
   font-size: 0.78rem;
   color: var(--muted);
@@ -1764,6 +1774,20 @@ tr:nth-child(even) td {
   white-space: pre-wrap;
 }
 
+.derive-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 10px 0 0;
+}
+
+.derive-action-hint {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 /* ─── Empty State ─── */
 
 .empty-state {
@@ -2091,4 +2115,10 @@ tbody tr:hover td {
   grid-template-columns: 1fr 1fr;
   gap: 16px;
   margin-bottom: 16px;
+}
+
+#mlImportancePlot,
+#dlImportancePlot {
+  max-height: 720px;
+  overflow: auto;
 }

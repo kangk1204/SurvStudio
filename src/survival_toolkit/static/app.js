@@ -13,6 +13,7 @@ const runtime = {
   apiBase: window.location.protocol === "file:" ? "http://127.0.0.1:8000" : "",
   historySyncPaused: false,
   historySyncTimer: null,
+  lastDerivedGroup: null,
 };
 
 
@@ -60,6 +61,7 @@ const refs = {
   deriveMethod: document.getElementById("deriveMethod"),
   deriveCutoff: document.getElementById("deriveCutoff"),
   deriveColumnName: document.getElementById("deriveColumnName"),
+  deriveApplyToGroup: document.getElementById("deriveApplyToGroup"),
   cutoffWrap: document.getElementById("cutoffWrap"),
   deriveButton: document.getElementById("deriveButton"),
   deriveStatus: document.getElementById("deriveStatus"),
@@ -99,6 +101,8 @@ const refs = {
   downloadKmSvgButton: document.getElementById("downloadKmSvgButton"),
   covariateChecklist: document.getElementById("covariateChecklist"),
   categoricalChecklist: document.getElementById("categoricalChecklist"),
+  modelFeatureChecklist: document.getElementById("modelFeatureChecklist"),
+  modelCategoricalChecklist: document.getElementById("modelCategoricalChecklist"),
   runCoxButton: document.getElementById("runCoxButton"),
   coxInsightBoard: document.getElementById("coxInsightBoard"),
   coxPlot: document.getElementById("coxPlot"),
@@ -261,6 +265,7 @@ function captureControlSnapshot() {
     deriveMethod: refs.deriveMethod?.value || "",
     deriveCutoff: refs.deriveCutoff?.value || "",
     deriveColumnName: refs.deriveColumnName?.value || "",
+    deriveApplyToGroup: Boolean(refs.deriveApplyToGroup?.checked),
     showConfidenceBands: Boolean(refs.showConfidenceBands?.checked),
     riskTablePoints: refs.riskTablePoints?.value || "",
     logrankWeight: refs.logrankWeight?.value || "",
@@ -277,6 +282,8 @@ function captureControlSnapshot() {
     signatureRandomSeed: refs.signatureRandomSeed?.value || "",
     covariates: selectedCheckboxValues(refs.covariateChecklist),
     categoricals: selectedCheckboxValues(refs.categoricalChecklist),
+    modelFeatures: selectedCheckboxValues(refs.modelFeatureChecklist),
+    modelCategoricals: selectedCheckboxValues(refs.modelCategoricalChecklist),
     cohortVariables: selectedCheckboxValues(refs.cohortVariableChecklist),
     mlModelType: refs.mlModelType?.value || "",
     mlNEstimators: refs.mlNEstimators?.value || "",
@@ -341,6 +348,7 @@ function applyControlSnapshot(snapshot) {
   setSelectValueIfPresent(refs.deriveSource, snapshot.deriveSource);
   setInputValue(refs.deriveCutoff, snapshot.deriveCutoff);
   setInputValue(refs.deriveColumnName, snapshot.deriveColumnName);
+  if (refs.deriveApplyToGroup) refs.deriveApplyToGroup.checked = Boolean(snapshot.deriveApplyToGroup);
   setInputValue(refs.riskTablePoints, snapshot.riskTablePoints);
   setInputValue(refs.fhPower, snapshot.fhPower);
   setInputValue(refs.signatureMaxDepth, snapshot.signatureMaxDepth);
@@ -382,6 +390,8 @@ function applyControlSnapshot(snapshot) {
   updateDlEvaluationControls();
   setCheckedValues(refs.covariateChecklist, snapshot.covariates || []);
   setCheckedValues(refs.categoricalChecklist, snapshot.categoricals || []);
+  setCheckedValues(refs.modelFeatureChecklist, snapshot.modelFeatures || []);
+  setCheckedValues(refs.modelCategoricalChecklist, snapshot.modelCategoricals || []);
   setCheckedValues(refs.cohortVariableChecklist, snapshot.cohortVariables || []);
   renderSharedFeatureSummary();
   updateDatasetBadge();
@@ -743,9 +753,20 @@ function humanizePValueLabel(label) {
 }
 
 function renderDerivedGroupSummary(derivedColumn, summary) {
+  const appliedToGroup = refs.groupColumn?.value === derivedColumn;
+  const currentGroupLabel = refs.groupColumn?.value || "Overall only";
   const counts = summary?.counts || [];
   const assignmentRule = summary?.assignment_rule || null;
   const pValueLabel = humanizePValueLabel(summary?.p_value_label);
+  const groupingNote = appliedToGroup
+    ? `Group by now uses ${derivedColumn}. ML and DL feature selections did not change automatically.`
+    : `Group by stayed as ${currentGroupLabel}. ML and DL feature selections did not change automatically.`;
+  const groupingAction = appliedToGroup
+    ? ""
+    : `<div class="derive-action-row">
+        <button class="button ghost compact-btn" type="button" id="applyDerivedGroupButton" data-derived-column="${escapeHtml(derivedColumn || "")}">Set as Group by</button>
+        <span class="derive-action-hint">Use this only if you want Kaplan-Meier and grouped tables to switch to the derived column.</span>
+      </div>`;
   const summaryCell = (label, value, extraClass = "") => `
       <div class="${extraClass}">
         <strong>${escapeHtml(label)}</strong>
@@ -757,8 +778,9 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
       ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(deriveGroupCountLabel(item.group))}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
     </div>
     ${summary?.method === "optimal_cutpoint" ? '<div class="note-box">High/Low indicate risk direction, not whether the source value itself is numerically high or low.</div>' : ""}
-    <div class="note-box">The derived column was set as Group by. ML and DL feature selections did not change automatically.</div>
+    <div class="note-box">${escapeHtml(groupingNote)}</div>
     ${summary?.method === "optimal_cutpoint" ? '<div class="note-box">This optimal cutpoint used outcome information. Use it for grouping or visualization, not as an ML/DL training feature.</div>' : ""}
+    ${groupingAction}
     <div class="signature-summary-grid">
       ${summaryCell("Derived column", derivedColumn || "NA")}
       ${summaryCell("Method", summary?.method || "NA")}
@@ -1005,12 +1027,42 @@ function cohortColumnsExcluding(...excluded) {
     .map((col) => col.name);
 }
 
+function isOutcomeDerivedGroupingColumn(columnName) {
+  const normalized = String(columnName || "").toLowerCase();
+  return (
+    normalized.endsWith("__optimal_cutpoint")
+    || normalized === "auto_signature_group"
+    || normalized.startsWith("sig_")
+  );
+}
+
+function isSurvivalOutcomeLikeColumn(columnName) {
+  if (!state.dataset || !columnName) return false;
+  if (columnName === refs.timeColumn?.value || columnName === refs.eventColumn?.value) return true;
+
+  const suggestedTimeColumns = new Set(state.dataset?.suggestions?.time_columns || []);
+  if (suggestedTimeColumns.has(columnName)) return true;
+
+  const binarySet = new Set(state.dataset?.binary_candidate_columns || []);
+  if (binarySet.has(columnName) && isEventLikeColumnName(columnName) && !looksLikeBaselineStatusColumn(columnName)) {
+    return true;
+  }
+  return false;
+}
+
+function modelFeatureCandidateColumns() {
+  return cohortColumnsExcluding(refs.timeColumn?.value, refs.eventColumn?.value)
+    .filter((name) => !isSurvivalOutcomeLikeColumn(name))
+    .filter((name) => !isOutcomeDerivedGroupingColumn(name));
+}
+
 function refreshVariableSelections() {
   if (!state.dataset) return;
-  const excluded = [refs.timeColumn.value, refs.eventColumn.value];
-  const availableCovariates = cohortColumnsExcluding(...excluded);
+  const availableCovariates = modelFeatureCandidateColumns();
   const previousCovariates = selectedCheckboxValues(refs.covariateChecklist).filter((v) => availableCovariates.includes(v));
   const previousCategoricals = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => availableCovariates.includes(v));
+  const previousModelFeatures = selectedCheckboxValues(refs.modelFeatureChecklist).filter((v) => availableCovariates.includes(v));
+  const previousModelCategoricals = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => availableCovariates.includes(v));
   const previousTableVars = selectedCheckboxValues(refs.cohortVariableChecklist).filter((v) => availableCovariates.includes(v));
   const defaultCategoricals = state.dataset.columns
     .filter((c) => ["categorical", "binary"].includes(c.kind) || c.n_unique <= 6)
@@ -1018,8 +1070,10 @@ function refreshVariableSelections() {
     .filter((name) => availableCovariates.includes(name));
   renderChecklist(refs.covariateChecklist, availableCovariates, previousCovariates.length ? previousCovariates : availableCovariates.slice(0, 4));
   renderChecklist(refs.categoricalChecklist, availableCovariates, previousCategoricals.length ? previousCategoricals : defaultCategoricals);
+  renderChecklist(refs.modelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : availableCovariates);
+  renderChecklist(refs.modelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
   renderChecklist(refs.cohortVariableChecklist, availableCovariates, previousTableVars.length ? previousTableVars : availableCovariates.slice(0, 6));
-  const numericOptions = state.dataset.numeric_columns.filter((c) => !excluded.includes(c));
+  const numericOptions = state.dataset.numeric_columns.filter((c) => ![refs.timeColumn.value, refs.eventColumn.value].includes(c));
   renderSelect(refs.deriveSource, numericOptions, { selected: numericOptions.includes(refs.deriveSource.value) ? refs.deriveSource.value : numericOptions[0] || null });
   renderSharedFeatureSummary();
 }
@@ -1140,14 +1194,16 @@ function renderContextCards({
   eventLabel,
   eventValue,
   groupLabel,
-  features,
-  categoricals,
+  coxFeatures,
+  coxCategoricals,
+  modelFeatures,
+  modelCategoricals,
   tableVariables,
 }) {
   if (refs.groupingSummaryText) {
     refs.groupingSummaryText.textContent = !hasDataset
       ? "Used mainly for Kaplan-Meier and grouped tables. Group by does not change Cox, ML, or DL inputs."
-      : `Current Group by: ${groupLabel}. These settings mainly affect Kaplan-Meier and grouped tables. Cox, ML, and DL use the outcome definition plus the Cox-tab covariates.`;
+      : `Current Group by: ${groupLabel}. These settings mainly affect Kaplan-Meier and grouped tables. Cox, ML, and DL use the outcome definition plus their own feature selections.`;
   }
 
   if (refs.kmDependencyText) {
@@ -1170,8 +1226,8 @@ function renderContextCards({
     renderChipList(refs.coxDependencyChips, hasDataset ? [
       formatOutcomeChip(timeLabel, eventLabel, eventValue),
       formatGroupChip(groupLabel),
-      `Covariates: ${features.length}`,
-      `Categorical: ${categoricals.length}`,
+      `Covariates: ${coxFeatures.length}`,
+      `Categorical: ${coxCategoricals.length}`,
     ] : []);
   }
 
@@ -1188,18 +1244,20 @@ function renderContextCards({
 
 function renderSharedFeatureSummary() {
   const hasDataset = Boolean(state.dataset);
-  const features = hasDataset ? selectedCheckboxValues(refs.covariateChecklist) : [];
-  const categoricals = hasDataset ? selectedCheckboxValues(refs.categoricalChecklist).filter((value) => features.includes(value)) : [];
+  const coxFeatures = hasDataset ? selectedCheckboxValues(refs.covariateChecklist) : [];
+  const coxCategoricals = hasDataset ? selectedCheckboxValues(refs.categoricalChecklist).filter((value) => coxFeatures.includes(value)) : [];
+  const features = hasDataset ? selectedCheckboxValues(refs.modelFeatureChecklist) : [];
+  const categoricals = hasDataset ? selectedCheckboxValues(refs.modelCategoricalChecklist).filter((value) => features.includes(value)) : [];
   const tableVariables = hasDataset ? selectedCheckboxValues(refs.cohortVariableChecklist) : [];
   const timeLabel = hasDataset ? (refs.timeColumn?.value || "time") : "time";
   const eventLabel = hasDataset ? (refs.eventColumn?.value || "event") : "event";
   const eventValue = hasDataset ? (refs.eventPositiveValue?.value || "1") : "1";
   const groupLabel = hasDataset ? (refs.groupColumn?.value || "overall only") : "overall only";
   const summaryText = !hasDataset
-    ? "Load a dataset first. ML and DL use the shared covariate and categorical selections defined on the Cox tab."
+    ? "Load a dataset first. ML and DL use the model feature and categorical selections defined in the ML tab."
     : features.length
-      ? `Training inputs come only from the Cox tab selections: ${summarizeFeatureNames(features)}. Group by is shown below for context only.`
-      : "No shared feature set selected yet. Choose covariates on the Cox tab before training ML or DL models.";
+      ? `Training inputs come only from the ML/DL model feature selections: ${summarizeFeatureNames(features)}. Group by is shown below for context only.`
+      : "No model feature set selected yet. Choose ML/DL model features before training.";
   const finalChips = !hasDataset
     ? []
     : [
@@ -1225,8 +1283,10 @@ function renderSharedFeatureSummary() {
     eventLabel,
     eventValue,
     groupLabel,
-    features,
-    categoricals,
+    coxFeatures,
+    coxCategoricals,
+    modelFeatures: features,
+    modelCategoricals: categoricals,
     tableVariables,
   });
 }
@@ -1236,11 +1296,11 @@ function updateGroupingDetailsVisibility(tabName = activeTabName()) {
   refs.groupingDetails.open = ["km", "tables"].includes(tabName);
 }
 
-function focusSharedFeatureEditor() {
-  activateTab("cox");
+function focusModelFeatureEditor() {
+  activateTab("ml");
   requestAnimationFrame(() => {
-    refs.covariateChecklist?.closest(".selection-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
-    flashPresetTargets([refs.covariateChecklist, refs.categoricalChecklist]);
+    refs.modelFeatureChecklist?.closest(".selection-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    flashPresetTargets([refs.modelFeatureChecklist, refs.modelCategoricalChecklist]);
   });
 }
 
@@ -1273,8 +1333,13 @@ function applyDatasetPreset(mode) {
   const covariates = mode === "models" ? preset.modelFeatures : preset.coxCovariates;
   const categoricals = mode === "models" ? preset.modelCategoricals : preset.coxCategoricals;
   const tableVariables = preset.tableVariables || covariates;
-  setCheckedValues(refs.covariateChecklist, covariates);
-  setCheckedValues(refs.categoricalChecklist, categoricals);
+  if (mode === "models") {
+    setCheckedValues(refs.modelFeatureChecklist, covariates);
+    setCheckedValues(refs.modelCategoricalChecklist, categoricals);
+  } else {
+    setCheckedValues(refs.covariateChecklist, covariates);
+    setCheckedValues(refs.categoricalChecklist, categoricals);
+  }
   setCheckedValues(refs.cohortVariableChecklist, tableVariables);
   updateDatasetBadge();
 
@@ -1283,7 +1348,7 @@ function applyDatasetPreset(mode) {
   const summaryTitle = `${preset.name} applied`;
   const summaryText = mode === "basic"
     ? "Updated the study columns, group split, Cox covariates, and cohort-table variables below. No analysis ran yet."
-    : "Updated the study columns and the feature checklists used by ML and DL. These shared feature selections live on the Cox tab. No analysis ran yet.";
+    : "Updated the study columns and the feature checklists used by ML and DL. These model feature selections live in the ML tab. No analysis ran yet.";
   const summaryChips = [
     `Time: ${preset.timeColumn}`,
     `Event: ${preset.eventColumn}=${preset.eventPositiveValue}`,
@@ -1303,6 +1368,8 @@ function applyDatasetPreset(mode) {
     refs.timeUnitLabel,
     refs.covariateChecklist,
     refs.categoricalChecklist,
+    refs.modelFeatureChecklist,
+    refs.modelCategoricalChecklist,
     refs.cohortVariableChecklist,
     refs.mlFeatureSummaryCard,
     refs.dlFeatureSummaryCard,
@@ -1509,12 +1576,14 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   state.dl = null;
   refs.kmMetaBanner.textContent = "Configure your study columns above, then click Run Analysis.";
   refs.coxMetaBanner.textContent = "Select covariates above, then click Run Analysis.";
-  refs.mlMetaBanner.textContent = "Select features from the Cox tab, then train a model.";
-  refs.dlMetaBanner.textContent = "Select features from the Cox tab, configure hyperparameters, then train.";
+  refs.mlMetaBanner.textContent = "Select model features on the ML tab, then train a model.";
+  refs.dlMetaBanner.textContent = "Select model features on the ML tab, configure hyperparameters, then train.";
   refs.deriveSummary.innerHTML = "";
   refs.deriveSummary.classList.add("hidden");
+  runtime.lastDerivedGroup = null;
   refs.datasetPresetBar?.classList.add("hidden");
   refs.deriveStatus.textContent = "";
+  if (refs.deriveApplyToGroup) refs.deriveApplyToGroup.checked = false;
   if (refs.cutpointPlot) { refs.cutpointPlot.innerHTML = ""; refs.cutpointPlot.classList.add("hidden"); }
   refs.kmSummaryShell.innerHTML = '<div class="empty-state">Survival statistics will appear after you run the analysis.</div>';
   refs.kmRiskShell.innerHTML = '<div class="empty-state">Number of patients at risk over time.</div>';
@@ -1614,6 +1683,8 @@ async function deriveGroup() {
   const method = refs.deriveMethod.value;
   const isCustomCutoff = method === "custom_cutoff";
   const isOptimal = method === "optimal_cutpoint";
+  const preservedGroup = refs.groupColumn.value || "";
+  const applyToGroup = Boolean(refs.deriveApplyToGroup?.checked);
   const cutoffInput = refs.deriveCutoff.value.trim();
   let cutoffValue = null;
   if (isCustomCutoff) {
@@ -1638,11 +1709,25 @@ async function deriveGroup() {
 
   const payload = await fetchJSON("/api/derive-group", { method: "POST", body: JSON.stringify(body) });
   updateAfterDataset(payload);
-  const featureUseMessage = isOptimal
-    ? "Set as Group by. ML/DL features were not changed. This cutpoint used outcome information, so keep it for grouping or visualization rather than predictive training."
-    : "Set as Group by. ML/DL features were not changed. Add it manually on the Cox tab only if you want models to use it.";
+  if (applyToGroup) {
+    refs.groupColumn.value = payload.derived_column;
+  } else {
+    setSelectValueIfPresent(refs.groupColumn, preservedGroup);
+  }
+  const previousGroup = preservedGroup || "Overall only";
+  runtime.lastDerivedGroup = {
+    derivedColumn: payload.derived_column,
+    summary: payload.derive_summary,
+  };
+  const featureUseMessage = applyToGroup
+    ? (isOptimal
+      ? "Set as Group by. ML/DL features were not changed. This cutpoint used outcome information, so keep it for grouping or visualization rather than predictive training."
+      : "Set as Group by. ML/DL features were not changed. Add it manually in the ML tab only if you want models to use it.")
+    : (isOptimal
+      ? `Group by stayed as ${previousGroup}. ML/DL features were not changed. This cutpoint used outcome information, so use it for grouping or visualization only if you decide to apply it.`
+      : `Group by stayed as ${previousGroup}. ML/DL features were not changed. Use "Set as Group by" only if you want Kaplan-Meier and grouped tables to switch.`);
   refs.deriveStatus.textContent = `Created ${payload.derived_column}. ${featureUseMessage}`;
-  refs.groupColumn.value = payload.derived_column;
+  updateDatasetBadge();
   renderDerivedGroupSummary(payload.derived_column, payload.derive_summary);
   renderSharedFeatureSummary();
   showToast(`Created ${payload.derived_column}. ${featureUseMessage}`, "success", 5200);
@@ -1822,9 +1907,9 @@ async function runCohortTable() {
 
 async function runMlModel() {
   const base = currentBaseConfig();
-  const features = selectedCheckboxValues(refs.covariateChecklist);
-  if (!features.length) { showToast("Select at least one feature (from Cox tab covariates).", "error"); return; }
-  const categoricalFeatures = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => features.includes(v));
+  const features = selectedCheckboxValues(refs.modelFeatureChecklist);
+  if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
+  const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
   const computeShap = !refs.mlSkipShap?.checked;
   const startedAt = performance.now();
   setShimmer(refs.mlImportancePlot);
@@ -1888,9 +1973,9 @@ async function runMlModel() {
 
 async function runCompareModels() {
   const base = currentBaseConfig();
-  const features = selectedCheckboxValues(refs.covariateChecklist);
-  if (!features.length) { showToast("Select at least one feature.", "error"); return; }
-  const categoricalFeatures = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => features.includes(v));
+  const features = selectedCheckboxValues(refs.modelFeatureChecklist);
+  if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
+  const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
   setShimmer(refs.mlComparisonShell);
 
   const payload = await fetchJSON("/api/ml-model", {
@@ -1944,9 +2029,9 @@ async function runCompareModels() {
 async function runDlModel() {
   const base = currentBaseConfig();
   validateDlControls();
-  const features = selectedCheckboxValues(refs.covariateChecklist);
-  if (!features.length) { showToast("Select at least one feature (from Cox tab covariates).", "error"); return; }
-  const categoricalFeatures = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => features.includes(v));
+  const features = selectedCheckboxValues(refs.modelFeatureChecklist);
+  if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
+  const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
   const hiddenLayers = refs.dlHiddenLayers.value.split(",").map(Number).filter((n) => n > 0);
   if (!hiddenLayers.length) hiddenLayers.push(64, 64);
 
@@ -2037,9 +2122,9 @@ async function runDlModel() {
 async function runDlCompareModels() {
   const base = currentBaseConfig();
   validateDlControls();
-  const features = selectedCheckboxValues(refs.covariateChecklist);
-  if (!features.length) { showToast("Select at least one feature (from Cox tab covariates).", "error"); return; }
-  const categoricalFeatures = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => features.includes(v));
+  const features = selectedCheckboxValues(refs.modelFeatureChecklist);
+  if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
+  const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
   const hiddenLayers = refs.dlHiddenLayers.value.split(",").map(Number).filter((n) => n > 0);
   if (!hiddenLayers.length) hiddenLayers.push(64, 64);
 
@@ -2416,16 +2501,41 @@ function initListeners() {
     renderSharedFeatureSummary();
     queueHistorySync();
   });
-  refs.groupColumn.addEventListener("change", () => { updateDatasetBadge(); renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.groupColumn.addEventListener("change", () => {
+    if (runtime.lastDerivedGroup) {
+      renderDerivedGroupSummary(runtime.lastDerivedGroup.derivedColumn, runtime.lastDerivedGroup.summary);
+    }
+    updateDatasetBadge();
+    renderSharedFeatureSummary();
+    queueHistorySync();
+  });
+  refs.deriveSummary?.addEventListener("click", (event) => {
+    const button = event.target.closest("#applyDerivedGroupButton");
+    if (!button) return;
+    const derivedColumn = button.dataset.derivedColumn;
+    if (!derivedColumn) return;
+    refs.groupColumn.value = derivedColumn;
+    if (runtime.lastDerivedGroup?.derivedColumn === derivedColumn) {
+      renderDerivedGroupSummary(runtime.lastDerivedGroup.derivedColumn, runtime.lastDerivedGroup.summary);
+    }
+    refs.deriveStatus.textContent = `Updated Group by to ${derivedColumn}. ML/DL features were not changed.`;
+    updateDatasetBadge();
+    renderSharedFeatureSummary();
+    queueHistorySync();
+    showToast(`Group by updated to ${derivedColumn}. ML/DL features were not changed.`, "success", 3600);
+  });
   refs.timeUnitLabel.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.maxTime.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.confidenceLevel.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.covariateChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.categoricalChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.modelFeatureChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.modelCategoricalChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.cohortVariableChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.reviewMlFeaturesButton?.addEventListener("click", focusSharedFeatureEditor);
-  refs.reviewDlFeaturesButton?.addEventListener("click", focusSharedFeatureEditor);
+  refs.reviewMlFeaturesButton?.addEventListener("click", focusModelFeatureEditor);
+  refs.reviewDlFeaturesButton?.addEventListener("click", focusModelFeatureEditor);
   refs.deriveMethod.addEventListener("change", () => { updateMethodVisibility(); queueHistorySync(); });
+  refs.deriveApplyToGroup?.addEventListener("change", queueHistorySync);
   refs.logrankWeight.addEventListener("change", () => { updateWeightVisibility(); queueHistorySync(); });
   refs.mlModelType.addEventListener("change", () => { updateMlModelControlVisibility(); queueHistorySync(); });
   refs.mlEvaluationStrategy.addEventListener("change", () => { updateMlEvaluationControls(); queueHistorySync(); });
