@@ -131,6 +131,7 @@ class MLModelRequest(BaseModel):
     max_depth: int | None = None
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = 42
+    compute_shap: bool = False
     evaluation_strategy: Literal["holdout", "repeated_cv"] = "holdout"
     cv_folds: int = Field(default=5, ge=2, le=10)
     cv_repeats: int = Field(default=3, ge=1, le=20)
@@ -946,7 +947,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
             shap_figure = None
             model_obj = result.get("_model")
             x_encoded = result.get("_X_encoded")
-            if model_obj is not None and x_encoded is not None:
+            if request_model.compute_shap and model_obj is not None and x_encoded is not None:
                 try:
                     shap_result = compute_shap_values(model_obj, x_encoded, result["feature_names"])
                     from survival_toolkit.plots import build_shap_figure

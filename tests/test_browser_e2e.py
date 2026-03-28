@@ -258,6 +258,47 @@ def test_browser_study_design_collapses_grouping_controls_outside_km(browser_ser
         pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
 
 
+def test_browser_event_column_defaults_to_event_like_fields_and_advanced_toggle_reveals_all(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadTcgaButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+
+            default_options = page.locator("#eventColumn option").evaluate_all(
+                "(options) => options.map((option) => option.value)"
+            )
+            assert "os_event" in default_options
+            assert "egfr_status" not in default_options
+            assert "kras_status" not in default_options
+            assert "Showing event-like binary columns only" in page.locator("#eventColumnHelp").inner_text()
+
+            page.locator("#showAllEventColumns").check()
+            page.wait_for_function(
+                "Array.from(document.querySelectorAll('#eventColumn option')).some((option) => option.value === 'egfr_status')"
+            )
+            advanced_options = page.locator("#eventColumn option").evaluate_all(
+                "(options) => options.map((option) => option.value)"
+            )
+            assert "egfr_status" in advanced_options
+            assert "Advanced mode is on" in page.locator("#eventColumnHelp").inner_text()
+
+            page.locator("#eventColumn").select_option("egfr_status")
+            page.wait_for_function(
+                "document.getElementById('eventColumnWarning').textContent.includes('baseline characteristic')"
+            )
+            assert "Use it as Group by or as a model feature" in page.locator("#eventColumnWarning").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
 def test_browser_dataset_entry_resets_scroll_to_top(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 

@@ -381,6 +381,8 @@ The app can handle common event codings.
 
 - default is `1 = event`, `0 = censored`
 - if your event column uses another coding, select the event-positive value in the app
+- by default, the `Event column` selector shows only binary columns whose names look like real event indicators
+- if your true event indicator uses a non-standard name, turn on `Show all columns for Event`
 
 Examples:
 - `1 / 0`
@@ -391,6 +393,8 @@ Examples:
 Important:
 - this platform expects a **binary event indicator**
 - if your status column has more than two states, recode it first
+- baseline characteristics such as `egfr_status`, `kras_status`, `sex`, `stage`, or treatment labels are usually **not** event columns
+- those fields should usually be used as `Group by` variables or model features, not as the survival event indicator
 
 Examples that need recoding before analysis:
 - `0 = censored`, `1 = cancer death`, `2 = non-cancer death`
@@ -484,6 +488,7 @@ You should expect an error if:
 - the event column cannot be interpreted as binary
 - the event-positive value you selected is not present
 - the event column has more than two states
+- you pick a baseline status field as the event column after enabling `Show all columns for Event`
 - the selected time column has no positive values
 - all usable rows disappear after missing-value filtering
 - a model has too few analyzable samples or too few events
@@ -541,6 +546,16 @@ Comparison supports:
 - deterministic holdout
 - repeated stratified CV
 - manuscript-oriented result tables
+
+Single-model ML training also supports:
+- `Fast mode (skip SHAP)` for faster turnaround
+- feature-importance output for trained models
+
+Practical note:
+- `Compare All` is usually faster than single-model `Train Model`
+- `Compare All` focuses on cross-model scoring
+- single-model `Train Model` may do extra post-fit work such as feature importance and optional SHAP computation
+- for quick RSF checks on larger cohorts, leave `Fast mode` enabled
 
 ### Deep Learning
 

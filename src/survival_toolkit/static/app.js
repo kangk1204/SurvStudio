@@ -47,6 +47,9 @@ const refs = {
   timeColumn: document.getElementById("timeColumn"),
   eventColumn: document.getElementById("eventColumn"),
   eventPositiveValue: document.getElementById("eventPositiveValue"),
+  showAllEventColumns: document.getElementById("showAllEventColumns"),
+  eventColumnHelp: document.getElementById("eventColumnHelp"),
+  eventColumnWarning: document.getElementById("eventColumnWarning"),
   groupColumn: document.getElementById("groupColumn"),
   timeUnitLabel: document.getElementById("timeUnitLabel"),
   maxTime: document.getElementById("maxTime"),
@@ -127,6 +130,7 @@ const refs = {
   mlModelType: document.getElementById("mlModelType"),
   mlNEstimators: document.getElementById("mlNEstimators"),
   mlLearningRate: document.getElementById("mlLearningRate"),
+  mlSkipShap: document.getElementById("mlSkipShap"),
   mlEvaluationStrategy: document.getElementById("mlEvaluationStrategy"),
   mlCvFoldsWrap: document.getElementById("mlCvFoldsWrap"),
   mlCvRepeatsWrap: document.getElementById("mlCvRepeatsWrap"),
@@ -247,6 +251,7 @@ function captureControlSnapshot() {
     timeColumn: refs.timeColumn?.value || "",
     eventColumn: refs.eventColumn?.value || "",
     eventPositiveValue: refs.eventPositiveValue?.value || "",
+    showAllEventColumns: Boolean(refs.showAllEventColumns?.checked),
     groupColumn: refs.groupColumn?.value || "",
     timeUnitLabel: refs.timeUnitLabel?.value || "",
     maxTime: refs.maxTime?.value || "",
@@ -276,6 +281,7 @@ function captureControlSnapshot() {
     mlModelType: refs.mlModelType?.value || "",
     mlNEstimators: refs.mlNEstimators?.value || "",
     mlLearningRate: refs.mlLearningRate?.value || "",
+    mlSkipShap: Boolean(refs.mlSkipShap?.checked),
     mlEvaluationStrategy: refs.mlEvaluationStrategy?.value || "",
     mlCvFolds: refs.mlCvFolds?.value || "",
     mlCvRepeats: refs.mlCvRepeats?.value || "",
@@ -321,8 +327,11 @@ function applyControlSnapshot(snapshot) {
   if (!snapshot || !state.dataset) return;
   const columnNames = new Set(state.dataset.columns.map((column) => column.name));
   if (snapshot.timeColumn && columnNames.has(snapshot.timeColumn)) refs.timeColumn.value = snapshot.timeColumn;
-  if (snapshot.eventColumn && columnNames.has(snapshot.eventColumn)) refs.eventColumn.value = snapshot.eventColumn;
-  updateEventPositiveOptions();
+  if (refs.showAllEventColumns) refs.showAllEventColumns.checked = Boolean(snapshot.showAllEventColumns);
+  renderEventColumnOptions({
+    preferred: snapshot.eventColumn && columnNames.has(snapshot.eventColumn) ? snapshot.eventColumn : null,
+    silent: true,
+  });
   setSelectValueIfPresent(refs.eventPositiveValue, snapshot.eventPositiveValue);
   refreshVariableSelections();
   setSelectValueIfPresent(refs.groupColumn, snapshot.groupColumn ?? "");
@@ -365,6 +374,7 @@ function applyControlSnapshot(snapshot) {
   setSelectValueIfPresent(refs.dlModelType, snapshot.dlModelType);
   setSelectValueIfPresent(refs.dlEvaluationStrategy, snapshot.dlEvaluationStrategy);
   setSelectValueIfPresent(refs.dlJournalTemplate, snapshot.dlJournalTemplate);
+  if (refs.mlSkipShap) refs.mlSkipShap.checked = snapshot.mlSkipShap !== false;
   if (refs.showConfidenceBands) refs.showConfidenceBands.checked = snapshot.showConfidenceBands !== false;
   updateMethodVisibility();
   updateWeightVisibility();
@@ -475,6 +485,161 @@ function getColumnMeta(columnName) {
   return state.dataset?.columns.find((column) => column.name === columnName) || null;
 }
 
+function normalizeColumnLabel(columnName) {
+  return String(columnName || "").trim().toLowerCase();
+}
+
+function isEventLikeColumnName(columnName) {
+  const normalized = normalizeColumnLabel(columnName);
+  if (!normalized) return false;
+  if (normalized === "event" || normalized === "status") return true;
+  return [
+    /event/,
+    /death/,
+    /mort/,
+    /vital_status/,
+    /survival_status/,
+    /outcome_status/,
+    /relapse/,
+    /recur/,
+    /progress/,
+    /failure/,
+    /censor/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function looksLikeBaselineStatusColumn(columnName) {
+  const normalized = normalizeColumnLabel(columnName);
+  if (!normalized) return false;
+  return [
+    /egfr/,
+    /kras/,
+    /braf/,
+    /alk/,
+    /ros1/,
+    /erbb2/,
+    /mutation/,
+    /mutated/,
+    /wildtype/,
+    /sex/,
+    /gender/,
+    /stage/,
+    /grade/,
+    /treat/,
+    /therapy/,
+    /drug/,
+    /smok/,
+    /histolog/,
+    /subtype/,
+    /cluster/,
+    /group/,
+    /arm/,
+    /cohort/,
+    /horth/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function datasetColumnNames() {
+  return state.dataset?.columns?.map((column) => column.name) || [];
+}
+
+function binaryCandidateColumns() {
+  const binarySet = new Set(state.dataset?.binary_candidate_columns || []);
+  return datasetColumnNames().filter((column) => binarySet.has(column));
+}
+
+function recommendedEventColumns() {
+  const binaryColumns = binaryCandidateColumns();
+  const eventLikeBinary = binaryColumns.filter(
+    (column) => isEventLikeColumnName(column) && !looksLikeBaselineStatusColumn(column),
+  );
+  if (eventLikeBinary.length) return eventLikeBinary;
+  const suggestionSet = new Set(state.dataset?.suggestions?.event_columns || []);
+  const keywordBinary = binaryColumns.filter(
+    (column) => suggestionSet.has(column) && !looksLikeBaselineStatusColumn(column),
+  );
+  if (keywordBinary.length) return keywordBinary;
+  return binaryColumns;
+}
+
+function currentEventColumnWarning() {
+  const eventColumn = refs.eventColumn?.value || "";
+  if (!state.dataset || !eventColumn) return null;
+
+  const binarySet = new Set(state.dataset.binary_candidate_columns || []);
+  if (!binarySet.has(eventColumn)) {
+    return {
+      tone: "error",
+      message: `"${eventColumn}" does not look like a binary event indicator. Choose a 0/1-style event column or recode it before survival analysis.`,
+    };
+  }
+
+  if (!refs.showAllEventColumns?.checked) return null;
+  if (isEventLikeColumnName(eventColumn) && !looksLikeBaselineStatusColumn(eventColumn)) return null;
+
+  return {
+    tone: "warning",
+    message: `"${eventColumn}" looks more like a baseline characteristic than a time-to-event indicator. Use it as Group by or as a model feature, not as the Event column.`,
+  };
+}
+
+function updateEventColumnGuidance() {
+  if (!state.dataset) return;
+
+  const binaryColumns = binaryCandidateColumns();
+  const recommendedColumns = recommendedEventColumns();
+  if (refs.eventColumnHelp) {
+    if (refs.showAllEventColumns?.checked) {
+      refs.eventColumnHelp.textContent = "Advanced mode is on. Every column is shown here, so use only a true binary event indicator.";
+    } else if (recommendedColumns.length && recommendedColumns.length < datasetColumnNames().length) {
+      refs.eventColumnHelp.textContent = "Showing event-like binary columns only. Turn on Show all columns if your event indicator uses a non-standard name.";
+    } else if (binaryColumns.length) {
+      refs.eventColumnHelp.textContent = "No clear event-style name was found. Showing binary candidate columns only.";
+    } else {
+      refs.eventColumnHelp.textContent = "No binary event candidates were detected. Turn on Show all columns only if you already know which column is the event indicator.";
+    }
+  }
+
+  const warning = currentEventColumnWarning();
+  if (!refs.eventColumnWarning) return;
+  if (!warning) {
+    refs.eventColumnWarning.textContent = "";
+    refs.eventColumnWarning.className = "event-warning hidden";
+    return;
+  }
+  refs.eventColumnWarning.textContent = warning.message;
+  refs.eventColumnWarning.className = `event-warning event-warning-${warning.tone}`;
+}
+
+function renderEventColumnOptions({ preferred = null, silent = true } = {}) {
+  if (!state.dataset) return;
+  const allColumns = datasetColumnNames();
+  const options = refs.showAllEventColumns?.checked
+    ? allColumns
+    : (() => {
+        const recommended = recommendedEventColumns();
+        if (recommended.length) return recommended;
+        const binaryColumns = binaryCandidateColumns();
+        return binaryColumns.length ? binaryColumns : allColumns;
+      })();
+
+  const currentValue = preferred ?? refs.eventColumn?.value ?? "";
+  const nextValue = options.includes(currentValue)
+    ? currentValue
+    : inferDefault(options, recommendedEventColumns(), 0);
+  renderSelect(refs.eventColumn, options, { selected: nextValue });
+  updateEventPositiveOptions();
+  updateEventColumnGuidance();
+
+  if (!silent && currentValue && nextValue && currentValue !== nextValue) {
+    showToast(
+      `Event column reset to ${nextValue}. Turn on Show all columns to select non-standard event fields.`,
+      "warning",
+      3600,
+    );
+  }
+}
+
 function updateEventPositiveOptions() {
   const eventColumn = refs.eventColumn.value;
   const meta = getColumnMeta(eventColumn);
@@ -494,6 +659,7 @@ function updateEventPositiveOptions() {
     if (String(value) === "1" || String(value).toLowerCase() === "event") option.selected = true;
     refs.eventPositiveValue.appendChild(option);
   });
+  updateEventColumnGuidance();
 }
 
 function renderChecklist(container, values, selected = []) {
@@ -944,7 +1110,7 @@ function formatOutcomeChip(timeLabel, eventLabel, eventValue) {
   return `Outcome: ${timeLabel} / ${eventLabel}=${eventValue}`;
 }
 
-function mlPendingBannerText({ modelType, nEstimators, rowCount }) {
+function mlPendingBannerText({ modelType, nEstimators, rowCount, computeShap }) {
   const label = modelType === "gbs" ? "Gradient Boosted Survival" : "Random Survival Forest";
   const treeSuffix = Number.isFinite(nEstimators) ? ` with ${nEstimators} trees` : "";
   const cohortSuffix = Number.isFinite(rowCount) ? ` on ${rowCount} rows` : "";
@@ -954,7 +1120,9 @@ function mlPendingBannerText({ modelType, nEstimators, rowCount }) {
   } else {
     message += " This usually finishes quickly on small cohorts.";
   }
-  message += " SHAP is computed after fitting and can add a short delay.";
+  message += computeShap
+    ? " SHAP is computed after fitting and can add a short delay."
+    : " Fast mode is on, so SHAP will be skipped for a faster result.";
   return message;
 }
 
@@ -1190,6 +1358,8 @@ function currentBaseConfig() {
   const timeColumn = refs.timeColumn.value;
   const eventColumn = refs.eventColumn.value;
   if (!timeColumn || !eventColumn) throw new Error("Select both a time column and an event column.");
+  const eventWarning = currentEventColumnWarning();
+  if (eventWarning?.tone === "error") throw new Error(eventWarning.message);
   return {
     dataset_id: state.dataset.dataset_id,
     time_column: timeColumn,
@@ -1306,10 +1476,13 @@ function activateTab(tabName) {
 function updateControlsFromDataset({ scrollToTop = false } = {}) {
   const columnNames = state.dataset.columns.map((c) => c.name);
   const suggestions = state.dataset.suggestions;
+  if (refs.showAllEventColumns) refs.showAllEventColumns.checked = false;
   renderSelect(refs.timeColumn, columnNames, { selected: inferDefault(columnNames, suggestions.time_columns, 0) });
-  renderSelect(refs.eventColumn, columnNames, { selected: inferDefault(columnNames, suggestions.event_columns, 1) });
+  renderEventColumnOptions({
+    preferred: inferDefault(columnNames, suggestions.event_columns, 1),
+    silent: true,
+  });
   renderSelect(refs.groupColumn, columnNames, { includeBlank: true, blankLabel: "Overall only", selected: inferDefault(columnNames, suggestions.group_columns, 2) });
-  updateEventPositiveOptions();
   refreshVariableSelections();
   updateDatasetBadge();
   renderSharedFeatureSummary();
@@ -1652,11 +1825,14 @@ async function runMlModel() {
   const features = selectedCheckboxValues(refs.covariateChecklist);
   if (!features.length) { showToast("Select at least one feature (from Cox tab covariates).", "error"); return; }
   const categoricalFeatures = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => features.includes(v));
+  const computeShap = !refs.mlSkipShap?.checked;
+  const startedAt = performance.now();
   setShimmer(refs.mlImportancePlot);
   refs.mlMetaBanner.textContent = mlPendingBannerText({
     modelType: refs.mlModelType.value,
     nEstimators: Number(refs.mlNEstimators.value),
     rowCount: Number(state.dataset?.n_rows),
+    computeShap,
   });
 
   const payload = await fetchJSON("/api/ml-model", {
@@ -1668,8 +1844,10 @@ async function runMlModel() {
       model_type: refs.mlModelType.value,
       n_estimators: Number(refs.mlNEstimators.value),
       learning_rate: Number(refs.mlLearningRate.value),
+      compute_shap: computeShap,
     }),
   });
+  const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
   state.ml = payload;
   refs.downloadMlComparisonButton.disabled = true;
   if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = true;
@@ -1692,13 +1870,17 @@ async function runMlModel() {
     refs.mlShapPlot.innerHTML = "";
     await Plotly.newPlot(refs.mlShapPlot, payload.shap_figure.data, payload.shap_figure.layout, plotConfig("shap_importance"));
   } else {
-    clearPlotShell(refs.mlShapPlot, '<div class="empty-state plot-empty"><span>SHAP not available for this model</span></div>');
+    clearPlotShell(
+      refs.mlShapPlot,
+      `<div class="empty-state plot-empty"><span>${computeShap ? "SHAP not available for this model" : "SHAP skipped in Fast mode"}</span></div>`,
+    );
   }
   renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "ML model results.");
   const stats = payload.analysis?.model_stats || {};
   const mlMetricLabel = stats.metric_name || ((stats.evaluation_mode === "holdout") ? "Holdout C-index" : "Apparent C-index");
   const mlEvaluationMode = stats.evaluation_mode || "unknown";
-  refs.mlMetaBanner.textContent = `${refs.mlModelType.value.toUpperCase()}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}`;
+  const shapStatus = payload.shap_figure ? "computed" : (computeShap ? "unavailable" : "skipped");
+  refs.mlMetaBanner.textContent = `${refs.mlModelType.value.toUpperCase()}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}, time=${elapsedSeconds}s`;
   updateStepIndicator(3);
   activateTab("ml");
   showToast(`${refs.mlModelType.value.toUpperCase()} model trained`, "success", 3000);
@@ -2224,9 +2406,16 @@ function initListeners() {
   refs.loadExampleButton.addEventListener("click", () => withLoading(refs.loadExampleButton, loadExampleDataset));
   refs.applyBasicPresetButton?.addEventListener("click", () => applyDatasetPreset("basic"));
   refs.applyModelPresetButton?.addEventListener("click", () => applyDatasetPreset("models"));
-  refs.timeColumn.addEventListener("change", () => { refreshVariableSelections(); updateDatasetBadge(); queueHistorySync(); });
-  refs.eventColumn.addEventListener("change", () => { updateEventPositiveOptions(); refreshVariableSelections(); updateDatasetBadge(); queueHistorySync(); });
-  refs.eventPositiveValue.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.timeColumn.addEventListener("change", () => { refreshVariableSelections(); updateDatasetBadge(); renderSharedFeatureSummary(); updateEventColumnGuidance(); queueHistorySync(); });
+  refs.eventColumn.addEventListener("change", () => { updateEventPositiveOptions(); refreshVariableSelections(); updateDatasetBadge(); renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.eventPositiveValue.addEventListener("change", () => { renderSharedFeatureSummary(); updateEventColumnGuidance(); queueHistorySync(); });
+  refs.showAllEventColumns?.addEventListener("change", () => {
+    renderEventColumnOptions({ silent: false });
+    refreshVariableSelections();
+    updateDatasetBadge();
+    renderSharedFeatureSummary();
+    queueHistorySync();
+  });
   refs.groupColumn.addEventListener("change", () => { updateDatasetBadge(); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.timeUnitLabel.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.maxTime.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });
@@ -2259,6 +2448,7 @@ function initListeners() {
   refs.tabButtons.forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
   const changeTrackedControls = [
     refs.eventPositiveValue,
+    refs.showAllEventColumns,
     refs.timeUnitLabel,
     refs.maxTime,
     refs.confidenceLevel,
@@ -2281,6 +2471,7 @@ function initListeners() {
     refs.mlModelType,
     refs.mlNEstimators,
     refs.mlLearningRate,
+    refs.mlSkipShap,
     refs.mlCvFolds,
     refs.mlCvRepeats,
     refs.mlJournalTemplate,

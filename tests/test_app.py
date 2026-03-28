@@ -69,6 +69,11 @@ def test_index_uses_relative_static_assets() -> None:
     assert "It does not change the Kaplan-Meier curve itself." in response.text
     assert "Used everywhere" in response.text
     assert "Used mainly for grouping and display" in response.text
+    assert 'id="showAllEventColumns"' in response.text
+    assert 'id="eventColumnHelp"' in response.text
+    assert 'id="eventColumnWarning"' in response.text
+    assert "Show all columns for Event" in response.text
+    assert "Showing event-like binary columns only." in response.text
     assert 'id="groupingDetails"' in response.text
     assert 'id="groupingSummaryText"' in response.text
     assert 'id="kmDependencyText"' in response.text
@@ -91,6 +96,8 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'id="dlFeatureSummaryChips"' in response.text
     assert 'id="reviewMlFeaturesButton"' in response.text
     assert 'id="reviewDlFeaturesButton"' in response.text
+    assert 'id="mlSkipShap"' in response.text
+    assert "Fast mode (skip SHAP)" in response.text
     assert "ML uses the Study Design outcome definition and the shared covariates selected on the Cox tab." in response.text
     assert "No preset applied yet." in response.text
     assert "Applying a preset updates recommended columns and checkbox selections only." in response.text
@@ -107,9 +114,24 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "controls: captureControlSnapshot()" in text
     assert "applyControlSnapshot(historyState.controls || null);" in text
     assert "queueHistorySync()" in text
+    assert "showAllEventColumns: Boolean(refs.showAllEventColumns?.checked)" in text
     assert "updateGroupingDetailsVisibility(tabName);" in text
     assert "function scrollWorkspaceEntryToTop()" in text
     assert "updateAfterDataset(payload, { scrollToTop: true });" in text
+
+
+def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selection() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function isEventLikeColumnName(columnName)" in text
+    assert "function looksLikeBaselineStatusColumn(columnName)" in text
+    assert "function recommendedEventColumns()" in text
+    assert "function renderEventColumnOptions(" in text
+    assert "function currentEventColumnWarning()" in text
+    assert "Show all columns to select non-standard event fields." in text
+    assert "looks more like a baseline characteristic than a time-to-event indicator" in text
+    assert "does not look like a binary event indicator" in text
 
 
 def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
@@ -148,7 +170,65 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert "function mlPendingBannerText(" in text
     assert "This can take longer on a local CPU for real cohorts." in text
     assert "SHAP is computed after fitting and can add a short delay." in text
+    assert "Fast mode is on, so SHAP will be skipped for a faster result." in text
     assert "refs.mlMetaBanner.textContent = mlPendingBannerText(" in text
+    assert "compute_shap: computeShap" in text
+    assert "SHAP skipped in Fast mode" in text
+    assert "SHAP=${shapStatus}, time=${elapsedSeconds}s" in text
+
+
+def test_ml_model_fast_mode_skips_shap_computation(monkeypatch) -> None:
+    import pandas as pd
+    import survival_toolkit.ml_models as ml_models
+
+    stored = store.create(
+        make_example_dataset(seed=77, n_patients=64),
+        filename="ml_fast_mode.csv",
+        copy_dataframe=False,
+    )
+
+    monkeypatch.setattr(
+        ml_models,
+        "train_random_survival_forest",
+        lambda *args, **kwargs: {
+            "feature_importance": [{"feature": "age", "importance": 1.0}],
+            "feature_names": ["age"],
+            "model_stats": {
+                "c_index": 0.71,
+                "evaluation_mode": "holdout",
+                "n_patients": 64,
+                "n_features": 1,
+            },
+            "_model": object(),
+            "_X_encoded": pd.DataFrame({"age": [51.0, 63.0, 72.0]}),
+        },
+    )
+
+    def _raise_if_called(*args, **kwargs):
+        raise AssertionError("compute_shap_values should not run when Fast mode is enabled.")
+
+    monkeypatch.setattr(ml_models, "compute_shap_values", _raise_if_called)
+
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age"],
+            "categorical_features": [],
+            "model_type": "rsf",
+            "n_estimators": 20,
+            "compute_shap": False,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request_config"]["compute_shap"] is False
+    assert body["shap_result"] is None
+    assert body["shap_figure"] is None
 
 
 def test_deep_model_request_accepts_1000_epochs() -> None:
