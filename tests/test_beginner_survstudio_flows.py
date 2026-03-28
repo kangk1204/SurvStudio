@@ -92,12 +92,13 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             page.locator("#workspace").wait_for(state="visible")
+            page.locator("#guidedShell").wait_for(state="visible")
 
             assert "Group by does not change Cox, ML, or DL inputs." in page.locator("#groupingSummaryText").inner_text()
             assert "current Group by setting" in page.locator("#kmDependencyText").inner_text()
             assert "Group by does not change the model unless you add that column as a covariate." in page.locator("#coxDependencyText").inner_text()
             assert "model features selected below" in page.locator("#mlFeatureSummaryText").inner_text()
-            assert "model features selected on the ML tab" in page.locator("#dlFeatureSummaryText").inner_text()
+            assert "shared model feature selections shown in this tab and on the ML tab" in page.locator("#dlFeatureSummaryText").inner_text()
 
             _assert_tab_active(page, "km")
             page.locator("#runKmButton").click()
@@ -178,7 +179,7 @@ def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(b
                 "document.getElementById('datasetPresetStatusText').textContent.includes('feature checklists used by ML and DL')"
             )
             assert "model features selected below" in page.locator("#mlFeatureSummaryText").inner_text()
-            assert "model features selected on the ML tab" in page.locator("#dlFeatureSummaryText").inner_text()
+            assert "shared ML/DL model feature selections" in page.locator("#dlFeatureSummaryText").inner_text()
             assert "Model features: 6" in page.locator("#datasetPresetChips").inner_text()
             assert "Categorical: 3" in page.locator("#datasetPresetChips").inner_text()
 
@@ -221,7 +222,7 @@ def test_beginner_ml_compare_options_toggle_cv_inputs_and_finish_with_visible_fe
 
             page.locator("#mlCvFolds").fill("2")
             page.locator("#mlCvRepeats").fill("1")
-            assert "Compare All Evaluation" in page.locator("#mlEvaluationStrategy").inner_text()
+            assert page.locator("#mlEvaluationStrategy").input_value() == "repeated_cv"
             assert not page.locator("#mlCvFolds").is_disabled()
             assert not page.locator("#mlCvRepeats").is_disabled()
 

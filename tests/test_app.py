@@ -63,8 +63,14 @@ def test_index_uses_relative_static_assets() -> None:
     assert "Classic breast cancer recurrence-survival cohort" in response.text
     assert "Fastest demo path for checking the app and workflow" in response.text
     assert 'id="uploadButton" type="button"' in response.text
-    assert '<span>Compare All Evaluation</span>' in response.text
-    assert "Compare All Evaluation affects only <strong>Compare All</strong>" in response.text
+    assert 'id="guidedModeButton"' in response.text
+    assert 'id="expertModeButton"' in response.text
+    assert 'id="guidedShell"' in response.text
+    assert 'id="guidedSummaryBar"' in response.text
+    assert 'id="guidedPanel"' in response.text
+    assert "Configure &amp; run" in response.text
+    assert '<span>Evaluation Mode</span>' in response.text
+    assert "Evaluation Mode applies to both <strong>Train Model</strong> and <strong>Compare All</strong>" in response.text
     assert "Risk table ticks" in response.text
     assert "It does not change the Kaplan-Meier curve itself." in response.text
     assert "Used everywhere" in response.text
@@ -72,6 +78,7 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="showAllEventColumns"' in response.text
     assert 'id="eventColumnHelp"' in response.text
     assert 'id="eventColumnWarning"' in response.text
+    assert 'id="eventValueWarning"' in response.text
     assert "Show all columns for Event" in response.text
     assert "Showing event-like binary columns only." in response.text
     assert 'id="groupingDetails"' in response.text
@@ -98,11 +105,15 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'id="dlFeatureSummaryChips"' in response.text
     assert 'id="modelFeatureChecklist"' in response.text
     assert 'id="modelCategoricalChecklist"' in response.text
+    assert 'id="dlModelFeatureChecklist"' in response.text
+    assert 'id="dlModelCategoricalChecklist"' in response.text
     assert 'id="reviewMlFeaturesButton"' in response.text
     assert 'id="reviewDlFeaturesButton"' in response.text
+    assert "Review shared features" in response.text
     assert 'id="mlSkipShap"' in response.text
     assert "Fast mode (skip SHAP)" in response.text
     assert "ML uses the Study Design outcome definition and the model features selected below." in response.text
+    assert "DL uses the Study Design outcome definition and the model features selected below. The same feature list stays synced with the ML tab." in response.text
     assert "No preset applied yet." in response.text
     assert "Applying a preset updates recommended columns and checkbox selections only." in response.text
     assert 'class="button ghost compact-btn" id="applyBasicPresetButton"' in response.text
@@ -125,6 +136,22 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "updateAfterDataset(payload, { scrollToTop: true });" in text
 
 
+def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'uiMode: "guided"' in text
+    assert "guidedGoal: null" in text
+    assert "function setUiMode(mode" in text
+    assert "function setGuidedGoal(goal" in text
+    assert "function renderGuidedChrome()" in text
+    assert "view: \"home\", uiMode: runtime.uiMode" in text
+    assert "guidedGoal: runtime.guidedGoal" in text
+    assert "setUiMode(historyState?.uiMode || runtime.uiMode, { syncHistory: false });" in text
+    assert "runtime.guidedGoal = historyState.guidedGoal || null;" in text
+    assert "handleGuidedPanelAction(button);" in text
+
+
 def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selection() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
@@ -133,10 +160,15 @@ def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selec
     assert "function looksLikeBaselineStatusColumn(columnName)" in text
     assert "function recommendedEventColumns()" in text
     assert "function renderEventColumnOptions(" in text
+    assert "function inferEventPositiveSelection(" in text
+    assert "function updateEventValueGuidance(" in text
     assert "function currentEventColumnWarning()" in text
     assert "Show all columns to select non-standard event fields." in text
     assert "looks more like a baseline characteristic than a time-to-event indicator" in text
     assert "does not look like a binary event indicator" in text
+    assert "Choose event value" in text
+    assert 'Choose the Event Value that means the event happened' in text
+    assert 'renderSelect(refs.groupColumn, columnNames, { includeBlank: true, blankLabel: "Overall only", selected: null });' in text
 
 
 def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
