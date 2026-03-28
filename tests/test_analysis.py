@@ -306,6 +306,8 @@ def test_signature_summary_stays_exploratory_without_permutation_or_holdout_conf
             "validation_iterations": 0,
             "significance_level": 0.05,
             "min_group_size": 10,
+            "tested_combinations": 12,
+            "significant_signatures": 1,
         },
     )
 
