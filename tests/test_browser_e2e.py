@@ -206,3 +206,33 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
         pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1400})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadGbsg2Button").click()
+            page.locator("#workspace").wait_for(state="visible")
+
+            page.locator("#deriveToggle").click()
+            page.locator("#deriveSource").select_option("age")
+            page.locator("#deriveMethod").select_option("optimal_cutpoint")
+            page.locator("#deriveButton").click()
+            page.wait_for_function(
+                "document.getElementById('deriveSummary').textContent.includes('Assignment rule')"
+            )
+
+            derive_text = page.locator("#deriveSummary").inner_text()
+            assert "High/Low indicate risk direction" in derive_text
+            assert "Assignment rule" in derive_text
+            assert ("Selection-adjusted p-value" in derive_text) or ("Raw p-value" in derive_text)
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")

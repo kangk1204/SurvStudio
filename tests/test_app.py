@@ -423,6 +423,8 @@ def test_optimal_cutpoint_derive_group_returns_inline_scan_figure() -> None:
     payload = response.json()
     assert payload["cutpoint_figure"]["data"][0]["type"] == "scatter"
     assert payload["derive_summary"]["scan_data"]
+    assert payload["derive_summary"]["assignment_rule"]
+    assert payload["derive_summary"]["p_value_label"] in {"selection_adjusted_p_value", "raw_p_value"}
 
 
 def test_time_dependent_importance_endpoint_uses_time_major_matrix() -> None:
