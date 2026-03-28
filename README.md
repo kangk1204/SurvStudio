@@ -27,7 +27,7 @@ The current scope is:
 
 The app includes four built-in example datasets:
 
-1. `Load Example`
+1. `Synthetic Example`
 - a synthetic cohort generated inside the package
 - includes `os_months`, `os_event`, `pfs_months`, `pfs_event`
 - includes demographic, treatment, stage, and biomarker variables
