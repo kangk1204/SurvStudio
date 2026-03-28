@@ -518,6 +518,56 @@ def test_compare_deep_survival_models_returns_ranked_table() -> None:
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_compare_deep_survival_models_normalizes_blank_model_labels(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    df = make_example_dataset(seed=113, n_patients=60)
+
+    def _stub(model_label: str):
+        def _run(*args, **kwargs):
+            return {
+                "model": model_label,
+                "c_index": 0.61,
+                "apparent_c_index": 0.59,
+                "holdout_c_index": 0.61,
+                "evaluation_mode": "holdout",
+                "epochs_trained": 1,
+                "n_features": 3,
+                "training_samples": 48,
+                "evaluation_samples": 12,
+                "training_time_ms": 1.0,
+            }
+        return _run
+
+    monkeypatch.setattr(deep_models, "train_deepsurv", _stub(""))
+    monkeypatch.setattr(deep_models, "train_deephit", _stub("DeepHit"))
+    monkeypatch.setattr(deep_models, "train_neural_mtlr", _stub("Neural MTLR"))
+    monkeypatch.setattr(deep_models, "train_survival_transformer", _stub("Survival Transformer"))
+    monkeypatch.setattr(deep_models, "train_survival_vae", _stub("Survival VAE"))
+
+    result = deep_models.compare_deep_survival_models(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+        hidden_layers=[8],
+        epochs=1,
+        batch_size=8,
+        num_time_bins=6,
+        d_model=16,
+        n_heads=4,
+        n_layers=1,
+        latent_dim=4,
+        n_clusters=3,
+        random_seed=21,
+    )
+
+    models = {row["model"] for row in result["comparison_table"]}
+    assert "DeepSurv" in models
+    assert "" not in models
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 def test_compare_deep_survival_models_supports_repeated_cv() -> None:
     from survival_toolkit.deep_models import compare_deep_survival_models
 
