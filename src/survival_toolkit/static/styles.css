@@ -1086,9 +1086,20 @@ body {
 }
 
 .derive-status {
+  display: block;
+  flex: 1 1 100%;
+  margin-top: 4px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(37, 115, 135, 0.18);
+  background: rgba(37, 115, 135, 0.04);
   font-size: 0.78rem;
   color: var(--muted);
-  align-self: center;
+  line-height: 1.5;
+}
+
+.derive-status:empty {
+  display: none;
 }
 
 .derive-result {

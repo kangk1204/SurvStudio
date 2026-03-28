@@ -1692,7 +1692,9 @@ async function deriveGroup() {
     cutoffValue = Number(cutoffInput);
     if (!Number.isFinite(cutoffValue)) throw new Error("Cutoff must be a finite numeric value.");
   }
-  refs.deriveStatus.textContent = isOptimal ? "Scanning cutpoints..." : "Deriving...";
+  refs.deriveStatus.textContent = isOptimal
+    ? "Scanning candidate cutpoints for a new grouping column..."
+    : "Creating a derived grouping column...";
 
   const body = {
     dataset_id: state.dataset.dataset_id,
