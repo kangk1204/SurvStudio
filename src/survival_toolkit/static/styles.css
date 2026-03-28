@@ -707,9 +707,9 @@ body {
 }
 
 .dataset-preset-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 14px;
   padding: 12px 16px;
   margin-bottom: 14px;
@@ -722,6 +722,7 @@ body {
 .dataset-preset-copy {
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
 
 .dataset-preset-copy strong {
@@ -752,6 +753,21 @@ body {
   font-size: 0.74rem;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.dataset-preset-actions {
+  flex-wrap: nowrap;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  width: 240px;
+  flex: 0 0 240px;
+}
+
+.dataset-preset-actions .button {
+  width: 100%;
+  justify-content: center;
+  white-space: nowrap;
 }
 
 .dataset-preset-chips {
@@ -806,6 +822,30 @@ body {
   line-height: 1.5;
 }
 
+.dependency-card {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(41, 77, 98, 0.14);
+  background: rgba(41, 77, 98, 0.05);
+}
+
+.dependency-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.dependency-copy strong {
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.dependency-copy span {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 /* ─── Config Strip ─── */
 
 .config-strip {
@@ -846,11 +886,46 @@ body {
   color: var(--muted);
 }
 
+.study-design-board {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.study-design-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(41, 77, 98, 0.14);
+  background: rgba(41, 77, 98, 0.05);
+}
+
+.study-design-card strong {
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.study-design-card span {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.study-design-card-muted {
+  background: rgba(0, 0, 0, 0.025);
+}
+
 .config-row {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 12px;
+}
+
+.config-row-primary {
+  margin-bottom: 10px;
 }
 
 .config-field {
@@ -874,9 +949,73 @@ body {
   line-height: 1.2;
 }
 
+.scope-tag {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.scope-global {
+  color: var(--teal);
+  background: rgba(37, 115, 135, 0.08);
+  border-color: rgba(37, 115, 135, 0.16);
+}
+
+.scope-grouping {
+  color: #8b5f1f;
+  background: rgba(214, 168, 77, 0.1);
+  border-color: rgba(214, 168, 77, 0.2);
+}
+
 .config-row > .button {
   align-self: flex-end;
   flex-shrink: 0;
+}
+
+.grouping-details {
+  margin: 0 0 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.grouping-summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 14px;
+}
+
+.grouping-summary::-webkit-details-marker {
+  display: none;
+}
+
+.grouping-summary-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.grouping-summary-copy strong {
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.grouping-summary-copy span {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.grouping-details .config-row-secondary {
+  padding: 0 14px 14px;
 }
 
 /* ─── Derive Panel ─── */
@@ -1519,12 +1658,26 @@ tr:nth-child(even) td {
 }
 
 .signature-summary-grid > div {
+  min-width: 0;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   background: var(--surface);
   font-size: 0.82rem;
   line-height: 1.4;
+}
+
+.signature-summary-grid > div strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.signature-summary-grid .summary-value {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .count-strip {
@@ -1817,6 +1970,10 @@ tbody tr:hover td {
     flex-direction: column;
   }
 
+  .study-design-board {
+    grid-template-columns: 1fr;
+  }
+
   .config-field,
   .config-field.narrow {
     flex: unset;
@@ -1876,8 +2033,13 @@ tbody tr:hover td {
   }
 
   .dataset-preset-bar {
-    flex-direction: column;
+    grid-template-columns: 1fr;
     align-items: stretch;
+  }
+
+  .dataset-preset-actions {
+    width: 100%;
+    flex: 1 1 auto;
   }
 
   .ml-plots-grid {

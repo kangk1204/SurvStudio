@@ -33,6 +33,8 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
+_TorchModuleBase = nn.Module if TORCH_AVAILABLE else object
+
 _TORCH_INSTALL_MSG = (
     "PyTorch is required for deep learning models. "
     "Install with: pip install torch  (see https://pytorch.org for GPU options)"
@@ -136,6 +138,52 @@ def _run_deep_compare_fold_task(task: dict[str, Any]) -> dict[str, Any]:
                 }
             )
     return {"fold_results": fold_results, "errors": errors}
+
+
+def _deep_trainer_specs(
+    *,
+    hidden_layers: list[int],
+    dropout: float,
+    num_time_bins: int,
+    d_model: int,
+    n_heads: int,
+    n_layers: int,
+    latent_dim: int,
+    n_clusters: int,
+) -> list[tuple[str, Any, dict[str, Any]]]:
+    return [
+        ("DeepSurv", train_deepsurv, {"hidden_layers": hidden_layers, "dropout": dropout}),
+        ("DeepHit", train_deephit, {"hidden_layers": hidden_layers, "dropout": dropout, "num_time_bins": num_time_bins}),
+        ("Neural MTLR", train_neural_mtlr, {"hidden_layers": hidden_layers, "num_time_bins": num_time_bins}),
+        (
+            "Survival Transformer",
+            train_survival_transformer,
+            {"d_model": d_model, "n_heads": n_heads, "n_layers": n_layers, "dropout": dropout},
+        ),
+        (
+            "Survival VAE",
+            train_survival_vae,
+            {
+                "hidden_dim": hidden_layers[0] if hidden_layers else 64,
+                "latent_dim": latent_dim,
+                "n_clusters": n_clusters,
+                "dropout": dropout,
+            },
+        ),
+    ]
+
+
+def _canonical_deep_model_name(model_type: str) -> str:
+    mapping = {
+        "deepsurv": "DeepSurv",
+        "deephit": "DeepHit",
+        "mtlr": "Neural MTLR",
+        "transformer": "Survival Transformer",
+        "vae": "Survival VAE",
+    }
+    if model_type not in mapping:
+        raise ValueError(f"Unknown deep model type: {model_type}")
+    return mapping[model_type]
 
 
 def _coerce_deep_frame(
@@ -697,6 +745,29 @@ def _discrete_survival_from_pmf(
     return survival_at_edges, -rmst
 
 
+def _digitize_time_bins(
+    time_values: Sequence[float] | np.ndarray,
+    bin_edges: np.ndarray,
+    num_time_bins: int,
+    *,
+    preserve_tail_overflow: bool = False,
+) -> np.ndarray:
+    """Map observed times into discrete bins with optional tail-bucket support.
+
+    The observed horizon is defined by ``bin_edges[-1]``. When
+    ``preserve_tail_overflow`` is true, times beyond that horizon are assigned
+    to the explicit tail bucket at index ``num_time_bins`` instead of being
+    clipped into the last in-horizon event bin.
+    """
+    values = np.asarray(time_values, dtype=float).reshape(-1)
+    indices = np.digitize(values, bin_edges[1:-1]).astype(int, copy=False)
+    indices = np.clip(indices, 0, num_time_bins - 1)
+    if preserve_tail_overflow:
+        indices = indices.copy()
+        indices[values > float(bin_edges[-1])] = num_time_bins
+    return indices
+
+
 def _gradient_feature_importance(
     model: Any,
     x_tensor: torch.Tensor,
@@ -841,31 +912,27 @@ def compare_deep_survival_models(
     early_stopping_patience: int | None = 10,
     early_stopping_min_delta: float = 1e-4,
     parallel_jobs: int = 1,
+    included_models: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Train all deep survival models with shared inputs and compare them."""
     _require_torch()
 
     hidden_layers = hidden_layers if hidden_layers is not None else [64, 64]
-    trainer_specs: list[tuple[str, Any, dict[str, Any]]] = [
-        ("DeepSurv", train_deepsurv, {"hidden_layers": hidden_layers, "dropout": dropout}),
-        ("DeepHit", train_deephit, {"hidden_layers": hidden_layers, "dropout": dropout, "num_time_bins": num_time_bins}),
-        ("Neural MTLR", train_neural_mtlr, {"hidden_layers": hidden_layers, "num_time_bins": num_time_bins}),
-        (
-            "Survival Transformer",
-            train_survival_transformer,
-            {"d_model": d_model, "n_heads": n_heads, "n_layers": n_layers, "dropout": dropout},
-        ),
-        (
-            "Survival VAE",
-            train_survival_vae,
-            {
-                "hidden_dim": hidden_layers[0] if hidden_layers else 64,
-                "latent_dim": latent_dim,
-                "n_clusters": n_clusters,
-                "dropout": dropout,
-            },
-        ),
-    ]
+    trainer_specs = _deep_trainer_specs(
+        hidden_layers=hidden_layers,
+        dropout=dropout,
+        num_time_bins=num_time_bins,
+        d_model=d_model,
+        n_heads=n_heads,
+        n_layers=n_layers,
+        latent_dim=latent_dim,
+        n_clusters=n_clusters,
+    )
+    if included_models is not None:
+        included = {str(name) for name in included_models}
+        trainer_specs = [spec for spec in trainer_specs if spec[0] in included]
+        if not trainer_specs:
+            raise ValueError("No deep-learning models remain after applying the requested model filter.")
     def _finalize_result(
         comparison: list[dict[str, Any]],
         errors: list[dict[str, Any]],
@@ -937,6 +1004,10 @@ def compare_deep_survival_models(
             strengths.append(
                 f"Each model was evaluated across {cv_repeats} repeat(s) of {cv_folds}-fold stratified cross-validation."
             )
+            if len(comparison) == 1:
+                strengths.append(
+                    "The same repeated-CV settings can be rerun with Train Model when the evaluation strategy and seed are left unchanged."
+                )
         elif len(shared_training_seeds) == 1:
             shared_seed = next(iter(shared_training_seeds))
             strengths.append(
@@ -1189,9 +1260,12 @@ def compare_deep_survival_models(
                 "cv_folds": cv_folds,
                 "cv_repeats": cv_repeats,
                 "evaluation_mode": "repeated_cv",
-                "training_seed": None,
-                "split_seed": random_seed,
-                "monitor_seed": random_seed,
+                "training_seed": None if not model_rows else (int(model_rows[0]["training_seed"]) if len({int(row["training_seed"]) for row in model_rows if row.get("training_seed") is not None}) == 1 else None),
+                "split_seed": None if not model_rows else (int(model_rows[0]["split_seed"]) if len({int(row["split_seed"]) for row in model_rows if row.get("split_seed") is not None}) == 1 else None),
+                "monitor_seed": None if not model_rows else (int(model_rows[0]["monitor_seed"]) if len({int(row["monitor_seed"]) for row in model_rows if row.get("monitor_seed") is not None}) == 1 else None),
+                "training_seeds": sorted({int(row["training_seed"]) for row in model_rows if row.get("training_seed") is not None}),
+                "split_seeds": sorted({int(row["split_seed"]) for row in model_rows if row.get("split_seed") is not None}),
+                "monitor_seeds": sorted({int(row["monitor_seed"]) for row in model_rows if row.get("monitor_seed") is not None}),
                 "epochs_trained": int(round(np.mean([row["epochs_trained"] for row in model_rows]))) if model_rows else None,
                 "training_samples": None if summary is None else int(summary["train_n"]),
                 "evaluation_samples": None if summary is None else int(summary["test_n"]),
@@ -1259,6 +1333,208 @@ def compare_deep_survival_models(
     return _finalize_result(comparison, errors, evaluation_mode="holdout")
 
 
+def evaluate_single_deep_survival_model(
+    model_type: str,
+    *,
+    df: pd.DataFrame,
+    time_column: str,
+    event_column: str,
+    features: Sequence[str],
+    categorical_features: Sequence[str] | None = None,
+    event_positive_value: Any = None,
+    hidden_layers: list[int] | None = None,
+    dropout: float = 0.1,
+    learning_rate: float = 0.001,
+    epochs: int = 100,
+    batch_size: int = 64,
+    random_seed: int = 42,
+    num_time_bins: int = 50,
+    n_heads: int = 4,
+    d_model: int = 64,
+    n_layers: int = 2,
+    latent_dim: int = 8,
+    n_clusters: int = 3,
+    evaluation_strategy: str = "holdout",
+    cv_folds: int = 5,
+    cv_repeats: int = 3,
+    early_stopping_patience: int | None = 10,
+    early_stopping_min_delta: float = 1e-4,
+    parallel_jobs: int = 1,
+) -> dict[str, Any]:
+    """Evaluate one deep model with either holdout or repeated CV semantics."""
+    canonical_name = _canonical_deep_model_name(model_type)
+    if evaluation_strategy == "repeated_cv":
+        compare_result = compare_deep_survival_models(
+            df=df,
+            time_column=time_column,
+            event_column=event_column,
+            features=features,
+            categorical_features=categorical_features,
+            event_positive_value=event_positive_value,
+            hidden_layers=hidden_layers,
+            dropout=dropout,
+            learning_rate=learning_rate,
+            epochs=epochs,
+            batch_size=batch_size,
+            random_seed=random_seed,
+            num_time_bins=num_time_bins,
+            n_heads=n_heads,
+            d_model=d_model,
+            n_layers=n_layers,
+            latent_dim=latent_dim,
+            n_clusters=n_clusters,
+            evaluation_strategy=evaluation_strategy,
+            cv_folds=cv_folds,
+            cv_repeats=cv_repeats,
+            early_stopping_patience=early_stopping_patience,
+            early_stopping_min_delta=early_stopping_min_delta,
+            parallel_jobs=parallel_jobs,
+            included_models=[canonical_name],
+        )
+        row = compare_result["comparison_table"][0]
+        summary = {
+            "status": compare_result["scientific_summary"]["status"],
+            "headline": (
+                f"{canonical_name} completed {cv_repeats}x{cv_folds} repeated CV with mean C-index "
+                f"of {row['c_index']:.3f}."
+                if row.get("c_index") is not None
+                else f"{canonical_name} completed {cv_repeats}x{cv_folds} repeated CV, but the aggregate C-index could not be computed."
+            ),
+            "strengths": list(compare_result["scientific_summary"].get("strengths", [])),
+            "cautions": list(compare_result["scientific_summary"].get("cautions", [])),
+            "next_steps": list(compare_result["scientific_summary"].get("next_steps", [])),
+            "metrics": [
+                {"label": "Model", "value": canonical_name},
+                {"label": "Mean C-index", "value": row.get("c_index")},
+                {"label": "Evaluation mode", "value": "repeated_cv"},
+                {"label": "CV folds", "value": cv_folds},
+                {"label": "CV repeats", "value": cv_repeats},
+            ],
+        }
+        summary["cautions"].append(
+            "This result is an aggregate repeated-CV estimate. Feature-importance and loss-curve outputs require a separate single-fit run."
+        )
+        return {
+            "model": canonical_name,
+            "model_type": model_type,
+            "c_index": row.get("c_index"),
+            "evaluation_mode": "repeated_cv",
+            "cv_folds": cv_folds,
+            "cv_repeats": cv_repeats,
+            "n_evaluations": row.get("n_evaluations"),
+            "n_failures": row.get("n_failures"),
+            "n_features": row.get("n_features"),
+            "epochs_trained": row.get("epochs_trained"),
+            "training_time_ms": row.get("training_time_ms"),
+            "training_seed": row.get("training_seed"),
+            "split_seed": row.get("split_seed"),
+            "monitor_seed": row.get("monitor_seed"),
+            "training_seeds": row.get("training_seeds", []),
+            "split_seeds": row.get("split_seeds", []),
+            "monitor_seeds": row.get("monitor_seeds", []),
+            "repeat_results": row.get("repeat_results", []),
+            "comparison_table": [dict(row)],
+            "fold_results": [
+                fold_row for fold_row in compare_result.get("fold_results", [])
+                if fold_row.get("model") == canonical_name
+            ],
+            "manuscript_tables": compare_result.get("manuscript_tables"),
+            "scientific_summary": summary,
+            "insight_board": summary,
+        }
+
+    trainer_map = {
+        "deepsurv": lambda: train_deepsurv(
+            df,
+            time_column=time_column,
+            event_column=event_column,
+            features=features,
+            categorical_features=categorical_features,
+            event_positive_value=event_positive_value,
+            hidden_layers=hidden_layers,
+            dropout=dropout,
+            learning_rate=learning_rate,
+            epochs=epochs,
+            batch_size=batch_size,
+            random_seed=random_seed,
+            early_stopping_patience=early_stopping_patience,
+            early_stopping_min_delta=early_stopping_min_delta,
+        ),
+        "deephit": lambda: train_deephit(
+            df,
+            time_column=time_column,
+            event_column=event_column,
+            features=features,
+            categorical_features=categorical_features,
+            event_positive_value=event_positive_value,
+            hidden_layers=hidden_layers,
+            dropout=dropout,
+            learning_rate=learning_rate,
+            epochs=epochs,
+            batch_size=batch_size,
+            random_seed=random_seed,
+            num_time_bins=num_time_bins,
+            early_stopping_patience=early_stopping_patience,
+            early_stopping_min_delta=early_stopping_min_delta,
+        ),
+        "mtlr": lambda: train_neural_mtlr(
+            df,
+            time_column=time_column,
+            event_column=event_column,
+            features=features,
+            categorical_features=categorical_features,
+            event_positive_value=event_positive_value,
+            hidden_layers=hidden_layers,
+            learning_rate=learning_rate,
+            epochs=epochs,
+            batch_size=batch_size,
+            random_seed=random_seed,
+            num_time_bins=num_time_bins,
+            early_stopping_patience=early_stopping_patience,
+            early_stopping_min_delta=early_stopping_min_delta,
+        ),
+        "transformer": lambda: train_survival_transformer(
+            df,
+            time_column=time_column,
+            event_column=event_column,
+            features=features,
+            categorical_features=categorical_features,
+            event_positive_value=event_positive_value,
+            d_model=d_model,
+            n_heads=n_heads,
+            n_layers=n_layers,
+            dropout=dropout,
+            learning_rate=learning_rate,
+            epochs=epochs,
+            batch_size=batch_size,
+            random_seed=random_seed,
+            early_stopping_patience=early_stopping_patience,
+            early_stopping_min_delta=early_stopping_min_delta,
+        ),
+        "vae": lambda: train_survival_vae(
+            df,
+            time_column=time_column,
+            event_column=event_column,
+            features=features,
+            categorical_features=categorical_features,
+            event_positive_value=event_positive_value,
+            latent_dim=latent_dim,
+            hidden_dim=hidden_layers[0] if hidden_layers else 64,
+            n_clusters=n_clusters,
+            dropout=dropout,
+            learning_rate=learning_rate,
+            epochs=epochs,
+            batch_size=batch_size,
+            random_seed=random_seed,
+            early_stopping_patience=early_stopping_patience,
+            early_stopping_min_delta=early_stopping_min_delta,
+        ),
+    }
+    if model_type not in trainer_map:
+        raise ValueError(f"Unknown model type: {model_type}")
+    return trainer_map[model_type]()
+
+
 # ---------------------------------------------------------------------------
 # 1. DeepSurv (Neural Cox PH)
 # ---------------------------------------------------------------------------
@@ -1305,7 +1581,7 @@ def _cox_partial_likelihood_loss(
     return loss / max(total_events, 1.0)
 
 
-class DeepSurvNet(nn.Module):
+class DeepSurvNet(_TorchModuleBase):
     """MLP that outputs a single risk score for Cox PH."""
 
     def __init__(self, in_features: int, hidden_layers: list[int], dropout: float = 0.1) -> None:
@@ -1533,7 +1809,7 @@ def train_deepsurv(
 # ---------------------------------------------------------------------------
 
 
-class DeepHitNet(nn.Module):
+class DeepHitNet(_TorchModuleBase):
     """MLP that outputs discrete-time hazard probabilities."""
 
     def __init__(
@@ -1583,8 +1859,6 @@ def _deephit_loss(
         ],
         dim=1,
     )
-    survival_start = survival_at_edges[:, :-1]
-
     # Likelihood:
     # - event in bin k: -log pmf[k]
     # - censored in bin k: -log S_start[k]
@@ -1593,7 +1867,7 @@ def _deephit_loss(
         selected_pmf = pmf[torch.arange(n, device=pmf.device), bin_idx]
         terms.append(-torch.log(selected_pmf[event_mask] + 1e-12))
     if torch.any(censor_mask):
-        cens_surv = survival_start[torch.arange(n, device=pmf.device), bin_idx]
+        cens_surv = survival_at_edges[torch.arange(n, device=pmf.device), bin_idx]
         terms.append(-torch.log(cens_surv[censor_mask] + 1e-12))
     log_likelihood = torch.cat(terms).mean() if terms else torch.tensor(0.0, device=pmf.device)
 
@@ -1610,8 +1884,8 @@ def _deephit_loss(
             later_mask = bin_idx.unsqueeze(1) > event_times.unsqueeze(0)
             if not torch.any(later_mask):
                 continue
-            subject_survival = survival_start[:, torch.clamp(event_times, max=num_bins - 1)]
-            event_survival = survival_start[chunk, torch.clamp(event_times, max=num_bins - 1)]
+            subject_survival = survival_at_edges[:, event_times]
+            event_survival = survival_at_edges[chunk, event_times]
             diff = event_survival.unsqueeze(0) - subject_survival
             ranking_terms.append(torch.exp(diff / 0.1)[later_mask])
         ranking_loss = (
@@ -1687,17 +1961,17 @@ def train_deephit(
         t_max = t_min + 1e-6
     bin_edges = np.linspace(t_min, t_max, num_time_bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-    bin_indices = np.digitize(time_np, bin_edges[1:-1])  # 0-based bin indices
-    bin_indices = np.clip(bin_indices, 0, num_time_bins - 1)
+    bin_indices = _digitize_time_bins(time_np, bin_edges, num_time_bins)
     bin_tensor = torch.tensor(bin_indices, dtype=torch.long)
     bin_widths = torch.tensor(np.diff(bin_edges), dtype=torch.float32)
-    eval_bin_indices = np.digitize(t_all[eval_idx].detach().cpu().numpy(), bin_edges[1:-1])
-    eval_bin_indices = np.clip(eval_bin_indices, 0, num_time_bins - 1)
-    eval_bin_tensor = torch.tensor(eval_bin_indices, dtype=torch.long)
     monitor_bin_tensor: torch.Tensor | None = None
     if monitor_idx is not None:
-        monitor_bin_indices = np.digitize(t_all[monitor_idx].detach().cpu().numpy(), bin_edges[1:-1])
-        monitor_bin_indices = np.clip(monitor_bin_indices, 0, num_time_bins - 1)
+        monitor_bin_indices = _digitize_time_bins(
+            t_all[monitor_idx].detach().cpu().numpy(),
+            bin_edges,
+            num_time_bins,
+            preserve_tail_overflow=True,
+        )
         monitor_bin_tensor = torch.tensor(monitor_bin_indices, dtype=torch.long)
 
     model = DeepHitNet(data["n_features"], hidden_layers, num_time_bins, dropout)
@@ -1837,7 +2111,7 @@ def train_deephit(
 # ---------------------------------------------------------------------------
 
 
-class NeuralMTLRNet(nn.Module):
+class NeuralMTLRNet(_TorchModuleBase):
     """Neural network version of Multi-Task Logistic Regression."""
 
     def __init__(
@@ -1894,14 +2168,12 @@ def _mtlr_loss(
         ],
         dim=1,
     )
-    surv_start = survival_at_edges[:, :-1]
-
     terms: list[torch.Tensor] = []
     if torch.any(event_mask):
         terms.append(-log_pmf[torch.arange(n, device=cumsum_logits.device), bin_idx][event_mask])
     if torch.any(censor_mask):
         terms.append(
-            -torch.log(surv_start[torch.arange(n, device=cumsum_logits.device), bin_idx][censor_mask] + 1e-12)
+            -torch.log(survival_at_edges[torch.arange(n, device=cumsum_logits.device), bin_idx][censor_mask] + 1e-12)
         )
     return torch.cat(terms).mean() if terms else torch.tensor(0.0, device=cumsum_logits.device)
 
@@ -1966,17 +2238,17 @@ def train_neural_mtlr(
         t_max = t_min + 1e-6
     bin_edges = np.linspace(t_min, t_max, num_time_bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-    bin_indices = np.digitize(time_np, bin_edges[1:-1])
-    bin_indices = np.clip(bin_indices, 0, num_time_bins - 1)
+    bin_indices = _digitize_time_bins(time_np, bin_edges, num_time_bins)
     bin_tensor = torch.tensor(bin_indices, dtype=torch.long)
     bin_widths = torch.tensor(np.diff(bin_edges), dtype=torch.float32)
-    eval_bin_indices = np.digitize(t_all[eval_idx].detach().cpu().numpy(), bin_edges[1:-1])
-    eval_bin_indices = np.clip(eval_bin_indices, 0, num_time_bins - 1)
-    eval_bin_tensor = torch.tensor(eval_bin_indices, dtype=torch.long)
     monitor_bin_tensor: torch.Tensor | None = None
     if monitor_idx is not None:
-        monitor_bin_indices = np.digitize(t_all[monitor_idx].detach().cpu().numpy(), bin_edges[1:-1])
-        monitor_bin_indices = np.clip(monitor_bin_indices, 0, num_time_bins - 1)
+        monitor_bin_indices = _digitize_time_bins(
+            t_all[monitor_idx].detach().cpu().numpy(),
+            bin_edges,
+            num_time_bins,
+            preserve_tail_overflow=True,
+        )
         monitor_bin_tensor = torch.tensor(monitor_bin_indices, dtype=torch.long)
 
     model = NeuralMTLRNet(data["n_features"], hidden_layers, num_time_bins)
@@ -2074,8 +2346,8 @@ def train_neural_mtlr(
         e_np = e_all[artifact_idx].detach().cpu().numpy().ravel()
         evt_times = t_np[e_np == 1]
         t_ref = float(np.median(evt_times)) if evt_times.size else float(np.median(t_np))
-        ref_bin = int(np.digitize([t_ref], bin_edges[1:-1])[0])
-        ref_bin = int(np.clip(ref_bin, 0, num_time_bins - 1))
+        t_ref = min(t_ref, float(bin_edges[-1]))
+        ref_bin = int(_digitize_time_bins(np.asarray([t_ref]), bin_edges, num_time_bins)[0])
 
         predicted_event_prob = 1.0 - survival_np[artifact_idx_np, ref_bin + 1]
         # Use evaluable subjects only: exclude those censored before t_ref
@@ -2143,7 +2415,7 @@ def train_neural_mtlr(
 # ---------------------------------------------------------------------------
 
 
-class _PositionalEncoding(nn.Module):
+class _PositionalEncoding(_TorchModuleBase):
     """Fixed sinusoidal positional encoding for feature positions."""
 
     def __init__(self, d_model: int, max_len: int = 512) -> None:
@@ -2161,7 +2433,7 @@ class _PositionalEncoding(nn.Module):
         return x + self.pe[:, : x.size(1), :]
 
 
-class SurvivalTransformerNet(nn.Module):
+class SurvivalTransformerNet(_TorchModuleBase):
     """Transformer encoder for survival risk prediction.
 
     Each feature is treated as a token: Linear embed -> Positional Encoding ->
@@ -2417,7 +2689,7 @@ def train_survival_transformer(
 # ---------------------------------------------------------------------------
 
 
-class SurvivalVAENet(nn.Module):
+class SurvivalVAENet(_TorchModuleBase):
     """Variational Autoencoder with a survival risk head.
 
     Encoder: Input -> Hidden -> (mu, log_var)

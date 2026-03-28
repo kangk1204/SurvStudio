@@ -67,6 +67,15 @@ def test_index_uses_relative_static_assets() -> None:
     assert "Compare All Evaluation affects only <strong>Compare All</strong>" in response.text
     assert "Risk table ticks" in response.text
     assert "It does not change the Kaplan-Meier curve itself." in response.text
+    assert "Used everywhere" in response.text
+    assert "Used mainly for grouping and display" in response.text
+    assert 'id="groupingDetails"' in response.text
+    assert 'id="groupingSummaryText"' in response.text
+    assert 'id="kmDependencyText"' in response.text
+    assert 'id="coxDependencyText"' in response.text
+    assert 'id="tableDependencyText"' in response.text
+    assert "What this tab uses" in response.text
+    assert "KM / grouped summary settings" in response.text
 
 
 def test_index_exposes_dataset_preset_feedback_ui() -> None:
@@ -82,10 +91,12 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'id="dlFeatureSummaryChips"' in response.text
     assert 'id="reviewMlFeaturesButton"' in response.text
     assert 'id="reviewDlFeaturesButton"' in response.text
+    assert "ML uses the Study Design outcome definition and the shared covariates selected on the Cox tab." in response.text
     assert "No preset applied yet." in response.text
     assert "Applying a preset updates recommended columns and checkbox selections only." in response.text
     assert 'class="button ghost compact-btn" id="applyBasicPresetButton"' in response.text
     assert 'class="button ghost compact-btn" id="applyModelPresetButton"' in response.text
+    assert 'class="button-row dataset-preset-actions"' in response.text
 
 
 def test_frontend_tracks_workspace_controls_in_history_state() -> None:
@@ -96,6 +107,9 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "controls: captureControlSnapshot()" in text
     assert "applyControlSnapshot(historyState.controls || null);" in text
     assert "queueHistorySync()" in text
+    assert "updateGroupingDetailsVisibility(tabName);" in text
+    assert "function scrollWorkspaceEntryToTop()" in text
+    assert "updateAfterDataset(payload, { scrollToTop: true });" in text
 
 
 def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
@@ -119,8 +133,22 @@ def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
     assert "CV folds must be between 2 and 10." in text
     assert "Parallel jobs must be between 1 and 16." in text
     assert "validateDlControls();" in text
+    assert "evaluation_strategy: refs.dlEvaluationStrategy.value" in text
+    assert "cv_folds: Number(refs.dlCvFolds.value)" in text
+    assert "cv_repeats: Number(refs.dlCvRepeats.value)" in text
     assert "rerun seed=" in text
+    assert "rerun a single architecture with Train Model while keeping repeated CV selected" in text
     assert "seed=" in text
+
+
+def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function mlPendingBannerText(" in text
+    assert "This can take longer on a local CPU for real cohorts." in text
+    assert "SHAP is computed after fitting and can add a short delay." in text
+    assert "refs.mlMetaBanner.textContent = mlPendingBannerText(" in text
 
 
 def test_deep_model_request_accepts_1000_epochs() -> None:
@@ -232,6 +260,34 @@ def test_ml_compare_response_includes_request_config() -> None:
     assert request_config["time_column"] == "os_months"
     assert request_config["features"] == ["age", "sex", "stage", "biomarker_score"]
     assert request_config["evaluation_strategy"] == "holdout"
+
+
+def test_ml_compare_response_appends_replay_notes_to_manuscript_tables() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "sex", "stage", "biomarker_score"],
+            "categorical_features": ["sex", "stage"],
+            "model_type": "compare",
+            "evaluation_strategy": "repeated_cv",
+            "cv_folds": 2,
+            "cv_repeats": 1,
+            "n_estimators": 10,
+            "learning_rate": 0.05,
+            "random_state": 17,
+        },
+    )
+
+    assert response.status_code == 200
+    notes = response.json()["analysis"]["manuscript_tables"]["table_notes"]
+    assert any(note.startswith("Replay dataset: ") for note in notes)
+    assert any(note.startswith("Replay settings: ") for note in notes)
+    assert any(note.startswith("Replay features: ") for note in notes)
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -1119,6 +1175,22 @@ def test_frontend_uses_inline_cutpoint_figure_without_refetch() -> None:
     assert 'fetchJSON("/api/optimal-cutpoint"' not in derive_body
 
 
+def test_frontend_derive_group_explains_that_dl_features_do_not_change() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "ML/DL features were not changed." in app_js
+    assert "Use it for grouping or visualization, not as an ML/DL training feature." in app_js
+    assert "Grouping only:" in app_js
+    assert "Training inputs come only from the Cox tab selections" in app_js
+    assert "Cox, ML, and DL use the outcome definition plus the Cox-tab covariates." in app_js
+
+
 def test_export_table_endpoint_returns_journal_markdown() -> None:
     response = client.post(
         "/api/export-table",
@@ -1317,6 +1389,70 @@ def test_deep_model_compare_endpoint_supports_repeated_cv() -> None:
     assert payload["analysis"]["manuscript_tables"]["model_performance_table"]
 
 
+def test_deep_single_model_endpoint_supports_repeated_cv(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    dataset = client.post("/api/load-example").json()
+
+    def _fake_evaluate_single(*args, **kwargs):
+        assert kwargs["evaluation_strategy"] == "repeated_cv"
+        assert kwargs["cv_folds"] == 2
+        assert kwargs["cv_repeats"] == 2
+        return {
+            "model": "Neural MTLR",
+            "c_index": 0.701,
+            "evaluation_mode": "repeated_cv",
+            "cv_folds": 2,
+            "cv_repeats": 2,
+            "epochs_trained": 9,
+            "training_seeds": [42, 43],
+            "repeat_results": [{"repeat": 1, "c_index": 0.69}, {"repeat": 2, "c_index": 0.712}],
+            "comparison_table": [{"model": "Neural MTLR", "c_index": 0.701}],
+            "manuscript_tables": {"model_performance_table": [{"Model": "Neural MTLR"}]},
+            "scientific_summary": {"headline": "stub"},
+            "insight_board": {"headline": "stub"},
+        }
+
+    monkeypatch.setattr(deep_models, "evaluate_single_deep_survival_model", _fake_evaluate_single)
+
+    response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "biomarker_score", "immune_index"],
+            "categorical_features": [],
+            "model_type": "mtlr",
+            "hidden_layers": [8],
+            "dropout": 0.1,
+            "learning_rate": 0.001,
+            "epochs": 10,
+            "batch_size": 8,
+            "random_seed": 19,
+            "num_time_bins": 10,
+            "n_heads": 4,
+            "d_model": 16,
+            "n_layers": 1,
+            "latent_dim": 4,
+            "n_clusters": 3,
+            "evaluation_strategy": "repeated_cv",
+            "cv_folds": 2,
+            "cv_repeats": 2,
+            "early_stopping_patience": 2,
+            "early_stopping_min_delta": 0.0,
+            "parallel_jobs": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analysis"]["evaluation_mode"] == "repeated_cv"
+    assert payload["analysis"]["training_seeds"] == [42, 43]
+    assert payload["analysis"]["comparison_table"][0]["model"] == "Neural MTLR"
+
+
 def test_ml_compare_workflow_with_mixed_features_exports_manuscript_table() -> None:
     stored = store.create(
         make_example_dataset(seed=41, n_patients=96),
@@ -1435,6 +1571,24 @@ def test_load_tcga_example_endpoint_returns_real_public_cohort() -> None:
     assert {"os_months", "os_event", "age", "pathologic_stage", "stage_group", "smoking_status"}.issubset(column_names)
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/load-example",
+        "/api/load-tcga-example",
+        "/api/load-tcga-upload-ready",
+        "/api/load-gbsg2-example",
+    ],
+)
+def test_builtin_dataset_loaders_mark_preset_eligible(path: str) -> None:
+    response = client.post(path)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dataset_source"] == "builtin_demo"
+    assert payload["preset_eligible"] is True
+
+
 def test_load_tcga_upload_ready_endpoint_returns_compact_real_cohort() -> None:
     response = client.post("/api/load-tcga-upload-ready")
 
@@ -1455,6 +1609,19 @@ def test_load_gbsg2_example_endpoint_returns_real_public_cohort() -> None:
     assert payload["n_rows"] == 686
     column_names = {column["name"] for column in payload["columns"]}
     assert {"rfs_days", "rfs_event", "age", "horTh", "menostat", "pnodes", "tgrade", "tsize"}.issubset(column_names)
+
+
+def test_uploaded_dataset_marks_preset_ineligible() -> None:
+    payload = b"os_months,os_event,age\n12,1,60\n18,0,55\n24,1,70\n"
+    response = client.post(
+        "/api/upload",
+        files={"file": ("custom_upload.csv", payload, "text/csv")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dataset_source"] == "upload"
+    assert body["preset_eligible"] is False
 
 
 def test_upload_ready_real_tcga_file_runs_classical_and_ml_smoke() -> None:

@@ -16,6 +16,7 @@ _TTL_SECONDS = 3600  # 1 hour
 class StoredDataset:
     dataset_id: str
     filename: str
+    source: str
     dataframe: pd.DataFrame
     created_at: datetime
 
@@ -41,7 +42,14 @@ class DatasetStore:
         while len(self._datasets) >= self._max_datasets:
             self._datasets.popitem(last=False)
 
-    def create(self, dataframe: pd.DataFrame, filename: str, *, copy_dataframe: bool = True) -> StoredDataset:
+    def create(
+        self,
+        dataframe: pd.DataFrame,
+        filename: str,
+        *,
+        source: str = "upload",
+        copy_dataframe: bool = True,
+    ) -> StoredDataset:
         with self._lock:
             self._evict_expired()
             self._evict_lru()
@@ -49,6 +57,7 @@ class DatasetStore:
             stored = StoredDataset(
                 dataset_id=dataset_id,
                 filename=filename,
+                source=source,
                 dataframe=dataframe.copy() if copy_dataframe else dataframe,
                 created_at=datetime.now(timezone.utc),
             )

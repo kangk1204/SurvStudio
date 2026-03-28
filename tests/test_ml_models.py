@@ -637,3 +637,133 @@ def test_store_delete() -> None:
     store.delete(stored.dataset_id)
     with pytest.raises(KeyError):
         store.get(stored.dataset_id)
+
+
+def test_compute_shap_values_caps_kernel_fallback_work(monkeypatch) -> None:
+    import types
+    import numpy as np
+    import pandas as pd
+    import survival_toolkit.ml_models as ml_models
+
+    seen: dict[str, object] = {}
+
+    class _FakeTreeExplainer:
+        def __init__(self, model) -> None:
+            raise RuntimeError("tree unsupported")
+
+    class _FakeKernelExplainer:
+        def __init__(self, predict_fn, background) -> None:
+            seen["background_shape"] = background.shape
+
+        def shap_values(self, eval_matrix, nsamples=None, silent=None):
+            seen["eval_shape"] = eval_matrix.shape
+            seen["nsamples"] = nsamples
+            seen["silent"] = silent
+            return np.ones((eval_matrix.shape[0], eval_matrix.shape[1]), dtype=float)
+
+    monkeypatch.setattr(ml_models, "SHAP_AVAILABLE", True)
+    monkeypatch.setattr(
+        ml_models,
+        "shap",
+        types.SimpleNamespace(TreeExplainer=_FakeTreeExplainer, KernelExplainer=_FakeKernelExplainer),
+    )
+
+    encoded = pd.DataFrame(np.arange(240 * 5, dtype=float).reshape(240, 5), columns=list("abcde"))
+    result = ml_models.compute_shap_values(object(), encoded, feature_names=list(encoded.columns))
+
+    assert result["method"] == "kernel"
+    assert seen["background_shape"] == (20, 5)
+    assert seen["eval_shape"] == (20, 5)
+    assert seen["nsamples"] == 40
+    assert seen["silent"] is True
+
+
+def test_rsf_permutation_importance_caps_rows_and_repeats(monkeypatch) -> None:
+    import numpy as np
+    import pandas as pd
+    import survival_toolkit.ml_models as ml_models
+    import sklearn.inspection
+
+    seen: dict[str, object] = {}
+
+    train_encoded = pd.DataFrame(np.ones((160, 24)), columns=[f"f{i}" for i in range(24)])
+    eval_encoded = pd.DataFrame(np.ones((180, 24)), columns=[f"f{i}" for i in range(24)])
+    full_encoded = pd.concat([train_encoded, eval_encoded], ignore_index=True)
+    frame = pd.DataFrame({
+        "os_months": np.linspace(1, 340, 340),
+        "os_event": np.tile([0, 1], 170),
+    })
+    train_frame = frame.iloc[:160].reset_index(drop=True)
+    eval_frame = frame.iloc[160:].reset_index(drop=True)
+    full_frame = frame.reset_index(drop=True)
+    y_train = np.zeros(train_frame.shape[0], dtype=float)
+    y_eval = np.zeros(eval_frame.shape[0], dtype=float)
+
+    class _DummyRSF:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        @property
+        def feature_importances_(self):
+            raise NotImplementedError
+
+        def fit(self, X, y):
+            seen["fit_shape"] = X.shape
+            return self
+
+        def predict(self, X):
+            return np.zeros(X.shape[0], dtype=float)
+
+    def _fake_perm(model, X, y, n_repeats, random_state, n_jobs):
+        seen["perm_shape"] = X.shape
+        seen["perm_y_shape"] = y.shape
+        seen["n_repeats"] = n_repeats
+        return type("PermResult", (), {"importances_mean": np.zeros(X.shape[1], dtype=float)})()
+
+    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
+    monkeypatch.setattr(ml_models, "RandomSurvivalForest", _DummyRSF)
+    monkeypatch.setattr(ml_models, "_prepare_model_evaluation_split", lambda *args, **kwargs: {
+        "train_frame": train_frame,
+        "eval_frame": eval_frame,
+        "full_frame": full_frame,
+        "train_encoded": train_encoded,
+        "eval_encoded": eval_encoded,
+        "full_encoded": full_encoded,
+        "evaluation_mode": "holdout",
+        "metric_name": "Holdout C-index",
+        "feature_encoder": None,
+    })
+    monkeypatch.setattr(ml_models, "_prepare_sksurv_data", lambda frame, time_column, event_column: y_train if len(frame) == len(train_frame) else y_eval)
+    monkeypatch.setattr(ml_models, "_sksurv_c_index", lambda y, scores: 0.61)
+    monkeypatch.setattr(sklearn.inspection, "permutation_importance", _fake_perm)
+
+    result = ml_models.train_random_survival_forest(
+        full_frame.assign(age=np.linspace(40, 80, full_frame.shape[0])),
+        time_column="os_months",
+        event_column="os_event",
+        features=["age"],
+        n_estimators=20,
+        random_state=42,
+    )
+
+    assert result["feature_importance"]
+    assert seen["fit_shape"] == (160, 24)
+    assert seen["perm_shape"] == (120, 24)
+    assert seen["perm_y_shape"] == (120,)
+    assert seen["n_repeats"] == 2
+
+
+def test_time_dependent_importance_uses_proxy_language() -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    df = make_example_dataset(seed=61, n_patients=60)
+    result = ml_models.compute_time_dependent_importance(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+    )
+
+    summary = result["scientific_summary"]
+    assert "proxy" in summary["headline"].lower()
+    assert any("not be described as formal survshap" in caution.lower() for caution in summary["cautions"])

@@ -136,12 +136,13 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
 
             page.locator("#applyModelPresetButton").click()
             page.wait_for_function(
-                "document.getElementById('dlFeatureSummaryText').textContent.includes('Shared across ML and DL')"
+                "document.getElementById('dlFeatureSummaryText').textContent.includes('Training inputs come only from the Cox tab selections')"
             )
             assert page.locator('[data-tab="dl"]').get_attribute("aria-selected") == "true"
             assert "feature checklists used by ML and DL" in page.locator("#datasetPresetStatusText").inner_text()
             assert "Model features: 6" in page.locator("#datasetPresetChips").inner_text()
-            assert "Features: 6" in page.locator("#dlFeatureSummaryChips").inner_text()
+            assert "Model features: 6" in page.locator("#dlFeatureSummaryChips").inner_text()
+            assert "Grouping only: horTh" in page.locator("#dlFeatureSummaryChips").inner_text()
             assert "Categorical: 3" in page.locator("#dlFeatureSummaryChips").inner_text()
 
             browser.close()
@@ -223,6 +224,66 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
         pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
 
 
+def test_browser_study_design_collapses_grouping_controls_outside_km(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+
+            assert page.locator("#groupingDetails").evaluate("(el) => el.open") is True
+            assert "Current Group by:" in page.locator("#groupingSummaryText").inner_text()
+
+            page.locator('[data-tab="dl"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'"
+            )
+            assert page.locator("#groupingDetails").evaluate("(el) => el.open") is False
+            assert "Grouping only:" in page.locator("#dlFeatureSummaryChips").inner_text()
+            assert "Training inputs come only from the Cox tab selections" in page.locator("#dlFeatureSummaryText").inner_text()
+
+            page.locator('[data-tab="tables"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"tables\"]').getAttribute('aria-selected') === 'true'"
+            )
+            assert page.locator("#groupingDetails").evaluate("(el) => el.open") is True
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_dataset_entry_resets_scroll_to_top(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 720})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+            assert page.evaluate("window.scrollY") > 0
+
+            page.evaluate("document.getElementById('loadExampleButton').click()")
+            page.locator("#workspace").wait_for(state="visible")
+            page.wait_for_timeout(450)
+
+            assert page.evaluate("window.scrollY") <= 24
+            config_box = page.locator("#configStrip").bounding_box()
+            assert config_box is not None
+            assert config_box["y"] < 220
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
 def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
@@ -247,6 +308,44 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
             assert "High/Low indicate risk direction" in derive_text
             assert "Assignment rule" in derive_text
             assert ("Selection-adjusted p-value" in derive_text) or ("Raw p-value" in derive_text)
+            assert "ML and DL feature selections did not change automatically" in derive_text
+            assert "not as an ML/DL training feature" in derive_text
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_optimal_cutpoint_summary_wraps_long_derived_column(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1400})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadTcgaButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+
+            page.locator("#deriveToggle").click()
+            page.locator("#deriveSource").select_option("pack_years_smoked")
+            page.locator("#deriveMethod").select_option("optimal_cutpoint")
+            page.locator("#deriveButton").click()
+            page.wait_for_function(
+                "document.getElementById('deriveSummary').textContent.includes('Derived column')"
+            )
+
+            grid_box = page.locator("#deriveSummary .signature-summary-grid").bounding_box()
+            derived_box = page.locator("#deriveSummary .signature-summary-grid > div").nth(0).bounding_box()
+            assert grid_box is not None
+            assert derived_box is not None
+            assert derived_box["x"] + derived_box["width"] <= grid_box["x"] + grid_box["width"] + 1.0
+
+            overflow = page.locator("#deriveSummary .signature-summary-grid").evaluate(
+                "(el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth })"
+            )
+            assert overflow["scrollWidth"] <= overflow["clientWidth"] + 1
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
