@@ -319,6 +319,9 @@ def test_compare_deep_survival_models_uses_shared_holdout_and_monitor_splits(mon
             "apparent_c_index": 0.61,
             "holdout_c_index": 0.61,
             "evaluation_mode": "holdout",
+            "training_seed": int(kwargs["random_seed"]),
+            "split_seed": 21,
+            "monitor_seed": 21,
             "epochs_trained": 1,
             "n_features": 3,
             "training_samples": len(evaluation_split["train_idx"]),
@@ -352,7 +355,72 @@ def test_compare_deep_survival_models_uses_shared_holdout_and_monitor_splits(mon
     assert len(seen) == 5
     assert len({item[0] for item in seen}) == 1
     assert len({item[1] for item in seen}) == 1
-    assert len({item[2] for item in seen}) == 5
+    assert len({item[2] for item in seen}) == 1
+    assert result["shared_training_seed"] == 21
+    assert result["shared_split_seed"] == 21
+    assert result["shared_monitor_seed"] == 21
+    assert all(row["training_seed"] == 21 for row in result["comparison_table"])
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_neural_mtlr_single_run_matches_compare_all_holdout_when_settings_match(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    df = make_example_dataset(seed=88, n_patients=48)
+    original_mtlr = deep_models.train_neural_mtlr
+
+    def _stub_model(name: str):
+        def _inner(*args, **kwargs):
+            return {
+                "model": name,
+                "c_index": 0.50,
+                "apparent_c_index": 0.50,
+                "holdout_c_index": 0.50,
+                "evaluation_mode": "holdout",
+                "training_seed": kwargs["random_seed"],
+                "split_seed": kwargs["random_seed"],
+                "monitor_seed": kwargs["random_seed"],
+                "epochs_trained": 1,
+                "n_features": 3,
+                "training_samples": len(kwargs["evaluation_split"]["train_idx"]),
+                "evaluation_samples": len(kwargs["evaluation_split"]["eval_idx"]),
+            }
+        return _inner
+
+    monkeypatch.setattr(deep_models, "train_deepsurv", _stub_model("DeepSurv"))
+    monkeypatch.setattr(deep_models, "train_deephit", _stub_model("DeepHit"))
+    monkeypatch.setattr(deep_models, "train_survival_transformer", _stub_model("Survival Transformer"))
+    monkeypatch.setattr(deep_models, "train_survival_vae", _stub_model("Survival VAE"))
+
+    compare_result = deep_models.compare_deep_survival_models(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+        hidden_layers=[8],
+        epochs=1,
+        batch_size=8,
+        num_time_bins=6,
+        random_seed=33,
+    )
+
+    compare_row = next(row for row in compare_result["comparison_table"] if row["model"] == "Neural MTLR")
+    single_result = original_mtlr(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+        hidden_layers=[8],
+        num_time_bins=6,
+        epochs=1,
+        batch_size=8,
+        random_seed=33,
+    )
+
+    assert compare_row["training_seed"] == single_result["training_seed"] == 33
+    assert compare_row["split_seed"] == single_result["split_seed"] == 33
+    assert compare_row["monitor_seed"] == single_result["monitor_seed"] == 33
+    assert compare_row["c_index"] == pytest.approx(single_result["c_index"], rel=0.0, abs=1e-9)
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")

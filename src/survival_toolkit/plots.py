@@ -353,14 +353,29 @@ def build_model_comparison_figure(comparison: dict[str, Any]) -> dict[str, Any]:
             marker={"color": colors, "line": {"width": 1, "color": INK}},
             text=labels,
             textposition="outside",
+            cliponaxis=False,
             customdata=hover_text,
             hovertemplate="%{customdata}<extra></extra>",
         )
     )
-    fig.add_hline(y=0.5, line_dash="dash", line_color="gray", opacity=0.5, annotation_text="Random (0.5)")
+    fig.add_hline(y=0.5, line_dash="dash", line_color="gray", opacity=0.5)
+    fig.add_annotation(
+        text="Random baseline (0.5)",
+        xref="paper",
+        yref="y",
+        x=0.02,
+        y=0.5,
+        showarrow=False,
+        xanchor="left",
+        yanchor="bottom",
+        font={"size": 12, "color": "rgba(71,85,105,0.95)"},
+        bgcolor="rgba(255,255,255,0.88)",
+        borderpad=3,
+        yshift=6,
+    )
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": 60, "r": 30, "t": 80, "b": 60},
+        margin={"l": 80, "r": 30, "t": 90, "b": 60},
         title={
             "text": f"Model Comparison (C-index){note}",
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},

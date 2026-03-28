@@ -83,6 +83,9 @@ def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
         "repeat": task["repeat"],
         "fold": task["fold"],
         "c_index": result.get("c_index"),
+        "training_seed": int(task["seed"]),
+        "split_seed": None if task.get("split_seed") is None else int(task["split_seed"]),
+        "monitor_seed": None if task.get("monitor_seed") is None else int(task["monitor_seed"]),
         "n_features": result.get("n_features"),
         "training_time_ms": round((time.monotonic() - started) * 1000, 1),
         "training_samples": result.get("training_samples"),
@@ -104,7 +107,9 @@ def _run_deep_compare_fold_task(task: dict[str, Any]) -> dict[str, Any]:
                         "extra_kwargs": model_spec["extra_kwargs"],
                         "repeat": task["repeat"],
                         "fold": task["fold"],
-                        "seed": int(task["seed_base"]) + int(model_spec["seed_offset"]),
+                        "seed": int(task["seed_base"]),
+                        "split_seed": task.get("split_seed"),
+                        "monitor_seed": task.get("monitor_seed"),
                         "time_column": task["time_column"],
                         "event_column": task["event_column"],
                         "features": task["features"],
@@ -923,9 +928,19 @@ def compare_deep_survival_models(
         strengths = [
             f"{len(comparison)} deep model(s) were trained on the same feature set ({len(features)} selected input columns).",
         ]
+        shared_training_seeds = {
+            int(row["training_seed"])
+            for row in comparison
+            if row.get("training_seed") is not None
+        }
         if evaluation_mode == "repeated_cv":
             strengths.append(
                 f"Each model was evaluated across {cv_repeats} repeat(s) of {cv_folds}-fold stratified cross-validation."
+            )
+        elif len(shared_training_seeds) == 1:
+            shared_seed = next(iter(shared_training_seeds))
+            strengths.append(
+                f"All holdout comparisons used the same split and seed ({shared_seed}), so the top model can be rerun directly under the same settings."
             )
         if mixed_evaluation:
             strengths.append(
@@ -991,6 +1006,22 @@ def compare_deep_survival_models(
             "scientific_summary": summary,
             "insight_board": summary,
         }
+        if len(shared_training_seeds) == 1:
+            result["shared_training_seed"] = next(iter(shared_training_seeds))
+        shared_split_seeds = {
+            int(row["split_seed"])
+            for row in comparison
+            if row.get("split_seed") is not None
+        }
+        if len(shared_split_seeds) == 1:
+            result["shared_split_seed"] = next(iter(shared_split_seeds))
+        shared_monitor_seeds = {
+            int(row["monitor_seed"])
+            for row in comparison
+            if row.get("monitor_seed") is not None
+        }
+        if len(shared_monitor_seeds) == 1:
+            result["shared_monitor_seed"] = next(iter(shared_monitor_seeds))
         if fold_results is not None:
             result["fold_results"] = fold_results
             result["cv_folds"] = cv_folds
@@ -1028,9 +1059,8 @@ def compare_deep_survival_models(
             {
                 "model_name": model_name,
                 "extra_kwargs": extra_kwargs,
-                "seed_offset": offset,
             }
-            for offset, (model_name, _trainer, extra_kwargs) in enumerate(trainer_specs)
+            for model_name, _trainer, extra_kwargs in trainer_specs
         ]
         tasks: list[dict[str, Any]] = []
         for repeat_idx in range(cv_repeats):
@@ -1065,6 +1095,7 @@ def compare_deep_survival_models(
                     "repeat": repeat_idx + 1,
                     "fold": fold_idx,
                     "seed_base": random_seed + repeat_idx,
+                    "split_seed": random_seed + repeat_idx,
                     "time_column": time_column,
                     "event_column": event_column,
                     "features": list(features),
@@ -1082,6 +1113,7 @@ def compare_deep_survival_models(
                         prepared_data["event_tensor"],
                         random_seed + repeat_idx,
                     ),
+                    "monitor_seed": random_seed + repeat_idx,
                     "model_specs": model_specs,
                 })
 
@@ -1157,6 +1189,9 @@ def compare_deep_survival_models(
                 "cv_folds": cv_folds,
                 "cv_repeats": cv_repeats,
                 "evaluation_mode": "repeated_cv",
+                "training_seed": None,
+                "split_seed": random_seed,
+                "monitor_seed": random_seed,
                 "epochs_trained": int(round(np.mean([row["epochs_trained"] for row in model_rows]))) if model_rows else None,
                 "training_samples": None if summary is None else int(summary["train_n"]),
                 "evaluation_samples": None if summary is None else int(summary["test_n"]),
@@ -1182,7 +1217,7 @@ def compare_deep_survival_models(
     )
     comparison: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    for offset, (model_name, trainer, extra_kwargs) in enumerate(trainer_specs):
+    for model_name, trainer, extra_kwargs in trainer_specs:
         try:
             started = time.monotonic()
             result = trainer(
@@ -1195,7 +1230,7 @@ def compare_deep_survival_models(
                 learning_rate=learning_rate,
                 epochs=epochs,
                 batch_size=batch_size,
-                random_seed=random_seed + offset,
+                random_seed=random_seed,
                 prepared_data=shared_data,
                 evaluation_split=shared_eval_split,
                 monitor_indices=shared_monitor_indices,
@@ -1210,6 +1245,9 @@ def compare_deep_survival_models(
                 "apparent_c_index": result.get("apparent_c_index"),
                 "holdout_c_index": result.get("holdout_c_index"),
                 "evaluation_mode": result.get("evaluation_mode"),
+                "training_seed": result.get("training_seed"),
+                "split_seed": result.get("split_seed"),
+                "monitor_seed": result.get("monitor_seed"),
                 "epochs_trained": result.get("epochs_trained"),
                 "n_features": result.get("n_features"),
                 "training_samples": result.get("training_samples"),
@@ -1471,6 +1509,9 @@ def train_deepsurv(
         "holdout_c_index": holdout_c_index,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
+        "training_seed": random_seed,
+        "split_seed": random_seed,
+        "monitor_seed": random_seed,
         "loss_history": loss_history,
         "feature_importance": feature_importance,
         "risk_scores": risk_list,
@@ -1771,6 +1812,9 @@ def train_deephit(
         "holdout_c_index": holdout_c_index,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
+        "training_seed": random_seed,
+        "split_seed": random_seed,
+        "monitor_seed": random_seed,
         "loss_history": loss_history,
         "predicted_survival_curves": predicted_survival_curves,
         "feature_importance": feature_importance,
@@ -2074,6 +2118,9 @@ def train_neural_mtlr(
         "holdout_c_index": holdout_c_index,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
+        "training_seed": random_seed,
+        "split_seed": random_seed,
+        "monitor_seed": random_seed,
         "loss_history": loss_history,
         "predicted_survival_curves": predicted_survival_curves,
         "calibration_data": calibration_data,
@@ -2345,6 +2392,9 @@ def train_survival_transformer(
         "holdout_c_index": holdout_c_index,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
+        "training_seed": random_seed,
+        "split_seed": random_seed,
+        "monitor_seed": random_seed,
         "loss_history": loss_history,
         "attention_weights": attention_weights,
         "feature_attention": feature_attention,
@@ -2699,6 +2749,9 @@ def train_survival_vae(
         "holdout_c_index": holdout_c_index,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
+        "training_seed": random_seed,
+        "split_seed": random_seed,
+        "monitor_seed": random_seed,
         "loss_history": loss_history,
         "latent_embeddings": latent_embeddings,
         "cluster_labels": cluster_labels,

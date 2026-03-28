@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Survival Analysis Toolkit</title>
+    <title>SurvStudio</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23db583b'/><text x='50' y='68' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='44' fill='white'>SA</text></svg>" />
     <meta name="description" content="Upload clinical data and generate exploratory Kaplan-Meier curves, Cox regression, ML/DL comparisons, and cohort summary tables." />
     <link rel="stylesheet" href="../static/styles.css" />
@@ -14,7 +14,7 @@
     <header class="shell-header">
       <a class="brand-line" id="brandHome" href="#" style="text-decoration:none;color:inherit;">
         <div class="brand-mark">SA</div>
-        <h1>Survival Analysis Toolkit</h1>
+        <h1>SurvStudio</h1>
       </a>
       <div class="header-right">
         <span class="dataset-badge hidden" id="datasetBadge"></span>
@@ -293,7 +293,7 @@
               <span>CI bands</span>
             </label>
             <label class="toolbar-field">
-              <span>Risk ticks</span>
+              <span>Risk table ticks <button class="help-dot" type="button" data-tooltip="Controls how many time points are shown in the Number at risk table below. It does not change the Kaplan-Meier curve itself.">?</button></span>
               <input id="riskTablePoints" type="number" min="4" max="12" step="1" value="6" />
             </label>
             <label class="toolbar-field">

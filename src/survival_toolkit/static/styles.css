@@ -1184,6 +1184,10 @@ h3 {
   gap: 3px;
 }
 
+.toolbar-field.is-disabled {
+  opacity: 0.58;
+}
+
 .toolbar-field > span {
   color: var(--muted);
   font-size: 0.72rem;

@@ -253,6 +253,39 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
         pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
 
 
+def test_browser_risk_table_ticks_change_columns_and_flash_table(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+
+            page.locator("#runKmButton").click()
+            page.wait_for_function("!document.getElementById('downloadKmSummaryButton').disabled")
+            default_columns = page.locator("#kmRiskShell thead th").count()
+            assert default_columns == 7
+
+            page.locator("#riskTablePoints").fill("10")
+            page.locator("#runKmButton").click()
+            page.wait_for_function(
+                "document.querySelectorAll('#kmRiskShell thead th').length === 11"
+            )
+            page.wait_for_function(
+                "document.getElementById('kmRiskShell').classList.contains('preset-applied-flash')"
+            )
+            updated_columns = page.locator("#kmRiskShell thead th").count()
+            assert updated_columns == 11
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
 def test_browser_dl_epoch_validation_message_is_human_readable(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
