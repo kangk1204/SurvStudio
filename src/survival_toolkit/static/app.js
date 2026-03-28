@@ -399,19 +399,35 @@ function renderInsightBoard(container, summary, emptyMessage) {
     </article>`;
 }
 
+function deriveGroupCountLabel(group) {
+  if (group === "High") return "High risk";
+  if (group === "Low") return "Low risk";
+  return group;
+}
+
+function humanizePValueLabel(label) {
+  if (label === "selection_adjusted_p_value") return "Selection-adjusted p-value";
+  if (label === "raw_p_value") return "Raw p-value";
+  return "p-value";
+}
+
 function renderDerivedGroupSummary(derivedColumn, summary) {
   const counts = summary?.counts || [];
+  const assignmentRule = summary?.assignment_rule || null;
+  const pValueLabel = humanizePValueLabel(summary?.p_value_label);
   refs.deriveSummary.classList.remove("hidden");
   refs.deriveSummary.innerHTML = `
     <div class="count-strip">
-      ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(item.group)}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
+      ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(deriveGroupCountLabel(item.group))}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
     </div>
+    ${summary?.method === "optimal_cutpoint" ? '<div class="note-box">High/Low indicate risk direction, not whether the source value itself is numerically high or low.</div>' : ""}
     <div class="signature-summary-grid">
       <div><strong>Derived column</strong><br/>${escapeHtml(derivedColumn || "NA")}</div>
       <div><strong>Method</strong><br/>${escapeHtml(summary?.method || "NA")}</div>
       <div><strong>Cutoff</strong><br/>${escapeHtml(formatValue(summary?.cutoff))}</div>
-      ${summary?.p_value != null ? `<div class="pvalue-card"><strong>p-value</strong><br/>${escapeHtml(formatValue(summary.p_value))}</div>` : ""}
+      ${summary?.p_value != null ? `<div class="pvalue-card"><strong>${escapeHtml(pValueLabel)}</strong><br/>${escapeHtml(formatValue(summary.p_value))}</div>` : ""}
       <div><strong>Groups</strong><br/>${escapeHtml(formatValue(summary?.n_groups || counts.length || "NA"))}</div>
+      ${assignmentRule ? `<div class="wide-card"><strong>Assignment rule</strong><br/>${escapeHtml(assignmentRule)}</div>` : ""}
     </div>`;
 }
 

@@ -1508,6 +1508,10 @@ tr:nth-child(even) td {
   font-size: 0.86rem;
 }
 
+.signature-summary-grid > .wide-card {
+  grid-column: 1 / -1;
+}
+
 .note-box {
   padding: 10px 14px;
   border-radius: var(--radius-sm);
