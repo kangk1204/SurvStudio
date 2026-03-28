@@ -878,6 +878,9 @@ def compare_deep_survival_models(
                 )
             )
 
+        for row in comparison:
+            row["model"] = str(row.get("model") or "Unknown model")
+
         evaluation_modes = sorted({str(row.get("evaluation_mode", "unknown")) for row in comparison})
         mixed_evaluation = len(evaluation_modes) > 1
         result_evaluation_mode = evaluation_mode
@@ -1202,7 +1205,7 @@ def compare_deep_survival_models(
             )
             training_time_ms = round((time.monotonic() - started) * 1000, 1)
             comparison.append({
-                "model": model_name,
+                "model": str(result.get("model") or model_name or "Unknown model"),
                 "c_index": result.get("c_index"),
                 "apparent_c_index": result.get("apparent_c_index"),
                 "holdout_c_index": result.get("holdout_c_index"),
