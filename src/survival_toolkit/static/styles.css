@@ -237,6 +237,11 @@ body {
   display: none;
 }
 
+.upload-inline {
+  display: inline-flex;
+  align-items: center;
+}
+
 /* ─── Buttons ─── */
 
 .button {
@@ -277,6 +282,21 @@ body {
 .button.compact-btn {
   padding: 7px 14px;
   font-size: 0.78rem;
+}
+
+.toolbar-note {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(37, 115, 135, 0.06);
+  border: 1px solid rgba(37, 115, 135, 0.12);
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.toolbar-note strong {
+  color: var(--ink);
 }
 
 .button.is-loading {

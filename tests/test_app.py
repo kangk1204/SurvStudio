@@ -57,6 +57,9 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'class="button ghost" id="loadTcgaButton"' in response.text
     assert 'class="button ghost" id="loadGbsg2Button"' in response.text
     assert 'class="button ghost" id="loadExampleButton"' in response.text
+    assert 'id="uploadButton" type="button"' in response.text
+    assert '<span>Compare All Evaluation</span>' in response.text
+    assert "Compare All Evaluation affects only <strong>Compare All</strong>" in response.text
 
 
 def test_index_exposes_dataset_preset_feedback_ui() -> None:
@@ -76,6 +79,16 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert "Applying a preset updates recommended columns and checkbox selections only." in response.text
     assert 'class="button ghost compact-btn" id="applyBasicPresetButton"' in response.text
     assert 'class="button ghost compact-btn" id="applyModelPresetButton"' in response.text
+
+
+def test_frontend_tracks_workspace_controls_in_history_state() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "captureControlSnapshot()" in text
+    assert "controls: captureControlSnapshot()" in text
+    assert "applyControlSnapshot(historyState.controls || null);" in text
+    assert "queueHistorySync()" in text
 
 
 def test_health_allows_null_origin_for_file_preview() -> None:

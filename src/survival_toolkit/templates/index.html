@@ -18,10 +18,10 @@
       </a>
       <div class="header-right">
         <span class="dataset-badge hidden" id="datasetBadge"></span>
-        <label class="upload-inline" for="datasetFile">
+        <div class="upload-inline">
           <input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" />
-          <span class="button ghost compact-btn" id="uploadButton">Upload</span>
-        </label>
+          <button class="button ghost compact-btn" id="uploadButton" type="button">Upload</button>
+        </div>
       </div>
     </header>
 
@@ -434,7 +434,7 @@
               <input id="mlLearningRate" type="number" min="0.001" max="1" step="0.01" value="0.1" />
             </label>
             <label class="toolbar-field">
-              <span>Comparison Evaluation</span>
+              <span>Compare All Evaluation</span>
               <select id="mlEvaluationStrategy">
                 <option value="holdout">Deterministic Holdout</option>
                 <option value="repeated_cv">Repeated Stratified CV</option>
@@ -458,6 +458,7 @@
               </select>
             </label>
           </div>
+          <div class="toolbar-note">Compare All Evaluation affects only <strong>Compare All</strong>. <strong>Train Model</strong> uses the single-model training path and reports its own evaluation mode in the result banner.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>Shared feature selection</strong>
@@ -543,7 +544,7 @@
               <input id="dlDropout" type="number" min="0" max="0.5" step="0.05" value="0.1" />
             </label>
             <label class="toolbar-field">
-              <span>Comparison Evaluation</span>
+              <span>Compare All Evaluation</span>
               <select id="dlEvaluationStrategy">
                 <option value="holdout">Deterministic Holdout</option>
                 <option value="repeated_cv">Repeated Stratified CV</option>
@@ -579,6 +580,7 @@
               </select>
             </label>
           </div>
+          <div class="toolbar-note">Compare All Evaluation affects only <strong>Compare All</strong>. <strong>Train Model</strong> keeps the single-model path and reports its own evaluation mode after training.</div>
           <div class="shared-feature-card" id="dlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>Shared feature selection</strong>

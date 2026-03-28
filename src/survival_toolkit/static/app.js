@@ -12,6 +12,7 @@ const runtime = {
   isFilePreview: window.location.protocol === "file:",
   apiBase: window.location.protocol === "file:" ? "http://127.0.0.1:8000" : "",
   historySyncPaused: false,
+  historySyncTimer: null,
 };
 
 
@@ -217,12 +218,152 @@ function activeTabName() {
   return document.querySelector(".tab-button.active")?.dataset.tab || "km";
 }
 
+function captureControlSnapshot() {
+  if (!state.dataset) return null;
+  return {
+    timeColumn: refs.timeColumn?.value || "",
+    eventColumn: refs.eventColumn?.value || "",
+    eventPositiveValue: refs.eventPositiveValue?.value || "",
+    groupColumn: refs.groupColumn?.value || "",
+    timeUnitLabel: refs.timeUnitLabel?.value || "",
+    maxTime: refs.maxTime?.value || "",
+    confidenceLevel: refs.confidenceLevel?.value || "",
+    derivePanelOpen: !refs.derivePanel?.classList.contains("hidden"),
+    deriveSource: refs.deriveSource?.value || "",
+    deriveMethod: refs.deriveMethod?.value || "",
+    deriveCutoff: refs.deriveCutoff?.value || "",
+    deriveColumnName: refs.deriveColumnName?.value || "",
+    showConfidenceBands: Boolean(refs.showConfidenceBands?.checked),
+    riskTablePoints: refs.riskTablePoints?.value || "",
+    logrankWeight: refs.logrankWeight?.value || "",
+    fhPower: refs.fhPower?.value || "",
+    signatureMaxDepth: refs.signatureMaxDepth?.value || "",
+    signatureMinFraction: refs.signatureMinFraction?.value || "",
+    signatureTopK: refs.signatureTopK?.value || "",
+    signatureBootstrapIterations: refs.signatureBootstrapIterations?.value || "",
+    signaturePermutationIterations: refs.signaturePermutationIterations?.value || "",
+    signatureValidationIterations: refs.signatureValidationIterations?.value || "",
+    signatureValidationFraction: refs.signatureValidationFraction?.value || "",
+    signatureSignificanceLevel: refs.signatureSignificanceLevel?.value || "",
+    signatureOperator: refs.signatureOperator?.value || "",
+    signatureRandomSeed: refs.signatureRandomSeed?.value || "",
+    covariates: selectedCheckboxValues(refs.covariateChecklist),
+    categoricals: selectedCheckboxValues(refs.categoricalChecklist),
+    cohortVariables: selectedCheckboxValues(refs.cohortVariableChecklist),
+    mlModelType: refs.mlModelType?.value || "",
+    mlNEstimators: refs.mlNEstimators?.value || "",
+    mlLearningRate: refs.mlLearningRate?.value || "",
+    mlEvaluationStrategy: refs.mlEvaluationStrategy?.value || "",
+    mlCvFolds: refs.mlCvFolds?.value || "",
+    mlCvRepeats: refs.mlCvRepeats?.value || "",
+    mlJournalTemplate: refs.mlJournalTemplate?.value || "",
+    dlModelType: refs.dlModelType?.value || "",
+    dlEpochs: refs.dlEpochs?.value || "",
+    dlLearningRate: refs.dlLearningRate?.value || "",
+    dlHiddenLayers: refs.dlHiddenLayers?.value || "",
+    dlDropout: refs.dlDropout?.value || "",
+    dlEvaluationStrategy: refs.dlEvaluationStrategy?.value || "",
+    dlCvFolds: refs.dlCvFolds?.value || "",
+    dlCvRepeats: refs.dlCvRepeats?.value || "",
+    dlEarlyStoppingPatience: refs.dlEarlyStoppingPatience?.value || "",
+    dlEarlyStoppingMinDelta: refs.dlEarlyStoppingMinDelta?.value || "",
+    dlParallelJobs: refs.dlParallelJobs?.value || "",
+    dlJournalTemplate: refs.dlJournalTemplate?.value || "",
+  };
+}
+
+function queueHistorySync() {
+  if (runtime.historySyncPaused || !state.dataset || !window.history?.replaceState) return;
+  if (runtime.historySyncTimer) window.clearTimeout(runtime.historySyncTimer);
+  runtime.historySyncTimer = window.setTimeout(() => {
+    runtime.historySyncTimer = null;
+    syncHistoryState("replace");
+  }, 0);
+}
+
+function setInputValue(control, value) {
+  if (!control || value === undefined || value === null) return;
+  control.value = String(value);
+}
+
+function setSelectValueIfPresent(control, value) {
+  if (!control || value === undefined || value === null) return;
+  const wanted = String(value);
+  if ([...control.options].some((option) => option.value === wanted)) {
+    control.value = wanted;
+  }
+}
+
+function applyControlSnapshot(snapshot) {
+  if (!snapshot || !state.dataset) return;
+  const columnNames = new Set(state.dataset.columns.map((column) => column.name));
+  if (snapshot.timeColumn && columnNames.has(snapshot.timeColumn)) refs.timeColumn.value = snapshot.timeColumn;
+  if (snapshot.eventColumn && columnNames.has(snapshot.eventColumn)) refs.eventColumn.value = snapshot.eventColumn;
+  updateEventPositiveOptions();
+  setSelectValueIfPresent(refs.eventPositiveValue, snapshot.eventPositiveValue);
+  refreshVariableSelections();
+  setSelectValueIfPresent(refs.groupColumn, snapshot.groupColumn ?? "");
+  setInputValue(refs.timeUnitLabel, snapshot.timeUnitLabel);
+  setInputValue(refs.maxTime, snapshot.maxTime);
+  setInputValue(refs.confidenceLevel, snapshot.confidenceLevel);
+  setSelectValueIfPresent(refs.deriveSource, snapshot.deriveSource);
+  setInputValue(refs.deriveCutoff, snapshot.deriveCutoff);
+  setInputValue(refs.deriveColumnName, snapshot.deriveColumnName);
+  setInputValue(refs.riskTablePoints, snapshot.riskTablePoints);
+  setInputValue(refs.fhPower, snapshot.fhPower);
+  setInputValue(refs.signatureMaxDepth, snapshot.signatureMaxDepth);
+  setInputValue(refs.signatureMinFraction, snapshot.signatureMinFraction);
+  setInputValue(refs.signatureTopK, snapshot.signatureTopK);
+  setInputValue(refs.signatureBootstrapIterations, snapshot.signatureBootstrapIterations);
+  setInputValue(refs.signaturePermutationIterations, snapshot.signaturePermutationIterations);
+  setInputValue(refs.signatureValidationIterations, snapshot.signatureValidationIterations);
+  setInputValue(refs.signatureValidationFraction, snapshot.signatureValidationFraction);
+  setInputValue(refs.signatureSignificanceLevel, snapshot.signatureSignificanceLevel);
+  setInputValue(refs.signatureRandomSeed, snapshot.signatureRandomSeed);
+  setInputValue(refs.mlNEstimators, snapshot.mlNEstimators);
+  setInputValue(refs.mlLearningRate, snapshot.mlLearningRate);
+  setInputValue(refs.mlCvFolds, snapshot.mlCvFolds);
+  setInputValue(refs.mlCvRepeats, snapshot.mlCvRepeats);
+  setInputValue(refs.dlEpochs, snapshot.dlEpochs);
+  setInputValue(refs.dlLearningRate, snapshot.dlLearningRate);
+  setInputValue(refs.dlHiddenLayers, snapshot.dlHiddenLayers);
+  setInputValue(refs.dlDropout, snapshot.dlDropout);
+  setInputValue(refs.dlCvFolds, snapshot.dlCvFolds);
+  setInputValue(refs.dlCvRepeats, snapshot.dlCvRepeats);
+  setInputValue(refs.dlEarlyStoppingPatience, snapshot.dlEarlyStoppingPatience);
+  setInputValue(refs.dlEarlyStoppingMinDelta, snapshot.dlEarlyStoppingMinDelta);
+  setInputValue(refs.dlParallelJobs, snapshot.dlParallelJobs);
+  setSelectValueIfPresent(refs.deriveMethod, snapshot.deriveMethod);
+  setSelectValueIfPresent(refs.logrankWeight, snapshot.logrankWeight);
+  setSelectValueIfPresent(refs.signatureOperator, snapshot.signatureOperator);
+  setSelectValueIfPresent(refs.mlModelType, snapshot.mlModelType);
+  setSelectValueIfPresent(refs.mlEvaluationStrategy, snapshot.mlEvaluationStrategy);
+  setSelectValueIfPresent(refs.mlJournalTemplate, snapshot.mlJournalTemplate);
+  setSelectValueIfPresent(refs.dlModelType, snapshot.dlModelType);
+  setSelectValueIfPresent(refs.dlEvaluationStrategy, snapshot.dlEvaluationStrategy);
+  setSelectValueIfPresent(refs.dlJournalTemplate, snapshot.dlJournalTemplate);
+  if (refs.showConfidenceBands) refs.showConfidenceBands.checked = snapshot.showConfidenceBands !== false;
+  updateMethodVisibility();
+  updateWeightVisibility();
+  updateMlEvaluationControls();
+  updateDlEvaluationControls();
+  setCheckedValues(refs.covariateChecklist, snapshot.covariates || []);
+  setCheckedValues(refs.categoricalChecklist, snapshot.categoricals || []);
+  setCheckedValues(refs.cohortVariableChecklist, snapshot.cohortVariables || []);
+  renderSharedFeatureSummary();
+  updateDatasetBadge();
+  const derivePanelOpen = Boolean(snapshot.derivePanelOpen);
+  refs.derivePanel?.classList.toggle("hidden", !derivePanelOpen);
+  if (refs.deriveToggle) refs.deriveToggle.textContent = derivePanelOpen ? "Close" : "Derive Group";
+}
+
 function currentHistoryState() {
   if (!state.dataset) return { view: "home" };
   return {
     view: "workspace",
     datasetId: state.dataset.dataset_id,
     tab: activeTabName(),
+    controls: captureControlSnapshot(),
   };
 }
 
@@ -254,6 +395,7 @@ async function restoreHistoryState(historyState) {
     } else {
       showWorkspace();
     }
+    applyControlSnapshot(historyState.controls || null);
     activateTab(historyState.tab || "km");
   } catch {
     goHome({ syncHistory: false });
@@ -883,6 +1025,7 @@ function applyDatasetPreset(mode) {
     });
   }
 
+  queueHistorySync();
   showToast(`${preset.name} — ${mode === "basic" ? "KM/Cox" : "ML/DL"} preset applied`, "success", 2500);
 }
 
@@ -1783,30 +1926,29 @@ function initListeners() {
   refs.datasetFile.addEventListener("change", () => {
     if (refs.datasetFile.files?.length) withLoading(refs.uploadButton, uploadDataset);
   });
-  refs.uploadButton.addEventListener("click", (e) => {
-    if (!refs.datasetFile.files?.length) { e.stopPropagation(); return; }
-    withLoading(refs.uploadButton, uploadDataset);
-  });
+  refs.uploadButton.addEventListener("click", () => refs.datasetFile.click());
   refs.loadTcgaUploadReadyButton.addEventListener("click", () => withLoading(refs.loadTcgaUploadReadyButton, loadTcgaUploadReadyDataset));
   refs.loadTcgaButton.addEventListener("click", () => withLoading(refs.loadTcgaButton, loadTcgaDataset));
   refs.loadGbsg2Button.addEventListener("click", () => withLoading(refs.loadGbsg2Button, loadGbsg2Dataset));
   refs.loadExampleButton.addEventListener("click", () => withLoading(refs.loadExampleButton, loadExampleDataset));
   refs.applyBasicPresetButton?.addEventListener("click", () => applyDatasetPreset("basic"));
   refs.applyModelPresetButton?.addEventListener("click", () => applyDatasetPreset("models"));
-  refs.timeColumn.addEventListener("change", () => { refreshVariableSelections(); updateDatasetBadge(); });
-  refs.eventColumn.addEventListener("change", () => { updateEventPositiveOptions(); refreshVariableSelections(); updateDatasetBadge(); });
-  refs.groupColumn.addEventListener("change", updateDatasetBadge);
-  refs.covariateChecklist?.addEventListener("change", renderSharedFeatureSummary);
-  refs.categoricalChecklist?.addEventListener("change", renderSharedFeatureSummary);
+  refs.timeColumn.addEventListener("change", () => { refreshVariableSelections(); updateDatasetBadge(); queueHistorySync(); });
+  refs.eventColumn.addEventListener("change", () => { updateEventPositiveOptions(); refreshVariableSelections(); updateDatasetBadge(); queueHistorySync(); });
+  refs.groupColumn.addEventListener("change", () => { updateDatasetBadge(); queueHistorySync(); });
+  refs.covariateChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.categoricalChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.cohortVariableChecklist?.addEventListener("change", queueHistorySync);
   refs.reviewMlFeaturesButton?.addEventListener("click", focusSharedFeatureEditor);
   refs.reviewDlFeaturesButton?.addEventListener("click", focusSharedFeatureEditor);
-  refs.deriveMethod.addEventListener("change", updateMethodVisibility);
-  refs.logrankWeight.addEventListener("change", updateWeightVisibility);
-  refs.mlEvaluationStrategy.addEventListener("change", updateMlEvaluationControls);
-  refs.dlEvaluationStrategy.addEventListener("change", updateDlEvaluationControls);
+  refs.deriveMethod.addEventListener("change", () => { updateMethodVisibility(); queueHistorySync(); });
+  refs.logrankWeight.addEventListener("change", () => { updateWeightVisibility(); queueHistorySync(); });
+  refs.mlEvaluationStrategy.addEventListener("change", () => { updateMlEvaluationControls(); queueHistorySync(); });
+  refs.dlEvaluationStrategy.addEventListener("change", () => { updateDlEvaluationControls(); queueHistorySync(); });
   refs.deriveToggle.addEventListener("click", () => {
     refs.derivePanel.classList.toggle("hidden");
     refs.deriveToggle.textContent = refs.derivePanel.classList.contains("hidden") ? "Derive Group" : "Close";
+    queueHistorySync();
   });
   refs.deriveButton.addEventListener("click", () => withLoading(refs.deriveButton, deriveGroup));
   refs.runKmButton.addEventListener("click", () => withLoading(refs.runKmButton, runKaplanMeier));
@@ -1818,6 +1960,49 @@ function initListeners() {
   refs.runDlButton.addEventListener("click", () => withLoading(refs.runDlButton, runDlModel));
   refs.runDlCompareButton.addEventListener("click", () => withLoading(refs.runDlCompareButton, runDlCompareModels));
   refs.tabButtons.forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
+  const changeTrackedControls = [
+    refs.eventPositiveValue,
+    refs.timeUnitLabel,
+    refs.maxTime,
+    refs.confidenceLevel,
+    refs.deriveSource,
+    refs.deriveCutoff,
+    refs.deriveColumnName,
+    refs.showConfidenceBands,
+    refs.riskTablePoints,
+    refs.fhPower,
+    refs.signatureMaxDepth,
+    refs.signatureMinFraction,
+    refs.signatureTopK,
+    refs.signatureBootstrapIterations,
+    refs.signaturePermutationIterations,
+    refs.signatureValidationIterations,
+    refs.signatureValidationFraction,
+    refs.signatureSignificanceLevel,
+    refs.signatureOperator,
+    refs.signatureRandomSeed,
+    refs.mlModelType,
+    refs.mlNEstimators,
+    refs.mlLearningRate,
+    refs.mlCvFolds,
+    refs.mlCvRepeats,
+    refs.mlJournalTemplate,
+    refs.dlModelType,
+    refs.dlEpochs,
+    refs.dlLearningRate,
+    refs.dlHiddenLayers,
+    refs.dlDropout,
+    refs.dlCvFolds,
+    refs.dlCvRepeats,
+    refs.dlEarlyStoppingPatience,
+    refs.dlEarlyStoppingMinDelta,
+    refs.dlParallelJobs,
+    refs.dlJournalTemplate,
+  ];
+  changeTrackedControls.filter(Boolean).forEach((control) => {
+    control.addEventListener("change", queueHistorySync);
+    if (["text", "number"].includes(control.type)) control.addEventListener("input", queueHistorySync);
+  });
   wireDownloads();
 }
 
