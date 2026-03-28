@@ -33,6 +33,9 @@ const refs = {
   datasetPresetBar: document.getElementById("datasetPresetBar"),
   datasetPresetTitle: document.getElementById("datasetPresetTitle"),
   datasetPresetText: document.getElementById("datasetPresetText"),
+  datasetPresetStatusTitle: document.getElementById("datasetPresetStatusTitle"),
+  datasetPresetStatusText: document.getElementById("datasetPresetStatusText"),
+  datasetPresetChips: document.getElementById("datasetPresetChips"),
   applyBasicPresetButton: document.getElementById("applyBasicPresetButton"),
   applyModelPresetButton: document.getElementById("applyModelPresetButton"),
   tooltipPopup: document.getElementById("tooltipPopup"),
@@ -647,6 +650,40 @@ function datasetPresetForCurrentDataset() {
   return null;
 }
 
+function setDatasetPresetButtonState(mode = null) {
+  if (!refs.applyBasicPresetButton || !refs.applyModelPresetButton) return;
+  refs.applyBasicPresetButton.className = `button ${mode === "basic" ? "primary" : "ghost"} compact-btn`;
+  refs.applyModelPresetButton.className = `button ${mode === "models" ? "primary" : "ghost"} compact-btn`;
+}
+
+function renderDatasetPresetStatus(title, text, chips = []) {
+  if (refs.datasetPresetStatusTitle) refs.datasetPresetStatusTitle.textContent = title;
+  if (refs.datasetPresetStatusText) refs.datasetPresetStatusText.textContent = text;
+  if (!refs.datasetPresetChips) return;
+  refs.datasetPresetChips.innerHTML = "";
+  if (!chips.length) {
+    refs.datasetPresetChips.classList.add("hidden");
+    return;
+  }
+  chips.forEach((label) => {
+    const chip = document.createElement("span");
+    chip.className = "dataset-preset-chip";
+    chip.textContent = label;
+    refs.datasetPresetChips.appendChild(chip);
+  });
+  refs.datasetPresetChips.classList.remove("hidden");
+}
+
+function flashPresetTargets(targets) {
+  targets.filter(Boolean).forEach((target) => {
+    const shell = target.closest(".config-field, .selection-card") || target;
+    shell.classList.remove("preset-applied-flash");
+    void shell.offsetWidth;
+    shell.classList.add("preset-applied-flash");
+    window.setTimeout(() => shell.classList.remove("preset-applied-flash"), 1800);
+  });
+}
+
 function applyDatasetPreset(mode) {
   const preset = datasetPresetForCurrentDataset();
   if (!preset) {
@@ -665,20 +702,48 @@ function applyDatasetPreset(mode) {
 
   const covariates = mode === "models" ? preset.modelFeatures : preset.coxCovariates;
   const categoricals = mode === "models" ? preset.modelCategoricals : preset.coxCategoricals;
+  const tableVariables = preset.tableVariables || covariates;
   setCheckedValues(refs.covariateChecklist, covariates);
   setCheckedValues(refs.categoricalChecklist, categoricals);
-  setCheckedValues(refs.cohortVariableChecklist, preset.tableVariables || covariates);
+  setCheckedValues(refs.cohortVariableChecklist, tableVariables);
   updateDatasetBadge();
 
-  // Highlight active preset button
-  if (refs.applyBasicPresetButton && refs.applyModelPresetButton) {
-    if (mode === "basic") {
-      refs.applyBasicPresetButton.className = "button primary compact-btn";
-      refs.applyModelPresetButton.className = "button ghost compact-btn";
-    } else {
-      refs.applyBasicPresetButton.className = "button ghost compact-btn";
-      refs.applyModelPresetButton.className = "button primary compact-btn";
-    }
+  setDatasetPresetButtonState(mode);
+
+  const summaryTitle = `${preset.name} applied`;
+  const summaryText = mode === "basic"
+    ? "Updated the study columns, group split, Cox covariates, and cohort-table variables below. No analysis ran yet."
+    : "Updated the study columns and the feature checklists used by ML and DL. These shared feature selections live on the Cox tab. No analysis ran yet.";
+  const summaryChips = [
+    `Time: ${preset.timeColumn}`,
+    `Event: ${preset.eventColumn}=${preset.eventPositiveValue}`,
+    `Group: ${preset.basicGroup}`,
+    `${mode === "models" ? "Model features" : "Cox covariates"}: ${covariates.length}`,
+    `Categorical: ${categoricals.length}`,
+    `Table vars: ${tableVariables.length}`,
+  ];
+  renderDatasetPresetStatus(summaryTitle, summaryText, summaryChips);
+
+  flashPresetTargets([
+    refs.timeColumn,
+    refs.eventColumn,
+    refs.eventPositiveValue,
+    refs.groupColumn,
+    refs.timeUnitLabel,
+    refs.covariateChecklist,
+    refs.categoricalChecklist,
+    refs.cohortVariableChecklist,
+  ]);
+
+  if (mode === "models") {
+    activateTab("cox");
+    requestAnimationFrame(() => {
+      refs.covariateChecklist?.closest(".selection-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  } else {
+    requestAnimationFrame(() => {
+      refs.configStrip?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
   }
 
   showToast(`${preset.name} — ${mode === "basic" ? "KM/Cox" : "ML/DL"} preset applied`, "success", 2500);
@@ -689,10 +754,22 @@ function updateDatasetPresetBar() {
   if (!refs.datasetPresetBar || !refs.datasetPresetTitle || !refs.datasetPresetText) return;
   if (!preset) {
     refs.datasetPresetBar.classList.add("hidden");
+    renderDatasetPresetStatus(
+      "No preset applied yet.",
+      "Applying a preset updates recommended columns and checkbox selections only. It does not run an analysis.",
+      [],
+    );
+    setDatasetPresetButtonState(null);
     return;
   }
   refs.datasetPresetTitle.textContent = preset.name;
   refs.datasetPresetText.textContent = preset.summary;
+  renderDatasetPresetStatus(
+    "No preset applied yet.",
+    "Applying a preset updates recommended columns and checkbox selections only. It does not run an analysis.",
+    [],
+  );
+  setDatasetPresetButtonState(null);
   refs.datasetPresetBar.classList.remove("hidden");
 }
 

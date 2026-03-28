@@ -129,10 +129,15 @@
         <div class="dataset-preset-copy">
           <strong id="datasetPresetTitle">Recommended preset</strong>
           <span id="datasetPresetText">Apply a dataset-specific starting configuration.</span>
+          <div class="dataset-preset-status">
+            <strong id="datasetPresetStatusTitle">No preset applied yet.</strong>
+            <span id="datasetPresetStatusText">Applying a preset updates recommended columns and checkbox selections only. It does not run an analysis.</span>
+            <div class="dataset-preset-chips hidden" id="datasetPresetChips"></div>
+          </div>
         </div>
         <div class="button-row">
           <button class="button ghost compact-btn" id="applyBasicPresetButton">Apply KM/Cox Preset</button>
-          <button class="button primary compact-btn" id="applyModelPresetButton">Apply ML/DL Preset</button>
+          <button class="button ghost compact-btn" id="applyModelPresetButton">Apply ML/DL Preset</button>
         </div>
       </div>
 

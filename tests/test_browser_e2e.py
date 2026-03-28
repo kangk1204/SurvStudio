@@ -103,3 +103,40 @@ def test_browser_downloads_km_summary_csv_and_png(browser_server: str, tmp_path:
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
         pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_preset_application_shows_visible_feedback(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page()
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadGbsg2Button").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#datasetPresetBar").wait_for(state="visible")
+
+            assert page.locator("#datasetPresetStatusTitle").inner_text() == "No preset applied yet."
+            assert "does not run an analysis" in page.locator("#datasetPresetStatusText").inner_text()
+
+            page.locator("#applyBasicPresetButton").click()
+            page.wait_for_function(
+                "document.getElementById('datasetPresetStatusTitle').textContent.includes('GBSG2 preset applied')"
+            )
+            assert page.locator("#timeColumn").input_value() == "rfs_days"
+            assert page.locator("#eventColumn").input_value() == "rfs_event"
+            assert page.locator("#groupColumn").input_value() == "horTh"
+            assert "Cox covariates: 6" in page.locator("#datasetPresetChips").inner_text()
+
+            page.locator("#applyModelPresetButton").click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"cox\"]').getAttribute('aria-selected') === 'true'"
+            )
+            assert "feature checklists used by ML and DL" in page.locator("#datasetPresetStatusText").inner_text()
+            assert "Model features: 6" in page.locator("#datasetPresetChips").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
