@@ -55,6 +55,19 @@ def test_index_uses_relative_static_assets() -> None:
     assert "exploratory Kaplan-Meier curves" in response.text
 
 
+def test_index_exposes_dataset_preset_feedback_ui() -> None:
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'id="datasetPresetStatusTitle"' in response.text
+    assert 'id="datasetPresetStatusText"' in response.text
+    assert 'id="datasetPresetChips"' in response.text
+    assert "No preset applied yet." in response.text
+    assert "Applying a preset updates recommended columns and checkbox selections only." in response.text
+    assert 'class="button ghost compact-btn" id="applyBasicPresetButton"' in response.text
+    assert 'class="button ghost compact-btn" id="applyModelPresetButton"' in response.text
+
+
 def test_health_allows_null_origin_for_file_preview() -> None:
     response = client.get("/api/health", headers={"Origin": "null"})
 

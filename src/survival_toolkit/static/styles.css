@@ -688,6 +688,49 @@ body {
   line-height: 1.5;
 }
 
+.dataset-preset-status {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(214, 168, 77, 0.2);
+}
+
+.dataset-preset-status strong {
+  font-size: 0.76rem;
+  color: var(--ink);
+}
+
+.dataset-preset-status span {
+  font-size: 0.74rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.dataset-preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dataset-preset-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(41, 77, 98, 0.16);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--ink);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.preset-applied-flash {
+  box-shadow: 0 0 0 3px rgba(214, 110, 74, 0.18);
+  border-color: rgba(214, 110, 74, 0.55) !important;
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
 /* ─── Config Strip ─── */
 
 .config-strip {
