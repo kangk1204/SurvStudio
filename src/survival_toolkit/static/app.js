@@ -2071,13 +2071,15 @@ function guidedPanelMarkup(step) {
         <article class="guided-card">
           <h3>${escapeHtml(configureCopy.title)}</h3>
           <p>${escapeHtml(configureCopy.text)}</p>
-          <div class="guided-actions">
+          <div class="guided-actions guided-actions-priority">
+            ${configureCopy.secondaryAction
+              ? `<button class="button ghost compact-btn guided-run-choice" type="button" data-guided-action="${escapeHtml(configureCopy.secondaryAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.secondaryLabel)}</button>`
+              : ""}
+            <button class="button primary compact-btn guided-run-choice" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.runLabel)}</button>
+          </div>
+          <div class="guided-actions guided-actions-secondary">
             <button class="button ghost compact-btn" type="button" data-guided-action="previous-step">Back</button>
             <button class="button ghost compact-btn" type="button" data-guided-action="choose-another-analysis">Change analysis</button>
-            ${configureCopy.secondaryAction
-              ? `<button class="button ghost compact-btn" type="button" data-guided-action="${escapeHtml(configureCopy.secondaryAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.secondaryLabel)}</button>`
-              : ""}
-            <button class="button primary compact-btn" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.runLabel)}</button>
           </div>
         </article>
         <aside class="guided-card">

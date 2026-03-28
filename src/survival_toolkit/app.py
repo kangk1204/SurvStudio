@@ -35,6 +35,16 @@ from survival_toolkit.sample_data import (
 from survival_toolkit.store import DatasetStore
 
 BASE_DIR = Path(__file__).resolve().parent
+STATIC_ASSET_VERSION = str(
+    int(
+        max(
+            (BASE_DIR / "templates" / "index.html").stat().st_mtime,
+            (BASE_DIR / "static" / "styles.css").stat().st_mtime,
+            (BASE_DIR / "static" / "app.js").stat().st_mtime,
+            (BASE_DIR / "static" / "vendor" / "plotly-3.4.0.min.js").stat().st_mtime,
+        )
+    )
+)
 
 app = FastAPI(
     title="SurvStudio",
@@ -594,7 +604,7 @@ def _export_rows_to_docx(
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "index.html", {})
+    return templates.TemplateResponse(request, "index.html", {"static_version": STATIC_ASSET_VERSION})
 
 
 @app.get("/api/health")
