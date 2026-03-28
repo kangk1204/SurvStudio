@@ -62,6 +62,12 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'id="datasetPresetStatusTitle"' in response.text
     assert 'id="datasetPresetStatusText"' in response.text
     assert 'id="datasetPresetChips"' in response.text
+    assert 'id="mlFeatureSummaryText"' in response.text
+    assert 'id="mlFeatureSummaryChips"' in response.text
+    assert 'id="dlFeatureSummaryText"' in response.text
+    assert 'id="dlFeatureSummaryChips"' in response.text
+    assert 'id="reviewMlFeaturesButton"' in response.text
+    assert 'id="reviewDlFeaturesButton"' in response.text
     assert "No preset applied yet." in response.text
     assert "Applying a preset updates recommended columns and checkbox selections only." in response.text
     assert 'class="button ghost compact-btn" id="applyBasicPresetButton"' in response.text

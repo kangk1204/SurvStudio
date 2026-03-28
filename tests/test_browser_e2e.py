@@ -117,6 +117,10 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
             page.locator("#loadGbsg2Button").click()
             page.locator("#workspace").wait_for(state="visible")
             page.locator("#datasetPresetBar").wait_for(state="visible")
+            page.locator('[data-tab="dl"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'"
+            )
 
             assert page.locator("#datasetPresetStatusTitle").inner_text() == "No preset applied yet."
             assert "does not run an analysis" in page.locator("#datasetPresetStatusText").inner_text()
@@ -132,10 +136,42 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
 
             page.locator("#applyModelPresetButton").click()
             page.wait_for_function(
-                "document.querySelector('[data-tab=\"cox\"]').getAttribute('aria-selected') === 'true'"
+                "document.getElementById('dlFeatureSummaryText').textContent.includes('Shared across ML and DL')"
             )
+            assert page.locator('[data-tab="dl"]').get_attribute("aria-selected") == "true"
             assert "feature checklists used by ML and DL" in page.locator("#datasetPresetStatusText").inner_text()
             assert "Model features: 6" in page.locator("#datasetPresetChips").inner_text()
+            assert "Features: 6" in page.locator("#dlFeatureSummaryChips").inner_text()
+            assert "Categorical: 3" in page.locator("#dlFeatureSummaryChips").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_cox_results_table_stays_within_card(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadTcgaButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#runCoxButton").click()
+            page.wait_for_function(
+                "!document.getElementById('downloadCoxResultsButton').disabled"
+            )
+
+            shell_box = page.locator("#coxResultsShell").bounding_box()
+            card_box = page.locator("#coxResultsShell").locator("xpath=ancestor::div[contains(@class,'table-card')]").bounding_box()
+            assert shell_box is not None
+            assert card_box is not None
+            shell_right = shell_box["x"] + shell_box["width"]
+            card_right = card_box["x"] + card_box["width"]
+            assert shell_right <= card_right + 1.0
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path

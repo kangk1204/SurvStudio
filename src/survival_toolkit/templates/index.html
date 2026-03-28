@@ -458,6 +458,16 @@
               </select>
             </label>
           </div>
+          <div class="shared-feature-card" id="mlFeatureSummaryCard">
+            <div class="shared-feature-copy">
+              <strong>Shared feature selection</strong>
+              <span id="mlFeatureSummaryText">ML and DL use the covariate and categorical selections defined on the Cox tab.</span>
+              <div class="dataset-preset-chips hidden" id="mlFeatureSummaryChips"></div>
+            </div>
+            <div class="button-row">
+              <button class="button ghost compact-btn" id="reviewMlFeaturesButton" type="button">Edit on Cox Tab</button>
+            </div>
+          </div>
           <div class="ml-plots-grid">
             <div class="plot-shell" id="mlImportancePlot">
               <div class="empty-state plot-empty">
@@ -568,6 +578,16 @@
                 <option value="jco">JCO</option>
               </select>
             </label>
+          </div>
+          <div class="shared-feature-card" id="dlFeatureSummaryCard">
+            <div class="shared-feature-copy">
+              <strong>Shared feature selection</strong>
+              <span id="dlFeatureSummaryText">ML and DL use the covariate and categorical selections defined on the Cox tab.</span>
+              <div class="dataset-preset-chips hidden" id="dlFeatureSummaryChips"></div>
+            </div>
+            <div class="button-row">
+              <button class="button ghost compact-btn" id="reviewDlFeaturesButton" type="button">Edit on Cox Tab</button>
+            </div>
           </div>
           <div class="ml-plots-grid">
             <div class="plot-shell" id="dlImportancePlot">
