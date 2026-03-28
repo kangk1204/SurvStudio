@@ -238,12 +238,6 @@ survival-toolkit inspect path/to/data.csv
 
 ## Recommended Real-Data Workflows
 
-If you use one of the built-in real datasets, the UI now exposes dataset-specific preset buttons:
-- `Apply KM/Cox Preset`
-- `Apply ML/DL Preset`
-
-These presets fill the most useful starting columns and feature sets for the selected cohort.
-
 ### TCGA LUAD Workflow
 
 Best starting dataset choices:
@@ -645,13 +639,14 @@ You can export comparison tables and manuscript tables as:
 - LaTeX
 - DOCX
 
-The app also supports manuscript-style templates:
+ML and DL manuscript-table export supports these formatting helpers:
 - `default`
 - `NEJM`
 - `Lancet`
 - `JCO`
 
-These are formatting helpers, not official publisher-certified house styles.
+These apply to manuscript table export only.
+They are formatting helpers, not official publisher-certified house styles.
 
 ### Download File Names
 

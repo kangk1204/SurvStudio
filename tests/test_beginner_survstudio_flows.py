@@ -96,8 +96,8 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
             assert "Group by does not change Cox, ML, or DL inputs." in page.locator("#groupingSummaryText").inner_text()
             assert "current Group by setting" in page.locator("#kmDependencyText").inner_text()
             assert "Group by does not change the model unless you add that column as a covariate." in page.locator("#coxDependencyText").inner_text()
-            assert "shared covariates selected on the Cox tab" in page.locator("#mlFeatureSummaryText").inner_text()
-            assert "shared covariates selected on the Cox tab" in page.locator("#dlFeatureSummaryText").inner_text()
+            assert "model features selected below" in page.locator("#mlFeatureSummaryText").inner_text()
+            assert "model features selected on the ML tab" in page.locator("#dlFeatureSummaryText").inner_text()
 
             _assert_tab_active(page, "km")
             page.locator("#runKmButton").click()
@@ -127,7 +127,7 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
                 "document.getElementById('mlMetaBanner').textContent.includes('eval=')"
             )
             assert "eval=" in page.locator("#mlMetaBanner").inner_text()
-            assert "shared covariates selected on the Cox tab" in page.locator("#mlFeatureSummaryText").inner_text()
+            assert "model features selected below" in page.locator("#mlFeatureSummaryText").inner_text()
 
             page.locator('[data-tab="dl"]').click()
             _assert_tab_active(page, "dl")
@@ -177,8 +177,8 @@ def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(b
             page.wait_for_function(
                 "document.getElementById('datasetPresetStatusText').textContent.includes('feature checklists used by ML and DL')"
             )
-            assert "shared covariates selected on the Cox tab" in page.locator("#mlFeatureSummaryText").inner_text()
-            assert "shared covariates selected on the Cox tab" in page.locator("#dlFeatureSummaryText").inner_text()
+            assert "model features selected below" in page.locator("#mlFeatureSummaryText").inner_text()
+            assert "model features selected on the ML tab" in page.locator("#dlFeatureSummaryText").inner_text()
             assert "Model features: 6" in page.locator("#datasetPresetChips").inner_text()
             assert "Categorical: 3" in page.locator("#datasetPresetChips").inner_text()
 
