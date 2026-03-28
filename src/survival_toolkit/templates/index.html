@@ -247,6 +247,10 @@
               <span>Column name <span class="scope-tag scope-grouping">Grouping</span></span>
               <input id="deriveColumnName" type="text" placeholder="biomarker_group" />
             </label>
+            <label class="toggle derive-toggle-option">
+              <input id="deriveApplyToGroup" type="checkbox" />
+              <span>Use new column as Group by</span>
+            </label>
             <button class="button primary compact-btn" id="deriveButton">Create</button>
             <div class="derive-status" id="deriveStatus"></div>
           </div>
@@ -520,11 +524,21 @@
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>What this tab uses</strong>
-              <span id="mlFeatureSummaryText">ML uses the Study Design outcome definition and the shared covariates selected on the Cox tab.</span>
+              <span id="mlFeatureSummaryText">ML uses the Study Design outcome definition and the model features selected below.</span>
               <div class="dataset-preset-chips hidden" id="mlFeatureSummaryChips"></div>
             </div>
             <div class="button-row">
-              <button class="button ghost compact-btn" id="reviewMlFeaturesButton" type="button">Edit on Cox Tab</button>
+              <button class="button ghost compact-btn" id="reviewMlFeaturesButton" type="button">Focus Model Features</button>
+            </div>
+          </div>
+          <div class="checklist-grid">
+            <div class="selection-card">
+              <h3>Model Features <button class="help-dot" type="button" data-tooltip="Variables used by ML and DL models. Survival outcome columns and outcome-informed derived groups are excluded from this list by default.">?</button></h3>
+              <div class="checklist tall" id="modelFeatureChecklist"></div>
+            </div>
+            <div class="selection-card">
+              <h3>Treat as Categorical <button class="help-dot" type="button" data-tooltip="Mark ML/DL input variables that should be encoded as categories rather than used as continuous values.">?</button></h3>
+              <div class="checklist tall" id="modelCategoricalChecklist"></div>
             </div>
           </div>
           <div class="ml-plots-grid">
@@ -542,7 +556,7 @@
             </div>
           </div>
           <div class="plot-shell hidden" id="mlComparisonPlot"></div>
-          <div class="analysis-banner" id="mlMetaBanner">Select features from the Cox tab, then train a model.</div>
+          <div class="analysis-banner" id="mlMetaBanner">Select model features below, then train a model.</div>
           <div class="insight-board" id="mlInsightBoard"><div class="empty-state">ML model interpretation will appear here after training.</div></div>
           <div class="table-grid stacked">
             <div class="table-card full-width"><h3>Model Comparison</h3><div class="table-shell" id="mlComparisonShell"><div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div></div></div>
@@ -643,11 +657,11 @@
           <div class="shared-feature-card" id="dlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>What this tab uses</strong>
-              <span id="dlFeatureSummaryText">DL uses the Study Design outcome definition and the shared covariates selected on the Cox tab.</span>
+              <span id="dlFeatureSummaryText">DL uses the Study Design outcome definition and the model features selected on the ML tab.</span>
               <div class="dataset-preset-chips hidden" id="dlFeatureSummaryChips"></div>
             </div>
             <div class="button-row">
-              <button class="button ghost compact-btn" id="reviewDlFeaturesButton" type="button">Edit on Cox Tab</button>
+              <button class="button ghost compact-btn" id="reviewDlFeaturesButton" type="button">Edit on ML Tab</button>
             </div>
           </div>
           <div class="ml-plots-grid">
@@ -665,7 +679,7 @@
               </div>
             </div>
           </div>
-          <div class="analysis-banner" id="dlMetaBanner">Select features from the Cox tab, configure hyperparameters, then train.</div>
+          <div class="analysis-banner" id="dlMetaBanner">Select model features on the ML tab, configure hyperparameters, then train.</div>
           <div class="insight-board" id="dlInsightBoard"><div class="empty-state">Deep learning model interpretation will appear here after training.</div></div>
           <div class="plot-shell hidden" id="dlComparisonPlot"></div>
           <div class="table-grid stacked">
