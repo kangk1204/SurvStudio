@@ -65,6 +65,8 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="uploadButton" type="button"' in response.text
     assert '<span>Compare All Evaluation</span>' in response.text
     assert "Compare All Evaluation affects only <strong>Compare All</strong>" in response.text
+    assert "Risk table ticks" in response.text
+    assert "It does not change the Kaplan-Meier curve itself." in response.text
 
 
 def test_index_exposes_dataset_preset_feedback_ui() -> None:
@@ -96,6 +98,16 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "queueHistorySync()" in text
 
 
+def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function updateMlModelControlVisibility()" in text
+    assert 'refs.mlModelType?.value !== "rsf"' in text
+    assert "Learning rate applies to Gradient Boosted Survival only." in text
+    assert 'refs.mlModelType.addEventListener("change", () => { updateMlModelControlVisibility(); queueHistorySync(); });' in text
+
+
 def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
@@ -107,6 +119,8 @@ def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
     assert "CV folds must be between 2 and 10." in text
     assert "Parallel jobs must be between 1 and 16." in text
     assert "validateDlControls();" in text
+    assert "rerun seed=" in text
+    assert "seed=" in text
 
 
 def test_deep_model_request_accepts_1000_epochs() -> None:
@@ -192,6 +206,62 @@ def test_kaplan_meier_response_exposes_groups_and_logrank_p_summary_fields() -> 
     analysis = response.json()["analysis"]
     assert analysis["groups"] == 4
     assert analysis["logrank_p"] is not None
+
+
+def test_ml_compare_response_includes_request_config() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "sex", "stage", "biomarker_score"],
+            "categorical_features": ["sex", "stage"],
+            "model_type": "compare",
+            "n_estimators": 20,
+            "learning_rate": 0.05,
+            "evaluation_strategy": "holdout",
+        },
+    )
+
+    assert response.status_code == 200
+    request_config = response.json()["request_config"]
+    assert request_config["dataset_id"] == dataset["dataset_id"]
+    assert request_config["time_column"] == "os_months"
+    assert request_config["features"] == ["age", "sex", "stage", "biomarker_score"]
+    assert request_config["evaluation_strategy"] == "holdout"
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_deep_model_response_includes_request_config_and_seed_metadata() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "sex", "stage", "biomarker_score"],
+            "categorical_features": ["sex", "stage"],
+            "model_type": "mtlr",
+            "hidden_layers": [16],
+            "num_time_bins": 10,
+            "epochs": 10,
+            "batch_size": 16,
+            "random_seed": 77,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request_config"]["random_seed"] == 77
+    assert body["request_config"]["model_type"] == "mtlr"
+    assert body["analysis"]["training_seed"] == 77
+    assert body["analysis"]["split_seed"] == 77
+    assert body["analysis"]["monitor_seed"] == 77
 
 
 def test_endpoints_accept_boundary_configuration_values() -> None:

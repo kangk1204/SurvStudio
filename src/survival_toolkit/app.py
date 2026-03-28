@@ -37,7 +37,7 @@ from survival_toolkit.store import DatasetStore
 BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(
-    title="Survival Analysis Toolkit",
+    title="SurvStudio",
     description="Local survival analysis dashboard for exploratory and validation-oriented cohort work.",
 )
 app.add_middleware(
@@ -832,6 +832,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
 
         stored = store.get(request_model.dataset_id)
         df = stored.dataframe
+        request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
             if request_model.model_type == "compare":
@@ -864,7 +865,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                         random_state=request_model.random_state,
                     )
                 figure = build_model_comparison_figure(comparison)
-                return {"analysis": comparison, "figure": figure}
+                return {"analysis": comparison, "figure": figure, "request_config": request_config}
 
             common_ml = dict(
                 df=df,
@@ -904,6 +905,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                 "importance_figure": importance_figure,
                 "shap_result": shap_result,
                 "shap_figure": shap_figure,
+                "request_config": request_config,
             }
 
         return await run_in_threadpool(_run)
@@ -923,6 +925,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
 
         stored = store.get(request_model.dataset_id)
         df = stored.dataframe
+        request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
             base = dict(
@@ -960,6 +963,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                 return {
                     "analysis": clean_result,
                     "figures": {"comparison": build_model_comparison_figure(result)},
+                    "request_config": request_config,
                 }
 
             if request_model.model_type == "deepsurv":
@@ -989,7 +993,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                 clean_result["scientific_summary"] = clean_result["insight_board"]
             if "epochs_trained" not in clean_result:
                 clean_result["epochs_trained"] = request_model.epochs
-            return {"analysis": clean_result, "figures": figures}
+            return {"analysis": clean_result, "figures": figures, "request_config": request_config}
 
         return await run_in_threadpool(_run)
     except Exception as exc:

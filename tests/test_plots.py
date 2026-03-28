@@ -96,6 +96,13 @@ def test_build_model_comparison_figure() -> None:
     }
     figure = build_model_comparison_figure(comparison)
     assert "data" in figure
+    annotations = figure["layout"].get("annotations", [])
+    assert any((annotation.get("text") or "") == "Random baseline (0.5)" for annotation in annotations)
+    random_annotation = next(annotation for annotation in annotations if annotation.get("text") == "Random baseline (0.5)")
+    assert random_annotation["xref"] == "paper"
+    assert random_annotation["yref"] == "y"
+    assert random_annotation["xanchor"] == "left"
+    assert random_annotation["yanchor"] == "bottom"
 
 
 def test_build_model_comparison_figure_handles_missing_values() -> None:

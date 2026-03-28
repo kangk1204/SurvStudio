@@ -1369,8 +1369,24 @@ function updateWeightVisibility() {
   refs.fhPowerWrap.classList.toggle("hidden", refs.logrankWeight.value !== "fleming_harrington");
 }
 
+function updateMlModelControlVisibility() {
+  const learningRateField = refs.mlLearningRate?.closest(".toolbar-field");
+  const learningRateApplies = refs.mlModelType?.value !== "rsf";
+  if (refs.mlLearningRate) {
+    refs.mlLearningRate.disabled = !learningRateApplies;
+    refs.mlLearningRate.setAttribute("aria-disabled", String(!learningRateApplies));
+  }
+  if (learningRateField) {
+    learningRateField.classList.toggle("is-disabled", !learningRateApplies);
+    learningRateField.title = learningRateApplies
+      ? ""
+      : "Learning rate applies to Gradient Boosted Survival only.";
+  }
+}
+
 async function runKaplanMeier() {
   const base = currentBaseConfig();
+  const requestedRiskTicks = Number(refs.riskTablePoints.value);
   setShimmer(refs.kmSummaryShell);
   setShimmer(refs.kmRiskShell);
   const payload = await fetchJSON("/api/kaplan-meier", {
@@ -1378,7 +1394,7 @@ async function runKaplanMeier() {
     body: JSON.stringify({
       ...base,
       confidence_level: Number(refs.confidenceLevel.value),
-      risk_table_points: Number(refs.riskTablePoints.value),
+      risk_table_points: requestedRiskTicks,
       show_confidence_bands: refs.showConfidenceBands.checked,
       logrank_weight: refs.logrankWeight.value,
       fh_p: Number(refs.fhPower.value),
@@ -1391,6 +1407,7 @@ async function runKaplanMeier() {
   updateStepIndicator(3);
   renderTable(refs.kmSummaryShell, payload.analysis.summary_table);
   renderTable(refs.kmRiskShell, payload.analysis.risk_table.rows, payload.analysis.risk_table.columns);
+  flashPresetTargets([refs.kmRiskShell]);
   renderTable(refs.kmPairwiseShell, payload.analysis.pairwise_table);
   renderInsightBoard(refs.kmInsightBoard, payload.analysis.scientific_summary, "Run KM to generate an interpretation panel.");
   const cohort = payload.analysis.cohort;
@@ -1402,7 +1419,7 @@ async function runKaplanMeier() {
   if (refs.downloadKmSvgButton) refs.downloadKmSvgButton.disabled = false;
   activateTab("km");
   requestAnimationFrame(() => refs.kmPlot.scrollIntoView({ behavior: "smooth", block: "center" }));
-  showToast("Kaplan-Meier analysis complete", "success", 3000);
+  showToast(`Kaplan-Meier analysis complete. Risk table updated to ${requestedRiskTicks} time points.`, "success", 3200);
 }
 
 function renderSignatureResult(analysis) {
@@ -1671,7 +1688,8 @@ async function runDlModel() {
   const stats = payload.analysis || {};
   const epochsTrained = stats.epochs_trained || stats.epochs || refs.dlEpochs.value;
   const dlMetricLabel = stats.evaluation_mode === "holdout" ? "Holdout C-index" : "Apparent C-index";
-  refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(stats.evaluation_mode)}, epochs=${formatValue(epochsTrained)}`;
+  const dlSeedSuffix = stats.training_seed != null ? `, seed=${formatValue(stats.training_seed)}` : "";
+  refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(stats.evaluation_mode)}, epochs=${formatValue(epochsTrained)}${dlSeedSuffix}`;
   updateStepIndicator(3);
   activateTab("dl");
   showToast(`${refs.dlModelType.value.toUpperCase()} model trained`, "success", 3000);
@@ -1737,7 +1755,10 @@ async function runDlCompareModels() {
     ? `${payload.analysis?.cv_repeats || refs.dlCvRepeats.value}x${payload.analysis?.cv_folds || refs.dlCvFolds.value} repeated CV`
     : bestRow.evaluation_mode;
   const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Best holdout-comparable" : "Best";
-  refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}`;
+  const rerunSeedSuffix = (bestRow.training_seed != null && dlEvalMode !== "repeated_cv")
+    ? `, rerun seed=${formatValue(bestRow.training_seed)}`
+    : "";
+  refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}${rerunSeedSuffix}`;
   refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
   if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !(payload.figures?.comparison?.data?.length);
   if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !(payload.figures?.comparison?.data?.length);
@@ -2053,6 +2074,7 @@ function initListeners() {
   refs.reviewDlFeaturesButton?.addEventListener("click", focusSharedFeatureEditor);
   refs.deriveMethod.addEventListener("change", () => { updateMethodVisibility(); queueHistorySync(); });
   refs.logrankWeight.addEventListener("change", () => { updateWeightVisibility(); queueHistorySync(); });
+  refs.mlModelType.addEventListener("change", () => { updateMlModelControlVisibility(); queueHistorySync(); });
   refs.mlEvaluationStrategy.addEventListener("change", () => { updateMlEvaluationControls(); queueHistorySync(); });
   refs.dlEvaluationStrategy.addEventListener("change", () => { updateDlEvaluationControls(); queueHistorySync(); });
   refs.deriveToggle.addEventListener("click", () => {
@@ -2123,6 +2145,7 @@ initTooltips();
 initTabKeyboard();
 updateMethodVisibility();
 updateWeightVisibility();
+updateMlModelControlVisibility();
 updateMlEvaluationControls();
 updateDlEvaluationControls();
 initializeRuntime();
