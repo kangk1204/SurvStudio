@@ -185,6 +185,14 @@
             <select id="eventPositiveValue"></select>
           </label>
         </div>
+        <div class="event-guard-row">
+          <label class="toggle" title="Advanced: show every column in the Event selector. Use this only if your true event indicator has a non-standard name.">
+            <input id="showAllEventColumns" type="checkbox" />
+            <span>Show all columns for Event</span>
+          </label>
+          <span class="event-guard-note" id="eventColumnHelp">Showing event-like binary columns only. Turn on Show all columns if your event indicator uses a non-standard name.</span>
+        </div>
+        <div class="event-warning hidden" id="eventColumnWarning"></div>
 
         <details class="grouping-details" id="groupingDetails">
           <summary class="grouping-summary">
@@ -503,8 +511,12 @@
                 <option value="jco">JCO</option>
               </select>
             </label>
+            <label class="toggle" title="Skip SHAP to return the fitted model faster. Turn this off only when you need SHAP values.">
+              <input id="mlSkipShap" type="checkbox" checked />
+              <span>Fast mode (skip SHAP)</span>
+            </label>
           </div>
-          <div class="toolbar-note">Compare All Evaluation affects only <strong>Compare All</strong>. <strong>Train Model</strong> uses the single-model training path and reports its own evaluation mode in the result banner.</div>
+          <div class="toolbar-note">Compare All Evaluation affects only <strong>Compare All</strong>. <strong>Train Model</strong> uses the single-model training path and reports its own evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so Random Survival Forest returns much faster on larger cohorts.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>What this tab uses</strong>

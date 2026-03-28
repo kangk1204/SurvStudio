@@ -928,6 +928,43 @@ body {
   margin-bottom: 10px;
 }
 
+.event-guard-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: -2px 0 12px;
+}
+
+.event-guard-note {
+  font-size: 0.74rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.event-warning {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(219, 88, 59, 0.18);
+  background: rgba(219, 88, 59, 0.06);
+  color: var(--accent);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.event-warning-warning {
+  border-color: rgba(214, 168, 77, 0.28);
+  background: rgba(214, 168, 77, 0.09);
+  color: #8b5f1f;
+}
+
+.event-warning-error {
+  border-color: rgba(219, 88, 59, 0.28);
+  background: rgba(219, 88, 59, 0.08);
+  color: var(--accent);
+}
+
 .config-field {
   display: grid;
   gap: 4px;
