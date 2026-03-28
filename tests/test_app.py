@@ -52,6 +52,8 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="dlEarlyStoppingPatience"' in response.text
     assert 'id="dlParallelJobs"' in response.text
     assert 'id="dlJournalTemplate"' in response.text
+    assert 'id="runCompareInlineButton"' in response.text
+    assert 'id="runDlCompareInlineButton"' in response.text
     assert "publication-ready" not in response.text
     assert "exploratory Kaplan-Meier curves" in response.text
     assert 'class="button ghost" id="loadTcgaUploadReadyButton"' in response.text
@@ -1564,12 +1566,15 @@ def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
     assert 'guided-actions guided-actions-priority' in app_js
     assert 'guided-actions guided-actions-secondary' in app_js
     assert 'guided-run-choice' in app_js
+    assert 'runCompareInlineButton' in app_js
+    assert 'runDlCompareInlineButton' in app_js
     assert 'if (action === "run-ml-compare")' in app_js
     assert 'if (action === "run-dl-compare")' in app_js
     assert "#panel-ml #runCompareButton" not in styles
     assert "#panel-dl #runDlCompareButton" not in styles
     assert ".guided-actions-priority" in styles
     assert ".guided-run-choice" in styles
+    assert ".run-setup-quick-actions" in styles
 
 
 def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
@@ -1583,13 +1588,35 @@ def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
 
     assert "busyScopes: {}" in app_js
     assert "function buttonsForScope(scope)" in app_js
-    assert 'if (scope === "ml") return [refs.runMlButton, refs.runCompareButton];' in app_js
-    assert 'if (scope === "dl") return [refs.runDlButton, refs.runDlCompareButton];' in app_js
+    assert 'if (scope === "ml") return [refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton];' in app_js
+    assert 'if (scope === "dl") return [refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton];' in app_js
     assert "function setScopeBusy(scope, isBusy, activeButton = null)" in app_js
-    assert 'button === refs.runMlButton || button === refs.runCompareButton ? "ml"' in app_js
-    assert 'button === refs.runDlButton || button === refs.runDlCompareButton ? "dl"' in app_js
+    assert 'button === refs.runMlButton || button === refs.runCompareButton || button === refs.runCompareInlineButton ? "ml"' in app_js
+    assert 'button === refs.runDlButton || button === refs.runDlCompareButton || button === refs.runDlCompareInlineButton ? "dl"' in app_js
     assert 'setScopeBusy(scope, true, button);' in app_js
     assert 'setScopeBusy(scope, false, button);' in app_js
+
+
+def test_frontend_scrolls_to_results_after_runs_finish() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function resultAnchorFor(tabName, { mode = \"single\" } = {})" in app_js
+    assert "function scrollToAnalysisResult(tabName, { mode = \"single\" } = {})" in app_js
+    assert 'setGuidedStep(5, { scroll: false, historyMode: "push" });' in app_js
+    assert 'scrollToAnalysisResult(tabName, { mode: resultMode });' in app_js
+    assert 'scrollToAnalysisResult("km");' in app_js
+    assert 'scrollToAnalysisResult("cox");' in app_js
+    assert 'scrollToAnalysisResult("tables");' in app_js
+    assert 'scrollToAnalysisResult("ml", { mode: "single" });' in app_js
+    assert 'scrollToAnalysisResult("ml", { mode: "compare" });' in app_js
+    assert 'scrollToAnalysisResult("dl", { mode: "single" });' in app_js
+    assert 'scrollToAnalysisResult("dl", { mode: "compare" });' in app_js
 
 
 def test_compare_results_hide_single_model_plot_sections() -> None:

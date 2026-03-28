@@ -154,6 +154,7 @@ const refs = {
   // ML
   runMlButton: document.getElementById("runMlButton"),
   runCompareButton: document.getElementById("runCompareButton"),
+  runCompareInlineButton: document.getElementById("runCompareInlineButton"),
   downloadMlComparisonButton: document.getElementById("downloadMlComparisonButton"),
   downloadMlManuscriptCsvButton: document.getElementById("downloadMlManuscriptCsvButton"),
   downloadMlManuscriptMarkdownButton: document.getElementById("downloadMlManuscriptMarkdownButton"),
@@ -185,6 +186,7 @@ const refs = {
   // DL
   runDlButton: document.getElementById("runDlButton"),
   runDlCompareButton: document.getElementById("runDlCompareButton"),
+  runDlCompareInlineButton: document.getElementById("runDlCompareInlineButton"),
   downloadDlComparisonButton: document.getElementById("downloadDlComparisonButton"),
   downloadDlManuscriptCsvButton: document.getElementById("downloadDlManuscriptCsvButton"),
   downloadDlManuscriptMarkdownButton: document.getElementById("downloadDlManuscriptMarkdownButton"),
@@ -820,8 +822,8 @@ function isScopeBusy(scope) {
 }
 
 function buttonsForScope(scope) {
-  if (scope === "ml") return [refs.runMlButton, refs.runCompareButton];
-  if (scope === "dl") return [refs.runDlButton, refs.runDlCompareButton];
+  if (scope === "ml") return [refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton];
+  if (scope === "dl") return [refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton];
   if (scope === "km") return [refs.runKmButton];
   if (scope === "cox") return [refs.runCoxButton];
   if (scope === "tables") return [refs.runCohortTableButton];
@@ -2717,7 +2719,7 @@ async function runKaplanMeier() {
   if (refs.downloadKmPngButton) refs.downloadKmPngButton.disabled = false;
   if (refs.downloadKmSvgButton) refs.downloadKmSvgButton.disabled = false;
   activateTab("km");
-  requestAnimationFrame(() => refs.kmPlot.scrollIntoView({ behavior: "smooth", block: "center" }));
+  scrollToAnalysisResult("km");
   showToast(`Kaplan-Meier analysis complete. Risk table updated to ${requestedRiskTicks} time points.`, "success", 3200);
 }
 
@@ -2804,7 +2806,7 @@ async function runCox() {
   if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.disabled = false;
   if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.disabled = false;
   activateTab("cox");
-  requestAnimationFrame(() => refs.coxPlot.scrollIntoView({ behavior: "smooth", block: "center" }));
+  scrollToAnalysisResult("cox");
   showToast("Cox PH model fitted", "success", 3000);
 }
 
@@ -2822,6 +2824,7 @@ async function runCohortTable() {
   refs.downloadCohortTableButton.disabled = false;
   updateStepIndicator(3);
   activateTab("tables");
+  scrollToAnalysisResult("tables");
 }
 
 // ── ML Models ──────────────────────────────────────────────────
@@ -2890,6 +2893,7 @@ async function runMlModel() {
   refs.mlMetaBanner.textContent = `${refs.mlModelType.value.toUpperCase()}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}, time=${elapsedSeconds}s`;
   updateStepIndicator(3);
   activateTab("ml");
+  scrollToAnalysisResult("ml", { mode: "single" });
   showToast(`${refs.mlModelType.value.toUpperCase()} model trained`, "success", 3000);
 }
 
@@ -2944,6 +2948,7 @@ async function runCompareModels() {
   if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !(payload.figure?.data?.length);
   setMlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
   activateTab("ml");
+  scrollToAnalysisResult("ml", { mode: "compare" });
   showToast("Model comparison complete", "success", 3000);
 }
 
@@ -3040,6 +3045,7 @@ async function runDlModel() {
   refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlSeedSuffix}`;
   updateStepIndicator(3);
   activateTab("dl");
+  scrollToAnalysisResult("dl", { mode: "single" });
   showToast(`${refs.dlModelType.value.toUpperCase()} model trained`, "success", 3000);
 }
 
@@ -3117,6 +3123,7 @@ async function runDlCompareModels() {
   setDlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
   updateStepIndicator(3);
   activateTab("dl");
+  scrollToAnalysisResult("dl", { mode: "compare" });
   showToast("Deep learning model comparison complete", "success", 3000);
 }
 
@@ -3241,8 +3248,8 @@ function wireDownloads() {
 
 async function withLoading(button, action) {
   const scope = (
-    button === refs.runMlButton || button === refs.runCompareButton ? "ml"
-      : button === refs.runDlButton || button === refs.runDlCompareButton ? "dl"
+    button === refs.runMlButton || button === refs.runCompareButton || button === refs.runCompareInlineButton ? "ml"
+      : button === refs.runDlButton || button === refs.runDlCompareButton || button === refs.runDlCompareInlineButton ? "dl"
         : button === refs.runKmButton ? "km"
           : button === refs.runCoxButton ? "cox"
             : button === refs.runCohortTableButton ? "tables"
@@ -3314,10 +3321,40 @@ function focusTabWorkspace(tabName, { historyMode = "push" } = {}) {
   });
 }
 
-async function runGuidedGoal(tabName, button, action) {
+function isVisibleResultNode(node) {
+  return Boolean(node && !node.classList?.contains("hidden"));
+}
+
+function resultAnchorFor(tabName, { mode = "single" } = {}) {
+  const candidates = {
+    km: [refs.kmPlot, refs.kmSummaryShell],
+    cox: [refs.coxPlot, refs.coxResultsShell],
+    tables: [refs.cohortTableShell],
+    ml: mode === "compare"
+      ? [refs.mlComparisonPlot, refs.mlComparisonShell, refs.mlMetaBanner]
+      : [refs.mlImportancePlot, refs.mlMetaBanner, refs.mlInsightBoard],
+    dl: mode === "compare"
+      ? [refs.dlComparisonPlot, refs.dlComparisonShell, refs.dlMetaBanner]
+      : [refs.dlImportancePlot, refs.dlLossPlot, refs.dlMetaBanner],
+  }[tabName] || [];
+  return candidates.find(isVisibleResultNode) || null;
+}
+
+function scrollToAnalysisResult(tabName, { mode = "single" } = {}) {
+  const target = resultAnchorFor(tabName, { mode });
+  if (!target) return;
+  requestAnimationFrame(() => {
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+async function runGuidedGoal(tabName, button, action, { resultMode = "single" } = {}) {
   activateTab(tabName, { historyMode: "replace" });
   await withLoading(button, action);
-  if (currentGoalResult(tabName)) setGuidedStep(5, { scroll: true, historyMode: "push" });
+  if (currentGoalResult(tabName)) {
+    setGuidedStep(5, { scroll: false, historyMode: "push" });
+    scrollToAnalysisResult(tabName, { mode: resultMode });
+  }
 }
 
 function handleGuidedPanelAction(target) {
@@ -3355,10 +3392,10 @@ function handleGuidedPanelAction(target) {
   if (action === "open-tables") { focusTabWorkspace("tables", { historyMode: "push" }); return; }
   if (action === "run-km") { void runGuidedGoal("km", refs.runKmButton, runKaplanMeier); return; }
   if (action === "run-cox") { void runGuidedGoal("cox", refs.runCoxButton, runCox); return; }
-  if (action === "run-ml") { void runGuidedGoal("ml", refs.runMlButton, runMlModel); return; }
-  if (action === "run-ml-compare") { void runGuidedGoal("ml", refs.runCompareButton, runCompareModels); return; }
-  if (action === "run-dl") { void runGuidedGoal("dl", refs.runDlButton, runDlModel); return; }
-  if (action === "run-dl-compare") { void runGuidedGoal("dl", refs.runDlCompareButton, runDlCompareModels); return; }
+  if (action === "run-ml") { void runGuidedGoal("ml", refs.runMlButton, runMlModel, { resultMode: "single" }); return; }
+  if (action === "run-ml-compare") { void runGuidedGoal("ml", refs.runCompareButton, runCompareModels, { resultMode: "compare" }); return; }
+  if (action === "run-dl") { void runGuidedGoal("dl", refs.runDlButton, runDlModel, { resultMode: "single" }); return; }
+  if (action === "run-dl-compare") { void runGuidedGoal("dl", refs.runDlCompareButton, runDlCompareModels, { resultMode: "compare" }); return; }
   if (action === "run-tables") { void runGuidedGoal("tables", refs.runCohortTableButton, runCohortTable); }
 }
 
@@ -3657,6 +3694,14 @@ function initListeners() {
     }
     withLoading(refs.runCompareButton, runCompareModels);
   });
+  refs.runCompareInlineButton?.addEventListener("click", () => {
+    if (runtime.uiMode === "guided") {
+      runtime.guidedGoal = "ml";
+      void runGuidedGoal("ml", refs.runCompareButton, runCompareModels);
+      return;
+    }
+    withLoading(refs.runCompareInlineButton, runCompareModels);
+  });
   refs.runDlButton.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
       runtime.guidedGoal = "dl";
@@ -3672,6 +3717,14 @@ function initListeners() {
       return;
     }
     withLoading(refs.runDlCompareButton, runDlCompareModels);
+  });
+  refs.runDlCompareInlineButton?.addEventListener("click", () => {
+    if (runtime.uiMode === "guided") {
+      runtime.guidedGoal = "dl";
+      void runGuidedGoal("dl", refs.runDlCompareButton, runDlCompareModels);
+      return;
+    }
+    withLoading(refs.runDlCompareInlineButton, runDlCompareModels);
   });
   refs.tabButtons.forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab, { historyMode: "push" })));
   const changeTrackedControls = [
