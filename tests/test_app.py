@@ -68,6 +68,14 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="guidedShell"' in response.text
     assert 'id="guidedSummaryBar"' in response.text
     assert 'id="guidedPanel"' in response.text
+    assert 'class="guided-rail"' in response.text
+    assert "Guided workflow" in response.text
+    assert "Move one decision at a time." in response.text
+    assert "Confirm outcome" in response.text
+    assert "Choose analysis" in response.text
+    assert "Configure &amp; run" in response.text
+    assert "Review results" in response.text
+    assert "Upload or open a sample cohort" in response.text
     assert "Configure &amp; run" in response.text
     assert '<span>Evaluation Mode</span>' in response.text
     assert "Evaluation Mode applies to both <strong>Train Model</strong> and <strong>Compare All</strong>" in response.text
@@ -79,6 +87,7 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="eventColumnHelp"' in response.text
     assert 'id="eventColumnWarning"' in response.text
     assert 'id="eventValueWarning"' in response.text
+    assert 'id="groupColumnWarning"' in response.text
     assert "Show all columns for Event" in response.text
     assert "Showing event-like binary columns only." in response.text
     assert 'id="groupingDetails"' in response.text
@@ -119,6 +128,9 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'class="button ghost compact-btn" id="applyBasicPresetButton"' in response.text
     assert 'class="button ghost compact-btn" id="applyModelPresetButton"' in response.text
     assert 'class="button-row dataset-preset-actions"' in response.text
+    assert "Run setup" in response.text
+    assert "Validation and runtime" in response.text
+    assert 'class="table-card-head"' in response.text
 
 
 def test_frontend_tracks_workspace_controls_in_history_state() -> None:
@@ -142,14 +154,33 @@ def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
 
     assert 'uiMode: "guided"' in text
     assert "guidedGoal: null" in text
+    assert "guidedStep: 1" in text
     assert "function setUiMode(mode" in text
     assert "function setGuidedGoal(goal" in text
+    assert "function setGuidedStep(step" in text
+    assert "function maxReachableGuidedStep()" in text
+    assert "function canNavigateToGuidedStep(step)" in text
+    assert "function updateGuidedSurfaceVisibility()" in text
     assert "function renderGuidedChrome()" in text
     assert "view: \"home\", uiMode: runtime.uiMode" in text
     assert "guidedGoal: runtime.guidedGoal" in text
+    assert "guidedStep: runtime.guidedStep" in text
     assert "setUiMode(historyState?.uiMode || runtime.uiMode, { syncHistory: false });" in text
     assert "runtime.guidedGoal = historyState.guidedGoal || null;" in text
+    assert "runtime.guidedStep = historyState.guidedStep" in text
     assert "handleGuidedPanelAction(button);" in text
+    assert 'setGuidedStep(currentGuidedStep() + 1, { historyMode: "push" });' in text
+    assert 'setGuidedStep(currentGuidedStep() - 1, { historyMode: "push" });' in text
+    assert 'setGuidedGoal(target.dataset.goal || null, { historyMode: "push" });' in text
+    assert 'if (currentGoalResult(tabName)) setGuidedStep(5, { scroll: true, historyMode: "push" });' in text
+    assert 'refs.stepIndicator?.addEventListener("click", (event) => {' in text
+    assert 'if (requestedStep === 1) {' in text
+    assert 'if (requestedStep >= 4 && runtime.guidedGoal) {' in text
+    assert "historyRestoreToken: 0" in text
+    assert "const restoreToken = ++runtime.historyRestoreToken;" in text
+    assert 'goHome({ historyMode: "push" });' in text
+    assert 'setUiMode("guided", { historyMode: "push" })' in text
+    assert 'setUiMode("expert", { historyMode: "push" })' in text
 
 
 def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selection() -> None:
@@ -163,12 +194,14 @@ def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selec
     assert "function inferEventPositiveSelection(" in text
     assert "function updateEventValueGuidance(" in text
     assert "function currentEventColumnWarning()" in text
-    assert "Show all columns to select non-standard event fields." in text
+    assert "Turn on Show all columns to select non-standard event fields." in text
     assert "looks more like a baseline characteristic than a time-to-event indicator" in text
     assert "does not look like a binary event indicator" in text
+    assert 'If this is intentional, turn on Show all columns for Event first.' in text
     assert "Choose event value" in text
     assert 'Choose the Event Value that means the event happened' in text
-    assert 'renderSelect(refs.groupColumn, columnNames, { includeBlank: true, blankLabel: "Overall only", selected: null });' in text
+    assert "function currentGroupColumnWarning()" in text
+    assert "high-cardinality numeric column" in text
 
 
 def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
@@ -353,6 +386,33 @@ def test_kaplan_meier_response_exposes_groups_and_logrank_p_summary_fields() -> 
     assert analysis["logrank_p"] is not None
 
 
+def test_kaplan_meier_response_includes_request_config() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "group_column": "stage",
+            "time_unit_label": "Months",
+            "confidence_level": 0.95,
+            "risk_table_points": 6,
+            "show_confidence_bands": True,
+            "logrank_weight": "logrank",
+            "fh_p": 1.0,
+        },
+    )
+
+    assert response.status_code == 200
+    request_config = response.json()["request_config"]
+    assert request_config["dataset_id"] == dataset["dataset_id"]
+    assert request_config["group_column"] == "stage"
+    assert request_config["risk_table_points"] == 6
+    assert request_config["show_confidence_bands"] is True
+
+
 def test_ml_compare_response_includes_request_config() -> None:
     dataset = client.post("/api/load-example").json()
     response = client.post(
@@ -377,6 +437,43 @@ def test_ml_compare_response_includes_request_config() -> None:
     assert request_config["time_column"] == "os_months"
     assert request_config["features"] == ["age", "sex", "stage", "biomarker_score"]
     assert request_config["evaluation_strategy"] == "holdout"
+
+
+def test_cox_response_includes_request_config() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/cox",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "covariates": ["age", "sex", "stage"],
+            "categorical_covariates": ["sex", "stage"],
+        },
+    )
+
+    assert response.status_code == 200
+    request_config = response.json()["request_config"]
+    assert request_config["covariates"] == ["age", "sex", "stage"]
+    assert request_config["categorical_covariates"] == ["sex", "stage"]
+
+
+def test_cohort_table_response_includes_request_config() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/cohort-table",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "variables": ["age", "sex", "stage"],
+            "group_column": "stage",
+        },
+    )
+
+    assert response.status_code == 200
+    request_config = response.json()["request_config"]
+    assert request_config["variables"] == ["age", "sex", "stage"]
+    assert request_config["group_column"] == "stage"
 
 
 def test_ml_compare_response_appends_replay_notes_to_manuscript_tables() -> None:
@@ -996,6 +1093,89 @@ def test_classical_endpoint_option_matrix_runs_without_errors() -> None:
     assert cohort_response.json()["analysis"]["rows"]
 
 
+def test_derive_group_rejects_existing_column_name_collision() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/derive-group",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "source_column": "age",
+            "method": "median_split",
+            "new_column_name": "age",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "already exists" in response.json()["detail"]
+
+
+def test_derive_group_response_tracks_outcome_informed_provenance() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/derive-group",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "source_column": "age",
+            "method": "optimal_cutpoint",
+            "new_column_name": "age_bin",
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    provenance = response.json()["derived_column_provenance"]
+    assert provenance["age_bin"]["outcome_informed"] is True
+
+
+def test_signature_search_rejects_existing_column_name_collision() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/discover-signature",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "candidate_columns": ["age", "sex", "stage"],
+            "max_combination_size": 2,
+            "top_k": 5,
+            "bootstrap_iterations": 1,
+            "permutation_iterations": 0,
+            "validation_iterations": 0,
+            "new_column_name": "stage",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "already exists" in response.json()["detail"]
+
+
+def test_signature_search_response_tracks_outcome_informed_provenance() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/discover-signature",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "candidate_columns": ["age", "sex", "stage"],
+            "max_combination_size": 2,
+            "top_k": 5,
+            "bootstrap_iterations": 1,
+            "permutation_iterations": 0,
+            "validation_iterations": 0,
+            "new_column_name": "sig_age_stage",
+        },
+    )
+
+    assert response.status_code == 200
+    provenance = response.json()["derived_column_provenance"]
+    assert provenance["sig_age_stage"]["outcome_informed"] is True
+
+
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 def test_core_endpoints_support_explicit_string_event_positive_value() -> None:
     df = make_example_dataset(seed=72, n_patients=84)
@@ -1303,6 +1483,7 @@ def test_frontend_derive_group_explains_that_dl_features_do_not_change() -> None
 
     assert 'const applyToGroup = Boolean(refs.deriveApplyToGroup?.checked);' in app_js
     assert 'Group by stayed as ${previousGroup}.' in app_js
+    assert "Kaplan-Meier remains ungrouped until you apply this column." in app_js
     assert 'Use "Set as Group by" only if you want Kaplan-Meier and grouped tables to switch.' in app_js
     assert "Set as Group by. ML/DL features were not changed." in app_js
     assert "Use it for grouping or visualization, not as an ML/DL training feature." in app_js
@@ -1326,6 +1507,156 @@ def test_frontend_derive_group_preserves_existing_group_unless_user_applies_new_
     assert "const preservedGroup = refs.groupColumn.value || \"\";" in derive_body
     assert "setSelectValueIfPresent(refs.groupColumn, preservedGroup);" in derive_body
     assert "Use \"Set as Group by\" only if you want Kaplan-Meier and grouped tables to switch." in derive_body
+
+
+def test_frontend_prefers_applying_new_group_in_km_when_group_is_still_overall_only() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function preferredDeriveApplyToGroup()" in app_js
+    assert "return guidedGroupingContextActive() && !(refs.groupColumn?.value || \"\");" in app_js
+    assert "function syncDeriveApplyPreference({ force = false } = {})" in app_js
+
+
+def test_frontend_refreshes_km_after_creating_and_applying_a_new_group() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    derive_start = app_js.index("async function deriveGroup()")
+    derive_end = app_js.index("function updateMethodVisibility()", derive_start)
+    derive_body = app_js[derive_start:derive_end]
+    assert 'const shouldRefreshKm = applyToGroup && (activeTabName() === "km" || runtime.guidedGoal === "km");' in derive_body
+    assert "Refreshing Kaplan-Meier with the new grouping..." in derive_body
+    assert "Kaplan-Meier is refreshing now." in derive_body
+    assert "await runKaplanMeier();" in derive_body
+
+
+def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert 'secondaryAction: "run-ml-compare"' in app_js
+    assert 'secondaryAction: "run-dl-compare"' in app_js
+    assert 'secondaryLabel: "Compare all ML models"' in app_js
+    assert 'secondaryLabel: "Compare all DL models"' in app_js
+    assert 'if (action === "run-ml-compare")' in app_js
+    assert 'if (action === "run-dl-compare")' in app_js
+    assert "#panel-ml #runCompareButton" not in styles
+    assert "#panel-dl #runDlCompareButton" not in styles
+
+
+def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "busyScopes: {}" in app_js
+    assert "function buttonsForScope(scope)" in app_js
+    assert 'if (scope === "ml") return [refs.runMlButton, refs.runCompareButton];' in app_js
+    assert 'if (scope === "dl") return [refs.runDlButton, refs.runDlCompareButton];' in app_js
+    assert "function setScopeBusy(scope, isBusy, activeButton = null)" in app_js
+    assert 'button === refs.runMlButton || button === refs.runCompareButton ? "ml"' in app_js
+    assert 'button === refs.runDlButton || button === refs.runDlCompareButton ? "dl"' in app_js
+    assert 'setScopeBusy(scope, true, button);' in app_js
+    assert 'setScopeBusy(scope, false, button);' in app_js
+
+
+def test_compare_results_hide_single_model_plot_sections() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert 'mlPanel: document.getElementById("panel-ml")' in app_js
+    assert 'dlPanel: document.getElementById("panel-dl")' in app_js
+    assert 'function setPanelResultMode(panel, mode = "idle")' in app_js
+    assert 'setPanelResultMode(refs.mlPanel, "single");' in app_js
+    assert 'setPanelResultMode(refs.mlPanel, "compare");' in app_js
+    assert 'setPanelResultMode(refs.dlPanel, "single");' in app_js
+    assert 'setPanelResultMode(refs.dlPanel, "compare");' in app_js
+    assert '#panel-ml[data-result-mode="compare"] .ml-plots-grid' in styles
+    assert '#panel-dl[data-result-mode="compare"] .ml-plots-grid' in styles
+
+
+def test_shared_model_feature_bulk_actions_are_exposed() -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'id="selectAllModelFeaturesButton"' in response.text
+    assert 'id="clearModelFeaturesButton"' in response.text
+    assert 'id="selectAllDlModelFeaturesButton"' in response.text
+    assert 'id="clearDlModelFeaturesButton"' in response.text
+
+
+def test_frontend_syncs_bulk_model_feature_actions_across_ml_and_dl() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function setSharedModelFeatureSelection(nextFeatures = [], { clearCategoricals = false } = {})" in app_js
+    assert 'setCheckedValues(refs.modelFeatureChecklist, normalizedFeatures);' in app_js
+    assert 'setCheckedValues(refs.dlModelFeatureChecklist, normalizedFeatures);' in app_js
+    assert 'refs.selectAllModelFeaturesButton?.addEventListener("click"' in app_js
+    assert 'refs.clearModelFeaturesButton?.addEventListener("click"' in app_js
+    assert 'refs.selectAllDlModelFeaturesButton?.addEventListener("click"' in app_js
+    assert 'refs.clearDlModelFeaturesButton?.addEventListener("click"' in app_js
+    assert 'setSharedModelFeatureSelection(modelFeatureCandidateColumns());' in app_js
+    assert 'setSharedModelFeatureSelection([], { clearCategoricals: true });' in app_js
+
+
+def test_guided_summary_bar_is_not_sticky() -> None:
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    start = styles.index(".guided-summary-bar {")
+    end = styles.index(".guided-summary-copy", start)
+    guided_summary_css = styles[start:end]
+    assert "position: static;" in guided_summary_css
+    assert "position: sticky;" not in guided_summary_css
 
 
 def test_frontend_caps_importance_plot_container_height() -> None:

@@ -63,7 +63,7 @@ def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
     trainer = trainer_map[trainer_name]
     started = time.monotonic()
     result = trainer(
-        pd.DataFrame(),
+        None,
         time_column=task["time_column"],
         event_column=task["event_column"],
         features=task["features"],
@@ -201,9 +201,17 @@ def _coerce_deep_frame(
 
     if not features:
         raise ValueError("Select at least one feature for deep learning models.")
+    required_columns = [*features, time_column, event_column]
+    missing_columns = [column for column in required_columns if column not in df.columns]
+    if missing_columns:
+        missing_preview = ", ".join(str(column) for column in missing_columns[:5])
+        raise ValueError(
+            "Deep learning input is missing required columns: "
+            f"{missing_preview}."
+        )
 
     categorical_features = list(categorical_features or [])
-    frame = df[list(features) + [time_column, event_column]].copy()
+    frame = df[required_columns].copy()
     frame = frame.replace([np.inf, -np.inf], np.nan)
     frame[time_column] = pd.to_numeric(frame[time_column], errors="coerce")
 
@@ -436,7 +444,7 @@ def _prepare_deep_split_data(
 
 
 def _prepare_deep_training_inputs(
-    df: pd.DataFrame,
+    df: pd.DataFrame | None,
     *,
     time_column: str,
     event_column: str,
@@ -454,6 +462,8 @@ def _prepare_deep_training_inputs(
             random_seed,
         )
         return prepared_data, resolved_split
+    if df is None:
+        raise ValueError("Raw dataframe input is required when prepared_data is not provided.")
 
     clean_frame = _coerce_deep_frame(
         df,
@@ -1603,7 +1613,7 @@ class DeepSurvNet(_TorchModuleBase):
 
 
 def train_deepsurv(
-    df: pd.DataFrame,
+    df: pd.DataFrame | None,
     time_column: str,
     event_column: str,
     features: Sequence[str],
@@ -1900,7 +1910,7 @@ def _deephit_loss(
 
 
 def train_deephit(
-    df: pd.DataFrame,
+    df: pd.DataFrame | None,
     time_column: str,
     event_column: str,
     features: Sequence[str],
@@ -2179,7 +2189,7 @@ def _mtlr_loss(
 
 
 def train_neural_mtlr(
-    df: pd.DataFrame,
+    df: pd.DataFrame | None,
     time_column: str,
     event_column: str,
     features: Sequence[str],
@@ -2364,7 +2374,7 @@ def train_neural_mtlr(
             if eval_mask.sum() > 0:
                 obs_mean = float(np.sum(observed_event[idx_slice][eval_mask]) / eval_mask.sum())
             else:
-                obs_mean = float(np.mean(observed_event[idx_slice]))
+                obs_mean = None
             calibration_data.append({
                 "decile": d + 1,
                 "predicted_event_rate": pred_mean,
@@ -2495,7 +2505,7 @@ class SurvivalTransformerNet(_TorchModuleBase):
 
 
 def train_survival_transformer(
-    df: pd.DataFrame,
+    df: pd.DataFrame | None,
     time_column: str,
     event_column: str,
     features: Sequence[str],
@@ -2836,7 +2846,7 @@ def _simple_kmeans(data: np.ndarray, n_clusters: int, max_iter: int = 100, seed:
 
 
 def train_survival_vae(
-    df: pd.DataFrame,
+    df: pd.DataFrame | None,
     time_column: str,
     event_column: str,
     features: Sequence[str],
