@@ -29,9 +29,9 @@ def test_index_uses_relative_static_assets() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
-    assert '../static/styles.css' in response.text
-    assert '<script src="../static/vendor/plotly-3.4.0.min.js" defer></script>' in response.text
-    assert '<script src="../static/app.js" defer></script>' in response.text
+    assert '../static/styles.css?v=' in response.text
+    assert '<script src="../static/vendor/plotly-3.4.0.min.js?v=' in response.text
+    assert '<script src="../static/app.js?v=' in response.text
     assert "cdn.plot.ly" not in response.text
     assert 'id="mlEvaluationStrategy"' in response.text
     assert 'id="downloadMlManuscriptMarkdownButton"' in response.text
@@ -1561,10 +1561,15 @@ def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
     assert 'secondaryAction: "run-dl-compare"' in app_js
     assert 'secondaryLabel: "Compare all ML models"' in app_js
     assert 'secondaryLabel: "Compare all DL models"' in app_js
+    assert 'guided-actions guided-actions-priority' in app_js
+    assert 'guided-actions guided-actions-secondary' in app_js
+    assert 'guided-run-choice' in app_js
     assert 'if (action === "run-ml-compare")' in app_js
     assert 'if (action === "run-dl-compare")' in app_js
     assert "#panel-ml #runCompareButton" not in styles
     assert "#panel-dl #runDlCompareButton" not in styles
+    assert ".guided-actions-priority" in styles
+    assert ".guided-run-choice" in styles
 
 
 def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
