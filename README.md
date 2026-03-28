@@ -230,6 +230,11 @@ If this is your first time:
    - custom cutoff
    - optimal cutpoint
 5. Move to ML or DL comparison only after the classical analysis makes sense
+6. If you want to validate a file before opening the UI, run:
+
+```bash
+survival-toolkit inspect path/to/data.csv
+```
 
 ## Recommended Real-Data Workflows
 
@@ -295,6 +300,31 @@ Recommended manuscript outputs:
 - Cox forest plot for recurrence-free survival
 - cohort table grouped by hormonal therapy
 - ML comparison table for recurrence discrimination
+
+### Synthetic Example Workflow
+
+Best starting dataset choice:
+- `Synthetic Example`
+
+Recommended study columns:
+- time column: `os_months`
+- event column: `os_event`
+- event-positive value: `1`
+- group column: `stage` or `treatment`
+
+Recommended first figures and tables:
+1. Kaplan-Meier by `stage`
+2. Kaplan-Meier by `treatment`
+3. Cohort Table grouped by `stage`
+4. Cox PH with:
+   - covariates: `age`, `sex`, `stage`, `treatment`, `biomarker_score`, `immune_index`
+   - categorical covariates: `sex`, `stage`, `treatment`
+5. ML comparison with:
+   - features: `age`, `sex`, `stage`, `treatment`, `biomarker_score`, `immune_index`
+   - categorical features: `sex`, `stage`, `treatment`
+
+This synthetic dataset does **not** use `stage_group` or `treatment_group`.
+The actual column names are `stage` and `treatment`.
 
 ## Input Data Format
 
@@ -649,6 +679,22 @@ This prints a file-level profile so you can quickly check:
 - likely time columns
 - likely event columns
 - basic variable types
+
+This is the fastest way to catch file-format problems before uploading a cohort in the browser.
+
+## DL Runtime Note
+
+Deep learning comparison can take substantial time on CPU-only machines, especially with:
+- `Compare All`
+- `Repeated Stratified CV`
+- large `Epochs`
+
+If you are running on a laptop without GPU acceleration, start with:
+- `Epochs = 100`
+- `Holdout`
+- a compact feature set
+
+Then increase epochs or switch to repeated CV only after the single-run workflow looks correct.
 
 ## Practical Notes
 

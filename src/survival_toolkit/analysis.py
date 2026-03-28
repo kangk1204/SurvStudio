@@ -310,9 +310,12 @@ def looks_binary(series: pd.Series) -> bool:
 
 def suggest_columns(df: pd.DataFrame) -> dict[str, list[str]]:
     columns = list(df.columns)
+    event_tokens = ("event", "status", "death", "progress", "relapse", "censor")
+    time_raw = _column_keywords(columns, ("time", "month", "day", "week", "year", "os", "pfs", "dfs"))
+    time_columns = [c for c in time_raw if not any(tok in c.lower() for tok in event_tokens)]
     suggestions = {
-        "time_columns": _column_keywords(columns, ("time", "month", "day", "week", "year", "os", "pfs", "dfs")),
-        "event_columns": _column_keywords(columns, ("event", "status", "death", "progress", "relapse", "censor")),
+        "time_columns": time_columns,
+        "event_columns": _column_keywords(columns, event_tokens),
         "group_columns": _column_keywords(columns, ("group", "arm", "treatment", "stage", "sex", "risk", "cluster")),
     }
     return suggestions
@@ -673,9 +676,18 @@ def _signature_scientific_summary(
     if permutation_p is not None and permutation_p > alpha:
         cautions.append("Permutation testing does not confirm the observed ranking at the configured alpha.")
 
-    if is_significant:
+    has_internal_confirmation = (
+        search_space["permutation_iterations"] > 0 or search_space["validation_iterations"] > 0
+    )
+    if is_significant and has_internal_confirmation:
         headline = "Top-ranked signature passes the current internal significance and robustness gates."
         next_steps.append("Validate the locked signature on an external cohort before presenting it as a biomarker claim.")
+    elif is_significant:
+        headline = (
+            "Top-ranked signature clears the current ranking rules but remains exploratory "
+            "without permutation or holdout confirmation."
+        )
+        next_steps.append("Run permutation or holdout validation before framing this signature as a robust biomarker claim.")
     else:
         headline = "Top-ranked signature is still exploratory and should be treated as hypothesis-generating."
         next_steps.append("Narrow the candidate list or increase sample size before claiming a stable signature.")
@@ -1715,6 +1727,8 @@ def compute_km_analysis(
     return {
         "curves": curve_payloads,
         "summary_table": summary_rows,
+        "groups": int(len(summary_rows)),
+        "logrank_p": None if test_payload is None else float(test_payload["p_value"]),
         "risk_table": {
             "columns": ["Group", *[f"{tick:g}" for tick in risk_ticks]],
             "rows": risk_rows,

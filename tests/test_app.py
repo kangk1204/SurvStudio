@@ -57,6 +57,10 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'class="button ghost" id="loadTcgaButton"' in response.text
     assert 'class="button ghost" id="loadGbsg2Button"' in response.text
     assert 'class="button ghost" id="loadExampleButton"' in response.text
+    assert "Compact upload-style test cohort with fewer columns" in response.text
+    assert "Broader bundled clinical cohort with extra fields" in response.text
+    assert "Classic breast cancer recurrence-survival cohort" in response.text
+    assert "Fastest demo path for checking the app and workflow" in response.text
     assert 'id="uploadButton" type="button"' in response.text
     assert '<span>Compare All Evaluation</span>' in response.text
     assert "Compare All Evaluation affects only <strong>Compare All</strong>" in response.text
@@ -151,6 +155,42 @@ def test_upload_dataset_accepts_tsv_files() -> None:
     assert body["filename"] == "cohort.tsv"
     assert body["n_rows"] == 3
     assert {column["name"] for column in body["columns"]} >= {"os_months", "os_event", "age"}
+
+
+def test_readme_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -> None:
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    text = readme.read_text()
+
+    assert "Synthetic Example Workflow" in text
+    assert "This synthetic dataset does **not** use `stage_group` or `treatment_group`." in text
+    assert "survival-toolkit inspect path/to/data.csv" in text
+    assert "This is the fastest way to catch file-format problems before uploading a cohort in the browser." in text
+    assert "## DL Runtime Note" in text
+
+
+def test_kaplan_meier_response_exposes_groups_and_logrank_p_summary_fields() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "group_column": "stage",
+            "confidence_level": 0.95,
+            "max_time": None,
+            "risk_table_points": 6,
+            "show_confidence_bands": True,
+            "logrank_weight": "logrank",
+            "fh_p": 1.0,
+        },
+    )
+
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+    assert analysis["groups"] == 4
+    assert analysis["logrank_p"] is not None
 
 
 def test_endpoints_accept_boundary_configuration_values() -> None:
