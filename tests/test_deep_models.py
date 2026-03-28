@@ -217,7 +217,9 @@ def test_deephit_ranking_loss_is_invariant_to_row_order_when_many_events() -> No
     baseline = _deephit_loss(pmf, time_bins, events, alpha=0.0).item()
     permuted = _deephit_loss(pmf[perm], time_bins[perm], events[perm], alpha=0.0).item()
 
-    assert baseline == pytest.approx(permuted, rel=1e-7, abs=1e-7)
+    # The ranking-loss reduction is mathematically order-invariant, but tiny
+    # float32 accumulation differences can appear across platforms.
+    assert baseline == pytest.approx(permuted, rel=2e-7, abs=2e-6)
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
