@@ -18,6 +18,10 @@
       </a>
       <div class="header-right">
         <span class="dataset-badge hidden" id="datasetBadge"></span>
+        <div class="mode-toggle" id="analysisModeToggle" role="tablist" aria-label="Analysis mode">
+          <button class="mode-toggle-button active" id="guidedModeButton" type="button" role="tab" aria-selected="true">Guided</button>
+          <button class="mode-toggle-button" id="expertModeButton" type="button" role="tab" aria-selected="false">Expert</button>
+        </div>
         <div class="upload-inline">
           <input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" />
           <button class="button ghost compact-btn" id="uploadButton" type="button">Upload</button>
@@ -110,24 +114,48 @@
     </section>
 
     <main class="workspace hidden" id="workspace">
-      <!-- Step Indicator -->
-      <div class="step-indicator" id="stepIndicator">
-        <div class="step completed" data-step="1">
-          <div class="step-circle">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      <section class="guided-shell" id="guidedShell">
+        <div class="step-indicator" id="stepIndicator">
+          <div class="step completed" data-step="1">
+            <div class="step-circle">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <span class="step-label">Load data</span>
           </div>
-          <span class="step-label">Upload Data</span>
+          <div class="step-connector completed"></div>
+          <div class="step" data-step="2">
+            <div class="step-circle">2</div>
+            <span class="step-label">Confirm outcome</span>
+          </div>
+          <div class="step-connector"></div>
+          <div class="step" data-step="3">
+            <div class="step-circle">3</div>
+            <span class="step-label">Choose analysis</span>
+          </div>
+          <div class="step-connector"></div>
+          <div class="step" data-step="4">
+            <div class="step-circle">4</div>
+            <span class="step-label">Configure &amp; run</span>
+          </div>
+          <div class="step-connector"></div>
+          <div class="step" data-step="5">
+            <div class="step-circle">5</div>
+            <span class="step-label">Review results</span>
+          </div>
         </div>
-        <div class="step-connector completed"></div>
-        <div class="step active" data-step="2">
-          <div class="step-circle">2</div>
-          <span class="step-label">Configure Columns</span>
+        <div class="guided-summary-bar" id="guidedSummaryBar">
+          <div class="guided-summary-copy">
+            <strong id="guidedSummaryTitle">Guided Mode</strong>
+            <span id="guidedSummaryText">Confirm the survival endpoint first, then choose one analysis path.</span>
+          </div>
+          <div class="guided-summary-chips" id="guidedSummaryChips"></div>
         </div>
-        <div class="step-connector"></div>
-        <div class="step" data-step="3">
-          <div class="step-circle">3</div>
-          <span class="step-label">Run Analysis</span>
-        </div>
+        <div class="guided-panel" id="guidedPanel" aria-live="polite"></div>
+      </section>
+
+      <div class="expert-surface-label hidden" id="expertSurfaceLabel">
+        <strong>Expert workspace</strong>
+        <span>The full Study Design and analysis tabs remain available below.</span>
       </div>
 
       <!-- Smart Detection Banner -->
@@ -193,6 +221,7 @@
           <span class="event-guard-note" id="eventColumnHelp">Showing event-like binary columns only. Turn on Show all columns if your event indicator uses a non-standard name.</span>
         </div>
         <div class="event-warning hidden" id="eventColumnWarning"></div>
+        <div class="event-warning hidden" id="eventValueWarning"></div>
 
         <details class="grouping-details" id="groupingDetails">
           <summary class="grouping-summary">
@@ -279,7 +308,7 @@
         <button class="tab-button" type="button" data-tab="dl" role="tab" id="tab-dl" aria-selected="false" aria-controls="panel-dl" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v5M7.5 17.5l3-4.5M16.5 17.5l-3-4.5"/><circle cx="12" cy="12" r="1.5"/></svg></span>
           Deep Learning
-          <span class="tab-desc">DeepSurv, Transformer</span>
+          <span class="tab-desc">DeepSurv, DeepHit, MTLR</span>
         </button>
         <button class="tab-button" type="button" data-tab="tables" role="tab" id="tab-tables" aria-selected="false" aria-controls="panel-tables" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/></svg></span>
@@ -616,7 +645,7 @@
               <input id="dlDropout" type="number" min="0" max="0.5" step="0.05" value="0.1" />
             </label>
             <label class="toolbar-field">
-              <span>Compare All Evaluation</span>
+              <span>Evaluation Mode</span>
               <select id="dlEvaluationStrategy">
                 <option value="holdout">Deterministic Holdout</option>
                 <option value="repeated_cv">Repeated Stratified CV</option>
@@ -652,16 +681,26 @@
               </select>
             </label>
           </div>
-          <div class="toolbar-note">Compare All Evaluation affects only <strong>Compare All</strong>. <strong>Train Model</strong> keeps the single-model path and reports its own evaluation mode after training.</div>
+          <div class="toolbar-note">Evaluation Mode applies to both <strong>Train Model</strong> and <strong>Compare All</strong>. <strong>Holdout</strong> is the fastest default and returns one fitted model with plots. <strong>Repeated CV</strong> is slower, returns aggregate performance, and skips single-fit plots such as one loss curve or one feature-importance chart.</div>
           <div class="toolbar-note">Allowed ranges: <strong>Epochs 10-1000</strong>, <strong>Learning rate 0-0.1</strong>, <strong>Dropout 0-0.5</strong>, <strong>CV folds 2-10</strong>, <strong>CV repeats 1-20</strong>, <strong>Patience 1-100</strong>, <strong>Min delta 0-0.1</strong>, and <strong>Parallel jobs 1-16</strong>. Hidden layers should be comma-separated positive integers such as <strong>64,64</strong>.</div>
           <div class="shared-feature-card" id="dlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>What this tab uses</strong>
-              <span id="dlFeatureSummaryText">DL uses the Study Design outcome definition and the model features selected on the ML tab.</span>
+              <span id="dlFeatureSummaryText">DL uses the Study Design outcome definition and the model features selected below. The same feature list stays synced with the ML tab.</span>
               <div class="dataset-preset-chips hidden" id="dlFeatureSummaryChips"></div>
             </div>
             <div class="button-row">
-              <button class="button ghost compact-btn" id="reviewDlFeaturesButton" type="button">Edit on ML Tab</button>
+              <button class="button ghost compact-btn" id="reviewDlFeaturesButton" type="button">Review shared features</button>
+            </div>
+          </div>
+          <div class="checklist-grid">
+            <div class="selection-card">
+              <h3>DL Model Features <button class="help-dot" type="button" data-tooltip="These inputs are shared with the ML tab. Changes made here stay synced with the ML feature list.">?</button></h3>
+              <div class="checklist tall" id="dlModelFeatureChecklist"></div>
+            </div>
+            <div class="selection-card">
+              <h3>DL Categorical Inputs <button class="help-dot" type="button" data-tooltip="Mark shared ML/DL input variables that should be treated as categorical. Changes stay synced with the ML tab.">?</button></h3>
+              <div class="checklist tall" id="dlModelCategoricalChecklist"></div>
             </div>
           </div>
           <div class="ml-plots-grid">
@@ -679,7 +718,7 @@
               </div>
             </div>
           </div>
-          <div class="analysis-banner" id="dlMetaBanner">Select model features on the ML tab, configure hyperparameters, then train.</div>
+          <div class="analysis-banner" id="dlMetaBanner">Select model features below, configure hyperparameters, then train.</div>
           <div class="insight-board" id="dlInsightBoard"><div class="empty-state">Deep learning model interpretation will appear here after training.</div></div>
           <div class="plot-shell hidden" id="dlComparisonPlot"></div>
           <div class="table-grid stacked">

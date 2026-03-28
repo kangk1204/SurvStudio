@@ -14,6 +14,8 @@ const runtime = {
   historySyncPaused: false,
   historySyncTimer: null,
   lastDerivedGroup: null,
+  uiMode: "guided",
+  guidedGoal: null,
 };
 
 
@@ -23,13 +25,21 @@ const refs = {
   workspace: document.getElementById("workspace"),
   datasetBadge: document.getElementById("datasetBadge"),
   datasetFile: document.getElementById("datasetFile"),
+  guidedModeButton: document.getElementById("guidedModeButton"),
+  expertModeButton: document.getElementById("expertModeButton"),
   uploadButton: document.getElementById("uploadButton"),
   loadTcgaUploadReadyButton: document.getElementById("loadTcgaUploadReadyButton"),
   loadTcgaButton: document.getElementById("loadTcgaButton"),
   loadGbsg2Button: document.getElementById("loadGbsg2Button"),
   loadExampleButton: document.getElementById("loadExampleButton"),
   datasetPreviewShell: document.getElementById("datasetPreviewShell"),
+  guidedShell: document.getElementById("guidedShell"),
   stepIndicator: document.getElementById("stepIndicator"),
+  guidedSummaryTitle: document.getElementById("guidedSummaryTitle"),
+  guidedSummaryText: document.getElementById("guidedSummaryText"),
+  guidedSummaryChips: document.getElementById("guidedSummaryChips"),
+  guidedPanel: document.getElementById("guidedPanel"),
+  expertSurfaceLabel: document.getElementById("expertSurfaceLabel"),
   smartBanner: document.getElementById("smartBanner"),
   smartBannerText: document.getElementById("smartBannerText"),
   smartBannerClose: document.getElementById("smartBannerClose"),
@@ -51,6 +61,7 @@ const refs = {
   showAllEventColumns: document.getElementById("showAllEventColumns"),
   eventColumnHelp: document.getElementById("eventColumnHelp"),
   eventColumnWarning: document.getElementById("eventColumnWarning"),
+  eventValueWarning: document.getElementById("eventValueWarning"),
   groupColumn: document.getElementById("groupColumn"),
   timeUnitLabel: document.getElementById("timeUnitLabel"),
   maxTime: document.getElementById("maxTime"),
@@ -103,6 +114,8 @@ const refs = {
   categoricalChecklist: document.getElementById("categoricalChecklist"),
   modelFeatureChecklist: document.getElementById("modelFeatureChecklist"),
   modelCategoricalChecklist: document.getElementById("modelCategoricalChecklist"),
+  dlModelFeatureChecklist: document.getElementById("dlModelFeatureChecklist"),
+  dlModelCategoricalChecklist: document.getElementById("dlModelCategoricalChecklist"),
   runCoxButton: document.getElementById("runCoxButton"),
   coxInsightBoard: document.getElementById("coxInsightBoard"),
   coxPlot: document.getElementById("coxPlot"),
@@ -191,6 +204,15 @@ const refs = {
   tabPanels: [...document.querySelectorAll(".tab-panel")],
 };
 
+const EVENT_TRUE_TOKENS = new Set([
+  "1", "true", "t", "yes", "y", "event", "dead", "deceased", "died", "failure",
+  "failed", "progressed", "progression", "relapse", "recurred", "recurrence",
+]);
+const EVENT_FALSE_TOKENS = new Set([
+  "0", "false", "f", "no", "n", "censor", "censored", "alive", "living",
+  "none", "disease_free", "disease-free", "progression_free", "progression-free",
+]);
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -247,6 +269,86 @@ function setRuntimeBanner(text = "", tone = "info") {
 
 function activeTabName() {
   return document.querySelector(".tab-button.active")?.dataset.tab || "km";
+}
+
+const GUIDED_GOALS = ["km", "cox", "ml", "dl", "tables"];
+
+function goalLabel(goal) {
+  return {
+    km: "Kaplan-Meier",
+    cox: "Cox PH",
+    ml: "ML Models",
+    dl: "Deep Learning",
+    tables: "Cohort Table",
+  }[goal] || "Choose analysis";
+}
+
+function goalFeatureCount(goal) {
+  if (goal === "cox") return selectedCheckboxValues(refs.covariateChecklist).length;
+  if (goal === "ml" || goal === "dl") return selectedCheckboxValues(refs.modelFeatureChecklist).length;
+  if (goal === "tables") return selectedCheckboxValues(refs.cohortVariableChecklist).length;
+  return 0;
+}
+
+function evaluationModeLabel(goal) {
+  if (goal === "ml") {
+    return refs.mlEvaluationStrategy?.selectedOptions?.[0]?.textContent || refs.mlEvaluationStrategy?.value || "Holdout";
+  }
+  if (goal === "dl") {
+    return refs.dlEvaluationStrategy?.selectedOptions?.[0]?.textContent || refs.dlEvaluationStrategy?.value || "Holdout";
+  }
+  return null;
+}
+
+function currentGoalResult(goal) {
+  return {
+    km: state.km,
+    cox: state.cox,
+    ml: state.ml,
+    dl: state.dl,
+    tables: state.cohort,
+  }[goal] || null;
+}
+
+function endpointIsReady() {
+  if (!state.dataset) return false;
+  try {
+    currentBaseConfig();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function currentGuidedStep() {
+  if (!state.dataset) return 1;
+  if (!endpointIsReady()) return 2;
+  if (!runtime.guidedGoal) return 3;
+  if (!currentGoalResult(runtime.guidedGoal)) return 4;
+  return 5;
+}
+
+function setUiMode(mode, { syncHistory = true } = {}) {
+  if (!["guided", "expert"].includes(mode)) return;
+  runtime.uiMode = mode;
+  document.body.dataset.uiMode = mode;
+  refs.guidedModeButton?.classList.toggle("active", mode === "guided");
+  refs.guidedModeButton?.setAttribute("aria-selected", mode === "guided" ? "true" : "false");
+  refs.expertModeButton?.classList.toggle("active", mode === "expert");
+  refs.expertModeButton?.setAttribute("aria-selected", mode === "expert" ? "true" : "false");
+  refs.guidedShell?.classList.toggle("hidden", mode !== "guided" || !state.dataset);
+  refs.expertSurfaceLabel?.classList.toggle("hidden", mode !== "guided" || !state.dataset);
+  renderGuidedChrome();
+  if (syncHistory && window.history?.replaceState) syncHistoryState("replace");
+}
+
+function setGuidedGoal(goal, { activate = true, syncHistory = true } = {}) {
+  runtime.guidedGoal = GUIDED_GOALS.includes(goal) ? goal : null;
+  if (activate && runtime.guidedGoal) {
+    activateTab(runtime.guidedGoal, { setGuidedGoal: false });
+  }
+  renderGuidedChrome();
+  if (syncHistory && state.dataset) syncHistoryState("replace");
 }
 
 function captureControlSnapshot() {
@@ -392,6 +494,8 @@ function applyControlSnapshot(snapshot) {
   setCheckedValues(refs.categoricalChecklist, snapshot.categoricals || []);
   setCheckedValues(refs.modelFeatureChecklist, snapshot.modelFeatures || []);
   setCheckedValues(refs.modelCategoricalChecklist, snapshot.modelCategoricals || []);
+  setCheckedValues(refs.dlModelFeatureChecklist, snapshot.modelFeatures || []);
+  setCheckedValues(refs.dlModelCategoricalChecklist, snapshot.modelCategoricals || []);
   setCheckedValues(refs.cohortVariableChecklist, snapshot.cohortVariables || []);
   renderSharedFeatureSummary();
   updateDatasetBadge();
@@ -401,11 +505,13 @@ function applyControlSnapshot(snapshot) {
 }
 
 function currentHistoryState() {
-  if (!state.dataset) return { view: "home" };
+  if (!state.dataset) return { view: "home", uiMode: runtime.uiMode };
   return {
     view: "workspace",
     datasetId: state.dataset.dataset_id,
     tab: activeTabName(),
+    uiMode: runtime.uiMode,
+    guidedGoal: runtime.guidedGoal,
     controls: captureControlSnapshot(),
   };
 }
@@ -422,16 +528,19 @@ function syncHistoryState(mode = "replace") {
 
 async function restoreHistoryState(historyState) {
   if (!historyState || historyState.view === "home") {
+    setUiMode(historyState?.uiMode || runtime.uiMode, { syncHistory: false });
     goHome({ syncHistory: false });
     return;
   }
   if (historyState.view !== "workspace" || !historyState.datasetId) {
+    setUiMode(historyState?.uiMode || runtime.uiMode, { syncHistory: false });
     goHome({ syncHistory: false });
     return;
   }
 
   runtime.historySyncPaused = true;
   try {
+    setUiMode(historyState.uiMode || runtime.uiMode, { syncHistory: false });
     if (!state.dataset || state.dataset.dataset_id !== historyState.datasetId) {
       const payload = await fetchJSON(`/api/dataset/${historyState.datasetId}`);
       updateAfterDataset(payload);
@@ -439,7 +548,9 @@ async function restoreHistoryState(historyState) {
       showWorkspace();
     }
     applyControlSnapshot(historyState.controls || null);
-    activateTab(historyState.tab || "km");
+    runtime.guidedGoal = historyState.guidedGoal || null;
+    activateTab(historyState.tab || "km", { setGuidedGoal: false });
+    renderGuidedChrome();
   } catch {
     goHome({ syncHistory: false });
   } finally {
@@ -553,6 +664,54 @@ function datasetColumnNames() {
   return state.dataset?.columns?.map((column) => column.name) || [];
 }
 
+function normalizeEventToken(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "boolean") return value ? "1" : "0";
+  const text = String(value).trim().toLowerCase();
+  if (!text) return null;
+  if (/^-?\d+(?:\.0+)?$/.test(text)) return String(Number(text));
+  return text;
+}
+
+function inferEventPositiveSelection(eventColumn, values, previousValue = "") {
+  const normalized = values.map((value) => ({
+    raw: String(value),
+    token: normalizeEventToken(value),
+  })).filter((entry) => entry.token !== null);
+  const available = new Set(normalized.map((entry) => entry.raw));
+  if (previousValue && available.has(String(previousValue))) {
+    return { value: String(previousValue), warning: null };
+  }
+
+  const truthy = normalized.filter((entry) => EVENT_TRUE_TOKENS.has(entry.token));
+  const falsy = normalized.filter((entry) => EVENT_FALSE_TOKENS.has(entry.token));
+  const pickTruthy = truthy.find((entry) => entry.token === "1")
+    || truthy.find((entry) => entry.token === "event")
+    || truthy.find((entry) => entry.token === "dead")
+    || truthy[0];
+
+  if (pickTruthy && falsy.length) {
+    return { value: pickTruthy.raw, warning: null };
+  }
+  if (pickTruthy && normalized.length === 1) {
+    return { value: pickTruthy.raw, warning: null };
+  }
+
+  const uniqueTokens = [...new Set(normalized.map((entry) => entry.token))];
+  const numericTokens = uniqueTokens.filter((token) => /^-?\d+(?:\.\d+)?$/.test(token));
+  if (uniqueTokens.length === 2 && numericTokens.length === 2) {
+    return {
+      value: "",
+      warning: `"${eventColumn}" uses non-standard binary values (${values.map((value) => String(value)).join(", ")}). Choose which value means the event happened before running an analysis.`,
+    };
+  }
+
+  return {
+    value: "",
+    warning: `SurvStudio could not safely guess which value in "${eventColumn}" means the event happened. Choose the Event Value explicitly before running an analysis.`,
+  };
+}
+
 function binaryCandidateColumns() {
   const binarySet = new Set(state.dataset?.binary_candidate_columns || []);
   return datasetColumnNames().filter((column) => binarySet.has(column));
@@ -591,6 +750,17 @@ function currentEventColumnWarning() {
     tone: "warning",
     message: `"${eventColumn}" looks more like a baseline characteristic than a time-to-event indicator. Use it as Group by or as a model feature, not as the Event column.`,
   };
+}
+
+function updateEventValueGuidance(message = null) {
+  if (!refs.eventValueWarning) return;
+  if (!message) {
+    refs.eventValueWarning.textContent = "";
+    refs.eventValueWarning.className = "event-warning hidden";
+    return;
+  }
+  refs.eventValueWarning.textContent = message;
+  refs.eventValueWarning.className = "event-warning event-warning-warning";
 }
 
 function updateEventColumnGuidance() {
@@ -654,25 +824,39 @@ function updateEventPositiveOptions() {
   const eventColumn = refs.eventColumn.value;
   const meta = getColumnMeta(eventColumn);
   const values = meta?.unique_preview?.filter((value) => value !== null) ?? [];
+  const preserveSelection = refs.eventColumn?.dataset?.lastColumn === eventColumn;
+  const previousValue = preserveSelection ? refs.eventPositiveValue.value : "";
+  if (refs.eventColumn) refs.eventColumn.dataset.lastColumn = eventColumn;
   refs.eventPositiveValue.innerHTML = "";
   if (values.length === 0) {
     const option = document.createElement("option");
     option.value = "1";
     option.textContent = "1";
     refs.eventPositiveValue.appendChild(option);
+    updateEventValueGuidance(null);
     return;
+  }
+  const inferred = inferEventPositiveSelection(eventColumn, values, previousValue);
+  if (!inferred.value) {
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Choose event value";
+    placeholder.selected = true;
+    refs.eventPositiveValue.appendChild(placeholder);
   }
   values.forEach((value) => {
     const option = document.createElement("option");
     option.value = String(value);
     option.textContent = String(value);
-    if (String(value) === "1" || String(value).toLowerCase() === "event") option.selected = true;
+    if (String(value) === inferred.value) option.selected = true;
     refs.eventPositiveValue.appendChild(option);
   });
+  updateEventValueGuidance(inferred.warning);
   updateEventColumnGuidance();
 }
 
 function renderChecklist(container, values, selected = []) {
+  if (!container) return;
   container.innerHTML = "";
   values.forEach((value) => {
     const label = document.createElement("label");
@@ -689,6 +873,7 @@ function renderChecklist(container, values, selected = []) {
 }
 
 function selectedCheckboxValues(container) {
+  if (!container) return [];
   return [...container.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
 }
 
@@ -1072,10 +1257,31 @@ function refreshVariableSelections() {
   renderChecklist(refs.categoricalChecklist, availableCovariates, previousCategoricals.length ? previousCategoricals : defaultCategoricals);
   renderChecklist(refs.modelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : availableCovariates);
   renderChecklist(refs.modelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
+  renderChecklist(refs.dlModelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : availableCovariates);
+  renderChecklist(refs.dlModelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
   renderChecklist(refs.cohortVariableChecklist, availableCovariates, previousTableVars.length ? previousTableVars : availableCovariates.slice(0, 6));
   const numericOptions = state.dataset.numeric_columns.filter((c) => ![refs.timeColumn.value, refs.eventColumn.value].includes(c));
   renderSelect(refs.deriveSource, numericOptions, { selected: numericOptions.includes(refs.deriveSource.value) ? refs.deriveSource.value : numericOptions[0] || null });
   renderSharedFeatureSummary();
+}
+
+function syncChecklistSelections(sourceContainer, targetContainer) {
+  if (!sourceContainer || !targetContainer) return;
+  setCheckedValues(targetContainer, selectedCheckboxValues(sourceContainer));
+}
+
+function syncModelFeatureMirrors(sourceContainer = refs.modelFeatureChecklist) {
+  const counterpart = sourceContainer === refs.dlModelFeatureChecklist
+    ? refs.modelFeatureChecklist
+    : refs.dlModelFeatureChecklist;
+  syncChecklistSelections(sourceContainer, counterpart);
+}
+
+function syncModelCategoricalMirrors(sourceContainer = refs.modelCategoricalChecklist) {
+  const counterpart = sourceContainer === refs.dlModelCategoricalChecklist
+    ? refs.modelCategoricalChecklist
+    : refs.dlModelCategoricalChecklist;
+  syncChecklistSelections(sourceContainer, counterpart);
 }
 
 function setCheckedValues(container, values) {
@@ -1251,13 +1457,18 @@ function renderSharedFeatureSummary() {
   const tableVariables = hasDataset ? selectedCheckboxValues(refs.cohortVariableChecklist) : [];
   const timeLabel = hasDataset ? (refs.timeColumn?.value || "time") : "time";
   const eventLabel = hasDataset ? (refs.eventColumn?.value || "event") : "event";
-  const eventValue = hasDataset ? (refs.eventPositiveValue?.value || "1") : "1";
+  const eventValue = hasDataset ? (refs.eventPositiveValue?.value || "choose event value") : "choose event value";
   const groupLabel = hasDataset ? (refs.groupColumn?.value || "overall only") : "overall only";
-  const summaryText = !hasDataset
-    ? "Load a dataset first. ML and DL use the model feature and categorical selections defined in the ML tab."
+  const mlSummaryText = !hasDataset
+    ? "Load a dataset first. ML uses the shared model feature selections shown below."
     : features.length
       ? `Training inputs come only from the ML/DL model feature selections: ${summarizeFeatureNames(features)}. Group by is shown below for context only.`
       : "No model feature set selected yet. Choose ML/DL model features before training.";
+  const dlSummaryText = !hasDataset
+    ? "Load a dataset first. DL uses the shared model feature selections shown in this tab and on the ML tab."
+    : features.length
+      ? `Training inputs come only from the shared ML/DL model feature selections: ${summarizeFeatureNames(features)}. Group by is shown below for context only.`
+      : "No model feature set selected yet. Choose DL model features below or on the ML tab before training.";
   const finalChips = !hasDataset
     ? []
     : [
@@ -1269,13 +1480,10 @@ function renderSharedFeatureSummary() {
         categoricals.length ? `Categoricals: ${summarizeFeatureNames(categoricals, 3)}` : "Categoricals: none",
       ];
 
-  [
-    [refs.mlFeatureSummaryText, refs.mlFeatureSummaryChips],
-    [refs.dlFeatureSummaryText, refs.dlFeatureSummaryChips],
-  ].forEach(([textNode, chipContainer]) => {
-    if (textNode) textNode.textContent = summaryText;
-    renderChipList(chipContainer, finalChips);
-  });
+  if (refs.mlFeatureSummaryText) refs.mlFeatureSummaryText.textContent = mlSummaryText;
+  if (refs.dlFeatureSummaryText) refs.dlFeatureSummaryText.textContent = dlSummaryText;
+  renderChipList(refs.mlFeatureSummaryChips, finalChips);
+  renderChipList(refs.dlFeatureSummaryChips, finalChips);
 
   renderContextCards({
     hasDataset,
@@ -1289,6 +1497,262 @@ function renderSharedFeatureSummary() {
     modelCategoricals: categoricals,
     tableVariables,
   });
+  renderGuidedChrome();
+}
+
+function renderGuidedSummaryChips(items) {
+  if (!refs.guidedSummaryChips) return;
+  refs.guidedSummaryChips.innerHTML = items.length
+    ? items.map((item) => `<span class="guided-summary-chip">${escapeHtml(item)}</span>`).join("")
+    : "";
+}
+
+function renderGuidedChrome() {
+  if (!refs.guidedShell || !refs.guidedPanel) return;
+  const showGuided = runtime.uiMode === "guided" && Boolean(state.dataset);
+  refs.guidedShell.classList.toggle("hidden", !showGuided);
+  refs.expertSurfaceLabel?.classList.toggle("hidden", !showGuided);
+  if (!showGuided) return;
+
+  const step = currentGuidedStep();
+  const goal = runtime.guidedGoal;
+  const timeColumn = refs.timeColumn?.value || "time";
+  const eventColumn = refs.eventColumn?.value || "event";
+  const eventValue = refs.eventPositiveValue?.value || "choose event value";
+  const groupBy = refs.groupColumn?.value || "Overall only";
+  const features = goalFeatureCount(goal);
+  const evaluation = evaluationModeLabel(goal);
+  const summaryText = {
+    2: "Choose the time column, event column, and the value that means the event happened before running anything.",
+    3: "The endpoint is ready. Pick one analysis path and keep the rest hidden for now.",
+    4: "Configure only the controls that matter for the selected analysis, then run it once before moving on.",
+    5: "Review the result, confirm the evaluation mode, then export or switch to another analysis path.",
+  }[step] || "Load a dataset or sample cohort to begin.";
+
+  if (refs.guidedSummaryTitle) {
+    refs.guidedSummaryTitle.textContent = `${step}. ${["Load data", "Confirm outcome", "Choose analysis", "Configure & run", "Review results"][step - 1]}`;
+  }
+  if (refs.guidedSummaryText) refs.guidedSummaryText.textContent = summaryText;
+  renderGuidedSummaryChips([
+    `Dataset: ${state.dataset.filename}`,
+    `Time: ${timeColumn}`,
+    `Event: ${eventColumn} = ${eventValue}`,
+    `Group by: ${groupBy}`,
+    `Mode: ${runtime.uiMode === "guided" ? "Guided" : "Expert"}`,
+    `Goal: ${goalLabel(goal)}`,
+    ...(goal ? [`Features: ${features}`] : []),
+    ...(evaluation ? [`Eval: ${evaluation}`] : []),
+  ]);
+
+  updateStepIndicator(step);
+  refs.guidedPanel.innerHTML = guidedPanelMarkup(step);
+}
+
+function eventPreviewValues(columnName) {
+  return getColumnMeta(columnName)?.unique_preview?.filter((value) => value !== null).map((value) => String(value)) || [];
+}
+
+function guidedPanelMarkup(step) {
+  const goal = runtime.guidedGoal;
+  const eventWarning = currentEventColumnWarning();
+  const eventValues = eventPreviewValues(refs.eventColumn?.value || "");
+  const datasetName = escapeHtml(state.dataset?.filename || "dataset");
+  const goalCards = GUIDED_GOALS.map((entry) => `
+    <button class="guided-goal-card${goal === entry ? " active" : ""}" type="button" data-guided-action="choose-goal" data-goal="${entry}">
+      <strong>${escapeHtml(goalLabel(entry))}</strong>
+      <span>${escapeHtml({
+        km: "Start with overall survival, then add an optional Group by.",
+        cox: "Estimate covariate effects after the endpoint is confirmed.",
+        ml: "Benchmark Cox, RSF, and GBS with the shared model features.",
+        dl: "Benchmark DeepSurv, DeepHit, Neural MTLR, Transformer, and VAE models.",
+        tables: "Build a grouped or overall cohort summary table for reporting.",
+      }[entry])}</span>
+    </button>
+  `).join("");
+
+  if (step === 2) {
+    return `
+      <div class="guided-panel-grid">
+        <article class="guided-card">
+          <h3>Confirm outcome</h3>
+          <p>Choose the columns that define time-to-event analysis. This decision affects Kaplan-Meier, Cox, ML, and DL.</p>
+          <div class="guided-actions">
+            <button class="button primary compact-btn" type="button" data-guided-action="focus-study-design">Review Study Design</button>
+          </div>
+          <span class="guided-inline-note">Keep Group by optional for now. Start with the endpoint first.</span>
+        </article>
+        <aside class="guided-card">
+          <h4>Current checks</h4>
+          <div class="guided-status-list">
+            <div class="guided-status-item">
+              <strong>Time column</strong>
+              <span>${escapeHtml(refs.timeColumn?.value || "Not selected")}</span>
+            </div>
+            <div class="guided-status-item">
+              <strong>Event column</strong>
+              <span>${escapeHtml(refs.eventColumn?.value || "Not selected")}</span>
+            </div>
+            <div class="guided-status-item">
+              <strong>Observed event values</strong>
+              <span>${escapeHtml(eventValues.length ? eventValues.join(", ") : "Unavailable")}</span>
+            </div>
+            <div class="guided-status-item${eventWarning ? " warning" : ""}">
+              <strong>Blocking issue</strong>
+              <span>${escapeHtml(eventWarning?.message || `Choose the Event Value that means the event happened for "${refs.eventColumn?.value || "event"}".`)}</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    `;
+  }
+
+  if (step === 3) {
+    return `
+      <div class="guided-panel-grid">
+        <article class="guided-card">
+          <h3>Choose one analysis path</h3>
+          <p>Start simple. Kaplan-Meier is the safest first run. Move to Cox, ML, or DL only after the endpoint looks right.</p>
+          <div class="guided-goal-grid">${goalCards}</div>
+        </article>
+        <aside class="guided-card">
+          <h4>Current endpoint</h4>
+          <div class="guided-status-list">
+            <div class="guided-status-item">
+              <strong>Dataset</strong>
+              <span>${datasetName}</span>
+            </div>
+            <div class="guided-status-item">
+              <strong>Outcome</strong>
+              <span>${escapeHtml(`${refs.timeColumn?.value || "time"} / ${refs.eventColumn?.value || "event"} = ${refs.eventPositiveValue?.value || "choose event value"}`)}</span>
+            </div>
+            <div class="guided-status-item">
+              <strong>Grouping</strong>
+              <span>${escapeHtml(refs.groupColumn?.value || "Overall only")}</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    `;
+  }
+
+  if (step === 4) {
+    const configureCopy = {
+      km: {
+        title: "Configure Kaplan-Meier",
+        text: "Review Group by, CI, and display settings. Group by is optional and should stay Overall only unless you want subgroup curves.",
+        reviewAction: "open-km",
+        reviewLabel: "Review KM settings",
+        runAction: "run-km",
+        runLabel: "Run Kaplan-Meier",
+      },
+      cox: {
+        title: "Configure Cox PH",
+        text: "Choose covariates and categorical tags. Group by does not affect Cox unless you add that column as a covariate.",
+        reviewAction: "open-cox",
+        reviewLabel: "Review Cox inputs",
+        runAction: "run-cox",
+        runLabel: "Run Cox",
+      },
+      ml: {
+        title: "Configure ML models",
+        text: "Choose the shared model features, then train one model or compare all models with the selected evaluation mode.",
+        reviewAction: "open-ml",
+        reviewLabel: "Review ML inputs",
+        runAction: "run-ml",
+        runLabel: "Train ML model",
+      },
+      dl: {
+        title: "Configure DL models",
+        text: "Choose the shared model features, then tune the deep model hyperparameters and evaluation mode before training.",
+        reviewAction: "open-dl",
+        reviewLabel: "Review DL inputs",
+        runAction: "run-dl",
+        runLabel: "Train DL model",
+      },
+      tables: {
+        title: "Configure cohort table",
+        text: "Pick the variables to summarize. Group by is optional and affects only the grouped table output.",
+        reviewAction: "open-tables",
+        reviewLabel: "Review table inputs",
+        runAction: "run-tables",
+        runLabel: "Build cohort table",
+      },
+    }[goal] || {
+      title: "Configure analysis",
+      text: "Pick one analysis path first.",
+      reviewAction: "focus-study-design",
+      reviewLabel: "Review Study Design",
+      runAction: "focus-study-design",
+      runLabel: "Go back",
+    };
+    return `
+      <div class="guided-panel-grid">
+        <article class="guided-card">
+          <h3>${escapeHtml(configureCopy.title)}</h3>
+          <p>${escapeHtml(configureCopy.text)}</p>
+          <div class="guided-actions">
+            <button class="button ghost compact-btn" type="button" data-guided-action="${escapeHtml(configureCopy.reviewAction)}">${escapeHtml(configureCopy.reviewLabel)}</button>
+            <button class="button primary compact-btn" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}">${escapeHtml(configureCopy.runLabel)}</button>
+          </div>
+        </article>
+        <aside class="guided-card">
+          <h4>Run summary</h4>
+          <div class="guided-status-list">
+            <div class="guided-status-item">
+              <strong>Goal</strong>
+              <span>${escapeHtml(goalLabel(goal))}</span>
+            </div>
+            <div class="guided-status-item">
+              <strong>Group by</strong>
+              <span>${escapeHtml(refs.groupColumn?.value || "Overall only")}</span>
+            </div>
+            <div class="guided-status-item">
+              <strong>Selected features</strong>
+              <span>${escapeHtml(String(goalFeatureCount(goal)))}</span>
+            </div>
+            <div class="guided-status-item">
+              <strong>Evaluation</strong>
+              <span>${escapeHtml(evaluationModeLabel(goal) || "Not applicable")}</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="guided-panel-grid">
+      <article class="guided-card">
+        <h3>Review results</h3>
+        <p>${escapeHtml(`${goalLabel(goal)} is ready. Check the plot, the sample counts, and the evaluation mode before interpreting the result.`)}</p>
+        <div class="guided-actions">
+          <button class="button ghost compact-btn" type="button" data-guided-action="open-${escapeHtml(goal || "km")}">View result panel</button>
+          <button class="button primary compact-btn" type="button" data-guided-action="choose-another-analysis">Choose another analysis</button>
+        </div>
+      </article>
+      <aside class="guided-card">
+        <h4>What to verify</h4>
+        <div class="guided-status-list">
+          <div class="guided-status-item">
+            <strong>Goal</strong>
+            <span>${escapeHtml(goalLabel(goal))}</span>
+          </div>
+          <div class="guided-status-item">
+            <strong>Outcome</strong>
+            <span>${escapeHtml(`${refs.timeColumn?.value || "time"} / ${refs.eventColumn?.value || "event"} = ${refs.eventPositiveValue?.value || "choose event value"}`)}</span>
+          </div>
+          <div class="guided-status-item">
+            <strong>Evaluation</strong>
+            <span>${escapeHtml(evaluationModeLabel(goal) || "Not applicable")}</span>
+          </div>
+          <div class="guided-status-item">
+            <strong>Grouping</strong>
+            <span>${escapeHtml(refs.groupColumn?.value || "Overall only")}</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+  `;
 }
 
 function updateGroupingDetailsVisibility(tabName = activeTabName()) {
@@ -1300,7 +1764,7 @@ function focusModelFeatureEditor() {
   activateTab("ml");
   requestAnimationFrame(() => {
     refs.modelFeatureChecklist?.closest(".selection-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
-    flashPresetTargets([refs.modelFeatureChecklist, refs.modelCategoricalChecklist]);
+    flashPresetTargets([refs.modelFeatureChecklist, refs.modelCategoricalChecklist, refs.dlModelFeatureChecklist, refs.dlModelCategoricalChecklist]);
   });
 }
 
@@ -1336,6 +1800,8 @@ function applyDatasetPreset(mode) {
   if (mode === "models") {
     setCheckedValues(refs.modelFeatureChecklist, covariates);
     setCheckedValues(refs.modelCategoricalChecklist, categoricals);
+    setCheckedValues(refs.dlModelFeatureChecklist, covariates);
+    setCheckedValues(refs.dlModelCategoricalChecklist, categoricals);
   } else {
     setCheckedValues(refs.covariateChecklist, covariates);
     setCheckedValues(refs.categoricalChecklist, categoricals);
@@ -1348,7 +1814,7 @@ function applyDatasetPreset(mode) {
   const summaryTitle = `${preset.name} applied`;
   const summaryText = mode === "basic"
     ? "Updated the study columns, group split, Cox covariates, and cohort-table variables below. No analysis ran yet."
-    : "Updated the study columns and the feature checklists used by ML and DL. These model feature selections live in the ML tab. No analysis ran yet.";
+    : "Updated the study columns and the shared feature checklists used by ML and DL. You can review the same selections on either tab. No analysis ran yet.";
   const summaryChips = [
     `Time: ${preset.timeColumn}`,
     `Event: ${preset.eventColumn}=${preset.eventPositiveValue}`,
@@ -1427,6 +1893,9 @@ function currentBaseConfig() {
   if (!timeColumn || !eventColumn) throw new Error("Select both a time column and an event column.");
   const eventWarning = currentEventColumnWarning();
   if (eventWarning?.tone === "error") throw new Error(eventWarning.message);
+  if (!refs.eventPositiveValue.value) {
+    throw new Error(`Choose the Event Value that means the event happened for "${eventColumn}" before running an analysis.`);
+  }
   return {
     dataset_id: state.dataset.dataset_id,
     time_column: timeColumn,
@@ -1514,7 +1983,7 @@ function showWorkspace() {
   setTimeout(() => refs.workspace.classList.remove("fade-in"), 360);
 }
 
-function activateTab(tabName) {
+function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided" } = {}) {
   refs.tabButtons.forEach((button) => {
     const isActive = button.dataset.tab === tabName;
     button.classList.toggle("active", isActive);
@@ -1523,8 +1992,10 @@ function activateTab(tabName) {
     if (isActive) button.focus();
   });
   refs.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tabName));
+  if (setGuidedGoal && GUIDED_GOALS.includes(tabName)) runtime.guidedGoal = tabName;
   updateGroupingDetailsVisibility(tabName);
   if (state.dataset) syncHistoryState("replace");
+  renderGuidedChrome();
   requestAnimationFrame(() => {
     if (tabName === "km" && state.km) Plotly.Plots.resize(refs.kmPlot);
     if (tabName === "cox" && state.cox) Plotly.Plots.resize(refs.coxPlot);
@@ -1549,7 +2020,7 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
     preferred: inferDefault(columnNames, suggestions.event_columns, 1),
     silent: true,
   });
-  renderSelect(refs.groupColumn, columnNames, { includeBlank: true, blankLabel: "Overall only", selected: inferDefault(columnNames, suggestions.group_columns, 2) });
+  renderSelect(refs.groupColumn, columnNames, { includeBlank: true, blankLabel: "Overall only", selected: null });
   refreshVariableSelections();
   updateDatasetBadge();
   renderSharedFeatureSummary();
@@ -1558,7 +2029,7 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   refs.downloadSignatureButton.disabled = true;
   showWorkspace();
   if (scrollToTop) scrollWorkspaceEntryToTop();
-  updateStepIndicator(2);
+  renderGuidedChrome();
   const timeSugg = suggestions.time_columns?.[0];
   const eventSugg = suggestions.event_columns?.[0];
   if (timeSugg && eventSugg) {
@@ -1574,10 +2045,11 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   state.signature = null;
   state.ml = null;
   state.dl = null;
+  runtime.guidedGoal = null;
   refs.kmMetaBanner.textContent = "Configure your study columns above, then click Run Analysis.";
   refs.coxMetaBanner.textContent = "Select covariates above, then click Run Analysis.";
   refs.mlMetaBanner.textContent = "Select model features on the ML tab, then train a model.";
-  refs.dlMetaBanner.textContent = "Select model features on the ML tab, configure hyperparameters, then train.";
+  refs.dlMetaBanner.textContent = "Select model features below, configure hyperparameters, then train.";
   refs.deriveSummary.innerHTML = "";
   refs.deriveSummary.classList.add("hidden");
   runtime.lastDerivedGroup = null;
@@ -1636,7 +2108,7 @@ async function uploadDataset() {
   const payload = await fetchJSON("/api/upload", { method: "POST", body: formData });
   updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
-  activateTab("km");
+  activateTab("km", { setGuidedGoal: false });
   runtime.historySyncPaused = false;
   syncHistoryState("push");
 }
@@ -1645,7 +2117,7 @@ async function loadExampleDataset() {
   const payload = await fetchJSON("/api/load-example", { method: "POST" });
   updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
-  activateTab("km");
+  activateTab("km", { setGuidedGoal: false });
   runtime.historySyncPaused = false;
   syncHistoryState("push");
 }
@@ -1654,7 +2126,7 @@ async function loadTcgaUploadReadyDataset() {
   const payload = await fetchJSON("/api/load-tcga-upload-ready", { method: "POST" });
   updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
-  activateTab("km");
+  activateTab("km", { setGuidedGoal: false });
   runtime.historySyncPaused = false;
   syncHistoryState("push");
 }
@@ -1663,7 +2135,7 @@ async function loadTcgaDataset() {
   const payload = await fetchJSON("/api/load-tcga-example", { method: "POST" });
   updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
-  activateTab("km");
+  activateTab("km", { setGuidedGoal: false });
   runtime.historySyncPaused = false;
   syncHistoryState("push");
 }
@@ -1672,7 +2144,7 @@ async function loadGbsg2Dataset() {
   const payload = await fetchJSON("/api/load-gbsg2-example", { method: "POST" });
   updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
-  activateTab("km");
+  activateTab("km", { setGuidedGoal: false });
   runtime.historySyncPaused = false;
   syncHistoryState("push");
 }
@@ -2323,6 +2795,7 @@ async function withLoading(button, action) {
 }
 
 async function initializeRuntime() {
+  setUiMode(runtime.uiMode, { syncHistory: false });
   syncHistoryState("replace");
   if (!runtime.isFilePreview) { setRuntimeBanner(""); return; }
   try {
@@ -2353,21 +2826,72 @@ function getActiveRunAction() {
   return null;
 }
 
-function updateStepIndicator(step) {
+function focusStudyDesignSection() {
+  refs.configStrip?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function focusTabWorkspace(tabName) {
+  activateTab(tabName);
+  requestAnimationFrame(() => {
+    document.querySelector(`.tab-panel[data-panel="${tabName}"] .workspace-card`)?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  });
+}
+
+function runGuidedGoal(tabName, button, action) {
+  activateTab(tabName);
+  void withLoading(button, action);
+}
+
+function handleGuidedPanelAction(target) {
+  const action = target.dataset.guidedAction;
+  if (!action) return;
+  if (action === "focus-study-design") {
+    focusStudyDesignSection();
+    return;
+  }
+  if (action === "choose-another-analysis") {
+    runtime.guidedGoal = null;
+    renderGuidedChrome();
+    refs.guidedShell?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  if (action === "choose-goal") {
+    setGuidedGoal(target.dataset.goal || null);
+    return;
+  }
+  if (action === "open-km") { focusTabWorkspace("km"); return; }
+  if (action === "open-cox") { focusTabWorkspace("cox"); return; }
+  if (action === "open-ml") { focusTabWorkspace("ml"); return; }
+  if (action === "open-dl") { focusTabWorkspace("dl"); return; }
+  if (action === "open-tables") { focusTabWorkspace("tables"); return; }
+  if (action === "run-km") { runGuidedGoal("km", refs.runKmButton, runKaplanMeier); return; }
+  if (action === "run-cox") { runGuidedGoal("cox", refs.runCoxButton, runCox); return; }
+  if (action === "run-ml") { runGuidedGoal("ml", refs.runMlButton, runMlModel); return; }
+  if (action === "run-dl") { runGuidedGoal("dl", refs.runDlButton, runDlModel); return; }
+  if (action === "run-tables") { runGuidedGoal("tables", refs.runCohortTableButton, runCohortTable); }
+}
+
+function updateStepIndicator(step = currentGuidedStep()) {
   if (!refs.stepIndicator) return;
+  const activeStep = currentGuidedStep();
   const steps = refs.stepIndicator.querySelectorAll(".step");
   const connectors = refs.stepIndicator.querySelectorAll(".step-connector");
   steps.forEach((el) => {
     const s = Number(el.dataset.step);
+    const circle = el.querySelector(".step-circle");
     el.classList.remove("active", "completed");
-    if (s < step) {
+    if (circle) circle.textContent = String(s);
+    if (s < activeStep) {
       el.classList.add("completed");
-      el.querySelector(".step-circle").innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-    } else if (s === step) {
+      if (circle) circle.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    } else if (s === activeStep) {
       el.classList.add("active");
     }
   });
-  connectors.forEach((c, i) => c.classList.toggle("completed", i < step - 1));
+  connectors.forEach((c, i) => c.classList.toggle("completed", i < activeStep - 1));
 }
 
 function showSmartBanner(text) {
@@ -2470,7 +2994,9 @@ function goHome({ syncHistory = true } = {}) {
   refs.landing.classList.remove("hidden", "fade-out");
   refs.datasetBadge.classList.add("hidden");
   refs.datasetFile.value = "";
+  runtime.guidedGoal = null;
   renderSharedFeatureSummary();
+  renderGuidedChrome();
   setRuntimeBanner("");
   if (syncHistory) syncHistoryState("replace");
 }
@@ -2480,6 +3006,13 @@ function initListeners() {
   if (brandHome) {
     brandHome.addEventListener("click", (e) => { e.preventDefault(); goHome(); });
   }
+  refs.guidedModeButton?.addEventListener("click", () => setUiMode("guided"));
+  refs.expertModeButton?.addEventListener("click", () => setUiMode("expert"));
+  refs.guidedPanel?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-guided-action]");
+    if (!button) return;
+    handleGuidedPanelAction(button);
+  });
   window.addEventListener("popstate", (event) => {
     void restoreHistoryState(event.state);
   });
@@ -2495,7 +3028,7 @@ function initListeners() {
   refs.applyModelPresetButton?.addEventListener("click", () => applyDatasetPreset("models"));
   refs.timeColumn.addEventListener("change", () => { refreshVariableSelections(); updateDatasetBadge(); renderSharedFeatureSummary(); updateEventColumnGuidance(); queueHistorySync(); });
   refs.eventColumn.addEventListener("change", () => { updateEventPositiveOptions(); refreshVariableSelections(); updateDatasetBadge(); renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.eventPositiveValue.addEventListener("change", () => { renderSharedFeatureSummary(); updateEventColumnGuidance(); queueHistorySync(); });
+  refs.eventPositiveValue.addEventListener("change", () => { updateEventPositiveOptions(); renderSharedFeatureSummary(); updateEventColumnGuidance(); queueHistorySync(); });
   refs.showAllEventColumns?.addEventListener("change", () => {
     renderEventColumnOptions({ silent: false });
     refreshVariableSelections();
@@ -2531,8 +3064,10 @@ function initListeners() {
   refs.confidenceLevel.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.covariateChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.categoricalChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.modelFeatureChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.modelCategoricalChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.modelFeatureChecklist?.addEventListener("change", () => { syncModelFeatureMirrors(refs.modelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.modelCategoricalChecklist?.addEventListener("change", () => { syncModelCategoricalMirrors(refs.modelCategoricalChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.dlModelFeatureChecklist?.addEventListener("change", () => { syncModelFeatureMirrors(refs.dlModelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.dlModelCategoricalChecklist?.addEventListener("change", () => { syncModelCategoricalMirrors(refs.dlModelCategoricalChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.cohortVariableChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.reviewMlFeaturesButton?.addEventListener("click", focusModelFeatureEditor);
   refs.reviewDlFeaturesButton?.addEventListener("click", focusModelFeatureEditor);
@@ -2549,14 +3084,42 @@ function initListeners() {
     queueHistorySync();
   });
   refs.deriveButton.addEventListener("click", () => withLoading(refs.deriveButton, deriveGroup));
-  refs.runKmButton.addEventListener("click", () => withLoading(refs.runKmButton, runKaplanMeier));
+  refs.runKmButton.addEventListener("click", () => {
+    if (runtime.uiMode === "guided") runtime.guidedGoal = "km";
+    renderGuidedChrome();
+    withLoading(refs.runKmButton, runKaplanMeier);
+  });
   refs.runSignatureSearchButton.addEventListener("click", () => withLoading(refs.runSignatureSearchButton, runSignatureSearch));
-  refs.runCoxButton.addEventListener("click", () => withLoading(refs.runCoxButton, runCox));
-  refs.runCohortTableButton.addEventListener("click", () => withLoading(refs.runCohortTableButton, runCohortTable));
-  refs.runMlButton.addEventListener("click", () => withLoading(refs.runMlButton, runMlModel));
-  refs.runCompareButton.addEventListener("click", () => withLoading(refs.runCompareButton, runCompareModels));
-  refs.runDlButton.addEventListener("click", () => withLoading(refs.runDlButton, runDlModel));
-  refs.runDlCompareButton.addEventListener("click", () => withLoading(refs.runDlCompareButton, runDlCompareModels));
+  refs.runCoxButton.addEventListener("click", () => {
+    if (runtime.uiMode === "guided") runtime.guidedGoal = "cox";
+    renderGuidedChrome();
+    withLoading(refs.runCoxButton, runCox);
+  });
+  refs.runCohortTableButton.addEventListener("click", () => {
+    if (runtime.uiMode === "guided") runtime.guidedGoal = "tables";
+    renderGuidedChrome();
+    withLoading(refs.runCohortTableButton, runCohortTable);
+  });
+  refs.runMlButton.addEventListener("click", () => {
+    if (runtime.uiMode === "guided") runtime.guidedGoal = "ml";
+    renderGuidedChrome();
+    withLoading(refs.runMlButton, runMlModel);
+  });
+  refs.runCompareButton.addEventListener("click", () => {
+    if (runtime.uiMode === "guided") runtime.guidedGoal = "ml";
+    renderGuidedChrome();
+    withLoading(refs.runCompareButton, runCompareModels);
+  });
+  refs.runDlButton.addEventListener("click", () => {
+    if (runtime.uiMode === "guided") runtime.guidedGoal = "dl";
+    renderGuidedChrome();
+    withLoading(refs.runDlButton, runDlModel);
+  });
+  refs.runDlCompareButton.addEventListener("click", () => {
+    if (runtime.uiMode === "guided") runtime.guidedGoal = "dl";
+    renderGuidedChrome();
+    withLoading(refs.runDlCompareButton, runDlCompareModels);
+  });
   refs.tabButtons.forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
   const changeTrackedControls = [
     refs.eventPositiveValue,

@@ -303,7 +303,21 @@ def looks_binary(series: pd.Series) -> bool:
     try:
         coerced = coerce_event(series)
     except ValueError:
-        return False
+        valid = series.dropna()
+        if valid.empty:
+            return False
+
+        numeric_series = pd.to_numeric(valid, errors="coerce")
+        if numeric_series.notna().sum() == len(valid):
+            observed_numeric = {float(value) for value in numeric_series.astype(float).tolist()}
+            return len(observed_numeric) == 2
+
+        normalized = valid.map(_normalize_token)
+        normalized_non_missing = normalized.dropna()
+        if len(normalized_non_missing) == len(valid):
+            return len(set(normalized_non_missing.tolist())) == 2
+
+        return int(valid.nunique(dropna=True)) == 2
     non_missing = coerced.dropna()
     return not non_missing.empty and set(non_missing.unique()).issubset({0.0, 1.0})
 

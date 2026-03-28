@@ -136,7 +136,7 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
 
             page.locator("#applyModelPresetButton").click()
             page.wait_for_function(
-                "document.getElementById('dlFeatureSummaryText').textContent.includes('Training inputs come only from the ML/DL model feature selections')"
+                "document.getElementById('dlFeatureSummaryText').textContent.includes('Training inputs come only from the shared ML/DL model feature selections')"
             )
             assert page.locator('[data-tab="dl"]').get_attribute("aria-selected") == "true"
             assert "feature checklists used by ML and DL" in page.locator("#datasetPresetStatusText").inner_text()
@@ -237,7 +237,7 @@ def test_browser_study_design_collapses_grouping_controls_outside_km(browser_ser
             page.locator("#workspace").wait_for(state="visible")
 
             assert page.locator("#groupingDetails").evaluate("(el) => el.open") is True
-            assert "Current Group by:" in page.locator("#groupingSummaryText").inner_text()
+            assert "Current Group by: overall only" in page.locator("#groupingSummaryText").inner_text().lower()
 
             page.locator('[data-tab="dl"]').click()
             page.wait_for_function(
@@ -245,13 +245,53 @@ def test_browser_study_design_collapses_grouping_controls_outside_km(browser_ser
             )
             assert page.locator("#groupingDetails").evaluate("(el) => el.open") is False
             assert "Grouping only:" in page.locator("#dlFeatureSummaryChips").inner_text()
-            assert "Training inputs come only from the ML/DL model feature selections" in page.locator("#dlFeatureSummaryText").inner_text()
+            assert "Training inputs come only from the shared ML/DL model feature selections" in page.locator("#dlFeatureSummaryText").inner_text()
 
             page.locator('[data-tab="tables"]').click()
             page.wait_for_function(
                 "document.querySelector('[data-tab=\"tables\"]').getAttribute('aria-selected') === 'true'"
             )
             assert page.locator("#groupingDetails").evaluate("(el) => el.open") is True
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_guided_mode_goal_cards_and_mode_toggle(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#guidedShell").wait_for(state="visible")
+
+            assert "Choose analysis" in page.locator("#guidedSummaryTitle").inner_text()
+            assert "Event:" in page.locator("#guidedSummaryChips").inner_text()
+            assert "Group by: Overall only" in page.locator("#guidedSummaryChips").inner_text()
+
+            page.locator('[data-guided-action="choose-goal"][data-goal="cox"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"cox\"]').getAttribute('aria-selected') === 'true'"
+            )
+            assert "Configure Cox PH" in page.locator("#guidedPanel").inner_text()
+            assert "Goal: Cox PH" in page.locator("#guidedSummaryChips").inner_text()
+
+            page.locator("#expertModeButton").click()
+            page.wait_for_function(
+                "document.body.dataset.uiMode === 'expert' && document.getElementById('guidedShell').classList.contains('hidden')"
+            )
+
+            page.locator("#guidedModeButton").click()
+            page.wait_for_function(
+                "document.body.dataset.uiMode === 'guided' && !document.getElementById('guidedShell').classList.contains('hidden')"
+            )
+            assert "Configure Cox PH" in page.locator("#guidedPanel").inner_text()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -363,6 +403,31 @@ def test_browser_event_column_defaults_to_event_like_fields_and_advanced_toggle_
                 "document.getElementById('eventColumnWarning').textContent.includes('baseline characteristic')"
             )
             assert "Use it as Group by or as a model feature" in page.locator("#eventColumnWarning").inner_text()
+            assert page.locator("#eventPositiveValue").input_value() == ""
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+
+
+def test_browser_event_value_requires_explicit_choice_for_ambiguous_binary_codes(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadTcgaButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+
+            page.locator("#showAllEventColumns").check()
+            page.locator("#eventColumn").select_option("egfr_status")
+            page.wait_for_function(
+                "document.getElementById('eventValueWarning').textContent.includes('Choose which value means the event happened') || document.getElementById('eventValueWarning').textContent.includes('could not safely guess')"
+            )
+            assert page.locator("#eventPositiveValue").input_value() == ""
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path

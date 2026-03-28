@@ -13,6 +13,7 @@ from survival_toolkit.analysis import (
     discover_feature_signature,
     derive_group_column,
     load_dataframe_from_path,
+    looks_binary,
 )
 from survival_toolkit.sample_data import make_example_dataset
 
@@ -81,6 +82,12 @@ def test_coerce_event_rejects_multistate_numeric_status_columns() -> None:
     series = pd.Series([0, 1, 2, 1, 0])
     with pytest.raises(ValueError, match="more than two distinct states|pre-binarized"):
         coerce_event(series, event_positive_value=1)
+
+
+def test_looks_binary_accepts_nonstandard_two_value_numeric_status() -> None:
+    series = pd.Series([1, 2, 1, 2, None])
+
+    assert looks_binary(series) is True
 
 
 def test_km_analysis_returns_grouped_results() -> None:
