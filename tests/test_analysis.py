@@ -131,7 +131,23 @@ def test_weighted_km_does_not_report_weighted_test_as_logrank_p() -> None:
     assert result["test"]["test"] == "gehan_breslow"
     assert result["logrank_p"] is None
     assert result["test_p_value"] == pytest.approx(result["test"]["p_value"])
-    assert result["test_p_value_label"] == "gehan_breslow"
+    assert result["test_p_value_label"] == "Gehan-Breslow"
+
+
+def test_fleming_harrington_label_includes_fh_parameter() -> None:
+    df = make_example_dataset(seed=13, n_patients=180)
+    result = compute_km_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        group_column="stage",
+        event_positive_value=1,
+        logrank_weight="fleming_harrington",
+        fh_p=1.5,
+    )
+
+    assert result["test_p_value_label"] == "Fleming-Harrington (fh_p=1.5)"
+    assert "fh_p=1.5" in result["scientific_summary"]["headline"]
 
 
 def test_pointwise_km_ci_handles_survival_near_one_without_blowing_up() -> None:
@@ -178,6 +194,8 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert result["scientific_summary"]["metrics"]
     assert any(metric["label"] == "Apparent C-index" for metric in result["scientific_summary"]["metrics"])
     assert any("apparent" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("analyzable cohort" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+    assert any("changing the covariate set" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 
 def test_cox_analysis_keeps_low_cardinality_numeric_covariates_continuous_by_default() -> None:
@@ -472,6 +490,7 @@ def test_signature_summary_stays_exploratory_without_permutation_or_holdout_conf
 
     assert "remains exploratory" in summary["headline"].lower()
     assert any("optimistic" in caution.lower() for caution in summary["cautions"])
+    assert any("changing the candidate set can change the search cohort" in caution.lower() for caution in summary["cautions"])
 
 
 def test_signature_summary_keeps_internal_confirmation_language_conservative() -> None:

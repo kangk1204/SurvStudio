@@ -2610,8 +2610,8 @@ def counterfactual_survival(
     - the target feature set to ``original_value`` for every patient
       (or the observed values when ``original_value`` is *None*)
     - the target feature set to ``counterfactual_value`` for every patient
-    The shift in median risk score quantifies the feature's causal-style
-    influence.
+    The shift in median risk score summarizes a model-based association under
+    this cohort-level perturbation; it is descriptive and not causal.
 
     Parameters
     ----------
@@ -2779,25 +2779,25 @@ def counterfactual_survival(
     if risk_change_pct is None:
         risk_change_text = "is not well-defined because the baseline median risk is zero"
         headline_effect = (
-            f"Changing '{target_feature}' from {original_label} to {counterfactual_label} "
-            "changed median predicted risk, but the relative percentage change is undefined because the baseline median risk is zero."
+            f"Under a model-based scenario that sets '{target_feature}' from {original_label} to {counterfactual_label}, "
+            "median predicted risk changed, but the relative percentage change is undefined because the baseline median risk is zero."
         )
     else:
         risk_change_text = f"{direction} by {abs(risk_change_pct):.1f}% ({direction_label})"
         headline_effect = (
-            f"Changing '{target_feature}' from {original_label} to {counterfactual_label} "
-            f"{direction} median predicted risk by {abs(risk_change_pct):.1f}%."
+            f"Under a model-based scenario that sets '{target_feature}' from {original_label} to {counterfactual_label}, "
+            f"median predicted risk {direction} by {abs(risk_change_pct):.1f}%."
         )
 
     strengths: list[str] = [
-        f"Counterfactual analysis: changing '{target_feature}' from "
+        f"Counterfactual scenario analysis set '{target_feature}' from "
         f"{original_label} to {counterfactual_label} across {n_patients} patients.",
-        f"Median risk {risk_change_text}.",
+        f"Median predicted risk {risk_change_text}.",
     ]
     cautions: list[str] = [
         "Counterfactual analysis assumes independent feature manipulation; "
         "correlated features may invalidate the 'all else equal' assumption.",
-        "This is an observational approximation, not a causal estimate.",
+        "This is a descriptive model-based perturbation on observational data, not a causal estimate.",
     ]
     next_steps: list[str] = [
         "Validate counterfactual findings with domain expertise before clinical interpretation.",

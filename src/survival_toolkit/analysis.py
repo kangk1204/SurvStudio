@@ -548,12 +548,16 @@ def _summarize_labels(labels: Sequence[str], max_items: int = 3) -> str:
     return f"{', '.join(cleaned[:max_items])} +{len(cleaned) - max_items} more"
 
 
-def _weighted_test_label(test_name: str | None) -> str:
+def _weighted_test_label(test_name: str | None, *, fh_p: float | None = None) -> str:
     label_map = {
         "logrank": "log-rank",
         "gehan_breslow": "Gehan-Breslow",
         "tarone_ware": "Tarone-Ware",
-        "fleming_harrington": "Fleming-Harrington",
+        "fleming_harrington": (
+            f"Fleming-Harrington (fh_p={fh_p:g})"
+            if fh_p is not None and np.isfinite(float(fh_p))
+            else "Fleming-Harrington (fh_p-only)"
+        ),
     }
     return label_map.get(str(test_name), str(test_name))
 
@@ -564,6 +568,8 @@ def _km_scientific_summary(
     group_column: str | None,
     test_payload: dict[str, Any] | None,
     pairwise_rows: Sequence[dict[str, Any]],
+    *,
+    fh_p: float | None = None,
 ) -> dict[str, Any]:
     group_count = len(summary_rows)
     min_group_n = min(int(row["N"]) for row in summary_rows)
@@ -577,7 +583,7 @@ def _km_scientific_summary(
     next_steps: list[str] = []
 
     if group_column:
-        test_name = _weighted_test_label(test_payload["test"]) if test_payload else "weighted"
+        test_name = _weighted_test_label(test_payload["test"], fh_p=fh_p) if test_payload else "weighted"
         strengths.append(f"Global {test_name} comparison was run across {group_count} groups.")
         if pairwise_rows:
             strengths.append("Pairwise group comparisons include Benjamini-Hochberg adjusted p-values.")
@@ -595,10 +601,10 @@ def _km_scientific_summary(
 
     if group_column and test_payload:
         if float(test_payload["p_value"]) < 0.05:
-            headline = f"Global {_weighted_test_label(test_payload['test'])} testing suggests survival differs across groups."
+            headline = f"Global {_weighted_test_label(test_payload['test'], fh_p=fh_p)} testing suggests survival differs across groups."
             next_steps.append("Inspect groupwise medians, RMST, and adjusted pairwise comparisons before making a manuscript claim.")
         else:
-            headline = f"Global {_weighted_test_label(test_payload['test'])} testing does not show clear survival separation across groups."
+            headline = f"Global {_weighted_test_label(test_payload['test'], fh_p=fh_p)} testing does not show clear survival separation across groups."
             next_steps.append("Do not treat visual curve separation alone as evidence if the global test is not significant.")
     else:
         headline = "Single-cohort survival was estimated without a between-group hypothesis test."
@@ -650,6 +656,7 @@ def _cox_scientific_summary(
 
     strengths = [
         "Cox regression was fit with the Efron tie method.",
+        f"Model estimates use the analyzable cohort after dropping rows with missing selected covariates (N = {int(model_stats['n'])}).",
         "Proportional-hazards diagnostics were evaluated from Schoenfeld residual correlation tests.",
         "The reported discrimination metric is an apparent C-index computed on the fitted cohort.",
     ]
@@ -661,6 +668,7 @@ def _cox_scientific_summary(
     if epv is not None and epv < 10:
         cautions.append("Events per parameter is below 10, so coefficients may be unstable or overfit.")
         next_steps.append("Reduce model complexity or increase the event count before treating estimates as final.")
+    cautions.append("Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.")
     if ph_alert_terms:
         cautions.append(
             f"Possible proportional-hazards violations detected for: {_summarize_labels(ph_alert_terms)}."
@@ -729,6 +737,15 @@ def _signature_scientific_summary(
     if search_space["truncated"]:
         cautions.append("Search space hit the internal combination cap, so discovery was not exhaustive.")
         cautions.append("Adjusted p-values only account for the tested subset of combinations under the cap.")
+    analyzable_n = search_space.get("n_rows_analyzed")
+    if analyzable_n is not None:
+        cautions.append(
+            f"Signature discovery used {int(analyzable_n)} analyzable rows after dropping missing candidate values; changing the candidate set can change the search cohort."
+        )
+    else:
+        cautions.append(
+            "Signature discovery uses the analyzable subset after dropping missing candidate values; changing the candidate set can change the search cohort."
+        )
     if search_space["permutation_iterations"] == 0 and search_space["validation_iterations"] == 0:
         cautions.append(
             "Because the signature is selected from many tested rules in the same cohort, "
@@ -1818,6 +1835,13 @@ def compute_km_analysis(
         group_column=group_column,
         test_payload=test_payload,
         pairwise_rows=pairwise_rows,
+        fh_p=fh_p,
+    )
+
+    test_label = (
+        None
+        if test_payload is None
+        else _weighted_test_label(str(test_payload["test"]), fh_p=fh_p)
     )
 
     return {
@@ -1836,7 +1860,7 @@ def compute_km_analysis(
         "pairwise_table": pairwise_rows,
         "test": test_payload,
         "test_p_value": None if test_payload is None else float(test_payload["p_value"]),
-        "test_p_value_label": None if test_payload is None else str(test_payload["test"]),
+        "test_p_value_label": test_label,
         "cohort": cohort_summary,
         "display_horizon": display_horizon,
         "group_column": group_column,

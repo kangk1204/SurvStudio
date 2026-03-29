@@ -1471,13 +1471,15 @@ def evaluate_single_deep_survival_model(
             included_models=[canonical_name],
         )
         row = compare_result["comparison_table"][0]
+        aggregate_mode = str(compare_result.get("evaluation_mode", row.get("evaluation_mode", "repeated_cv")))
+        mode_label = "repeated-CV" if aggregate_mode == "repeated_cv" else aggregate_mode.replace("_", " ")
         summary = {
             "status": compare_result["scientific_summary"]["status"],
             "headline": (
-                f"{canonical_name} completed {cv_repeats}x{cv_folds} repeated CV with mean C-index "
+                f"{canonical_name} completed {cv_repeats}x{cv_folds} {mode_label} with mean C-index "
                 f"of {row['c_index']:.3f}."
                 if row.get("c_index") is not None
-                else f"{canonical_name} completed {cv_repeats}x{cv_folds} repeated CV, but the aggregate C-index could not be computed."
+                else f"{canonical_name} completed {cv_repeats}x{cv_folds} {mode_label}, but the aggregate C-index could not be computed."
             ),
             "strengths": list(compare_result["scientific_summary"].get("strengths", [])),
             "cautions": list(compare_result["scientific_summary"].get("cautions", [])),
@@ -1485,7 +1487,7 @@ def evaluate_single_deep_survival_model(
             "metrics": [
                 {"label": "Model", "value": canonical_name},
                 {"label": "Mean C-index", "value": row.get("c_index")},
-                {"label": "Evaluation mode", "value": "repeated_cv"},
+                {"label": "Evaluation mode", "value": aggregate_mode},
                 {"label": "CV folds", "value": cv_folds},
                 {"label": "CV repeats", "value": cv_repeats},
             ],
@@ -1497,7 +1499,7 @@ def evaluate_single_deep_survival_model(
             "model": canonical_name,
             "model_type": model_type,
             "c_index": row.get("c_index"),
-            "evaluation_mode": "repeated_cv",
+            "evaluation_mode": aggregate_mode,
             "cv_folds": cv_folds,
             "cv_repeats": cv_repeats,
             "n_evaluations": row.get("n_evaluations"),
