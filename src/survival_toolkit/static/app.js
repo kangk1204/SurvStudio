@@ -3285,8 +3285,8 @@ async function runDlModel() {
     refs.dlImportancePlot.innerHTML = "";
     await Plotly.newPlot(refs.dlImportancePlot, payload.figures.importance.data, payload.figures.importance.layout, plotConfig("dl_importance"));
   } else {
-    const importanceEmpty = stats?.evaluation_mode === "repeated_cv"
-      ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit single-fit feature importance.</span></div>'
+    const importanceEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
+      ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit single-fit gradient salience.</span></div>'
       : '<div class="empty-state plot-empty"><span>No feature importance available</span></div>';
     clearPlotShell(refs.dlImportancePlot, importanceEmpty);
   }
@@ -3295,17 +3295,18 @@ async function runDlModel() {
     refs.dlLossPlot.innerHTML = "";
     await Plotly.newPlot(refs.dlLossPlot, payload.figures.loss.data, payload.figures.loss.layout, plotConfig("dl_loss"));
   } else {
-    const lossEmpty = stats?.evaluation_mode === "repeated_cv"
+    const lossEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
       ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit a single training loss curve.</span></div>'
       : '<div class="empty-state plot-empty"><span>No loss curve available</span></div>';
     clearPlotShell(refs.dlLossPlot, lossEmpty);
   }
-  if (stats.evaluation_mode === "repeated_cv" && Array.isArray(stats.repeat_results) && stats.repeat_results.length) {
+  const repeatedCvLike = stats.evaluation_mode === "repeated_cv" || stats.evaluation_mode === "repeated_cv_incomplete";
+  if (repeatedCvLike && Array.isArray(stats.repeat_results) && stats.repeat_results.length) {
     renderTable(refs.dlComparisonShell, stats.repeat_results);
   } else {
     refs.dlComparisonShell.innerHTML = '<div class="empty-state">Run "Compare All" to benchmark all deep models on the same feature set.</div>';
   }
-  if (stats.evaluation_mode === "repeated_cv" && payload.analysis?.manuscript_tables?.model_performance_table) {
+  if (repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table) {
     renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
   } else {
     refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Run "Compare All" to populate manuscript-ready deep comparison rows.</div>';
@@ -3315,18 +3316,26 @@ async function runDlModel() {
   refs.downloadDlComparisonButton.disabled = !(Array.isArray(stats.comparison_table) && stats.comparison_table.length);
   if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
   if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
-  setDlManuscriptDownloadsEnabled(!!(stats.evaluation_mode === "repeated_cv" && payload.analysis?.manuscript_tables?.model_performance_table?.length));
+  setDlManuscriptDownloadsEnabled(!!(repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table?.length));
   // Backend may emit either `scientific_summary` or `insight_board` depending on model implementation.
   const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
   renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning results.");
   const epochsTrained = stats.epochs_trained || stats.epochs || refs.dlEpochs.value;
   const dlMetricLabel = stats.evaluation_mode === "repeated_cv"
     ? "Mean repeated-CV C-index"
-    : (stats.evaluation_mode === "holdout" ? "Holdout C-index" : "Apparent C-index");
+    : (stats.evaluation_mode === "repeated_cv_incomplete"
+      ? "Mean repeated-CV C-index (incomplete)"
+      : (stats.evaluation_mode === "holdout"
+        ? "Holdout C-index"
+        : (stats.evaluation_mode === "holdout_fallback_apparent" ? "Apparent fallback C-index" : "Apparent C-index")));
   const dlEvalLabel = stats.evaluation_mode === "repeated_cv"
     ? `${formatValue(stats.cv_repeats || refs.dlCvRepeats.value)}x${formatValue(stats.cv_folds || refs.dlCvFolds.value)} repeated CV`
-    : formatValue(stats.evaluation_mode);
-  const dlSeedSuffix = stats.evaluation_mode === "repeated_cv"
+    : (stats.evaluation_mode === "repeated_cv_incomplete"
+      ? `${formatValue(stats.cv_repeats || refs.dlCvRepeats.value)}x${formatValue(stats.cv_folds || refs.dlCvFolds.value)} repeated CV (incomplete; fallback folds excluded)`
+      : (stats.evaluation_mode === "holdout_fallback_apparent"
+        ? "holdout requested, reported as apparent fallback"
+        : formatValue(stats.evaluation_mode)));
+  const dlSeedSuffix = repeatedCvLike
     ? (Array.isArray(stats.training_seeds) && stats.training_seeds.length
       ? `, repeat seeds=${stats.training_seeds.join(", ")}`
       : "")
@@ -3334,7 +3343,7 @@ async function runDlModel() {
   refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlSeedSuffix}`;
   updateStepIndicator(3);
   activateTab("dl");
-  scrollToAnalysisResult("dl", { mode: "single" });
+  scrollToAnalysisResult("dl", { mode: repeatedCvLike ? "compare" : "single" });
   showToast(`${refs.dlModelType.value.toUpperCase()} model trained`, "success", 3000);
 }
 
@@ -3411,11 +3420,15 @@ async function runDlCompareModels() {
     const dlEvalMode = payload.analysis?.evaluation_mode || refs.dlEvaluationStrategy.value;
     const dlEvalLabel = dlEvalMode === "repeated_cv"
       ? `${payload.analysis?.cv_repeats || refs.dlCvRepeats.value}x${payload.analysis?.cv_folds || refs.dlCvFolds.value} repeated CV`
-      : (dlEvalMode === "mixed_holdout_apparent"
-        ? "mixed holdout/apparent"
-        : formatValue(dlEvalMode));
-    const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Best holdout-comparable" : "Best";
-    const dlMetricLabel = dlEvalMode === "mixed_holdout_apparent" ? "Best holdout C-index" : "C-index";
+      : (dlEvalMode === "repeated_cv_incomplete"
+        ? `${payload.analysis?.cv_repeats || refs.dlCvRepeats.value}x${payload.analysis?.cv_folds || refs.dlCvFolds.value} repeated CV (incomplete)`
+        : (dlEvalMode === "mixed_holdout_apparent"
+          ? "mixed holdout/apparent"
+          : formatValue(dlEvalMode)));
+    const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Screening top holdout-comparable" : "Screening top model";
+    const dlMetricLabel = dlEvalMode === "mixed_holdout_apparent"
+      ? "Best holdout C-index"
+      : (dlEvalMode === "repeated_cv_incomplete" ? "Screening mean C-index (incomplete)" : "C-index");
     const rerunSeedSuffix = (bestRow.training_seed != null && dlEvalMode !== "repeated_cv")
       ? `, rerun seed=${formatValue(bestRow.training_seed)}`
       : "";

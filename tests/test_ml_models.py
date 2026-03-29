@@ -260,6 +260,38 @@ def test_feature_encoder_imputes_missing_numeric_and_categorical_values() -> Non
     assert encoded.loc[0, "age"] == pytest.approx(float(encoder["numeric_impute_values"]["age"]))
 
 
+def test_build_manuscript_result_tables_handles_incomplete_repeated_cv() -> None:
+    from survival_toolkit.ml_models import build_manuscript_result_tables
+
+    manuscript = build_manuscript_result_tables(
+        {
+            "evaluation_mode": "repeated_cv_incomplete",
+            "comparison_table": [
+                {
+                    "model": "Survival Transformer",
+                    "c_index": None,
+                    "evaluation_mode": "repeated_cv_incomplete",
+                    "cv_folds": 5,
+                    "cv_repeats": 3,
+                    "n_repeats": 3,
+                    "n_evaluations": 13,
+                    "n_failures": 2,
+                    "n_apparent_fallbacks": 2,
+                    "n_features": 10,
+                    "training_time_ms": 123.4,
+                    "training_seeds": [42, 43, 44],
+                    "split_seeds": [42, 43, 44],
+                    "monitor_seeds": [42, 43, 44],
+                }
+            ],
+        }
+    )
+
+    assert "incomplete repeated stratified cross-validation" in manuscript["caption"].lower()
+    assert any("repeated-cv incomplete" in note.lower() for note in manuscript["table_notes"])
+    assert manuscript["model_performance_table"][0]["Validation Strategy"].endswith("(incomplete)")
+
+
 def test_prepare_model_evaluation_split_keeps_outcome_valid_rows_with_missing_features() -> None:
     import survival_toolkit.ml_models as ml_models
 

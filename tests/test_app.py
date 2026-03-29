@@ -249,6 +249,8 @@ def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
     assert "CV folds must be between 2 and 10." in text
     assert "Parallel jobs must be between 1 and 16." in text
     assert "Transformer width must be divisible by attention heads." in text
+    assert "repeated CV (incomplete; fallback folds excluded)" in text
+    assert "holdout requested, reported as apparent fallback" in text
     assert "Latent dim must be between 2 and 32." in text
     assert "validateDlControls();" in text
     assert "evaluation_strategy: refs.dlEvaluationStrategy.value" in text
@@ -1765,6 +1767,34 @@ def test_single_deep_model_endpoints_handle_mixed_features(model_type: str) -> N
     assert payload["figures"]["loss"]["data"]
 
 
+def test_deep_model_endpoint_rejects_invalid_transformer_width() -> None:
+    load_response = client.post("/api/load-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+
+    response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "biomarker_score"],
+            "categorical_features": [],
+            "model_type": "transformer",
+            "epochs": 10,
+            "batch_size": 8,
+            "random_seed": 23,
+            "d_model": 30,
+            "n_heads": 4,
+            "n_layers": 1,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Transformer width must be divisible by attention heads." in response.text
+
+
 def test_ml_model_compare_endpoint_supports_repeated_cv_export() -> None:
     load_response = client.post("/api/load-example")
     assert load_response.status_code == 200
@@ -2091,7 +2121,7 @@ def test_frontend_scrolls_to_results_after_runs_finish() -> None:
     assert 'scrollToAnalysisResult("tables");' in app_js
     assert 'scrollToAnalysisResult("ml", { mode: "single" });' in app_js
     assert 'scrollToAnalysisResult("ml", { mode: "compare" });' in app_js
-    assert 'scrollToAnalysisResult("dl", { mode: "single" });' in app_js
+    assert 'scrollToAnalysisResult("dl", { mode: repeatedCvLike ? "compare" : "single" });' in app_js
     assert 'scrollToAnalysisResult("dl", { mode: "compare" });' in app_js
 
 

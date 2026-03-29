@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from survival_toolkit.analysis import (
@@ -181,6 +181,12 @@ class DeepModelRequest(BaseModel):
     latent_dim: int = Field(default=8, ge=2, le=32)
     n_clusters: int = Field(default=3, ge=2, le=10)
 
+    @model_validator(mode="after")
+    def validate_transformer_width(self) -> "DeepModelRequest":
+        if self.model_type in {"transformer", "compare"} and self.d_model % self.n_heads != 0:
+            raise ValueError("Transformer width must be divisible by attention heads.")
+        return self
+
 
 class OptimalCutpointRequest(BaseModel):
     dataset_id: str
@@ -329,7 +335,12 @@ def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -
     return notes
 
 
-def _dl_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -> list[str]:
+def _dl_replay_notes(
+    request_config: dict[str, Any],
+    *,
+    dataset_filename: str,
+    resolved_analysis: dict[str, Any] | None = None,
+) -> list[str]:
     features = [str(value) for value in request_config.get("features") or []]
     categorical = [str(value) for value in request_config.get("categorical_features") or []]
     evaluation_strategy = str(request_config.get("evaluation_strategy", "holdout"))
@@ -371,6 +382,13 @@ def _dl_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -
         ),
         "Replay settings: " + "; ".join(settings) + ".",
     ]
+    if resolved_analysis:
+        actual_eval = resolved_analysis.get("evaluation_mode")
+        if actual_eval is not None:
+            notes.append(f"Reported evaluation outcome: {actual_eval}.")
+        actual_note = (resolved_analysis.get("evaluation_note") or "").strip()
+        if actual_note:
+            notes.append("Reported evaluation note: " + actual_note)
     if features:
         notes.append("Replay features: " + ", ".join(features) + ".")
     if categorical:
@@ -1250,7 +1268,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                 )
                 _attach_manuscript_notes(
                     result,
-                    _dl_replay_notes(request_config, dataset_filename=stored.filename),
+                    _dl_replay_notes(request_config, dataset_filename=stored.filename, resolved_analysis=result),
                 )
                 clean_result = {k: v for k, v in result.items() if not k.startswith("_")}
                 return {
@@ -1281,6 +1299,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                 figures["importance"] = build_feature_importance_figure(
                     result["feature_importance"],
                     model_name=request_model.model_type.upper(),
+                    title_label="Gradient-Based Feature Salience",
                 )
             if result.get("loss_history"):
                 figures["loss"] = build_loss_curve_figure(result["loss_history"], model_name=request_model.model_type.upper())

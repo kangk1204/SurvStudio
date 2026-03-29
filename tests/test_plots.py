@@ -91,6 +91,19 @@ def test_build_feature_importance_figure() -> None:
     assert len(figure["data"]) == 1
 
 
+def test_build_feature_importance_figure_supports_custom_title_label() -> None:
+    importances = [
+        {"feature": "age", "importance": 0.3},
+        {"feature": "stage", "importance": 0.2},
+    ]
+    figure = build_feature_importance_figure(
+        importances,
+        model_name="TRANSFORMER",
+        title_label="Gradient-Based Feature Salience",
+    )
+    assert figure["layout"]["title"]["text"] == "TRANSFORMER Gradient-Based Feature Salience"
+
+
 def test_build_model_comparison_figure() -> None:
     comparison = {
         "comparison_table": [

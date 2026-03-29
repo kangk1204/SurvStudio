@@ -1417,6 +1417,7 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
     evaluation_mode = str(result.get("evaluation_mode", "unknown"))
     rows: list[dict[str, Any]] = []
     comparison_table = list(result.get("comparison_table", []))
+    repeated_cv_mode = evaluation_mode in {"repeated_cv", "repeated_cv_incomplete"}
 
     def _format_seed_values(values: Any) -> str | None:
         if not values:
@@ -1427,7 +1428,7 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             return None
         return ", ".join(str(value) for value in ints) if ints else None
 
-    if evaluation_mode == "repeated_cv":
+    if repeated_cv_mode:
         interval_label = "Empirical repeat interval (repeat means)"
         include_provenance = any(
             row.get("training_seeds") or row.get("split_seeds") or row.get("monitor_seeds")
@@ -1437,10 +1438,15 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
         for rank, row in enumerate(comparison_table, start=1):
             interval_lower = _safe_float(row.get("c_index_interval_lower"))
             interval_upper = _safe_float(row.get("c_index_interval_upper"))
+            row_mode = str(row.get("evaluation_mode", evaluation_mode))
             manuscript_row = {
                 "Rank": rank,
                 "Model": row["model"],
-                "Validation Strategy": f"{row.get('cv_repeats', 1)}x{row.get('cv_folds', 1)} repeated stratified CV",
+                "Validation Strategy": (
+                    f"{row.get('cv_repeats', 1)}x{row.get('cv_folds', 1)} repeated stratified CV"
+                    if row_mode == "repeated_cv"
+                    else f"{row.get('cv_repeats', 1)}x{row.get('cv_folds', 1)} repeated stratified CV (incomplete)"
+                ),
                 "Mean C-index": _safe_float(row.get("c_index")),
                 "SD": _safe_float(row.get("c_index_std")),
                 "Repeat means, n": row.get("n_repeats"),
@@ -1467,6 +1473,10 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             "The repeat interval is descriptive across repeats and should not be interpreted as a formal confidence interval.",
             "Blank C-index fields indicate incomplete repeated-CV evaluation because one or more folds failed or fell back to apparent evaluation.",
         ]
+        if evaluation_mode == "repeated_cv_incomplete":
+            table_notes.append(
+                "This comparison is labeled repeated-CV incomplete because one or more apparent-fallback or failed folds were excluded from the aggregate."
+            )
         if include_provenance:
             table_notes.append(
                 "Training, split, and monitor seed columns record the exact repeated-CV partitioning used for replay under the same model settings."
@@ -1507,12 +1517,16 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             "Table 1. Discrimination performance of survival models under repeated stratified cross-validation."
             if evaluation_mode == "repeated_cv"
             else (
-                "Table 1. Discrimination performance of survival models under apparent evaluation."
-                if comparison_table and all(str(row.get("evaluation_mode", evaluation_mode)) in {"apparent", "holdout_fallback_apparent"} for row in comparison_table)
+                "Table 1. Discrimination performance of survival models under incomplete repeated stratified cross-validation."
+                if evaluation_mode == "repeated_cv_incomplete"
                 else (
-                    "Table 1. Discrimination performance of survival models under mixed holdout/apparent evaluation."
-                    if any(str(row.get("evaluation_mode", evaluation_mode)) != "holdout" for row in comparison_table)
-                    else "Table 1. Discrimination performance of survival models under deterministic holdout evaluation."
+                    "Table 1. Discrimination performance of survival models under apparent evaluation."
+                    if comparison_table and all(str(row.get("evaluation_mode", evaluation_mode)) in {"apparent", "holdout_fallback_apparent"} for row in comparison_table)
+                    else (
+                        "Table 1. Discrimination performance of survival models under mixed holdout/apparent evaluation."
+                        if any(str(row.get("evaluation_mode", evaluation_mode)) != "holdout" for row in comparison_table)
+                        else "Table 1. Discrimination performance of survival models under deterministic holdout evaluation."
+                    )
                 )
             )
         ),

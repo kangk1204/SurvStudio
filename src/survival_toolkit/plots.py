@@ -243,7 +243,12 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
 # ── Feature importance ──────────────────────────────────────────
 
 
-def build_feature_importance_figure(importances: list[dict[str, Any]], model_name: str = "Model") -> dict[str, Any]:
+def build_feature_importance_figure(
+    importances: list[dict[str, Any]],
+    model_name: str = "Model",
+    *,
+    title_label: str = "Feature Importance",
+) -> dict[str, Any]:
     if not importances:
         return figure_to_json(go.Figure())
 
@@ -266,7 +271,7 @@ def build_feature_importance_figure(importances: list[dict[str, Any]], model_nam
         **_COMMON_LAYOUT,
         margin={"l": 200, "r": 30, "t": 80, "b": 60},
         title={
-            "text": f"{model_name} Feature Importance",
+            "text": f"{model_name} {title_label}",
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
             "x": 0.02,
         },
