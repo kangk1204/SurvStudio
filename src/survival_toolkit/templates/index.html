@@ -555,7 +555,7 @@
             <section class="control-section">
               <div class="control-section-head">
                 <strong>Run setup</strong>
-                <span>Single-model training controls. Use Fast mode for a quicker first pass.</span>
+                <span>Train one RSF or GBS model here. Compare All below is a separate screening run.</span>
               </div>
               <div class="button-row run-setup-quick-actions">
                 <button class="button ghost compact-btn" id="runCompareInlineButton" type="button">Compare All Models</button>
@@ -585,7 +585,7 @@
             <section class="control-section">
               <div class="control-section-head">
                 <strong>Evaluation</strong>
-                <span>Choose the evaluation path before Train Model or Compare All.</span>
+                <span>These settings apply to Compare All screening only. Train Model uses its own holdout/apparent path.</span>
               </div>
               <div class="toolbar-grid expert-parameter-grid">
                 <label class="toolbar-field">
@@ -606,15 +606,16 @@
               </div>
             </section>
           </div>
-          <div class="toolbar-note">Compare All Evaluation affects only <strong>Compare All</strong>. <strong>Train Model</strong> uses the single-model training path and reports its own evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so Random Survival Forest returns much faster on larger cohorts.</div>
+          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH, RSF, and GBS on one shared evaluation path. <strong>Train Model</strong> fits one RSF or GBS model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF returns much faster on larger cohorts.</div>
+          <div class="toolbar-note">Partial dependence and counterfactual analysis are available for tree-model runs only (<strong>RSF</strong> or <strong>GBS</strong>). They reuse the latest matching trained tree model when available; otherwise they refit the same requested tree settings.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>What this tab uses</strong>
-              <span id="mlFeatureSummaryText">ML uses the Study Design outcome definition and the model features selected below.</span>
+              <span id="mlFeatureSummaryText">ML uses the Study Design outcome definition and the shared ML/DL model features selected below.</span>
               <div class="dataset-preset-chips hidden" id="mlFeatureSummaryChips"></div>
             </div>
             <div class="button-row">
-              <button class="button ghost compact-btn" id="reviewMlFeaturesButton" type="button">Focus Model Features</button>
+              <button class="button ghost compact-btn" id="reviewMlFeaturesButton" type="button">Review shared features</button>
             </div>
           </div>
           <div class="checklist-grid">

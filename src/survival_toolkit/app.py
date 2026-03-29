@@ -1410,9 +1410,9 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
                 "trained_tree_model" if artifact is not None else "refit_tree_model"
             )
             analysis["contract_note"] = (
-                "Counterfactual analysis reused the exact fitted tree model from the latest matching single-model run."
+                "Counterfactual analysis reused the exact fitted RSF/GBS model from the latest matching single-model run. It does not explain a Compare All ranking table."
                 if artifact is not None
-                else "Counterfactual analysis refit a tree model from the requested configuration because no matching trained artifact was cached."
+                else "Counterfactual analysis refit an RSF/GBS model from the requested configuration because no matching single-model artifact was cached. It does not explain a previously displayed Compare All winner."
             )
             return {"analysis": analysis, "request_config": request_config}
 
@@ -1483,9 +1483,9 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
                 "trained_tree_model" if artifact_reused else "refit_tree_model"
             )
             result["contract_note"] = (
-                "Partial dependence reused the exact fitted tree model from the latest matching single-model run."
+                "Partial dependence reused the exact fitted RSF/GBS model from the latest matching single-model run. It does not explain a Compare All ranking table."
                 if artifact_reused
-                else "Partial dependence refit a tree model from the requested configuration because no matching trained artifact was cached."
+                else "Partial dependence refit an RSF/GBS model from the requested configuration because no matching single-model artifact was cached. It does not explain a previously displayed Compare All winner."
             )
             figure = build_pdp_figure(result)
             return {"analysis": result, "figure": figure, "request_config": request_config}
