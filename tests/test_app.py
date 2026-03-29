@@ -1789,6 +1789,39 @@ def test_frontend_refreshes_km_after_creating_and_applying_a_new_group() -> None
     assert "await runKaplanMeier();" in derive_body
 
 
+def test_frontend_derive_group_uses_lightweight_dataset_refresh() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function updateAfterDerivedDataset(payload, { deferChrome = false } = {})" in app_js
+    assert "state.km = preservedStates.km;" in app_js
+    assert "state.ml = preservedStates.ml;" in app_js
+    assert "if (!deferChrome) {" in app_js
+    derive_start = app_js.index("async function deriveGroup()")
+    derive_end = app_js.index("function updateMethodVisibility()", derive_start)
+    derive_body = app_js[derive_start:derive_end]
+    assert "updateAfterDerivedDataset(payload, { deferChrome: shouldRefreshKm });" in derive_body
+    assert "updateAfterDataset(payload);" not in derive_body
+
+
+def test_guided_confirm_outcome_shows_ready_status_when_event_value_is_set() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'const issueHeading = eventWarning || !eventValueSelected ? "Blocking issue" : "Ready status";' in app_js
+    assert '"Time, event, and event value are all set. You can continue."' in app_js
+
+
 def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
@@ -2990,3 +3023,133 @@ def test_dev_extra_includes_ml_and_dl_dependencies() -> None:
 
     assert {"scikit-survival>=0.23.0", "shap>=0.45.0", "torch>=2.0.0"}.issubset(dev_dependencies)
     assert {"httpx>=0.28.1", "pytest>=8.3.5"}.issubset(dev_dependencies)
+
+
+def test_guided_tables_hide_cutpoint_scan_when_goal_is_not_km() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "const showCutpointPlot = hasCutpointPlot && (!guidedActive || goal === \"km\");" in app_js
+
+
+def test_guided_tables_use_single_column_builder_layout() -> None:
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .table-builder-grid {' in styles
+    assert "grid-template-columns: 1fr;" in styles
+    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .table-card {' in styles
+    assert "order: 1;" in styles
+    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .selection-card {' in styles
+    assert "order: 2;" in styles
+    assert 'body[data-ui-mode="guided"][data-guided-step="4"] #panel-tables .table-card {' not in styles
+
+
+def test_guided_tables_run_uses_clicked_button_and_state_based_success_check() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'async function runGuidedGoal(tabName, button, action, { resultMode = "single", successCheck = null } = {})' in app_js
+    assert 'const hasResult = typeof successCheck === "function" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName));' in app_js
+    assert 'if (action === "run-tables") {' in app_js
+    assert 'void runGuidedGoal("tables", target, runCohortTable, {' in app_js
+    assert 'successCheck: () => Boolean(state.cohort?.analysis),' in app_js
+    assert 'void runGuidedGoal("tables", refs.runCohortTableButton, runCohortTable, {' in app_js
+
+
+def test_guided_runs_use_scope_override_for_loading_locks() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "async function withLoading(button, action, scopeOverride = null) {" in app_js
+    assert "const scope = scopeOverride || (" in app_js
+    assert "await withLoading(button, action, tabName);" in app_js
+    assert "const scopeButtons = buttonsForScope(scope);" in app_js
+    assert "if (activeButton && !scopeButtons.includes(activeButton)) {" in app_js
+    assert "setButtonLoading(activeButton, isBusy);" in app_js
+
+
+def test_compare_all_actions_surface_pending_feedback() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
+    assert "function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
+    assert 'setRuntimeBanner("Comparing all ML models. This can take a little while on larger cohorts.", "info");' in app_js
+    assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");' in app_js
+    assert "refs.mlMetaBanner.textContent = mlComparePendingBannerText({" in app_js
+    assert "refs.dlMetaBanner.textContent = dlComparePendingBannerText({" in app_js
+
+
+def test_guided_tables_configure_panel_uses_stacked_layout() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert 'const panelGridClass = `guided-panel-grid${goal === "tables" ? " guided-panel-grid-stacked" : ""}`;' in app_js
+    assert ".guided-panel-grid.guided-panel-grid-stacked {" in styles
+    assert "grid-template-columns: 1fr;" in styles
+    assert ".guided-actions-priority:not(.guided-actions-dual) .guided-run-choice {" in styles
+    assert "min-width: 220px;" in styles
+    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .table-builder-grid {' in styles
+    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .table-card {' in styles
+    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .selection-card {' in styles
+    assert "justify-self: stretch;" in styles
+    assert "body[data-ui-mode=\"guided\"] #guidedConfigMount," in styles
+    assert "body[data-ui-mode=\"guided\"] #guidedActivePanelMount {" in styles
+    assert "display: contents;" in styles
+    assert "body[data-ui-mode=\"guided\"] .guided-main," in styles
+    assert "body[data-ui-mode=\"guided\"] .smart-banner {" in styles
+    assert "body[data-ui-mode=\"guided\"] .guided-main,\n  body[data-ui-mode=\"guided\"] .config-strip,\n  body[data-ui-mode=\"guided\"] .smart-banner,\n  body[data-ui-mode=\"guided\"] .tab-panel.guided-visible {" not in styles
+
+
+def test_window_resize_schedules_plot_resizing() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "plotResizeTimer: null," in app_js
+    assert "function scheduleVisiblePlotResize(delay = 80) {" in app_js
+    assert "window.clearTimeout(runtime.plotResizeTimer);" in app_js
+    assert "window.addEventListener(\"resize\", () => {" in app_js
+    assert "scheduleVisiblePlotResize(80);" in app_js

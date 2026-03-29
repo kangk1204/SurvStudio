@@ -789,6 +789,10 @@ body {
   gap: 16px;
 }
 
+.guided-panel-grid.guided-panel-grid-stacked {
+  grid-template-columns: 1fr;
+}
+
 .guided-card {
   padding: 16px;
   border-radius: var(--radius-sm);
@@ -837,6 +841,12 @@ body {
   flex: 1 1 220px;
   justify-content: center;
   width: 100%;
+}
+
+.guided-actions-priority:not(.guided-actions-dual) .guided-run-choice {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 220px;
 }
 
 .guided-actions-secondary {
@@ -1499,6 +1509,11 @@ body {
     display: contents;
   }
 
+  body[data-ui-mode="guided"] #guidedConfigMount,
+  body[data-ui-mode="guided"] #guidedActivePanelMount {
+    display: contents;
+  }
+
   body[data-ui-mode="guided"] .guided-rail {
     grid-column: 1;
     top: 20px;
@@ -1506,9 +1521,7 @@ body {
   }
 
   body[data-ui-mode="guided"] .guided-main,
-  body[data-ui-mode="guided"] .config-strip,
-  body[data-ui-mode="guided"] .smart-banner,
-  body[data-ui-mode="guided"] .tab-panel.guided-visible {
+  body[data-ui-mode="guided"] .smart-banner {
     grid-column: 2;
   }
 
@@ -1721,6 +1734,32 @@ body[data-ui-mode="guided"] .tab-panel.guided-visible .checklist-grid {
   margin-right: 0;
 }
 
+body[data-ui-mode="guided"] #panel-tables.guided-visible .table-builder-grid {
+  grid-template-columns: 1fr;
+}
+
+body[data-ui-mode="guided"] #panel-tables.guided-visible,
+body[data-ui-mode="guided"] #panel-tables.guided-visible .workspace-card,
+body[data-ui-mode="guided"] #panel-tables.guided-visible .card-head,
+body[data-ui-mode="guided"] #panel-tables.guided-visible .dependency-card,
+body[data-ui-mode="guided"] #panel-tables.guided-visible .table-builder-grid,
+body[data-ui-mode="guided"] #panel-tables.guided-visible .table-card,
+body[data-ui-mode="guided"] #panel-tables.guided-visible .selection-card {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  box-sizing: border-box;
+  justify-self: stretch;
+}
+
+body[data-ui-mode="guided"] #panel-tables.guided-visible .table-card {
+  order: 1;
+}
+
+body[data-ui-mode="guided"] #panel-tables.guided-visible .selection-card {
+  order: 2;
+}
+
 body[data-ui-mode="guided"] .smart-banner,
 body[data-ui-mode="guided"] .dataset-preset-bar {
   display: none !important;
@@ -1767,8 +1806,7 @@ body[data-ui-mode="guided"][data-guided-step="4"] #panel-dl #dlLossPlot,
 body[data-ui-mode="guided"][data-guided-step="4"] #panel-dl #dlMetaBanner,
 body[data-ui-mode="guided"][data-guided-step="4"] #panel-dl #dlInsightBoard,
 body[data-ui-mode="guided"][data-guided-step="4"] #panel-dl #dlComparisonPlot,
-body[data-ui-mode="guided"][data-guided-step="4"] #panel-dl .table-grid,
-body[data-ui-mode="guided"][data-guided-step="4"] #panel-tables .table-card {
+body[data-ui-mode="guided"][data-guided-step="4"] #panel-dl .table-grid {
   display: none !important;
 }
 
@@ -1861,7 +1899,7 @@ body[data-ui-mode="guided"][data-guided-step="5"] #panel-dl #dlLossPlot {
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
 }
 
 h2 {
@@ -1885,13 +1923,13 @@ h3 {
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .control-stack {
   display: grid;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .balanced-control-stack {
@@ -2071,13 +2109,13 @@ h3 {
   color: var(--ink);
   font-size: 0.82rem;
   line-height: 1.6;
-  margin: 12px 0;
+  margin: 16px 0;
 }
 
 /* ─── Insight Board ─── */
 
 .insight-board {
-  margin: 12px 0;
+  margin: 16px 0;
 }
 
 .insight-board.compact {
@@ -2197,6 +2235,7 @@ h3 {
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: var(--surface);
+  margin-bottom: 16px;
 }
 
 /* ─── Tables ─── */

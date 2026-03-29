@@ -21,6 +21,7 @@ const runtime = {
   historyRestoreToken: 0,
   derivedColumnProvenance: {},
   busyScopes: {},
+  plotResizeTimer: null,
 };
 
 
@@ -586,6 +587,11 @@ function updateGuidedSurfaceVisibility() {
   refs.tabStrip?.classList.toggle("hidden", guidedActive);
   refs.datasetPresetBar?.classList.toggle("hidden", guidedActive || !datasetPresetForCurrentDataset());
   refs.expertSurfaceLabel?.classList.toggle("hidden", runtime.uiMode !== "expert" || !state.dataset);
+  if (refs.cutpointPlot) {
+    const hasCutpointPlot = refs.cutpointPlot.innerHTML.trim().length > 0;
+    const showCutpointPlot = hasCutpointPlot && (!guidedActive || goal === "km");
+    refs.cutpointPlot.classList.toggle("hidden", !showCutpointPlot);
+  }
 
   if (showGroupingConfig && refs.groupingDetails) refs.groupingDetails.open = true;
 }
@@ -638,6 +644,16 @@ function queueVisiblePlotResize() {
     resizeVisiblePlotsNow();
     window.setTimeout(resizeVisiblePlotsNow, 120);
   });
+}
+
+function scheduleVisiblePlotResize(delay = 80) {
+  if (runtime.plotResizeTimer) {
+    window.clearTimeout(runtime.plotResizeTimer);
+  }
+  runtime.plotResizeTimer = window.setTimeout(() => {
+    runtime.plotResizeTimer = null;
+    queueVisiblePlotResize();
+  }, delay);
 }
 
 function setGuidedGoal(goal, { activate = true, syncHistory = true, historyMode = "replace" } = {}) {
@@ -916,7 +932,11 @@ function buttonsForScope(scope) {
 function setScopeBusy(scope, isBusy, activeButton = null) {
   if (!scope) return;
   runtime.busyScopes[scope] = Boolean(isBusy);
-  buttonsForScope(scope).forEach((button) => {
+  const scopeButtons = buttonsForScope(scope);
+  if (activeButton && !scopeButtons.includes(activeButton)) {
+    setButtonLoading(activeButton, isBusy);
+  }
+  scopeButtons.forEach((button) => {
     if (!button) return;
     if (button === activeButton) {
       setButtonLoading(button, isBusy);
@@ -1869,6 +1889,22 @@ function mlPendingBannerText({ modelType, nEstimators, rowCount, computeShap }) 
   return message;
 }
 
+function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {
+  const cohortSuffix = Number.isFinite(rowCount) ? ` on ${rowCount} rows` : "";
+  const evalSuffix = evaluationStrategy === "repeated_cv"
+    ? ` using ${cvRepeats}x${cvFolds} repeated CV`
+    : " using deterministic holdout";
+  return `Comparing Cox PH, Random Survival Forest, and Gradient Boosted Survival${cohortSuffix}${evalSuffix}.`;
+}
+
+function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {
+  const cohortSuffix = Number.isFinite(rowCount) ? ` on ${rowCount} rows` : "";
+  const evalSuffix = evaluationStrategy === "repeated_cv"
+    ? ` using ${cvRepeats}x${cvFolds} repeated CV`
+    : " using deterministic holdout";
+  return `Comparing DeepSurv, DeepHit, Neural MTLR, Survival Transformer, and Survival VAE${cohortSuffix}${evalSuffix}.`;
+}
+
 function formatGroupChip(groupLabel) {
   return `Grouping only: ${groupLabel}`;
 }
@@ -2053,6 +2089,7 @@ function eventPreviewValues(columnName) {
 function guidedPanelMarkup(step) {
   const goal = runtime.guidedGoal;
   const eventWarning = currentEventColumnWarning();
+  const eventValueSelected = Boolean(refs.eventPositiveValue?.value);
   const eventValues = eventPreviewValues(refs.eventColumn?.value || "");
   const datasetName = escapeHtml(state.dataset?.filename || "dataset");
   const goalCards = GUIDED_GOALS.map((entry) => `
@@ -2069,7 +2106,12 @@ function guidedPanelMarkup(step) {
   `).join("");
 
   if (step === 2) {
-    const canContinue = endpointIsReady() && !eventWarning && Boolean(refs.eventPositiveValue?.value);
+    const canContinue = endpointIsReady() && !eventWarning && eventValueSelected;
+    const issueHeading = eventWarning || !eventValueSelected ? "Blocking issue" : "Ready status";
+    const issueMessage = eventWarning?.message
+      || (!eventValueSelected
+        ? `Choose the Event Value that means the event happened for "${refs.eventColumn?.value || "event"}".`
+        : "Time, event, and event value are all set. You can continue.");
     return `
       <div class="guided-panel-grid">
         <article class="guided-card">
@@ -2096,9 +2138,9 @@ function guidedPanelMarkup(step) {
               <strong>Observed event values</strong>
               <span>${escapeHtml(eventValues.length ? eventValues.join(", ") : "Unavailable")}</span>
             </div>
-            <div class="guided-status-item${eventWarning ? " warning" : ""}">
-              <strong>Blocking issue</strong>
-              <span>${escapeHtml(eventWarning?.message || `Choose the Event Value that means the event happened for "${refs.eventColumn?.value || "event"}".`)}</span>
+            <div class="guided-status-item${eventWarning || !eventValueSelected ? " warning" : ""}">
+              <strong>${escapeHtml(issueHeading)}</strong>
+              <span>${escapeHtml(issueMessage)}</span>
             </div>
           </div>
         </aside>
@@ -2187,8 +2229,9 @@ function guidedPanelMarkup(step) {
       runScope: null,
     };
     const scopeBusy = isScopeBusy(configureCopy.runScope);
+    const panelGridClass = `guided-panel-grid${goal === "tables" ? " guided-panel-grid-stacked" : ""}`;
     return `
-      <div class="guided-panel-grid">
+      <div class="${panelGridClass}">
         <article class="guided-card">
           <h3>${escapeHtml(configureCopy.title)}</h3>
           <p>${escapeHtml(configureCopy.text)}</p>
@@ -2680,6 +2723,59 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   updateControlsFromDataset({ scrollToTop });
 }
 
+function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
+  const snapshot = captureControlSnapshot();
+  const preservedStates = {
+    km: state.km,
+    cox: state.cox,
+    cohort: state.cohort,
+    signature: state.signature,
+    ml: state.ml,
+    dl: state.dl,
+  };
+  const preservedGuidedGoal = runtime.guidedGoal;
+  const preservedGuidedStep = runtime.guidedStep;
+  const columnNames = payload.columns.map((column) => column.name);
+  const suggestions = payload.suggestions || { time_columns: [], event_columns: [] };
+  const preferredTime = snapshot?.timeColumn && columnNames.includes(snapshot.timeColumn)
+    ? snapshot.timeColumn
+    : inferDefault(columnNames, suggestions.time_columns || [], 0);
+  const preferredEvent = snapshot?.eventColumn && columnNames.includes(snapshot.eventColumn)
+    ? snapshot.eventColumn
+    : inferDefault(columnNames, suggestions.event_columns || [], 1);
+  const preferredGroup = snapshot?.groupColumn && columnNames.includes(snapshot.groupColumn)
+    ? snapshot.groupColumn
+    : null;
+
+  state.dataset = payload;
+  runtime.derivedColumnProvenance = payload.derived_column_provenance || {};
+  runtime.guidedGoal = preservedGuidedGoal;
+  runtime.guidedStep = preservedGuidedStep;
+
+  if (refs.showAllEventColumns) refs.showAllEventColumns.checked = Boolean(snapshot?.showAllEventColumns);
+  renderSelect(refs.timeColumn, columnNames, { selected: preferredTime });
+  renderEventColumnOptions({ preferred: preferredEvent, silent: true });
+  renderSelect(refs.groupColumn, columnNames, { includeBlank: true, blankLabel: "Overall only", selected: preferredGroup });
+  refreshVariableSelections();
+  if (snapshot) applyControlSnapshot(snapshot);
+  updateDatasetBadge();
+  renderDatasetPreview();
+  updateDatasetPresetBar();
+  showWorkspace();
+
+  state.km = preservedStates.km;
+  state.cox = preservedStates.cox;
+  state.cohort = preservedStates.cohort;
+  state.signature = preservedStates.signature;
+  state.ml = preservedStates.ml;
+  state.dl = preservedStates.dl;
+
+  if (!deferChrome) {
+    renderGuidedChrome();
+    queueHistorySync();
+  }
+}
+
 async function uploadDataset() {
   if (!refs.datasetFile.files?.length) throw new Error("Choose a dataset file first.");
   const formData = new FormData();
@@ -2761,13 +2857,13 @@ async function deriveGroup() {
     body.event_positive_value = refs.eventPositiveValue.value;
   }
 
+  const shouldRefreshKm = applyToGroup && (activeTabName() === "km" || runtime.guidedGoal === "km");
   const payload = await fetchJSON("/api/derive-group", { method: "POST", body: JSON.stringify(body) });
-  updateAfterDataset(payload);
+  updateAfterDerivedDataset(payload, { deferChrome: shouldRefreshKm });
   runtime.derivedColumnProvenance[payload.derived_column] = {
     outcomeInformed: isOptimal,
   };
   refreshVariableSelections();
-  const shouldRefreshKm = applyToGroup && (activeTabName() === "km" || runtime.guidedGoal === "km");
   if (applyToGroup) {
     refs.groupColumn.value = payload.derived_column;
   } else {
@@ -2795,7 +2891,9 @@ async function deriveGroup() {
     : `Created ${payload.derived_column}. ${featureUseMessage}`;
   updateDatasetBadge();
   renderDerivedGroupSummary(payload.derived_column, payload.derive_summary);
-  renderSharedFeatureSummary();
+  if (!shouldRefreshKm) {
+    renderSharedFeatureSummary();
+  }
   showToast(
     shouldRefreshKm
       ? `Created ${payload.derived_column}. ${featureUseMessage} Kaplan-Meier is refreshing now.`
@@ -2817,9 +2915,13 @@ async function deriveGroup() {
   }
 
   if (shouldRefreshKm) {
-    await runKaplanMeier();
-    if (runtime.uiMode === "guided" && runtime.guidedGoal === "km") {
-      setGuidedStep(5, { scroll: false, historyMode: "replace" });
+    try {
+      await runKaplanMeier();
+      if (runtime.uiMode === "guided" && runtime.guidedGoal === "km") {
+        setGuidedStep(5, { scroll: false, historyMode: "replace" });
+      }
+    } finally {
+      renderSharedFeatureSummary();
     }
   }
 }
@@ -2988,6 +3090,7 @@ async function runCohortTable() {
   updateStepIndicator(3);
   activateTab("tables");
   scrollToAnalysisResult("tables");
+  showToast("Cohort table built", "success", 3000);
 }
 
 // ── ML Models ──────────────────────────────────────────────────
@@ -3069,54 +3172,65 @@ async function runCompareModels() {
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
   const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
+  refs.mlMetaBanner.textContent = mlComparePendingBannerText({
+    rowCount: base.row_count,
+    evaluationStrategy: refs.mlEvaluationStrategy.value,
+    cvFolds: Number(refs.mlCvFolds.value),
+    cvRepeats: Number(refs.mlCvRepeats.value),
+  });
+  setRuntimeBanner("Comparing all ML models. This can take a little while on larger cohorts.", "info");
   setShimmer(refs.mlComparisonShell);
 
-  const payload = await fetchJSON("/api/ml-model", {
-    method: "POST",
-    body: JSON.stringify({
-      dataset_id: base.dataset_id, time_column: base.time_column,
-      event_column: base.event_column, event_positive_value: base.event_positive_value,
-      features,
-      categorical_features: categoricalFeatures,
-      model_type: "compare",
-      n_estimators: Number(refs.mlNEstimators.value),
-      learning_rate: Number(refs.mlLearningRate.value),
-      evaluation_strategy: refs.mlEvaluationStrategy.value,
-      cv_folds: Number(refs.mlCvFolds.value),
-      cv_repeats: Number(refs.mlCvRepeats.value),
-    }),
-  });
-  state.ml = payload;
-  setPanelResultMode(refs.mlPanel, "compare");
+  try {
+    const payload = await fetchJSON("/api/ml-model", {
+      method: "POST",
+      body: JSON.stringify({
+        dataset_id: base.dataset_id, time_column: base.time_column,
+        event_column: base.event_column, event_positive_value: base.event_positive_value,
+        features,
+        categorical_features: categoricalFeatures,
+        model_type: "compare",
+        n_estimators: Number(refs.mlNEstimators.value),
+        learning_rate: Number(refs.mlLearningRate.value),
+        evaluation_strategy: refs.mlEvaluationStrategy.value,
+        cv_folds: Number(refs.mlCvFolds.value),
+        cv_repeats: Number(refs.mlCvRepeats.value),
+      }),
+    });
+    state.ml = payload;
+    setPanelResultMode(refs.mlPanel, "compare");
 
-  if (payload.analysis?.comparison_table) {
-    const mlDisplayCols = ["model", "c_index", "evaluation_mode", "n_features", "training_time_ms", "rank"];
-    const mlCols = mlDisplayCols.filter((c) => payload.analysis.comparison_table[0]?.[c] !== undefined);
-    renderTable(refs.mlComparisonShell, payload.analysis.comparison_table, mlCols);
+    if (payload.analysis?.comparison_table) {
+      const mlDisplayCols = ["model", "c_index", "evaluation_mode", "n_features", "training_time_ms", "rank"];
+      const mlCols = mlDisplayCols.filter((c) => payload.analysis.comparison_table[0]?.[c] !== undefined);
+      renderTable(refs.mlComparisonShell, payload.analysis.comparison_table, mlCols);
+    }
+    if (payload.analysis?.manuscript_tables?.model_performance_table) {
+      renderTable(refs.mlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
+    }
+    if (payload.figure) {
+      refs.mlComparisonPlot.classList.remove("hidden");
+      refs.mlComparisonPlot.innerHTML = "";
+      await Plotly.newPlot(refs.mlComparisonPlot, payload.figure.data, payload.figure.layout, plotConfig("model_comparison"));
+    }
+    renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "Model comparison.");
+    const comparisonRows = payload.analysis?.comparison_table || [];
+    const bestRow = comparisonRows[0] || {};
+    const evaluationMode = payload.analysis?.evaluation_mode || refs.mlEvaluationStrategy.value;
+    const evalLabel = evaluationMode === "repeated_cv"
+      ? `${payload.analysis?.cv_repeats || refs.mlCvRepeats.value}x${payload.analysis?.cv_folds || refs.mlCvFolds.value} repeated CV`
+      : evaluationMode;
+    refs.mlMetaBanner.textContent = `Best=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}`;
+    refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
+    if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !(payload.figure?.data?.length);
+    if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !(payload.figure?.data?.length);
+    setMlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
+    activateTab("ml");
+    scrollToAnalysisResult("ml", { mode: "compare" });
+    showToast("Model comparison complete", "success", 3000);
+  } finally {
+    setRuntimeBanner("");
   }
-  if (payload.analysis?.manuscript_tables?.model_performance_table) {
-    renderTable(refs.mlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
-  }
-  if (payload.figure) {
-    refs.mlComparisonPlot.classList.remove("hidden");
-    refs.mlComparisonPlot.innerHTML = "";
-    await Plotly.newPlot(refs.mlComparisonPlot, payload.figure.data, payload.figure.layout, plotConfig("model_comparison"));
-  }
-  renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "Model comparison.");
-  const comparisonRows = payload.analysis?.comparison_table || [];
-  const bestRow = comparisonRows[0] || {};
-  const evaluationMode = payload.analysis?.evaluation_mode || refs.mlEvaluationStrategy.value;
-  const evalLabel = evaluationMode === "repeated_cv"
-    ? `${payload.analysis?.cv_repeats || refs.mlCvRepeats.value}x${payload.analysis?.cv_folds || refs.mlCvFolds.value} repeated CV`
-    : evaluationMode;
-  refs.mlMetaBanner.textContent = `Best=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}`;
-  refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
-  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !(payload.figure?.data?.length);
-  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !(payload.figure?.data?.length);
-  setMlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
-  activateTab("ml");
-  scrollToAnalysisResult("ml", { mode: "compare" });
-  showToast("Model comparison complete", "success", 3000);
 }
 
 // ── Deep Learning ──────────────────────────────────────────────
@@ -3231,79 +3345,90 @@ async function runDlCompareModels() {
   const hiddenLayers = parseHiddenLayers();
   if (!hiddenLayers.length) hiddenLayers.push(64, 64);
 
+  refs.dlMetaBanner.textContent = dlComparePendingBannerText({
+    rowCount: base.row_count,
+    evaluationStrategy: refs.dlEvaluationStrategy.value,
+    cvFolds: Number(refs.dlCvFolds.value),
+    cvRepeats: Number(refs.dlCvRepeats.value),
+  });
+  setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");
   setShimmer(refs.dlComparisonShell);
 
-  const payload = await fetchJSON("/api/deep-model", {
-    method: "POST",
-    body: JSON.stringify({
-      dataset_id: base.dataset_id,
-      time_column: base.time_column,
-      event_column: base.event_column,
-      event_positive_value: base.event_positive_value,
-      features,
-      categorical_features: categoricalFeatures,
-      model_type: "compare",
-      hidden_layers: hiddenLayers,
-      dropout: Number(refs.dlDropout.value),
-      learning_rate: Number(refs.dlLearningRate.value),
-      epochs: Number(refs.dlEpochs.value),
-      batch_size: Number(refs.dlBatchSize.value),
-      random_seed: Number(refs.dlRandomSeed.value),
-      early_stopping_patience: Number(refs.dlEarlyStoppingPatience.value),
-      early_stopping_min_delta: Number(refs.dlEarlyStoppingMinDelta.value),
-      parallel_jobs: Number(refs.dlParallelJobs.value),
-      evaluation_strategy: refs.dlEvaluationStrategy.value,
-      cv_folds: Number(refs.dlCvFolds.value),
-      cv_repeats: Number(refs.dlCvRepeats.value),
-      num_time_bins: Number(refs.dlNumTimeBins.value),
-      d_model: Number(refs.dlDModel.value),
-      n_heads: Number(refs.dlHeads.value),
-      n_layers: Number(refs.dlLayers.value),
-      latent_dim: Number(refs.dlLatentDim.value),
-      n_clusters: Number(refs.dlClusters.value),
-    }),
-  });
-  state.dl = payload;
-  setPanelResultMode(refs.dlPanel, "compare");
+  try {
+    const payload = await fetchJSON("/api/deep-model", {
+      method: "POST",
+      body: JSON.stringify({
+        dataset_id: base.dataset_id,
+        time_column: base.time_column,
+        event_column: base.event_column,
+        event_positive_value: base.event_positive_value,
+        features,
+        categorical_features: categoricalFeatures,
+        model_type: "compare",
+        hidden_layers: hiddenLayers,
+        dropout: Number(refs.dlDropout.value),
+        learning_rate: Number(refs.dlLearningRate.value),
+        epochs: Number(refs.dlEpochs.value),
+        batch_size: Number(refs.dlBatchSize.value),
+        random_seed: Number(refs.dlRandomSeed.value),
+        early_stopping_patience: Number(refs.dlEarlyStoppingPatience.value),
+        early_stopping_min_delta: Number(refs.dlEarlyStoppingMinDelta.value),
+        parallel_jobs: Number(refs.dlParallelJobs.value),
+        evaluation_strategy: refs.dlEvaluationStrategy.value,
+        cv_folds: Number(refs.dlCvFolds.value),
+        cv_repeats: Number(refs.dlCvRepeats.value),
+        num_time_bins: Number(refs.dlNumTimeBins.value),
+        d_model: Number(refs.dlDModel.value),
+        n_heads: Number(refs.dlHeads.value),
+        n_layers: Number(refs.dlLayers.value),
+        latent_dim: Number(refs.dlLatentDim.value),
+        n_clusters: Number(refs.dlClusters.value),
+      }),
+    });
+    state.dl = payload;
+    setPanelResultMode(refs.dlPanel, "compare");
 
-  if (payload.analysis?.comparison_table?.length) {
-    const dlDisplayCols = ["model", "c_index", "evaluation_mode", "epochs_trained", "n_features", "training_time_ms", "rank"];
-    const dlCols = dlDisplayCols.filter((c) => payload.analysis.comparison_table[0]?.[c] !== undefined);
-    renderTable(refs.dlComparisonShell, payload.analysis.comparison_table, dlCols);
+    if (payload.analysis?.comparison_table?.length) {
+      const dlDisplayCols = ["model", "c_index", "evaluation_mode", "epochs_trained", "n_features", "training_time_ms", "rank"];
+      const dlCols = dlDisplayCols.filter((c) => payload.analysis.comparison_table[0]?.[c] !== undefined);
+      renderTable(refs.dlComparisonShell, payload.analysis.comparison_table, dlCols);
+    }
+    if (payload.analysis?.manuscript_tables?.model_performance_table) {
+      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
+    }
+    if (payload.figures?.comparison) {
+      refs.dlComparisonPlot.classList.remove("hidden");
+      refs.dlComparisonPlot.innerHTML = "";
+      await Plotly.newPlot(refs.dlComparisonPlot, payload.figures.comparison.data, payload.figures.comparison.layout, plotConfig("dl_model_comparison"));
+    }
+    refs.dlImportancePlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model feature importance appears when you train one deep model.</span></div>';
+    refs.dlLossPlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model loss curves appear when you train one deep model.</span></div>';
+    const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
+    renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning comparison results.");
+    const bestRow = payload.analysis?.comparison_table?.[0] || {};
+    const dlEvalMode = payload.analysis?.evaluation_mode || refs.dlEvaluationStrategy.value;
+    const dlEvalLabel = dlEvalMode === "repeated_cv"
+      ? `${payload.analysis?.cv_repeats || refs.dlCvRepeats.value}x${payload.analysis?.cv_folds || refs.dlCvFolds.value} repeated CV`
+      : bestRow.evaluation_mode;
+    const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Best holdout-comparable" : "Best";
+    const rerunSeedSuffix = (bestRow.training_seed != null && dlEvalMode !== "repeated_cv")
+      ? `, rerun seed=${formatValue(bestRow.training_seed)}`
+      : "";
+    const repeatedCvRerunNote = dlEvalMode === "repeated_cv"
+      ? ", rerun a single architecture with Train Model while keeping repeated CV selected"
+      : "";
+    refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
+    refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
+    if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !(payload.figures?.comparison?.data?.length);
+    if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !(payload.figures?.comparison?.data?.length);
+    setDlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
+    updateStepIndicator(3);
+    activateTab("dl");
+    scrollToAnalysisResult("dl", { mode: "compare" });
+    showToast("Deep learning model comparison complete", "success", 3000);
+  } finally {
+    setRuntimeBanner("");
   }
-  if (payload.analysis?.manuscript_tables?.model_performance_table) {
-    renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
-  }
-  if (payload.figures?.comparison) {
-    refs.dlComparisonPlot.classList.remove("hidden");
-    refs.dlComparisonPlot.innerHTML = "";
-    await Plotly.newPlot(refs.dlComparisonPlot, payload.figures.comparison.data, payload.figures.comparison.layout, plotConfig("dl_model_comparison"));
-  }
-  refs.dlImportancePlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model feature importance appears when you train one deep model.</span></div>';
-  refs.dlLossPlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model loss curves appear when you train one deep model.</span></div>';
-  const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
-  renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning comparison results.");
-  const bestRow = payload.analysis?.comparison_table?.[0] || {};
-  const dlEvalMode = payload.analysis?.evaluation_mode || refs.dlEvaluationStrategy.value;
-  const dlEvalLabel = dlEvalMode === "repeated_cv"
-    ? `${payload.analysis?.cv_repeats || refs.dlCvRepeats.value}x${payload.analysis?.cv_folds || refs.dlCvFolds.value} repeated CV`
-    : bestRow.evaluation_mode;
-  const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Best holdout-comparable" : "Best";
-  const rerunSeedSuffix = (bestRow.training_seed != null && dlEvalMode !== "repeated_cv")
-    ? `, rerun seed=${formatValue(bestRow.training_seed)}`
-    : "";
-  const repeatedCvRerunNote = dlEvalMode === "repeated_cv"
-    ? ", rerun a single architecture with Train Model while keeping repeated CV selected"
-    : "";
-  refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
-  refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
-  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !(payload.figures?.comparison?.data?.length);
-  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !(payload.figures?.comparison?.data?.length);
-  setDlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
-  updateStepIndicator(3);
-  activateTab("dl");
-  scrollToAnalysisResult("dl", { mode: "compare" });
-  showToast("Deep learning model comparison complete", "success", 3000);
 }
 
 // ── Downloads ──────────────────────────────────────────────────
@@ -3425,8 +3550,8 @@ function wireDownloads() {
 
 // ── Utilities ──────────────────────────────────────────────────
 
-async function withLoading(button, action) {
-  const scope = (
+async function withLoading(button, action, scopeOverride = null) {
+  const scope = scopeOverride || (
     button === refs.runMlButton || button === refs.runCompareButton || button === refs.runCompareInlineButton ? "ml"
       : button === refs.runDlButton || button === refs.runDlCompareButton || button === refs.runDlCompareInlineButton ? "dl"
         : button === refs.runKmButton ? "km"
@@ -3527,10 +3652,11 @@ function scrollToAnalysisResult(tabName, { mode = "single" } = {}) {
   });
 }
 
-async function runGuidedGoal(tabName, button, action, { resultMode = "single" } = {}) {
+async function runGuidedGoal(tabName, button, action, { resultMode = "single", successCheck = null } = {}) {
   activateTab(tabName, { historyMode: "replace" });
-  await withLoading(button, action);
-  if (currentGoalResult(tabName)) {
+  await withLoading(button, action, tabName);
+  const hasResult = typeof successCheck === "function" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName));
+  if (hasResult) {
     setGuidedStep(5, { scroll: false, historyMode: "push" });
     scrollToAnalysisResult(tabName, { mode: resultMode });
   }
@@ -3556,6 +3682,7 @@ function handleGuidedPanelAction(target) {
     return;
   }
   if (action === "choose-another-analysis") {
+    activateTab("data", { setGuidedGoal: false, historyMode: "replace" });
     runtime.guidedGoal = null;
     setGuidedStep(3, { historyMode: "push" });
     return;
@@ -3569,13 +3696,17 @@ function handleGuidedPanelAction(target) {
   if (action === "open-ml") { focusTabWorkspace("ml", { historyMode: "push" }); return; }
   if (action === "open-dl") { focusTabWorkspace("dl", { historyMode: "push" }); return; }
   if (action === "open-tables") { focusTabWorkspace("tables", { historyMode: "push" }); return; }
-  if (action === "run-km") { void runGuidedGoal("km", refs.runKmButton, runKaplanMeier); return; }
-  if (action === "run-cox") { void runGuidedGoal("cox", refs.runCoxButton, runCox); return; }
-  if (action === "run-ml") { void runGuidedGoal("ml", refs.runMlButton, runMlModel, { resultMode: "single" }); return; }
-  if (action === "run-ml-compare") { void runGuidedGoal("ml", refs.runCompareButton, runCompareModels, { resultMode: "compare" }); return; }
-  if (action === "run-dl") { void runGuidedGoal("dl", refs.runDlButton, runDlModel, { resultMode: "single" }); return; }
-  if (action === "run-dl-compare") { void runGuidedGoal("dl", refs.runDlCompareButton, runDlCompareModels, { resultMode: "compare" }); return; }
-  if (action === "run-tables") { void runGuidedGoal("tables", refs.runCohortTableButton, runCohortTable); }
+  if (action === "run-km") { void runGuidedGoal("km", target, runKaplanMeier); return; }
+  if (action === "run-cox") { void runGuidedGoal("cox", target, runCox); return; }
+  if (action === "run-ml") { void runGuidedGoal("ml", target, runMlModel, { resultMode: "single" }); return; }
+  if (action === "run-ml-compare") { void runGuidedGoal("ml", target, runCompareModels, { resultMode: "compare" }); return; }
+  if (action === "run-dl") { void runGuidedGoal("dl", target, runDlModel, { resultMode: "single" }); return; }
+  if (action === "run-dl-compare") { void runGuidedGoal("dl", target, runDlCompareModels, { resultMode: "compare" }); return; }
+  if (action === "run-tables") {
+    void runGuidedGoal("tables", target, runCohortTable, {
+      successCheck: () => Boolean(state.cohort?.analysis),
+    });
+  }
 }
 
 function updateStepIndicator(step = currentGuidedStep()) {
@@ -3743,6 +3874,9 @@ function initListeners() {
   window.addEventListener("popstate", (event) => {
     void restoreHistoryState(event.state);
   });
+  window.addEventListener("resize", () => {
+    scheduleVisiblePlotResize(80);
+  });
   refs.datasetFile.addEventListener("change", () => {
     if (refs.datasetFile.files?.length) withLoading(refs.uploadButton, uploadDataset);
   });
@@ -3853,7 +3987,9 @@ function initListeners() {
   refs.runCohortTableButton.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
       runtime.guidedGoal = "tables";
-      void runGuidedGoal("tables", refs.runCohortTableButton, runCohortTable);
+      void runGuidedGoal("tables", refs.runCohortTableButton, runCohortTable, {
+        successCheck: () => Boolean(state.cohort?.analysis),
+      });
       return;
     }
     withLoading(refs.runCohortTableButton, runCohortTable);
