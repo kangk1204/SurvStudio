@@ -43,6 +43,8 @@ def test_build_cox_forest_figure_returns_json() -> None:
     figure = build_cox_forest_figure(cox_result)
     assert "data" in figure
     assert "layout" in figure
+    shapes = figure["layout"].get("shapes", [])
+    assert any(shape.get("type") == "line" and shape.get("x0") == 1.0 and shape.get("x1") == 1.0 for shape in shapes)
 
 
 def test_build_cutpoint_scan_figure_with_data() -> None:
@@ -97,12 +99,14 @@ def test_build_model_comparison_figure() -> None:
     figure = build_model_comparison_figure(comparison)
     assert "data" in figure
     annotations = figure["layout"].get("annotations", [])
-    assert any((annotation.get("text") or "") == "Random baseline (0.5)" for annotation in annotations)
-    random_annotation = next(annotation for annotation in annotations if annotation.get("text") == "Random baseline (0.5)")
+    assert any((annotation.get("text") or "") == "Reference (0.5)" for annotation in annotations)
+    random_annotation = next(annotation for annotation in annotations if annotation.get("text") == "Reference (0.5)")
     assert random_annotation["xref"] == "paper"
     assert random_annotation["yref"] == "y"
     assert random_annotation["xanchor"] == "left"
     assert random_annotation["yanchor"] == "bottom"
+    shapes = figure["layout"].get("shapes", [])
+    assert any(shape.get("type") == "line" and shape.get("y0") == 0.5 and shape.get("y1") == 0.5 for shape in shapes)
 
 
 def test_build_model_comparison_figure_handles_missing_values() -> None:
