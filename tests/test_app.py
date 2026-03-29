@@ -111,6 +111,8 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="kmDependencyText"' in response.text
     assert 'id="coxDependencyText"' in response.text
     assert 'id="tableDependencyText"' in response.text
+    assert 'id="tableOutputStatusText"' in response.text
+    assert 'id="runCohortTableButtonLabel"' in response.text
     assert "The reported C-index is apparent on the analyzable cohort." in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
@@ -3496,6 +3498,23 @@ def test_guided_tables_configure_panel_uses_stacked_layout() -> None:
     assert "body[data-ui-mode=\"guided\"] .guided-main," in styles
     assert "body[data-ui-mode=\"guided\"] .smart-banner {" in styles
     assert "body[data-ui-mode=\"guided\"] .guided-main,\n  body[data-ui-mode=\"guided\"] .config-strip,\n  body[data-ui-mode=\"guided\"] .smart-banner,\n  body[data-ui-mode=\"guided\"] .tab-panel.guided-visible {" not in styles
+
+
+def test_cohort_table_dependency_copy_marks_stale_output_and_rebuild_label() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function currentCohortTableOutputState() {" in app_js
+    assert "if (!hasDataset || !tableState.hasOutput || tableState.isCurrent) {" in app_js
+    assert "Output below still reflects the last built table:" in app_js
+    assert "function updateCohortTableButtonLabel() {" in app_js
+    assert '? "Rebuild Table"' in app_js
+    assert "renderSharedFeatureSummary();" in app_js
 
 
 def test_window_resize_schedules_plot_resizing() -> None:

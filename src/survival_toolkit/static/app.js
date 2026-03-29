@@ -152,9 +152,11 @@ const refs = {
   downloadCoxSvgButton: document.getElementById("downloadCoxSvgButton"),
   cohortVariableChecklist: document.getElementById("cohortVariableChecklist"),
   runCohortTableButton: document.getElementById("runCohortTableButton"),
+  runCohortTableButtonLabel: document.getElementById("runCohortTableButtonLabel"),
   cohortTableShell: document.getElementById("cohortTableShell"),
   tableDependencyText: document.getElementById("tableDependencyText"),
   tableDependencyChips: document.getElementById("tableDependencyChips"),
+  tableOutputStatusText: document.getElementById("tableOutputStatusText"),
   downloadCohortTableButton: document.getElementById("downloadCohortTableButton"),
   // ML
   runMlButton: document.getElementById("runMlButton"),
@@ -361,6 +363,38 @@ function arrayEquals(left = [], right = []) {
 
 function sortedStrings(values = []) {
   return [...values].map((value) => String(value)).sort();
+}
+
+function requestConfigFromPayload(payload) {
+  return payload?.request_config || payload?.analysis?.request_config || null;
+}
+
+function currentCohortTableOutputState() {
+  const requestConfig = requestConfigFromPayload(state.cohort);
+  if (!requestConfig || !state.dataset) {
+    return {
+      hasOutput: false,
+      isCurrent: false,
+      outputVariables: [],
+      outputGroupLabel: "overall only",
+    };
+  }
+  const outputVariables = (requestConfig.variables || []).map(String);
+  const outputGroupLabel = String(requestConfig.group_column || "") || "overall only";
+  return {
+    hasOutput: true,
+    isCurrent: matchesRequestConfig("tables", requestConfig),
+    outputVariables,
+    outputGroupLabel,
+  };
+}
+
+function updateCohortTableButtonLabel() {
+  if (!refs.runCohortTableButtonLabel) return;
+  const tableState = currentCohortTableOutputState();
+  refs.runCohortTableButtonLabel.textContent = tableState.hasOutput && !tableState.isCurrent
+    ? "Rebuild Table"
+    : "Build Table";
 }
 
 function matchesRequestConfig(goal, requestConfig) {
@@ -2022,6 +2056,17 @@ function renderContextCards({
       `Group: ${groupLabel}`,
     ] : []);
   }
+  if (refs.tableOutputStatusText) {
+    const tableState = currentCohortTableOutputState();
+    if (!hasDataset || !tableState.hasOutput || tableState.isCurrent) {
+      refs.tableOutputStatusText.textContent = "";
+      refs.tableOutputStatusText.classList.add("hidden");
+    } else {
+      refs.tableOutputStatusText.textContent = `Output below still reflects the last built table: Variables ${tableState.outputVariables.length}, Group ${tableState.outputGroupLabel}. Click Rebuild Table to apply the current settings.`;
+      refs.tableOutputStatusText.classList.remove("hidden");
+    }
+  }
+  updateCohortTableButtonLabel();
 }
 
 function renderSharedFeatureSummary() {
@@ -3139,6 +3184,7 @@ async function runCohortTable() {
   });
   state.cohort = payload;
   renderTable(refs.cohortTableShell, payload.analysis.rows, payload.analysis.columns);
+  renderSharedFeatureSummary();
   refs.downloadCohortTableButton.disabled = !(payload.analysis.rows?.length);
   updateStepIndicator(3);
   activateTab("tables");
