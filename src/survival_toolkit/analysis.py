@@ -1899,7 +1899,7 @@ def _prepare_cox_frame(
     for column in covariates:
         if column in categorical_covariates:
             string_values = frame[column].astype("string")
-            categories = sorted(string_values.dropna().unique().tolist())
+            categories = _ordered_reference_categories(string_values.dropna().unique().tolist(), column)
             frame[column] = pd.Categorical(string_values, categories=categories)
         else:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
@@ -1919,6 +1919,94 @@ def _build_cox_formula(time_column: str, covariates: Sequence[str], categorical_
         else:
             terms.append(quote_name(column))
     return f"{quote_name(time_column)} ~ {' + '.join(terms)}"
+
+
+_STAGE_ORDER = [
+    "0",
+    "i",
+    "ia",
+    "ib",
+    "ic",
+    "ii",
+    "iia",
+    "iib",
+    "iic",
+    "iii",
+    "iiia",
+    "iiib",
+    "iiic",
+    "iv",
+    "iva",
+    "ivb",
+    "ivc",
+]
+_STAGE_ORDER_INDEX = {stage: idx for idx, stage in enumerate(_STAGE_ORDER)}
+
+
+def _normalize_category_text(value: Any) -> tuple[str, str]:
+    text = str(value).strip().lower()
+    normalized = re.sub(r"[^a-z0-9]+", " ", text).strip()
+    compact = normalized.replace(" ", "")
+    return normalized, compact
+
+
+def _stage_level_key(value: Any) -> tuple[int, int, str] | None:
+    normalized, compact = _normalize_category_text(value)
+    stage_token = compact
+    if stage_token.startswith("stage"):
+        stage_token = stage_token[5:]
+    if not stage_token:
+        return None
+    if "unknown" in normalized:
+        return (1, len(_STAGE_ORDER_INDEX) + 1, normalized)
+    stage_index = _STAGE_ORDER_INDEX.get(stage_token)
+    if stage_index is None:
+        return None
+    return (0, stage_index, normalized)
+
+
+def _category_reference_sort_key(column: str, value: Any) -> tuple[Any, ...]:
+    normalized, compact = _normalize_category_text(value)
+    column_text, column_compact = _normalize_category_text(column)
+    unknown_like = {"unknown", "missing", "not available", "na", "n a"}
+    if normalized in unknown_like or "unknown" in normalized or "missing" in normalized:
+        return (9, normalized)
+
+    smoking_context = "smok" in column_compact or "smoker" in normalized or "nonsmoker" in compact
+    if smoking_context:
+        if "lifelong non smoker" in normalized or "never smoker" in normalized or "non smoker" in normalized or "nonsmoker" in compact:
+            return (0, 0, normalized)
+        if "former smoker" in normalized or normalized.startswith("former "):
+            return (0, 1, normalized)
+        if "current smoker" in normalized or normalized.startswith("current "):
+            return (0, 2, normalized)
+
+    stage_key = _stage_level_key(value)
+    if stage_key is not None:
+        return (1, *stage_key)
+
+    if "wildtype" in compact or "wt" == compact:
+        return (2, 0, normalized)
+    if "mutated" in normalized or "mutant" in normalized:
+        return (2, 1, normalized)
+
+    if normalized in {"negative", "neg", "no", "absent", "control", "reference", "baseline", "normal", "none"}:
+        return (3, 0, normalized)
+    if normalized in {"positive", "pos", "yes", "present", "case", "abnormal"}:
+        return (3, 1, normalized)
+
+    if "sex" in column_text or "gender" in column_text:
+        if normalized == "female":
+            return (4, 0, normalized)
+        if normalized == "male":
+            return (4, 1, normalized)
+
+    return (8, normalized)
+
+
+def _ordered_reference_categories(values: Sequence[Any], column: str) -> list[str]:
+    unique_values = [str(item) for item in values]
+    return sorted(unique_values, key=lambda item: _category_reference_sort_key(column, item))
 
 
 def _reference_levels(frame: pd.DataFrame, categorical_covariates: Sequence[str]) -> dict[str, str]:

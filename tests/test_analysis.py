@@ -6,6 +6,9 @@ import pandas as pd
 
 from survival_toolkit.__main__ import main as cli_main
 from survival_toolkit.analysis import (
+    _ordered_reference_categories,
+    _prepare_cox_frame,
+    _reference_levels,
     _pointwise_km_ci,
     _signature_scientific_summary,
     _safe_float,
@@ -215,6 +218,89 @@ def test_cox_analysis_keeps_low_cardinality_numeric_covariates_continuous_by_def
     assert len(result["results_table"]) == 1
     assert result["results_table"][0]["Label"] == "dose_level"
     assert result["results_table"][0]["Reference"] is None
+
+
+def test_cox_reference_ordering_prefers_clinical_baselines_for_common_categories() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": np.linspace(6, 65, 12),
+            "os_event": [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0],
+            "smoking_status": [
+                "Current smoker",
+                "Former smoker <=15y",
+                "Lifelong Non-smoker",
+                "Current smoker",
+                "Former smoker <=15y",
+                "Lifelong Non-smoker",
+                "Current smoker",
+                "Former smoker <=15y",
+                "Lifelong Non-smoker",
+                "Current smoker",
+                "Former smoker <=15y",
+                "Lifelong Non-smoker",
+            ],
+            "kras_status": [
+                "Mutated",
+                "Wildtype",
+                "Mutated",
+                "Wildtype",
+                "Mutated",
+                "Wildtype",
+                "Mutated",
+                "Wildtype",
+                "Mutated",
+                "Wildtype",
+                "Mutated",
+                "Wildtype",
+            ],
+            "stage_group": [
+                "Stage IV",
+                "Stage II",
+                "Stage I",
+                "Stage III",
+                "Stage II",
+                "Stage I",
+                "Stage IV",
+                "Stage III",
+                "Stage I",
+                "Stage II",
+                "Stage IV",
+                "Stage III",
+            ],
+        }
+    )
+
+    frame = _prepare_cox_frame(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        covariates=["smoking_status", "kras_status", "stage_group"],
+        categorical_covariates=["smoking_status", "kras_status", "stage_group"],
+        event_positive_value=1,
+    )
+    refs = _reference_levels(frame, ["smoking_status", "kras_status", "stage_group"])
+
+    assert list(frame["smoking_status"].cat.categories) == [
+        "Lifelong Non-smoker",
+        "Former smoker <=15y",
+        "Current smoker",
+    ]
+    assert list(frame["kras_status"].cat.categories) == ["Wildtype", "Mutated"]
+    assert list(frame["stage_group"].cat.categories) == ["Stage I", "Stage II", "Stage III", "Stage IV"]
+    assert refs == {
+        "smoking_status": "Lifelong Non-smoker",
+        "kras_status": "Wildtype",
+        "stage_group": "Stage I",
+    }
+
+
+def test_ordered_reference_categories_keeps_unknown_levels_last() -> None:
+    ordered = _ordered_reference_categories(
+        ["unknown", "Stage III", "Stage I", "Stage II"],
+        "stage_group",
+    )
+
+    assert ordered == ["Stage I", "Stage II", "Stage III", "unknown"]
 
 
 def test_cox_analysis_caps_extreme_hazard_ratios_instead_of_crashing(monkeypatch) -> None:
