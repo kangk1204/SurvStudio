@@ -1197,6 +1197,53 @@ def test_evaluate_single_deep_survival_model_repeated_cv_reuses_compare_path(mon
     assert "aggregate repeated-cv estimate" in result["scientific_summary"]["cautions"][-1].lower()
 
 
+def test_evaluate_single_deep_survival_model_repeated_cv_preserves_incomplete_state(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    monkeypatch.setattr(
+        deep_models,
+        "compare_deep_survival_models",
+        lambda *args, **kwargs: {
+            "evaluation_mode": "repeated_cv_incomplete",
+            "comparison_table": [{
+                "model": "Neural MTLR",
+                "c_index": 0.611,
+                "evaluation_mode": "repeated_cv_incomplete",
+                "n_features": 4,
+                "epochs_trained": 8,
+                "training_time_ms": 123.4,
+                "training_seed": None,
+                "split_seed": None,
+                "monitor_seed": None,
+                "training_seeds": [42, 43],
+                "split_seeds": [42, 43],
+                "monitor_seeds": [42, 43],
+                "n_evaluations": 3,
+                "n_failures": 1,
+                "repeat_results": [{"repeat": 1, "c_index": 0.61}],
+            }],
+            "fold_results": [],
+            "manuscript_tables": {"model_performance_table": [{"Model": "Neural MTLR"}]},
+            "scientific_summary": {"status": "review", "strengths": [], "cautions": ["fallbacks"], "next_steps": []},
+        },
+    )
+
+    result = deep_models.evaluate_single_deep_survival_model(
+        "mtlr",
+        df=pd.DataFrame(),
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "stage"],
+        evaluation_strategy="repeated_cv",
+        cv_folds=2,
+        cv_repeats=2,
+    )
+
+    assert result["evaluation_mode"] == "repeated_cv_incomplete"
+    evaluation_metric = next(metric for metric in result["scientific_summary"]["metrics"] if metric["label"] == "Evaluation mode")
+    assert evaluation_metric["value"] == "repeated_cv_incomplete"
+
+
 def test_deep_models_module_can_load_when_torch_is_missing(monkeypatch) -> None:
     module_path = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "deep_models.py"
     source = module_path.read_text(encoding="utf-8")

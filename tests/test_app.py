@@ -59,6 +59,12 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="dlLayers"' in response.text
     assert 'id="dlLatentDim"' in response.text
     assert 'id="dlClusters"' in response.text
+
+
+def test_index_mentions_fleming_harrington_p_only_label() -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Fleming-Harrington (fh_p only)" in response.text
     assert 'id="dlJournalTemplate"' in response.text
     assert 'id="runCompareInlineButton"' in response.text
     assert 'id="runDlCompareInlineButton"' in response.text

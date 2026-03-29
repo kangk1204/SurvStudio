@@ -3410,15 +3410,18 @@ async function runDlCompareModels() {
     const dlEvalMode = payload.analysis?.evaluation_mode || refs.dlEvaluationStrategy.value;
     const dlEvalLabel = dlEvalMode === "repeated_cv"
       ? `${payload.analysis?.cv_repeats || refs.dlCvRepeats.value}x${payload.analysis?.cv_folds || refs.dlCvFolds.value} repeated CV`
-      : bestRow.evaluation_mode;
+      : (dlEvalMode === "mixed_holdout_apparent"
+        ? "mixed holdout/apparent"
+        : formatValue(dlEvalMode));
     const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Best holdout-comparable" : "Best";
+    const dlMetricLabel = dlEvalMode === "mixed_holdout_apparent" ? "Best holdout C-index" : "C-index";
     const rerunSeedSuffix = (bestRow.training_seed != null && dlEvalMode !== "repeated_cv")
       ? `, rerun seed=${formatValue(bestRow.training_seed)}`
       : "";
     const repeatedCvRerunNote = dlEvalMode === "repeated_cv"
       ? ", rerun a single architecture with Train Model while keeping repeated CV selected"
       : "";
-    refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
+    refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, ${dlMetricLabel}=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
     refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
     if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !(payload.figures?.comparison?.data?.length);
     if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !(payload.figures?.comparison?.data?.length);

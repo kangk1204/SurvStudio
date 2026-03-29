@@ -567,6 +567,7 @@ def test_counterfactual_survival_handles_zero_baseline_risk(monkeypatch) -> None
 
     assert result["risk_change_pct"] is None
     assert "undefined" in result["scientific_summary"]["headline"].lower()
+    assert "causal" not in result["scientific_summary"]["headline"].lower()
 
 
 def test_counterfactual_survival_uses_original_value_for_baseline_scenario(monkeypatch) -> None:
@@ -607,6 +608,8 @@ def test_counterfactual_survival_uses_original_value_for_baseline_scenario(monke
     assert result["counterfactual_median_risk"] == pytest.approx(15.0)
     assert result["risk_change_pct"] == pytest.approx(200.0)
     assert "from 5.0 to 15.0" in result["scientific_summary"]["headline"]
+    assert "model-based scenario" in result["scientific_summary"]["headline"].lower()
+    assert any("not a causal estimate" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 
 def test_counterfactual_survival_rejects_unknown_model_type(monkeypatch) -> None:
