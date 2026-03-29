@@ -588,7 +588,7 @@ def test_compute_calibration_data_uses_descriptive_language() -> None:
     not _sksurv_available(),
     reason="scikit-survival not installed",
 )
-def test_partial_dependence_rejects_categorical_encoded_features() -> None:
+def test_partial_dependence_supports_categorical_raw_feature() -> None:
     from survival_toolkit.ml_models import compute_partial_dependence, train_random_survival_forest
 
     df = make_example_dataset(seed=46, n_patients=160)
@@ -601,16 +601,20 @@ def test_partial_dependence_rejects_categorical_encoded_features() -> None:
         n_estimators=20,
         random_state=42,
     )
-    encoded_columns = [column for column in result["_X_encoded"].columns if column.startswith("stage_")]
-    assert encoded_columns
+    pdp = compute_partial_dependence(
+        result["_model"],
+        result["_X_encoded"],
+        feature_name="stage",
+        categorical_features=["stage"],
+        feature_encoder=result["_feature_encoder"],
+        analysis_frame=result["_analysis_frame"],
+    )
 
-    with pytest.raises(ValueError, match="categorical feature"):
-        compute_partial_dependence(
-            result["_model"],
-            result["_X_encoded"],
-            feature_name=encoded_columns[0],
-            categorical_features=["stage"],
-        )
+    assert pdp["feature"] == "stage"
+    assert pdp["feature_type"] == "categorical"
+    assert len(pdp["values"]) >= 2
+    assert len(pdp["values"]) == len(pdp["mean_risk"])
+    assert all(isinstance(value, str) for value in pdp["values"])
 
 
 def test_store_lru_eviction() -> None:

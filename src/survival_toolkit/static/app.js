@@ -604,7 +604,38 @@ function setUiMode(mode, { syncHistory = true, historyMode = "replace" } = {}) {
   refs.expertSurfaceLabel?.classList.toggle("hidden", mode !== "expert" || !state.dataset);
   runtime.guidedStep = normalizedGuidedStep(runtime.guidedStep);
   renderGuidedChrome();
+  queueVisiblePlotResize();
   if (syncHistory && window.history?.replaceState) syncHistoryState(historyMode);
+}
+
+function resizeVisiblePlotsNow() {
+  const plots = [
+    refs.kmPlot,
+    refs.coxPlot,
+    refs.cutpointPlot,
+    refs.mlImportancePlot,
+    refs.mlShapPlot,
+    refs.mlComparisonPlot,
+    refs.dlImportancePlot,
+    refs.dlLossPlot,
+    refs.dlComparisonPlot,
+  ];
+  plots.forEach((plot) => {
+    if (!plot?.data?.length) return;
+    if (plot.closest(".hidden")) return;
+    try {
+      Plotly.Plots.resize(plot);
+    } catch {
+      // Ignore stale nodes during guided/expert remounts.
+    }
+  });
+}
+
+function queueVisiblePlotResize() {
+  requestAnimationFrame(() => {
+    resizeVisiblePlotsNow();
+    window.setTimeout(resizeVisiblePlotsNow, 120);
+  });
 }
 
 function setGuidedGoal(goal, { activate = true, syncHistory = true, historyMode = "replace" } = {}) {
@@ -1417,7 +1448,10 @@ function renderTable(shell, rows, columns = null) {
 }
 
 function downloadCsv(filename, rows, columns = null) {
-  if (!rows || rows.length === 0) return;
+  if (!rows || rows.length === 0) {
+    showToast("No rows available for export.", "warning");
+    return;
+  }
   const visibleColumns = columns || Object.keys(rows[0]);
   const sanitizeCsvCell = (value) => {
     const text = value === null || value === undefined ? "" : String(value);
@@ -1486,6 +1520,10 @@ function triggerBlobDownload(filename, blob) {
 }
 
 async function downloadServerTable(filename, payload, fallbackMimeType = "text/plain;charset=utf-8;") {
+  if (!payload?.rows || payload.rows.length === 0) {
+    showToast("No rows available for export.", "warning");
+    return;
+  }
   const response = await fetch(apiUrl("/api/export-table"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2931,7 +2969,7 @@ async function runCohortTable() {
   });
   state.cohort = payload;
   renderTable(refs.cohortTableShell, payload.analysis.rows, payload.analysis.columns);
-  refs.downloadCohortTableButton.disabled = false;
+  refs.downloadCohortTableButton.disabled = !(payload.analysis.rows?.length);
   updateStepIndicator(3);
   activateTab("tables");
   scrollToAnalysisResult("tables");

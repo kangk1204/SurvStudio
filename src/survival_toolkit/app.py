@@ -1201,12 +1201,16 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
             )
             model = rsf_result["_model"]
             X_encoded = rsf_result["_X_encoded"]
+            feature_encoder = rsf_result.get("_feature_encoder")
+            analysis_frame = rsf_result.get("_analysis_frame")
 
             result = compute_partial_dependence(
                 model,
                 X_encoded,
                 feature_name=request_model.target_feature,
                 categorical_features=request_model.categorical_features,
+                feature_encoder=feature_encoder,
+                analysis_frame=analysis_frame,
             )
             figure = build_pdp_figure(result)
             return {"analysis": result, "figure": figure}
