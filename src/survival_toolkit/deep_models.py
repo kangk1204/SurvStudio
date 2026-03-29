@@ -574,8 +574,12 @@ def _compute_c_index_torch(
 def _metric_name_for_evaluation(evaluation_mode: str) -> str:
     if evaluation_mode == "holdout":
         return "Holdout C-index"
+    if evaluation_mode == "holdout_fallback_apparent":
+        return "Apparent fallback C-index"
     if evaluation_mode == "repeated_cv":
         return "Repeated-CV mean C-index"
+    if evaluation_mode == "repeated_cv_incomplete":
+        return "Repeated-CV mean C-index (incomplete)"
     return "Apparent C-index"
 
 
@@ -1087,7 +1091,7 @@ def compare_deep_survival_models(
                 f"{len(ranked_rows)} model(s) retained a clean holdout estimate and remained rank-comparable."
             )
         if best.get("c_index") is not None:
-            strengths.append(f"Best deep model was {best['model']} with {metric_name} = {best['c_index']:.3f}.")
+            strengths.append(f"Screening top deep model was {best['model']} with {metric_name} = {best['c_index']:.3f}.")
         else:
             strengths.append(f"Best-ranked model was {best['model']}, but the concordance estimate was not available.")
 
@@ -1101,6 +1105,10 @@ def compare_deep_survival_models(
         if evaluation_mode == "repeated_cv" and any(int(row.get("n_apparent_fallbacks", 0) or 0) > 0 for row in comparison):
             cautions.append(
                 "Some repeated-CV folds fell back to apparent evaluation inside model training and were excluded from the repeated-CV aggregate."
+            )
+        if result_evaluation_mode == "repeated_cv_incomplete":
+            cautions.append(
+                "Repeated-CV incomplete means one or more folds were excluded because they failed or fell back to apparent evaluation."
             )
         if best.get("evaluation_mode") != "holdout" and evaluation_mode != "repeated_cv":
             cautions.append(
@@ -1472,7 +1480,15 @@ def evaluate_single_deep_survival_model(
         )
         row = compare_result["comparison_table"][0]
         aggregate_mode = str(compare_result.get("evaluation_mode", row.get("evaluation_mode", "repeated_cv")))
-        mode_label = "repeated-CV" if aggregate_mode == "repeated_cv" else aggregate_mode.replace("_", " ")
+        mode_label = (
+            "repeated-CV"
+            if aggregate_mode == "repeated_cv"
+            else (
+                "repeated-CV incomplete"
+                if aggregate_mode == "repeated_cv_incomplete"
+                else aggregate_mode.replace("_", " ")
+            )
+        )
         summary = {
             "status": compare_result["scientific_summary"]["status"],
             "headline": (
@@ -1495,6 +1511,10 @@ def evaluate_single_deep_survival_model(
         summary["cautions"].append(
             "This result is an aggregate repeated-CV estimate. Feature-importance and loss-curve outputs require a separate single-fit run."
         )
+        if aggregate_mode == "repeated_cv_incomplete":
+            summary["cautions"].append(
+                "Repeated-CV incomplete means one or more folds were excluded because they failed or fell back to apparent evaluation."
+            )
         return {
             "model": canonical_name,
             "model_type": model_type,
@@ -2638,9 +2658,8 @@ def train_survival_transformer(
     evaluation_note = str(eval_split["evaluation_note"])
     x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
 
-    # Ensure d_model is divisible by n_heads
     if d_model % n_heads != 0:
-        d_model = n_heads * max(d_model // n_heads, 1)
+        raise ValueError("Transformer width must be divisible by attention heads.")
 
     model = SurvivalTransformerNet(
         data["n_features"], d_model=d_model, n_heads=n_heads, n_layers=n_layers, dropout=dropout
