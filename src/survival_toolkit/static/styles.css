@@ -1433,16 +1433,31 @@ body {
 /* ─── Derive Panel ─── */
 
 .derive-panel {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns:
+    minmax(200px, 1.2fr)
+    minmax(190px, 1.05fr)
+    minmax(180px, 1fr)
+    minmax(190px, 0.9fr)
+    auto;
   align-items: flex-end;
   gap: 12px;
   margin-top: 12px;
   padding-top: 12px;
+  padding-inline: 6px;
   border-top: 1px solid var(--line);
   max-height: 200px;
   overflow: hidden;
   transition: max-height 0.25s ease, opacity 0.2s ease, margin-top 0.25s ease, padding-top 0.25s ease;
+}
+
+.derive-panel .config-field,
+.derive-panel .config-field.narrow {
+  min-width: 0;
+}
+
+.derive-source-field {
+  min-width: 0;
 }
 
 .derive-panel > .button {
@@ -1451,18 +1466,43 @@ body {
 }
 
 .derive-toggle-option {
-  align-self: flex-end;
-  min-height: 34px;
+  align-self: stretch;
+  min-height: 52px;
+  padding: 8px 12px;
+  line-height: 1.25;
 }
 
 .derive-toggle-option span:last-child {
   font-size: 0.78rem;
   font-weight: 600;
+  line-height: 1.25;
+  white-space: normal;
+  max-width: 150px;
+}
+
+.derive-toggle-option input {
+  margin-top: 2px;
+}
+
+@media (max-width: 1160px) {
+  .derive-panel {
+    grid-template-columns: repeat(2, minmax(200px, 1fr));
+  }
+
+  .derive-panel > .button {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 760px) {
+  .derive-panel {
+    grid-template-columns: 1fr;
+  }
 }
 
 .derive-status {
   display: block;
-  flex: 1 1 100%;
+  grid-column: 1 / -1;
   margin-top: 4px;
   padding: 9px 12px;
   border-radius: var(--radius-sm);
@@ -1471,6 +1511,10 @@ body {
   font-size: 0.78rem;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.derive-status:empty {
+  display: none;
 }
 
 .derive-status:empty {
