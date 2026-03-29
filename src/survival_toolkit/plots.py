@@ -576,22 +576,33 @@ def build_pdp_figure(pdp_data: dict[str, Any]) -> dict[str, Any]:
         Output with keys ``feature``, ``values``, ``mean_risk``.
     """
     feature: str = pdp_data.get("feature", "Feature")
-    values: list[float] = pdp_data.get("values", [])
+    values: list[Any] = pdp_data.get("values", [])
     mean_risk: list[float] = pdp_data.get("mean_risk", [])
+    feature_type = str(pdp_data.get("feature_type", "numeric"))
 
     if not values or not mean_risk:
         return figure_to_json(go.Figure())
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=values,
-            y=mean_risk,
-            mode="lines",
-            line={"width": 2.5, "color": SLATE},
-            hovertemplate=f"{feature} = %{{x:.3f}}<br>Mean risk = %{{y:.4f}}<extra></extra>",
+    if feature_type == "categorical":
+        fig.add_trace(
+            go.Bar(
+                x=values,
+                y=mean_risk,
+                marker={"color": SLATE, "line": {"color": INK, "width": 0.4}},
+                hovertemplate=f"{feature} = %{{x}}<br>Mean risk = %{{y:.4f}}<extra></extra>",
+            )
         )
-    )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=values,
+                y=mean_risk,
+                mode="lines",
+                line={"width": 2.5, "color": SLATE},
+                hovertemplate=f"{feature} = %{{x:.3f}}<br>Mean risk = %{{y:.4f}}<extra></extra>",
+            )
+        )
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 70, "r": 30, "t": 80, "b": 70},

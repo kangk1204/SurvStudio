@@ -176,6 +176,9 @@ def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     assert "guidedGoal: runtime.guidedGoal" in text
     assert "guidedStep: runtime.guidedStep" in text
     assert "setUiMode(historyState?.uiMode || runtime.uiMode, { syncHistory: false });" in text
+    assert "function queueVisiblePlotResize()" in text
+    assert "function resizeVisiblePlotsNow()" in text
+    assert "queueVisiblePlotResize();" in text
     assert "runtime.guidedGoal = historyState.guidedGoal || null;" in text
     assert "runtime.guidedStep = historyState.guidedStep" in text
     assert "handleGuidedPanelAction(button);" in text
@@ -739,6 +742,36 @@ def test_ml_model_endpoint_reports_missing_dependency(monkeypatch) -> None:
     assert "scikit-survival" in response.json()["detail"]
 
 
+def test_deep_model_endpoint_reports_missing_torch_dependency(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    def _raise_missing_dependency(*args, **kwargs):
+        raise ImportError("PyTorch is required for deep learning models.")
+
+    monkeypatch.setattr(deep_models, "evaluate_single_deep_survival_model", _raise_missing_dependency)
+
+    load_response = client.post("/api/load-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+
+    response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "biomarker_score", "immune_index"],
+            "categorical_features": [],
+            "model_type": "deepsurv",
+            "hidden_layers": [8],
+        },
+    )
+
+    assert response.status_code == 503
+    assert "PyTorch" in response.json()["detail"]
+
+
 def test_discover_signature_endpoint_persists_derived_group() -> None:
     load_response = client.post("/api/load-example")
     assert load_response.status_code == 200
@@ -958,7 +991,7 @@ def test_xai_endpoints_support_explicit_event_positive_value_and_categorical_cou
     assert counterfactual_analysis["counterfactual_value"] == "III"
 
 
-def test_pdp_endpoint_rejects_categorical_target_feature() -> None:
+def test_pdp_endpoint_supports_categorical_target_feature() -> None:
     stored = store.create(
         make_example_dataset(seed=68, n_patients=72),
         filename="pdp_categorical.csv",
@@ -978,8 +1011,12 @@ def test_pdp_endpoint_rejects_categorical_target_feature() -> None:
         },
     )
 
-    assert response.status_code == 400
-    assert "categorical feature" in response.json()["detail"].lower()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analysis"]["feature"] == "stage"
+    assert payload["analysis"]["feature_type"] == "categorical"
+    assert len(payload["analysis"]["values"]) >= 2
+    assert payload["figure"]["data"][0]["type"] == "bar"
 
 
 def test_counterfactual_endpoint_uses_original_value_for_baseline(monkeypatch) -> None:
@@ -1439,6 +1476,7 @@ def test_frontend_uses_dataset_aware_download_filenames() -> None:
     assert 'buildDownloadFilename("cox_results", "csv")' in app_js
     assert 'buildDownloadFilename("cox_forest", "png")' in app_js
     assert 'buildDownloadFilename("cox_forest", "svg")' in app_js
+    assert 'showToast("No rows available for export.", "warning")' in app_js
     assert 'buildDownloadFilename("ml_manuscript_table", "docx", { template: currentMlJournalTemplate() })' in app_js
     assert 'buildDownloadFilename("ml_model_comparison", "png")' in app_js
     assert 'buildDownloadFilename("ml_model_comparison", "svg")' in app_js
@@ -1841,6 +1879,21 @@ def test_export_table_endpoint_returns_docx_archive() -> None:
     assert "Lancet-style comments block." in document_xml
 
 
+def test_export_table_endpoint_rejects_empty_rows() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [],
+            "format": "markdown",
+            "style": "journal",
+            "template": "default",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "No rows available for export." in response.json()["detail"]
+
+
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 def test_deep_model_compare_endpoint_returns_comparison_figure() -> None:
     load_response = client.post("/api/load-example")
@@ -2146,6 +2199,111 @@ def test_load_gbsg2_example_endpoint_returns_real_public_cohort() -> None:
     assert {"rfs_days", "rfs_event", "age", "horTh", "menostat", "pnodes", "tgrade", "tsize"}.issubset(column_names)
 
 
+@pytest.mark.parametrize(
+    (
+        "load_path",
+        "time_column",
+        "event_column",
+        "group_column",
+        "covariates",
+        "categorical_covariates",
+    ),
+    [
+        (
+            "/api/load-example",
+            "os_months",
+            "os_event",
+            "stage",
+            ["age", "stage", "treatment", "biomarker_score"],
+            ["stage", "treatment"],
+        ),
+        (
+            "/api/load-tcga-example",
+            "os_months",
+            "os_event",
+            "stage_group",
+            ["age", "sex", "stage_group", "smoking_status"],
+            ["sex", "stage_group", "smoking_status"],
+        ),
+        (
+            "/api/load-tcga-upload-ready",
+            "os_months",
+            "os_event",
+            "stage_group",
+            ["age", "sex", "stage_group", "smoking_status"],
+            ["sex", "stage_group", "smoking_status"],
+        ),
+        (
+            "/api/load-gbsg2-example",
+            "rfs_days",
+            "rfs_event",
+            "horTh",
+            ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+            ["horTh", "menostat", "tgrade"],
+        ),
+    ],
+)
+def test_builtin_examples_run_classical_and_ml_smoke(
+    load_path: str,
+    time_column: str,
+    event_column: str,
+    group_column: str,
+    covariates: list[str],
+    categorical_covariates: list[str],
+) -> None:
+    load_response = client.post(load_path)
+
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+
+    km_response = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": time_column,
+            "event_column": event_column,
+            "event_positive_value": 1,
+            "group_column": group_column,
+        },
+    )
+    assert km_response.status_code == 200
+    assert km_response.json()["analysis"]["curves"]
+
+    cox_response = client.post(
+        "/api/cox",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": time_column,
+            "event_column": event_column,
+            "event_positive_value": 1,
+            "covariates": covariates,
+            "categorical_covariates": categorical_covariates,
+        },
+    )
+    assert cox_response.status_code == 200
+    assert cox_response.json()["analysis"]["results_table"]
+
+    ml_response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": time_column,
+            "event_column": event_column,
+            "event_positive_value": 1,
+            "features": covariates,
+            "categorical_features": categorical_covariates,
+            "model_type": "rsf",
+            "n_estimators": 12,
+            "max_depth": 3,
+            "random_state": 17,
+        },
+    )
+    assert ml_response.status_code == 200
+    ml_analysis = ml_response.json()["analysis"]
+    assert ml_analysis["model_stats"]["n_evaluation_patients"] > 0
+    assert ml_analysis["feature_importance"]
+
+
 def test_uploaded_dataset_marks_preset_ineligible() -> None:
     payload = b"os_months,os_event,age\n12,1,60\n18,0,55\n24,1,70\n"
     response = client.post(
@@ -2275,6 +2433,86 @@ def test_upload_ready_real_gbsg2_file_runs_classical_and_ml_smoke() -> None:
     )
     assert ml_response.status_code == 200
     assert ml_response.json()["analysis"]["model_stats"]["n_evaluation_patients"] > 0
+
+
+def test_switching_datasets_keeps_derived_groups_isolated_across_reanalysis() -> None:
+    first_dataset = client.post("/api/load-example").json()
+
+    derive_first = client.post(
+        "/api/derive-group",
+        json={
+            "dataset_id": first_dataset["dataset_id"],
+            "source_column": "age",
+            "method": "median_split",
+            "new_column_name": "risk_split",
+        },
+    )
+    assert derive_first.status_code == 200
+
+    first_km = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": first_dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "group_column": "risk_split",
+        },
+    )
+    assert first_km.status_code == 200
+    assert len(first_km.json()["analysis"]["curves"]) == 2
+
+    second_dataset = client.post("/api/load-gbsg2-example").json()
+
+    missing_group_response = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": second_dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "group_column": "risk_split",
+        },
+    )
+    assert missing_group_response.status_code == 404
+    assert "Column not found" in missing_group_response.json()["detail"]
+
+    derive_second = client.post(
+        "/api/derive-group",
+        json={
+            "dataset_id": second_dataset["dataset_id"],
+            "source_column": "age",
+            "method": "median_split",
+            "new_column_name": "risk_split",
+        },
+    )
+    assert derive_second.status_code == 200
+
+    second_km = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": second_dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "group_column": "risk_split",
+        },
+    )
+    assert second_km.status_code == 200
+    assert len(second_km.json()["analysis"]["curves"]) == 2
+
+    first_km_rerun = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": first_dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "group_column": "risk_split",
+        },
+    )
+    assert first_km_rerun.status_code == 200
+    assert len(first_km_rerun.json()["analysis"]["curves"]) == 2
 
 
 def test_export_endpoints_can_be_saved_to_nonempty_files(tmp_path: Path) -> None:

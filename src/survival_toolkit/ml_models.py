@@ -1814,31 +1814,113 @@ def compute_partial_dependence(
     feature_name: str,
     n_points: int = 50,
     categorical_features: Sequence[str] | None = None,
+    feature_encoder: dict[str, Any] | None = None,
+    analysis_frame: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Compute partial dependence of the model's risk score on a single
     feature.
 
-    For each grid value the feature column is replaced across all rows,
-    the model predicts risk, and the mean risk is recorded.
+    Numeric features are evaluated on an evenly spaced grid. Categorical
+    features are evaluated category by category by rebuilding the encoded
+    design matrix from the raw analyzable frame.
 
     Returns
     -------
     dict
-        ``feature``, ``values`` (grid), ``mean_risk`` (averaged predicted
-        risk at each grid value).
+        ``feature``, ``feature_type``, ``values`` (grid or categories),
+        ``mean_risk`` (averaged predicted risk at each value).
     """
     categorical_features = list(categorical_features or [])
-    for categorical_feature in categorical_features:
-        if feature_name == categorical_feature or feature_name.startswith(f"{categorical_feature}_"):
-            raise ValueError(
-                f"Partial dependence for categorical feature '{feature_name}' is not supported. "
-                "Use a numeric feature or compute category-level contrasts instead."
+
+    def _predict_mean_for_variant(frame_variant: pd.DataFrame) -> float | None:
+        if feature_encoder is not None:
+            encoded = _transform_feature_encoder(frame_variant, feature_encoder)
+            encoded = encoded.reindex(columns=X_encoded.columns, fill_value=0.0).fillna(0.0)
+            X_variant = encoded.to_numpy(dtype=float)
+        else:
+            if feature_name not in X_encoded.columns:
+                raise ValueError(
+                    f"Feature '{feature_name}' not found in the encoded data. "
+                    f"Available: {list(X_encoded.columns)}"
+                )
+            X_variant = X_encoded.to_numpy(dtype=float)
+            col_idx = list(X_encoded.columns).index(feature_name)
+            replacement = pd.to_numeric(frame_variant[feature_name], errors="coerce").to_numpy(dtype=float)
+            X_variant[:, col_idx] = replacement
+        preds = model.predict(X_variant)
+        return _safe_float(float(np.mean(preds)))
+
+    if analysis_frame is not None and feature_name in analysis_frame.columns:
+        if feature_name in categorical_features:
+            category_values = sorted(
+                str(value)
+                for value in analysis_frame[feature_name].dropna().astype("string").unique().tolist()
             )
+            if len(category_values) < 2:
+                raise ValueError(
+                    f"Feature '{feature_name}' has fewer than two observed categories. "
+                    "Partial dependence requires at least two distinct values."
+                )
+
+            mean_risks: list[float | None] = []
+            category_counts = analysis_frame[feature_name].astype("string").value_counts(dropna=True)
+            for category in category_values:
+                frame_variant = analysis_frame.copy()
+                frame_variant[feature_name] = category
+                try:
+                    mean_risks.append(_predict_mean_for_variant(frame_variant))
+                except Exception:
+                    mean_risks.append(None)
+
+            return {
+                "feature": feature_name,
+                "feature_type": "categorical",
+                "values": category_values,
+                "mean_risk": mean_risks,
+                "n_grid_points": len(category_values),
+                "category_counts": {
+                    category: int(category_counts.get(category, 0)) for category in category_values
+                },
+            }
+
+        raw_values = pd.to_numeric(analysis_frame[feature_name], errors="coerce")
+        valid_values = raw_values.dropna()
+        if valid_values.empty:
+            raise ValueError(
+                f"Feature '{feature_name}' could not be converted to numeric values for partial dependence."
+            )
+
+        col_min = float(valid_values.min())
+        col_max = float(valid_values.max())
+        if col_min == col_max:
+            raise ValueError(
+                f"Feature '{feature_name}' has no variation (min == max == {col_min}). "
+                "Partial dependence requires at least two distinct values."
+            )
+
+        grid = np.linspace(col_min, col_max, n_points)
+        mean_risks: list[float | None] = []
+        for grid_val in grid:
+            frame_variant = analysis_frame.copy()
+            frame_variant[feature_name] = float(grid_val)
+            try:
+                mean_risks.append(_predict_mean_for_variant(frame_variant))
+            except Exception:
+                mean_risks.append(None)
+
+        return {
+            "feature": feature_name,
+            "feature_type": "numeric",
+            "values": [_safe_float(float(v)) for v in grid],
+            "mean_risk": mean_risks,
+            "n_grid_points": n_points,
+            "feature_range": {"min": _safe_float(col_min), "max": _safe_float(col_max)},
+        }
 
     if feature_name not in X_encoded.columns:
         raise ValueError(
-            f"Feature '{feature_name}' not found in the encoded data. "
-            f"Available: {list(X_encoded.columns)}"
+            f"Feature '{feature_name}' was not found in the analyzable feature set. "
+            "Use a feature from the selected model inputs."
         )
 
     X_array = X_encoded.to_numpy(dtype=float)
@@ -1868,6 +1950,7 @@ def compute_partial_dependence(
 
     return {
         "feature": feature_name,
+        "feature_type": "numeric",
         "values": [_safe_float(float(v)) for v in grid],
         "mean_risk": mean_risks,
         "n_grid_points": n_points,
