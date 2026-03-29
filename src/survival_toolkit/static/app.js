@@ -2887,8 +2887,8 @@ async function deriveGroup() {
         ? `Group by stayed as ${previousGroup}. ML/DL features were not changed. This cutpoint used outcome information, so use it for grouping or visualization only if you decide to apply it.`
         : `Group by stayed as ${previousGroup}. ML/DL features were not changed. Use "Set as Group by" only if you want Kaplan-Meier and grouped tables to switch.`);
   refs.deriveStatus.textContent = shouldRefreshKm
-    ? `Created ${payload.derived_column}. ${featureUseMessage} Refreshing Kaplan-Meier with the new grouping...`
-    : `Created ${payload.derived_column}. ${featureUseMessage}`;
+    ? "Refreshing Kaplan-Meier with the new grouping..."
+    : "";
   updateDatasetBadge();
   renderDerivedGroupSummary(payload.derived_column, payload.derive_summary);
   if (!shouldRefreshKm) {
@@ -2921,6 +2921,7 @@ async function deriveGroup() {
         setGuidedStep(5, { scroll: false, historyMode: "replace" });
       }
     } finally {
+      refs.deriveStatus.textContent = "";
       renderSharedFeatureSummary();
     }
   }
