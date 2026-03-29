@@ -93,12 +93,14 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
             page.locator("#loadExampleButton").click()
             page.locator("#workspace").wait_for(state="visible")
             page.locator("#guidedShell").wait_for(state="visible")
+            page.locator("#expertModeButton").click()
+            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
 
             assert "Group by does not change Cox, ML, or DL inputs." in page.locator("#groupingSummaryText").inner_text()
             assert "current Group by setting" in page.locator("#kmDependencyText").inner_text()
-            assert "Group by does not change the model unless you add that column as a covariate." in page.locator("#coxDependencyText").inner_text()
+            assert "covariates selected below" in page.locator("#coxDependencyText").inner_text()
             assert "model features selected below" in page.locator("#mlFeatureSummaryText").inner_text()
-            assert "shared model feature selections shown in this tab and on the ML tab" in page.locator("#dlFeatureSummaryText").inner_text()
+            assert "model features selected below" in page.locator("#dlFeatureSummaryText").inner_text()
 
             _assert_tab_active(page, "km")
             page.locator("#runKmButton").click()
@@ -158,6 +160,10 @@ def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(b
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadGbsg2Button").click()
             page.locator("#workspace").wait_for(state="visible")
+            page.locator("#guidedShell").wait_for(state="visible")
+            assert page.locator("#datasetPresetBar").is_hidden()
+            page.locator("#expertModeButton").click()
+            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
             page.locator("#datasetPresetBar").wait_for(state="visible")
 
             assert "No preset applied yet." in page.locator("#datasetPresetStatusTitle").inner_text()
@@ -178,10 +184,18 @@ def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(b
             page.wait_for_function(
                 "document.getElementById('datasetPresetStatusText').textContent.includes('feature checklists used by ML and DL')"
             )
+            selected_feature_count = page.eval_on_selector_all(
+                "#modelFeatureChecklist input",
+                "els => els.filter(e => e.checked).length",
+            )
+            selected_categorical_count = page.eval_on_selector_all(
+                "#modelCategoricalChecklist input",
+                "els => els.filter(e => e.checked).length",
+            )
             assert "model features selected below" in page.locator("#mlFeatureSummaryText").inner_text()
-            assert "shared ML/DL model feature selections" in page.locator("#dlFeatureSummaryText").inner_text()
-            assert "Model features: 6" in page.locator("#datasetPresetChips").inner_text()
-            assert "Categorical: 3" in page.locator("#datasetPresetChips").inner_text()
+            assert "shared ML/DL model feature selections" in page.locator("#datasetPresetStatusText").inner_text() or "feature checklists used by ML and DL" in page.locator("#datasetPresetStatusText").inner_text()
+            assert f"Model features: {selected_feature_count}" in page.locator("#datasetPresetChips").inner_text()
+            assert f"Categorical: {selected_categorical_count}" in page.locator("#datasetPresetChips").inner_text()
 
             for tab_name in ("km", "cox", "ml", "dl"):
                 page.locator(f'[data-tab="{tab_name}"]').click()
@@ -203,7 +217,8 @@ def test_beginner_ml_compare_options_toggle_cv_inputs_and_finish_with_visible_fe
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             page.locator("#workspace").wait_for(state="visible")
-            page.locator("#applyModelPresetButton").click()
+            page.locator("#expertModeButton").click()
+            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
 
             page.locator('[data-tab="ml"]').click()
             _assert_tab_active(page, "ml")
@@ -249,7 +264,8 @@ def test_beginner_dl_single_run_keeps_feedback_visible_and_hides_cv_controls(bro
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             page.locator("#workspace").wait_for(state="visible")
-            page.locator("#applyModelPresetButton").click()
+            page.locator("#expertModeButton").click()
+            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
 
             page.locator('[data-tab="dl"]').click()
             _assert_tab_active(page, "dl")

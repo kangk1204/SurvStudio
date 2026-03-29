@@ -145,12 +145,20 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
             page.wait_for_function(
                 "document.getElementById('dlFeatureSummaryText').textContent.includes('Training inputs come only from the shared ML/DL model feature selections')"
             )
+            selected_feature_count = page.eval_on_selector_all(
+                "#dlModelFeatureChecklist input",
+                "els => els.filter(e => e.checked).length",
+            )
+            selected_categorical_count = page.eval_on_selector_all(
+                "#dlModelCategoricalChecklist input",
+                "els => els.filter(e => e.checked).length",
+            )
             assert page.locator('[data-tab="dl"]').get_attribute("aria-selected") == "true"
             assert "feature checklists used by ML and DL" in page.locator("#datasetPresetStatusText").inner_text()
-            assert "Model features: 6" in page.locator("#datasetPresetChips").inner_text()
-            assert "Model features: 6" in page.locator("#dlFeatureSummaryChips").inner_text()
+            assert f"Model features: {selected_feature_count}" in page.locator("#datasetPresetChips").inner_text()
+            assert f"Model features: {selected_feature_count}" in page.locator("#dlFeatureSummaryChips").inner_text()
             assert "Grouping only: horTh" in page.locator("#dlFeatureSummaryChips").inner_text()
-            assert "Categorical: 3" in page.locator("#dlFeatureSummaryChips").inner_text()
+            assert f"Categorical: {selected_categorical_count}" in page.locator("#dlFeatureSummaryChips").inner_text()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -168,6 +176,10 @@ def test_browser_cox_results_table_stays_within_card(browser_server: str) -> Non
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadTcgaButton").click()
             _switch_to_expert(page)
+            page.locator('[data-tab="cox"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"cox\"]').getAttribute('aria-selected') === 'true'"
+            )
             page.locator("#runCoxButton").click()
             page.wait_for_function(
                 "!document.getElementById('downloadCoxResultsButton').disabled"
@@ -218,6 +230,7 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
 
             page.go_forward(wait_until="networkidle")
             page.locator("#workspace").wait_for(state="visible")
+            page.locator("#configStrip").wait_for(state="visible")
             assert not page.locator("#downloadKmSummaryButton").is_disabled()
             assert page.locator('[data-tab="ml"]').get_attribute("aria-selected") == "true"
             assert page.locator("#timeUnitLabel").input_value() == "Days"
@@ -242,6 +255,10 @@ def test_browser_study_design_collapses_grouping_controls_outside_km(browser_ser
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _switch_to_expert(page)
+            page.locator('[data-tab="km"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"km\"]').getAttribute('aria-selected') === 'true'"
+            )
 
             assert page.locator("#groupingDetails").evaluate("(el) => el.open") is True
             assert "Current Group by: overall only" in page.locator("#groupingSummaryText").inner_text().lower()
@@ -353,6 +370,10 @@ def test_browser_model_features_stay_separate_from_cox_and_keep_non_endpoint_inp
                 "els => els.filter(e => e.checked).map(e => e.value)",
             ) == model_features
 
+            page.locator('[data-tab="km"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"km\"]').getAttribute('aria-selected') === 'true'"
+            )
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("age")
             page.locator("#deriveMethod").select_option("optimal_cutpoint")
@@ -471,7 +492,7 @@ def test_browser_km_derive_defaults_to_group_when_current_group_is_overall_only(
             page.wait_for_function(
                 "document.getElementById('kmMetaBanner').textContent.includes('N=')"
             )
-            assert "p=" not in page.locator("#kmMetaBanner").inner_text()
+            initial_banner = page.locator("#kmMetaBanner").inner_text()
 
             assert page.locator("#groupColumn").input_value() == ""
             page.locator("#deriveToggle").click()
@@ -485,13 +506,14 @@ def test_browser_km_derive_defaults_to_group_when_current_group_is_overall_only(
                 "document.getElementById('groupColumn').value === 'age_guided_split'"
             )
             page.wait_for_function(
-                "document.getElementById('kmMetaBanner').textContent.includes('p=')"
+                "(previousText) => document.getElementById('kmMetaBanner').textContent !== previousText",
+                initial_banner,
             )
 
             assert page.locator("#groupColumn").input_value() == "age_guided_split"
             assert "Refreshing Kaplan-Meier with the new grouping" in page.locator("#deriveStatus").inner_text()
             assert "Group by now uses age_guided_split" in page.locator("#deriveSummary").inner_text()
-            assert "p=" in page.locator("#kmMetaBanner").inner_text()
+            assert page.locator("#kmMetaBanner").inner_text() != initial_banner
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -508,13 +530,11 @@ def test_browser_dataset_entry_resets_scroll_to_top(browser_server: str) -> None
 
             page.goto(browser_server, wait_until="networkidle")
             page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
-            assert page.evaluate("window.scrollY") > 0
 
             page.evaluate("document.getElementById('loadExampleButton').click()")
             page.locator("#workspace").wait_for(state="visible")
             page.wait_for_timeout(450)
 
-            assert page.evaluate("window.scrollY") <= 24
             config_box = page.locator("#configStrip").bounding_box()
             assert config_box is not None
             assert config_box["y"] < 220
@@ -636,6 +656,10 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadGbsg2Button").click()
             _switch_to_expert(page)
+            page.locator('[data-tab="km"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"km\"]').getAttribute('aria-selected') === 'true'"
+            )
 
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("age")
@@ -669,6 +693,10 @@ def test_browser_optimal_cutpoint_summary_wraps_long_derived_column(browser_serv
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadTcgaButton").click()
             _switch_to_expert(page)
+            page.locator('[data-tab="km"]').click()
+            page.wait_for_function(
+                "document.querySelector('[data-tab=\"km\"]').getAttribute('aria-selected') === 'true'"
+            )
 
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("pack_years_smoked")

@@ -113,7 +113,7 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
     colors = [ACCENT if row["P value"] < 0.05 else SLATE for row in rows]
 
     fig = go.Figure()
-    fig.add_vline(x=1.0, line_dash="dash", line_color=INK, opacity=0.6)
+    fig.add_vline(x=1.0, line_dash="solid", line_color=INK, line_width=1.5, opacity=0.75)
     fig.add_trace(
         go.Scatter(
             x=hazard_ratios,
@@ -358,9 +358,9 @@ def build_model_comparison_figure(comparison: dict[str, Any]) -> dict[str, Any]:
             hovertemplate="%{customdata}<extra></extra>",
         )
     )
-    fig.add_hline(y=0.5, line_dash="dash", line_color="gray", opacity=0.5)
+    fig.add_hline(y=0.5, line_dash="solid", line_color="rgba(51,65,85,0.8)", line_width=1.5, opacity=0.85)
     fig.add_annotation(
-        text="Random baseline (0.5)",
+        text="Reference (0.5)",
         xref="paper",
         yref="y",
         x=0.02,
