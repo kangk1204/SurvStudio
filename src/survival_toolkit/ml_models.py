@@ -1212,7 +1212,7 @@ def compare_survival_models(
 
     best = comparison[0]
     scientific_summary = _scientific_summary_ml(
-        model_name=f"Model Comparison (best: {best['model']})",
+        model_name=f"Model Comparison Screening (top: {best['model']})",
         c_index=best["c_index"],
         n_patients=n_patients,
         n_events=n_events,
@@ -1226,8 +1226,9 @@ def compare_survival_models(
             f"{len(comparison)} model(s) trained and compared with {evaluation_mode} evaluation.",
         ],
         extra_cautions=[
+            "The top-ranked model was selected and scored on the same evaluation split; treat this as screening rather than final external validation.",
             f"{len(errors)} model(s) failed to train." if errors else None,
-        ] if errors else None,
+        ],
     )
 
     result = {
@@ -1671,7 +1672,7 @@ def cross_validate_survival_models(
     mean_test_events = int(round(np.mean([row["test_events"] for row in fold_results]))) if fold_results else n_events
     best = comparison[0]
     scientific_summary = _scientific_summary_ml(
-        model_name=f"Repeated-CV Model Comparison (best: {best['model']})",
+        model_name=f"Repeated-CV Model Comparison Screening (top: {best['model']})",
         c_index=best["c_index"],
         n_patients=n_patients,
         n_events=n_events,
@@ -1685,6 +1686,10 @@ def cross_validate_survival_models(
             f"{len(comparison)} model(s) evaluated across {cv_repeats} repeat(s) of {cv_folds}-fold stratified CV.",
         ],
         extra_cautions=[f"{len(errors)} fold-level fit(s) failed."] if errors else None,
+    )
+    scientific_summary["cautions"].insert(
+        0,
+        "The top-ranked model was selected and scored within the same repeated-CV screening run; treat this as model screening rather than final external validation.",
     )
 
     result = {

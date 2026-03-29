@@ -394,8 +394,10 @@ function matchesRequestConfig(goal, requestConfig) {
 
   if (goal === "ml") {
     const compareRun = String(requestConfig.model_type || "") === "compare";
+    const selectedModelType = String(refs.mlModelType?.value || "");
+    const learningRateApplies = compareRun || selectedModelType === "gbs";
     return (
-      (compareRun || String(requestConfig.model_type || "") === String(refs.mlModelType?.value || ""))
+      (compareRun || String(requestConfig.model_type || "") === selectedModelType)
       && arrayEquals(sortedStrings(requestConfig.features || []), sortedStrings(selectedCheckboxValues(refs.modelFeatureChecklist)))
       && arrayEquals(
         sortedStrings(requestConfig.categorical_features || []),
@@ -403,11 +405,10 @@ function matchesRequestConfig(goal, requestConfig) {
       )
       && Number(requestConfig.n_estimators) === Number(refs.mlNEstimators?.value)
       && String(requestConfig.max_depth ?? "") === ""
-      && Number(requestConfig.learning_rate) === Number(refs.mlLearningRate?.value)
-      && (compareRun || Boolean(requestConfig.compute_shap) === !Boolean(refs.mlSkipShap?.checked))
-      && String(requestConfig.evaluation_strategy || "holdout") === String(refs.mlEvaluationStrategy?.value || "holdout")
-      && Number(requestConfig.cv_folds || 5) === Number(refs.mlCvFolds?.value || 5)
-      && Number(requestConfig.cv_repeats || 3) === Number(refs.mlCvRepeats?.value || 3)
+      && (!learningRateApplies || Number(requestConfig.learning_rate) === Number(refs.mlLearningRate?.value))
+      && (!compareRun || String(requestConfig.evaluation_strategy || "holdout") === String(refs.mlEvaluationStrategy?.value || "holdout"))
+      && (!compareRun || Number(requestConfig.cv_folds || 5) === Number(refs.mlCvFolds?.value || 5))
+      && (!compareRun || Number(requestConfig.cv_repeats || 3) === Number(refs.mlCvRepeats?.value || 3))
     );
   }
 
@@ -1894,7 +1895,7 @@ function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvR
   const evalSuffix = evaluationStrategy === "repeated_cv"
     ? ` using ${cvRepeats}x${cvFolds} repeated CV`
     : " using deterministic holdout";
-  return `Comparing Cox PH, Random Survival Forest, and Gradient Boosted Survival${cohortSuffix}${evalSuffix}.`;
+  return `Screening Cox PH, Random Survival Forest, and Gradient Boosted Survival${cohortSuffix}${evalSuffix}.`;
 }
 
 function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {
@@ -1991,7 +1992,7 @@ function renderSharedFeatureSummary() {
   const mlSummaryText = !hasDataset
     ? "Load a dataset first. ML uses the shared model feature selections shown below."
     : features.length
-      ? `Training inputs come only from the ML/DL model feature selections: ${summarizeFeatureNames(features)}. Group by is shown below for context only.`
+      ? `ML and DL share this model feature list: ${summarizeFeatureNames(features)}. Compare All uses the Evaluation section for cross-model screening only. Group by is shown below for context only.`
       : "No model feature set selected yet. Choose ML/DL model features before training.";
   const dlSummaryText = !hasDataset
     ? "Load a dataset first. DL uses the shared model feature selections shown in this tab and on the ML tab."
@@ -3179,7 +3180,7 @@ async function runCompareModels() {
     cvFolds: Number(refs.mlCvFolds.value),
     cvRepeats: Number(refs.mlCvRepeats.value),
   });
-  setRuntimeBanner("Comparing all ML models. This can take a little while on larger cohorts.", "info");
+  setRuntimeBanner("Screening all ML models on one shared evaluation path. This can take a little while on larger cohorts.", "info");
   setShimmer(refs.mlComparisonShell);
 
   try {
@@ -3221,14 +3222,14 @@ async function runCompareModels() {
     const evalLabel = evaluationMode === "repeated_cv"
       ? `${payload.analysis?.cv_repeats || refs.mlCvRepeats.value}x${payload.analysis?.cv_folds || refs.mlCvFolds.value} repeated CV`
       : evaluationMode;
-    refs.mlMetaBanner.textContent = `Best=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}`;
+    refs.mlMetaBanner.textContent = `Screening top model=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}`;
     refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
     if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !(payload.figure?.data?.length);
     if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !(payload.figure?.data?.length);
     setMlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
     activateTab("ml");
     scrollToAnalysisResult("ml", { mode: "compare" });
-    showToast("Model comparison complete", "success", 3000);
+    showToast("Model comparison screening complete", "success", 3000);
   } finally {
     setRuntimeBanner("");
   }
@@ -4017,7 +4018,7 @@ function initListeners() {
   refs.runCompareInlineButton?.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
       runtime.guidedGoal = "ml";
-      void runGuidedGoal("ml", refs.runCompareButton, runCompareModels);
+      void runGuidedGoal("ml", refs.runCompareInlineButton, runCompareModels);
       return;
     }
     withLoading(refs.runCompareInlineButton, runCompareModels);

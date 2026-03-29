@@ -137,7 +137,7 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert "Review shared features" in response.text
     assert 'id="mlSkipShap"' in response.text
     assert "Fast mode (skip SHAP)" in response.text
-    assert "ML uses the Study Design outcome definition and the model features selected below." in response.text
+    assert "ML uses the Study Design outcome definition and the shared ML/DL model features selected below." in response.text
     assert "DL uses the Study Design outcome definition and the model features selected below. The same feature list stays synced with the ML tab." in response.text
     assert "No preset applied yet." in response.text
     assert "Applying a preset updates recommended columns and checkbox selections only." in response.text
@@ -147,6 +147,8 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert "Run setup" in response.text
     assert "Validation and runtime" in response.text
     assert 'class="table-card-head"' in response.text
+    assert "screening comparison across Cox PH, RSF, and GBS" in response.text
+    assert "Partial dependence and counterfactual analysis are available for tree-model runs only" in response.text
 
 
 def test_frontend_tracks_workspace_controls_in_history_state() -> None:
@@ -278,6 +280,29 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert "SHAP skipped in Fast mode" in text
     assert "SHAP failed:" in text
     assert "SHAP=${shapStatus}, time=${elapsedSeconds}s" in text
+    assert "Screening Cox PH, Random Survival Forest, and Gradient Boosted Survival" in text
+    assert "Screening all ML models on one shared evaluation path." in text
+    assert "Screening top model=" in text
+    assert "Model comparison screening complete" in text
+
+
+def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'const selectedModelType = String(refs.mlModelType?.value || "");' in text
+    assert 'const learningRateApplies = compareRun || selectedModelType === "gbs";' in text
+    assert '&& (!compareRun || String(requestConfig.evaluation_strategy || "holdout") === String(refs.mlEvaluationStrategy?.value || "holdout"))' in text
+    assert '&& (!compareRun || Number(requestConfig.cv_folds || 5) === Number(refs.mlCvFolds?.value || 5))' in text
+    assert '&& (!compareRun || Number(requestConfig.cv_repeats || 3) === Number(refs.mlCvRepeats?.value || 3))' in text
+    assert '&& (compareRun || Boolean(requestConfig.compute_shap) === !Boolean(refs.mlSkipShap?.checked))' not in text
+
+
+def test_guided_ml_inline_compare_uses_clicked_button_as_loading_target() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'void runGuidedGoal("ml", refs.runCompareInlineButton, runCompareModels);' in text
 
 
 def test_ml_model_fast_mode_skips_shap_computation(monkeypatch) -> None:
@@ -1268,6 +1293,8 @@ def test_pdp_endpoint_reuses_matching_cached_ml_artifact(monkeypatch) -> None:
     assert pdp_response.status_code == 200
     assert calls["train"] == 1
     assert pdp_response.json()["analysis"]["artifact_reused"] is True
+    assert "RSF/GBS model" in pdp_response.json()["analysis"]["contract_note"]
+    assert "Compare All ranking table" in pdp_response.json()["analysis"]["contract_note"]
 
 
 def test_counterfactual_endpoint_uses_original_value_for_baseline(monkeypatch) -> None:
@@ -1374,6 +1401,8 @@ def test_counterfactual_endpoint_reuses_matching_cached_ml_artifact(monkeypatch)
     assert response.status_code == 200
     assert calls["train"] == 1
     assert response.json()["analysis"]["artifact_reused"] is True
+    assert "RSF/GBS model" in response.json()["analysis"]["contract_note"]
+    assert "Compare All ranking table" in response.json()["analysis"]["contract_note"]
 
 
 def test_counterfactual_endpoint_accepts_gbs_model_type(monkeypatch) -> None:
@@ -1904,7 +1933,7 @@ def test_frontend_derive_group_explains_that_dl_features_do_not_change() -> None
     assert "Set as Group by. ML/DL features were not changed." in app_js
     assert "Use it for grouping or visualization, not as an ML/DL training feature." in app_js
     assert "Grouping only:" in app_js
-    assert "Training inputs come only from the ML/DL model feature selections" in app_js
+    assert "ML and DL share this model feature list" in app_js
     assert "Cox, ML, and DL use the outcome definition plus their own feature selections." in app_js
 
 
@@ -3268,7 +3297,7 @@ def test_compare_all_actions_surface_pending_feedback() -> None:
 
     assert "function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
     assert "function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
-    assert 'setRuntimeBanner("Comparing all ML models. This can take a little while on larger cohorts.", "info");' in app_js
+    assert 'setRuntimeBanner("Screening all ML models on one shared evaluation path. This can take a little while on larger cohorts.", "info");' in app_js
     assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");' in app_js
     assert "refs.mlMetaBanner.textContent = mlComparePendingBannerText({" in app_js
     assert "refs.dlMetaBanner.textContent = dlComparePendingBannerText({" in app_js
