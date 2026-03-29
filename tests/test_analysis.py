@@ -84,6 +84,13 @@ def test_coerce_event_rejects_unknown_tokens_when_explicit_positive_value_is_sta
         coerce_event(series, event_positive_value=1)
 
 
+def test_coerce_event_rejects_explicit_censor_token_as_event_positive_value() -> None:
+    series = pd.Series(["alive", "dead", "alive", "dead"])
+
+    with pytest.raises(ValueError, match="maps to censoring"):
+        coerce_event(series, event_positive_value="alive")
+
+
 def test_coerce_event_rejects_multistate_numeric_status_columns() -> None:
     series = pd.Series([0, 1, 2, 1, 0])
     with pytest.raises(ValueError, match="more than two distinct states|pre-binarized"):
@@ -466,7 +473,7 @@ def test_discover_feature_signature_ranks_and_persists_best_group() -> None:
     assert payload["search_space"]["combination_operator"] == "and"
     assert payload["search_space"]["random_seed"] == 1234
     assert payload["search_space"]["significant_signatures"] >= 0
-    support = payload["best_split"]["Bootstrap support (p<0.05)"]
+    support = payload["best_split"]["Bootstrap support (p<alpha)"]
     assert support is None or 0.0 <= support <= 1.0
     permutation_p = payload["best_split"]["Permutation p"]
     assert permutation_p is None or 0.0 <= permutation_p <= 1.0
@@ -560,7 +567,7 @@ def test_signature_summary_stays_exploratory_without_permutation_or_holdout_conf
         best_split={
             "N signature+": 42,
             "Statistically significant": True,
-            "Bootstrap support (p<0.05)": None,
+            "Bootstrap support (p<alpha)": None,
             "Bootstrap HR direction consistency": None,
             "Validation support (p<alpha)": None,
             "Permutation p": None,
@@ -586,7 +593,7 @@ def test_signature_summary_keeps_internal_confirmation_language_conservative() -
         best_split={
             "N signature+": 42,
             "Statistically significant": True,
-            "Bootstrap support (p<0.05)": 0.82,
+            "Bootstrap support (p<alpha)": 0.82,
             "Bootstrap HR direction consistency": 0.91,
             "Validation support (p<alpha)": 0.67,
             "Permutation p": 0.021,

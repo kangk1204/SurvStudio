@@ -136,6 +136,35 @@ def test_build_model_comparison_figure_handles_missing_values() -> None:
     assert "layout" in figure
 
 
+def test_build_model_comparison_figure_treats_nan_c_index_as_missing() -> None:
+    comparison = {
+        "comparison_table": [
+            {"model": "Cox PH", "c_index": float("nan")},
+            {"model": "RSF", "c_index": 0.70},
+        ]
+    }
+
+    figure = build_model_comparison_figure(comparison)
+
+    assert figure["data"][0]["y"][0] is None
+    assert figure["data"][0]["text"][0] == "NA"
+
+
+def test_build_cox_forest_figure_ignores_nonfinite_rows() -> None:
+    cox_result = {
+        "results_table": [
+            {"Label": "age", "Hazard ratio": 1.1, "CI lower": 1.01, "CI upper": 1.2, "P value": 0.01},
+            {"Label": "bad", "Hazard ratio": float("inf"), "CI lower": 0.9, "CI upper": float("inf"), "P value": 0.02},
+        ],
+        "model_stats": {"n": 100, "events": 50, "c_index": 0.65, "c_index_label": "Apparent C-index"},
+    }
+
+    figure = build_cox_forest_figure(cox_result)
+
+    assert figure["data"][0]["x"] == [1.1]
+    assert figure["data"][0]["y"] == ["age"]
+
+
 def test_build_time_dependent_importance_figure_orients_matrix_correctly() -> None:
     result = {
         "features": ["age", "stage", "biomarker"],

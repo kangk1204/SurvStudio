@@ -105,12 +105,30 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
 
 
 def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
-    rows = list(reversed(cox_result["results_table"]))
+    raw_rows = list(reversed(cox_result["results_table"]))
+    rows = [
+        row
+        for row in raw_rows
+        if isinstance(row.get("Hazard ratio"), (int, float))
+        and isinstance(row.get("CI lower"), (int, float))
+        and isinstance(row.get("CI upper"), (int, float))
+        and np.isfinite(float(row["Hazard ratio"]))
+        and np.isfinite(float(row["CI lower"]))
+        and np.isfinite(float(row["CI upper"]))
+        and float(row["Hazard ratio"]) > 0.0
+        and float(row["CI lower"]) > 0.0
+        and float(row["CI upper"]) > 0.0
+    ]
     labels = [row["Label"] for row in rows]
     hazard_ratios = [row["Hazard ratio"] for row in rows]
     error_plus = [row["CI upper"] - row["Hazard ratio"] for row in rows]
     error_minus = [row["Hazard ratio"] - row["CI lower"] for row in rows]
-    colors = [ACCENT if row["P value"] < 0.05 else SLATE for row in rows]
+    colors = [
+        ACCENT
+        if isinstance(row.get("P value"), (int, float)) and np.isfinite(float(row["P value"])) and float(row["P value"]) < 0.05
+        else SLATE
+        for row in rows
+    ]
 
     fig = go.Figure()
     fig.add_vline(x=1.0, line_dash="solid", line_color=INK, line_width=1.5, opacity=0.75)
@@ -134,7 +152,7 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             "font": {"family": "Source Serif 4, serif", "size": 24, "color": INK},
             "x": 0.02,
         },
-        height=max(420, 90 + 46 * len(rows)),
+        height=max(420, 90 + 46 * max(len(rows), 1)),
     )
     stat_parts = [f"N = {stats['n']}", f"events = {stats['events']}"]
     if stats.get("c_index") is not None:
@@ -147,6 +165,17 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         align="right", xanchor="right", yanchor="top",
         bgcolor="rgba(255,255,255,0.85)", borderpad=4,
     )
+    if not rows:
+        fig.add_annotation(
+            text="No finite hazard ratios are available to plot.",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font={"size": 14, "color": INK},
+            align="center",
+        )
     fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_COMMON_AXES)
     fig.update_yaxes(**_COMMON_AXES)
     return figure_to_json(fig)
@@ -330,7 +359,10 @@ def build_model_comparison_figure(comparison: dict[str, Any]) -> dict[str, Any]:
 
     models = [row["model"] for row in table]
     c_indices = [row.get("c_index") for row in table]
-    safe_c = [float(v) if isinstance(v, (int, float)) and v is not None else None for v in c_indices]
+    safe_c = [
+        (float(v) if isinstance(v, (int, float)) and v is not None and np.isfinite(float(v)) else None)
+        for v in c_indices
+    ]
     colors = [
         (PALETTE[i % len(PALETTE)] if row.get("comparable_for_ranking", True) else "rgba(148,163,184,0.75)")
         for i, row in enumerate(table)

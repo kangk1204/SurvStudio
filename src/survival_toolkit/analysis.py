@@ -261,7 +261,10 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
                     + ", ".join(unknown[:6])
                     + (" ..." if len(unknown) > 6 else "")
                 )
-            event_tokens = FALSE_TOKENS
+            raise ValueError(
+                f"The selected event-positive value '{target}' maps to censoring, not the event. "
+                "Choose the value that means the event happened."
+            )
         else:
             # Custom label: allow mapping only for true binary columns to avoid masking typos.
             if target_token not in observed_tokens:
@@ -729,7 +732,7 @@ def _signature_scientific_summary(
     if search_space["validation_iterations"] > 0:
         strengths.append("Repeated subsample holdout checks were enabled for top-ranked candidates.")
 
-    support = _safe_float(best_split.get("Bootstrap support (p<0.05)"))
+    support = _safe_float(best_split.get("Bootstrap support (p<alpha)"))
     direction_consistency = _safe_float(best_split.get("Bootstrap HR direction consistency"))
     validation_support = _safe_float(best_split.get("Validation support (p<alpha)"))
     permutation_p = _safe_float(best_split.get("Permutation p"))
@@ -1062,7 +1065,7 @@ def _stability_score(row: dict[str, Any]) -> float:
     # Composite score balancing significance, robustness, effect size, and parsimony.
     bh_p = max(float(row["BH adjusted p"]), 1e-12)
     effect = abs(math.log(max(float(row["Hazard ratio (signature+ vs -)"]), 1e-12)))
-    support = row["Bootstrap support (p<0.05)"]
+    support = row["Bootstrap support (p<alpha)"]
     support_value = float(support) if support is not None else 0.0
     direction_consistency = row.get("Bootstrap HR direction consistency")
     direction_consistency_value = (
@@ -1138,10 +1141,11 @@ def _bootstrap_signature_metrics(
     n_iterations: int,
     sample_fraction: float,
     random_seed: int,
+    significance_level: float,
 ) -> dict[str, float | int | None]:
     if n_iterations <= 0:
         return {
-            "Bootstrap support (p<0.05)": None,
+            "Bootstrap support (p<alpha)": None,
             "Bootstrap median HR": None,
             "Bootstrap median p": None,
             "Bootstrap HR direction consistency": None,
@@ -1195,12 +1199,12 @@ def _bootstrap_signature_metrics(
         p_float = float(p_value)
         p_values.append(p_float)
         hazard_ratios.append(_safe_exp(cox_results.params[0]))
-        if p_float < 0.05:
+        if p_float < significance_level:
             significant_count += 1
 
     if valid_resamples == 0:
         return {
-            "Bootstrap support (p<0.05)": None,
+            "Bootstrap support (p<alpha)": None,
             "Bootstrap median HR": None,
             "Bootstrap median p": None,
             "Bootstrap HR direction consistency": None,
@@ -1213,7 +1217,7 @@ def _bootstrap_signature_metrics(
     )
 
     return {
-        "Bootstrap support (p<0.05)": float(significant_count / valid_resamples),
+        "Bootstrap support (p<alpha)": float(significant_count / valid_resamples),
         "Bootstrap median HR": float(np.median(hazard_ratios)),
         "Bootstrap median p": float(np.median(p_values)),
         "Bootstrap HR direction consistency": direction_consistency,
@@ -1493,7 +1497,7 @@ def discover_feature_signature(
                         "HR CI upper": ci_high,
                         "Median signature+": median_high,
                         "Median signature-": median_low,
-                        "Bootstrap support (p<0.05)": None,
+                        "Bootstrap support (p<alpha)": None,
                         "Bootstrap median HR": None,
                         "Bootstrap median p": None,
                         "Bootstrap HR direction consistency": None,
@@ -1549,6 +1553,7 @@ def discover_feature_signature(
                 n_iterations=bootstrap_iterations,
                 sample_fraction=bootstrap_sample_fraction,
                 random_seed=random_seed + 1000 + idx,
+                significance_level=significance_level,
             )
             rows[idx].update(bootstrap_metrics)
 

@@ -3056,7 +3056,7 @@ function renderSignatureResult(analysis) {
       <div><strong>BH-adjusted p</strong><br/>${formatValue(best["BH adjusted p"])}</div>
       <div><strong>Significant</strong><br/>${significantFlag}</div>
       <div><strong>Stability</strong><br/>${formatValue(best["Stability score"])}</div>
-      <div><strong>Bootstrap support</strong><br/>${formatValue(best["Bootstrap support (p<0.05)"])}</div>
+      <div><strong>Bootstrap support</strong><br/>${formatValue(best["Bootstrap support (p<alpha)"])}</div>
       <div><strong>Direction consistency</strong><br/>${formatValue(best["Bootstrap HR direction consistency"])}</div>
       <div><strong>Validation support</strong><br/>${formatValue(best["Validation support (p<alpha)"])}</div>
       <div><strong>Permutation p</strong><br/>${formatValue(best["Permutation p"])}</div>
