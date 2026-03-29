@@ -568,6 +568,25 @@ def test_counterfactual_survival_uses_original_value_for_baseline_scenario(monke
     assert "from 5.0 to 15.0" in result["scientific_summary"]["headline"]
 
 
+def test_counterfactual_survival_rejects_unknown_model_type(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
+    df = make_example_dataset(seed=164, n_patients=40)
+
+    with pytest.raises(ValueError, match="Unsupported counterfactual model_type"):
+        ml_models.counterfactual_survival(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            features=["age"],
+            target_feature="age",
+            original_value=5.0,
+            counterfactual_value=15.0,
+            model_type="bogus",
+        )
+
+
 def test_compute_calibration_data_uses_descriptive_language() -> None:
     from survival_toolkit.ml_models import compute_calibration_data
 

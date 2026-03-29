@@ -181,6 +181,7 @@ def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     assert "queueVisiblePlotResize();" in text
     assert "runtime.guidedGoal = historyState.guidedGoal || null;" in text
     assert "runtime.guidedStep = historyState.guidedStep" in text
+    assert 'const compareRun = String(requestConfig.model_type || "") === "compare";' in text
     assert "handleGuidedPanelAction(button);" in text
     assert 'setGuidedStep(currentGuidedStep() + 1, { historyMode: "push" });' in text
     assert 'setGuidedStep(currentGuidedStep() - 1, { historyMode: "push" });' in text
@@ -269,6 +270,7 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert "refs.mlMetaBanner.textContent = mlPendingBannerText(" in text
     assert "compute_shap: computeShap" in text
     assert "SHAP skipped in Fast mode" in text
+    assert "SHAP failed:" in text
     assert "SHAP=${shapStatus}, time=${elapsedSeconds}s" in text
 
 
@@ -324,6 +326,60 @@ def test_ml_model_fast_mode_skips_shap_computation(monkeypatch) -> None:
     assert body["request_config"]["compute_shap"] is False
     assert body["shap_result"] is None
     assert body["shap_figure"] is None
+
+
+def test_ml_model_surfaces_shap_failures_without_failing_entire_request(monkeypatch) -> None:
+    import pandas as pd
+    import survival_toolkit.ml_models as ml_models
+
+    stored = store.create(
+        make_example_dataset(seed=177, n_patients=64),
+        filename="ml_shap_failure.csv",
+        copy_dataframe=False,
+    )
+
+    monkeypatch.setattr(
+        ml_models,
+        "train_random_survival_forest",
+        lambda *args, **kwargs: {
+            "feature_importance": [{"feature": "age", "importance": 1.0}],
+            "feature_names": ["age"],
+            "model_stats": {
+                "c_index": 0.71,
+                "evaluation_mode": "holdout",
+                "n_patients": 64,
+                "n_features": 1,
+            },
+            "_model": object(),
+            "_X_encoded": pd.DataFrame({"age": [51.0, 63.0, 72.0]}),
+        },
+    )
+    monkeypatch.setattr(
+        ml_models,
+        "compute_shap_values",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("kernel failed")),
+    )
+
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age"],
+            "categorical_features": [],
+            "model_type": "rsf",
+            "n_estimators": 20,
+            "compute_shap": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["shap_result"] is None
+    assert body["shap_figure"] is None
+    assert body["shap_error"] == "RuntimeError: kernel failed"
 
 
 def test_deep_model_request_accepts_1000_epochs() -> None:
@@ -519,6 +575,42 @@ def test_ml_compare_response_appends_replay_notes_to_manuscript_tables() -> None
             "n_estimators": 10,
             "learning_rate": 0.05,
             "random_state": 17,
+        },
+    )
+
+    assert response.status_code == 200
+    notes = response.json()["analysis"]["manuscript_tables"]["table_notes"]
+    assert any(note.startswith("Replay dataset: ") for note in notes)
+    assert any(note.startswith("Replay settings: ") for note in notes)
+    assert any(note.startswith("Replay features: ") for note in notes)
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_deep_compare_response_appends_replay_notes_to_manuscript_tables() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "sex", "stage", "biomarker_score"],
+            "categorical_features": ["sex", "stage"],
+            "model_type": "compare",
+            "hidden_layers": [8],
+            "dropout": 0.1,
+            "learning_rate": 0.001,
+            "epochs": 10,
+            "batch_size": 8,
+            "random_seed": 31,
+            "num_time_bins": 10,
+            "n_heads": 2,
+            "d_model": 16,
+            "n_layers": 1,
+            "latent_dim": 4,
+            "n_clusters": 3,
+            "evaluation_strategy": "holdout",
         },
     )
 
@@ -981,6 +1073,9 @@ def test_xai_endpoints_support_explicit_event_positive_value_and_categorical_cou
             "target_feature": "stage",
             "original_value": "I",
             "counterfactual_value": "III",
+            "model_type": "gbs",
+            "n_estimators": 20,
+            "learning_rate": 0.05,
         },
     )
 
@@ -1017,6 +1112,54 @@ def test_pdp_endpoint_supports_categorical_target_feature() -> None:
     assert payload["analysis"]["feature_type"] == "categorical"
     assert len(payload["analysis"]["values"]) >= 2
     assert payload["figure"]["data"][0]["type"] == "bar"
+
+
+def test_pdp_endpoint_accepts_gbs_model_type(monkeypatch) -> None:
+    import pandas as pd
+    import survival_toolkit.ml_models as ml_models
+
+    class _LinearModel:
+        def predict(self, X):
+            return X[:, 0].astype(float)
+
+    analysis_frame = pd.DataFrame({"age": [10.0, 20.0, 30.0]})
+    stored = store.create(
+        make_example_dataset(seed=170, n_patients=48),
+        filename="pdp_gbs.csv",
+        copy_dataframe=False,
+    )
+
+    monkeypatch.setattr(
+        ml_models,
+        "train_gradient_boosted_survival",
+        lambda *args, **kwargs: {
+            "_model": _LinearModel(),
+            "_X_encoded": pd.DataFrame({"age": analysis_frame["age"]}),
+            "_analysis_frame": analysis_frame.copy(),
+            "_feature_encoder": None,
+        },
+    )
+
+    response = client.post(
+        "/api/pdp",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age"],
+            "categorical_features": [],
+            "target_feature": "age",
+            "model_type": "gbs",
+            "n_estimators": 20,
+            "learning_rate": 0.05,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis"]["model_type"] == "gbs"
+    assert body["request_config"]["model_type"] == "gbs"
 
 
 def test_counterfactual_endpoint_uses_original_value_for_baseline(monkeypatch) -> None:
@@ -1063,6 +1206,51 @@ def test_counterfactual_endpoint_uses_original_value_for_baseline(monkeypatch) -
     assert analysis["original_median_risk"] == pytest.approx(5.0)
     assert analysis["counterfactual_median_risk"] == pytest.approx(15.0)
     assert analysis["risk_change_pct"] == pytest.approx(200.0)
+
+
+def test_counterfactual_endpoint_accepts_gbs_model_type(monkeypatch) -> None:
+    import pandas as pd
+    import survival_toolkit.ml_models as ml_models
+
+    class _LinearAgeModel:
+        def predict(self, X):
+            return X[:, 0].astype(float)
+
+    analysis_frame = pd.DataFrame({"age": [10.0, 20.0, 30.0]})
+    called: dict[str, bool] = {"gbs": False}
+
+    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
+    monkeypatch.setattr(
+        ml_models,
+        "train_gradient_boosted_survival",
+        lambda *args, **kwargs: called.__setitem__("gbs", True) or {
+            "_model": _LinearAgeModel(),
+            "_X_encoded": pd.DataFrame({"age": analysis_frame["age"]}),
+            "_analysis_frame": analysis_frame.copy(),
+        },
+    )
+
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/counterfactual",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age"],
+            "categorical_features": [],
+            "target_feature": "age",
+            "original_value": 5.0,
+            "counterfactual_value": 15.0,
+            "model_type": "gbs",
+            "n_estimators": 20,
+            "learning_rate": 0.05,
+        },
+    )
+
+    assert response.status_code == 200
+    assert called["gbs"] is True
 
 
 def test_classical_endpoint_option_matrix_runs_without_errors() -> None:
@@ -1785,6 +1973,29 @@ def test_export_table_endpoint_returns_journal_markdown() -> None:
     assert "*Table 1. Model discrimination summary.*" in response.text
     assert "| Rank | Model | Mean C-index | 95% CI |" in response.text
     assert "Notes:" in response.text
+
+
+def test_export_table_endpoint_appends_provenance_notes() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [{"Rank": 1, "Model": "RSF", "C-index": 0.712}],
+            "format": "markdown",
+            "style": "journal",
+            "template": "default",
+            "caption": "Table 1. Replayable summary.",
+            "notes": ["Primary note."],
+            "provenance": {
+                "request_config": {"model_type": "compare", "random_state": 42},
+                "analysis": {"evaluation_mode": "holdout", "shared_training_seed": 42},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Primary note." in response.text
+    assert "Replay request_config:" in response.text
+    assert "Replay analysis metadata:" in response.text
 
 
 def test_export_table_endpoint_preserves_union_of_row_keys() -> None:

@@ -392,8 +392,9 @@ function matchesRequestConfig(goal, requestConfig) {
   }
 
   if (goal === "ml") {
+    const compareRun = String(requestConfig.model_type || "") === "compare";
     return (
-      String(requestConfig.model_type || "") === String(refs.mlModelType?.value || "")
+      (compareRun || String(requestConfig.model_type || "") === String(refs.mlModelType?.value || ""))
       && arrayEquals(sortedStrings(requestConfig.features || []), sortedStrings(selectedCheckboxValues(refs.modelFeatureChecklist)))
       && arrayEquals(
         sortedStrings(requestConfig.categorical_features || []),
@@ -402,7 +403,7 @@ function matchesRequestConfig(goal, requestConfig) {
       && Number(requestConfig.n_estimators) === Number(refs.mlNEstimators?.value)
       && String(requestConfig.max_depth ?? "") === ""
       && Number(requestConfig.learning_rate) === Number(refs.mlLearningRate?.value)
-      && Boolean(requestConfig.compute_shap) === !Boolean(refs.mlSkipShap?.checked)
+      && (compareRun || Boolean(requestConfig.compute_shap) === !Boolean(refs.mlSkipShap?.checked))
       && String(requestConfig.evaluation_strategy || "holdout") === String(refs.mlEvaluationStrategy?.value || "holdout")
       && Number(requestConfig.cv_folds || 5) === Number(refs.mlCvFolds?.value || 5)
       && Number(requestConfig.cv_repeats || 3) === Number(refs.mlCvRepeats?.value || 3)
@@ -411,18 +412,19 @@ function matchesRequestConfig(goal, requestConfig) {
 
   if (goal === "dl") {
     const modelType = String(refs.dlModelType?.value || "");
+    const compareRun = String(requestConfig.model_type || "") === "compare";
     const usesHiddenLayers = modelType !== "transformer";
     const usesDiscreteTime = modelType === "deephit" || modelType === "mtlr";
     const usesTransformer = modelType === "transformer";
     const usesVae = modelType === "vae";
     return (
-      String(requestConfig.model_type || "") === modelType
+      (compareRun || String(requestConfig.model_type || "") === modelType)
       && arrayEquals(sortedStrings(requestConfig.features || []), sortedStrings(selectedCheckboxValues(refs.modelFeatureChecklist)))
       && arrayEquals(
         sortedStrings(requestConfig.categorical_features || []),
         sortedStrings(selectedCheckboxValues(refs.modelCategoricalChecklist).filter((value) => selectedCheckboxValues(refs.modelFeatureChecklist).includes(value))),
       )
-      && (!usesHiddenLayers || arrayEquals((requestConfig.hidden_layers || []).map(Number), parseHiddenLayers()))
+      && ((compareRun || !usesHiddenLayers) || arrayEquals((requestConfig.hidden_layers || []).map(Number), parseHiddenLayers()))
       && Number(requestConfig.dropout) === Number(refs.dlDropout?.value)
       && Number(requestConfig.learning_rate) === Number(refs.dlLearningRate?.value)
       && Number(requestConfig.epochs) === Number(refs.dlEpochs?.value)
@@ -434,12 +436,12 @@ function matchesRequestConfig(goal, requestConfig) {
       && Number(requestConfig.early_stopping_patience || 10) === Number(refs.dlEarlyStoppingPatience?.value || 10)
       && Number(requestConfig.early_stopping_min_delta || 0.0001) === Number(refs.dlEarlyStoppingMinDelta?.value || 0.0001)
       && Number(requestConfig.parallel_jobs || 1) === Number(refs.dlParallelJobs?.value || 1)
-      && (!usesDiscreteTime || Number(requestConfig.num_time_bins || 50) === Number(refs.dlNumTimeBins?.value || 50))
-      && (!usesTransformer || Number(requestConfig.d_model || 64) === Number(refs.dlDModel?.value || 64))
-      && (!usesTransformer || Number(requestConfig.n_heads || 4) === Number(refs.dlHeads?.value || 4))
-      && (!usesTransformer || Number(requestConfig.n_layers || 2) === Number(refs.dlLayers?.value || 2))
-      && (!usesVae || Number(requestConfig.latent_dim || 8) === Number(refs.dlLatentDim?.value || 8))
-      && (!usesVae || Number(requestConfig.n_clusters || 3) === Number(refs.dlClusters?.value || 3))
+      && ((compareRun || !usesDiscreteTime) || Number(requestConfig.num_time_bins || 50) === Number(refs.dlNumTimeBins?.value || 50))
+      && ((compareRun || !usesTransformer) || Number(requestConfig.d_model || 64) === Number(refs.dlDModel?.value || 64))
+      && ((compareRun || !usesTransformer) || Number(requestConfig.n_heads || 4) === Number(refs.dlHeads?.value || 4))
+      && ((compareRun || !usesTransformer) || Number(requestConfig.n_layers || 2) === Number(refs.dlLayers?.value || 2))
+      && ((compareRun || !usesVae) || Number(requestConfig.latent_dim || 8) === Number(refs.dlLatentDim?.value || 8))
+      && ((compareRun || !usesVae) || Number(requestConfig.n_clusters || 3) === Number(refs.dlClusters?.value || 3))
     );
   }
 
@@ -1576,7 +1578,9 @@ function setDlManuscriptDownloadsEnabled(enabled) {
   refs.downloadDlManuscriptDocxButton.disabled = !enabled;
 }
 
-function manuscriptExportPayload(manuscript, format, template, fallbackCaption) {
+function manuscriptExportPayload(manuscript, format, template, fallbackCaption, resultPayload = null) {
+  const analysis = resultPayload?.analysis || {};
+  const requestConfig = resultPayload?.request_config || null;
   return {
     rows: manuscript?.model_performance_table || [],
     format,
@@ -1584,6 +1588,17 @@ function manuscriptExportPayload(manuscript, format, template, fallbackCaption) 
     template,
     caption: manuscript?.caption || fallbackCaption,
     notes: manuscript?.table_notes || [],
+    provenance: {
+      request_config: requestConfig,
+      analysis: {
+        evaluation_mode: analysis?.evaluation_mode,
+        cv_folds: analysis?.cv_folds,
+        cv_repeats: analysis?.cv_repeats,
+        shared_training_seed: analysis?.shared_training_seed,
+        shared_split_seed: analysis?.shared_split_seed,
+        shared_monitor_seed: analysis?.shared_monitor_seed,
+      },
+    },
   };
 }
 
@@ -3030,14 +3045,18 @@ async function runMlModel() {
   } else {
     clearPlotShell(
       refs.mlShapPlot,
-      `<div class="empty-state plot-empty"><span>${computeShap ? "SHAP not available for this model" : "SHAP skipped in Fast mode"}</span></div>`,
+      `<div class="empty-state plot-empty"><span>${
+        payload.shap_error
+          ? `SHAP failed: ${escapeHtml(payload.shap_error)}`
+          : (computeShap ? "SHAP not available for this model" : "SHAP skipped in Fast mode")
+      }</span></div>`,
     );
   }
   renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "ML model results.");
   const stats = payload.analysis?.model_stats || {};
   const mlMetricLabel = stats.metric_name || ((stats.evaluation_mode === "holdout") ? "Holdout C-index" : "Apparent C-index");
   const mlEvaluationMode = stats.evaluation_mode || "unknown";
-  const shapStatus = payload.shap_figure ? "computed" : (computeShap ? "unavailable" : "skipped");
+  const shapStatus = payload.shap_figure ? "computed" : (payload.shap_error ? "failed" : (computeShap ? "unavailable" : "skipped"));
   refs.mlMetaBanner.textContent = `${refs.mlModelType.value.toUpperCase()}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}, time=${elapsedSeconds}s`;
   updateStepIndicator(3);
   activateTab("ml");
@@ -3315,7 +3334,7 @@ function wireDownloads() {
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("ml_manuscript_table", "csv", { template: currentMlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "csv", currentMlJournalTemplate(), "Model discrimination summary"),
+      manuscriptExportPayload(manuscript, "csv", currentMlJournalTemplate(), "Model discrimination summary", state.ml),
       "text/csv;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
@@ -3325,7 +3344,7 @@ function wireDownloads() {
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("ml_manuscript_table", "md", { template: currentMlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "markdown", currentMlJournalTemplate(), "Model discrimination summary"),
+      manuscriptExportPayload(manuscript, "markdown", currentMlJournalTemplate(), "Model discrimination summary", state.ml),
       "text/markdown;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
@@ -3335,7 +3354,7 @@ function wireDownloads() {
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("ml_manuscript_table", "tex", { template: currentMlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "latex", currentMlJournalTemplate(), "Model discrimination summary"),
+      manuscriptExportPayload(manuscript, "latex", currentMlJournalTemplate(), "Model discrimination summary", state.ml),
       "text/x-tex;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
@@ -3345,7 +3364,7 @@ function wireDownloads() {
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("ml_manuscript_table", "docx", { template: currentMlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "docx", currentMlJournalTemplate(), "Model discrimination summary"),
+      manuscriptExportPayload(manuscript, "docx", currentMlJournalTemplate(), "Model discrimination summary", state.ml),
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ).catch((error) => showError(error.message));
   });
@@ -3366,7 +3385,7 @@ function wireDownloads() {
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("dl_manuscript_table", "csv", { template: currentDlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "csv", currentDlJournalTemplate(), "Deep model discrimination summary"),
+      manuscriptExportPayload(manuscript, "csv", currentDlJournalTemplate(), "Deep model discrimination summary", state.dl),
       "text/csv;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
@@ -3376,7 +3395,7 @@ function wireDownloads() {
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("dl_manuscript_table", "md", { template: currentDlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "markdown", currentDlJournalTemplate(), "Deep model discrimination summary"),
+      manuscriptExportPayload(manuscript, "markdown", currentDlJournalTemplate(), "Deep model discrimination summary", state.dl),
       "text/markdown;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
@@ -3386,7 +3405,7 @@ function wireDownloads() {
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("dl_manuscript_table", "tex", { template: currentDlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "latex", currentDlJournalTemplate(), "Deep model discrimination summary"),
+      manuscriptExportPayload(manuscript, "latex", currentDlJournalTemplate(), "Deep model discrimination summary", state.dl),
       "text/x-tex;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
@@ -3396,7 +3415,7 @@ function wireDownloads() {
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("dl_manuscript_table", "docx", { template: currentDlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "docx", currentDlJournalTemplate(), "Deep model discrimination summary"),
+      manuscriptExportPayload(manuscript, "docx", currentDlJournalTemplate(), "Deep model discrimination summary", state.dl),
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ).catch((error) => showError(error.message));
   });
