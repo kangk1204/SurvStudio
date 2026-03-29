@@ -2085,7 +2085,8 @@ def train_deephit(
     model = DeepHitNet(data["n_features"], hidden_layers, num_time_bins, dropout)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     dataset = TensorDataset(x_train, bin_tensor, e_train)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    loader_generator = torch.Generator().manual_seed(random_seed)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=loader_generator)
 
     loss_history: list[float] = []
     best_monitor: float | None = None
@@ -2364,7 +2365,8 @@ def train_neural_mtlr(
     model = NeuralMTLRNet(data["n_features"], hidden_layers, num_time_bins, dropout=dropout)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     dataset = TensorDataset(x_train, bin_tensor, e_train)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    loader_generator = torch.Generator().manual_seed(random_seed)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=loader_generator)
 
     loss_history: list[float] = []
     best_monitor: float | None = None

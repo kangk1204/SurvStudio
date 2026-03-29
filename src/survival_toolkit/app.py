@@ -3,11 +3,12 @@ from __future__ import annotations
 import csv
 import io
 import json
+from collections import OrderedDict
 from pathlib import Path
 import tempfile
 import threading
 import zipfile
-from typing import Any, Literal, NoReturn, Sequence
+from typing import Any, Callable, Literal, NoReturn, Sequence
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -63,7 +64,8 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 store = DatasetStore()
-_ML_ARTIFACT_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+_MAX_ML_ARTIFACT_CACHE = 32
+_ML_ARTIFACT_CACHE: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
 _ML_ARTIFACT_CACHE_LOCK = threading.Lock()
 
 
@@ -294,7 +296,11 @@ def _remember_ml_artifact(dataset_id: str, request_config: dict[str, Any], resul
         },
     }
     with _ML_ARTIFACT_CACHE_LOCK:
-        _ML_ARTIFACT_CACHE[(dataset_id, model_type)] = artifact
+        cache_key = (dataset_id, model_type)
+        _ML_ARTIFACT_CACHE[cache_key] = artifact
+        _ML_ARTIFACT_CACHE.move_to_end(cache_key)
+        while len(_ML_ARTIFACT_CACHE) > _MAX_ML_ARTIFACT_CACHE:
+            _ML_ARTIFACT_CACHE.popitem(last=False)
 
 
 def _get_ml_artifact(dataset_id: str, request_config: dict[str, Any]) -> dict[str, Any] | None:
@@ -303,7 +309,10 @@ def _get_ml_artifact(dataset_id: str, request_config: dict[str, Any]) -> dict[st
         return None
     expected = _ml_artifact_signature(request_config)
     with _ML_ARTIFACT_CACHE_LOCK:
-        cached = _ML_ARTIFACT_CACHE.get((dataset_id, model_type))
+        cache_key = (dataset_id, model_type)
+        cached = _ML_ARTIFACT_CACHE.get(cache_key)
+        if cached is not None:
+            _ML_ARTIFACT_CACHE.move_to_end(cache_key)
     if not cached or cached.get("signature") != expected:
         return None
     result = cached.get("result")
@@ -629,10 +638,7 @@ def _latex_escape(value: str) -> str:
         "~": r"\textasciitilde{}",
         "^": r"\textasciicircum{}",
     }
-    escaped = value
-    for source, replacement in replacements.items():
-        escaped = escaped.replace(source, replacement)
-    return escaped
+    return "".join(replacements.get(char, char) for char in value)
 
 
 def _export_rows_to_latex(
@@ -788,11 +794,16 @@ def _export_rows_to_docx(
         'Target="word/document.xml"/>'
         "</Relationships>"
     )
+    document_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>'
+    )
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", content_types_xml)
         archive.writestr("_rels/.rels", rels_xml)
         archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/_rels/document.xml.rels", document_rels_xml)
     return buffer.getvalue()
 
 
@@ -810,6 +821,20 @@ async def health() -> dict[str, str]:
 
 
 _MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
+
+
+async def _load_builtin_dataset_response(
+    loader: Callable[[], Any],
+    *,
+    filename: str,
+    source: str = "builtin_demo",
+) -> dict[str, Any]:
+    try:
+        dataframe = await run_in_threadpool(loader)
+        stored = store.create(dataframe, filename=filename, source=source)
+        return await run_in_threadpool(dataset_response, stored.dataset_id)
+    except Exception as exc:
+        fail_bad_request(exc)
 
 
 @app.post("/api/upload")
@@ -844,30 +869,22 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
 
 @app.post("/api/load-example")
 async def load_example() -> dict[str, Any]:
-    dataframe = make_example_dataset()
-    stored = store.create(dataframe, filename="example_survival_cohort", source="builtin_demo")
-    return dataset_response(stored.dataset_id)
+    return await _load_builtin_dataset_response(make_example_dataset, filename="example_survival_cohort")
 
 
 @app.post("/api/load-tcga-example")
 async def load_tcga_example() -> dict[str, Any]:
-    dataframe = load_tcga_luad_example_dataset()
-    stored = store.create(dataframe, filename="tcga_luad_xena_example", source="builtin_demo")
-    return dataset_response(stored.dataset_id)
+    return await _load_builtin_dataset_response(load_tcga_luad_example_dataset, filename="tcga_luad_xena_example")
 
 
 @app.post("/api/load-tcga-upload-ready")
 async def load_tcga_upload_ready() -> dict[str, Any]:
-    dataframe = load_tcga_luad_upload_ready_dataset()
-    stored = store.create(dataframe, filename="tcga_luad_upload_ready", source="builtin_demo")
-    return dataset_response(stored.dataset_id)
+    return await _load_builtin_dataset_response(load_tcga_luad_upload_ready_dataset, filename="tcga_luad_upload_ready")
 
 
 @app.post("/api/load-gbsg2-example")
 async def load_gbsg2_example() -> dict[str, Any]:
-    dataframe = load_gbsg2_upload_ready_dataset()
-    stored = store.create(dataframe, filename="gbsg2_upload_ready", source="builtin_demo")
-    return dataset_response(stored.dataset_id)
+    return await _load_builtin_dataset_response(load_gbsg2_upload_ready_dataset, filename="gbsg2_upload_ready")
 
 
 @app.get("/api/dataset/{dataset_id}")
@@ -933,32 +950,36 @@ async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
         from survival_toolkit.plots import build_cutpoint_scan_figure
 
         stored = store.get(request_model.dataset_id)
-        updated, column_name, summary = derive_group_column(
-            stored.dataframe,
-            source_column=request_model.source_column,
-            method=request_model.method,
-            new_column_name=request_model.new_column_name,
-            cutoff=request_model.cutoff,
-            lower_label=request_model.lower_label,
-            upper_label=request_model.upper_label,
-            time_column=request_model.time_column,
-            event_column=request_model.event_column,
-            event_positive_value=request_model.event_positive_value,
-        )
-        provenance = dict(stored.metadata.get("derived_column_provenance", {}))
-        provenance[column_name] = {
-            "outcome_informed": bool(summary.get("outcome_informed")),
-        }
-        new_metadata = {
-            **stored.metadata,
-            "derived_column_provenance": provenance,
-        }
-        payload = _create_dataset_snapshot(stored, updated, metadata=new_metadata)
-        payload["derived_column"] = column_name
-        payload["derive_summary"] = summary
-        if request_model.method == "optimal_cutpoint" and summary.get("scan_data"):
-            payload["cutpoint_figure"] = build_cutpoint_scan_figure(summary, variable_name=request_model.source_column)
-        return payload
+
+        def _run() -> dict[str, Any]:
+            updated, column_name, summary = derive_group_column(
+                stored.dataframe,
+                source_column=request_model.source_column,
+                method=request_model.method,
+                new_column_name=request_model.new_column_name,
+                cutoff=request_model.cutoff,
+                lower_label=request_model.lower_label,
+                upper_label=request_model.upper_label,
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+            )
+            provenance = dict(stored.metadata.get("derived_column_provenance", {}))
+            provenance[column_name] = {
+                "outcome_informed": bool(summary.get("outcome_informed")),
+            }
+            new_metadata = {
+                **stored.metadata,
+                "derived_column_provenance": provenance,
+            }
+            payload = _create_dataset_snapshot(stored, updated, metadata=new_metadata)
+            payload["derived_column"] = column_name
+            payload["derive_summary"] = summary
+            if request_model.method == "optimal_cutpoint" and summary.get("scan_data"):
+                payload["cutpoint_figure"] = build_cutpoint_scan_figure(summary, variable_name=request_model.source_column)
+            return payload
+
+        return await run_in_threadpool(_run)
     except Exception as exc:
         fail_bad_request(exc)
 

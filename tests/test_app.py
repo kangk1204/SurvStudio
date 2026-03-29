@@ -180,6 +180,14 @@ def test_readme_states_current_scope_and_validation_limitations() -> None:
     assert "rank-based Spearman correlations between Schoenfeld residuals and log time" in readme
 
 
+def test_app_uses_threadpool_for_builtin_loaders_and_derive_group() -> None:
+    app_py = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "app.py").read_text()
+
+    assert "async def _load_builtin_dataset_response(" in app_py
+    assert "dataframe = await run_in_threadpool(loader)" in app_py
+    assert "return await run_in_threadpool(_run)" in app_py
+
+
 def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
@@ -2422,6 +2430,26 @@ def test_export_table_endpoint_returns_journal_latex() -> None:
     assert "DeepSurv" in response.text
 
 
+def test_export_table_endpoint_escapes_backslashes_without_double_escaping_braces() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [
+                {"Path": "C:\\tmp\\results", "Value": "{alpha}_1"},
+            ],
+            "format": "latex",
+            "style": "journal",
+            "template": "default",
+            "caption": "Table 1. Paths.",
+            "notes": [],
+        },
+    )
+
+    assert response.status_code == 200
+    assert r"\textbackslash{}tmp\textbackslash{}results" in response.text
+    assert r"\textbackslash\{\}" not in response.text
+
+
 def test_export_table_endpoint_returns_docx_archive() -> None:
     response = client.post(
         "/api/export-table",
@@ -2445,6 +2473,7 @@ def test_export_table_endpoint_returns_docx_archive() -> None:
     assert "[Content_Types].xml" in names
     assert "_rels/.rels" in names
     assert "word/document.xml" in names
+    assert "word/_rels/document.xml.rels" in names
     document_xml = archive.read("word/document.xml").decode("utf-8")
     assert "Table 1. Model performance summary." in document_xml
     assert "Comments:" in document_xml
