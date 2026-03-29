@@ -22,6 +22,10 @@ const runtime = {
   derivedColumnProvenance: {},
   busyScopes: {},
   plotResizeTimer: null,
+  resultPreference: {
+    ml: "single",
+    dl: "single",
+  },
 };
 
 
@@ -183,6 +187,7 @@ const refs = {
   mlMetaBanner: document.getElementById("mlMetaBanner"),
   mlInsightBoard: document.getElementById("mlInsightBoard"),
   mlComparisonShell: document.getElementById("mlComparisonShell"),
+  mlComparisonTitle: document.getElementById("mlComparisonTitle"),
   mlManuscriptShell: document.getElementById("mlManuscriptShell"),
   // DL
   runDlButton: document.getElementById("runDlButton"),
@@ -231,6 +236,7 @@ const refs = {
   dlLossPlot: document.getElementById("dlLossPlot"),
   dlComparisonPlot: document.getElementById("dlComparisonPlot"),
   dlComparisonShell: document.getElementById("dlComparisonShell"),
+  dlComparisonTitle: document.getElementById("dlComparisonTitle"),
   dlManuscriptShell: document.getElementById("dlManuscriptShell"),
   dlMetaBanner: document.getElementById("dlMetaBanner"),
   dlInsightBoard: document.getElementById("dlInsightBoard"),
@@ -314,6 +320,11 @@ function activeTabName() {
   return document.querySelector(".tab-button.active")?.dataset.tab || "km";
 }
 
+function preferredResultMode(goal) {
+  if (goal === "ml" || goal === "dl") return runtime.resultPreference?.[goal] || "single";
+  return "single";
+}
+
 const GUIDED_GOALS = ["km", "cox", "ml", "dl", "tables"];
 
 function goalLabel(goal) {
@@ -394,10 +405,11 @@ function matchesRequestConfig(goal, requestConfig) {
 
   if (goal === "ml") {
     const compareRun = String(requestConfig.model_type || "") === "compare";
+    const expectsCompare = preferredResultMode("ml") === "compare";
     const selectedModelType = String(refs.mlModelType?.value || "");
     const learningRateApplies = compareRun || selectedModelType === "gbs";
     return (
-      (compareRun || String(requestConfig.model_type || "") === selectedModelType)
+      (expectsCompare ? compareRun : String(requestConfig.model_type || "") === selectedModelType)
       && arrayEquals(sortedStrings(requestConfig.features || []), sortedStrings(selectedCheckboxValues(refs.modelFeatureChecklist)))
       && arrayEquals(
         sortedStrings(requestConfig.categorical_features || []),
@@ -406,27 +418,57 @@ function matchesRequestConfig(goal, requestConfig) {
       && Number(requestConfig.n_estimators) === Number(refs.mlNEstimators?.value)
       && String(requestConfig.max_depth ?? "") === ""
       && (!learningRateApplies || Number(requestConfig.learning_rate) === Number(refs.mlLearningRate?.value))
-      && (!compareRun || String(requestConfig.evaluation_strategy || "holdout") === String(refs.mlEvaluationStrategy?.value || "holdout"))
-      && (!compareRun || Number(requestConfig.cv_folds || 5) === Number(refs.mlCvFolds?.value || 5))
-      && (!compareRun || Number(requestConfig.cv_repeats || 3) === Number(refs.mlCvRepeats?.value || 3))
+      && (!expectsCompare || String(requestConfig.evaluation_strategy || "holdout") === String(refs.mlEvaluationStrategy?.value || "holdout"))
+      && (!expectsCompare || Number(requestConfig.cv_folds || 5) === Number(refs.mlCvFolds?.value || 5))
+      && (!expectsCompare || Number(requestConfig.cv_repeats || 3) === Number(refs.mlCvRepeats?.value || 3))
     );
   }
 
   if (goal === "dl") {
-    const modelType = String(refs.dlModelType?.value || "");
     const compareRun = String(requestConfig.model_type || "") === "compare";
+    const expectsCompare = preferredResultMode("dl") === "compare";
+    if (expectsCompare) {
+      return (
+        compareRun
+        && arrayEquals(sortedStrings(requestConfig.features || []), sortedStrings(selectedCheckboxValues(refs.modelFeatureChecklist)))
+        && arrayEquals(
+          sortedStrings(requestConfig.categorical_features || []),
+          sortedStrings(selectedCheckboxValues(refs.modelCategoricalChecklist).filter((value) => selectedCheckboxValues(refs.modelFeatureChecklist).includes(value))),
+        )
+        && arrayEquals((requestConfig.hidden_layers || []).map(Number), parseHiddenLayers())
+        && Number(requestConfig.dropout) === Number(refs.dlDropout?.value)
+        && Number(requestConfig.learning_rate) === Number(refs.dlLearningRate?.value)
+        && Number(requestConfig.epochs) === Number(refs.dlEpochs?.value)
+        && Number(requestConfig.batch_size || 64) === Number(refs.dlBatchSize?.value || 64)
+        && Number(requestConfig.random_seed || 42) === Number(refs.dlRandomSeed?.value || 42)
+        && String(requestConfig.evaluation_strategy || "holdout") === String(refs.dlEvaluationStrategy?.value || "holdout")
+        && Number(requestConfig.cv_folds || 5) === Number(refs.dlCvFolds?.value || 5)
+        && Number(requestConfig.cv_repeats || 3) === Number(refs.dlCvRepeats?.value || 3)
+        && Number(requestConfig.early_stopping_patience || 10) === Number(refs.dlEarlyStoppingPatience?.value || 10)
+        && Number(requestConfig.early_stopping_min_delta || 0.0001) === Number(refs.dlEarlyStoppingMinDelta?.value || 0.0001)
+        && Number(requestConfig.parallel_jobs || 1) === Number(refs.dlParallelJobs?.value || 1)
+        && Number(requestConfig.num_time_bins || 50) === Number(refs.dlNumTimeBins?.value || 50)
+        && Number(requestConfig.d_model || 64) === Number(refs.dlDModel?.value || 64)
+        && Number(requestConfig.n_heads || 4) === Number(refs.dlHeads?.value || 4)
+        && Number(requestConfig.n_layers || 2) === Number(refs.dlLayers?.value || 2)
+        && Number(requestConfig.latent_dim || 8) === Number(refs.dlLatentDim?.value || 8)
+        && Number(requestConfig.n_clusters || 3) === Number(refs.dlClusters?.value || 3)
+      );
+    }
+    const modelType = String(refs.dlModelType?.value || "");
     const usesHiddenLayers = modelType !== "transformer";
     const usesDiscreteTime = modelType === "deephit" || modelType === "mtlr";
     const usesTransformer = modelType === "transformer";
     const usesVae = modelType === "vae";
     return (
-      (compareRun || String(requestConfig.model_type || "") === modelType)
+      !compareRun
+      && String(requestConfig.model_type || "") === modelType
       && arrayEquals(sortedStrings(requestConfig.features || []), sortedStrings(selectedCheckboxValues(refs.modelFeatureChecklist)))
       && arrayEquals(
         sortedStrings(requestConfig.categorical_features || []),
         sortedStrings(selectedCheckboxValues(refs.modelCategoricalChecklist).filter((value) => selectedCheckboxValues(refs.modelFeatureChecklist).includes(value))),
       )
-      && ((compareRun || !usesHiddenLayers) || arrayEquals((requestConfig.hidden_layers || []).map(Number), parseHiddenLayers()))
+      && ((!usesHiddenLayers) || arrayEquals((requestConfig.hidden_layers || []).map(Number), parseHiddenLayers()))
       && Number(requestConfig.dropout) === Number(refs.dlDropout?.value)
       && Number(requestConfig.learning_rate) === Number(refs.dlLearningRate?.value)
       && Number(requestConfig.epochs) === Number(refs.dlEpochs?.value)
@@ -438,12 +480,12 @@ function matchesRequestConfig(goal, requestConfig) {
       && Number(requestConfig.early_stopping_patience || 10) === Number(refs.dlEarlyStoppingPatience?.value || 10)
       && Number(requestConfig.early_stopping_min_delta || 0.0001) === Number(refs.dlEarlyStoppingMinDelta?.value || 0.0001)
       && Number(requestConfig.parallel_jobs || 1) === Number(refs.dlParallelJobs?.value || 1)
-      && ((compareRun || !usesDiscreteTime) || Number(requestConfig.num_time_bins || 50) === Number(refs.dlNumTimeBins?.value || 50))
-      && ((compareRun || !usesTransformer) || Number(requestConfig.d_model || 64) === Number(refs.dlDModel?.value || 64))
-      && ((compareRun || !usesTransformer) || Number(requestConfig.n_heads || 4) === Number(refs.dlHeads?.value || 4))
-      && ((compareRun || !usesTransformer) || Number(requestConfig.n_layers || 2) === Number(refs.dlLayers?.value || 2))
-      && ((compareRun || !usesVae) || Number(requestConfig.latent_dim || 8) === Number(refs.dlLatentDim?.value || 8))
-      && ((compareRun || !usesVae) || Number(requestConfig.n_clusters || 3) === Number(refs.dlClusters?.value || 3))
+      && ((!usesDiscreteTime) || Number(requestConfig.num_time_bins || 50) === Number(refs.dlNumTimeBins?.value || 50))
+      && ((!usesTransformer) || Number(requestConfig.d_model || 64) === Number(refs.dlDModel?.value || 64))
+      && ((!usesTransformer) || Number(requestConfig.n_heads || 4) === Number(refs.dlHeads?.value || 4))
+      && ((!usesTransformer) || Number(requestConfig.n_layers || 2) === Number(refs.dlLayers?.value || 2))
+      && ((!usesVae) || Number(requestConfig.latent_dim || 8) === Number(refs.dlLatentDim?.value || 8))
+      && ((!usesVae) || Number(requestConfig.n_clusters || 3) === Number(refs.dlClusters?.value || 3))
     );
   }
 
@@ -473,7 +515,11 @@ function currentGoalResult(goal) {
 
 function guidedGroupingContextActive() {
   const currentTab = activeTabName();
-  return currentTab === "km" || currentTab === "tables" || runtime.guidedGoal === "km" || runtime.guidedGoal === "tables";
+  return (
+    currentTab === "km"
+    || currentTab === "tables"
+    || (runtime.uiMode === "guided" && (runtime.guidedGoal === "km" || runtime.guidedGoal === "tables"))
+  );
 }
 
 function preferredDeriveApplyToGroup() {
@@ -1957,8 +2003,8 @@ function renderContextCards({
 
   if (refs.coxDependencyText) {
     refs.coxDependencyText.textContent = !hasDataset
-      ? "Cox uses the Study Design outcome definition and the covariates selected below."
-      : "Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate.";
+      ? "Cox uses the Study Design outcome definition and the covariates selected below. The reported C-index is apparent on the analyzable cohort."
+      : "Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort.";
     renderChipList(refs.coxDependencyChips, hasDataset ? [
       formatOutcomeChip(timeLabel, eventLabel, eventValue),
       formatGroupChip(groupLabel),
@@ -2674,6 +2720,8 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   runtime.lastDerivedGroup = null;
   runtime.deriveApplyTouched = false;
   runtime.derivedColumnProvenance = payload.derived_column_provenance || {};
+  runtime.resultPreference.ml = "single";
+  runtime.resultPreference.dl = "single";
   refs.datasetPresetBar?.classList.add("hidden");
   refs.deriveStatus.textContent = "";
   if (refs.deriveApplyToGroup) refs.deriveApplyToGroup.checked = preferredDeriveApplyToGroup();
@@ -2686,10 +2734,12 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.coxDiagnosticsShell.innerHTML = '<div class="empty-state">Model assumption checks will appear here.</div>';
   refs.cohortTableShell.innerHTML = '<div class="empty-state">Check variables on the left, then click <strong>Build Table</strong>.</div>';
   refs.mlComparisonShell.innerHTML = '<div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div>';
+  if (refs.mlComparisonTitle) refs.mlComparisonTitle.textContent = "Model Comparison";
   refs.mlManuscriptShell.innerHTML = '<div class="empty-state">Comparison-ready manuscript rows appear after running a comparison.</div>';
   refs.mlComparisonPlot.innerHTML = "";
   refs.mlComparisonPlot.classList.add("hidden");
   refs.dlComparisonShell.innerHTML = '<div class="empty-state">Click "Compare All" to benchmark DeepSurv, DeepHit, Neural MTLR, Transformer, and VAE.</div>';
+  if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Deep Model Comparison";
   refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Comparison-ready manuscript rows appear after running a deep comparison.</div>';
   refs.dlComparisonPlot.innerHTML = "";
   refs.dlComparisonPlot.classList.add("hidden");
@@ -2858,7 +2908,8 @@ async function deriveGroup() {
     body.event_positive_value = refs.eventPositiveValue.value;
   }
 
-  const shouldRefreshKm = applyToGroup && (activeTabName() === "km" || runtime.guidedGoal === "km");
+  const guidedKmRefresh = runtime.uiMode === "guided" && runtime.guidedGoal === "km";
+  const shouldRefreshKm = applyToGroup && (activeTabName() === "km" || guidedKmRefresh);
   const payload = await fetchJSON("/api/derive-group", { method: "POST", body: JSON.stringify(body) });
   updateAfterDerivedDataset(payload, { deferChrome: shouldRefreshKm });
   runtime.derivedColumnProvenance[payload.derived_column] = {
@@ -3098,6 +3149,7 @@ async function runCohortTable() {
 // ── ML Models ──────────────────────────────────────────────────
 
 async function runMlModel() {
+  runtime.resultPreference.ml = "single";
   const base = currentBaseConfig();
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
@@ -3132,6 +3184,7 @@ async function runMlModel() {
   if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = true;
   setMlManuscriptDownloadsEnabled(false);
   refs.mlComparisonShell.innerHTML = '<div class="empty-state">Run a comparison to populate the cross-model table.</div>';
+  if (refs.mlComparisonTitle) refs.mlComparisonTitle.textContent = "Model Comparison";
   refs.mlManuscriptShell.innerHTML = '<div class="empty-state">Run a comparison to populate manuscript-ready rows.</div>';
   refs.mlComparisonPlot.innerHTML = "";
   refs.mlComparisonPlot.classList.add("hidden");
@@ -3170,6 +3223,7 @@ async function runMlModel() {
 }
 
 async function runCompareModels() {
+  runtime.resultPreference.ml = "compare";
   const base = currentBaseConfig();
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
@@ -3222,7 +3276,8 @@ async function runCompareModels() {
     const evalLabel = evaluationMode === "repeated_cv"
       ? `${payload.analysis?.cv_repeats || refs.mlCvRepeats.value}x${payload.analysis?.cv_folds || refs.mlCvFolds.value} repeated CV`
       : evaluationMode;
-    refs.mlMetaBanner.textContent = `Screening top model=${formatValue(bestRow.model)}, C-index=${formatValue(bestRow.c_index)}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}`;
+    const mlMetricLabel = evaluationMode === "repeated_cv" ? "Mean C-index" : "C-index";
+    refs.mlMetaBanner.textContent = `Screening top model=${formatValue(bestRow.model)}, ${mlMetricLabel}=${formatValue(bestRow.c_index)}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}`;
     refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
     if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !(payload.figure?.data?.length);
     if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !(payload.figure?.data?.length);
@@ -3238,6 +3293,7 @@ async function runCompareModels() {
 // ── Deep Learning ──────────────────────────────────────────────
 
 async function runDlModel() {
+  runtime.resultPreference.dl = "single";
   const base = currentBaseConfig();
   validateDlControls();
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
@@ -3302,8 +3358,10 @@ async function runDlModel() {
   }
   const repeatedCvLike = stats.evaluation_mode === "repeated_cv" || stats.evaluation_mode === "repeated_cv_incomplete";
   if (repeatedCvLike && Array.isArray(stats.repeat_results) && stats.repeat_results.length) {
+    if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Repeated-CV Repeat Summary";
     renderTable(refs.dlComparisonShell, stats.repeat_results);
   } else {
+    if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Deep Model Comparison";
     refs.dlComparisonShell.innerHTML = '<div class="empty-state">Run "Compare All" to benchmark all deep models on the same feature set.</div>';
   }
   if (repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table) {
@@ -3348,6 +3406,7 @@ async function runDlModel() {
 }
 
 async function runDlCompareModels() {
+  runtime.resultPreference.dl = "compare";
   const base = currentBaseConfig();
   validateDlControls();
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
@@ -3400,6 +3459,7 @@ async function runDlCompareModels() {
     setPanelResultMode(refs.dlPanel, "compare");
 
     if (payload.analysis?.comparison_table?.length) {
+      if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Deep Model Comparison";
       const dlDisplayCols = ["model", "c_index", "evaluation_mode", "epochs_trained", "n_features", "training_time_ms", "rank"];
       const dlCols = dlDisplayCols.filter((c) => payload.analysis.comparison_table[0]?.[c] !== undefined);
       renderTable(refs.dlComparisonShell, payload.analysis.comparison_table, dlCols);
@@ -3428,7 +3488,9 @@ async function runDlCompareModels() {
     const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Screening top holdout-comparable" : "Screening top model";
     const dlMetricLabel = dlEvalMode === "mixed_holdout_apparent"
       ? "Best holdout C-index"
-      : (dlEvalMode === "repeated_cv_incomplete" ? "Screening mean C-index (incomplete)" : "C-index");
+      : (dlEvalMode === "repeated_cv"
+        ? "Screening mean C-index"
+        : (dlEvalMode === "repeated_cv_incomplete" ? "Screening mean C-index (incomplete)" : "C-index"));
     const rerunSeedSuffix = (bestRow.training_seed != null && dlEvalMode !== "repeated_cv")
       ? `, rerun seed=${formatValue(bestRow.training_seed)}`
       : "";
@@ -3700,9 +3762,10 @@ function handleGuidedPanelAction(target) {
     return;
   }
   if (action === "choose-another-analysis") {
-    activateTab("data", { setGuidedGoal: false, historyMode: "replace" });
     runtime.guidedGoal = null;
-    setGuidedStep(3, { historyMode: "push" });
+    runtime.guidedStep = normalizedGuidedStep(3);
+    if (document.body) document.body.dataset.guidedGoal = "";
+    activateTab("data", { setGuidedGoal: false, historyMode: "push" });
     return;
   }
   if (action === "choose-goal") {
@@ -3856,6 +3919,8 @@ function goHome({ syncHistory = true, historyMode = "replace" } = {}) {
   refs.datasetFile.value = "";
   runtime.guidedGoal = null;
   runtime.guidedStep = 1;
+  runtime.resultPreference.ml = "single";
+  runtime.resultPreference.dl = "single";
   renderSharedFeatureSummary();
   renderGuidedChrome();
   setRuntimeBanner("");
@@ -3974,9 +4039,9 @@ function initListeners() {
     queueHistorySync();
   });
   refs.logrankWeight.addEventListener("change", () => { updateWeightVisibility(); queueHistorySync(); });
-  refs.mlModelType.addEventListener("change", () => { updateMlModelControlVisibility(); queueHistorySync(); });
+  refs.mlModelType.addEventListener("change", () => { runtime.resultPreference.ml = "single"; updateMlModelControlVisibility(); queueHistorySync(); });
   refs.mlEvaluationStrategy.addEventListener("change", () => { updateMlEvaluationControls(); queueHistorySync(); });
-  refs.dlModelType.addEventListener("change", () => { updateDlModelControlVisibility(); queueHistorySync(); });
+  refs.dlModelType.addEventListener("change", () => { runtime.resultPreference.dl = "single"; updateDlModelControlVisibility(); queueHistorySync(); });
   refs.dlEvaluationStrategy.addEventListener("change", () => { updateDlEvaluationControls(); queueHistorySync(); });
   refs.deriveToggle.addEventListener("click", () => {
     if (refs.groupingDetails) refs.groupingDetails.open = true;
@@ -4055,7 +4120,7 @@ function initListeners() {
   refs.runDlCompareInlineButton?.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
       runtime.guidedGoal = "dl";
-      void runGuidedGoal("dl", refs.runDlCompareButton, runDlCompareModels);
+      void runGuidedGoal("dl", refs.runDlCompareInlineButton, runDlCompareModels);
       return;
     }
     withLoading(refs.runDlCompareInlineButton, runDlCompareModels);

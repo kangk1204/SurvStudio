@@ -111,10 +111,12 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="kmDependencyText"' in response.text
     assert 'id="coxDependencyText"' in response.text
     assert 'id="tableDependencyText"' in response.text
+    assert "The reported C-index is apparent on the analyzable cohort." in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
     assert 'id="deriveApplyToGroup"' in response.text
     assert "Use new column as Group by" in response.text
+    assert "Rank-based Schoenfeld residual diagnostics against log time appear here." in response.text
 
 
 def test_index_exposes_dataset_preset_feedback_ui() -> None:
@@ -166,6 +168,18 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "updateAfterDataset(payload, { scrollToTop: true });" in text
 
 
+def test_readme_states_current_scope_and_validation_limitations() -> None:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+
+    assert "single-event survival analysis" in readme
+    assert "right-censored data" in readme
+    assert "no left-truncated entry-time handling" in readme
+    assert "no competing-risks analysis" in readme
+    assert 'no built-in "apply the locked model directly to an external cohort" workflow yet' in readme
+    assert "Apparent C-index" in readme
+    assert "rank-based Spearman correlations between Schoenfeld residuals and log time" in readme
+
+
 def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
@@ -190,6 +204,7 @@ def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     assert "runtime.guidedGoal = historyState.guidedGoal || null;" in text
     assert "runtime.guidedStep = historyState.guidedStep" in text
     assert 'const compareRun = String(requestConfig.model_type || "") === "compare";' in text
+    assert 'function preferredResultMode(goal)' in text
     assert "handleGuidedPanelAction(button);" in text
     assert 'setGuidedStep(currentGuidedStep() + 1, { historyMode: "push" });' in text
     assert 'setGuidedStep(currentGuidedStep() - 1, { historyMode: "push" });' in text
@@ -233,7 +248,7 @@ def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
     assert "function updateMlModelControlVisibility()" in text
     assert 'refs.mlModelType?.value !== "rsf"' in text
     assert "Learning rate applies to Gradient Boosted Survival only." in text
-    assert 'refs.mlModelType.addEventListener("change", () => { updateMlModelControlVisibility(); queueHistorySync(); });' in text
+    assert 'refs.mlModelType.addEventListener("change", () => { runtime.resultPreference.ml = "single"; updateMlModelControlVisibility(); queueHistorySync(); });' in text
 
 
 def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
@@ -292,11 +307,13 @@ def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() 
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
 
+    assert 'const expectsCompare = preferredResultMode("ml") === "compare";' in text
     assert 'const selectedModelType = String(refs.mlModelType?.value || "");' in text
+    assert '(expectsCompare ? compareRun : String(requestConfig.model_type || "") === selectedModelType)' in text
     assert 'const learningRateApplies = compareRun || selectedModelType === "gbs";' in text
-    assert '&& (!compareRun || String(requestConfig.evaluation_strategy || "holdout") === String(refs.mlEvaluationStrategy?.value || "holdout"))' in text
-    assert '&& (!compareRun || Number(requestConfig.cv_folds || 5) === Number(refs.mlCvFolds?.value || 5))' in text
-    assert '&& (!compareRun || Number(requestConfig.cv_repeats || 3) === Number(refs.mlCvRepeats?.value || 3))' in text
+    assert '&& (!expectsCompare || String(requestConfig.evaluation_strategy || "holdout") === String(refs.mlEvaluationStrategy?.value || "holdout"))' in text
+    assert '&& (!expectsCompare || Number(requestConfig.cv_folds || 5) === Number(refs.mlCvFolds?.value || 5))' in text
+    assert '&& (!expectsCompare || Number(requestConfig.cv_repeats || 3) === Number(refs.mlCvRepeats?.value || 3))' in text
     assert '&& (compareRun || Boolean(requestConfig.compute_shap) === !Boolean(refs.mlSkipShap?.checked))' not in text
 
 
@@ -305,6 +322,30 @@ def test_guided_ml_inline_compare_uses_clicked_button_as_loading_target() -> Non
     text = app_js.read_text()
 
     assert 'void runGuidedGoal("ml", refs.runCompareInlineButton, runCompareModels);' in text
+
+
+def test_guided_dl_inline_compare_uses_clicked_button_as_loading_target() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'void runGuidedGoal("dl", refs.runDlCompareInlineButton, runDlCompareModels);' in text
+
+
+def test_guided_grouping_context_only_uses_guided_goal_inside_guided_mode() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert '|| (runtime.uiMode === "guided" && (runtime.guidedGoal === "km" || runtime.guidedGoal === "tables"))' in text
+    assert 'const guidedKmRefresh = runtime.uiMode === "guided" && runtime.guidedGoal === "km";' in text
+
+
+def test_change_analysis_clears_guided_goal_before_pushing_history() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'runtime.guidedGoal = null;' in text
+    assert 'activateTab("data", { setGuidedGoal: false, historyMode: "push" });' in text
+    assert 'activateTab("data", { setGuidedGoal: false, historyMode: "replace" });' not in text
 
 
 def test_ml_model_fast_mode_skips_shap_computation(monkeypatch) -> None:
@@ -941,6 +982,39 @@ def test_discover_signature_endpoint_persists_derived_group() -> None:
     assert any(column["name"] == "auto_sig" for column in payload["columns"])
 
 
+def test_discover_signature_returns_new_dataset_snapshot_and_preserves_original_dataset() -> None:
+    load_response = client.post("/api/load-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+    original_dataset_id = dataset["dataset_id"]
+
+    response = client.post(
+        "/api/discover-signature",
+        json={
+            "dataset_id": original_dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "candidate_columns": ["age", "sex", "stage"],
+            "max_combination_size": 2,
+            "top_k": 5,
+            "bootstrap_iterations": 1,
+            "permutation_iterations": 0,
+            "validation_iterations": 0,
+            "new_column_name": "sig_age_stage",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dataset_id"] != original_dataset_id
+    assert any(column["name"] == "sig_age_stage" for column in payload["columns"])
+
+    original = client.get(f"/api/dataset/{original_dataset_id}")
+    assert original.status_code == 200
+    assert all(column["name"] != "sig_age_stage" for column in original.json()["columns"])
+
+
 @pytest.mark.parametrize("operator", ["and", "or", "mixed"])
 def test_discover_signature_endpoint_supports_all_combination_operators(operator: str) -> None:
     stored = store.create(
@@ -1027,6 +1101,32 @@ def test_optimal_cutpoint_derive_group_returns_inline_scan_figure() -> None:
     assert payload["derive_summary"]["scan_data"]
     assert payload["derive_summary"]["assignment_rule"]
     assert payload["derive_summary"]["p_value_label"] in {"selection_adjusted_p_value", "raw_p_value"}
+
+
+def test_derive_group_returns_new_dataset_snapshot_and_preserves_original_dataset() -> None:
+    load_response = client.post("/api/load-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+    original_dataset_id = dataset["dataset_id"]
+
+    response = client.post(
+        "/api/derive-group",
+        json={
+            "dataset_id": original_dataset_id,
+            "source_column": "age",
+            "method": "median_split",
+            "new_column_name": "age_bin",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dataset_id"] != original_dataset_id
+    assert any(column["name"] == "age_bin" for column in payload["columns"])
+
+    original = client.get(f"/api/dataset/{original_dataset_id}")
+    assert original.status_code == 200
+    assert all(column["name"] != "age_bin" for column in original.json()["columns"])
 
 
 def test_time_dependent_importance_endpoint_uses_time_major_matrix() -> None:
@@ -2010,7 +2110,8 @@ def test_frontend_refreshes_km_after_creating_and_applying_a_new_group() -> None
     derive_start = app_js.index("async function deriveGroup()")
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
-    assert 'const shouldRefreshKm = applyToGroup && (activeTabName() === "km" || runtime.guidedGoal === "km");' in derive_body
+    assert 'const guidedKmRefresh = runtime.uiMode === "guided" && runtime.guidedGoal === "km";' in derive_body
+    assert 'const shouldRefreshKm = applyToGroup && (activeTabName() === "km" || guidedKmRefresh);' in derive_body
     assert "Refreshing Kaplan-Meier with the new grouping..." in derive_body
     assert "Kaplan-Meier is refreshing now." in derive_body
     assert "await runKaplanMeier();" in derive_body
@@ -2919,11 +3020,12 @@ def test_switching_datasets_keeps_derived_groups_isolated_across_reanalysis() ->
         },
     )
     assert derive_first.status_code == 200
+    first_derived_dataset = derive_first.json()
 
     first_km = client.post(
         "/api/kaplan-meier",
         json={
-            "dataset_id": first_dataset["dataset_id"],
+            "dataset_id": first_derived_dataset["dataset_id"],
             "time_column": "os_months",
             "event_column": "os_event",
             "event_positive_value": 1,
@@ -2958,11 +3060,12 @@ def test_switching_datasets_keeps_derived_groups_isolated_across_reanalysis() ->
         },
     )
     assert derive_second.status_code == 200
+    second_derived_dataset = derive_second.json()
 
     second_km = client.post(
         "/api/kaplan-meier",
         json={
-            "dataset_id": second_dataset["dataset_id"],
+            "dataset_id": second_derived_dataset["dataset_id"],
             "time_column": "rfs_days",
             "event_column": "rfs_event",
             "event_positive_value": 1,
@@ -2975,7 +3078,7 @@ def test_switching_datasets_keeps_derived_groups_isolated_across_reanalysis() ->
     first_km_rerun = client.post(
         "/api/kaplan-meier",
         json={
-            "dataset_id": first_dataset["dataset_id"],
+            "dataset_id": first_derived_dataset["dataset_id"],
             "time_column": "os_months",
             "event_column": "os_event",
             "event_positive_value": 1,

@@ -195,6 +195,8 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert any(metric["label"] == "Apparent C-index" for metric in result["scientific_summary"]["metrics"])
     assert any("apparent" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("analyzable cohort" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+    assert any("spearman" in strength.lower() and "schoenfeld" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+    assert any("external-cohort apply workflow" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("changing the covariate set" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 

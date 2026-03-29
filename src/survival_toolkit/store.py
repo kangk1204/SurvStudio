@@ -51,6 +51,7 @@ class DatasetStore:
         filename: str,
         *,
         source: str = "upload",
+        metadata: dict[str, Any] | None = None,
         copy_dataframe: bool = True,
     ) -> StoredDataset:
         with self._lock:
@@ -63,7 +64,7 @@ class DatasetStore:
                 source=source,
                 dataframe=dataframe.copy(deep=True) if copy_dataframe else dataframe,
                 created_at=datetime.now(timezone.utc),
-                metadata={},
+                metadata=copy.deepcopy(metadata or {}),
             )
             self._datasets[dataset_id] = stored
             return self._clone_stored(stored, copy_dataframe=copy_dataframe)
