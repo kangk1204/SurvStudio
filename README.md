@@ -566,6 +566,29 @@ Deep comparison supports:
 - early stopping
 - parallel fold execution
 
+Single-model and comparison DL runs expose:
+- epochs
+- learning rate
+- dropout
+- batch size
+- random seed
+- shared ML/DL feature selection
+
+Model-specific advanced controls are shown only when relevant:
+- DeepHit / Neural MTLR:
+  - `time bins`
+- Survival Transformer:
+  - `transformer width`
+  - `attention heads`
+  - `transformer layers`
+- Survival VAE:
+  - `latent dim`
+  - `clusters`
+
+Architecture note:
+- `Hidden Layers` uses the full comma-separated stack for DeepSurv, DeepHit, Neural MTLR, and Survival VAE
+- `Dropout` is applied to all current deep model paths, including Neural MTLR
+
 ## How To Read Results
 
 ### Kaplan-Meier

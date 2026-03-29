@@ -557,6 +557,9 @@
                 <strong>Run setup</strong>
                 <span>Single-model training controls. Use Fast mode for a quicker first pass.</span>
               </div>
+              <div class="button-row run-setup-quick-actions">
+                <button class="button ghost compact-btn" id="runCompareInlineButton" type="button">Compare All Models</button>
+              </div>
               <div class="toolbar-grid expert-parameter-grid">
                 <label class="toolbar-field">
                   <span>Model</span>
@@ -698,6 +701,9 @@
                 <strong>Run setup</strong>
                 <span>The minimum needed for one deep-learning run.</span>
               </div>
+              <div class="button-row run-setup-quick-actions">
+                <button class="button ghost compact-btn" id="runDlCompareInlineButton" type="button">Compare All Models</button>
+              </div>
               <div class="toolbar-grid expert-parameter-grid">
                 <label class="toolbar-field">
                   <span>Model</span>
@@ -770,9 +776,49 @@
                 </label>
               </div>
             </section>
+            <section class="control-section control-section-wide">
+              <div class="control-section-head">
+                <strong>Model-specific advanced controls</strong>
+                <span>Shown only when the selected architecture actually uses them.</span>
+              </div>
+              <div class="toolbar-grid expert-parameter-grid">
+                <label class="toolbar-field">
+                  <span>Batch Size</span>
+                  <input id="dlBatchSize" type="number" min="8" max="512" step="8" value="64" />
+                </label>
+                <label class="toolbar-field">
+                  <span>Random Seed</span>
+                  <input id="dlRandomSeed" type="number" step="1" value="42" />
+                </label>
+                <label class="toolbar-field hidden" id="dlNumTimeBinsWrap">
+                  <span>Time Bins</span>
+                  <input id="dlNumTimeBins" type="number" min="10" max="200" step="5" value="50" />
+                </label>
+                <label class="toolbar-field hidden" id="dlDModelWrap">
+                  <span>Transformer Width</span>
+                  <input id="dlDModel" type="number" min="16" max="256" step="16" value="64" />
+                </label>
+                <label class="toolbar-field hidden" id="dlHeadsWrap">
+                  <span>Attention Heads</span>
+                  <input id="dlHeads" type="number" min="1" max="16" step="1" value="4" />
+                </label>
+                <label class="toolbar-field hidden" id="dlLayersWrap">
+                  <span>Transformer Layers</span>
+                  <input id="dlLayers" type="number" min="1" max="8" step="1" value="2" />
+                </label>
+                <label class="toolbar-field hidden" id="dlLatentDimWrap">
+                  <span>Latent Dim</span>
+                  <input id="dlLatentDim" type="number" min="2" max="32" step="1" value="8" />
+                </label>
+                <label class="toolbar-field hidden" id="dlClustersWrap">
+                  <span>Clusters</span>
+                  <input id="dlClusters" type="number" min="2" max="10" step="1" value="3" />
+                </label>
+              </div>
+            </section>
           </div>
           <div class="toolbar-note">Evaluation Mode applies to both <strong>Train Model</strong> and <strong>Compare All</strong>. <strong>Holdout</strong> is the fastest default and returns one fitted model with plots. <strong>Repeated CV</strong> is slower, returns aggregate performance, and skips single-fit plots such as one loss curve or one feature-importance chart.</div>
-          <div class="toolbar-note">Allowed ranges: <strong>Epochs 10-1000</strong>, <strong>Learning rate 0-0.1</strong>, <strong>Dropout 0-0.5</strong>, <strong>CV folds 2-10</strong>, <strong>CV repeats 1-20</strong>, <strong>Patience 1-100</strong>, <strong>Min delta 0-0.1</strong>, and <strong>Parallel jobs 1-16</strong>. Hidden layers should be comma-separated positive integers such as <strong>64,64</strong>.</div>
+          <div class="toolbar-note">Allowed ranges: <strong>Epochs 10-1000</strong>, <strong>Learning rate 0-0.1</strong>, <strong>Dropout 0-0.5</strong>, <strong>Batch size 8-512</strong>, <strong>CV folds 2-10</strong>, <strong>CV repeats 1-20</strong>, <strong>Patience 1-100</strong>, <strong>Min delta 0-0.1</strong>, and <strong>Parallel jobs 1-16</strong>. Hidden layers use the full comma-separated stack such as <strong>64,64</strong>.</div>
           <div class="shared-feature-card" id="dlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>What this tab uses</strong>

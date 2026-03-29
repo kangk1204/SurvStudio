@@ -154,7 +154,7 @@ def _deep_trainer_specs(
     return [
         ("DeepSurv", train_deepsurv, {"hidden_layers": hidden_layers, "dropout": dropout}),
         ("DeepHit", train_deephit, {"hidden_layers": hidden_layers, "dropout": dropout, "num_time_bins": num_time_bins}),
-        ("Neural MTLR", train_neural_mtlr, {"hidden_layers": hidden_layers, "num_time_bins": num_time_bins}),
+        ("Neural MTLR", train_neural_mtlr, {"hidden_layers": hidden_layers, "dropout": dropout, "num_time_bins": num_time_bins}),
         (
             "Survival Transformer",
             train_survival_transformer,
@@ -164,7 +164,7 @@ def _deep_trainer_specs(
             "Survival VAE",
             train_survival_vae,
             {
-                "hidden_dim": hidden_layers[0] if hidden_layers else 64,
+                "hidden_layers": hidden_layers,
                 "latent_dim": latent_dim,
                 "n_clusters": n_clusters,
                 "dropout": dropout,
@@ -1495,6 +1495,7 @@ def evaluate_single_deep_survival_model(
             categorical_features=categorical_features,
             event_positive_value=event_positive_value,
             hidden_layers=hidden_layers,
+            dropout=dropout,
             learning_rate=learning_rate,
             epochs=epochs,
             batch_size=batch_size,
@@ -1529,7 +1530,7 @@ def evaluate_single_deep_survival_model(
             categorical_features=categorical_features,
             event_positive_value=event_positive_value,
             latent_dim=latent_dim,
-            hidden_dim=hidden_layers[0] if hidden_layers else 64,
+            hidden_layers=hidden_layers,
             n_clusters=n_clusters,
             dropout=dropout,
             learning_rate=learning_rate,
@@ -2125,7 +2126,7 @@ class NeuralMTLRNet(_TorchModuleBase):
     """Neural network version of Multi-Task Logistic Regression."""
 
     def __init__(
-        self, in_features: int, hidden_layers: list[int], num_time_bins: int
+        self, in_features: int, hidden_layers: list[int], num_time_bins: int, dropout: float = 0.1
     ) -> None:
         super().__init__()
         layers: list[nn.Module] = []
@@ -2134,6 +2135,7 @@ class NeuralMTLRNet(_TorchModuleBase):
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),
                 nn.ReLU(),
+                nn.Dropout(dropout),
             ])
             prev_dim = hidden_dim
         self.encoder = nn.Sequential(*layers)
@@ -2196,6 +2198,7 @@ def train_neural_mtlr(
     categorical_features: Sequence[str] | None = None,
     event_positive_value: Any = None,
     hidden_layers: list[int] | None = None,
+    dropout: float = 0.1,
     num_time_bins: int = 50,
     learning_rate: float = 0.001,
     epochs: int = 100,
@@ -2261,7 +2264,7 @@ def train_neural_mtlr(
         )
         monitor_bin_tensor = torch.tensor(monitor_bin_indices, dtype=torch.long)
 
-    model = NeuralMTLRNet(data["n_features"], hidden_layers, num_time_bins)
+    model = NeuralMTLRNet(data["n_features"], hidden_layers, num_time_bins, dropout=dropout)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     dataset = TensorDataset(x_train, bin_tensor, e_train)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -2710,33 +2713,43 @@ class SurvivalVAENet(_TorchModuleBase):
     def __init__(
         self,
         in_features: int,
-        hidden_dim: int = 64,
+        hidden_layers: list[int] | None = None,
+        hidden_dim: int | None = None,
         latent_dim: int = 8,
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
-        # Encoder
-        self.encoder = nn.Sequential(
-            nn.Linear(in_features, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-        )
-        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
-        self.fc_log_var = nn.Linear(hidden_dim, latent_dim)
+        hidden_layers = list(hidden_layers or ([hidden_dim] if hidden_dim is not None else [64]))
+        encoder_layers: list[nn.Module] = []
+        prev_dim = in_features
+        for hidden_dim in hidden_layers:
+            encoder_layers.extend([
+                nn.Linear(prev_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            ])
+            prev_dim = hidden_dim
+        self.encoder = nn.Sequential(*encoder_layers)
+        self.fc_mu = nn.Linear(prev_dim, latent_dim)
+        self.fc_log_var = nn.Linear(prev_dim, latent_dim)
 
-        # Decoder
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, in_features),
-        )
+        decoder_layers: list[nn.Module] = []
+        prev_decoder_dim = latent_dim
+        for hidden_dim in reversed(hidden_layers):
+            decoder_layers.extend([
+                nn.Linear(prev_decoder_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            ])
+            prev_decoder_dim = hidden_dim
+        decoder_layers.append(nn.Linear(prev_decoder_dim, in_features))
+        self.decoder = nn.Sequential(*decoder_layers)
 
-        # Survival head
+        risk_hidden = max(hidden_layers[-1] // 2, 1)
         self.survival_head = nn.Sequential(
-            nn.Linear(latent_dim, hidden_dim // 2),
+            nn.Linear(latent_dim, risk_hidden),
             nn.ReLU(),
-            nn.Linear(hidden_dim // 2, 1),
+            nn.Linear(risk_hidden, 1),
         )
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -2853,7 +2866,8 @@ def train_survival_vae(
     categorical_features: Sequence[str] | None = None,
     event_positive_value: Any = None,
     latent_dim: int = 8,
-    hidden_dim: int = 64,
+    hidden_layers: list[int] | None = None,
+    hidden_dim: int | None = None,
     n_clusters: int = 3,
     dropout: float = 0.1,
     learning_rate: float = 0.001,
@@ -2874,6 +2888,7 @@ def train_survival_vae(
     _require_torch()
     torch.manual_seed(random_seed)
     # np.random.seed removed — torch.manual_seed handles PyTorch reproducibility
+    hidden_layers = list(hidden_layers or ([hidden_dim] if hidden_dim is not None else [64]))
 
     data, eval_split = _prepare_deep_training_inputs(
         df,
@@ -2899,7 +2914,7 @@ def train_survival_vae(
     evaluation_note = str(eval_split["evaluation_note"])
     x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
 
-    model = SurvivalVAENet(data["n_features"], hidden_dim, latent_dim, dropout)
+    model = SurvivalVAENet(data["n_features"], hidden_layers=hidden_layers, latent_dim=latent_dim, dropout=dropout)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     loss_history: list[float] = []

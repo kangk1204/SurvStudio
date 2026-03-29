@@ -828,9 +828,15 @@ body {
   align-items: stretch;
 }
 
+.guided-actions-dual {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .guided-actions-priority .guided-run-choice {
   flex: 1 1 220px;
   justify-content: center;
+  width: 100%;
 }
 
 .guided-actions-secondary {
@@ -1915,6 +1921,16 @@ h3 {
   color: var(--muted);
   font-size: 0.75rem;
   line-height: 1.45;
+}
+
+.run-setup-quick-actions {
+  margin: 10px 0 0;
+}
+
+@media (max-width: 900px) {
+  .guided-actions-dual {
+    grid-template-columns: 1fr;
+  }
 }
 
 .control-section-wide {
