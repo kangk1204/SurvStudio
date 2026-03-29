@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from pathlib import Path
 import tempfile
 import zipfile
@@ -195,6 +196,7 @@ class TableExportRequest(BaseModel):
     template: Literal["default", "nejm", "lancet", "jco"] = "default"
     caption: str | None = None
     notes: list[str] = Field(default_factory=list)
+    provenance: dict[str, Any] | None = None
 
 
 # ── Helpers ─────────────────────────────────────────────────────
@@ -245,6 +247,55 @@ def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -
     return notes
 
 
+def _dl_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -> list[str]:
+    features = [str(value) for value in request_config.get("features") or []]
+    categorical = [str(value) for value in request_config.get("categorical_features") or []]
+    evaluation_strategy = str(request_config.get("evaluation_strategy", "holdout"))
+    settings = [
+        f"evaluation={evaluation_strategy}",
+        f"random_seed={request_config.get('random_seed')}",
+        f"epochs={request_config.get('epochs')}",
+        f"batch_size={request_config.get('batch_size')}",
+        f"learning_rate={request_config.get('learning_rate')}",
+        f"hidden_layers={request_config.get('hidden_layers')}",
+        f"dropout={request_config.get('dropout')}",
+        f"early_stopping_patience={request_config.get('early_stopping_patience')}",
+        f"early_stopping_min_delta={request_config.get('early_stopping_min_delta')}",
+    ]
+    if request_config.get("parallel_jobs") is not None:
+        settings.append(f"parallel_jobs={request_config.get('parallel_jobs')}")
+    if evaluation_strategy == "repeated_cv":
+        settings.append(
+            f"cv={request_config.get('cv_repeats', 1)}x{request_config.get('cv_folds', 1)}"
+        )
+    if request_config.get("num_time_bins") is not None:
+        settings.append(f"num_time_bins={request_config.get('num_time_bins')}")
+    if request_config.get("d_model") is not None:
+        settings.append(f"d_model={request_config.get('d_model')}")
+    if request_config.get("n_heads") is not None:
+        settings.append(f"n_heads={request_config.get('n_heads')}")
+    if request_config.get("n_layers") is not None:
+        settings.append(f"n_layers={request_config.get('n_layers')}")
+    if request_config.get("latent_dim") is not None:
+        settings.append(f"latent_dim={request_config.get('latent_dim')}")
+    if request_config.get("n_clusters") is not None:
+        settings.append(f"n_clusters={request_config.get('n_clusters')}")
+
+    notes = [
+        (
+            "Replay dataset: "
+            f"{dataset_filename}. Outcome: time={request_config.get('time_column')}, "
+            f"event={request_config.get('event_column')}={request_config.get('event_positive_value')}."
+        ),
+        "Replay settings: " + "; ".join(settings) + ".",
+    ]
+    if features:
+        notes.append("Replay features: " + ", ".join(features) + ".")
+    if categorical:
+        notes.append("Replay categorical features: " + ", ".join(categorical) + ".")
+    return notes
+
+
 def _attach_manuscript_notes(
     analysis: dict[str, Any],
     extra_notes: Sequence[str],
@@ -257,6 +308,28 @@ def _attach_manuscript_notes(
         if note not in existing:
             existing.append(note)
     manuscript["table_notes"] = existing
+
+
+def _export_provenance_notes(provenance: dict[str, Any] | None) -> list[str]:
+    if not provenance:
+        return []
+
+    notes: list[str] = []
+    request_config = provenance.get("request_config")
+    if isinstance(request_config, dict) and request_config:
+        notes.append(
+            "Replay request_config: "
+            + json.dumps(request_config, sort_keys=True, default=str, ensure_ascii=False)
+        )
+
+    analysis_meta = provenance.get("analysis")
+    if isinstance(analysis_meta, dict) and analysis_meta:
+        notes.append(
+            "Replay analysis metadata: "
+            + json.dumps(analysis_meta, sort_keys=True, default=str, ensure_ascii=False)
+        )
+
+    return notes
 
 
 def fail_bad_request(exc: Exception) -> NoReturn:
@@ -369,11 +442,24 @@ def _sanitize_csv_cell(value: Any) -> str:
     return text
 
 
-def _export_rows_to_csv(rows: list[dict[str, Any]], style: str) -> str:
+def _export_rows_to_csv(
+    rows: list[dict[str, Any]],
+    style: str,
+    *,
+    caption: str | None = None,
+    notes: Sequence[str] | None = None,
+    template: str = "default",
+) -> str:
     if not rows:
         raise ValueError("No rows available for export.")
     columns = _export_columns(rows)
     buffer = io.StringIO()
+    resolved_caption = _resolve_export_caption(caption, template) if caption or notes else ""
+    export_notes = [str(note).strip() for note in (notes or []) if str(note).strip()]
+    if resolved_caption:
+        buffer.write(f"# {resolved_caption}\n")
+    for note in export_notes:
+        buffer.write(f"# {note}\n")
     writer = csv.writer(buffer)
     writer.writerow([_sanitize_csv_cell(column) for column in columns])
     for row in rows:
@@ -684,14 +770,24 @@ async def get_dataset(dataset_id: str) -> dict[str, Any]:
 @app.post("/api/export-table")
 async def export_table(request_model: TableExportRequest) -> Response:
     try:
+        export_notes = list(request_model.notes or [])
+        for provenance_note in _export_provenance_notes(request_model.provenance):
+            if provenance_note not in export_notes:
+                export_notes.append(provenance_note)
         if request_model.format == "csv":
-            content = _export_rows_to_csv(request_model.rows, request_model.style)
+            content = _export_rows_to_csv(
+                request_model.rows,
+                request_model.style,
+                caption=request_model.caption,
+                notes=export_notes,
+                template=request_model.template,
+            )
             return Response(content=content, media_type="text/csv; charset=utf-8")
         if request_model.format == "markdown":
             content = _export_rows_to_markdown(
                 request_model.rows,
                 caption=request_model.caption,
-                notes=request_model.notes,
+                notes=export_notes,
                 style=request_model.style,
                 template=request_model.template,
             )
@@ -700,7 +796,7 @@ async def export_table(request_model: TableExportRequest) -> Response:
             content = _export_rows_to_latex(
                 request_model.rows,
                 caption=request_model.caption,
-                notes=request_model.notes,
+                notes=export_notes,
                 style=request_model.style,
                 template=request_model.template,
             )
@@ -708,7 +804,7 @@ async def export_table(request_model: TableExportRequest) -> Response:
         content = _export_rows_to_docx(
             request_model.rows,
             caption=request_model.caption,
-            notes=request_model.notes,
+            notes=export_notes,
             style=request_model.style,
             template=request_model.template,
         )
@@ -975,6 +1071,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
 
             shap_result = None
             shap_figure = None
+            shap_error = None
             model_obj = result.get("_model")
             x_encoded = result.get("_X_encoded")
             if request_model.compute_shap and model_obj is not None and x_encoded is not None:
@@ -984,8 +1081,8 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                     shap_figure = build_shap_figure(shap_result)
                 except (MemoryError, KeyboardInterrupt):
                     raise
-                except Exception:
-                    pass  # SHAP is optional — log if logging is added
+                except Exception as exc:
+                    shap_error = f"{type(exc).__name__}: {exc}"
 
             clean_result = {k: v for k, v in result.items() if not k.startswith("_")}
             return {
@@ -993,6 +1090,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                 "importance_figure": importance_figure,
                 "shap_result": shap_result,
                 "shap_figure": shap_figure,
+                "shap_error": shap_error,
                 "request_config": request_config,
             }
 
@@ -1046,6 +1144,10 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                     cv_folds=request_model.cv_folds,
                     cv_repeats=request_model.cv_repeats,
                     parallel_jobs=request_model.parallel_jobs,
+                )
+                _attach_manuscript_notes(
+                    result,
+                    _dl_replay_notes(request_config, dataset_filename=stored.filename),
                 )
                 clean_result = {k: v for k, v in result.items() if not k.startswith("_")}
                 return {
@@ -1115,6 +1217,11 @@ class CounterfactualRequest(BaseModel):
     target_feature: str
     original_value: Any = None
     counterfactual_value: Any
+    model_type: Literal["rsf", "gbs"] = "rsf"
+    n_estimators: int = Field(default=100, ge=10, le=1000)
+    max_depth: int | None = None
+    learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
+    random_state: int = 42
 
 
 class PDPRequest(BaseModel):
@@ -1125,6 +1232,11 @@ class PDPRequest(BaseModel):
     features: list[str]
     categorical_features: list[str] = Field(default_factory=list)
     target_feature: str
+    model_type: Literal["rsf", "gbs"] = "rsf"
+    n_estimators: int = Field(default=100, ge=10, le=1000)
+    max_depth: int | None = None
+    learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
+    random_state: int = 42
 
 
 @app.post("/api/time-dependent-importance")
@@ -1171,6 +1283,11 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
                 target_feature=request_model.target_feature,
                 original_value=request_model.original_value,
                 counterfactual_value=request_model.counterfactual_value,
+                model_type=request_model.model_type,
+                n_estimators=request_model.n_estimators,
+                max_depth=request_model.max_depth,
+                learning_rate=request_model.learning_rate,
+                random_state=request_model.random_state,
             )}
 
         return await run_in_threadpool(_run)
@@ -1183,6 +1300,7 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
     try:
         from survival_toolkit.ml_models import (
             compute_partial_dependence,
+            train_gradient_boosted_survival,
             train_random_survival_forest,
         )
         from survival_toolkit.plots import build_pdp_figure
@@ -1191,18 +1309,28 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
         df = stored.dataframe
 
         def _run() -> dict[str, Any]:
-            rsf_result = train_random_survival_forest(
-                df,
+            common_kwargs = dict(
+                df=df,
                 time_column=request_model.time_column,
                 event_column=request_model.event_column,
                 event_positive_value=request_model.event_positive_value,
                 features=request_model.features,
                 categorical_features=request_model.categorical_features,
+                n_estimators=request_model.n_estimators,
+                max_depth=request_model.max_depth,
+                random_state=request_model.random_state,
             )
-            model = rsf_result["_model"]
-            X_encoded = rsf_result["_X_encoded"]
-            feature_encoder = rsf_result.get("_feature_encoder")
-            analysis_frame = rsf_result.get("_analysis_frame")
+            if request_model.model_type == "gbs":
+                trained = train_gradient_boosted_survival(
+                    **common_kwargs,
+                    learning_rate=request_model.learning_rate,
+                )
+            else:
+                trained = train_random_survival_forest(**common_kwargs)
+            model = trained["_model"]
+            X_encoded = trained["_X_encoded"]
+            feature_encoder = trained.get("_feature_encoder")
+            analysis_frame = trained.get("_analysis_frame")
 
             result = compute_partial_dependence(
                 model,
@@ -1212,8 +1340,9 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
                 feature_encoder=feature_encoder,
                 analysis_frame=analysis_frame,
             )
+            result["model_type"] = request_model.model_type
             figure = build_pdp_figure(result)
-            return {"analysis": result, "figure": figure}
+            return {"analysis": result, "figure": figure, "request_config": request_model.model_dump()}
 
         return await run_in_threadpool(_run)
     except Exception as exc:

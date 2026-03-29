@@ -2554,6 +2554,10 @@ def counterfactual_survival(
     counterfactual_value: Any = None,
     event_positive_value: Any = None,
     model_type: str = "rsf",
+    n_estimators: int = 100,
+    max_depth: int | None = None,
+    learning_rate: float = 0.1,
+    random_state: int = 42,
 ) -> dict[str, Any]:
     """Generate counterfactual survival analysis: 'What if this feature were different?'
 
@@ -2629,15 +2633,24 @@ def counterfactual_survival(
             event_column=event_column,
             features=features,
             categorical_features=cat_feats,
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            learning_rate=learning_rate,
+            random_state=random_state,
         )
-    else:
+    elif model_type == "rsf":
         result = train_random_survival_forest(
             frame,
             time_column=time_column,
             event_column=event_column,
             features=features,
             categorical_features=cat_feats,
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            random_state=random_state,
         )
+    else:
+        raise ValueError(f"Unsupported counterfactual model_type '{model_type}'. Expected 'rsf' or 'gbs'.")
 
     model = result["_model"]
     X_original = result["_X_encoded"]
