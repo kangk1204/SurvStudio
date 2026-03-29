@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import threading
 import zipfile
 from typing import Any, Literal, NoReturn, Sequence
 from xml.sax.saxutils import escape as xml_escape
@@ -62,6 +63,8 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 store = DatasetStore()
+_ML_ARTIFACT_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+_ML_ARTIFACT_CACHE_LOCK = threading.Lock()
 
 
 # ── Request models ──────────────────────────────────────────────
@@ -209,6 +212,85 @@ def dataset_response(dataset_id: str) -> dict[str, Any]:
     payload["preset_eligible"] = stored.source == "builtin_demo"
     payload["derived_column_provenance"] = dict(stored.metadata.get("derived_column_provenance", {}))
     return payload
+
+
+def _outcome_informed_columns(stored: Any) -> set[str]:
+    provenance = stored.metadata.get("derived_column_provenance", {})
+    if not isinstance(provenance, dict):
+        return set()
+    return {
+        str(column)
+        for column, meta in provenance.items()
+        if isinstance(meta, dict) and bool(meta.get("outcome_informed"))
+    }
+
+
+def _reject_outcome_informed_columns(
+    stored: Any,
+    columns: Sequence[str],
+    *,
+    context: str,
+) -> None:
+    forbidden = _outcome_informed_columns(stored)
+    offenders = sorted({str(column) for column in columns if str(column) in forbidden})
+    if offenders:
+        raise ValueError(
+            f"Outcome-informed derived columns cannot be used for {context}: "
+            + ", ".join(offenders)
+            + ". Use them only for exploratory grouping/visualization."
+        )
+
+
+def _ml_artifact_signature(request_config: dict[str, Any]) -> dict[str, Any]:
+    model_type = str(request_config.get("model_type", "rsf"))
+    signature = {
+        "model_type": model_type,
+        "time_column": request_config.get("time_column"),
+        "event_column": request_config.get("event_column"),
+        "event_positive_value": request_config.get("event_positive_value"),
+        "features": [str(value) for value in request_config.get("features") or []],
+        "categorical_features": [str(value) for value in request_config.get("categorical_features") or []],
+        "n_estimators": request_config.get("n_estimators"),
+        "max_depth": request_config.get("max_depth"),
+        "random_state": request_config.get("random_state"),
+    }
+    if model_type == "gbs":
+        signature["learning_rate"] = request_config.get("learning_rate")
+    return signature
+
+
+def _remember_ml_artifact(dataset_id: str, request_config: dict[str, Any], result: dict[str, Any]) -> None:
+    model_type = str(request_config.get("model_type", ""))
+    if model_type not in {"rsf", "gbs"}:
+        return
+    model = result.get("_model")
+    x_encoded = result.get("_X_encoded")
+    if model is None or x_encoded is None:
+        return
+    artifact = {
+        "signature": _ml_artifact_signature(request_config),
+        "result": {
+            "_model": model,
+            "_X_encoded": x_encoded,
+            "_feature_encoder": result.get("_feature_encoder"),
+            "_analysis_frame": result.get("_analysis_frame"),
+        },
+    }
+    with _ML_ARTIFACT_CACHE_LOCK:
+        _ML_ARTIFACT_CACHE[(dataset_id, model_type)] = artifact
+
+
+def _get_ml_artifact(dataset_id: str, request_config: dict[str, Any]) -> dict[str, Any] | None:
+    model_type = str(request_config.get("model_type", ""))
+    if model_type not in {"rsf", "gbs"}:
+        return None
+    expected = _ml_artifact_signature(request_config)
+    with _ML_ARTIFACT_CACHE_LOCK:
+        cached = _ML_ARTIFACT_CACHE.get((dataset_id, model_type))
+    if not cached or cached.get("signature") != expected:
+        return None
+    result = cached.get("result")
+    return result if isinstance(result, dict) else None
 
 
 def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -> list[str]:
@@ -890,6 +972,11 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
     try:
         stored = store.get(request_model.dataset_id)
         request_config = request_model.model_dump()
+        _reject_outcome_informed_columns(
+            stored,
+            [*request_model.covariates, *request_model.categorical_covariates],
+            context="Cox covariates",
+        )
 
         def _run() -> dict[str, Any]:
             analysis = compute_cox_analysis(
@@ -930,6 +1017,11 @@ async def cohort_table(request_model: CohortTableRequest) -> dict[str, Any]:
 async def discover_signature(request_model: SignatureSearchRequest) -> dict[str, Any]:
     try:
         stored = store.get(request_model.dataset_id)
+        _reject_outcome_informed_columns(
+            stored,
+            request_model.candidate_columns,
+            context="signature discovery candidates",
+        )
 
         def _run() -> tuple:
             return discover_feature_signature(
@@ -1013,6 +1105,11 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
         stored = store.get(request_model.dataset_id)
         df = stored.dataframe
         request_config = request_model.model_dump()
+        _reject_outcome_informed_columns(
+            stored,
+            [*request_model.features, *request_model.categorical_features],
+            context="machine-learning model inputs",
+        )
 
         def _run() -> dict[str, Any]:
             if request_model.model_type == "compare":
@@ -1067,6 +1164,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                 result = train_gradient_boosted_survival(**common_ml)
             else:
                 result = train_random_survival_forest(**common_ml)
+            _remember_ml_artifact(request_model.dataset_id, request_config, result)
             importance_figure = build_feature_importance_figure(result["feature_importance"], model_name=request_model.model_type.upper())
 
             shap_result = None
@@ -1112,6 +1210,11 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
         stored = store.get(request_model.dataset_id)
         df = stored.dataframe
         request_config = request_model.model_dump()
+        _reject_outcome_informed_columns(
+            stored,
+            [*request_model.features, *request_model.categorical_features],
+            context="deep-learning model inputs",
+        )
 
         def _run() -> dict[str, Any]:
             base = dict(
@@ -1246,6 +1349,11 @@ async def time_dependent_importance(request_model: TimeDependentImportanceReques
         from survival_toolkit.plots import build_time_dependent_importance_figure
 
         stored = store.get(request_model.dataset_id)
+        _reject_outcome_informed_columns(
+            stored,
+            [*request_model.features, *request_model.categorical_features],
+            context="time-dependent importance inputs",
+        )
 
         def _run() -> dict[str, Any]:
             result = compute_time_dependent_importance(
@@ -1271,9 +1379,16 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
         from survival_toolkit.ml_models import counterfactual_survival
 
         stored = store.get(request_model.dataset_id)
+        _reject_outcome_informed_columns(
+            stored,
+            [*request_model.features, *request_model.categorical_features, request_model.target_feature],
+            context="counterfactual analysis",
+        )
+        request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
-            return {"analysis": counterfactual_survival(
+            artifact = _get_ml_artifact(request_model.dataset_id, request_config)
+            analysis = counterfactual_survival(
                 stored.dataframe,
                 time_column=request_model.time_column,
                 event_column=request_model.event_column,
@@ -1288,7 +1403,18 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
                 max_depth=request_model.max_depth,
                 learning_rate=request_model.learning_rate,
                 random_state=request_model.random_state,
-            )}
+                trained_result=artifact,
+            )
+            analysis["artifact_reused"] = artifact is not None
+            analysis["explanation_scope"] = (
+                "trained_tree_model" if artifact is not None else "refit_tree_model"
+            )
+            analysis["contract_note"] = (
+                "Counterfactual analysis reused the exact fitted tree model from the latest matching single-model run."
+                if artifact is not None
+                else "Counterfactual analysis refit a tree model from the requested configuration because no matching trained artifact was cached."
+            )
+            return {"analysis": analysis, "request_config": request_config}
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -1307,26 +1433,37 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
 
         stored = store.get(request_model.dataset_id)
         df = stored.dataframe
+        _reject_outcome_informed_columns(
+            stored,
+            [*request_model.features, *request_model.categorical_features, request_model.target_feature],
+            context="partial dependence analysis",
+        )
+        request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
-            common_kwargs = dict(
-                df=df,
-                time_column=request_model.time_column,
-                event_column=request_model.event_column,
-                event_positive_value=request_model.event_positive_value,
-                features=request_model.features,
-                categorical_features=request_model.categorical_features,
-                n_estimators=request_model.n_estimators,
-                max_depth=request_model.max_depth,
-                random_state=request_model.random_state,
-            )
-            if request_model.model_type == "gbs":
-                trained = train_gradient_boosted_survival(
-                    **common_kwargs,
-                    learning_rate=request_model.learning_rate,
+            trained = _get_ml_artifact(request_model.dataset_id, request_config)
+            artifact_reused = trained is not None
+            if trained is None:
+                common_kwargs = dict(
+                    df=df,
+                    time_column=request_model.time_column,
+                    event_column=request_model.event_column,
+                    event_positive_value=request_model.event_positive_value,
+                    features=request_model.features,
+                    categorical_features=request_model.categorical_features,
+                    n_estimators=request_model.n_estimators,
+                    max_depth=request_model.max_depth,
+                    random_state=request_model.random_state,
                 )
+                if request_model.model_type == "gbs":
+                    trained = train_gradient_boosted_survival(
+                        **common_kwargs,
+                        learning_rate=request_model.learning_rate,
+                    )
+                else:
+                    trained = train_random_survival_forest(**common_kwargs)
             else:
-                trained = train_random_survival_forest(**common_kwargs)
+                trained = dict(trained)
             model = trained["_model"]
             X_encoded = trained["_X_encoded"]
             feature_encoder = trained.get("_feature_encoder")
@@ -1341,8 +1478,17 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
                 analysis_frame=analysis_frame,
             )
             result["model_type"] = request_model.model_type
+            result["artifact_reused"] = artifact_reused
+            result["explanation_scope"] = (
+                "trained_tree_model" if artifact_reused else "refit_tree_model"
+            )
+            result["contract_note"] = (
+                "Partial dependence reused the exact fitted tree model from the latest matching single-model run."
+                if artifact_reused
+                else "Partial dependence refit a tree model from the requested configuration because no matching trained artifact was cached."
+            )
             figure = build_pdp_figure(result)
-            return {"analysis": result, "figure": figure, "request_config": request_model.model_dump()}
+            return {"analysis": result, "figure": figure, "request_config": request_config}
 
         return await run_in_threadpool(_run)
     except Exception as exc:

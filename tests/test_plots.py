@@ -38,13 +38,15 @@ def test_build_cox_forest_figure_returns_json() -> None:
         "results_table": [
             {"Label": "age", "Hazard ratio": 1.05, "CI lower": 1.01, "CI upper": 1.10, "P value": 0.02},
         ],
-        "model_stats": {"n": 100, "events": 50, "c_index": 0.65},
+        "model_stats": {"n": 100, "events": 50, "c_index": 0.65, "c_index_label": "Apparent C-index"},
     }
     figure = build_cox_forest_figure(cox_result)
     assert "data" in figure
     assert "layout" in figure
     shapes = figure["layout"].get("shapes", [])
     assert any(shape.get("type") == "line" and shape.get("x0") == 1.0 and shape.get("x1") == 1.0 for shape in shapes)
+    annotation_text = " ".join(str(annotation.get("text", "")) for annotation in figure["layout"].get("annotations", []))
+    assert "Apparent C-index = 0.650" in annotation_text
 
 
 def test_build_cutpoint_scan_figure_with_data() -> None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from survival_toolkit.sample_data import make_example_dataset
@@ -239,6 +241,45 @@ def test_compare_models_passes_requested_hyperparameters(monkeypatch) -> None:
     assert result["comparison_table"]
     assert ("rsf", 37, 5, 99) in seen
     assert ("gbs", 37, 0.2, 99) in seen
+
+
+def test_feature_encoder_imputes_missing_numeric_and_categorical_values() -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    frame = make_example_dataset(seed=77, n_patients=40).loc[:, ["age", "sex"]].copy()
+    frame.loc[0, "age"] = np.nan
+    frame.loc[1, "sex"] = pd.NA
+
+    encoder = ml_models._fit_feature_encoder(frame, ["age", "sex"], categorical_features=["sex"])
+    encoded = ml_models._transform_feature_encoder(frame, encoder)
+
+    assert encoded.shape[0] == frame.shape[0]
+    assert not encoded.isna().any().any()
+    assert "sex__missing" in encoded.columns
+    assert encoded.loc[1, "sex__missing"] == pytest.approx(1.0)
+    assert encoded.loc[0, "age"] == pytest.approx(float(encoder["numeric_impute_values"]["age"]))
+
+
+def test_prepare_model_evaluation_split_keeps_outcome_valid_rows_with_missing_features() -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    frame = make_example_dataset(seed=78, n_patients=80).loc[:, ["os_months", "os_event", "age", "sex"]].copy()
+    frame.loc[:9, "age"] = np.nan
+    frame.loc[10:19, "sex"] = pd.NA
+
+    split = ml_models._prepare_model_evaluation_split(
+        frame,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "sex"],
+        categorical_features=["sex"],
+        random_state=19,
+    )
+
+    assert split["full_frame"].shape[0] == frame.shape[0]
+    assert split["train_frame"].shape[0] + split["eval_frame"].shape[0] == frame.shape[0]
+    assert not split["train_encoded"].isna().any().any()
+    assert not split["eval_encoded"].isna().any().any()
 
 
 @pytest.mark.skipif(
@@ -636,6 +677,46 @@ def test_partial_dependence_supports_categorical_raw_feature() -> None:
     assert all(isinstance(value, str) for value in pdp["values"])
 
 
+def test_partial_dependence_preserves_observed_categorical_order() -> None:
+    import pandas as pd
+
+    from survival_toolkit.ml_models import compute_partial_dependence
+
+    class _OrdinalModel:
+        def predict(self, X):
+            return X[:, 0].astype(float)
+
+    analysis_frame = pd.DataFrame({"stage": pd.Series(["Stage I", "Stage III", "Stage II"], dtype="string")})
+    encoded = pd.DataFrame({"stage": [0.0, 1.0, 2.0]})
+
+    pdp = compute_partial_dependence(
+        _OrdinalModel(),
+        encoded,
+        feature_name="stage",
+        categorical_features=["stage"],
+        analysis_frame=analysis_frame,
+    )
+
+    assert pdp["values"] == ["Stage I", "Stage III", "Stage II"]
+
+
+def test_partial_dependence_raises_on_internal_prediction_failure() -> None:
+    import pandas as pd
+
+    from survival_toolkit.ml_models import compute_partial_dependence
+
+    class _BrokenModel:
+        def predict(self, X):
+            raise RuntimeError("broken predictor")
+
+    with pytest.raises(ValueError, match="Partial dependence failed"):
+        compute_partial_dependence(
+            _BrokenModel(),
+            pd.DataFrame({"age": [10.0, 20.0, 30.0]}),
+            feature_name="age",
+        )
+
+
 def test_store_lru_eviction() -> None:
     from survival_toolkit.store import DatasetStore
 
@@ -806,6 +887,29 @@ def test_rsf_permutation_importance_caps_rows_and_repeats(monkeypatch) -> None:
     assert seen["perm_shape"] == (120, 24)
     assert seen["perm_y_shape"] == (120,)
     assert seen["n_repeats"] == 2
+
+
+def test_time_dependent_importance_raises_on_internal_classifier_failure(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    class _BrokenRF:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def fit(self, X, y):
+            raise RuntimeError("classifier failed")
+
+    monkeypatch.setattr(ml_models, "RandomForestClassifier", _BrokenRF)
+
+    df = make_example_dataset(seed=14, n_patients=80)
+    with pytest.raises(ValueError, match="Time-dependent importance failed"):
+        ml_models.compute_time_dependent_importance(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            features=["age", "biomarker_score"],
+            eval_times=[12.0],
+        )
 
 
 def test_find_optimal_cutpoint_does_not_swallow_unexpected_errors(monkeypatch) -> None:

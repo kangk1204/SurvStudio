@@ -80,11 +80,19 @@ def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
         early_stopping_min_delta=task["early_stopping_min_delta"],
         **task["extra_kwargs"],
     )
+    evaluation_mode = str(result.get("evaluation_mode", "unknown"))
+    if task.get("require_holdout_evaluation") and evaluation_mode != "holdout":
+        raise ValueError(
+            "Deep repeated-CV fold did not retain a clean holdout evaluation "
+            f"(reported '{evaluation_mode}')."
+        )
     return {
         "model": trainer_name,
         "repeat": task["repeat"],
         "fold": task["fold"],
         "c_index": result.get("c_index"),
+        "evaluation_mode": evaluation_mode,
+        "evaluation_note": result.get("evaluation_note"),
         "training_seed": int(task["seed"]),
         "split_seed": None if task.get("split_seed") is None else int(task["split_seed"]),
         "monitor_seed": None if task.get("monitor_seed") is None else int(task["monitor_seed"]),
@@ -125,6 +133,7 @@ def _run_deep_compare_fold_task(task: dict[str, Any]) -> dict[str, Any]:
                         "prepared_data": task["prepared_data"],
                         "evaluation_split": task["evaluation_split"],
                         "monitor_indices": task["monitor_indices"],
+                        "require_holdout_evaluation": task.get("require_holdout_evaluation", False),
                     }
                 )
             )
@@ -224,7 +233,7 @@ def _coerce_deep_frame(
         else:
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
 
-    frame = frame.dropna().copy()
+    frame = frame.dropna(subset=[time_column, event_column]).copy()
     frame = frame.loc[frame[time_column] > 0].reset_index(drop=True)
 
     if frame.empty:
@@ -233,7 +242,7 @@ def _coerce_deep_frame(
         raise ValueError("No events were found after preprocessing the event column.")
     if frame.shape[0] < min_samples:
         raise ValueError(
-            f"Only {frame.shape[0]} complete rows remain after dropping NAs. "
+            f"Only {frame.shape[0]} analyzable rows remain after validating outcome columns. "
             f"Need at least {min_samples} samples for deep learning models."
         )
     return frame
@@ -251,6 +260,7 @@ def _fit_deep_encoder(
     categorical_levels: dict[str, list[str]] = {}
     categorical_all_levels: dict[str, list[str]] = {}
     categorical_unknown_columns: dict[str, str] = {}
+    categorical_missing_columns: dict[str, str] = {}
     feature_names: list[str] = []
     for col in categorical_features:
         levels = [str(level) for level in pd.Index(frame[col].dropna().astype("string").unique()).tolist()]
@@ -259,18 +269,25 @@ def _fit_deep_encoder(
         categorical_levels[col] = retained_levels
         categorical_all_levels[col] = levels
         categorical_unknown_columns[col] = f"{col}__unknown"
+        categorical_missing_columns[col] = f"{col}__missing"
         feature_names.extend([f"{col}_{level}" for level in retained_levels])
         feature_names.append(categorical_unknown_columns[col])
+        feature_names.append(categorical_missing_columns[col])
 
     scaler_params: dict[str, dict[str, float]] = {}
     if numeric_features:
         numeric_frame = frame[numeric_features].apply(pd.to_numeric, errors="coerce")
-        numeric_array = numeric_frame.values.astype(np.float64)
-        means = np.nanmean(numeric_array, axis=0)
-        stds = np.nanstd(numeric_array, axis=0)
+        medians = numeric_frame.median(skipna=True).fillna(0.0)
+        numeric_array = numeric_frame.fillna(medians).values.astype(np.float64)
+        means = np.mean(numeric_array, axis=0)
+        stds = np.std(numeric_array, axis=0)
         stds[stds < 1e-12] = 1.0
         for idx, col in enumerate(numeric_features):
-            scaler_params[col] = {"mean": float(means[idx]), "std": float(stds[idx])}
+            scaler_params[col] = {
+                "mean": float(means[idx]),
+                "std": float(stds[idx]),
+                "impute_value": float(medians[col]),
+            }
         feature_names.extend(numeric_features)
 
     if not feature_names:
@@ -285,6 +302,7 @@ def _fit_deep_encoder(
         "categorical_levels": categorical_levels,
         "categorical_all_levels": categorical_all_levels,
         "categorical_unknown_columns": categorical_unknown_columns,
+        "categorical_missing_columns": categorical_missing_columns,
         "scaler_params": scaler_params,
         "feature_names": feature_names,
     }
@@ -303,23 +321,31 @@ def _transform_deep_frame(
 
     for col in encoder["categorical_features"]:
         levels = encoder["categorical_levels"].get(col, [])
-        values = frame[col].astype("string").astype(str)
+        values = frame[col].astype("string")
         column_blocks: list[np.ndarray] = []
         for level in levels:
-            column_blocks.append(((values == level).astype(float).to_numpy()).reshape(-1, 1))
+            column_blocks.append(values.eq(level).fillna(False).astype(float).to_numpy().reshape(-1, 1))
         known_levels = set(encoder["categorical_all_levels"].get(col, []))
         unknown_mask = (
             frame[col].notna()
             & ~frame[col].astype("string").isin(pd.Index(sorted(known_levels), dtype="string"))
         )
+        missing_mask = values.isna()
         column_blocks.append(unknown_mask.astype(float).to_numpy().reshape(-1, 1))
+        column_blocks.append(missing_mask.astype(float).to_numpy().reshape(-1, 1))
         encoded_parts.append(np.hstack(column_blocks))
         feature_names.extend([f"{col}_{level}" for level in levels])
         feature_names.append(encoder["categorical_unknown_columns"][col])
+        feature_names.append(encoder["categorical_missing_columns"][col])
 
     numeric_features = encoder["numeric_features"]
     if numeric_features:
-        numeric_array = frame[numeric_features].apply(pd.to_numeric, errors="coerce").values.astype(np.float64)
+        numeric_frame = frame[numeric_features].apply(pd.to_numeric, errors="coerce")
+        for col in numeric_features:
+            numeric_frame[col] = numeric_frame[col].fillna(
+                float(encoder["scaler_params"][col].get("impute_value", 0.0))
+            )
+        numeric_array = numeric_frame.values.astype(np.float64)
         standardized = np.empty_like(numeric_array, dtype=np.float64)
         for idx, col in enumerate(numeric_features):
             params = encoder["scaler_params"][col]
@@ -551,6 +577,30 @@ def _metric_name_for_evaluation(evaluation_mode: str) -> str:
     if evaluation_mode == "repeated_cv":
         return "Repeated-CV mean C-index"
     return "Apparent C-index"
+
+
+def _logsumexp_numpy(values: np.ndarray) -> float:
+    if values.size == 0:
+        return float("-inf")
+    max_value = float(np.max(values))
+    if not np.isfinite(max_value):
+        return max_value
+    stable = np.exp(values - max_value)
+    return float(max_value + np.log(np.sum(stable)))
+
+
+def _survival_from_log_cumulative_hazard(log_cumulative_hazard: np.ndarray) -> np.ndarray:
+    safe_log = np.asarray(log_cumulative_hazard, dtype=float)
+    survival = np.ones_like(safe_log)
+    positive_mask = np.isfinite(safe_log)
+    if not positive_mask.any():
+        return survival
+    very_large = safe_log >= 50.0
+    moderate = positive_mask & ~very_large
+    survival[very_large] = 0.0
+    survival[moderate] = np.exp(-np.exp(safe_log[moderate]))
+    survival[~positive_mask] = 1.0
+    return survival
 
 
 def _split_deep_indices(
@@ -983,6 +1033,8 @@ def compare_deep_survival_models(
         else:
             ranked_rows = list(comparison)
             unranked_rows = []
+            if any(str(row.get("evaluation_mode")) != "repeated_cv" for row in comparison):
+                result_evaluation_mode = "repeated_cv_incomplete"
 
         ranked_rows.sort(key=lambda row: row["c_index"] if row["c_index"] is not None else -1.0, reverse=True)
         if unranked_rows:
@@ -1018,6 +1070,13 @@ def compare_deep_survival_models(
                 strengths.append(
                     "The same repeated-CV settings can be rerun with Train Model when the evaluation strategy and seed are left unchanged."
                 )
+            fallback_models = [
+                row["model"] for row in comparison if int(row.get("n_apparent_fallbacks", 0) or 0) > 0
+            ]
+            if fallback_models:
+                strengths.append(
+                    f"{len(fallback_models)} model(s) retained at least one clean fold but had additional apparent-fallback folds excluded from the repeated-CV aggregate."
+                )
         elif len(shared_training_seeds) == 1:
             shared_seed = next(iter(shared_training_seeds))
             strengths.append(
@@ -1039,6 +1098,10 @@ def compare_deep_survival_models(
             )
         if errors:
             cautions.append(f"{len(errors)} deep model fit(s) failed and were excluded from the ranking.")
+        if evaluation_mode == "repeated_cv" and any(int(row.get("n_apparent_fallbacks", 0) or 0) > 0 for row in comparison):
+            cautions.append(
+                "Some repeated-CV folds fell back to apparent evaluation inside model training and were excluded from the repeated-CV aggregate."
+            )
         if best.get("evaluation_mode") != "holdout" and evaluation_mode != "repeated_cv":
             cautions.append(
                 "The top-ranked model did not report a clean holdout C-index, so the ranking is optimistic."
@@ -1083,6 +1146,7 @@ def compare_deep_survival_models(
         result = {
             "comparison_table": comparison,
             "errors": errors,
+            "ranking_complete": not errors and not unranked_rows and all(row.get("c_index") is not None for row in ranked_rows),
             "evaluation_mode": result_evaluation_mode,
             "scientific_summary": summary,
             "insight_board": summary,
@@ -1196,6 +1260,7 @@ def compare_deep_survival_models(
                     ),
                     "monitor_seed": random_seed + repeat_idx,
                     "model_specs": model_specs,
+                    "require_holdout_evaluation": True,
                 })
 
         if parallel_jobs > 1 and len(tasks) > 1:
@@ -1240,18 +1305,21 @@ def compare_deep_survival_models(
             model_rows = [row for row in fold_results if row["model"] == model_name and row["c_index"] is not None]
             n_failures = sum(1 for err in errors if err["model"] == model_name)
             expected_evaluations = cv_folds * cv_repeats
+            holdout_rows = [row for row in model_rows if str(row.get("evaluation_mode")) == "holdout"]
+            fallback_rows = [row for row in model_rows if str(row.get("evaluation_mode")) != "holdout"]
             summary = (
                 _summarize_repeated_cv_rows(
-                    model_rows,
+                    holdout_rows,
                     train_n_key="training_samples",
                     test_n_key="evaluation_samples",
                     train_events_key=None,
                     test_events_key=None,
                 )
-                if model_rows
+                if holdout_rows
                 else None
             )
-            incomplete = (len(model_rows) + n_failures) < expected_evaluations or n_failures > 0
+            n_failures += len(fallback_rows)
+            incomplete = (len(holdout_rows) + n_failures) < expected_evaluations or n_failures > 0
             if summary is None and n_failures == 0:
                 continue
             comparison.append({
@@ -1264,19 +1332,20 @@ def compare_deep_survival_models(
                 "c_index_interval_label": None if summary is None else summary["c_index_interval_label"],
                 "n_features": None if summary is None else int(summary["n_features"]),
                 "training_time_ms": None if summary is None else float(summary["training_time_ms"]),
-                "n_evaluations": len(model_rows),
+                "n_evaluations": len(holdout_rows),
                 "n_repeats": 0 if summary is None else int(summary["n_repeats"]),
                 "n_failures": n_failures,
+                "n_apparent_fallbacks": len(fallback_rows),
                 "cv_folds": cv_folds,
                 "cv_repeats": cv_repeats,
-                "evaluation_mode": "repeated_cv",
-                "training_seed": None if not model_rows else (int(model_rows[0]["training_seed"]) if len({int(row["training_seed"]) for row in model_rows if row.get("training_seed") is not None}) == 1 else None),
-                "split_seed": None if not model_rows else (int(model_rows[0]["split_seed"]) if len({int(row["split_seed"]) for row in model_rows if row.get("split_seed") is not None}) == 1 else None),
-                "monitor_seed": None if not model_rows else (int(model_rows[0]["monitor_seed"]) if len({int(row["monitor_seed"]) for row in model_rows if row.get("monitor_seed") is not None}) == 1 else None),
-                "training_seeds": sorted({int(row["training_seed"]) for row in model_rows if row.get("training_seed") is not None}),
-                "split_seeds": sorted({int(row["split_seed"]) for row in model_rows if row.get("split_seed") is not None}),
-                "monitor_seeds": sorted({int(row["monitor_seed"]) for row in model_rows if row.get("monitor_seed") is not None}),
-                "epochs_trained": int(round(np.mean([row["epochs_trained"] for row in model_rows]))) if model_rows else None,
+                "evaluation_mode": "repeated_cv" if not fallback_rows else "repeated_cv_incomplete",
+                "training_seed": None if not holdout_rows else (int(holdout_rows[0]["training_seed"]) if len({int(row["training_seed"]) for row in holdout_rows if row.get("training_seed") is not None}) == 1 else None),
+                "split_seed": None if not holdout_rows else (int(holdout_rows[0]["split_seed"]) if len({int(row["split_seed"]) for row in holdout_rows if row.get("split_seed") is not None}) == 1 else None),
+                "monitor_seed": None if not holdout_rows else (int(holdout_rows[0]["monitor_seed"]) if len({int(row["monitor_seed"]) for row in holdout_rows if row.get("monitor_seed") is not None}) == 1 else None),
+                "training_seeds": sorted({int(row["training_seed"]) for row in holdout_rows if row.get("training_seed") is not None}),
+                "split_seeds": sorted({int(row["split_seed"]) for row in holdout_rows if row.get("split_seed") is not None}),
+                "monitor_seeds": sorted({int(row["monitor_seed"]) for row in holdout_rows if row.get("monitor_seed") is not None}),
+                "epochs_trained": int(round(np.mean([row["epochs_trained"] for row in holdout_rows]))) if holdout_rows else None,
                 "training_samples": None if summary is None else int(summary["train_n"]),
                 "evaluation_samples": None if summary is None else int(summary["test_n"]),
                 "train_events": None if summary is None else summary["train_events"],
@@ -1761,14 +1830,20 @@ def train_deepsurv(
             baseline_cumhaz[k] = baseline_cumhaz[k - 1] if k > 0 else 0.0
             continue
         d_k = float(((train_time_np == t_k) & (train_event_np == 1)).sum())
-        risk_sum = float(np.exp(risk_np[train_idx_np][at_risk]).sum())
+        log_risk_sum = _logsumexp_numpy(risk_np[train_idx_np][at_risk])
+        risk_sum = 0.0 if not np.isfinite(log_risk_sum) else float(np.exp(min(log_risk_sum, 700.0)))
         h0_k = d_k / max(risk_sum, 1e-12)
         baseline_cumhaz[k] = (baseline_cumhaz[k - 1] if k > 0 else 0.0) + h0_k
 
     predicted_survival_function: list[dict[str, Any]] = []
     for idx in representative_indices:
-        cumhaz_i = baseline_cumhaz * np.exp(risk_np[idx])
-        surv_i = np.exp(-cumhaz_i)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            log_cumhaz_i = np.where(
+                baseline_cumhaz > 0.0,
+                np.log(baseline_cumhaz) + float(risk_np[idx]),
+                -np.inf,
+            )
+        surv_i = _survival_from_log_cumulative_hazard(log_cumhaz_i)
         timeline = [0.0] + [float(t) for t in unique_times]
         survival = [1.0] + [float(s) for s in surv_i]
         predicted_survival_function.append({
@@ -2759,7 +2834,8 @@ class SurvivalVAENet(_TorchModuleBase):
     def reparameterize(self, mu: torch.Tensor, log_var: torch.Tensor) -> torch.Tensor:
         if not self.training:
             return mu
-        std = torch.exp(0.5 * log_var)
+        safe_log_var = torch.clamp(log_var, min=-10.0, max=10.0)
+        std = torch.exp(0.5 * safe_log_var)
         eps = torch.randn_like(std)
         return mu + eps * std
 

@@ -138,7 +138,8 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
     )
     stat_parts = [f"N = {stats['n']}", f"events = {stats['events']}"]
     if stats.get("c_index") is not None:
-        stat_parts.append(f"C-index = {stats['c_index']:.3f}")
+        c_index_label = str(stats.get("c_index_label", "C-index"))
+        stat_parts.append(f"{c_index_label} = {stats['c_index']:.3f}")
     fig.add_annotation(
         text=", ".join(stat_parts),
         xref="paper", yref="paper", x=0.98, y=0.98,
