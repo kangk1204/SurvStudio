@@ -413,6 +413,7 @@ def _cohort_frame(
     event_column: str,
     event_positive_value: Any = None,
     extra_columns: Sequence[str] | None = None,
+    drop_missing_extra_columns: bool = True,
 ) -> pd.DataFrame:
     extra_columns = list(extra_columns or [])
     required_columns = [time_column, event_column, *extra_columns]
@@ -422,7 +423,11 @@ def _cohort_frame(
     for column in extra_columns:
         if not is_numeric_dtype(frame[column]):
             frame[column] = frame[column].astype("string")
-    frame = frame.replace([np.inf, -np.inf], np.nan).dropna()
+    frame = frame.replace([np.inf, -np.inf], np.nan)
+    if drop_missing_extra_columns:
+        frame = frame.dropna()
+    else:
+        frame = frame.dropna(subset=[time_column, event_column])
     frame = frame.loc[_ensure_positive_times(frame[time_column])].reset_index(drop=True)
     if frame.empty:
         raise ValueError("No analyzable rows remain after removing missing values.")
@@ -434,6 +439,24 @@ def _cohort_frame(
 def _sorted_group_labels(series: pd.Series) -> list[str]:
     labels = series.astype("string").dropna().unique().tolist()
     return sorted(labels, key=lambda value: (len(str(value)), str(value)))
+
+
+def _ordered_level_strings(series: pd.Series) -> list[str]:
+    non_missing = series.dropna()
+    if non_missing.empty:
+        return []
+    numeric_values = pd.to_numeric(non_missing, errors="coerce")
+    if numeric_values.notna().all():
+        ordered_numeric = np.sort(numeric_values.unique().astype(float))
+        return [str(int(value)) if float(value).is_integer() else str(value) for value in ordered_numeric]
+    return list(dict.fromkeys(non_missing.astype("string").tolist()))
+
+
+def _is_binary_numeric_series(series: pd.Series) -> bool:
+    numeric_values = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric_values.empty:
+        return False
+    return int(numeric_values.nunique()) == 2
 
 
 def _pointwise_km_ci(survival: np.ndarray, se: np.ndarray, alpha: float) -> tuple[np.ndarray, np.ndarray]:
@@ -1801,13 +1824,19 @@ def compute_km_analysis(
         "curves": curve_payloads,
         "summary_table": summary_rows,
         "groups": int(len(summary_rows)),
-        "logrank_p": None if test_payload is None else float(test_payload["p_value"]),
+        "logrank_p": (
+            None
+            if test_payload is None or logrank_weight != "logrank"
+            else float(test_payload["p_value"])
+        ),
         "risk_table": {
             "columns": ["Group", *[f"{tick:g}" for tick in risk_ticks]],
             "rows": risk_rows,
         },
         "pairwise_table": pairwise_rows,
         "test": test_payload,
+        "test_p_value": None if test_payload is None else float(test_payload["p_value"]),
+        "test_p_value_label": None if test_payload is None else str(test_payload["test"]),
         "cohort": cohort_summary,
         "display_horizon": display_horizon,
         "group_column": group_column,
@@ -2055,15 +2084,19 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
 
     for variable in variables:
         series = frame[variable]
-        if is_numeric_dtype(series):
+        is_binary_numeric = is_numeric_dtype(series) and _is_binary_numeric_series(series)
+        if is_numeric_dtype(series) and not is_binary_numeric:
             row = {"Variable": variable, "Statistic": "Mean ± SD | Median [IQR]"}
             for label, group_frame in group_frames.items():
                 values = pd.to_numeric(group_frame[variable], errors="coerce").dropna()
                 if values.empty:
                     row[label] = "NA"
                     continue
+                sd_value = values.std(ddof=1)
+                if not np.isfinite(sd_value):
+                    sd_value = 0.0
                 row[label] = (
-                    f"{values.mean():.2f} ± {values.std(ddof=1):.2f} | "
+                    f"{values.mean():.2f} ± {sd_value:.2f} | "
                     f"{values.median():.2f} [{values.quantile(0.25):.2f}, {values.quantile(0.75):.2f}]"
                 )
             rows.append(row)
@@ -2079,14 +2112,19 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
             )
             continue
 
-        string_series = series.astype("string")
-        levels = sorted(string_series.dropna().unique().tolist(), key=lambda value: (len(str(value)), str(value)))
+        source_series = pd.to_numeric(series, errors="coerce") if is_binary_numeric else series.astype("string")
+        levels = _ordered_level_strings(source_series)
         for level in levels:
             row = {"Variable": variable, "Statistic": str(level)}
             for label, group_frame in group_frames.items():
-                group_values = group_frame[variable].astype("string")
-                denominator = int(group_values.notna().sum())
-                numerator = int((group_values == level).sum())
+                if is_binary_numeric:
+                    group_values = pd.to_numeric(group_frame[variable], errors="coerce")
+                    denominator = int(group_values.notna().sum())
+                    numerator = int((group_values == float(level)).sum())
+                else:
+                    group_values = group_frame[variable].astype("string")
+                    denominator = int(group_values.notna().sum())
+                    numerator = int((group_values == level).sum())
                 proportion = (100.0 * numerator / denominator) if denominator else 0.0
                 row[label] = f"{numerator} ({proportion:.1f}%)"
             rows.append(row)

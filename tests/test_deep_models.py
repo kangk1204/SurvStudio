@@ -192,6 +192,75 @@ def test_run_deep_compare_task_passes_none_dataframe_when_prepared_data_is_suppl
     assert result["model"] == "DeepSurv"
 
 
+def test_run_deep_compare_task_rejects_apparent_fallback_when_holdout_is_required(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    def _fake_train(df, **kwargs):
+        return {
+            "c_index": 0.61,
+            "n_features": 3,
+            "training_samples": 20,
+            "evaluation_samples": 10,
+            "epochs_trained": 1,
+            "evaluation_mode": "holdout_fallback_apparent",
+            "evaluation_note": "fallback",
+        }
+
+    monkeypatch.setattr(deep_models, "train_deepsurv", _fake_train)
+
+    with pytest.raises(ValueError, match="clean holdout evaluation"):
+        deep_models._run_deep_compare_task(
+            {
+                "model_name": "DeepSurv",
+                "repeat": 1,
+                "fold": 1,
+                "seed": 123,
+                "split_seed": 456,
+                "monitor_seed": 789,
+                "time_column": "os_months",
+                "event_column": "os_event",
+                "features": ["age"],
+                "categorical_features": [],
+                "event_positive_value": 1,
+                "learning_rate": 0.001,
+                "epochs": 1,
+                "batch_size": 8,
+                "early_stopping_patience": 2,
+                "early_stopping_min_delta": 1e-4,
+                "prepared_data": {"n_features": 1},
+                "evaluation_split": {"train_idx": np.array([0, 1]), "eval_idx": np.array([2]), "evaluation_mode": "holdout", "evaluation_note": "ok"},
+                "monitor_indices": np.array([0, 1]),
+                "extra_kwargs": {"hidden_layers": [8], "dropout": 0.1},
+                "require_holdout_evaluation": True,
+            }
+        )
+
+
+def test_survival_from_log_cumulative_hazard_handles_extreme_values() -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    survival = deep_models._survival_from_log_cumulative_hazard(np.array([-np.inf, 0.0, 60.0], dtype=float))
+
+    assert survival[0] == pytest.approx(1.0)
+    assert 0.0 < survival[1] < 1.0
+    assert survival[2] == pytest.approx(0.0)
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_vae_reparameterize_clamps_extreme_log_variance() -> None:
+    import torch
+    import survival_toolkit.deep_models as deep_models
+
+    model = deep_models.SurvivalVAENet(in_features=4, hidden_layers=[8], latent_dim=2, dropout=0.1)
+    model.train()
+    mu = torch.zeros((2, 2), dtype=torch.float32)
+    log_var = torch.full((2, 2), 1_000.0, dtype=torch.float32)
+
+    sample = model.reparameterize(mu, log_var)
+
+    assert torch.isfinite(sample).all()
+
+
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 def test_prepare_deep_inputs_reports_missing_columns_cleanly() -> None:
     import survival_toolkit.deep_models as deep_models
@@ -203,6 +272,58 @@ def test_prepare_deep_inputs_reports_missing_columns_cleanly() -> None:
             event_column="os_event",
             features=["age"],
         )
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_coerce_deep_frame_keeps_rows_with_missing_features_when_outcome_is_valid() -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    frame = make_example_dataset(seed=81, n_patients=40).loc[:, ["os_months", "os_event", "age", "sex"]].copy()
+    frame.loc[0, "age"] = np.nan
+    frame.loc[1, "sex"] = pd.NA
+
+    cleaned = deep_models._coerce_deep_frame(
+        frame,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "sex"],
+        categorical_features=["sex"],
+        event_positive_value=1,
+    )
+
+    assert cleaned.shape[0] == frame.shape[0]
+    assert cleaned["age"].isna().sum() == 1
+    assert cleaned["sex"].isna().sum() == 1
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_deep_encoder_imputes_missing_numeric_and_categorical_values() -> None:
+    import torch
+    import survival_toolkit.deep_models as deep_models
+
+    frame = make_example_dataset(seed=82, n_patients=40).loc[:, ["os_months", "os_event", "age", "sex"]].copy()
+    frame.loc[0, "age"] = np.nan
+    frame.loc[1, "sex"] = pd.NA
+
+    cleaned = deep_models._coerce_deep_frame(
+        frame,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "sex"],
+        categorical_features=["sex"],
+        event_positive_value=1,
+    )
+    encoder = deep_models._fit_deep_encoder(cleaned, ["age", "sex"], ["sex"])
+    transformed = deep_models._transform_deep_frame(
+        cleaned,
+        time_column="os_months",
+        event_column="os_event",
+        encoder=encoder,
+    )
+
+    assert transformed["n_samples"] == cleaned.shape[0]
+    assert torch.isfinite(transformed["X_tensor"]).all()
+    assert "sex__missing" in transformed["feature_names"]
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -849,7 +970,7 @@ def test_compare_deep_survival_models_marks_incomplete_repeated_cv_rows(monkeypa
     def _succeeding_trainer(*args, **kwargs):
         return {
             "c_index": 0.62,
-            "evaluation_mode": "repeated_cv",
+            "evaluation_mode": "holdout",
             "epochs_trained": 1,
             "n_features": 3,
             "training_samples": 20,

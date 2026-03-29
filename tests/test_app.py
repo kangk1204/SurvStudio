@@ -1023,6 +1023,50 @@ def test_time_dependent_importance_endpoint_uses_time_major_matrix() -> None:
     assert payload["figure"]["data"][0]["type"] == "heatmap"
 
 
+def test_modeling_and_xai_endpoints_reject_outcome_informed_columns() -> None:
+    stored = store.create(
+        make_example_dataset(seed=171, n_patients=72),
+        filename="outcome_informed_guard.csv",
+        copy_dataframe=False,
+    )
+    store.update_metadata(
+        stored.dataset_id,
+        {"derived_column_provenance": {"age__optimal_cutpoint": {"outcome_informed": True}}},
+    )
+
+    common = {
+        "dataset_id": stored.dataset_id,
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "event_positive_value": 1,
+        "features": ["age__optimal_cutpoint"],
+        "categorical_features": [],
+    }
+
+    ml_response = client.post("/api/ml-model", json={**common, "model_type": "rsf"})
+    deep_response = client.post("/api/deep-model", json={**common, "model_type": "deepsurv"})
+    cox_response = client.post(
+        "/api/cox",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "covariates": ["age__optimal_cutpoint"],
+            "categorical_covariates": [],
+        },
+    )
+    pdp_response = client.post("/api/pdp", json={**common, "target_feature": "age__optimal_cutpoint"})
+    counterfactual_response = client.post(
+        "/api/counterfactual",
+        json={**common, "target_feature": "age__optimal_cutpoint", "counterfactual_value": "High"},
+    )
+
+    for response in [ml_response, deep_response, cox_response, pdp_response, counterfactual_response]:
+        assert response.status_code == 400
+        assert "Outcome-informed derived columns" in response.json()["detail"]
+
+
 def test_xai_endpoints_support_explicit_event_positive_value_and_categorical_counterfactual() -> None:
     df = make_example_dataset(seed=67, n_patients=96)
     df["custom_event"] = df["os_event"].map({1: "R", 0: "N"})
@@ -1162,6 +1206,64 @@ def test_pdp_endpoint_accepts_gbs_model_type(monkeypatch) -> None:
     assert body["request_config"]["model_type"] == "gbs"
 
 
+def test_pdp_endpoint_reuses_matching_cached_ml_artifact(monkeypatch) -> None:
+    import pandas as pd
+    import survival_toolkit.ml_models as ml_models
+
+    calls = {"train": 0}
+
+    class _LinearModel:
+        def predict(self, X):
+            return X[:, 0].astype(float)
+
+    def _fake_train(*args, **kwargs):
+        calls["train"] += 1
+        return {
+            "feature_importance": [{"feature": "age", "importance": 1.0}],
+            "feature_names": ["age"],
+            "model_stats": {"c_index": 0.70, "evaluation_mode": "holdout", "n_patients": 30, "n_features": 1},
+            "_model": _LinearModel(),
+            "_X_encoded": pd.DataFrame({"age": [10.0, 20.0, 30.0]}),
+            "_analysis_frame": pd.DataFrame({"age": [10.0, 20.0, 30.0]}),
+            "_feature_encoder": None,
+        }
+
+    monkeypatch.setattr(ml_models, "train_random_survival_forest", _fake_train)
+
+    dataset = client.post("/api/load-example").json()
+    train_response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age"],
+            "categorical_features": [],
+            "model_type": "rsf",
+        },
+    )
+    assert train_response.status_code == 200
+
+    pdp_response = client.post(
+        "/api/pdp",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age"],
+            "categorical_features": [],
+            "target_feature": "age",
+            "model_type": "rsf",
+        },
+    )
+
+    assert pdp_response.status_code == 200
+    assert calls["train"] == 1
+    assert pdp_response.json()["analysis"]["artifact_reused"] is True
+
+
 def test_counterfactual_endpoint_uses_original_value_for_baseline(monkeypatch) -> None:
     import pandas as pd
     import survival_toolkit.ml_models as ml_models
@@ -1206,6 +1308,66 @@ def test_counterfactual_endpoint_uses_original_value_for_baseline(monkeypatch) -
     assert analysis["original_median_risk"] == pytest.approx(5.0)
     assert analysis["counterfactual_median_risk"] == pytest.approx(15.0)
     assert analysis["risk_change_pct"] == pytest.approx(200.0)
+
+
+def test_counterfactual_endpoint_reuses_matching_cached_ml_artifact(monkeypatch) -> None:
+    import pandas as pd
+    import survival_toolkit.ml_models as ml_models
+
+    calls = {"train": 0}
+
+    class _LinearAgeModel:
+        def predict(self, X):
+            return X[:, 0].astype(float)
+
+    def _fake_train(*args, **kwargs):
+        calls["train"] += 1
+        return {
+            "feature_importance": [{"feature": "age", "importance": 1.0}],
+            "feature_names": ["age"],
+            "model_stats": {"c_index": 0.70, "evaluation_mode": "holdout", "n_patients": 30, "n_features": 1},
+            "_model": _LinearAgeModel(),
+            "_X_encoded": pd.DataFrame({"age": [10.0, 20.0, 30.0]}),
+            "_analysis_frame": pd.DataFrame({"age": [10.0, 20.0, 30.0]}),
+            "_feature_encoder": None,
+        }
+
+    monkeypatch.setattr(ml_models, "train_random_survival_forest", _fake_train)
+
+    dataset = client.post("/api/load-example").json()
+    train_response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age"],
+            "categorical_features": [],
+            "model_type": "rsf",
+        },
+    )
+    assert train_response.status_code == 200
+
+    response = client.post(
+        "/api/counterfactual",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age"],
+            "categorical_features": [],
+            "target_feature": "age",
+            "original_value": 5.0,
+            "counterfactual_value": 15.0,
+            "model_type": "rsf",
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls["train"] == 1
+    assert response.json()["analysis"]["artifact_reused"] is True
 
 
 def test_counterfactual_endpoint_accepts_gbs_model_type(monkeypatch) -> None:

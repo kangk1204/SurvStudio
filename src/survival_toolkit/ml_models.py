@@ -21,6 +21,7 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from statsmodels.duration.hazard_regression import PHReg
 from statsmodels.duration.survfunc import survdiff
@@ -105,6 +106,20 @@ def _coerce_feature_subset(
     return selected, resolved_categorical, numeric_features
 
 
+def _ordered_category_values(series: pd.Series) -> list[str]:
+    """Return observed category values in a deterministic, semantically stable order."""
+    non_missing = series.dropna()
+    if non_missing.empty:
+        return []
+    if isinstance(series.dtype, pd.CategoricalDtype) and getattr(series.dtype, "ordered", False):
+        return [str(value) for value in series.dtype.categories.tolist() if pd.notna(value)]
+    numeric_values = pd.to_numeric(non_missing, errors="coerce")
+    if numeric_values.notna().all():
+        ordered_numeric = np.sort(numeric_values.unique().astype(float))
+        return [str(int(value)) if float(value).is_integer() else str(value) for value in ordered_numeric]
+    return list(dict.fromkeys(non_missing.astype("string").tolist()))
+
+
 def _fit_feature_encoder(
     df: pd.DataFrame,
     features: Sequence[str],
@@ -125,20 +140,29 @@ def _fit_feature_encoder(
         baseline = levels[0] if levels else None
         retained_levels = levels[1:] if len(levels) > 1 else []
         unknown_column = f"{col}__unknown"
+        missing_column = f"{col}__missing"
         categorical_mappings[col] = {
             "all_levels": levels,
             "baseline_level": baseline,
             "retained_levels": retained_levels,
             "unknown_column": unknown_column,
+            "missing_column": missing_column,
         }
         feature_names.extend([f"{col}_{level}" for level in retained_levels])
         feature_names.append(unknown_column)
+        feature_names.append(missing_column)
+    numeric_impute_values: dict[str, float] = {}
+    for col in numeric_features:
+        numeric_series = pd.to_numeric(selected[col], errors="coerce")
+        median_value = numeric_series.median(skipna=True)
+        numeric_impute_values[col] = 0.0 if pd.isna(median_value) else float(median_value)
     feature_names.extend(numeric_features)
     return {
         "features": list(features),
         "categorical_features": resolved_categorical,
         "numeric_features": numeric_features,
         "categorical_mappings": categorical_mappings,
+        "numeric_impute_values": numeric_impute_values,
         "feature_names": feature_names,
     }
 
@@ -160,15 +184,23 @@ def _transform_feature_encoder(
         values = selected[col].astype("string")
         all_levels = pd.Index(mapping["all_levels"], dtype="string")
         for level in mapping["retained_levels"]:
-            encoded[f"{col}_{level}"] = (values == level).astype(float)
+            encoded[f"{col}_{level}"] = values.eq(level).fillna(False).astype(float)
+        missing_mask = values.isna()
         unknown_mask = values.notna() & ~values.isin(all_levels)
         encoded[mapping["unknown_column"]] = unknown_mask.astype(float)
+        encoded[mapping["missing_column"]] = missing_mask.astype(float)
 
     for col in encoder["numeric_features"]:
-        encoded[col] = pd.to_numeric(selected[col], errors="coerce")
+        impute_value = float(encoder["numeric_impute_values"].get(col, 0.0))
+        numeric_series = pd.to_numeric(selected[col], errors="coerce")
+        encoded[col] = numeric_series.fillna(impute_value).astype(float)
 
     encoded = encoded.reindex(columns=encoder["feature_names"], fill_value=0.0)
-    return encoded.replace([np.inf, -np.inf], np.nan)
+    encoded = encoded.replace([np.inf, -np.inf], np.nan)
+    for col in encoder["numeric_features"]:
+        encoded[col] = encoded[col].fillna(float(encoder["numeric_impute_values"].get(col, 0.0)))
+    encoded = encoded.fillna(0.0)
+    return encoded
 
 
 def _encode_features(
@@ -180,32 +212,8 @@ def _encode_features(
 
     Returns a new DataFrame suitable for sklearn-style estimators.
     """
-    categorical_features = list(categorical_features or [])
-    selected = df[list(features)].copy()
-
-    for col in features:
-        if col in categorical_features:
-            selected[col] = selected[col].astype("string")
-        elif is_numeric_dtype(selected[col]):
-            selected[col] = pd.to_numeric(selected[col], errors="coerce")
-        else:
-            # Treat non-numeric columns not listed as categorical as
-            # categorical anyway so we can encode them.
-            selected[col] = selected[col].astype("string")
-            if col not in categorical_features:
-                categorical_features.append(col)
-
-    if categorical_features:
-        selected = pd.get_dummies(
-            selected,
-            columns=[c for c in categorical_features if c in selected.columns],
-            drop_first=True,
-            dtype=float,
-        )
-
-    # Replace residual non-finite values
-    selected = selected.replace([np.inf, -np.inf], np.nan)
-    return selected
+    encoder = _fit_feature_encoder(df, features, categorical_features)
+    return _transform_feature_encoder(df, encoder)
 
 
 def _sksurv_c_index(
@@ -456,11 +464,6 @@ def _encode_train_test_features(
     encoder = _fit_feature_encoder(train_frame, features, categorical_features)
     train_encoded = _transform_feature_encoder(train_frame, encoder)
     test_encoded = _transform_feature_encoder(test_frame, encoder)
-
-    train_valid = train_encoded.notna().all(axis=1)
-    test_valid = test_encoded.notna().all(axis=1)
-    train_encoded = train_encoded.loc[train_valid]
-    test_encoded = test_encoded.loc[test_valid]
     return train_encoded, test_encoded, encoder
 
 
@@ -513,12 +516,12 @@ def _prepare_model_evaluation_split(
             features,
             categorical_features,
         )
-        train_valid = train_encoded.notna().all(axis=1)
-        eval_valid = eval_encoded.notna().all(axis=1)
-        train_encoded = train_encoded.loc[train_valid].reset_index(drop=True)
-        eval_encoded = eval_encoded.loc[eval_valid].reset_index(drop=True)
-        train_clean = train_frame.loc[train_valid].reset_index(drop=True)
-        eval_clean = eval_frame.loc[eval_valid].reset_index(drop=True)
+        if train_encoded.isna().any().any() or eval_encoded.isna().any().any():
+            raise ValueError("Feature encoding produced non-finite values after imputation.")
+        train_encoded = train_encoded.reset_index(drop=True)
+        eval_encoded = eval_encoded.reset_index(drop=True)
+        train_clean = train_frame.reset_index(drop=True)
+        eval_clean = eval_frame.reset_index(drop=True)
         return train_clean, eval_clean, train_encoded, eval_encoded, encoder
 
     train_frame, eval_frame, evaluation_mode = _split_train_test(
@@ -536,13 +539,10 @@ def _prepare_model_evaluation_split(
     if train_encoded.empty or eval_encoded.empty:
         raise ValueError("No valid rows remain after encoding features for model evaluation.")
 
-    full_encoded = _transform_feature_encoder(frame, encoder)
-    full_valid = full_encoded.notna().all(axis=1)
-    full_frame = frame.loc[full_valid].reset_index(drop=True)
-    full_encoded = full_encoded.loc[full_valid].reset_index(drop=True)
-
-    if full_encoded.empty:
-        raise ValueError("No valid rows remain after aligning encoded features to the trained model.")
+    full_encoded = _transform_feature_encoder(frame, encoder).reset_index(drop=True)
+    full_frame = frame.reset_index(drop=True)
+    if full_encoded.isna().any().any():
+        raise ValueError("Encoded full feature matrix contains non-finite values after imputation.")
 
     return {
         "train_frame": train_frame,
@@ -819,6 +819,7 @@ def train_random_survival_forest(
         event_column=event_column,
         event_positive_value=event_positive_value,
         extra_columns=list(features),
+        drop_missing_extra_columns=False,
     )
 
     if internal_evaluation:
@@ -841,12 +842,10 @@ def train_random_survival_forest(
         feature_encoder = split["feature_encoder"]
     else:
         feature_encoder = _fit_feature_encoder(frame, features, categorical_features)
-        full_encoded = _transform_feature_encoder(frame, feature_encoder)
-        valid_mask = full_encoded.notna().all(axis=1)
-        full_frame = frame.loc[valid_mask].reset_index(drop=True)
-        full_encoded = full_encoded.loc[valid_mask].reset_index(drop=True)
+        full_encoded = _transform_feature_encoder(frame, feature_encoder).reset_index(drop=True)
+        full_frame = frame.reset_index(drop=True)
         if full_encoded.empty:
-            raise ValueError("No valid rows remain after encoding features for RSF.")
+            raise ValueError("No analyzable rows remain after encoding features for RSF.")
         train_frame = eval_frame = full_frame
         train_encoded = eval_encoded = full_encoded
         evaluation_mode = "apparent"
@@ -990,6 +989,7 @@ def train_gradient_boosted_survival(
         event_column=event_column,
         event_positive_value=event_positive_value,
         extra_columns=list(features),
+        drop_missing_extra_columns=False,
     )
 
     if internal_evaluation:
@@ -1012,12 +1012,10 @@ def train_gradient_boosted_survival(
         feature_encoder = split["feature_encoder"]
     else:
         feature_encoder = _fit_feature_encoder(frame, features, categorical_features)
-        full_encoded = _transform_feature_encoder(frame, feature_encoder)
-        valid_mask = full_encoded.notna().all(axis=1)
-        full_frame = frame.loc[valid_mask].reset_index(drop=True)
-        full_encoded = full_encoded.loc[valid_mask].reset_index(drop=True)
+        full_encoded = _transform_feature_encoder(frame, feature_encoder).reset_index(drop=True)
+        full_frame = frame.reset_index(drop=True)
         if full_encoded.empty:
-            raise ValueError("No valid rows remain after encoding features for GBS.")
+            raise ValueError("No analyzable rows remain after encoding features for GBS.")
         train_frame = eval_frame = full_frame
         train_encoded = eval_encoded = full_encoded
         evaluation_mode = "apparent"
@@ -1135,6 +1133,7 @@ def compare_survival_models(
         event_column=event_column,
         event_positive_value=event_positive_value,
         extra_columns=list(features),
+        drop_missing_extra_columns=False,
     )
 
     n_patients = int(frame.shape[0])
@@ -1234,6 +1233,8 @@ def compare_survival_models(
     result = {
         "comparison_table": comparison,
         "errors": errors,
+        "ranking_complete": len(errors) == 0 and len(comparison) == len(model_specs),
+        "excluded_models": sorted({str(error["model"]) for error in errors}),
         "n_patients": n_patients,
         "n_events": n_events,
         "evaluation_mode": evaluation_mode,
@@ -1431,6 +1432,7 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             row.get("training_seeds") or row.get("split_seeds") or row.get("monitor_seeds")
             for row in comparison_table
         )
+        include_fallback_counts = any(int(row.get("n_apparent_fallbacks", 0) or 0) > 0 for row in comparison_table)
         for rank, row in enumerate(comparison_table, start=1):
             interval_lower = _safe_float(row.get("c_index_interval_lower"))
             interval_upper = _safe_float(row.get("c_index_interval_upper"))
@@ -1451,6 +1453,8 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
                 "Features, n": row.get("n_features"),
                 "Mean Training Time, ms": _safe_float(row.get("training_time_ms")),
             }
+            if include_fallback_counts:
+                manuscript_row["Apparent fallback folds, n"] = int(row.get("n_apparent_fallbacks", 0) or 0)
             if include_provenance:
                 manuscript_row["Training seeds"] = _format_seed_values(row.get("training_seeds"))
                 manuscript_row["Split seeds"] = _format_seed_values(row.get("split_seeds"))
@@ -1460,11 +1464,15 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             "C-index values summarize repeat-level means from repeated stratified cross-validation.",
             "The empirical repeat interval reports the 2.5th to 97.5th percentiles of repeat mean C-index values.",
             "The repeat interval is descriptive across repeats and should not be interpreted as a formal confidence interval.",
-            "Blank C-index fields indicate incomplete repeated-CV evaluation because one or more folds failed.",
+            "Blank C-index fields indicate incomplete repeated-CV evaluation because one or more folds failed or fell back to apparent evaluation.",
         ]
         if include_provenance:
             table_notes.append(
                 "Training, split, and monitor seed columns record the exact repeated-CV partitioning used for replay under the same model settings."
+            )
+        if include_fallback_counts:
+            table_notes.append(
+                "Apparent fallback fold counts report folds that were excluded from the repeated-CV aggregate because a clean holdout concordance estimate could not be retained."
             )
     else:
         row_modes = {str(row.get("evaluation_mode", evaluation_mode)) for row in comparison_table}
@@ -1537,6 +1545,7 @@ def cross_validate_survival_models(
         event_column=event_column,
         event_positive_value=event_positive_value,
         extra_columns=list(features),
+        drop_missing_extra_columns=False,
     )
     n_patients = int(frame.shape[0])
     n_events = int(frame[event_column].sum())
@@ -1683,6 +1692,8 @@ def cross_validate_survival_models(
         "fold_results": fold_results,
         "repeat_results": [row["repeat_results"] for row in comparison],
         "errors": errors,
+        "ranking_complete": not errors and all(row.get("c_index") is not None for row in comparison),
+        "excluded_models": sorted({str(error["model"]) for error in errors}),
         "n_patients": n_patients,
         "n_events": n_events,
         "evaluation_mode": "repeated_cv",
@@ -1831,6 +1842,7 @@ def compute_partial_dependence(
         ``mean_risk`` (averaged predicted risk at each value).
     """
     categorical_features = list(categorical_features or [])
+    computation_errors: list[str] = []
 
     def _predict_mean_for_variant(frame_variant: pd.DataFrame) -> float | None:
         if feature_encoder is not None:
@@ -1852,10 +1864,7 @@ def compute_partial_dependence(
 
     if analysis_frame is not None and feature_name in analysis_frame.columns:
         if feature_name in categorical_features:
-            category_values = sorted(
-                str(value)
-                for value in analysis_frame[feature_name].dropna().astype("string").unique().tolist()
-            )
+            category_values = _ordered_category_values(analysis_frame[feature_name])
             if len(category_values) < 2:
                 raise ValueError(
                     f"Feature '{feature_name}' has fewer than two observed categories. "
@@ -1869,8 +1878,15 @@ def compute_partial_dependence(
                 frame_variant[feature_name] = category
                 try:
                     mean_risks.append(_predict_mean_for_variant(frame_variant))
-                except Exception:
+                except Exception as exc:
+                    computation_errors.append(f"{feature_name}={category}: {type(exc).__name__}: {exc}")
                     mean_risks.append(None)
+
+            if computation_errors:
+                raise ValueError(
+                    "Partial dependence failed for one or more category levels: "
+                    + "; ".join(computation_errors[:3])
+                )
 
             return {
                 "feature": feature_name,
@@ -1905,8 +1921,15 @@ def compute_partial_dependence(
             frame_variant[feature_name] = float(grid_val)
             try:
                 mean_risks.append(_predict_mean_for_variant(frame_variant))
-            except Exception:
+            except Exception as exc:
+                computation_errors.append(f"{feature_name}={float(grid_val):.6g}: {type(exc).__name__}: {exc}")
                 mean_risks.append(None)
+
+        if computation_errors:
+            raise ValueError(
+                "Partial dependence failed for one or more grid values: "
+                + "; ".join(computation_errors[:3])
+            )
 
         return {
             "feature": feature_name,
@@ -1945,8 +1968,15 @@ def compute_partial_dependence(
         try:
             preds = model.predict(X_modified)
             mean_risks.append(_safe_float(float(np.mean(preds))))
-        except Exception:
+        except Exception as exc:
+            computation_errors.append(f"{feature_name}={float(grid_val):.6g}: {type(exc).__name__}: {exc}")
             mean_risks.append(None)
+
+    if computation_errors:
+        raise ValueError(
+            "Partial dependence failed for one or more grid values: "
+            + "; ".join(computation_errors[:3])
+        )
 
     return {
         "feature": feature_name,
@@ -2374,7 +2404,6 @@ def compute_time_dependent_importance(
         ``importance_matrix_orientation``, ``dominant_feature_per_time``,
         and ``scientific_summary``.
     """
-    from sklearn.ensemble import RandomForestClassifier
     _ = model_type
 
     frame = _cohort_frame(
@@ -2383,15 +2412,13 @@ def compute_time_dependent_importance(
         event_column=event_column,
         event_positive_value=event_positive_value,
         extra_columns=list(features),
+        drop_missing_extra_columns=False,
     )
-
-    X_encoded = _encode_features(frame, features, categorical_features)
-    valid_mask = X_encoded.notna().all(axis=1)
-    X_encoded = X_encoded.loc[valid_mask].reset_index(drop=True)
-    frame = frame.loc[valid_mask].reset_index(drop=True)
+    X_encoded = _encode_features(frame, features, categorical_features).reset_index(drop=True)
+    frame = frame.reset_index(drop=True)
 
     if X_encoded.empty:
-        raise ValueError("No valid rows remain after encoding features.")
+        raise ValueError("No analyzable rows remain after encoding features.")
 
     time_values = frame[time_column].to_numpy(dtype=float)
     event_values = frame[event_column].to_numpy(dtype=float)
@@ -2415,6 +2442,8 @@ def compute_time_dependent_importance(
     importance_matrix_time_major: list[list[float | None]] = []
     dominant_per_time: list[str | None] = []
     evaluable_patients_per_time: list[int] = []
+    skipped_time_points: list[dict[str, Any]] = []
+    computation_errors: list[str] = []
 
     X_array = X_encoded.to_numpy(dtype=float)
 
@@ -2433,6 +2462,11 @@ def compute_time_dependent_importance(
         if evaluable_patients < 2 or len(np.unique(y_t)) < 2:
             importance_matrix_time_major.append([None] * len(feature_names))
             dominant_per_time.append(None)
+            skipped_time_points.append({
+                "time": _safe_float(float(t)),
+                "reason": "not_enough_evaluable_patients_or_classes",
+                "evaluable_patients": evaluable_patients,
+            })
             continue
 
         try:
@@ -2450,9 +2484,16 @@ def compute_time_dependent_importance(
 
             best_idx = int(np.argmax(importances))
             dominant_per_time.append(feature_names[best_idx])
-        except Exception:
+        except Exception as exc:
             importance_matrix_time_major.append([None] * len(feature_names))
             dominant_per_time.append(None)
+            computation_errors.append(f"t={float(t):.6g}: {type(exc).__name__}: {exc}")
+
+    if computation_errors:
+        raise ValueError(
+            "Time-dependent importance failed for one or more evaluation times: "
+            + "; ".join(computation_errors[:3])
+        )
 
     n_patients = int(frame.shape[0])
     n_events = int(np.sum(event_values))
@@ -2534,6 +2575,7 @@ def compute_time_dependent_importance(
         "importance_matrix_orientation": "time_major",
         "dominant_feature_per_time": dominant_per_time,
         "evaluable_patients_per_time": evaluable_patients_per_time,
+        "skipped_time_points": skipped_time_points,
         "scientific_summary": scientific_summary,
     }
 
@@ -2558,6 +2600,7 @@ def counterfactual_survival(
     max_depth: int | None = None,
     learning_rate: float = 0.1,
     random_state: int = 42,
+    trained_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate counterfactual survival analysis: 'What if this feature were different?'
 
@@ -2615,47 +2658,61 @@ def counterfactual_survival(
             f"target_feature '{target_feature}' must be in the features list."
         )
 
-    frame = _cohort_frame(
-        df,
-        time_column=time_column,
-        event_column=event_column,
-        event_positive_value=event_positive_value,
-        extra_columns=list(features),
-    )
-
-    # Train a survival model on the original data
     cat_feats = list(categorical_features or [])
-
-    if model_type == "gbs":
-        result = train_gradient_boosted_survival(
-            frame,
+    if trained_result is None:
+        frame = _cohort_frame(
+            df,
             time_column=time_column,
             event_column=event_column,
-            features=features,
-            categorical_features=cat_feats,
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            learning_rate=learning_rate,
-            random_state=random_state,
+            event_positive_value=event_positive_value,
+            extra_columns=list(features),
+            drop_missing_extra_columns=False,
         )
-    elif model_type == "rsf":
-        result = train_random_survival_forest(
-            frame,
-            time_column=time_column,
-            event_column=event_column,
-            features=features,
-            categorical_features=cat_feats,
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            random_state=random_state,
-        )
+        if model_type == "gbs":
+            result = train_gradient_boosted_survival(
+                frame,
+                time_column=time_column,
+                event_column=event_column,
+                features=features,
+                categorical_features=cat_feats,
+                n_estimators=n_estimators,
+                max_depth=max_depth,
+                learning_rate=learning_rate,
+                random_state=random_state,
+            )
+        elif model_type == "rsf":
+            result = train_random_survival_forest(
+                frame,
+                time_column=time_column,
+                event_column=event_column,
+                features=features,
+                categorical_features=cat_feats,
+                n_estimators=n_estimators,
+                max_depth=max_depth,
+                random_state=random_state,
+            )
+        else:
+            raise ValueError(f"Unsupported counterfactual model_type '{model_type}'. Expected 'rsf' or 'gbs'.")
     else:
-        raise ValueError(f"Unsupported counterfactual model_type '{model_type}'. Expected 'rsf' or 'gbs'.")
+        result = trained_result
+        frame = result.get("_analysis_frame")
+        required_frame_columns = {time_column, event_column, *features}
+        if frame is None or not required_frame_columns.issubset(set(frame.columns)):
+            frame = _cohort_frame(
+                df,
+                time_column=time_column,
+                event_column=event_column,
+                event_positive_value=event_positive_value,
+                extra_columns=list(features),
+                drop_missing_extra_columns=False,
+            )
 
     model = result["_model"]
     X_original = result["_X_encoded"]
     encoder = result.get("_feature_encoder")
-    analysis_frame = result.get("_analysis_frame", frame)
+    analysis_frame = result.get("_analysis_frame")
+    if analysis_frame is None or not set(features).issubset(set(analysis_frame.columns)):
+        analysis_frame = frame
 
     def _scenario_label(value: Any) -> str:
         return "observed values" if value is None else str(value)
@@ -2778,5 +2835,6 @@ def counterfactual_survival(
         "original_median_risk": _safe_float(original_median_risk),
         "counterfactual_median_risk": _safe_float(cf_median_risk),
         "risk_change_pct": _safe_float(risk_change_pct),
+        "model_type": model_type,
         "scientific_summary": scientific_summary,
     }

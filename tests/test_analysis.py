@@ -116,6 +116,24 @@ def test_km_analysis_returns_grouped_results() -> None:
     assert result["scientific_summary"]["metrics"]
 
 
+def test_weighted_km_does_not_report_weighted_test_as_logrank_p() -> None:
+    df = make_example_dataset(seed=12, n_patients=180)
+    result = compute_km_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        group_column="stage",
+        event_positive_value=1,
+        logrank_weight="gehan_breslow",
+    )
+
+    assert result["test"] is not None
+    assert result["test"]["test"] == "gehan_breslow"
+    assert result["logrank_p"] is None
+    assert result["test_p_value"] == pytest.approx(result["test"]["p_value"])
+    assert result["test_p_value_label"] == "gehan_breslow"
+
+
 def test_pointwise_km_ci_handles_survival_near_one_without_blowing_up() -> None:
     lower, upper = _pointwise_km_ci(
         np.asarray([1.0 - 1e-16], dtype=float),
@@ -238,6 +256,19 @@ def test_cohort_table_includes_overall_column() -> None:
     table = compute_cohort_table(df, variables=["age", "sex", "stage"], group_column="treatment")
     assert "Overall" in table["columns"]
     assert any(row["Variable"] == "age" for row in table["rows"])
+
+
+def test_cohort_table_treats_binary_numeric_variables_as_counts() -> None:
+    df = make_example_dataset(seed=29, n_patients=100)
+    df["binary_flag"] = (df["age"] >= df["age"].median()).astype(int)
+
+    table = compute_cohort_table(df, variables=["binary_flag"], group_column=None)
+    stats = {(row["Variable"], row["Statistic"]): row["Overall"] for row in table["rows"]}
+
+    assert ("binary_flag", "Mean ± SD | Median [IQR]") not in stats
+    assert ("binary_flag", "0") in stats
+    assert ("binary_flag", "1") in stats
+    assert "%" in str(stats[("binary_flag", "1")])
 
 
 def test_tertile_split_handles_tied_quantile_edges() -> None:
