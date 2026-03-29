@@ -51,6 +51,14 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="downloadDlComparisonSvgButton"' in response.text
     assert 'id="dlEarlyStoppingPatience"' in response.text
     assert 'id="dlParallelJobs"' in response.text
+    assert 'id="dlBatchSize"' in response.text
+    assert 'id="dlRandomSeed"' in response.text
+    assert 'id="dlNumTimeBins"' in response.text
+    assert 'id="dlDModel"' in response.text
+    assert 'id="dlHeads"' in response.text
+    assert 'id="dlLayers"' in response.text
+    assert 'id="dlLatentDim"' in response.text
+    assert 'id="dlClusters"' in response.text
     assert 'id="dlJournalTemplate"' in response.text
     assert 'id="runCompareInlineButton"' in response.text
     assert 'id="runDlCompareInlineButton"' in response.text
@@ -174,7 +182,7 @@ def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     assert 'setGuidedStep(currentGuidedStep() + 1, { historyMode: "push" });' in text
     assert 'setGuidedStep(currentGuidedStep() - 1, { historyMode: "push" });' in text
     assert 'setGuidedGoal(target.dataset.goal || null, { historyMode: "push" });' in text
-    assert 'if (currentGoalResult(tabName)) setGuidedStep(5, { scroll: true, historyMode: "push" });' in text
+    assert 'setGuidedStep(5, { scroll: false, historyMode: "push" });' in text
     assert 'refs.stepIndicator?.addEventListener("click", (event) => {' in text
     assert 'if (requestedStep === 1) {' in text
     assert 'if (requestedStep >= 4 && runtime.guidedGoal) {' in text
@@ -224,12 +232,24 @@ def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
     assert 'item.loc.filter((part) => part !== "body").join(" > ")' in text
     assert "Epochs must be between 10 and 1000." in text
     assert "Hidden layers must be a comma-separated list of positive integers." in text
+    assert "Batch size must be between 8 and 512." in text
+    assert "Random seed must be an integer." in text
     assert "CV folds must be between 2 and 10." in text
     assert "Parallel jobs must be between 1 and 16." in text
+    assert "Transformer width must be divisible by attention heads." in text
+    assert "Latent dim must be between 2 and 32." in text
     assert "validateDlControls();" in text
     assert "evaluation_strategy: refs.dlEvaluationStrategy.value" in text
     assert "cv_folds: Number(refs.dlCvFolds.value)" in text
     assert "cv_repeats: Number(refs.dlCvRepeats.value)" in text
+    assert "batch_size: Number(refs.dlBatchSize.value)" in text
+    assert "random_seed: Number(refs.dlRandomSeed.value)" in text
+    assert "num_time_bins: Number(refs.dlNumTimeBins.value)" in text
+    assert "d_model: Number(refs.dlDModel.value)" in text
+    assert "n_heads: Number(refs.dlHeads.value)" in text
+    assert "n_layers: Number(refs.dlLayers.value)" in text
+    assert "latent_dim: Number(refs.dlLatentDim.value)" in text
+    assert "n_clusters: Number(refs.dlClusters.value)" in text
     assert "rerun seed=" in text
     assert "rerun a single architecture with Train Model while keeping repeated CV selected" in text
     assert "seed=" in text

@@ -199,6 +199,8 @@ const refs = {
   dlLearningRate: document.getElementById("dlLearningRate"),
   dlHiddenLayers: document.getElementById("dlHiddenLayers"),
   dlDropout: document.getElementById("dlDropout"),
+  dlBatchSize: document.getElementById("dlBatchSize"),
+  dlRandomSeed: document.getElementById("dlRandomSeed"),
   dlEvaluationStrategy: document.getElementById("dlEvaluationStrategy"),
   dlCvFoldsWrap: document.getElementById("dlCvFoldsWrap"),
   dlCvRepeatsWrap: document.getElementById("dlCvRepeatsWrap"),
@@ -207,6 +209,18 @@ const refs = {
   dlEarlyStoppingPatience: document.getElementById("dlEarlyStoppingPatience"),
   dlEarlyStoppingMinDelta: document.getElementById("dlEarlyStoppingMinDelta"),
   dlParallelJobs: document.getElementById("dlParallelJobs"),
+  dlNumTimeBinsWrap: document.getElementById("dlNumTimeBinsWrap"),
+  dlNumTimeBins: document.getElementById("dlNumTimeBins"),
+  dlDModelWrap: document.getElementById("dlDModelWrap"),
+  dlDModel: document.getElementById("dlDModel"),
+  dlHeadsWrap: document.getElementById("dlHeadsWrap"),
+  dlHeads: document.getElementById("dlHeads"),
+  dlLayersWrap: document.getElementById("dlLayersWrap"),
+  dlLayers: document.getElementById("dlLayers"),
+  dlLatentDimWrap: document.getElementById("dlLatentDimWrap"),
+  dlLatentDim: document.getElementById("dlLatentDim"),
+  dlClustersWrap: document.getElementById("dlClustersWrap"),
+  dlClusters: document.getElementById("dlClusters"),
   dlJournalTemplate: document.getElementById("dlJournalTemplate"),
   dlFeatureSummaryCard: document.getElementById("dlFeatureSummaryCard"),
   dlFeatureSummaryText: document.getElementById("dlFeatureSummaryText"),
@@ -247,6 +261,13 @@ function apiUrl(url) {
   if (/^https?:\/\//.test(url)) return url;
   if (url.startsWith("/")) return `${runtime.apiBase}${url}`;
   return url;
+}
+
+function parseHiddenLayers(control = refs.dlHiddenLayers) {
+  return String(control?.value || "")
+    .split(",")
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isInteger(value) && value > 0);
 }
 
 async function fetchJSON(url, options = {}) {
@@ -389,24 +410,36 @@ function matchesRequestConfig(goal, requestConfig) {
   }
 
   if (goal === "dl") {
+    const modelType = String(refs.dlModelType?.value || "");
+    const usesHiddenLayers = modelType !== "transformer";
+    const usesDiscreteTime = modelType === "deephit" || modelType === "mtlr";
+    const usesTransformer = modelType === "transformer";
+    const usesVae = modelType === "vae";
     return (
-      String(requestConfig.model_type || "") === String(refs.dlModelType?.value || "")
+      String(requestConfig.model_type || "") === modelType
       && arrayEquals(sortedStrings(requestConfig.features || []), sortedStrings(selectedCheckboxValues(refs.modelFeatureChecklist)))
       && arrayEquals(
         sortedStrings(requestConfig.categorical_features || []),
         sortedStrings(selectedCheckboxValues(refs.modelCategoricalChecklist).filter((value) => selectedCheckboxValues(refs.modelFeatureChecklist).includes(value))),
       )
-      && arrayEquals((requestConfig.hidden_layers || []).map(Number), String(refs.dlHiddenLayers?.value || "").split(",").map((value) => Number(value.trim())).filter((value) => Number.isFinite(value)))
+      && (!usesHiddenLayers || arrayEquals((requestConfig.hidden_layers || []).map(Number), parseHiddenLayers()))
       && Number(requestConfig.dropout) === Number(refs.dlDropout?.value)
       && Number(requestConfig.learning_rate) === Number(refs.dlLearningRate?.value)
       && Number(requestConfig.epochs) === Number(refs.dlEpochs?.value)
+      && Number(requestConfig.batch_size || 64) === Number(refs.dlBatchSize?.value || 64)
+      && Number(requestConfig.random_seed || 42) === Number(refs.dlRandomSeed?.value || 42)
       && String(requestConfig.evaluation_strategy || "holdout") === String(refs.dlEvaluationStrategy?.value || "holdout")
       && Number(requestConfig.cv_folds || 5) === Number(refs.dlCvFolds?.value || 5)
       && Number(requestConfig.cv_repeats || 3) === Number(refs.dlCvRepeats?.value || 3)
       && Number(requestConfig.early_stopping_patience || 10) === Number(refs.dlEarlyStoppingPatience?.value || 10)
       && Number(requestConfig.early_stopping_min_delta || 0.0001) === Number(refs.dlEarlyStoppingMinDelta?.value || 0.0001)
       && Number(requestConfig.parallel_jobs || 1) === Number(refs.dlParallelJobs?.value || 1)
-      && Number(requestConfig.num_time_bins || 50) === 50
+      && (!usesDiscreteTime || Number(requestConfig.num_time_bins || 50) === Number(refs.dlNumTimeBins?.value || 50))
+      && (!usesTransformer || Number(requestConfig.d_model || 64) === Number(refs.dlDModel?.value || 64))
+      && (!usesTransformer || Number(requestConfig.n_heads || 4) === Number(refs.dlHeads?.value || 4))
+      && (!usesTransformer || Number(requestConfig.n_layers || 2) === Number(refs.dlLayers?.value || 2))
+      && (!usesVae || Number(requestConfig.latent_dim || 8) === Number(refs.dlLatentDim?.value || 8))
+      && (!usesVae || Number(requestConfig.n_clusters || 3) === Number(refs.dlClusters?.value || 3))
     );
   }
 
@@ -634,12 +667,20 @@ function captureControlSnapshot() {
     dlLearningRate: refs.dlLearningRate?.value || "",
     dlHiddenLayers: refs.dlHiddenLayers?.value || "",
     dlDropout: refs.dlDropout?.value || "",
+    dlBatchSize: refs.dlBatchSize?.value || "",
+    dlRandomSeed: refs.dlRandomSeed?.value || "",
     dlEvaluationStrategy: refs.dlEvaluationStrategy?.value || "",
     dlCvFolds: refs.dlCvFolds?.value || "",
     dlCvRepeats: refs.dlCvRepeats?.value || "",
     dlEarlyStoppingPatience: refs.dlEarlyStoppingPatience?.value || "",
     dlEarlyStoppingMinDelta: refs.dlEarlyStoppingMinDelta?.value || "",
     dlParallelJobs: refs.dlParallelJobs?.value || "",
+    dlNumTimeBins: refs.dlNumTimeBins?.value || "",
+    dlDModel: refs.dlDModel?.value || "",
+    dlHeads: refs.dlHeads?.value || "",
+    dlLayers: refs.dlLayers?.value || "",
+    dlLatentDim: refs.dlLatentDim?.value || "",
+    dlClusters: refs.dlClusters?.value || "",
     dlJournalTemplate: refs.dlJournalTemplate?.value || "",
   };
 }
@@ -709,11 +750,19 @@ function applyControlSnapshot(snapshot) {
   setInputValue(refs.dlLearningRate, snapshot.dlLearningRate);
   setInputValue(refs.dlHiddenLayers, snapshot.dlHiddenLayers);
   setInputValue(refs.dlDropout, snapshot.dlDropout);
+  setInputValue(refs.dlBatchSize, snapshot.dlBatchSize);
+  setInputValue(refs.dlRandomSeed, snapshot.dlRandomSeed);
   setInputValue(refs.dlCvFolds, snapshot.dlCvFolds);
   setInputValue(refs.dlCvRepeats, snapshot.dlCvRepeats);
   setInputValue(refs.dlEarlyStoppingPatience, snapshot.dlEarlyStoppingPatience);
   setInputValue(refs.dlEarlyStoppingMinDelta, snapshot.dlEarlyStoppingMinDelta);
   setInputValue(refs.dlParallelJobs, snapshot.dlParallelJobs);
+  setInputValue(refs.dlNumTimeBins, snapshot.dlNumTimeBins);
+  setInputValue(refs.dlDModel, snapshot.dlDModel);
+  setInputValue(refs.dlHeads, snapshot.dlHeads);
+  setInputValue(refs.dlLayers, snapshot.dlLayers);
+  setInputValue(refs.dlLatentDim, snapshot.dlLatentDim);
+  setInputValue(refs.dlClusters, snapshot.dlClusters);
   setSelectValueIfPresent(refs.deriveMethod, snapshot.deriveMethod);
   setSelectValueIfPresent(refs.logrankWeight, snapshot.logrankWeight);
   setSelectValueIfPresent(refs.signatureOperator, snapshot.signatureOperator);
@@ -729,6 +778,7 @@ function applyControlSnapshot(snapshot) {
   updateWeightVisibility();
   updateMlEvaluationControls();
   updateDlEvaluationControls();
+  updateDlModelControlVisibility();
   setCheckedValues(refs.covariateChecklist, snapshot.covariates || []);
   setCheckedValues(refs.categoricalChecklist, snapshot.categoricals || []);
   setCheckedValues(refs.modelFeatureChecklist, snapshot.modelFeatures || []);
@@ -1535,6 +1585,22 @@ function updateDlEvaluationControls() {
   if (refs.dlParallelJobs) refs.dlParallelJobs.disabled = !isRepeatedCv;
 }
 
+function updateDlModelControlVisibility() {
+  const modelType = refs.dlModelType?.value || "deepsurv";
+  const usesDiscreteTime = modelType === "deephit" || modelType === "mtlr";
+  const usesTransformer = modelType === "transformer";
+  const usesVae = modelType === "vae";
+  const usesHiddenLayers = !usesTransformer;
+
+  refs.dlHiddenLayers?.closest(".toolbar-field")?.classList.toggle("hidden", !usesHiddenLayers);
+  refs.dlNumTimeBinsWrap?.classList.toggle("hidden", !usesDiscreteTime);
+  refs.dlDModelWrap?.classList.toggle("hidden", !usesTransformer);
+  refs.dlHeadsWrap?.classList.toggle("hidden", !usesTransformer);
+  refs.dlLayersWrap?.classList.toggle("hidden", !usesTransformer);
+  refs.dlLatentDimWrap?.classList.toggle("hidden", !usesVae);
+  refs.dlClustersWrap?.classList.toggle("hidden", !usesVae);
+}
+
 function purgePlot(el) {
   if (el && el.data) { try { Plotly.purge(el); } catch { /* ignore */ } }
 }
@@ -2073,9 +2139,9 @@ function guidedPanelMarkup(step) {
         <article class="guided-card">
           <h3>${escapeHtml(configureCopy.title)}</h3>
           <p>${escapeHtml(configureCopy.text)}</p>
-          <div class="guided-actions guided-actions-priority">
+          <div class="guided-actions guided-actions-priority${configureCopy.secondaryAction ? " guided-actions-dual" : ""}">
             ${configureCopy.secondaryAction
-              ? `<button class="button ghost compact-btn guided-run-choice" type="button" data-guided-action="${escapeHtml(configureCopy.secondaryAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.secondaryLabel)}</button>`
+              ? `<button class="button ghost compact-btn guided-run-choice guided-run-choice-secondary" type="button" data-guided-action="${escapeHtml(configureCopy.secondaryAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.secondaryLabel)}</button>`
               : ""}
             <button class="button primary compact-btn guided-run-choice" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.runLabel)}</button>
           </div>
@@ -2318,6 +2384,7 @@ function validateGroupingSelection() {
 }
 
 function validateDlControls() {
+  const modelType = refs.dlModelType?.value || "deepsurv";
   const epochs = Number(refs.dlEpochs?.value);
   if (!Number.isFinite(epochs) || epochs < 10 || epochs > 1000) {
     throw new Error(`Epochs must be between 10 and 1000. Current value: ${formatValue(epochs)}.`);
@@ -2330,13 +2397,23 @@ function validateDlControls() {
   if (!Number.isFinite(dropout) || dropout < 0 || dropout > 0.5) {
     throw new Error(`Dropout must be between 0 and 0.5. Current value: ${formatValue(dropout)}.`);
   }
-  const hiddenLayerText = refs.dlHiddenLayers?.value?.trim() || "";
-  if (!hiddenLayerText) {
-    throw new Error("Hidden layers must be a comma-separated list of positive integers, for example 64,64.");
+  if (modelType !== "transformer") {
+    const hiddenLayerText = refs.dlHiddenLayers?.value?.trim() || "";
+    if (!hiddenLayerText) {
+      throw new Error("Hidden layers must be a comma-separated list of positive integers, for example 64,64.");
+    }
+    const hiddenLayers = parseHiddenLayers();
+    if (!hiddenLayers.length) {
+      throw new Error(`Hidden layers must be a comma-separated list of positive integers. Current value: ${hiddenLayerText}.`);
+    }
   }
-  const hiddenLayers = hiddenLayerText.split(",").map((value) => Number(value.trim()));
-  if (!hiddenLayers.length || hiddenLayers.some((value) => !Number.isInteger(value) || value <= 0)) {
-    throw new Error(`Hidden layers must be a comma-separated list of positive integers. Current value: ${hiddenLayerText}.`);
+  const batchSize = Number(refs.dlBatchSize?.value);
+  if (!Number.isFinite(batchSize) || batchSize < 8 || batchSize > 512) {
+    throw new Error(`Batch size must be between 8 and 512. Current value: ${formatValue(batchSize)}.`);
+  }
+  const randomSeed = Number(refs.dlRandomSeed?.value);
+  if (!Number.isFinite(randomSeed) || !Number.isInteger(randomSeed)) {
+    throw new Error(`Random seed must be an integer. Current value: ${formatValue(randomSeed)}.`);
   }
   const patience = Number(refs.dlEarlyStoppingPatience?.value);
   if (!Number.isFinite(patience) || patience < 1 || patience > 100) {
@@ -2359,6 +2436,39 @@ function validateDlControls() {
     const parallelJobs = Number(refs.dlParallelJobs?.value);
     if (!Number.isFinite(parallelJobs) || parallelJobs < 1 || parallelJobs > 16) {
       throw new Error(`Parallel jobs must be between 1 and 16. Current value: ${formatValue(parallelJobs)}.`);
+    }
+  }
+  if (modelType === "deephit" || modelType === "mtlr") {
+    const numTimeBins = Number(refs.dlNumTimeBins?.value);
+    if (!Number.isFinite(numTimeBins) || numTimeBins < 10 || numTimeBins > 200) {
+      throw new Error(`Time bins must be between 10 and 200. Current value: ${formatValue(numTimeBins)}.`);
+    }
+  }
+  if (modelType === "transformer") {
+    const dModel = Number(refs.dlDModel?.value);
+    const nHeads = Number(refs.dlHeads?.value);
+    const nLayers = Number(refs.dlLayers?.value);
+    if (!Number.isFinite(dModel) || dModel < 16 || dModel > 256) {
+      throw new Error(`Transformer width must be between 16 and 256. Current value: ${formatValue(dModel)}.`);
+    }
+    if (!Number.isFinite(nHeads) || nHeads < 1 || nHeads > 16) {
+      throw new Error(`Attention heads must be between 1 and 16. Current value: ${formatValue(nHeads)}.`);
+    }
+    if (!Number.isFinite(nLayers) || nLayers < 1 || nLayers > 8) {
+      throw new Error(`Transformer layers must be between 1 and 8. Current value: ${formatValue(nLayers)}.`);
+    }
+    if (dModel % nHeads !== 0) {
+      throw new Error(`Transformer width must be divisible by attention heads. Current values: width=${formatValue(dModel)}, heads=${formatValue(nHeads)}.`);
+    }
+  }
+  if (modelType === "vae") {
+    const latentDim = Number(refs.dlLatentDim?.value);
+    const nClusters = Number(refs.dlClusters?.value);
+    if (!Number.isFinite(latentDim) || latentDim < 2 || latentDim > 32) {
+      throw new Error(`Latent dim must be between 2 and 32. Current value: ${formatValue(latentDim)}.`);
+    }
+    if (!Number.isFinite(nClusters) || nClusters < 2 || nClusters > 10) {
+      throw new Error(`Clusters must be between 2 and 10. Current value: ${formatValue(nClusters)}.`);
     }
   }
 }
@@ -2960,7 +3070,7 @@ async function runDlModel() {
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
   const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
-  const hiddenLayers = refs.dlHiddenLayers.value.split(",").map(Number).filter((n) => n > 0);
+  const hiddenLayers = parseHiddenLayers();
   if (!hiddenLayers.length) hiddenLayers.push(64, 64);
 
   setShimmer(refs.dlImportancePlot);
@@ -2977,14 +3087,20 @@ async function runDlModel() {
       dropout: Number(refs.dlDropout.value),
       learning_rate: Number(refs.dlLearningRate.value),
       epochs: Number(refs.dlEpochs.value),
+      batch_size: Number(refs.dlBatchSize.value),
+      random_seed: Number(refs.dlRandomSeed.value),
       early_stopping_patience: Number(refs.dlEarlyStoppingPatience.value),
       early_stopping_min_delta: Number(refs.dlEarlyStoppingMinDelta.value),
       parallel_jobs: Number(refs.dlParallelJobs.value),
       evaluation_strategy: refs.dlEvaluationStrategy.value,
       cv_folds: Number(refs.dlCvFolds.value),
       cv_repeats: Number(refs.dlCvRepeats.value),
-      batch_size: 64,
-      random_seed: 42,
+      num_time_bins: Number(refs.dlNumTimeBins.value),
+      d_model: Number(refs.dlDModel.value),
+      n_heads: Number(refs.dlHeads.value),
+      n_layers: Number(refs.dlLayers.value),
+      latent_dim: Number(refs.dlLatentDim.value),
+      n_clusters: Number(refs.dlClusters.value),
     }),
   });
   state.dl = payload;
@@ -3055,7 +3171,7 @@ async function runDlCompareModels() {
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
   const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
-  const hiddenLayers = refs.dlHiddenLayers.value.split(",").map(Number).filter((n) => n > 0);
+  const hiddenLayers = parseHiddenLayers();
   if (!hiddenLayers.length) hiddenLayers.push(64, 64);
 
   setShimmer(refs.dlComparisonShell);
@@ -3074,14 +3190,20 @@ async function runDlCompareModels() {
       dropout: Number(refs.dlDropout.value),
       learning_rate: Number(refs.dlLearningRate.value),
       epochs: Number(refs.dlEpochs.value),
+      batch_size: Number(refs.dlBatchSize.value),
+      random_seed: Number(refs.dlRandomSeed.value),
       early_stopping_patience: Number(refs.dlEarlyStoppingPatience.value),
       early_stopping_min_delta: Number(refs.dlEarlyStoppingMinDelta.value),
       parallel_jobs: Number(refs.dlParallelJobs.value),
-      batch_size: 64,
-      random_seed: 42,
       evaluation_strategy: refs.dlEvaluationStrategy.value,
       cv_folds: Number(refs.dlCvFolds.value),
       cv_repeats: Number(refs.dlCvRepeats.value),
+      num_time_bins: Number(refs.dlNumTimeBins.value),
+      d_model: Number(refs.dlDModel.value),
+      n_heads: Number(refs.dlHeads.value),
+      n_layers: Number(refs.dlLayers.value),
+      latent_dim: Number(refs.dlLatentDim.value),
+      n_clusters: Number(refs.dlClusters.value),
     }),
   });
   state.dl = payload;
@@ -3645,6 +3767,7 @@ function initListeners() {
   refs.logrankWeight.addEventListener("change", () => { updateWeightVisibility(); queueHistorySync(); });
   refs.mlModelType.addEventListener("change", () => { updateMlModelControlVisibility(); queueHistorySync(); });
   refs.mlEvaluationStrategy.addEventListener("change", () => { updateMlEvaluationControls(); queueHistorySync(); });
+  refs.dlModelType.addEventListener("change", () => { updateDlModelControlVisibility(); queueHistorySync(); });
   refs.dlEvaluationStrategy.addEventListener("change", () => { updateDlEvaluationControls(); queueHistorySync(); });
   refs.deriveToggle.addEventListener("click", () => {
     if (refs.groupingDetails) refs.groupingDetails.open = true;
@@ -3761,11 +3884,19 @@ function initListeners() {
     refs.dlLearningRate,
     refs.dlHiddenLayers,
     refs.dlDropout,
+    refs.dlBatchSize,
+    refs.dlRandomSeed,
     refs.dlCvFolds,
     refs.dlCvRepeats,
     refs.dlEarlyStoppingPatience,
     refs.dlEarlyStoppingMinDelta,
     refs.dlParallelJobs,
+    refs.dlNumTimeBins,
+    refs.dlDModel,
+    refs.dlHeads,
+    refs.dlLayers,
+    refs.dlLatentDim,
+    refs.dlClusters,
     refs.dlJournalTemplate,
   ];
   changeTrackedControls.filter(Boolean).forEach((control) => {
@@ -3784,6 +3915,7 @@ updateMethodVisibility();
 updateWeightVisibility();
 updateMlModelControlVisibility();
 updateMlEvaluationControls();
+updateDlModelControlVisibility();
 updateDlEvaluationControls();
 initializeRuntime();
 

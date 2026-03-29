@@ -380,6 +380,95 @@ def test_survival_vae_eval_is_deterministic() -> None:
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_neural_mtlr_net_uses_dropout_layers() -> None:
+    import torch.nn as nn
+
+    from survival_toolkit.deep_models import NeuralMTLRNet
+
+    model = NeuralMTLRNet(in_features=6, hidden_layers=[16, 8], num_time_bins=10, dropout=0.2)
+
+    dropout_layers = [module for module in model.encoder if isinstance(module, nn.Dropout)]
+    assert len(dropout_layers) == 2
+    assert all(layer.p == pytest.approx(0.2) for layer in dropout_layers)
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_survival_vae_uses_full_hidden_layer_stack() -> None:
+    import torch.nn as nn
+
+    from survival_toolkit.deep_models import SurvivalVAENet
+
+    model = SurvivalVAENet(in_features=5, hidden_layers=[16, 8], latent_dim=4, dropout=0.1)
+
+    encoder_linears = [module for module in model.encoder if isinstance(module, nn.Linear)]
+    decoder_linears = [module for module in model.decoder if isinstance(module, nn.Linear)]
+
+    assert [(layer.in_features, layer.out_features) for layer in encoder_linears] == [(5, 16), (16, 8)]
+    assert model.fc_mu.in_features == 8
+    assert model.fc_log_var.in_features == 8
+    assert [(layer.in_features, layer.out_features) for layer in decoder_linears] == [(4, 8), (8, 16), (16, 5)]
+
+
+def test_evaluate_single_deep_survival_model_passes_dropout_to_mtlr(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    seen: dict[str, object] = {}
+
+    def _fake_train(*args, **kwargs):
+        seen.update(kwargs)
+        return {"model": "Neural MTLR", "c_index": 0.6}
+
+    monkeypatch.setattr(deep_models, "train_neural_mtlr", _fake_train)
+
+    result = deep_models.evaluate_single_deep_survival_model(
+        "mtlr",
+        time_column="os_months",
+        event_column="os_event",
+        df=pd.DataFrame({"os_months": [1, 2], "os_event": [1, 0], "age": [50, 60]}),
+        features=["age"],
+        hidden_layers=[16, 8],
+        dropout=0.25,
+        epochs=10,
+        batch_size=8,
+    )
+
+    assert result["model"] == "Neural MTLR"
+    assert seen["dropout"] == pytest.approx(0.25)
+    assert seen["hidden_layers"] == [16, 8]
+
+
+def test_evaluate_single_deep_survival_model_passes_full_hidden_layers_to_vae(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    seen: dict[str, object] = {}
+
+    def _fake_train(*args, **kwargs):
+        seen.update(kwargs)
+        return {"model": "Survival VAE", "c_index": 0.6}
+
+    monkeypatch.setattr(deep_models, "train_survival_vae", _fake_train)
+
+    result = deep_models.evaluate_single_deep_survival_model(
+        "vae",
+        time_column="os_months",
+        event_column="os_event",
+        df=pd.DataFrame({"os_months": [1, 2], "os_event": [1, 0], "age": [50, 60]}),
+        features=["age"],
+        hidden_layers=[32, 16],
+        latent_dim=6,
+        n_clusters=4,
+        dropout=0.15,
+        epochs=10,
+        batch_size=8,
+    )
+
+    assert result["model"] == "Survival VAE"
+    assert seen["hidden_layers"] == [32, 16]
+    assert seen["latent_dim"] == 6
+    assert seen["n_clusters"] == 4
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 def test_compare_deep_survival_models_uses_shared_holdout_and_monitor_splits(monkeypatch) -> None:
     import numpy as np
     import survival_toolkit.deep_models as deep_models
