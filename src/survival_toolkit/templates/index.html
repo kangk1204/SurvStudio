@@ -499,7 +499,7 @@
           <div class="dependency-card" id="coxDependencyCard">
             <div class="dependency-copy">
               <strong>What this tab uses</strong>
-              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate.</span>
+              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort.</span>
               <div class="dataset-preset-chips hidden" id="coxDependencyChips"></div>
             </div>
           </div>
@@ -523,7 +523,7 @@
           <div class="insight-board" id="coxInsightBoard"><div class="empty-state">AI-powered model diagnostics will appear here after analysis.</div></div>
           <div class="table-grid stacked">
             <div class="table-card full-width"><h3>Hazard Ratios</h3><div class="table-shell" id="coxResultsShell"><div class="empty-state">Fit a Cox model.</div></div></div>
-            <div class="table-card full-width"><h3>PH Diagnostics</h3><div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Schoenfeld residual correlations appear here.</div></div></div>
+            <div class="table-card full-width"><h3>PH Diagnostics</h3><div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Rank-based Schoenfeld residual diagnostics against log time appear here.</div></div></div>
           </div>
         </article>
       </section>
@@ -653,7 +653,7 @@
           <div class="analysis-banner" id="mlMetaBanner">Select model features below, then train a model.</div>
           <div class="insight-board" id="mlInsightBoard"><div class="empty-state">ML model interpretation will appear here after training.</div></div>
           <div class="table-grid stacked">
-            <div class="table-card full-width"><h3>Model Comparison</h3><div class="table-shell" id="mlComparisonShell"><div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div></div></div>
+            <div class="table-card full-width"><h3 id="mlComparisonTitle">Model Comparison</h3><div class="table-shell" id="mlComparisonShell"><div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div></div></div>
             <div class="table-card full-width">
               <div class="table-card-head">
                 <h3>Manuscript Table</h3>
@@ -866,7 +866,7 @@
           <div class="insight-board" id="dlInsightBoard"><div class="empty-state">Deep learning model interpretation will appear here after training.</div></div>
           <div class="plot-shell hidden" id="dlComparisonPlot"></div>
           <div class="table-grid stacked">
-            <div class="table-card full-width"><h3>Deep Model Comparison</h3><div class="table-shell" id="dlComparisonShell"><div class="empty-state">Click "Compare All" to benchmark DeepSurv, DeepHit, Neural MTLR, Transformer, and VAE.</div></div></div>
+            <div class="table-card full-width"><h3 id="dlComparisonTitle">Deep Model Comparison</h3><div class="table-shell" id="dlComparisonShell"><div class="empty-state">Click "Compare All" to benchmark DeepSurv, DeepHit, Neural MTLR, Transformer, and VAE.</div></div></div>
             <div class="table-card full-width">
               <div class="table-card-head">
                 <h3>Deep Manuscript Table</h3>

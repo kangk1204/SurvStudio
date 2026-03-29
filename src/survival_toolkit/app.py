@@ -220,6 +220,17 @@ def dataset_response(dataset_id: str) -> dict[str, Any]:
     return payload
 
 
+def _create_dataset_snapshot(stored, dataframe, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    snapshot = store.create(
+        dataframe,
+        filename=stored.filename,
+        source=stored.source,
+        metadata=metadata if metadata is not None else stored.metadata,
+        copy_dataframe=False,
+    )
+    return dataset_response(snapshot.dataset_id)
+
+
 def _outcome_informed_columns(stored: Any) -> set[str]:
     provenance = stored.metadata.get("derived_column_provenance", {})
     if not isinstance(provenance, dict):
@@ -934,17 +945,15 @@ async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
             event_column=request_model.event_column,
             event_positive_value=request_model.event_positive_value,
         )
-        store.update_dataframe(request_model.dataset_id, updated)
-        stored = store.get(request_model.dataset_id)
         provenance = dict(stored.metadata.get("derived_column_provenance", {}))
         provenance[column_name] = {
             "outcome_informed": bool(summary.get("outcome_informed")),
         }
-        store.update_metadata(request_model.dataset_id, {
+        new_metadata = {
             **stored.metadata,
             "derived_column_provenance": provenance,
-        })
-        payload = dataset_response(request_model.dataset_id)
+        }
+        payload = _create_dataset_snapshot(stored, updated, metadata=new_metadata)
         payload["derived_column"] = column_name
         payload["derive_summary"] = summary
         if request_model.method == "optimal_cutpoint" and summary.get("scan_data"):
@@ -1063,15 +1072,12 @@ async def discover_signature(request_model: SignatureSearchRequest) -> dict[str,
             )
 
         updated, column_name, analysis = await run_in_threadpool(_run)
-        store.update_dataframe(request_model.dataset_id, updated)
-        stored = store.get(request_model.dataset_id)
         provenance = dict(stored.metadata.get("derived_column_provenance", {}))
         provenance[column_name] = {"outcome_informed": True}
-        store.update_metadata(request_model.dataset_id, {
+        payload = _create_dataset_snapshot(stored, updated, metadata={
             **stored.metadata,
             "derived_column_provenance": provenance,
         })
-        payload = dataset_response(request_model.dataset_id)
         payload["derived_column"] = column_name
         payload["signature_analysis"] = analysis
         return payload

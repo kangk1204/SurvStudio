@@ -657,7 +657,7 @@ def _cox_scientific_summary(
     strengths = [
         "Cox regression was fit with the Efron tie method.",
         f"Model estimates use the analyzable cohort after dropping rows with missing selected covariates (N = {int(model_stats['n'])}).",
-        "Proportional-hazards diagnostics were evaluated from Schoenfeld residual correlation tests.",
+        "Proportional-hazards diagnostics were evaluated from rank-based Spearman correlations between Schoenfeld residuals and log time.",
         "The reported discrimination metric is an apparent C-index computed on the fitted cohort.",
     ]
     cautions: list[str] = []
@@ -677,6 +677,9 @@ def _cox_scientific_summary(
     if c_index is not None and c_index < 0.6:
         cautions.append("Apparent model discrimination is modest (C-index below 0.60).")
     cautions.append("The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.")
+    cautions.append(
+        "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; validate the final specification on a separate cohort outside this run."
+    )
     if not significant_terms:
         cautions.append("No model term shows clear nominal evidence at p < 0.05.")
 

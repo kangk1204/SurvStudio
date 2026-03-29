@@ -22,6 +22,9 @@ The current scope is:
 - single-event survival analysis
 - right-censored data
 - tabular cohorts
+- no left-truncated entry-time handling
+- no competing-risks analysis
+- no built-in "apply the locked model directly to an external cohort" workflow yet
 
 ## What The Built-In Example Data Is
 
@@ -602,6 +605,9 @@ Architecture note:
 - Hazard ratio `> 1`: higher hazard
 - Hazard ratio `< 1`: lower hazard
 - Confidence intervals crossing `1` mean the estimate is compatible with no effect
+- The current Cox discrimination summary is an `Apparent C-index` on the analyzable cohort, not an externally validated performance estimate.
+- PH diagnostics currently use rank-based Spearman correlations between Schoenfeld residuals and log time.
+- That is useful for screening PH problems, but it is not the same thing as a full Grambsch-Therneau omnibus test.
 
 ### Model C-index
 
@@ -738,6 +744,12 @@ Then increase epochs or switch to repeated CV only after the single-run workflow
   - sensitivity checks
   - disciplined model selection
   - careful interpretation of calibration and cutpointing
+
+## Current Limitations
+
+- Cox PH currently reports an apparent C-index only. If you need bootstrap optimism correction or cross-validated Cox discrimination, run that validation outside the current dashboard workflow.
+- External-cohort validation is currently a manual workflow: load the separate cohort, reproduce the endpoint and covariate specification, and rerun the analysis.
+- Left truncation and competing risks are outside the current scope.
 
 ## Development and Testing
 
