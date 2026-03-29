@@ -1221,6 +1221,12 @@ body {
   line-height: 1.5;
 }
 
+.dependency-status {
+  font-size: 0.72rem;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
 /* ─── Config Strip ─── */
 
 .config-strip {

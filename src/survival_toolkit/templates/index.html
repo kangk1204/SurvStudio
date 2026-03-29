@@ -897,7 +897,7 @@
             <div class="button-row compact">
               <button class="button primary" id="runCohortTableButton">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                Build Table
+                <span id="runCohortTableButtonLabel">Build Table</span>
               </button>
               <button class="button ghost" id="downloadCohortTableButton" disabled>CSV</button>
             </div>
@@ -907,6 +907,7 @@
               <strong>What this tab uses</strong>
               <span id="tableDependencyText">The cohort table uses the selected variables below and applies Group by only when grouping is set.</span>
               <div class="dataset-preset-chips hidden" id="tableDependencyChips"></div>
+              <span class="dependency-status hidden" id="tableOutputStatusText"></span>
             </div>
           </div>
           <div class="table-builder-grid">
