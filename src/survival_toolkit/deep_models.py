@@ -1803,6 +1803,7 @@ def train_deepsurv(
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
 
     loss_history: list[float] = []
+    monitor_loss_history: list[float] = []
     best_monitor: float | None = None
     best_state: dict[str, torch.Tensor] | None = None
     early_wait = 0
@@ -1820,6 +1821,7 @@ def train_deepsurv(
             with torch.no_grad():
                 monitor_risk = model(x_all[monitor_idx])
                 monitor_loss = float(_cox_partial_likelihood_loss(monitor_risk, t_all[monitor_idx], e_all[monitor_idx]).item())
+            monitor_loss_history.append(monitor_loss)
             best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
                 monitor_loss,
                 best_value=best_monitor,
@@ -1940,6 +1942,7 @@ def train_deepsurv(
         "split_seed": random_seed,
         "monitor_seed": random_seed,
         "loss_history": loss_history,
+        "monitor_loss_history": monitor_loss_history,
         "feature_importance": feature_importance,
         "risk_scores": risk_list,
         "predicted_survival_function": predicted_survival_function,
@@ -2132,6 +2135,7 @@ def train_deephit(
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=loader_generator)
 
     loss_history: list[float] = []
+    monitor_loss_history: list[float] = []
     best_monitor: float | None = None
     best_state: dict[str, torch.Tensor] | None = None
     early_wait = 0
@@ -2152,6 +2156,7 @@ def train_deephit(
             with torch.no_grad():
                 monitor_pmf = model(x_all[monitor_idx])
                 monitor_loss = float(_deephit_loss(monitor_pmf, monitor_bin_tensor, e_all[monitor_idx], alpha).item())
+            monitor_loss_history.append(monitor_loss)
             best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
                 monitor_loss,
                 best_value=best_monitor,
@@ -2243,6 +2248,7 @@ def train_deephit(
         "split_seed": random_seed,
         "monitor_seed": random_seed,
         "loss_history": loss_history,
+        "monitor_loss_history": monitor_loss_history,
         "predicted_survival_curves": predicted_survival_curves,
         "feature_importance": feature_importance,
         "artifact_scope": artifact_scope,
@@ -2412,6 +2418,7 @@ def train_neural_mtlr(
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=loader_generator)
 
     loss_history: list[float] = []
+    monitor_loss_history: list[float] = []
     best_monitor: float | None = None
     best_state: dict[str, torch.Tensor] | None = None
     early_wait = 0
@@ -2432,6 +2439,7 @@ def train_neural_mtlr(
             with torch.no_grad():
                 cumsum_logits_monitor = model(x_all[monitor_idx])
                 monitor_loss = float(_mtlr_loss(cumsum_logits_monitor, monitor_bin_tensor, e_all[monitor_idx], num_time_bins).item())
+            monitor_loss_history.append(monitor_loss)
             best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
                 monitor_loss,
                 best_value=best_monitor,
@@ -2550,6 +2558,7 @@ def train_neural_mtlr(
         "split_seed": random_seed,
         "monitor_seed": random_seed,
         "loss_history": loss_history,
+        "monitor_loss_history": monitor_loss_history,
         "predicted_survival_curves": predicted_survival_curves,
         "calibration_data": calibration_data,
         "artifact_scope": artifact_scope,
@@ -2720,6 +2729,7 @@ def train_survival_transformer(
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
 
     loss_history: list[float] = []
+    monitor_loss_history: list[float] = []
     best_monitor: float | None = None
     best_state: dict[str, torch.Tensor] | None = None
     early_wait = 0
@@ -2737,6 +2747,7 @@ def train_survival_transformer(
             with torch.no_grad():
                 monitor_risk = model(x_all[monitor_idx])
                 monitor_loss = float(_cox_partial_likelihood_loss(monitor_risk, t_all[monitor_idx], e_all[monitor_idx]).item())
+            monitor_loss_history.append(monitor_loss)
             best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
                 monitor_loss,
                 best_value=best_monitor,
@@ -2831,6 +2842,7 @@ def train_survival_transformer(
         "split_seed": random_seed,
         "monitor_seed": random_seed,
         "loss_history": loss_history,
+        "monitor_loss_history": monitor_loss_history,
         "attention_weights": attention_weights,
         "feature_attention": feature_attention,
         "feature_importance": feature_importance,
@@ -3068,6 +3080,7 @@ def train_survival_vae(
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
 
     loss_history: list[float] = []
+    monitor_loss_history: list[float] = []
     best_monitor: float | None = None
     best_state: dict[str, torch.Tensor] | None = None
     early_wait = 0
@@ -3088,6 +3101,7 @@ def train_survival_vae(
                 e_monitor = e_all[monitor_idx]
                 x_recon_monitor, mu_monitor, log_var_monitor, risk_monitor = model(x_monitor)
                 monitor_loss = float(_vae_combined_loss(x_monitor, x_recon_monitor, mu_monitor, log_var_monitor, risk_monitor, t_monitor, e_monitor).item())
+            monitor_loss_history.append(monitor_loss)
             best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
                 monitor_loss,
                 best_value=best_monitor,
@@ -3201,6 +3215,7 @@ def train_survival_vae(
         "split_seed": random_seed,
         "monitor_seed": random_seed,
         "loss_history": loss_history,
+        "monitor_loss_history": monitor_loss_history,
         "latent_embeddings": latent_embeddings,
         "cluster_labels": cluster_labels,
         "cluster_survival_curves": cluster_survival_curves,

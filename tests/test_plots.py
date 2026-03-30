@@ -254,3 +254,19 @@ def test_build_loss_curve_figure() -> None:
     figure = build_loss_curve_figure(loss_history, model_name="DeepSurv")
     assert "data" in figure
     assert len(figure["data"]) == 1
+
+
+def test_build_loss_curve_figure_includes_monitor_trace_when_available() -> None:
+    loss_history = [1.0, 0.8, 0.6]
+    monitor_loss_history = [1.1, 0.9, 0.75]
+
+    figure = build_loss_curve_figure(
+        loss_history,
+        model_name="Transformer",
+        monitor_loss_history=monitor_loss_history,
+    )
+
+    assert len(figure["data"]) == 2
+    assert figure["data"][0]["name"] == "Training loss"
+    assert figure["data"][1]["name"] == "Monitor loss"
+    assert figure["layout"]["title"]["text"] == "Transformer Training and Monitor Loss"
