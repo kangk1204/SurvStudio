@@ -53,6 +53,47 @@ TERM_CATEGORICAL_PATTERN = re.compile(r'C\(Q\("(?P<var>.+)"\)\)\[T\.(?P<level>.+
 TERM_NUMERIC_PATTERN = re.compile(r'Q\("(?P<var>.+)"\)')
 _MAX_EXP_INPUT = math.log(np.finfo(float).max)
 _MIN_EXP_INPUT = math.log(np.finfo(float).tiny)
+MAX_MODEL_FEATURE_CANDIDATES = 1000
+_MODEL_FEATURE_ID_PATTERN = re.compile(r"^(patient_id|sample_id|subject_id|id|barcode|uuid|cohort)$", re.IGNORECASE)
+_EVENT_NAME_PATTERNS = (
+    re.compile(r"event"),
+    re.compile(r"death"),
+    re.compile(r"mort"),
+    re.compile(r"vital_status"),
+    re.compile(r"survival_status"),
+    re.compile(r"outcome_status"),
+    re.compile(r"relapse"),
+    re.compile(r"recur"),
+    re.compile(r"progress"),
+    re.compile(r"failure"),
+    re.compile(r"censor"),
+)
+_BASELINE_STATUS_PATTERNS = (
+    re.compile(r"egfr"),
+    re.compile(r"kras"),
+    re.compile(r"braf"),
+    re.compile(r"alk"),
+    re.compile(r"ros1"),
+    re.compile(r"erbb2"),
+    re.compile(r"mutation"),
+    re.compile(r"mutated"),
+    re.compile(r"wildtype"),
+    re.compile(r"sex"),
+    re.compile(r"gender"),
+    re.compile(r"stage"),
+    re.compile(r"grade"),
+    re.compile(r"treat"),
+    re.compile(r"therapy"),
+    re.compile(r"drug"),
+    re.compile(r"smok"),
+    re.compile(r"histolog"),
+    re.compile(r"subtype"),
+    re.compile(r"cluster"),
+    re.compile(r"group"),
+    re.compile(r"arm"),
+    re.compile(r"cohort"),
+    re.compile(r"horth"),
+)
 
 
 def make_unique_columns(columns: Iterable[Any]) -> list[str]:
@@ -162,6 +203,46 @@ def _column_keywords(columns: Sequence[str], tokens: Sequence[str]) -> list[str]
         if any(token in lowered for token in tokens):
             matches.append(column)
     return matches
+
+
+def _normalize_column_label(name: str) -> str:
+    return str(name or "").strip().lower()
+
+
+def _is_event_like_column_name(name: str) -> bool:
+    normalized = _normalize_column_label(name)
+    if not normalized:
+        return False
+    if normalized in {"event", "status"}:
+        return True
+    return any(pattern.search(normalized) for pattern in _EVENT_NAME_PATTERNS)
+
+
+def _looks_like_baseline_status_column(name: str) -> bool:
+    normalized = _normalize_column_label(name)
+    if not normalized:
+        return False
+    return any(pattern.search(normalized) for pattern in _BASELINE_STATUS_PATTERNS)
+
+
+def _model_feature_candidate_columns_from_metadata(
+    columns: Sequence[str],
+    *,
+    suggested_time_columns: Sequence[str],
+    binary_candidate_columns: Sequence[str],
+) -> list[str]:
+    suggested_time_set = set(suggested_time_columns)
+    binary_set = set(binary_candidate_columns)
+    candidates: list[str] = []
+    for column in columns:
+        if _MODEL_FEATURE_ID_PATTERN.fullmatch(column):
+            continue
+        if column in suggested_time_set:
+            continue
+        if column in binary_set and _is_event_like_column_name(column) and not _looks_like_baseline_status_column(column):
+            continue
+        candidates.append(column)
+    return candidates
 
 
 def _normalize_token(value: Any) -> str | None:
@@ -371,6 +452,11 @@ def profile_dataframe(df: pd.DataFrame, dataset_id: str, filename: str) -> dict[
         column_profiles.append(profile)
 
     suggestions = suggest_columns(df)
+    model_feature_candidates = _model_feature_candidate_columns_from_metadata(
+        list(df.columns),
+        suggested_time_columns=suggestions.get("time_columns", []),
+        binary_candidate_columns=binary_candidate_columns,
+    )
 
     return {
         "dataset_id": dataset_id,
@@ -382,8 +468,33 @@ def profile_dataframe(df: pd.DataFrame, dataset_id: str, filename: str) -> dict[
         "numeric_columns": numeric_columns,
         "categorical_columns": categorical_columns,
         "binary_candidate_columns": binary_candidate_columns,
+        "model_feature_candidate_count": len(model_feature_candidates),
         "suggestions": suggestions,
     }
+
+
+def model_feature_candidate_columns(df: pd.DataFrame) -> list[str]:
+    suggestions = suggest_columns(df)
+    binary_candidate_columns = [column for column in df.columns if looks_binary(df[column])]
+    return _model_feature_candidate_columns_from_metadata(
+        list(df.columns),
+        suggested_time_columns=suggestions.get("time_columns", []),
+        binary_candidate_columns=binary_candidate_columns,
+    )
+
+
+def ensure_model_feature_candidate_limit(
+    df: pd.DataFrame,
+    *,
+    max_features: int = MAX_MODEL_FEATURE_CANDIDATES,
+) -> int:
+    candidate_count = len(model_feature_candidate_columns(df))
+    if candidate_count > max_features:
+        raise ValueError(
+            f"Dataset exposes {candidate_count} model feature candidates after excluding likely survival endpoint columns. "
+            f"SurvStudio supports at most {max_features} model features per dataset upload."
+        )
+    return candidate_count
 
 
 def quote_name(name: str) -> str:

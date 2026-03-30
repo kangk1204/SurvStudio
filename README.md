@@ -50,6 +50,7 @@ The app includes four built-in example datasets:
 
 If you want a file that you can upload manually instead of clicking a built-in loader, use:
 - [examples/tcga_luad_nature2014_upload_ready.csv](examples/tcga_luad_nature2014_upload_ready.csv)
+- [examples/tcga_luad_rnaseq_top100_upload.csv](examples/tcga_luad_rnaseq_top100_upload.csv)
 - [examples/gbsg2_jco1994_upload_ready.csv](examples/gbsg2_jco1994_upload_ready.csv)
 - dataset notes: [examples/README.md](examples/README.md)
 
@@ -472,6 +473,7 @@ On upload and analysis, the app checks things like:
 - supported file extension
 - readable file encoding for text files
 - file is not empty
+- uploaded dataset stays within the 1000-feature model-input cap
 - required columns exist
 - survival time can be interpreted as numeric
 - survival time is positive

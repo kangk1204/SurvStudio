@@ -25,6 +25,7 @@ from survival_toolkit.analysis import (
     compute_km_analysis,
     discover_feature_signature,
     derive_group_column,
+    ensure_model_feature_candidate_limit,
     load_dataframe_from_path,
     profile_dataframe,
 )
@@ -831,6 +832,7 @@ async def _load_builtin_dataset_response(
 ) -> dict[str, Any]:
     try:
         dataframe = await run_in_threadpool(loader)
+        ensure_model_feature_candidate_limit(dataframe)
         stored = store.create(dataframe, filename=filename, source=source)
         return await run_in_threadpool(dataset_response, stored.dataset_id)
     except Exception as exc:
@@ -855,6 +857,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
                     raise HTTPException(status_code=413, detail="Upload exceeds the 200 MB limit.")
                 temp_file.write(chunk)
         dataframe = await run_in_threadpool(load_dataframe_from_path, temp_path)
+        ensure_model_feature_candidate_limit(dataframe)
         stored = store.create(dataframe, filename=filename, source="upload")
         return await run_in_threadpool(dataset_response, stored.dataset_id)
     except HTTPException:
