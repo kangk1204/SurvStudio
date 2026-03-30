@@ -891,6 +891,8 @@ def _scientific_summary_dl(
     c_val = c_index if c_index is not None else 0.5
     metric_name = _metric_name_for_evaluation(evaluation_mode)
 
+    epochs_trained = int(len(loss_history))
+
     if c_val > 0.65:
         status = "robust"
     elif c_val >= 0.55:
@@ -899,7 +901,7 @@ def _scientific_summary_dl(
         status = "caution"
 
     strengths: list[str] = [
-        f"{model_name} trained for {epochs} epoch(s) on {train_samples} sample(s) with {n_features} features.",
+        f"{model_name} trained for {epochs_trained or epochs} epoch(s) on {train_samples} sample(s) with {n_features} features.",
     ]
     if len(loss_history) >= 2 and loss_history[-1] < loss_history[0]:
         strengths.append("Training loss decreased over epochs, indicating successful optimization.")
@@ -959,7 +961,7 @@ def _scientific_summary_dl(
             {"label": "Training samples", "value": train_samples},
             {"label": "Evaluation samples", "value": eval_samples},
             {"label": "Features", "value": n_features},
-            {"label": "Epochs", "value": epochs},
+            {"label": "Epochs", "value": epochs_trained or epochs},
             {"label": "Final loss", "value": float(loss_history[-1]) if loss_history else None},
         ],
     }
@@ -991,6 +993,27 @@ def _update_early_stopping(
 
     wait_count += 1
     return best_value, wait_count, best_state, wait_count >= patience
+
+
+def _training_run_metadata(
+    loss_history: list[float],
+    monitor_loss_history: list[float] | None,
+    requested_epochs: int,
+) -> dict[str, int | bool | None]:
+    monitor_loss_history = list(monitor_loss_history or [])
+    epochs_trained = int(len(loss_history))
+    best_monitor_epoch = (
+        int(np.argmin(np.asarray(monitor_loss_history, dtype=float))) + 1
+        if monitor_loss_history
+        else None
+    )
+    stopped_early = bool(monitor_loss_history) and epochs_trained < int(requested_epochs)
+    return {
+        "epochs_trained": epochs_trained,
+        "best_monitor_epoch": best_monitor_epoch,
+        "stopped_early": stopped_early,
+        "max_epochs_requested": int(requested_epochs),
+    }
 
 
 def compare_deep_survival_models(
@@ -1919,6 +1942,7 @@ def train_deepsurv(
             "curve": _make_survival_curve(timeline, survival),
         })
 
+    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs)
     insight = _scientific_summary_dl(
         "DeepSurv",
         c_index,
@@ -1943,6 +1967,9 @@ def train_deepsurv(
         "monitor_seed": random_seed,
         "loss_history": loss_history,
         "monitor_loss_history": monitor_loss_history,
+        "best_monitor_epoch": training_meta["best_monitor_epoch"],
+        "stopped_early": training_meta["stopped_early"],
+        "max_epochs_requested": training_meta["max_epochs_requested"],
         "feature_importance": feature_importance,
         "risk_scores": risk_list,
         "predicted_survival_function": predicted_survival_function,
@@ -1950,7 +1977,7 @@ def train_deepsurv(
         "artifact_samples": int(artifact_idx.numel()),
         "insight_board": insight,
         "scientific_summary": insight,
-        "epochs_trained": len(loss_history),
+        "epochs_trained": training_meta["epochs_trained"],
         "n_samples": data["n_samples"],
         "training_samples": int(train_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
@@ -2225,6 +2252,7 @@ def train_deephit(
             "curve": _make_survival_curve(timeline, surv_values),
         })
 
+    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs)
     insight = _scientific_summary_dl(
         "DeepHit",
         c_index,
@@ -2249,6 +2277,9 @@ def train_deephit(
         "monitor_seed": random_seed,
         "loss_history": loss_history,
         "monitor_loss_history": monitor_loss_history,
+        "best_monitor_epoch": training_meta["best_monitor_epoch"],
+        "stopped_early": training_meta["stopped_early"],
+        "max_epochs_requested": training_meta["max_epochs_requested"],
         "predicted_survival_curves": predicted_survival_curves,
         "feature_importance": feature_importance,
         "artifact_scope": artifact_scope,
@@ -2257,7 +2288,7 @@ def train_deephit(
         "time_bin_edges": [float(edge) for edge in bin_edges],
         "insight_board": insight,
         "scientific_summary": insight,
-        "epochs_trained": len(loss_history),
+        "epochs_trained": training_meta["epochs_trained"],
         "n_samples": data["n_samples"],
         "training_samples": int(train_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
@@ -2535,6 +2566,7 @@ def train_neural_mtlr(
                 "observed_event_rate": obs_mean,
             })
 
+    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs)
     insight = _scientific_summary_dl(
         "Neural MTLR",
         c_index,
@@ -2559,6 +2591,9 @@ def train_neural_mtlr(
         "monitor_seed": random_seed,
         "loss_history": loss_history,
         "monitor_loss_history": monitor_loss_history,
+        "best_monitor_epoch": training_meta["best_monitor_epoch"],
+        "stopped_early": training_meta["stopped_early"],
+        "max_epochs_requested": training_meta["max_epochs_requested"],
         "predicted_survival_curves": predicted_survival_curves,
         "calibration_data": calibration_data,
         "artifact_scope": artifact_scope,
@@ -2567,7 +2602,7 @@ def train_neural_mtlr(
         "time_bin_edges": [float(edge) for edge in bin_edges],
         "insight_board": insight,
         "scientific_summary": insight,
-        "epochs_trained": len(loss_history),
+        "epochs_trained": training_meta["epochs_trained"],
         "n_samples": data["n_samples"],
         "training_samples": int(train_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
@@ -2819,6 +2854,7 @@ def train_survival_transformer(
             })
         feature_attention.sort(key=lambda d: d["attention_score"], reverse=True)
 
+    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs)
     insight = _scientific_summary_dl(
         "Survival Transformer",
         c_index,
@@ -2843,6 +2879,9 @@ def train_survival_transformer(
         "monitor_seed": random_seed,
         "loss_history": loss_history,
         "monitor_loss_history": monitor_loss_history,
+        "best_monitor_epoch": training_meta["best_monitor_epoch"],
+        "stopped_early": training_meta["stopped_early"],
+        "max_epochs_requested": training_meta["max_epochs_requested"],
         "attention_weights": attention_weights,
         "feature_attention": feature_attention,
         "feature_importance": feature_importance,
@@ -2851,7 +2890,7 @@ def train_survival_transformer(
         "artifact_samples": int(artifact_idx.numel()),
         "insight_board": insight,
         "scientific_summary": insight,
-        "epochs_trained": len(loss_history),
+        "epochs_trained": training_meta["epochs_trained"],
         "n_samples": data["n_samples"],
         "training_samples": int(train_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
@@ -3192,6 +3231,7 @@ def train_survival_vae(
             "curve": _make_survival_curve(timeline, surv_values),
         })
 
+    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs)
     insight = _scientific_summary_dl(
         "Survival VAE",
         c_index,
@@ -3216,6 +3256,9 @@ def train_survival_vae(
         "monitor_seed": random_seed,
         "loss_history": loss_history,
         "monitor_loss_history": monitor_loss_history,
+        "best_monitor_epoch": training_meta["best_monitor_epoch"],
+        "stopped_early": training_meta["stopped_early"],
+        "max_epochs_requested": training_meta["max_epochs_requested"],
         "latent_embeddings": latent_embeddings,
         "cluster_labels": cluster_labels,
         "cluster_survival_curves": cluster_survival_curves,
@@ -3224,7 +3267,7 @@ def train_survival_vae(
         "artifact_samples": int(artifact_idx.numel()),
         "insight_board": insight,
         "scientific_summary": insight,
-        "epochs_trained": len(loss_history),
+        "epochs_trained": training_meta["epochs_trained"],
         "n_samples": data["n_samples"],
         "training_samples": int(train_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
