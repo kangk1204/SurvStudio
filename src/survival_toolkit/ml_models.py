@@ -855,6 +855,7 @@ def train_random_survival_forest(
         metric_name = _metric_name_for_evaluation(evaluation_mode)
     y_train = _prepare_sksurv_data(train_frame, time_column, event_column)
     y_eval = _prepare_sksurv_data(eval_frame, time_column, event_column)
+    y_full = _prepare_sksurv_data(full_frame, time_column, event_column)
 
     t_start = time.monotonic()
     with warnings.catch_warnings():
@@ -952,9 +953,12 @@ def train_random_survival_forest(
         "scientific_summary": scientific_summary,
         "_model": model,
         "_X_encoded": full_encoded,
+        "_X_eval_encoded": eval_encoded,
         "_feature_encoder": feature_encoder,
         "_analysis_frame": full_frame,
-        "_y": y_eval,
+        "_analysis_eval_frame": eval_frame,
+        "_y": y_full,
+        "_y_eval": y_eval,
     }
 
 
@@ -1025,6 +1029,7 @@ def train_gradient_boosted_survival(
         metric_name = _metric_name_for_evaluation(evaluation_mode)
     y_train = _prepare_sksurv_data(train_frame, time_column, event_column)
     y_eval = _prepare_sksurv_data(eval_frame, time_column, event_column)
+    y_full = _prepare_sksurv_data(full_frame, time_column, event_column)
 
     t_start = time.monotonic()
     with warnings.catch_warnings():
@@ -1100,9 +1105,12 @@ def train_gradient_boosted_survival(
         "scientific_summary": scientific_summary,
         "_model": model,
         "_X_encoded": full_encoded,
+        "_X_eval_encoded": eval_encoded,
         "_feature_encoder": feature_encoder,
         "_analysis_frame": full_frame,
-        "_y": y_eval,
+        "_analysis_eval_frame": eval_frame,
+        "_y": y_full,
+        "_y_eval": y_eval,
     }
 
 

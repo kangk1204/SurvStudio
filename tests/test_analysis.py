@@ -10,6 +10,7 @@ import pandas as pd
 from survival_toolkit.__main__ import main as cli_main
 from survival_toolkit.analysis import (
     MAX_MODEL_FEATURE_CANDIDATES,
+    _cohort_frame,
     _ordered_reference_categories,
     _prepare_cox_frame,
     _reference_levels,
@@ -172,10 +173,30 @@ def test_coerce_event_rejects_explicit_censor_token_as_event_positive_value() ->
         coerce_event(series, event_positive_value="alive")
 
 
+def test_coerce_event_rejects_numeric_zero_as_event_positive_value() -> None:
+    series = pd.Series([0, 1, 0, 1])
+
+    with pytest.raises(ValueError, match="maps to censoring"):
+        coerce_event(series, event_positive_value=0)
+
+
 def test_coerce_event_rejects_multistate_numeric_status_columns() -> None:
     series = pd.Series([0, 1, 2, 1, 0])
     with pytest.raises(ValueError, match="more than two distinct states|pre-binarized"):
         coerce_event(series, event_positive_value=1)
+
+
+def test_cohort_frame_rejects_identical_time_and_event_columns() -> None:
+    df = pd.DataFrame({"status": [1, 0, 1], "age": [60, 55, 70]})
+
+    with pytest.raises(ValueError, match="must be different"):
+        _cohort_frame(
+            df,
+            time_column="status",
+            event_column="status",
+            event_positive_value=1,
+            extra_columns=["age"],
+        )
 
 
 def test_looks_binary_accepts_nonstandard_two_value_numeric_status() -> None:

@@ -230,6 +230,8 @@ def _coerce_deep_frame(
 
     if not features:
         raise ValueError("Select at least one feature for deep learning models.")
+    if time_column == event_column:
+        raise ValueError("The survival time column and event column must be different.")
     required_columns = [*features, time_column, event_column]
     missing_columns = [column for column in required_columns if column not in df.columns]
     if missing_columns:

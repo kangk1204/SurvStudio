@@ -283,6 +283,11 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
         # coding. Multi-state numeric status columns must be rejected rather
         # than silently collapsing extra states into censoring.
         if target_numeric is not None and numeric_series.notna().sum() == valid.sum():
+            target_token = _normalize_token(target)
+            if target_token in FALSE_TOKENS:
+                raise ValueError(
+                    f"The selected event-positive value '{target}' maps to censoring, not the event."
+                )
             observed_numeric = sorted({float(value) for value in numeric_series.loc[valid].astype(float).tolist()})
             if target_numeric not in observed_numeric:
                 raise ValueError(
@@ -531,6 +536,8 @@ def _cohort_frame(
     extra_columns: Sequence[str] | None = None,
     drop_missing_extra_columns: bool = True,
 ) -> pd.DataFrame:
+    if time_column == event_column:
+        raise ValueError("The survival time column and event column must be different.")
     extra_columns = list(extra_columns or [])
     required_columns = [time_column, event_column, *extra_columns]
     frame = df[required_columns].copy()
