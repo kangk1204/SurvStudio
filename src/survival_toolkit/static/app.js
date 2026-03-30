@@ -94,9 +94,13 @@ const refs = {
   deriveSource: document.getElementById("deriveSource"),
   deriveMethod: document.getElementById("deriveMethod"),
   deriveCutoff: document.getElementById("deriveCutoff"),
+  deriveMinGroupFraction: document.getElementById("deriveMinGroupFraction"),
+  derivePermutationIterations: document.getElementById("derivePermutationIterations"),
+  deriveRandomSeed: document.getElementById("deriveRandomSeed"),
   deriveColumnName: document.getElementById("deriveColumnName"),
   deriveApplyToGroup: document.getElementById("deriveApplyToGroup"),
   cutoffWrap: document.getElementById("cutoffWrap"),
+  deriveOptimalControls: document.getElementById("deriveOptimalControls"),
   deriveButton: document.getElementById("deriveButton"),
   deriveStatus: document.getElementById("deriveStatus"),
   deriveSummary: document.getElementById("deriveSummary"),
@@ -414,6 +418,36 @@ function currentCohortTableOutputState() {
   };
 }
 
+function currentSignatureResult() {
+  const payload = state.signature;
+  if (!payload || !state.dataset) return null;
+  const requestConfig = requestConfigFromPayload(payload);
+  if (!requestConfig) return null;
+  const base = currentBaseConfig();
+  const currentDerivedName = String(refs.deriveColumnName?.value || "").trim();
+  const currentCandidates = sortedStrings(selectedCheckboxValues(refs.covariateChecklist));
+  const requestedCandidates = sortedStrings(requestConfig.candidate_columns || []);
+  const isCurrent = (
+    String(requestConfig.dataset_id || "") === String(state.dataset.dataset_id || "")
+    && String(requestConfig.time_column || "") === String(base.time_column || "")
+    && String(requestConfig.event_column || "") === String(base.event_column || "")
+    && String(requestConfig.event_positive_value ?? "") === String(base.event_positive_value ?? "")
+    && String(requestConfig.new_column_name || "") === currentDerivedName
+    && String(requestConfig.combination_operator || "mixed") === String(refs.signatureOperator?.value || "mixed")
+    && Number(requestConfig.max_combination_size || 3) === Number(refs.signatureMaxDepth?.value || 3)
+    && Number(requestConfig.top_k || 15) === Number(refs.signatureTopK?.value || 15)
+    && Number(requestConfig.min_group_fraction || 0.1) === Number(refs.signatureMinFraction?.value || 0.1)
+    && Number(requestConfig.bootstrap_iterations || 30) === Number(refs.signatureBootstrapIterations?.value || 30)
+    && Number(requestConfig.permutation_iterations || 120) === Number(refs.signaturePermutationIterations?.value || 120)
+    && Number(requestConfig.validation_iterations || 12) === Number(refs.signatureValidationIterations?.value || 12)
+    && Number(requestConfig.validation_fraction || 0.35) === Number(refs.signatureValidationFraction?.value || 0.35)
+    && Number(requestConfig.significance_level || 0.05) === Number(refs.signatureSignificanceLevel?.value || 0.05)
+    && Number(requestConfig.random_seed || 20260311) === Number(refs.signatureRandomSeed?.value || 20260311)
+    && arrayEquals(requestedCandidates, currentCandidates)
+  );
+  return isCurrent ? payload : null;
+}
+
 function updateCohortTableButtonLabel() {
   if (!refs.runCohortTableButtonLabel) return;
   const tableState = currentCohortTableOutputState();
@@ -585,6 +619,9 @@ function goalPayload(goal) {
 function goalHasAnyOutput(goal) {
   if (goal === "tables") {
     return currentCohortTableOutputState().hasOutput;
+  }
+  if (goal === "signature") {
+    return Boolean(state.signature);
   }
   return Boolean(goalPayload(goal));
 }
@@ -1014,6 +1051,9 @@ function captureControlSnapshot() {
     deriveSource: refs.deriveSource?.value || "",
     deriveMethod: refs.deriveMethod?.value || "",
     deriveCutoff: refs.deriveCutoff?.value || "",
+    deriveMinGroupFraction: refs.deriveMinGroupFraction?.value || "",
+    derivePermutationIterations: refs.derivePermutationIterations?.value || "",
+    deriveRandomSeed: refs.deriveRandomSeed?.value || "",
     deriveColumnName: refs.deriveColumnName?.value || "",
     deriveApplyToGroup: Boolean(refs.deriveApplyToGroup?.checked),
     showConfidenceBands: Boolean(refs.showConfidenceBands?.checked),
@@ -1145,6 +1185,9 @@ function applyControlSnapshot(snapshot) {
   setInputValue(refs.dlLatentDim, snapshot.dlLatentDim);
   setInputValue(refs.dlClusters, snapshot.dlClusters);
   setSelectValueIfPresent(refs.deriveMethod, snapshot.deriveMethod);
+  setInputValue(refs.deriveMinGroupFraction, snapshot.deriveMinGroupFraction);
+  setInputValue(refs.derivePermutationIterations, snapshot.derivePermutationIterations);
+  setInputValue(refs.deriveRandomSeed, snapshot.deriveRandomSeed);
   setSelectValueIfPresent(refs.logrankWeight, snapshot.logrankWeight);
   setSelectValueIfPresent(refs.signatureOperator, snapshot.signatureOperator);
   setSelectValueIfPresent(refs.mlModelType, snapshot.mlModelType);
@@ -1255,7 +1298,7 @@ function isScopeBusy(scope) {
 function buttonsForScope(scope) {
   if (scope === "ml") return [refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton];
   if (scope === "dl") return [refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton];
-  if (scope === "km") return [refs.runKmButton];
+  if (scope === "km") return [refs.runKmButton, refs.runSignatureSearchButton];
   if (scope === "cox") return [refs.runCoxButton];
   if (scope === "tables") return [refs.runCohortTableButton];
   return [];
@@ -1806,6 +1849,9 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
       ${summaryCell("Cutoff", formatValue(summary?.cutoff))}
       ${summary?.p_value != null ? summaryCell(pValueLabel, formatValue(summary.p_value), "pvalue-card") : ""}
       ${summaryCell("Groups", formatValue(summary?.n_groups || counts.length || "NA"))}
+      ${summary?.method === "optimal_cutpoint" ? summaryCell("Min group fraction", formatValue(summary?.min_group_fraction)) : ""}
+      ${summary?.method === "optimal_cutpoint" ? summaryCell("Permutation iterations", formatValue(summary?.permutation_iterations)) : ""}
+      ${summary?.method === "optimal_cutpoint" ? summaryCell("Seed", formatValue(summary?.random_seed)) : ""}
       ${assignmentRule ? summaryCell("Assignment rule", assignmentRule, "wide-card") : ""}
     </div>`;
 }
@@ -2009,6 +2055,27 @@ function manuscriptExportPayload(manuscript, format, template, fallbackCaption, 
 function downloadPlotImage(plotEl, filename, format) {
   if (!plotEl || !plotEl.data) return;
   Plotly.downloadImage(plotEl, { format, filename, height: 900, width: 1400, scale: format === "png" ? 3 : 1 });
+}
+
+function requireCurrentResultForExport(goal, { payload = null } = {}) {
+  const scope = runScopeForGoal(goal);
+  if (scope && isScopeBusy(scope)) {
+    showToast("Wait for the current run to finish before exporting this result.", "warning", 3200);
+    return false;
+  }
+  if (goal === "tables") {
+    const tableState = currentCohortTableOutputState();
+    if (!tableState.hasOutput || !tableState.isCurrent || !payload) {
+      showToast("Visible settings no longer match the current cohort table. Rebuild the table before exporting.", "warning", 3600);
+      return false;
+    }
+    return true;
+  }
+  if (!payload || !currentGoalResult(goal)) {
+    showToast("Visible settings no longer match the current result. Run again before exporting.", "warning", 3600);
+    return false;
+  }
+  return true;
 }
 
 function isReadonlyPlot(filename) {
@@ -2464,7 +2531,7 @@ function renderContextCards({
   if (refs.tableDependencyText) {
     refs.tableDependencyText.textContent = !hasDataset
       ? "The cohort table uses the selected variables below and applies Group by only when grouping is set."
-      : "The cohort table uses the selected variables below and applies Group by only when grouping is set.";
+      : "The cohort table uses the selected variables below and applies Group by only when grouping is set. When Group by is active, Overall summarizes the grouped non-missing subset.";
     renderChipList(refs.tableDependencyChips, hasDataset ? [
       `Variables: ${tableVariables.length}`,
       `Group: ${groupLabel}`,
@@ -2481,6 +2548,34 @@ function renderContextCards({
     }
   }
   updateCohortTableButtonLabel();
+}
+
+function syncDownloadButtonAvailability() {
+  const currentKm = currentGoalResult("km");
+  const currentSignature = currentSignatureResult();
+  const currentCox = currentGoalResult("cox");
+  const currentMl = currentGoalResult("ml");
+  const currentDl = currentGoalResult("dl");
+  const currentTable = currentCohortTableOutputState();
+
+  refs.downloadKmSummaryButton.disabled = !currentKm;
+  refs.downloadKmPairwiseButton.disabled = !currentKm || !(currentKm.analysis?.pairwise_table?.length);
+  if (refs.downloadKmPngButton) refs.downloadKmPngButton.disabled = !currentKm;
+  if (refs.downloadKmSvgButton) refs.downloadKmSvgButton.disabled = !currentKm;
+  refs.downloadSignatureButton.disabled = !currentSignature || !(currentSignature.results_table?.length);
+  refs.downloadCoxResultsButton.disabled = !currentCox;
+  refs.downloadCoxDiagnosticsButton.disabled = !currentCox;
+  if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.disabled = !currentCox;
+  if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.disabled = !currentCox;
+  refs.downloadCohortTableButton.disabled = !currentTable.hasOutput || !currentTable.isCurrent;
+  refs.downloadMlComparisonButton.disabled = !currentMl || !(currentMl.analysis?.comparison_table?.length);
+  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !currentMl || !refs.mlComparisonPlot?.data?.length;
+  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !currentMl || !refs.mlComparisonPlot?.data?.length;
+  setMlManuscriptDownloadsEnabled(Boolean(currentMl?.analysis?.manuscript_tables?.model_performance_table?.length));
+  refs.downloadDlComparisonButton.disabled = !currentDl || !(currentDl.analysis?.comparison_table?.length);
+  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !currentDl || !refs.dlComparisonPlot?.data?.length;
+  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !currentDl || !refs.dlComparisonPlot?.data?.length;
+  setDlManuscriptDownloadsEnabled(Boolean(currentDl?.analysis?.manuscript_tables?.model_performance_table?.length));
 }
 
 function renderSharedFeatureSummary() {
@@ -2532,6 +2627,7 @@ function renderSharedFeatureSummary() {
     modelCategoricals: categoricals,
     tableVariables,
   });
+  syncDownloadButtonAvailability();
   renderGuidedChrome();
 }
 
@@ -3381,6 +3477,9 @@ async function deriveGroup() {
     body.time_column = refs.timeColumn.value;
     body.event_column = refs.eventColumn.value;
     body.event_positive_value = refs.eventPositiveValue.value;
+    body.min_group_fraction = Number(refs.deriveMinGroupFraction?.value || 0.1);
+    body.permutation_iterations = Number(refs.derivePermutationIterations?.value || 100);
+    body.random_seed = Number(refs.deriveRandomSeed?.value || 20260311);
   }
 
   const guidedKmRefresh = runtime.uiMode === "guided" && runtime.guidedGoal === "km";
@@ -3456,6 +3555,7 @@ async function deriveGroup() {
 
 function updateMethodVisibility() {
   refs.cutoffWrap.classList.toggle("hidden", refs.deriveMethod.value !== "custom_cutoff");
+  refs.deriveOptimalControls?.classList.toggle("hidden", refs.deriveMethod.value !== "optimal_cutpoint");
 }
 
 function updateWeightVisibility() {
@@ -3508,13 +3608,11 @@ async function runKaplanMeier() {
   const cohort = payload.analysis.cohort;
   const test = payload.analysis.test;
   refs.kmMetaBanner.textContent = `N=${cohort.n}, events=${cohort.events}, censored=${cohort.censored}, median follow-up=${formatValue(cohort.median_follow_up)} ${base.time_unit_label}${test ? `, ${test.test} p=${formatValue(test.p_value)}` : ""}`;
-  refs.downloadKmSummaryButton.disabled = false;
-  refs.downloadKmPairwiseButton.disabled = payload.analysis.pairwise_table.length === 0;
-  if (refs.downloadKmPngButton) refs.downloadKmPngButton.disabled = false;
-  if (refs.downloadKmSvgButton) refs.downloadKmSvgButton.disabled = false;
-  activateTab("km");
-  scrollToAnalysisResult("km");
-  showToast(`Kaplan-Meier analysis complete. Risk table updated to ${requestedRiskTicks} time points.`, "success", 3200);
+  syncDownloadButtonAvailability();
+  revealCompletedResultIfCurrent("km", {
+    successMessage: `Kaplan-Meier analysis complete. Risk table updated to ${requestedRiskTicks} time points.`,
+    backgroundMessage: "Kaplan-Meier finished in the background. Switch back when you are ready to review the updated curve.",
+  });
 }
 
 function renderSignatureResult(analysis) {
@@ -3549,29 +3647,46 @@ async function runSignatureSearch() {
   const candidateColumns = selectedCheckboxValues(refs.covariateChecklist);
   if (!candidateColumns.length) throw new Error("Select at least one covariate to search for signatures.");
   const requestedColumnName = validateDerivedColumnName(refs.deriveColumnName.value);
+  const requestConfig = {
+    dataset_id: state.dataset.dataset_id,
+    time_column: base.time_column,
+    event_column: base.event_column,
+    event_positive_value: base.event_positive_value,
+    candidate_columns: candidateColumns,
+    max_combination_size: Number(refs.signatureMaxDepth.value),
+    top_k: Number(refs.signatureTopK.value),
+    min_group_fraction: Number(refs.signatureMinFraction.value),
+    bootstrap_iterations: Number(refs.signatureBootstrapIterations.value),
+    bootstrap_sample_fraction: 0.8,
+    permutation_iterations: Number(refs.signaturePermutationIterations.value),
+    validation_iterations: Number(refs.signatureValidationIterations.value),
+    validation_fraction: Number(refs.signatureValidationFraction.value),
+    significance_level: Number(refs.signatureSignificanceLevel.value),
+    combination_operator: refs.signatureOperator.value,
+    random_seed: Number(refs.signatureRandomSeed.value),
+    new_column_name: requestedColumnName,
+  };
   const payload = await fetchJSON("/api/discover-signature", {
     method: "POST",
-    body: JSON.stringify({
-      dataset_id: state.dataset.dataset_id, time_column: base.time_column, event_column: base.event_column,
-      event_positive_value: base.event_positive_value, candidate_columns: candidateColumns,
-      max_combination_size: Number(refs.signatureMaxDepth.value), top_k: Number(refs.signatureTopK.value),
-      min_group_fraction: Number(refs.signatureMinFraction.value), bootstrap_iterations: Number(refs.signatureBootstrapIterations.value),
-      bootstrap_sample_fraction: 0.8, permutation_iterations: Number(refs.signaturePermutationIterations.value),
-      validation_iterations: Number(refs.signatureValidationIterations.value), validation_fraction: Number(refs.signatureValidationFraction.value),
-      significance_level: Number(refs.signatureSignificanceLevel.value), combination_operator: refs.signatureOperator.value,
-      random_seed: Number(refs.signatureRandomSeed.value), new_column_name: requestedColumnName,
-    }),
+    body: JSON.stringify(requestConfig),
   });
   updateAfterDataset(payload);
   runtime.derivedColumnProvenance[payload.derived_column] = {
     outcomeInformed: true,
   };
   refreshVariableSelections();
-  state.signature = payload.signature_analysis;
+  state.signature = {
+    ...payload.signature_analysis,
+    request_config: payload.signature_request_config || requestConfig,
+  };
   refs.groupColumn.value = payload.derived_column;
   renderSignatureResult(payload.signature_analysis);
   refs.deriveStatus.textContent = `Auto-derived ${payload.derived_column}`;
-  activateTab("km");
+  syncDownloadButtonAvailability();
+  revealCompletedResultIfCurrent("km", {
+    successMessage: `Signature discovery complete. Group by switched to ${payload.derived_column}.`,
+    backgroundMessage: "Signature discovery finished in the background. Switch back when you are ready to review the updated signature ranking.",
+  });
 }
 
 async function runCox() {
@@ -3597,13 +3712,11 @@ async function runCox() {
   const stats = payload.analysis.model_stats;
   const coxMetricLabel = stats.c_index_label || ((stats.evaluation_mode === "apparent") ? "Apparent C-index" : "C-index");
   refs.coxMetaBanner.textContent = `N=${stats.n}, events=${stats.events}, parameters=${stats.parameters}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricLabel}=${formatValue(stats.c_index)}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
-  refs.downloadCoxResultsButton.disabled = false;
-  refs.downloadCoxDiagnosticsButton.disabled = false;
-  if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.disabled = false;
-  if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.disabled = false;
-  activateTab("cox");
-  scrollToAnalysisResult("cox");
-  showToast("Cox PH model fitted", "success", 3000);
+  syncDownloadButtonAvailability();
+  revealCompletedResultIfCurrent("cox", {
+    successMessage: "Cox PH model fitted.",
+    backgroundMessage: "Cox PH finished in the background. Switch back when you are ready to review the updated model.",
+  });
 }
 
 async function runCohortTable() {
@@ -3618,11 +3731,12 @@ async function runCohortTable() {
   state.cohort = payload;
   renderTable(refs.cohortTableShell, payload.analysis.rows, payload.analysis.columns);
   renderSharedFeatureSummary();
-  refs.downloadCohortTableButton.disabled = !(payload.analysis.rows?.length);
+  syncDownloadButtonAvailability();
   updateStepIndicator(3);
-  activateTab("tables");
-  scrollToAnalysisResult("tables");
-  showToast("Cohort table built", "success", 3000);
+  revealCompletedResultIfCurrent("tables", {
+    successMessage: "Cohort table built.",
+    backgroundMessage: "Cohort table finished in the background. Switch back when you are ready to review the updated table.",
+  });
 }
 
 // ── ML Models ──────────────────────────────────────────────────
@@ -4035,118 +4149,195 @@ async function runDlCompareModels() {
 // ── Downloads ──────────────────────────────────────────────────
 
 function wireDownloads() {
-  refs.downloadKmSummaryButton.addEventListener("click", () => { if (state.km) downloadCsv(buildDownloadFilename("km_summary", "csv", { includeGroup: true }), state.km.analysis.summary_table); });
-  refs.downloadKmPairwiseButton.addEventListener("click", () => { if (state.km) downloadCsv(buildDownloadFilename("km_pairwise", "csv", { includeGroup: true }), state.km.analysis.pairwise_table); });
-  refs.downloadSignatureButton.addEventListener("click", () => { if (state.signature) downloadCsv(buildDownloadFilename("signature_ranking", "csv"), state.signature.results_table); });
-  refs.downloadCoxResultsButton.addEventListener("click", () => { if (state.cox) downloadCsv(buildDownloadFilename("cox_results", "csv"), state.cox.analysis.results_table); });
-  refs.downloadCoxDiagnosticsButton.addEventListener("click", () => { if (state.cox) downloadCsv(buildDownloadFilename("cox_diagnostics", "csv"), state.cox.analysis.diagnostics_table); });
-  if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.addEventListener("click", () => downloadPlotImage(refs.coxPlot, buildDownloadFilename("cox_forest", "png").replace(/\.png$/, ""), "png"));
-  if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.addEventListener("click", () => downloadPlotImage(refs.coxPlot, buildDownloadFilename("cox_forest", "svg").replace(/\.svg$/, ""), "svg"));
-  refs.downloadCohortTableButton.addEventListener("click", () => { if (state.cohort) downloadCsv(buildDownloadFilename("cohort_summary", "csv", { includeGroup: true }), state.cohort.analysis.rows, state.cohort.analysis.columns); });
+  refs.downloadKmSummaryButton.addEventListener("click", () => {
+    const payload = currentGoalResult("km");
+    if (!requireCurrentResultForExport("km", { payload })) return;
+    downloadCsv(buildDownloadFilename("km_summary", "csv", { includeGroup: true }), payload.analysis.summary_table);
+  });
+  refs.downloadKmPairwiseButton.addEventListener("click", () => {
+    const payload = currentGoalResult("km");
+    if (!requireCurrentResultForExport("km", { payload })) return;
+    downloadCsv(buildDownloadFilename("km_pairwise", "csv", { includeGroup: true }), payload.analysis.pairwise_table);
+  });
+  refs.downloadSignatureButton.addEventListener("click", () => {
+    const payload = currentSignatureResult();
+    if (!payload || isScopeBusy("km")) {
+      showToast("Visible settings no longer match the current signature result. Run again before exporting.", "warning", 3600);
+      return;
+    }
+    downloadCsv(buildDownloadFilename("signature_ranking", "csv"), payload.results_table);
+  });
+  refs.downloadCoxResultsButton.addEventListener("click", () => {
+    const payload = currentGoalResult("cox");
+    if (!requireCurrentResultForExport("cox", { payload })) return;
+    downloadCsv(buildDownloadFilename("cox_results", "csv"), payload.analysis.results_table);
+  });
+  refs.downloadCoxDiagnosticsButton.addEventListener("click", () => {
+    const payload = currentGoalResult("cox");
+    if (!requireCurrentResultForExport("cox", { payload })) return;
+    downloadCsv(buildDownloadFilename("cox_diagnostics", "csv"), payload.analysis.diagnostics_table);
+  });
+  if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.addEventListener("click", () => {
+    const payload = currentGoalResult("cox");
+    if (!requireCurrentResultForExport("cox", { payload })) return;
+    downloadPlotImage(refs.coxPlot, buildDownloadFilename("cox_forest", "png").replace(/\.png$/, ""), "png");
+  });
+  if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.addEventListener("click", () => {
+    const payload = currentGoalResult("cox");
+    if (!requireCurrentResultForExport("cox", { payload })) return;
+    downloadPlotImage(refs.coxPlot, buildDownloadFilename("cox_forest", "svg").replace(/\.svg$/, ""), "svg");
+  });
+  refs.downloadCohortTableButton.addEventListener("click", () => {
+    const payload = state.cohort;
+    if (!requireCurrentResultForExport("tables", { payload })) return;
+    downloadCsv(buildDownloadFilename("cohort_summary", "csv", { includeGroup: true }), payload.analysis.rows, payload.analysis.columns);
+  });
   refs.downloadMlComparisonButton.addEventListener("click", () => {
-    const rows = state.ml?.analysis?.comparison_table;
-    if (!rows) return;
+    const payload = currentGoalResult("ml");
+    const rows = payload?.analysis?.comparison_table;
+    if (!requireCurrentResultForExport("ml", { payload })) return;
     void downloadServerTable(buildDownloadFilename("ml_model_comparison", "csv"), {
       rows,
       format: "csv",
       style: "plain",
     }, "text/csv;charset=utf-8;").catch((error) => showError(error.message));
   });
-  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.addEventListener("click", () => downloadPlotImage(refs.mlComparisonPlot, buildDownloadFilename("ml_model_comparison", "png").replace(/\.png$/, ""), "png"));
-  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.addEventListener("click", () => downloadPlotImage(refs.mlComparisonPlot, buildDownloadFilename("ml_model_comparison", "svg").replace(/\.svg$/, ""), "svg"));
+  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.addEventListener("click", () => {
+    const payload = currentGoalResult("ml");
+    if (!requireCurrentResultForExport("ml", { payload })) return;
+    downloadPlotImage(refs.mlComparisonPlot, buildDownloadFilename("ml_model_comparison", "png").replace(/\.png$/, ""), "png");
+  });
+  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.addEventListener("click", () => {
+    const payload = currentGoalResult("ml");
+    if (!requireCurrentResultForExport("ml", { payload })) return;
+    downloadPlotImage(refs.mlComparisonPlot, buildDownloadFilename("ml_model_comparison", "svg").replace(/\.svg$/, ""), "svg");
+  });
   refs.downloadMlManuscriptCsvButton.addEventListener("click", () => {
-    const manuscript = state.ml?.analysis?.manuscript_tables;
+    const payload = currentGoalResult("ml");
+    if (!requireCurrentResultForExport("ml", { payload })) return;
+    const manuscript = payload?.analysis?.manuscript_tables;
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("ml_manuscript_table", "csv", { template: currentMlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "csv", currentMlJournalTemplate(), "Model discrimination summary", state.ml),
+      manuscriptExportPayload(manuscript, "csv", currentMlJournalTemplate(), "Model discrimination summary", payload),
       "text/csv;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
   refs.downloadMlManuscriptMarkdownButton.addEventListener("click", () => {
-    const manuscript = state.ml?.analysis?.manuscript_tables;
+    const payload = currentGoalResult("ml");
+    if (!requireCurrentResultForExport("ml", { payload })) return;
+    const manuscript = payload?.analysis?.manuscript_tables;
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("ml_manuscript_table", "md", { template: currentMlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "markdown", currentMlJournalTemplate(), "Model discrimination summary", state.ml),
+      manuscriptExportPayload(manuscript, "markdown", currentMlJournalTemplate(), "Model discrimination summary", payload),
       "text/markdown;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
   refs.downloadMlManuscriptLatexButton.addEventListener("click", () => {
-    const manuscript = state.ml?.analysis?.manuscript_tables;
+    const payload = currentGoalResult("ml");
+    if (!requireCurrentResultForExport("ml", { payload })) return;
+    const manuscript = payload?.analysis?.manuscript_tables;
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("ml_manuscript_table", "tex", { template: currentMlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "latex", currentMlJournalTemplate(), "Model discrimination summary", state.ml),
+      manuscriptExportPayload(manuscript, "latex", currentMlJournalTemplate(), "Model discrimination summary", payload),
       "text/x-tex;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
   refs.downloadMlManuscriptDocxButton.addEventListener("click", () => {
-    const manuscript = state.ml?.analysis?.manuscript_tables;
+    const payload = currentGoalResult("ml");
+    if (!requireCurrentResultForExport("ml", { payload })) return;
+    const manuscript = payload?.analysis?.manuscript_tables;
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("ml_manuscript_table", "docx", { template: currentMlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "docx", currentMlJournalTemplate(), "Model discrimination summary", state.ml),
+      manuscriptExportPayload(manuscript, "docx", currentMlJournalTemplate(), "Model discrimination summary", payload),
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ).catch((error) => showError(error.message));
   });
   refs.downloadDlComparisonButton.addEventListener("click", () => {
-    const rows = state.dl?.analysis?.comparison_table;
-    if (!rows) return;
+    const payload = currentGoalResult("dl");
+    const rows = payload?.analysis?.comparison_table;
+    if (!requireCurrentResultForExport("dl", { payload })) return;
     void downloadServerTable(buildDownloadFilename("dl_model_comparison", "csv"), {
       rows,
       format: "csv",
       style: "plain",
     }, "text/csv;charset=utf-8;").catch((error) => showError(error.message));
   });
-  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.addEventListener("click", () => downloadPlotImage(refs.dlComparisonPlot, buildDownloadFilename("dl_model_comparison", "png").replace(/\.png$/, ""), "png"));
-  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.addEventListener("click", () => downloadPlotImage(refs.dlComparisonPlot, buildDownloadFilename("dl_model_comparison", "svg").replace(/\.svg$/, ""), "svg"));
+  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.addEventListener("click", () => {
+    const payload = currentGoalResult("dl");
+    if (!requireCurrentResultForExport("dl", { payload })) return;
+    downloadPlotImage(refs.dlComparisonPlot, buildDownloadFilename("dl_model_comparison", "png").replace(/\.png$/, ""), "png");
+  });
+  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.addEventListener("click", () => {
+    const payload = currentGoalResult("dl");
+    if (!requireCurrentResultForExport("dl", { payload })) return;
+    downloadPlotImage(refs.dlComparisonPlot, buildDownloadFilename("dl_model_comparison", "svg").replace(/\.svg$/, ""), "svg");
+  });
   refs.downloadDlManuscriptCsvButton.addEventListener("click", () => {
-    const manuscript = state.dl?.analysis?.manuscript_tables;
+    const payload = currentGoalResult("dl");
+    if (!requireCurrentResultForExport("dl", { payload })) return;
+    const manuscript = payload?.analysis?.manuscript_tables;
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("dl_manuscript_table", "csv", { template: currentDlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "csv", currentDlJournalTemplate(), "Deep model discrimination summary", state.dl),
+      manuscriptExportPayload(manuscript, "csv", currentDlJournalTemplate(), "Deep model discrimination summary", payload),
       "text/csv;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
   refs.downloadDlManuscriptMarkdownButton.addEventListener("click", () => {
-    const manuscript = state.dl?.analysis?.manuscript_tables;
+    const payload = currentGoalResult("dl");
+    if (!requireCurrentResultForExport("dl", { payload })) return;
+    const manuscript = payload?.analysis?.manuscript_tables;
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("dl_manuscript_table", "md", { template: currentDlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "markdown", currentDlJournalTemplate(), "Deep model discrimination summary", state.dl),
+      manuscriptExportPayload(manuscript, "markdown", currentDlJournalTemplate(), "Deep model discrimination summary", payload),
       "text/markdown;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
   refs.downloadDlManuscriptLatexButton.addEventListener("click", () => {
-    const manuscript = state.dl?.analysis?.manuscript_tables;
+    const payload = currentGoalResult("dl");
+    if (!requireCurrentResultForExport("dl", { payload })) return;
+    const manuscript = payload?.analysis?.manuscript_tables;
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("dl_manuscript_table", "tex", { template: currentDlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "latex", currentDlJournalTemplate(), "Deep model discrimination summary", state.dl),
+      manuscriptExportPayload(manuscript, "latex", currentDlJournalTemplate(), "Deep model discrimination summary", payload),
       "text/x-tex;charset=utf-8;",
     ).catch((error) => showError(error.message));
   });
   refs.downloadDlManuscriptDocxButton.addEventListener("click", () => {
-    const manuscript = state.dl?.analysis?.manuscript_tables;
+    const payload = currentGoalResult("dl");
+    if (!requireCurrentResultForExport("dl", { payload })) return;
+    const manuscript = payload?.analysis?.manuscript_tables;
     const rows = manuscript?.model_performance_table;
     if (!rows) return;
     void downloadServerTable(
       buildDownloadFilename("dl_manuscript_table", "docx", { template: currentDlJournalTemplate() }),
-      manuscriptExportPayload(manuscript, "docx", currentDlJournalTemplate(), "Deep model discrimination summary", state.dl),
+      manuscriptExportPayload(manuscript, "docx", currentDlJournalTemplate(), "Deep model discrimination summary", payload),
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ).catch((error) => showError(error.message));
   });
-  if (refs.downloadKmPngButton) refs.downloadKmPngButton.addEventListener("click", () => downloadPlotImage(refs.kmPlot, buildDownloadFilename("km_curve", "png", { includeGroup: true }).replace(/\.png$/, ""), "png"));
-  if (refs.downloadKmSvgButton) refs.downloadKmSvgButton.addEventListener("click", () => downloadPlotImage(refs.kmPlot, buildDownloadFilename("km_curve", "svg", { includeGroup: true }).replace(/\.svg$/, ""), "svg"));
+  if (refs.downloadKmPngButton) refs.downloadKmPngButton.addEventListener("click", () => {
+    const payload = currentGoalResult("km");
+    if (!requireCurrentResultForExport("km", { payload })) return;
+    downloadPlotImage(refs.kmPlot, buildDownloadFilename("km_curve", "png", { includeGroup: true }).replace(/\.png$/, ""), "png");
+  });
+  if (refs.downloadKmSvgButton) refs.downloadKmSvgButton.addEventListener("click", () => {
+    const payload = currentGoalResult("km");
+    if (!requireCurrentResultForExport("km", { payload })) return;
+    downloadPlotImage(refs.kmPlot, buildDownloadFilename("km_curve", "svg", { includeGroup: true }).replace(/\.svg$/, ""), "svg");
+  });
 }
 
 // ── Utilities ──────────────────────────────────────────────────
@@ -4604,7 +4795,7 @@ function initListeners() {
     }
     withLoading(refs.runKmButton, runKaplanMeier);
   });
-  refs.runSignatureSearchButton.addEventListener("click", () => withLoading(refs.runSignatureSearchButton, runSignatureSearch));
+  refs.runSignatureSearchButton.addEventListener("click", () => withLoading(refs.runSignatureSearchButton, runSignatureSearch, "km"));
   refs.runCoxButton.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
       runtime.guidedGoal = "cox";

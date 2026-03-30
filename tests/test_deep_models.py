@@ -1342,3 +1342,23 @@ def test_deep_models_module_can_load_when_torch_is_missing(monkeypatch) -> None:
     assert module_globals["TORCH_AVAILABLE"] is False
     assert module_globals["DeepSurvNet"]
     assert module_globals["SurvivalTransformerNet"]
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_require_finite_loss_rejects_nan_before_optimizer_step() -> None:
+    import torch
+    import survival_toolkit.deep_models as deep_models
+
+    with pytest.raises(ValueError, match="NaN or Inf"):
+        deep_models._require_finite_loss(torch.tensor(float("nan")), context="unit test loss")
+
+
+def test_deephit_feature_importance_uses_expected_time_risk_target() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "deep_models.py"
+    ).read_text(encoding="utf-8")
+
+    assert "output_to_score=lambda pmf: _expected_time_risk(pmf, time_grid)" in source

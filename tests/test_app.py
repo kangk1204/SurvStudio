@@ -2518,13 +2518,11 @@ def test_frontend_scrolls_to_results_after_runs_finish() -> None:
     assert "function scrollToAnalysisResult(tabName, { mode = \"single\" } = {})" in app_js
     assert 'setGuidedStep(5, { scroll: false, historyMode: "push" });' in app_js
     assert 'scrollToAnalysisResult(tabName, { mode: resultMode });' in app_js
-    assert 'scrollToAnalysisResult("km");' in app_js
-    assert 'scrollToAnalysisResult("cox");' in app_js
-    assert 'scrollToAnalysisResult("tables");' in app_js
-    assert 'scrollToAnalysisResult("ml", { mode: "single" });' in app_js
-    assert 'scrollToAnalysisResult("ml", { mode: "compare" });' in app_js
-    assert 'scrollToAnalysisResult("dl", { mode: repeatedCvLike ? "compare" : "single" });' in app_js
-    assert 'scrollToAnalysisResult("dl", { mode: "compare" });' in app_js
+    assert 'revealCompletedResultIfCurrent("km", {' in app_js
+    assert 'revealCompletedResultIfCurrent("cox", {' in app_js
+    assert 'revealCompletedResultIfCurrent("tables", {' in app_js
+    assert 'revealCompletedResultIfCurrent("ml",' in app_js
+    assert 'revealCompletedResultIfCurrent("dl",' in app_js
 
 
 def test_compare_results_hide_single_model_plot_sections() -> None:
@@ -2561,6 +2559,38 @@ def test_shared_model_feature_bulk_actions_are_exposed() -> None:
     assert 'id="clearModelFeaturesButton"' in response.text
     assert 'id="selectAllDlModelFeaturesButton"' in response.text
     assert 'id="clearDlModelFeaturesButton"' in response.text
+
+
+def test_index_exposes_optimal_cutpoint_controls_and_non_ai_empty_states() -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'id="deriveOptimalControls"' in response.text
+    assert 'id="deriveMinGroupFraction"' in response.text
+    assert 'id="derivePermutationIterations"' in response.text
+    assert 'id="deriveRandomSeed"' in response.text
+    assert "Interpretation notes will appear here after analysis." in response.text
+    assert "Model interpretation and diagnostic notes will appear here after analysis." in response.text
+    assert "When Group by is active, Overall summarizes the grouped non-missing subset." in response.text
+
+
+def test_frontend_exports_require_current_results_and_signature_scope_guard() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function currentSignatureResult()" in app_js
+    assert 'if (!requireCurrentResultForExport("km", { payload })) return;' in app_js
+    assert 'if (!requireCurrentResultForExport("cox", { payload })) return;' in app_js
+    assert 'if (!requireCurrentResultForExport("tables", { payload })) return;' in app_js
+    assert 'if (!requireCurrentResultForExport("ml", { payload })) return;' in app_js
+    assert 'if (!requireCurrentResultForExport("dl", { payload })) return;' in app_js
+    assert 'if (!payload || isScopeBusy("km")) {' in app_js
+    assert 'refs.runSignatureSearchButton, runSignatureSearch, "km"' in app_js
+    assert "function syncDownloadButtonAvailability()" in app_js
 
 
 def test_frontend_syncs_bulk_model_feature_actions_across_ml_and_dl() -> None:
@@ -3886,3 +3916,80 @@ def test_window_resize_schedules_plot_resizing() -> None:
     assert "window.clearTimeout(runtime.plotResizeTimer);" in app_js
     assert "window.addEventListener(\"resize\", () => {" in app_js
     assert "scheduleVisiblePlotResize(80);" in app_js
+
+
+def test_ml_single_model_endpoint_rejects_repeated_cv_strategy() -> None:
+    dataset = client.post("/api/load-example").json()
+
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "model_type": "rsf",
+            "features": ["age", "biomarker_score"],
+            "categorical_features": [],
+            "evaluation_strategy": "repeated_cv",
+            "cv_folds": 3,
+            "cv_repeats": 2,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "deterministic holdout only" in response.json()["detail"]
+
+
+def test_cohort_table_rejects_outcome_informed_grouping_column() -> None:
+    dataset = client.post("/api/load-example").json()
+    derived = client.post(
+        "/api/derive-group",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "source_column": "age",
+            "method": "optimal_cutpoint",
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "new_column_name": "age_opt",
+        },
+    ).json()
+
+    response = client.post(
+        "/api/cohort-table",
+        json={
+            "dataset_id": derived["dataset_id"],
+            "variables": ["age", "sex"],
+            "group_column": "age_opt",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "grouped cohort tables" in response.json()["detail"]
+
+
+def test_signature_search_response_includes_request_config_for_staleness_checks() -> None:
+    dataset = client.post("/api/load-example").json()
+
+    response = client.post(
+        "/api/discover-signature",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "candidate_columns": ["age", "stage", "treatment"],
+            "max_combination_size": 2,
+            "top_k": 5,
+            "bootstrap_iterations": 0,
+            "permutation_iterations": 0,
+            "validation_iterations": 0,
+            "new_column_name": "sig_age_stage",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["signature_request_config"]["dataset_id"] == dataset["dataset_id"]
+    assert payload["signature_request_config"]["candidate_columns"] == ["age", "stage", "treatment"]

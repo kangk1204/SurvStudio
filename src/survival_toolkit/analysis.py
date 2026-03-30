@@ -43,6 +43,15 @@ FALSE_TOKENS = {
     "nonevent",
     "non-event",
 }
+_GENERIC_TRUE_TOKENS = {"1", "true", "yes", "y", "event"}
+_DEATH_TRUE_TOKENS = {"dead", "death", "deceased"}
+_PROGRESSION_TRUE_TOKENS = {"progressed", "progression", "relapse", "failure"}
+_EVENT_TOKEN_FAMILIES = {
+    **{token: "event_generic" for token in _GENERIC_TRUE_TOKENS},
+    **{token: "event_death" for token in _DEATH_TRUE_TOKENS},
+    **{token: "event_progression" for token in _PROGRESSION_TRUE_TOKENS},
+    **{token: "censor" for token in FALSE_TOKENS},
+}
 KM_WEIGHT_MAP = {
     "logrank": None,
     "gehan_breslow": "gb",
@@ -328,6 +337,19 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
             )
 
         observed_tokens = sorted(set(value_tokens.loc[valid].astype(str).tolist()))
+        observed_families = {
+            _EVENT_TOKEN_FAMILIES[token]
+            for token in observed_tokens
+            if token in _EVENT_TOKEN_FAMILIES
+        }
+
+        def _raise_if_multistate_family(target_family: str) -> None:
+            disallowed = sorted(observed_families - {target_family, "censor"})
+            if disallowed:
+                raise ValueError(
+                    "The event column contains more than one recognized event state. "
+                    "Recode it to a binary event indicator before survival analysis."
+                )
 
         # If the target is a known event/censor token, decode using the full token vocabulary.
         if target_token in TRUE_TOKENS:
@@ -339,7 +361,15 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
                     + ", ".join(unknown[:6])
                     + (" ..." if len(unknown) > 6 else "")
                 )
-            event_tokens = TRUE_TOKENS
+            target_family = _EVENT_TOKEN_FAMILIES.get(target_token)
+            if target_family is None:
+                raise ValueError("The selected event-positive value could not be mapped to a supported event family.")
+            _raise_if_multistate_family(target_family)
+            event_tokens = {
+                token
+                for token in TRUE_TOKENS
+                if _EVENT_TOKEN_FAMILIES.get(token) == target_family
+            }
         elif target_token in FALSE_TOKENS:
             allowed = TRUE_TOKENS | FALSE_TOKENS
             unknown = [tok for tok in observed_tokens if tok not in allowed]
@@ -385,6 +415,18 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
     mapped.loc[normalized.isin(TRUE_TOKENS)] = 1.0
     mapped.loc[normalized.isin(FALSE_TOKENS)] = 0.0
     if mapped.loc[valid].notna().sum() == valid.sum():
+        observed_tokens = set(normalized.loc[valid].dropna().astype(str).tolist())
+        observed_families = {
+            _EVENT_TOKEN_FAMILIES[token]
+            for token in observed_tokens
+            if token in _EVENT_TOKEN_FAMILIES
+        }
+        event_families = observed_families - {"censor"}
+        if len(event_families) > 1:
+            raise ValueError(
+                "The event column contains more than one recognized event state. "
+                "Recode it to a binary event indicator before survival analysis."
+            )
         return mapped
 
     raise ValueError(
@@ -408,7 +450,12 @@ def looks_binary(series: pd.Series) -> bool:
         normalized = valid.map(_normalize_token)
         normalized_non_missing = normalized.dropna()
         if len(normalized_non_missing) == len(valid):
-            return len(set(normalized_non_missing.tolist())) == 2
+            observed_tokens = set(normalized_non_missing.tolist())
+            if not observed_tokens.issubset(set(_EVENT_TOKEN_FAMILIES)):
+                return len(observed_tokens) == 2
+            families = {_EVENT_TOKEN_FAMILIES[token] for token in observed_tokens}
+            event_families = families - {"censor"}
+            return len(event_families) == 1 and bool(event_families)
 
         return int(valid.nunique(dropna=True)) == 2
     non_missing = coerced.dropna()
@@ -701,6 +748,7 @@ def _km_scientific_summary(
     pairwise_rows: Sequence[dict[str, Any]],
     *,
     fh_p: float | None = None,
+    outcome_informed_group: bool = False,
 ) -> dict[str, Any]:
     group_count = len(summary_rows)
     min_group_n = min(int(row["N"]) for row in summary_rows)
@@ -713,11 +761,13 @@ def _km_scientific_summary(
     cautions: list[str] = []
     next_steps: list[str] = []
 
-    if group_column:
+    if group_column and not outcome_informed_group:
         test_name = _weighted_test_label(test_payload["test"], fh_p=fh_p) if test_payload else "weighted"
         strengths.append(f"Global {test_name} comparison was run across {group_count} groups.")
         if pairwise_rows:
             strengths.append("Pairwise group comparisons include Benjamini-Hochberg adjusted p-values.")
+    elif group_column and outcome_informed_group:
+        strengths.append("Outcome-informed groups were visualized descriptively without a fresh between-group hypothesis test.")
     else:
         strengths.append("This run estimates a single cohort without between-group multiple testing.")
 
@@ -730,7 +780,11 @@ def _km_scientific_summary(
     if cohort_summary["median_follow_up"] is None:
         cautions.append("Median follow-up could not be estimated from the censoring distribution.")
 
-    if group_column and test_payload:
+    if group_column and outcome_informed_group:
+        headline = "Outcome-informed groups were visualized descriptively; a fresh log-rank p-value is not reported on the same selected split."
+        cautions.append("This grouping was derived using outcome information, so treat the KM figure as exploratory rather than confirmatory.")
+        next_steps.append("Report the selection procedure and any selection-adjusted p-value from the cutpoint or signature workflow instead of a fresh raw log-rank test.")
+    elif group_column and test_payload:
         if float(test_payload["p_value"]) < 0.05:
             headline = f"Global {_weighted_test_label(test_payload['test'], fh_p=fh_p)} testing suggests survival differs across groups."
             next_steps.append("Inspect groupwise medians, RMST, and adjusted pairwise comparisons before making a manuscript claim.")
@@ -980,6 +1034,9 @@ def derive_group_column(
     time_column: str | None = None,
     event_column: str | None = None,
     event_positive_value: Any = None,
+    min_group_fraction: float = 0.1,
+    permutation_iterations: int = 100,
+    random_seed: int = 20260311,
 ) -> tuple[pd.DataFrame, str, dict[str, Any]]:
     numeric_series = pd.to_numeric(df[source_column], errors="coerce")
     usable = numeric_series.dropna()
@@ -1021,11 +1078,11 @@ def derive_group_column(
             event_column=event_column,
             variable=source_column,
             event_positive_value=event_positive_value,
-            min_group_fraction=0.1,
+            min_group_fraction=min_group_fraction,
             lower_label=lower_label,
             upper_label=upper_label,
-            permutation_iterations=100,
-            random_seed=20260311,
+            permutation_iterations=permutation_iterations,
+            random_seed=random_seed,
         )
         split_point = result["optimal_cutpoint"]
         lbl_above = result["label_above_cutpoint"]
@@ -1043,6 +1100,9 @@ def derive_group_column(
             "raw_p_value": result.get("raw_p_value"),
             "selection_adjusted_p_value": result.get("selection_adjusted_p_value"),
             "selection_adjustment": result.get("selection_adjustment"),
+            "min_group_fraction": float(min_group_fraction),
+            "permutation_iterations": int(permutation_iterations),
+            "random_seed": int(random_seed),
             "scan_data": result["scan_data"],
         }
         outcome_informed = True
@@ -1839,6 +1899,8 @@ def compute_km_analysis(
     risk_table_points: int = 6,
     logrank_weight: str = "logrank",
     fh_p: float = 1.0,
+    suppress_group_inference: bool = False,
+    outcome_informed_group: bool = False,
 ) -> dict[str, Any]:
     extra_columns = [group_column] if group_column else []
     frame = _cohort_frame(
@@ -1929,7 +1991,7 @@ def compute_km_analysis(
     test_payload = None
     pairwise_rows: list[dict[str, Any]] = []
     weight_type = KM_WEIGHT_MAP.get(logrank_weight)
-    if group_column and len(group_labels) >= 2:
+    if group_column and len(group_labels) >= 2 and not suppress_group_inference:
         kwargs: dict[str, Any] = {}
         if weight_type == "fh":
             kwargs["fh_p"] = fh_p
@@ -1978,6 +2040,7 @@ def compute_km_analysis(
         test_payload=test_payload,
         pairwise_rows=pairwise_rows,
         fh_p=fh_p,
+        outcome_informed_group=outcome_informed_group,
     )
 
     test_label = (
@@ -2006,6 +2069,7 @@ def compute_km_analysis(
         "cohort": cohort_summary,
         "display_horizon": display_horizon,
         "group_column": group_column,
+        "outcome_informed_group": bool(outcome_informed_group),
         "scientific_summary": scientific_summary,
     }
 
@@ -2426,7 +2490,13 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
             }
         )
 
+    overall_label = "Overall (grouped subset)" if group_column else "Overall"
     return {
-        "columns": ["Variable", "Statistic", "Overall", *group_labels],
+        "columns": ["Variable", "Statistic", overall_label, *group_labels],
         "rows": rows,
+        "overall_scope": (
+            "Overall summarizes the non-missing grouped subset."
+            if group_column
+            else "Overall summarizes the full analyzable table cohort."
+        ),
     }

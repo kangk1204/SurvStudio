@@ -640,11 +640,17 @@ If you use them in a manuscript:
 - prefer selection-adjusted p-values when available
 - validate the cutpoint on separate data
 
+If you derive a `High/Low` grouping from the same cohort with optimal cutpointing or signature discovery and then send that new column back into Kaplan-Meier or grouped summaries on the same cohort:
+- treat the follow-up KM/table output as descriptive
+- do not treat the repeated group-separation p-value as an independent confirmatory test
+- use external validation if you want inferential claims for the derived grouping
+
 ### Calibration and Time-Dependent Importance
 
 These outputs are useful, but should be interpreted carefully:
 - calibration outputs are partly descriptive
 - time-dependent importance is an approximate proxy, not a formal SurvSHAP(t) implementation
+- partial dependence and counterfactual outputs are model-based local utilities, not causal intervention estimates
 
 ## Export
 
@@ -663,6 +669,10 @@ Available exports:
   - forest plot as `SVG`
 - Cohort Table:
   - table as `CSV`
+
+When Group by is active in the cohort table:
+- `Overall` refers to the grouped non-missing subset used in that table
+- it is not a separate all-rows summary outside the grouped analysis frame
 - ML and DL comparison:
   - comparison table as `CSV`
   - comparison plot as `PNG`
@@ -686,6 +696,12 @@ ML and DL manuscript-table export supports these formatting helpers:
 
 These apply to manuscript table export only.
 They are formatting helpers, not official publisher-certified house styles.
+
+## Evaluation Contract
+
+- ML `Train Model` currently supports the deterministic holdout path for a single fitted model.
+- ML `Compare All` is the screening path for shared-model comparison, including repeated cross-validation when selected.
+- DL single-model runs can use holdout or repeated-CV according to the visible evaluation controls.
 
 ### Download File Names
 

@@ -17,7 +17,7 @@ import multiprocessing as mp
 import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -57,6 +57,13 @@ def _seed_torch(random_seed: int) -> None:
     torch.manual_seed(random_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(random_seed)
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+    try:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except Exception:
+        pass
 
 
 def _clip_gradients(model: nn.Module, max_norm: float = 1.0) -> None:
@@ -863,12 +870,16 @@ def _digitize_time_bins(
 def _gradient_feature_importance(
     model: Any,
     x_tensor: torch.Tensor,
+    *,
+    output_to_score: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> list[float]:
     """Compute gradient-based feature importance: mean |grad of output w.r.t. input|."""
     model.eval()
     x_input = x_tensor.clone().detach().requires_grad_(True)
     output = model(x_input)
-    if output.dim() > 1:
+    if output_to_score is not None:
+        output = output_to_score(output)
+    elif output.dim() > 1:
         output = output.sum(dim=1)
     output.sum().backward()
     grad = x_input.grad
@@ -876,6 +887,11 @@ def _gradient_feature_importance(
         return [0.0] * x_tensor.shape[1]
     importance = grad.abs().mean(dim=0).detach().cpu().numpy()
     return [float(v) for v in importance]
+
+
+def _require_finite_loss(loss: torch.Tensor, *, context: str) -> None:
+    if not torch.isfinite(loss):
+        raise ValueError(f"{context} became NaN or Inf during training.")
 
 
 def _scientific_summary_dl(
@@ -1837,6 +1853,7 @@ def train_deepsurv(
         optimizer.zero_grad()
         risk = model(x_train)
         loss = _cox_partial_likelihood_loss(risk, t_train, e_train)
+        _require_finite_loss(loss, context="DeepSurv loss")
         loss.backward()
         _clip_gradients(model)
         optimizer.step()
@@ -2175,6 +2192,7 @@ def train_deephit(
             optimizer.zero_grad()
             pmf = model(x_b)
             loss = _deephit_loss(pmf, bin_b, e_b, alpha)
+            _require_finite_loss(loss, context="DeepHit loss")
             loss.backward()
             _clip_gradients(model)
             optimizer.step()
@@ -2225,7 +2243,17 @@ def train_deephit(
     artifact_scope = _artifact_scope_label(evaluation_mode)
 
     # Feature importance
-    importance = _gradient_feature_importance(model, x_all[artifact_idx])
+    time_grid = torch.cat(
+        [
+            torch.as_tensor(bin_centers, dtype=torch.float32),
+            torch.as_tensor([float(bin_edges[-1])], dtype=torch.float32),
+        ]
+    )
+    importance = _gradient_feature_importance(
+        model,
+        x_all[artifact_idx],
+        output_to_score=lambda pmf: _expected_time_risk(pmf, time_grid),
+    )
     feature_importance = [
         {"feature": name, "importance": imp}
         for name, imp in sorted(
@@ -2462,6 +2490,7 @@ def train_neural_mtlr(
             optimizer.zero_grad()
             cumsum_logits = model(x_b)
             loss = _mtlr_loss(cumsum_logits, bin_b, e_b, num_time_bins)
+            _require_finite_loss(loss, context="Neural MTLR loss")
             loss.backward()
             _clip_gradients(model)
             optimizer.step()
@@ -2775,6 +2804,7 @@ def train_survival_transformer(
         optimizer.zero_grad()
         risk = model(x_train)
         loss = _cox_partial_likelihood_loss(risk, t_train, e_train)
+        _require_finite_loss(loss, context="Survival Transformer loss")
         loss.backward()
         _clip_gradients(model)
         optimizer.step()
@@ -3130,6 +3160,7 @@ def train_survival_vae(
         optimizer.zero_grad()
         x_recon, mu, log_var, risk = model(x_train)
         loss = _vae_combined_loss(x_train, x_recon, mu, log_var, risk, t_train, e_train)
+        _require_finite_loss(loss, context="Survival VAE loss")
         loss.backward()
         _clip_gradients(model)
         optimizer.step()
