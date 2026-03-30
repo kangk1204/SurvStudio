@@ -512,6 +512,10 @@ def build_loss_curve_figure(
     loss_history: list[float],
     model_name: str = "Model",
     monitor_loss_history: list[float] | None = None,
+    best_monitor_epoch: int | None = None,
+    epochs_trained: int | None = None,
+    max_epochs_requested: int | None = None,
+    stopped_early: bool | None = None,
 ) -> dict[str, Any]:
     if not loss_history:
         return figure_to_json(go.Figure())
@@ -528,6 +532,8 @@ def build_loss_curve_figure(
         )
     )
     if monitor_loss_history:
+        if best_monitor_epoch is None and monitor_loss_history:
+            best_monitor_epoch = int(np.argmin(np.asarray(monitor_loss_history, dtype=float))) + 1
         fig.add_trace(
             go.Scatter(
                 x=list(range(1, len(monitor_loss_history) + 1)),
@@ -538,6 +544,33 @@ def build_loss_curve_figure(
                 name="Monitor loss",
             )
         )
+        if best_monitor_epoch is not None and best_monitor_epoch >= 1:
+            fig.add_vline(
+                x=best_monitor_epoch,
+                line_dash="dash",
+                line_color=GOLD,
+                line_width=1.5,
+                opacity=0.9,
+            )
+            fig.add_annotation(
+                x=best_monitor_epoch,
+                y=1.0,
+                xref="x",
+                yref="paper",
+                text=f"Best monitor epoch: {best_monitor_epoch}",
+                showarrow=False,
+                yanchor="bottom",
+                font={"size": 12, "color": INK},
+                bgcolor="rgba(255,255,255,0.88)",
+                borderpad=3,
+            )
+    status_text = None
+    if stopped_early and epochs_trained:
+        status_text = f"Stopped early at epoch {epochs_trained}"
+    elif max_epochs_requested and epochs_trained and epochs_trained >= max_epochs_requested:
+        status_text = f"Trained to max epoch ({max_epochs_requested})"
+    elif epochs_trained:
+        status_text = f"Trained for {epochs_trained} epoch(s)"
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": 80, "b": 60},
@@ -553,6 +586,20 @@ def build_loss_curve_figure(
         height=380,
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0.01},
     )
+    if status_text:
+        fig.add_annotation(
+            text=status_text,
+            xref="paper",
+            yref="paper",
+            x=0.98,
+            y=0.98,
+            showarrow=False,
+            xanchor="right",
+            yanchor="top",
+            font={"size": 12, "color": INK},
+            bgcolor="rgba(255,255,255,0.88)",
+            borderpad=4,
+        )
     fig.update_xaxes(title="Epoch", **_COMMON_AXES)
     fig.update_yaxes(title="Loss", **_COMMON_AXES)
     return figure_to_json(fig)

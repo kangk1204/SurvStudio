@@ -3718,7 +3718,17 @@ async function runDlModel() {
         ? `, repeat seeds=${stats.training_seeds.join(", ")}`
         : "")
       : (stats.training_seed != null ? `, seed=${formatValue(stats.training_seed)}` : "");
-    refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlSeedSuffix}, time=${elapsedSeconds}s`;
+    const dlTrainingStatus = repeatedCvLike
+      ? ""
+      : (stats.stopped_early
+        ? `, stopped early at epoch ${formatValue(epochsTrained)}`
+        : (stats.max_epochs_requested != null && Number(epochsTrained) >= Number(stats.max_epochs_requested)
+          ? `, trained to max epoch (${formatValue(stats.max_epochs_requested)})`
+          : ""));
+    const dlBestMonitorSuffix = repeatedCvLike
+      ? ""
+      : (stats.best_monitor_epoch != null ? `, best monitor epoch=${formatValue(stats.best_monitor_epoch)}` : "");
+    refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlBestMonitorSuffix}${dlTrainingStatus}${dlSeedSuffix}, time=${elapsedSeconds}s`;
     updateStepIndicator(3);
     activateTab("dl");
     scrollToAnalysisResult("dl", { mode: repeatedCvLike ? "compare" : "single" });

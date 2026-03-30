@@ -2879,6 +2879,9 @@ def test_deep_single_model_endpoint_builds_monitor_loss_curve_when_history_is_av
             "c_index": 0.701,
             "evaluation_mode": "holdout",
             "epochs_trained": 3,
+            "max_epochs_requested": 10,
+            "best_monitor_epoch": 2,
+            "stopped_early": True,
             "loss_history": [1.2, 0.9, 0.7],
             "monitor_loss_history": [1.3, 1.0, 0.8],
             "feature_importance": [{"feature": "age", "importance": 0.4}],
@@ -2919,6 +2922,12 @@ def test_deep_single_model_endpoint_builds_monitor_loss_curve_when_history_is_av
     assert len(payload["figures"]["loss"]["data"]) == 2
     assert payload["figures"]["loss"]["data"][0]["name"] == "Training loss"
     assert payload["figures"]["loss"]["data"][1]["name"] == "Monitor loss"
+    annotation_text = " ".join(
+        str(annotation.get("text", ""))
+        for annotation in payload["figures"]["loss"]["layout"].get("annotations", [])
+    )
+    assert "Best monitor epoch: 2" in annotation_text
+    assert "Stopped early at epoch 3" in annotation_text
 
 
 def test_ml_compare_workflow_with_mixed_features_exports_manuscript_table() -> None:

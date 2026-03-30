@@ -1391,6 +1391,10 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                     result["loss_history"],
                     model_name=request_model.model_type.upper(),
                     monitor_loss_history=result.get("monitor_loss_history"),
+                    best_monitor_epoch=result.get("best_monitor_epoch"),
+                    epochs_trained=result.get("epochs_trained"),
+                    max_epochs_requested=result.get("max_epochs_requested"),
+                    stopped_early=result.get("stopped_early"),
                 )
 
             clean_result = {k: v for k, v in result.items() if not k.startswith("_")}
