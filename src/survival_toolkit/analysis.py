@@ -579,7 +579,8 @@ def _ordered_level_strings(series: pd.Series, column_name: str | None = None) ->
     if numeric_values.notna().all():
         ordered_numeric = np.sort(numeric_values.unique().astype(float))
         return [str(int(value)) if float(value).is_integer() else str(value) for value in ordered_numeric]
-    return _ordered_reference_categories(non_missing.astype("string").tolist(), column_name or str(series.name or ""))
+    level_strings = non_missing.astype("string").unique().tolist()
+    return _ordered_reference_categories(level_strings, column_name or str(series.name or ""))
 
 
 def _is_binary_numeric_series(series: pd.Series) -> bool:
