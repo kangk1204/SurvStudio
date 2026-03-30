@@ -1387,7 +1387,11 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                     title_label="Gradient-Based Feature Salience",
                 )
             if result.get("loss_history"):
-                figures["loss"] = build_loss_curve_figure(result["loss_history"], model_name=request_model.model_type.upper())
+                figures["loss"] = build_loss_curve_figure(
+                    result["loss_history"],
+                    model_name=request_model.model_type.upper(),
+                    monitor_loss_history=result.get("monitor_loss_history"),
+                )
 
             clean_result = {k: v for k, v in result.items() if not k.startswith("_")}
             if "scientific_summary" not in clean_result and "insight_board" in clean_result:

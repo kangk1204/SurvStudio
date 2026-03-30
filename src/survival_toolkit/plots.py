@@ -508,7 +508,11 @@ def build_model_comparison_figure(comparison: dict[str, Any]) -> dict[str, Any]:
 # ── Loss curve (DL) ────────────────────────────────────────────
 
 
-def build_loss_curve_figure(loss_history: list[float], model_name: str = "Model") -> dict[str, Any]:
+def build_loss_curve_figure(
+    loss_history: list[float],
+    model_name: str = "Model",
+    monitor_loss_history: list[float] | None = None,
+) -> dict[str, Any]:
     if not loss_history:
         return figure_to_json(go.Figure())
 
@@ -519,18 +523,35 @@ def build_loss_curve_figure(loss_history: list[float], model_name: str = "Model"
             y=loss_history,
             mode="lines",
             line={"width": 2, "color": TEAL},
-            hovertemplate="Epoch %{x}: Loss = %{y:.4f}<extra></extra>",
+            hovertemplate="Epoch %{x}: Training loss = %{y:.4f}<extra></extra>",
+            name="Training loss",
         )
     )
+    if monitor_loss_history:
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(1, len(monitor_loss_history) + 1)),
+                y=monitor_loss_history,
+                mode="lines",
+                line={"width": 2, "color": ACCENT},
+                hovertemplate="Epoch %{x}: Monitor loss = %{y:.4f}<extra></extra>",
+                name="Monitor loss",
+            )
+        )
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": 80, "b": 60},
         title={
-            "text": f"{model_name} Training Loss",
+            "text": (
+                f"{model_name} Training and Monitor Loss"
+                if monitor_loss_history
+                else f"{model_name} Training Loss"
+            ),
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
             "x": 0.02,
         },
         height=380,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0.01},
     )
     fig.update_xaxes(title="Epoch", **_COMMON_AXES)
     fig.update_yaxes(title="Loss", **_COMMON_AXES)

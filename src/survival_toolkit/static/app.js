@@ -3044,7 +3044,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   clearPlotShell(refs.mlImportancePlot, '<div class="empty-state plot-empty"><span>Train a model to see feature importance</span></div>');
   clearPlotShell(refs.mlShapPlot, '<div class="empty-state plot-empty"><span>SHAP values will appear after training</span></div>');
   clearPlotShell(refs.dlImportancePlot, '<div class="empty-state plot-empty"><span>Train a deep learning model to see results</span></div>');
-  clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Training loss curve will appear here</span></div>');
+  clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Training and monitor loss curves will appear here</span></div>');
   purgePlot(refs.kmPlot);
   purgePlot(refs.coxPlot);
   refs.kmPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Click <strong>Run Analysis</strong> to generate your survival curve</span><small>Tip: Press Ctrl+Enter as a shortcut</small></div>';
@@ -3797,7 +3797,7 @@ async function runDlCompareModels() {
       stabilizePlotShellHeight(refs.dlComparisonPlot);
     }
     refs.dlImportancePlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model feature importance appears when you train one deep model.</span></div>';
-    refs.dlLossPlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model loss curves appear when you train one deep model.</span></div>';
+    refs.dlLossPlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model training and monitor loss curves appear when you train one deep model.</span></div>';
     const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
     renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning comparison results.");
     const bestRow = payload.analysis?.comparison_table?.[0] || {};

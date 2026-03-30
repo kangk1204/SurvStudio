@@ -2868,6 +2868,59 @@ def test_deep_single_model_endpoint_supports_repeated_cv(monkeypatch) -> None:
     assert payload["analysis"]["comparison_table"][0]["model"] == "Neural MTLR"
 
 
+def test_deep_single_model_endpoint_builds_monitor_loss_curve_when_history_is_available(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    dataset = client.post("/api/load-example").json()
+
+    def _fake_evaluate_single(*args, **kwargs):
+        return {
+            "model": "Survival Transformer",
+            "c_index": 0.701,
+            "evaluation_mode": "holdout",
+            "epochs_trained": 3,
+            "loss_history": [1.2, 0.9, 0.7],
+            "monitor_loss_history": [1.3, 1.0, 0.8],
+            "feature_importance": [{"feature": "age", "importance": 0.4}],
+            "scientific_summary": {"headline": "stub"},
+            "insight_board": {"headline": "stub"},
+        }
+
+    monkeypatch.setattr(deep_models, "evaluate_single_deep_survival_model", _fake_evaluate_single)
+
+    response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age", "biomarker_score", "immune_index"],
+            "categorical_features": [],
+            "model_type": "transformer",
+            "hidden_layers": [8],
+            "dropout": 0.1,
+            "learning_rate": 0.001,
+            "epochs": 10,
+            "batch_size": 8,
+            "random_seed": 19,
+            "num_time_bins": 10,
+            "n_heads": 4,
+            "d_model": 16,
+            "n_layers": 1,
+            "latent_dim": 4,
+            "n_clusters": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["figures"]["loss"]["layout"]["title"]["text"] == "TRANSFORMER Training and Monitor Loss"
+    assert len(payload["figures"]["loss"]["data"]) == 2
+    assert payload["figures"]["loss"]["data"][0]["name"] == "Training loss"
+    assert payload["figures"]["loss"]["data"][1]["name"] == "Monitor loss"
+
+
 def test_ml_compare_workflow_with_mixed_features_exports_manuscript_table() -> None:
     stored = store.create(
         make_example_dataset(seed=41, n_patients=96),
