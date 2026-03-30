@@ -325,6 +325,25 @@ def test_plot_config_removes_box_and_lasso_select_tools() -> None:
     assert 'modeBarButtonsToRemove: ["select2d", "lasso2d"]' in text
 
 
+def test_cox_plot_reset_axes_restores_initial_layout() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function stabilizePlotShellHeight(plotEl) {" in text
+    assert 'plotEl.style.height = `${Math.ceil(height)}px`;' in text
+    assert "stabilizePlotShellHeight(plot);" in text
+    assert "stabilizePlotShellHeight(refs.kmPlot);" in text
+    assert "stabilizePlotShellHeight(refs.mlImportancePlot);" in text
+    assert "stabilizePlotShellHeight(refs.dlComparisonPlot);" in text
+    assert "function stabilizeCoxPlotResetAxes(plotEl) {" in text
+    assert 'plotEl.__stableResetAxesState = {' in text
+    assert 'const resetRequested = Boolean(eventData?.["xaxis.autorange"] || eventData?.["yaxis.autorange"]);' in text
+    assert '"xaxis.range": stableState.xRange.slice(),' in text
+    assert '"yaxis.range": stableState.yRange.slice(),' in text
+    assert 'height: stableState.height,' in text
+    assert 'stabilizeCoxPlotResetAxes(refs.coxPlot);' in text
+
+
 def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
