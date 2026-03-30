@@ -1712,6 +1712,7 @@ function plotConfig(filename) {
   return {
     responsive: true,
     displaylogo: false,
+    modeBarButtonsToRemove: ["select2d", "lasso2d"],
     toImageButtonOptions: {
       format: "svg",
       filename: buildDownloadFilename(filename, "svg").replace(/\.svg$/, ""),

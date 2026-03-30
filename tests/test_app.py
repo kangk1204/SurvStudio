@@ -313,6 +313,14 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert "Model comparison screening complete" in text
 
 
+def test_plot_config_removes_box_and_lasso_select_tools() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function plotConfig(filename)" in text
+    assert 'modeBarButtonsToRemove: ["select2d", "lasso2d"]' in text
+
+
 def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
