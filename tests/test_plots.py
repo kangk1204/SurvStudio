@@ -68,6 +68,40 @@ def test_build_km_figure_uses_fixed_high_low_colors_regardless_of_curve_order() 
     assert line_colors["Low"] == "#2563eb"
 
 
+def test_build_km_figure_explains_hidden_p_value_for_outcome_informed_groups() -> None:
+    km_result = {
+        "curves": [
+            {
+                "group": "High",
+                "timeline": [0.0, 1.0, 2.0],
+                "survival": [1.0, 0.7, 0.5],
+                "ci_lower": [1.0, 0.6, 0.4],
+                "ci_upper": [1.0, 0.8, 0.6],
+                "censor_times": [],
+                "censor_survival": [],
+            },
+            {
+                "group": "Low",
+                "timeline": [0.0, 1.0, 2.0],
+                "survival": [1.0, 0.8, 0.6],
+                "ci_lower": [1.0, 0.7, 0.5],
+                "ci_upper": [1.0, 0.9, 0.7],
+                "censor_times": [],
+                "censor_survival": [],
+            },
+        ],
+        "test": None,
+        "outcome_informed_group": True,
+        "display_horizon": 3.0,
+    }
+
+    figure = build_km_figure(km_result)
+
+    annotations = figure["layout"].get("annotations", [])
+    annotation_text = " ".join(str(annotation.get("text", "")) for annotation in annotations)
+    assert "fresh raw p-value suppressed" in annotation_text
+
+
 def test_build_cox_forest_figure_returns_json() -> None:
     cox_result = {
         "results_table": [

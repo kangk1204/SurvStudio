@@ -1365,7 +1365,7 @@ body {
 
 .config-strip-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   margin-bottom: 12px;
   padding-bottom: 10px;
@@ -1384,7 +1384,12 @@ body {
 }
 
 .config-title svg {
+  display: block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
   color: var(--muted);
+  transform: translateY(1px);
 }
 
 .config-hint {
@@ -1596,6 +1601,19 @@ body {
   flex-shrink: 0;
 }
 
+.derive-optimal-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+  padding-inline: 6px;
+}
+
+.derive-optimal-controls .toolbar-field input,
+.derive-optimal-controls .toolbar-field select {
+  width: 100%;
+}
+
 .derive-toggle-option {
   align-self: stretch;
   min-height: 52px;
@@ -1623,10 +1641,18 @@ body {
   .derive-panel > .button {
     justify-self: start;
   }
+
+  .derive-optimal-controls {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
   .derive-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .derive-optimal-controls {
     grid-template-columns: 1fr;
   }
 }

@@ -61,6 +61,10 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="dlLatentDim"' in response.text
     assert 'id="dlClusters"' in response.text
     assert 'id="shutdownButton"' in response.text
+    assert 'id="selectAllCoxCovariatesButton"' in response.text
+    assert 'id="clearCoxCovariatesButton"' in response.text
+    assert 'id="selectAllCoxCategoricalsButton"' in response.text
+    assert 'id="clearCoxCategoricalsButton"' in response.text
 
 
 def test_index_mentions_fleming_harrington_p_only_label() -> None:
