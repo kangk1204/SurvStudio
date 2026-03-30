@@ -455,6 +455,52 @@ def test_guided_rail_status_tracks_running_ready_and_stale_states() -> None:
     assert "renderGuidedRailStatus();" in text
 
 
+def test_expert_surface_status_tracks_running_current_and_stale_states() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function goalResultStatusState(goal" in text
+    assert "function expertSurfaceStatusState() {" in text
+    assert 'currentLabel: "Current"' in text
+    assert "function renderExpertSurfaceStatus() {" in text
+    assert 'refs.expertSurfaceLabel.className = `expert-surface-label expert-surface-label-${status.tone}`;' in text
+    assert "Visible settings no longer match the current result. Run again before exporting or interpreting it." in text
+
+
+def test_mode_switch_busy_guard_and_tab_focus_scroll_protection() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'Object.values(runtime.busyScopes || {}).some(Boolean)' in text
+    assert "Wait for the current analysis run to finish before switching between Guided and Expert mode." in text
+    assert 'function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", historyMode = "replace", focusTabButton = false } = {}) {' in text
+    assert 'if (isActive && runtime.uiMode !== "guided" && focusTabButton)' in text
+    assert 'activateTab(tabs[next].dataset.tab, { historyMode: "push", focusTabButton: true });' in text
+
+
+def test_reparenting_preserves_focus_scroll_and_schedules_extra_plot_resize() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function captureReparentUiState() {" in text
+    assert "function restoreReparentUiState(snapshot) {" in text
+    assert "const preservedUiState = captureReparentUiState();" in text
+    assert "restoreReparentUiState(preservedUiState);" in text
+    assert "if (didMove) scheduleVisiblePlotResize(40);" in text
+    assert "window.setTimeout(resizeVisiblePlotsNow, 260);" in text
+
+
+def test_ml_dl_result_reveal_is_conditional_on_current_view() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function shouldRevealCompletedResult(goal) {" in text
+    assert "function revealCompletedResultIfCurrent(goal" in text
+    assert "if (hasResult && shouldRevealCompletedResult(tabName)) {" in text
+    assert 'revealCompletedResultIfCurrent("ml", {' in text
+    assert 'revealCompletedResultIfCurrent("dl", {' in text
+
+
 def test_frontend_exposes_shutdown_button_and_stop_flow_copy() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
@@ -3770,7 +3816,7 @@ def test_compare_all_actions_surface_pending_feedback() -> None:
     assert "function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
     assert 'setRuntimeBanner("Screening all ML models on one shared evaluation path. This can take a little while on larger cohorts.", "info");' in app_js
     assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");' in app_js
-    assert 'busyText: "DL model run in progress. Deep-learning runs can take longer, and review results will open automatically when the run finishes."' in app_js
+    assert 'busyText: "DL model run in progress. Deep-learning runs can take longer, so stay on this analysis path if you want the updated result to open here when the run finishes."' in app_js
     assert 'class="guided-run-status" role="status"' in app_js
     assert "refs.mlMetaBanner.textContent = mlComparePendingBannerText({" in app_js
     assert "refs.dlMetaBanner.textContent = dlComparePendingBannerText({" in app_js

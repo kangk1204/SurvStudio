@@ -589,6 +589,44 @@ function goalHasAnyOutput(goal) {
   return Boolean(goalPayload(goal));
 }
 
+function goalResultStatusState(goal, { currentLabel = "Ready", noResultLabel = "No result yet" } = {}) {
+  if (!goal || !GUIDED_GOALS.includes(goal)) return null;
+  const scope = runScopeForGoal(goal);
+  if (scope && isScopeBusy(scope)) {
+    return {
+      tone: "running",
+      label: "Running",
+      title: `${goalLabel(goal)} in progress`,
+      text: "Wait for the current run to finish before exporting this result or changing shared inputs.",
+    };
+  }
+  const hasCurrentResult = goal === "tables"
+    ? currentCohortTableOutputState().isCurrent
+    : Boolean(currentGoalResult(goal));
+  if (hasCurrentResult) {
+    return {
+      tone: "ready",
+      label: currentLabel,
+      title: `${goalLabel(goal)} result is current`,
+      text: "Visible settings match the result shown below.",
+    };
+  }
+  if (goalHasAnyOutput(goal)) {
+    return {
+      tone: "warning",
+      label: "Needs rerun",
+      title: `${goalLabel(goal)} settings changed`,
+      text: "Visible settings no longer match the current result. Run again before exporting or interpreting it.",
+    };
+  }
+  return {
+    tone: "idle",
+    label: noResultLabel,
+    title: `${goalLabel(goal)} not run yet`,
+    text: "Run the analysis to populate this result view.",
+  };
+}
+
 function guidedRailStatusState() {
   if (!state.dataset) {
     return {
@@ -628,30 +666,10 @@ function guidedRailStatusState() {
     };
   }
 
-  if (currentGoalResult(goal)) {
-    return {
-      tone: "ready",
-      label: "Ready",
-      title: `${goalLabel(goal)} result is current`,
-      text: "Current result matches the visible settings. You can review it or switch analyses.",
-    };
-  }
-
-  if (goalHasAnyOutput(goal)) {
-    return {
-      tone: "warning",
-      label: "Needs rerun",
-      title: `${goalLabel(goal)} settings changed`,
-      text: "Visible settings no longer match the last result. Run again to refresh it.",
-    };
-  }
-
-  return {
-    tone: "idle",
-    label: "No result yet",
-    title: `${goalLabel(goal)} not run yet`,
-    text: "Configuration is ready. Run the selected analysis to generate results.",
-  };
+  return goalResultStatusState(goal, {
+    currentLabel: "Ready",
+    noResultLabel: "No result yet",
+  });
 }
 
 function renderGuidedRailStatus() {
@@ -661,6 +679,59 @@ function renderGuidedRailStatus() {
   refs.guidedRailStatusLabel.textContent = status.label;
   refs.guidedRailStatusTitle.textContent = status.title;
   refs.guidedRailStatusText.textContent = status.text;
+}
+
+function expertSurfaceStatusState() {
+  if (!state.dataset) {
+    return {
+      tone: "idle",
+      label: "Expert",
+      title: "Expert workspace",
+      text: "The full Study Design and analysis tabs remain available below.",
+    };
+  }
+  const busyGoal = GUIDED_GOALS.find((entry) => isScopeBusy(entry));
+  const currentTab = activeTabName();
+  const currentGoal = GUIDED_GOALS.includes(currentTab) ? currentTab : null;
+  if (busyGoal && busyGoal !== currentGoal) {
+    return {
+      tone: "running",
+      label: "Running",
+      title: `${goalLabel(busyGoal)} in progress`,
+      text: currentGoal
+        ? `You are reviewing ${goalLabel(currentGoal)}, while ${goalLabel(busyGoal)} is still running in the background.`
+        : `${goalLabel(busyGoal)} is still running in the background while you review the workspace.`,
+    };
+  }
+  if (currentGoal) {
+    return goalResultStatusState(currentGoal, {
+      currentLabel: "Current",
+      noResultLabel: "No result yet",
+    });
+  }
+  return {
+    tone: busyGoal ? "running" : "idle",
+    label: busyGoal ? "Running" : "Expert",
+    title: busyGoal ? `${goalLabel(busyGoal)} in progress` : "Expert workspace",
+    text: busyGoal
+      ? "Wait for the current run to finish before switching shared analysis inputs."
+      : "The full Study Design and analysis tabs remain available below.",
+  };
+}
+
+function renderExpertSurfaceStatus() {
+  if (!refs.expertSurfaceLabel) return;
+  if (runtime.uiMode !== "expert" || !state.dataset) {
+    refs.expertSurfaceLabel.className = "expert-surface-label hidden";
+    return;
+  }
+  const status = expertSurfaceStatusState();
+  refs.expertSurfaceLabel.className = `expert-surface-label expert-surface-label-${status.tone}`;
+  refs.expertSurfaceLabel.innerHTML = `
+    <strong>${escapeHtml(status.label)}</strong>
+    <span>${escapeHtml(status.title)}</span>
+    <p>${escapeHtml(status.text)}</p>
+  `;
 }
 
 function guidedGroupingContextActive() {
@@ -734,6 +805,55 @@ function setGuidedStep(step, { syncHistory = true, historyMode = "replace", scro
   if (syncHistory && state.dataset) syncHistoryState(historyMode);
 }
 
+function reparentScrollContainers() {
+  return [
+    refs.configStrip,
+    refs.guidedShell,
+    refs.guidedPanel,
+    refs.guidedConfigMount,
+    refs.guidedActivePanelMount,
+    refs.tabPanelsHome,
+    ...refs.tabPanels,
+    refs.covariateChecklist,
+    refs.categoricalChecklist,
+    refs.modelFeatureChecklist,
+    refs.modelCategoricalChecklist,
+    refs.dlModelFeatureChecklist,
+    refs.dlModelCategoricalChecklist,
+    refs.cohortVariableChecklist,
+  ].filter(Boolean);
+}
+
+function captureReparentUiState() {
+  const focusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const scrollPositions = new Map();
+  [...new Set(reparentScrollContainers())].forEach((element) => {
+    if (!element) return;
+    scrollPositions.set(element, {
+      top: element.scrollTop,
+      left: element.scrollLeft,
+    });
+  });
+  return { focusedElement, scrollPositions };
+}
+
+function restoreReparentUiState(snapshot) {
+  if (!snapshot) return;
+  snapshot.scrollPositions?.forEach((position, element) => {
+    if (!element?.isConnected) return;
+    element.scrollTop = position.top;
+    element.scrollLeft = position.left;
+  });
+  const focusTarget = snapshot.focusedElement;
+  if (focusTarget?.isConnected && typeof focusTarget.focus === "function") {
+    try {
+      focusTarget.focus({ preventScroll: true });
+    } catch {
+      focusTarget.focus();
+    }
+  }
+}
+
 function updateGuidedSurfaceVisibility() {
   const guidedActive = runtime.uiMode === "guided" && Boolean(state.dataset);
   const step = currentGuidedStep();
@@ -743,14 +863,18 @@ function updateGuidedSurfaceVisibility() {
   const showGroupingConfig = guidedActive && goalNeedsGrouping && (step === 4 || step === 5);
   const showConfigStrip = !guidedActive || showOutcomeConfig || showGroupingConfig;
   const showGuidedReviewPanel = guidedActive && (step === 4 || step === 5) && GUIDED_GOALS.includes(goal);
+  const preservedUiState = captureReparentUiState();
+  let didMove = false;
 
   if (guidedActive && refs.guidedConfigMount && refs.configStrip) {
     if (refs.configStrip.parentElement !== refs.guidedConfigMount) {
       refs.guidedConfigMount.appendChild(refs.configStrip);
+      didMove = true;
     }
   } else if (refs.configStripHome && refs.configStrip) {
     if (refs.configStrip.parentElement !== refs.configStripHome.parentElement) {
       refs.configStripHome.after(refs.configStrip);
+      didMove = true;
     }
   }
 
@@ -763,9 +887,11 @@ function updateGuidedSurfaceVisibility() {
       if (guidedActive && shouldShow && refs.guidedActivePanelMount) {
         if (panel.parentElement !== refs.guidedActivePanelMount) {
           refs.guidedActivePanelMount.appendChild(panel);
+          didMove = true;
         }
       } else if (panel.parentElement !== refs.tabPanelsHome) {
         refs.tabPanelsHome.appendChild(panel);
+        didMove = true;
       }
     });
   } else {
@@ -783,7 +909,6 @@ function updateGuidedSurfaceVisibility() {
   refs.groupingDetails?.classList.toggle("hidden", guidedActive && !showGroupingConfig);
   refs.tabStrip?.classList.toggle("hidden", guidedActive);
   refs.datasetPresetBar?.classList.toggle("hidden", guidedActive || !datasetPresetForCurrentDataset());
-  refs.expertSurfaceLabel?.classList.toggle("hidden", runtime.uiMode !== "expert" || !state.dataset);
   if (refs.cutpointPlot) {
     const hasCutpointPlot = refs.cutpointPlot.innerHTML.trim().length > 0;
     const showCutpointPlot = hasCutpointPlot && (!guidedActive || goal === "km");
@@ -791,10 +916,17 @@ function updateGuidedSurfaceVisibility() {
   }
 
   if (showGroupingConfig && refs.groupingDetails) refs.groupingDetails.open = true;
+  restoreReparentUiState(preservedUiState);
+  renderExpertSurfaceStatus();
+  if (didMove) scheduleVisiblePlotResize(40);
 }
 
 function setUiMode(mode, { syncHistory = true, historyMode = "replace" } = {}) {
   if (!["guided", "expert"].includes(mode)) return;
+  if (mode !== runtime.uiMode && Object.values(runtime.busyScopes || {}).some(Boolean)) {
+    showToast("Wait for the current analysis run to finish before switching between Guided and Expert mode.", "warning", 3200);
+    return;
+  }
   runtime.uiMode = mode;
   document.body.dataset.uiMode = mode;
   if (mode === "guided" && GUIDED_GOALS.includes(activeTabName())) {
@@ -806,7 +938,6 @@ function setUiMode(mode, { syncHistory = true, historyMode = "replace" } = {}) {
   refs.expertModeButton?.classList.toggle("active", mode === "expert");
   refs.expertModeButton?.setAttribute("aria-selected", mode === "expert" ? "true" : "false");
   refs.guidedShell?.classList.toggle("hidden", mode !== "guided" || !state.dataset);
-  refs.expertSurfaceLabel?.classList.toggle("hidden", mode !== "expert" || !state.dataset);
   runtime.guidedStep = normalizedGuidedStep(runtime.guidedStep);
   renderGuidedChrome();
   queueVisiblePlotResize();
@@ -839,8 +970,11 @@ function resizeVisiblePlotsNow() {
 
 function queueVisiblePlotResize() {
   requestAnimationFrame(() => {
-    resizeVisiblePlotsNow();
-    window.setTimeout(resizeVisiblePlotsNow, 120);
+    requestAnimationFrame(() => {
+      resizeVisiblePlotsNow();
+      window.setTimeout(resizeVisiblePlotsNow, 120);
+      window.setTimeout(resizeVisiblePlotsNow, 260);
+    });
   });
 }
 
@@ -2413,6 +2547,7 @@ function renderGuidedChrome() {
   const showGuided = runtime.uiMode === "guided" && Boolean(state.dataset);
   refs.guidedShell.classList.toggle("hidden", !showGuided);
   updateGuidedSurfaceVisibility();
+  renderExpertSurfaceStatus();
   if (!showGuided) return;
 
   runtime.guidedStep = normalizedGuidedStep(runtime.guidedStep);
@@ -2453,6 +2588,7 @@ function renderGuidedChrome() {
   updateStepIndicator(step);
   refs.guidedPanel.innerHTML = guidedPanelMarkup(step);
   renderGuidedRailStatus();
+  renderExpertSurfaceStatus();
 }
 
 function eventPreviewValues(columnName) {
@@ -2577,7 +2713,7 @@ function guidedPanelMarkup(step) {
         secondaryAction: "run-ml-compare",
         secondaryLabel: "Compare all ML models",
         runScope: "ml",
-        busyText: "ML model run in progress. Review results will open automatically when the run finishes.",
+        busyText: "ML model run in progress. Stay on this analysis path if you want the updated result to open here when the run finishes.",
       },
       dl: {
         title: "Configure DL models",
@@ -2587,7 +2723,7 @@ function guidedPanelMarkup(step) {
         secondaryAction: "run-dl-compare",
         secondaryLabel: "Compare all DL models",
         runScope: "dl",
-        busyText: "DL model run in progress. Deep-learning runs can take longer, and review results will open automatically when the run finishes.",
+        busyText: "DL model run in progress. Deep-learning runs can take longer, so stay on this analysis path if you want the updated result to open here when the run finishes.",
       },
       tables: {
         title: "Configure cohort table",
@@ -2976,13 +3112,19 @@ function showWorkspace() {
   refs.workspace.classList.remove("fade-in");
 }
 
-function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", historyMode = "replace" } = {}) {
+function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", historyMode = "replace", focusTabButton = false } = {}) {
   refs.tabButtons.forEach((button) => {
     const isActive = button.dataset.tab === tabName;
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-selected", isActive ? "true" : "false");
     button.setAttribute("tabindex", isActive ? "0" : "-1");
-    if (isActive && runtime.uiMode !== "guided") button.focus();
+    if (isActive && runtime.uiMode !== "guided" && focusTabButton) {
+      try {
+        button.focus({ preventScroll: true });
+      } catch {
+        button.focus();
+      }
+    }
   });
   refs.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tabName));
   if (setGuidedGoal && GUIDED_GOALS.includes(tabName)) runtime.guidedGoal = tabName;
@@ -3556,9 +3698,11 @@ async function runMlModel() {
   const shapStatus = payload.shap_figure ? "computed" : (payload.shap_error ? "failed" : (computeShap ? "unavailable" : "skipped"));
   refs.mlMetaBanner.textContent = `${refs.mlModelType.value.toUpperCase()}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}, time=${elapsedSeconds}s`;
   updateStepIndicator(3);
-  activateTab("ml");
-  scrollToAnalysisResult("ml", { mode: "single" });
-  showToast(`${refs.mlModelType.value.toUpperCase()} model trained`, "success", 3000);
+  revealCompletedResultIfCurrent("ml", {
+    mode: "single",
+    successMessage: `${refs.mlModelType.value.toUpperCase()} model trained`,
+    backgroundMessage: `${refs.mlModelType.value.toUpperCase()} model finished in the background. Switch back to ML Models when you are ready to review it.`,
+  });
 }
 
 async function runCompareModels() {
@@ -3625,9 +3769,11 @@ async function runCompareModels() {
     if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !(payload.figure?.data?.length);
     if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !(payload.figure?.data?.length);
     setMlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
-    activateTab("ml");
-    scrollToAnalysisResult("ml", { mode: "compare" });
-    showToast("Model comparison screening complete", "success", 3000);
+    revealCompletedResultIfCurrent("ml", {
+      mode: "compare",
+      successMessage: "Model comparison screening complete",
+      backgroundMessage: "ML model comparison finished in the background. Switch back to ML Models when you are ready to review it.",
+    });
   } finally {
     setRuntimeBanner("");
   }
@@ -3767,9 +3913,11 @@ async function runDlModel() {
       : (stats.best_monitor_epoch != null ? `, best monitor epoch=${formatValue(stats.best_monitor_epoch)}` : "");
     refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlBestMonitorSuffix}${dlTrainingStatus}${dlSeedSuffix}, time=${elapsedSeconds}s`;
     updateStepIndicator(3);
-    activateTab("dl");
-    scrollToAnalysisResult("dl", { mode: repeatedCvLike ? "compare" : "single" });
-    showToast(`${refs.dlModelType.value.toUpperCase()} model trained`, "success", 3000);
+    revealCompletedResultIfCurrent("dl", {
+      mode: repeatedCvLike ? "compare" : "single",
+      successMessage: `${refs.dlModelType.value.toUpperCase()} model trained`,
+      backgroundMessage: `${refs.dlModelType.value.toUpperCase()} model finished in the background. Switch back to Deep Learning when you are ready to review it.`,
+    });
   } finally {
     setRuntimeBanner("");
   }
@@ -3874,9 +4022,11 @@ async function runDlCompareModels() {
     if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !(payload.figures?.comparison?.data?.length);
     setDlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
     updateStepIndicator(3);
-    activateTab("dl");
-    scrollToAnalysisResult("dl", { mode: "compare" });
-    showToast("Deep learning model comparison complete", "success", 3000);
+    revealCompletedResultIfCurrent("dl", {
+      mode: "compare",
+      successMessage: "Deep learning model comparison complete",
+      backgroundMessage: "Deep learning model comparison finished in the background. Switch back to Deep Learning when you are ready to review it.",
+    });
   } finally {
     setRuntimeBanner("");
   }
@@ -4103,11 +4253,33 @@ function scrollToAnalysisResult(tabName, { mode = "single" } = {}) {
   });
 }
 
+function shouldRevealCompletedResult(goal) {
+  if (activeTabName() !== goal) return false;
+  if (runtime.uiMode === "guided") return runtime.guidedGoal === goal;
+  return true;
+}
+
+function revealCompletedResultIfCurrent(goal, { mode = "single", successMessage = "", backgroundMessage = "" } = {}) {
+  const shouldReveal = shouldRevealCompletedResult(goal);
+  if (shouldReveal) {
+    activateTab(goal);
+    scrollToAnalysisResult(goal, { mode });
+  }
+  showToast(
+    shouldReveal
+      ? successMessage
+      : (backgroundMessage || `${goalLabel(goal)} finished in the background. Switch back when you are ready to review the updated result.`),
+    "success",
+    shouldReveal ? 3000 : 3600,
+  );
+  return shouldReveal;
+}
+
 async function runGuidedGoal(tabName, button, action, { resultMode = "single", successCheck = null } = {}) {
   activateTab(tabName, { historyMode: "replace" });
   await withLoading(button, action, tabName);
   const hasResult = typeof successCheck === "function" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName));
-  if (hasResult) {
+  if (hasResult && shouldRevealCompletedResult(tabName)) {
     setGuidedStep(5, { scroll: false, historyMode: "push" });
     scrollToAnalysisResult(tabName, { mode: resultMode });
   }
@@ -4206,7 +4378,7 @@ function initTabKeyboard() {
     else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx - 1 + tabs.length) % tabs.length;
     else if (e.key === "Home") next = 0;
     else if (e.key === "End") next = tabs.length - 1;
-    if (next >= 0) { e.preventDefault(); activateTab(tabs[next].dataset.tab, { historyMode: "push" }); }
+    if (next >= 0) { e.preventDefault(); activateTab(tabs[next].dataset.tab, { historyMode: "push", focusTabButton: true }); }
   });
 }
 

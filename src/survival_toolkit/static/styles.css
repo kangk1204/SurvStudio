@@ -1015,6 +1015,53 @@ body {
   line-height: 1.5;
 }
 
+.expert-surface-label p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.expert-surface-label-ready {
+  border-color: rgba(32, 126, 104, 0.18);
+  background: linear-gradient(180deg, rgba(32, 126, 104, 0.08), rgba(255, 255, 255, 0.96));
+}
+
+.expert-surface-label-ready strong,
+.expert-surface-label-ready span {
+  color: #1f6e5b;
+}
+
+.expert-surface-label-running {
+  border-color: rgba(217, 112, 74, 0.18);
+  background: linear-gradient(180deg, rgba(217, 112, 74, 0.12), rgba(255, 255, 255, 0.96));
+}
+
+.expert-surface-label-running strong,
+.expert-surface-label-running span {
+  color: #8f4b34;
+}
+
+.expert-surface-label-warning {
+  border-color: rgba(181, 132, 31, 0.18);
+  background: linear-gradient(180deg, rgba(181, 132, 31, 0.12), rgba(255, 255, 255, 0.96));
+}
+
+.expert-surface-label-warning strong,
+.expert-surface-label-warning span {
+  color: #836114;
+}
+
+.expert-surface-label-idle {
+  border-color: rgba(37, 115, 135, 0.14);
+  background: linear-gradient(180deg, rgba(37, 115, 135, 0.08), rgba(255, 255, 255, 0.96));
+}
+
+.expert-surface-label-idle strong,
+.expert-surface-label-idle span {
+  color: #245f6d;
+}
+
 .step {
   display: flex;
   align-items: flex-start;
