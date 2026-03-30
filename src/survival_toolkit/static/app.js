@@ -48,6 +48,10 @@ const refs = {
   guidedSummaryTitle: document.getElementById("guidedSummaryTitle"),
   guidedSummaryText: document.getElementById("guidedSummaryText"),
   guidedSummaryChips: document.getElementById("guidedSummaryChips"),
+  guidedRailStatus: document.getElementById("guidedRailStatus"),
+  guidedRailStatusLabel: document.getElementById("guidedRailStatusLabel"),
+  guidedRailStatusTitle: document.getElementById("guidedRailStatusTitle"),
+  guidedRailStatusText: document.getElementById("guidedRailStatusText"),
   guidedConfigMount: document.getElementById("guidedConfigMount"),
   guidedPanel: document.getElementById("guidedPanel"),
   guidedActivePanelMount: document.getElementById("guidedActivePanelMount"),
@@ -547,6 +551,97 @@ function currentGoalResult(goal) {
   return matchesRequestConfig(goal, requestConfig) ? payload : null;
 }
 
+function goalPayload(goal) {
+  return {
+    km: state.km,
+    cox: state.cox,
+    ml: state.ml,
+    dl: state.dl,
+    tables: state.cohort,
+  }[goal] || null;
+}
+
+function goalHasAnyOutput(goal) {
+  if (goal === "tables") {
+    return currentCohortTableOutputState().hasOutput;
+  }
+  return Boolean(goalPayload(goal));
+}
+
+function guidedRailStatusState() {
+  if (!state.dataset) {
+    return {
+      tone: "idle",
+      label: "No result yet",
+      title: "Load a cohort to begin.",
+      text: "Open a sample cohort or upload a dataset first.",
+    };
+  }
+
+  const busyGoal = GUIDED_GOALS.find((entry) => isScopeBusy(entry));
+  if (busyGoal) {
+    return {
+      tone: "running",
+      label: "Running",
+      title: `${goalLabel(busyGoal)} in progress`,
+      text: "Wait for the current run to finish before changing shared analysis inputs.",
+    };
+  }
+
+  if (!endpointIsReady()) {
+    return {
+      tone: "idle",
+      label: "No result yet",
+      title: "Complete study design first",
+      text: "Choose time, event, and event value to unlock analysis runs.",
+    };
+  }
+
+  const goal = runtime.guidedGoal;
+  if (!goal) {
+    return {
+      tone: "ready",
+      label: "Ready",
+      title: "Ready to choose an analysis",
+      text: "Outcome is configured. Pick one analysis path when you are ready.",
+    };
+  }
+
+  if (currentGoalResult(goal)) {
+    return {
+      tone: "ready",
+      label: "Ready",
+      title: `${goalLabel(goal)} result is current`,
+      text: "Current result matches the visible settings. You can review it or switch analyses.",
+    };
+  }
+
+  if (goalHasAnyOutput(goal)) {
+    return {
+      tone: "warning",
+      label: "Needs rerun",
+      title: `${goalLabel(goal)} settings changed`,
+      text: "Visible settings no longer match the last result. Run again to refresh it.",
+    };
+  }
+
+  return {
+    tone: "idle",
+    label: "No result yet",
+    title: `${goalLabel(goal)} not run yet`,
+    text: "Configuration is ready. Run the selected analysis to generate results.",
+  };
+}
+
+function renderGuidedRailStatus() {
+  if (!refs.guidedRailStatus || !refs.guidedRailStatusLabel || !refs.guidedRailStatusTitle || !refs.guidedRailStatusText) return;
+  const status = guidedRailStatusState();
+  refs.guidedRailStatus.className = `guided-rail-status guided-rail-status-${status.tone}`;
+  refs.guidedRailStatusLabel.textContent = status.label;
+  refs.guidedRailStatusTitle.textContent = status.title;
+  refs.guidedRailStatusText.textContent = status.text;
+}
+
 function guidedGroupingContextActive() {
   const currentTab = activeTabName();
   return (
@@ -1010,6 +1105,31 @@ function buttonsForScope(scope) {
   return [];
 }
 
+function setChecklistDisabled(container, isDisabled) {
+  if (!container) return;
+  container.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+    input.disabled = Boolean(isDisabled);
+  });
+}
+
+function syncSharedFeatureControlsBusy() {
+  const isBusy = isScopeBusy("ml") || isScopeBusy("dl");
+  [
+    refs.reviewMlFeaturesButton,
+    refs.reviewDlFeaturesButton,
+    refs.selectAllModelFeaturesButton,
+    refs.clearModelFeaturesButton,
+    refs.selectAllDlModelFeaturesButton,
+    refs.clearDlModelFeaturesButton,
+  ].forEach((button) => {
+    if (button) button.disabled = isBusy;
+  });
+  setChecklistDisabled(refs.modelFeatureChecklist, isBusy);
+  setChecklistDisabled(refs.modelCategoricalChecklist, isBusy);
+  setChecklistDisabled(refs.dlModelFeatureChecklist, isBusy);
+  setChecklistDisabled(refs.dlModelCategoricalChecklist, isBusy);
+}
+
 function setScopeBusy(scope, isBusy, activeButton = null) {
   if (!scope) return;
   runtime.busyScopes[scope] = Boolean(isBusy);
@@ -1026,6 +1146,7 @@ function setScopeBusy(scope, isBusy, activeButton = null) {
     button.disabled = Boolean(isBusy);
     button.classList.toggle("is-loading", false);
   });
+  syncSharedFeatureControlsBusy();
   renderGuidedChrome();
 }
 
@@ -2195,6 +2316,7 @@ function renderGuidedChrome() {
 
   updateStepIndicator(step);
   refs.guidedPanel.innerHTML = guidedPanelMarkup(step);
+  renderGuidedRailStatus();
 }
 
 function eventPreviewValues(columnName) {
@@ -2319,6 +2441,7 @@ function guidedPanelMarkup(step) {
         secondaryAction: "run-ml-compare",
         secondaryLabel: "Compare all ML models",
         runScope: "ml",
+        busyText: "ML model run in progress. Review results will open automatically when the run finishes.",
       },
       dl: {
         title: "Configure DL models",
@@ -2328,6 +2451,7 @@ function guidedPanelMarkup(step) {
         secondaryAction: "run-dl-compare",
         secondaryLabel: "Compare all DL models",
         runScope: "dl",
+        busyText: "DL model run in progress. Deep-learning runs can take longer, and review results will open automatically when the run finishes.",
       },
       tables: {
         title: "Configure cohort table",
@@ -2356,6 +2480,7 @@ function guidedPanelMarkup(step) {
               : ""}
             <button class="button primary compact-btn guided-run-choice" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.runLabel)}</button>
           </div>
+          ${scopeBusy && configureCopy.busyText ? `<div class="guided-run-status" role="status">${escapeHtml(configureCopy.busyText)}</div>` : ""}
           <div class="guided-actions guided-actions-secondary">
             <button class="button ghost compact-btn" type="button" data-guided-action="previous-step">Back</button>
             <button class="button ghost compact-btn" type="button" data-guided-action="choose-another-analysis">Change analysis</button>
