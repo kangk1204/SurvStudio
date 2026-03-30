@@ -148,8 +148,9 @@ def test_build_feature_importance_figure_wraps_long_feature_labels_without_losin
 
     figure = build_feature_importance_figure(importances, model_name="RSF")
 
-    assert "<br>" in figure["data"][0]["y"][1] or figure["data"][0]["y"][1].endswith("…")
+    assert "<br>" in figure["layout"]["yaxis"]["ticktext"][1] or figure["layout"]["yaxis"]["ticktext"][1].endswith("…")
     assert figure["data"][0]["customdata"][1] == long_name
+    assert figure["layout"]["yaxis"]["tickvals"][1] == long_name
     assert figure["layout"]["margin"]["l"] >= 200
 
 
@@ -164,9 +165,50 @@ def test_build_shap_figure_wraps_long_feature_labels_without_losing_hover_label(
 
     figure = build_shap_figure(shap_result)
 
-    assert "<br>" in figure["data"][0]["y"][1] or figure["data"][0]["y"][1].endswith("…")
+    assert "<br>" in figure["layout"]["yaxis"]["ticktext"][1] or figure["layout"]["yaxis"]["ticktext"][1].endswith("…")
     assert figure["data"][0]["customdata"][1] == long_name
+    assert figure["layout"]["yaxis"]["tickvals"][1] == long_name
     assert figure["layout"]["margin"]["l"] >= 200
+
+
+def test_build_feature_importance_figure_keeps_distinct_bars_when_wrapped_labels_collide() -> None:
+    importances = [
+        {
+            "feature": "histology_Lung Signet Ring Adenocarcinoma very long label alpha",
+            "importance": 0.8,
+        },
+        {
+            "feature": "histology_Lung Signet Ring Adenocarcinoma very long label beta",
+            "importance": 0.7,
+        },
+    ]
+
+    figure = build_feature_importance_figure(importances, model_name="DEEPHIT")
+
+    assert figure["data"][0]["y"][0] != figure["data"][0]["y"][1]
+    assert figure["layout"]["yaxis"]["ticktext"][0] == figure["layout"]["yaxis"]["ticktext"][1]
+    assert figure["layout"]["yaxis"]["tickvals"][0] != figure["layout"]["yaxis"]["tickvals"][1]
+
+
+def test_build_shap_figure_keeps_distinct_bars_when_wrapped_labels_collide() -> None:
+    shap_result = {
+        "feature_importance": [
+            {
+                "feature": "expression_subtype_Very long duplicated wrapped label alpha",
+                "mean_abs_shap": 2.5,
+            },
+            {
+                "feature": "expression_subtype_Very long duplicated wrapped label beta",
+                "mean_abs_shap": 2.0,
+            },
+        ]
+    }
+
+    figure = build_shap_figure(shap_result)
+
+    assert figure["data"][0]["y"][0] != figure["data"][0]["y"][1]
+    assert figure["layout"]["yaxis"]["ticktext"][0] == figure["layout"]["yaxis"]["ticktext"][1]
+    assert figure["layout"]["yaxis"]["tickvals"][0] != figure["layout"]["yaxis"]["tickvals"][1]
 
 
 def test_build_model_comparison_figure() -> None:

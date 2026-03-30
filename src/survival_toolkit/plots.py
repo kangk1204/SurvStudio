@@ -365,7 +365,7 @@ def build_feature_importance_figure(
     fig.add_trace(
         go.Bar(
             x=values,
-            y=display_labels,
+            y=labels,
             orientation="h",
             customdata=labels,
             marker={"color": SLATE, "line": {"width": 0}},
@@ -383,7 +383,13 @@ def build_feature_importance_figure(
         height=axis_layout["height"],
     )
     fig.update_xaxes(title="Importance", **_COMMON_AXES)
-    fig.update_yaxes(automargin=True, **_COMMON_AXES)
+    fig.update_yaxes(
+        automargin=True,
+        tickmode="array",
+        tickvals=labels,
+        ticktext=display_labels,
+        **_COMMON_AXES,
+    )
     return figure_to_json(fig)
 
 
@@ -405,7 +411,7 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
     fig.add_trace(
         go.Bar(
             x=values,
-            y=display_labels,
+            y=labels,
             orientation="h",
             customdata=labels,
             marker={"color": ACCENT, "line": {"width": 0}},
@@ -423,7 +429,13 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
         height=axis_layout["height"],
     )
     fig.update_xaxes(title="Mean |SHAP value|", **_COMMON_AXES)
-    fig.update_yaxes(automargin=True, **_COMMON_AXES)
+    fig.update_yaxes(
+        automargin=True,
+        tickmode="array",
+        tickvals=labels,
+        ticktext=display_labels,
+        **_COMMON_AXES,
+    )
     return figure_to_json(fig)
 
 
