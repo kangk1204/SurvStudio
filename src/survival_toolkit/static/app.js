@@ -809,6 +809,7 @@ function resizeVisiblePlotsNow() {
     if (plot.closest(".hidden")) return;
     try {
       Plotly.Plots.resize(plot);
+      stabilizePlotShellHeight(plot);
     } catch {
       // Ignore stale nodes during guided/expert remounts.
     }
@@ -1844,6 +1845,48 @@ function plotConfig(filename) {
   };
 }
 
+function stabilizePlotShellHeight(plotEl) {
+  if (!plotEl?._fullLayout) return;
+  const height = Number(plotEl._fullLayout.height);
+  if (!Number.isFinite(height) || height <= 0) return;
+  plotEl.style.height = `${Math.ceil(height)}px`;
+}
+
+function stabilizeCoxPlotResetAxes(plotEl) {
+  if (!plotEl?.on || !plotEl?._fullLayout) return;
+  const fullLayout = plotEl._fullLayout;
+  const xRange = Array.isArray(fullLayout.xaxis?.range) ? [...fullLayout.xaxis.range] : null;
+  const yRange = Array.isArray(fullLayout.yaxis?.range) ? [...fullLayout.yaxis.range] : null;
+  const height = Number(fullLayout.height);
+  if (!xRange || !yRange || !Number.isFinite(height)) return;
+
+  plotEl.__stableResetAxesState = {
+    applying: false,
+    height,
+    xRange,
+    yRange,
+  };
+  if (typeof plotEl.removeAllListeners === "function") plotEl.removeAllListeners("plotly_relayout");
+  plotEl.on("plotly_relayout", (eventData) => {
+    const resetRequested = Boolean(eventData?.["xaxis.autorange"] || eventData?.["yaxis.autorange"]);
+    const stableState = plotEl.__stableResetAxesState;
+    if (!resetRequested || !stableState || stableState.applying) return;
+
+    stableState.applying = true;
+    Promise.resolve(
+      Plotly.relayout(plotEl, {
+        height: stableState.height,
+        "xaxis.autorange": false,
+        "xaxis.range": stableState.xRange.slice(),
+        "yaxis.autorange": false,
+        "yaxis.range": stableState.yRange.slice(),
+      })
+    ).finally(() => {
+      if (plotEl.__stableResetAxesState) plotEl.__stableResetAxesState.applying = false;
+    });
+  });
+}
+
 function updateMlEvaluationControls() {
   const isRepeatedCv = refs.mlEvaluationStrategy?.value === "repeated_cv";
   refs.mlCvFoldsWrap?.classList.toggle("hidden", !isRepeatedCv);
@@ -1878,6 +1921,8 @@ function updateDlModelControlVisibility() {
 }
 
 function purgePlot(el) {
+  if (el && el.__stableResetAxesState) delete el.__stableResetAxesState;
+  if (el) el.style.height = "";
   if (el && el.data) { try { Plotly.purge(el); } catch { /* ignore */ } }
 }
 
@@ -3217,6 +3262,7 @@ async function runKaplanMeier() {
   purgePlot(refs.kmPlot);
   refs.kmPlot.innerHTML = "";
   await Plotly.newPlot(refs.kmPlot, payload.figure.data, payload.figure.layout, plotConfig("km_curve"));
+  stabilizePlotShellHeight(refs.kmPlot);
   updateStepIndicator(3);
   renderTable(refs.kmSummaryShell, payload.analysis.summary_table);
   renderTable(refs.kmRiskShell, payload.analysis.risk_table.rows, payload.analysis.risk_table.columns);
@@ -3306,6 +3352,8 @@ async function runCox() {
   purgePlot(refs.coxPlot);
   refs.coxPlot.innerHTML = "";
   await Plotly.newPlot(refs.coxPlot, payload.figure.data, payload.figure.layout, plotConfig("cox_forest"));
+  stabilizePlotShellHeight(refs.coxPlot);
+  stabilizeCoxPlotResetAxes(refs.coxPlot);
   updateStepIndicator(3);
   renderTable(refs.coxResultsShell, payload.analysis.results_table);
   renderTable(refs.coxDiagnosticsShell, payload.analysis.diagnostics_table);
@@ -3388,6 +3436,7 @@ async function runMlModel() {
     purgePlot(refs.mlImportancePlot);
     refs.mlImportancePlot.innerHTML = "";
     await Plotly.newPlot(refs.mlImportancePlot, payload.importance_figure.data, payload.importance_figure.layout, plotConfig("ml_importance"));
+    stabilizePlotShellHeight(refs.mlImportancePlot);
   } else {
     clearPlotShell(refs.mlImportancePlot, '<div class="empty-state plot-empty"><span>No feature importance available</span></div>');
   }
@@ -3395,6 +3444,7 @@ async function runMlModel() {
     purgePlot(refs.mlShapPlot);
     refs.mlShapPlot.innerHTML = "";
     await Plotly.newPlot(refs.mlShapPlot, payload.shap_figure.data, payload.shap_figure.layout, plotConfig("shap_importance"));
+    stabilizePlotShellHeight(refs.mlShapPlot);
   } else {
     clearPlotShell(
       refs.mlShapPlot,
@@ -3463,6 +3513,7 @@ async function runCompareModels() {
       refs.mlComparisonPlot.classList.remove("hidden");
       refs.mlComparisonPlot.innerHTML = "";
       await Plotly.newPlot(refs.mlComparisonPlot, payload.figure.data, payload.figure.layout, plotConfig("model_comparison"));
+      stabilizePlotShellHeight(refs.mlComparisonPlot);
     }
     renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "Model comparison.");
     const comparisonRows = payload.analysis?.comparison_table || [];
@@ -3547,6 +3598,7 @@ async function runDlModel() {
       purgePlot(refs.dlImportancePlot);
       refs.dlImportancePlot.innerHTML = "";
       await Plotly.newPlot(refs.dlImportancePlot, payload.figures.importance.data, payload.figures.importance.layout, plotConfig("dl_importance"));
+      stabilizePlotShellHeight(refs.dlImportancePlot);
     } else {
       const importanceEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
         ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit single-fit gradient salience.</span></div>'
@@ -3557,6 +3609,7 @@ async function runDlModel() {
       purgePlot(refs.dlLossPlot);
       refs.dlLossPlot.innerHTML = "";
       await Plotly.newPlot(refs.dlLossPlot, payload.figures.loss.data, payload.figures.loss.layout, plotConfig("dl_loss"));
+      stabilizePlotShellHeight(refs.dlLossPlot);
     } else {
       const lossEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
         ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit a single training loss curve.</span></div>'
@@ -3681,6 +3734,7 @@ async function runDlCompareModels() {
       refs.dlComparisonPlot.classList.remove("hidden");
       refs.dlComparisonPlot.innerHTML = "";
       await Plotly.newPlot(refs.dlComparisonPlot, payload.figures.comparison.data, payload.figures.comparison.layout, plotConfig("dl_model_comparison"));
+      stabilizePlotShellHeight(refs.dlComparisonPlot);
     }
     refs.dlImportancePlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model feature importance appears when you train one deep model.</span></div>';
     refs.dlLossPlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model loss curves appear when you train one deep model.</span></div>';
