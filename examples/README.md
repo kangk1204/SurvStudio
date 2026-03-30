@@ -6,6 +6,7 @@ Files included:
 
 - `tcga_luad_nature2014_upload_ready.csv`
 - `tcga_luad_rnaseq_top100_upload.csv`
+- `tcga_luad_rnaseq_top500_upload.csv`
 - `gbsg2_jco1994_upload_ready.csv`
 
 ## Dataset 1: TCGA LUAD
@@ -56,7 +57,7 @@ Data provenance:
 
 - This is a single-event right-censored cohort.
 - Some columns from the larger bundled TCGA example were intentionally removed so the upload example stays simple.
-- If you want a larger feature set, use `tcga_luad_rnaseq_top100_upload.csv`.
+- If you want a larger feature set, use `tcga_luad_rnaseq_top100_upload.csv` or `tcga_luad_rnaseq_top500_upload.csv`.
 
 ## Dataset 2: TCGA LUAD RNA Top 100
 
@@ -74,6 +75,7 @@ This file starts from the same 609-row TCGA LUAD upload-ready clinical cohort as
 
 Notes:
 
+- the 100 genes are the first 100 features from the ranked RNA top-1000 source table
 - four patients do not have matching RNA values in the source RNA table, so those gene cells remain missing
 - clinical-only Kaplan-Meier and Cox settings stay aligned with the 609-row bundled TCGA cohort
 - the file stays well below the SurvStudio upload cap of 1000 model feature candidates
@@ -91,7 +93,42 @@ Recommended first settings:
 4. Then try:
    - age-derived cutpoint grouping
    - ML or DL with a smaller selected feature subset
-## Dataset 3: GBSG2
+
+## Dataset 3: TCGA LUAD RNA Top 500
+
+- File: `tcga_luad_rnaseq_top500_upload.csv`
+- Rows: `609`
+- Columns: `512` total (`12` clinical + `500` gene-expression features)
+- Survival outcome:
+  - time column: `os_months`
+  - event column: `os_event`
+  - event-positive value: `1`
+
+## Source
+
+This file starts from the same 609-row TCGA LUAD upload-ready clinical cohort as `tcga_luad_nature2014_upload_ready.csv` and left-joins the first 500 RNA features from the same ranked RNA top-1000 source table used for the top-100 upload file.
+
+Notes:
+
+- the 500 genes are the first 500 features from the ranked RNA top-1000 source table
+- four patients do not have matching RNA values in the source RNA table, so those gene cells remain missing
+- clinical-only Kaplan-Meier and Cox settings stay aligned with the 609-row bundled TCGA cohort
+- the file remains below the SurvStudio upload cap of 1000 model feature candidates
+
+Recommended first settings:
+
+1. Upload `tcga_luad_rnaseq_top500_upload.csv`
+2. Set:
+  - time column: `os_months`
+  - event column: `os_event`
+  - event-positive value: `1`
+3. Start with:
+  - Kaplan-Meier
+  - group column: `stage_group`
+4. Then try:
+  - age-derived cutpoint grouping
+  - ML or DL after narrowing the default feature subset
+## Dataset 4: GBSG2
 
 - File: `gbsg2_jco1994_upload_ready.csv`
 - Rows: `686`

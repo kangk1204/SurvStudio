@@ -97,6 +97,35 @@ def test_rnaseq_top100_upload_example_matches_bundled_tcga_clinical_rows() -> No
     )
 
 
+def test_rnaseq_top500_upload_example_matches_bundled_tcga_clinical_rows() -> None:
+    root = Path(__file__).resolve().parents[1]
+    bundled = pd.read_csv(root / "src" / "survival_toolkit" / "data" / "tcga_luad_xena_example.csv")
+    upload = pd.read_csv(root / "examples" / "tcga_luad_rnaseq_top500_upload.csv")
+
+    key_columns = ["os_months", "os_event", "age", "sex", "stage_group"]
+    gene_columns = [column for column in upload.columns if column not in {
+        "patient_id",
+        "os_months",
+        "os_event",
+        "age",
+        "sex",
+        "stage_group",
+        "smoking_status",
+        "pack_years_smoked",
+        "tumor_longest_dimension_cm",
+        "kras_status",
+        "egfr_status",
+        "expression_subtype",
+    }]
+
+    assert upload.shape == (609, 512)
+    assert len(gene_columns) == 500
+    assert int(upload[gene_columns[0]].isna().sum()) == 4
+    assert Counter(map(tuple, upload[key_columns].itertuples(index=False, name=None))) == Counter(
+        map(tuple, bundled[key_columns].itertuples(index=False, name=None))
+    )
+
+
 def test_cli_inspect_reports_profile(tmp_path, capsys) -> None:
     path = tmp_path / "cohort.csv"
     path.write_text("age,os_months,os_event\n60,12,1\n", encoding="utf-8")
