@@ -1979,6 +1979,28 @@ function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvR
   return `Screening Cox PH, Random Survival Forest, and Gradient Boosted Survival${cohortSuffix}${evalSuffix}.`;
 }
 
+function dlPendingBannerText({ modelType, rowCount, epochs, evaluationStrategy, cvFolds, cvRepeats }) {
+  const labelMap = {
+    deepsurv: "DeepSurv",
+    deephit: "DeepHit",
+    mtlr: "Neural MTLR",
+    transformer: "Survival Transformer",
+    vae: "Survival VAE",
+  };
+  const label = labelMap[modelType] || String(modelType || "deep model");
+  const cohortSuffix = Number.isFinite(rowCount) ? ` on ${rowCount} rows` : "";
+  const evalSuffix = evaluationStrategy === "repeated_cv"
+    ? ` with ${cvRepeats}x${cvFolds} repeated CV`
+    : " with deterministic holdout";
+  let message = `Training ${label}${cohortSuffix}${evalSuffix} for up to ${epochs} epochs.`;
+  if (Number.isFinite(Number(epochs)) && Number(epochs) >= 200) {
+    message += " Early stopping may finish before the requested epoch limit.";
+  } else {
+    message += " Early stopping can still end training before the epoch limit.";
+  }
+  return message;
+}
+
 function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {
   const cohortSuffix = Number.isFinite(rowCount) ? ` on ${rowCount} rows` : "";
   const evalSuffix = evaluationStrategy === "repeated_cv"
@@ -2405,10 +2427,11 @@ function updateGroupingDetailsVisibility(tabName = activeTabName()) {
   refs.groupingDetails.open = ["km", "tables"].includes(tabName);
 }
 
-function focusModelFeatureEditor() {
-  activateTab("ml");
+function focusModelFeatureEditor(tabName = "ml") {
+  activateTab(tabName);
   requestAnimationFrame(() => {
-    refs.modelFeatureChecklist?.closest(".selection-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const featureChecklist = tabName === "dl" ? refs.dlModelFeatureChecklist : refs.modelFeatureChecklist;
+    featureChecklist?.closest(".selection-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
     flashPresetTargets([refs.modelFeatureChecklist, refs.modelCategoricalChecklist, refs.dlModelFeatureChecklist, refs.dlModelCategoricalChecklist]);
   });
 }
@@ -3348,108 +3371,123 @@ async function runDlModel() {
   const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
   const hiddenLayers = parseHiddenLayers();
   if (!hiddenLayers.length) hiddenLayers.push(64, 64);
+  const startedAt = performance.now();
 
   setShimmer(refs.dlImportancePlot);
   setShimmer(refs.dlLossPlot);
-
-  const payload = await fetchJSON("/api/deep-model", {
-    method: "POST",
-    body: JSON.stringify({
-      dataset_id: base.dataset_id, time_column: base.time_column,
-      event_column: base.event_column, event_positive_value: base.event_positive_value,
-      features, categorical_features: categoricalFeatures,
-      model_type: refs.dlModelType.value,
-      hidden_layers: hiddenLayers,
-      dropout: Number(refs.dlDropout.value),
-      learning_rate: Number(refs.dlLearningRate.value),
-      epochs: Number(refs.dlEpochs.value),
-      batch_size: Number(refs.dlBatchSize.value),
-      random_seed: Number(refs.dlRandomSeed.value),
-      early_stopping_patience: Number(refs.dlEarlyStoppingPatience.value),
-      early_stopping_min_delta: Number(refs.dlEarlyStoppingMinDelta.value),
-      parallel_jobs: Number(refs.dlParallelJobs.value),
-      evaluation_strategy: refs.dlEvaluationStrategy.value,
-      cv_folds: Number(refs.dlCvFolds.value),
-      cv_repeats: Number(refs.dlCvRepeats.value),
-      num_time_bins: Number(refs.dlNumTimeBins.value),
-      d_model: Number(refs.dlDModel.value),
-      n_heads: Number(refs.dlHeads.value),
-      n_layers: Number(refs.dlLayers.value),
-      latent_dim: Number(refs.dlLatentDim.value),
-      n_clusters: Number(refs.dlClusters.value),
-    }),
+  refs.dlMetaBanner.textContent = dlPendingBannerText({
+    modelType: refs.dlModelType.value,
+    rowCount: Number(state.dataset?.n_rows),
+    epochs: Number(refs.dlEpochs.value),
+    evaluationStrategy: refs.dlEvaluationStrategy.value,
+    cvFolds: Number(refs.dlCvFolds.value),
+    cvRepeats: Number(refs.dlCvRepeats.value),
   });
-  state.dl = payload;
-  setPanelResultMode(refs.dlPanel, "single");
-  const stats = payload.analysis || {};
+  setRuntimeBanner("Training the selected deep-learning model. This can take noticeably longer than a classical fit.", "info");
 
-  if (payload.figures?.importance) {
-    purgePlot(refs.dlImportancePlot);
-    refs.dlImportancePlot.innerHTML = "";
-    await Plotly.newPlot(refs.dlImportancePlot, payload.figures.importance.data, payload.figures.importance.layout, plotConfig("dl_importance"));
-  } else {
-    const importanceEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
-      ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit single-fit gradient salience.</span></div>'
-      : '<div class="empty-state plot-empty"><span>No feature importance available</span></div>';
-    clearPlotShell(refs.dlImportancePlot, importanceEmpty);
+  try {
+    const payload = await fetchJSON("/api/deep-model", {
+      method: "POST",
+      body: JSON.stringify({
+        dataset_id: base.dataset_id, time_column: base.time_column,
+        event_column: base.event_column, event_positive_value: base.event_positive_value,
+        features, categorical_features: categoricalFeatures,
+        model_type: refs.dlModelType.value,
+        hidden_layers: hiddenLayers,
+        dropout: Number(refs.dlDropout.value),
+        learning_rate: Number(refs.dlLearningRate.value),
+        epochs: Number(refs.dlEpochs.value),
+        batch_size: Number(refs.dlBatchSize.value),
+        random_seed: Number(refs.dlRandomSeed.value),
+        early_stopping_patience: Number(refs.dlEarlyStoppingPatience.value),
+        early_stopping_min_delta: Number(refs.dlEarlyStoppingMinDelta.value),
+        parallel_jobs: Number(refs.dlParallelJobs.value),
+        evaluation_strategy: refs.dlEvaluationStrategy.value,
+        cv_folds: Number(refs.dlCvFolds.value),
+        cv_repeats: Number(refs.dlCvRepeats.value),
+        num_time_bins: Number(refs.dlNumTimeBins.value),
+        d_model: Number(refs.dlDModel.value),
+        n_heads: Number(refs.dlHeads.value),
+        n_layers: Number(refs.dlLayers.value),
+        latent_dim: Number(refs.dlLatentDim.value),
+        n_clusters: Number(refs.dlClusters.value),
+      }),
+    });
+    const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
+    state.dl = payload;
+    setPanelResultMode(refs.dlPanel, "single");
+    const stats = payload.analysis || {};
+
+    if (payload.figures?.importance) {
+      purgePlot(refs.dlImportancePlot);
+      refs.dlImportancePlot.innerHTML = "";
+      await Plotly.newPlot(refs.dlImportancePlot, payload.figures.importance.data, payload.figures.importance.layout, plotConfig("dl_importance"));
+    } else {
+      const importanceEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
+        ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit single-fit gradient salience.</span></div>'
+        : '<div class="empty-state plot-empty"><span>No feature importance available</span></div>';
+      clearPlotShell(refs.dlImportancePlot, importanceEmpty);
+    }
+    if (payload.figures?.loss) {
+      purgePlot(refs.dlLossPlot);
+      refs.dlLossPlot.innerHTML = "";
+      await Plotly.newPlot(refs.dlLossPlot, payload.figures.loss.data, payload.figures.loss.layout, plotConfig("dl_loss"));
+    } else {
+      const lossEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
+        ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit a single training loss curve.</span></div>'
+        : '<div class="empty-state plot-empty"><span>No loss curve available</span></div>';
+      clearPlotShell(refs.dlLossPlot, lossEmpty);
+    }
+    const repeatedCvLike = stats.evaluation_mode === "repeated_cv" || stats.evaluation_mode === "repeated_cv_incomplete";
+    if (repeatedCvLike && Array.isArray(stats.repeat_results) && stats.repeat_results.length) {
+      if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Repeated-CV Repeat Summary";
+      renderTable(refs.dlComparisonShell, stats.repeat_results);
+    } else {
+      if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Deep Model Comparison";
+      refs.dlComparisonShell.innerHTML = '<div class="empty-state">Run "Compare All" to benchmark all deep models on the same feature set.</div>';
+    }
+    if (repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table) {
+      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
+    } else {
+      refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Run "Compare All" to populate manuscript-ready deep comparison rows.</div>';
+    }
+    refs.dlComparisonPlot.innerHTML = "";
+    refs.dlComparisonPlot.classList.add("hidden");
+    refs.downloadDlComparisonButton.disabled = !(Array.isArray(stats.comparison_table) && stats.comparison_table.length);
+    if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
+    if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
+    setDlManuscriptDownloadsEnabled(!!(repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table?.length));
+    // Backend may emit either `scientific_summary` or `insight_board` depending on model implementation.
+    const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
+    renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning results.");
+    const epochsTrained = stats.epochs_trained || stats.epochs || refs.dlEpochs.value;
+    const dlMetricLabel = stats.evaluation_mode === "repeated_cv"
+      ? "Mean repeated-CV C-index"
+      : (stats.evaluation_mode === "repeated_cv_incomplete"
+        ? "Mean repeated-CV C-index (incomplete)"
+        : (stats.evaluation_mode === "holdout"
+          ? "Holdout C-index"
+          : (stats.evaluation_mode === "holdout_fallback_apparent" ? "Apparent fallback C-index" : "Apparent C-index")));
+    const dlEvalLabel = stats.evaluation_mode === "repeated_cv"
+      ? `${formatValue(stats.cv_repeats || refs.dlCvRepeats.value)}x${formatValue(stats.cv_folds || refs.dlCvFolds.value)} repeated CV`
+      : (stats.evaluation_mode === "repeated_cv_incomplete"
+        ? `${formatValue(stats.cv_repeats || refs.dlCvRepeats.value)}x${formatValue(stats.cv_folds || refs.dlCvFolds.value)} repeated CV (incomplete; fallback folds excluded)`
+        : (stats.evaluation_mode === "holdout_fallback_apparent"
+          ? "holdout requested, reported as apparent fallback"
+          : formatValue(stats.evaluation_mode)));
+    const dlSeedSuffix = repeatedCvLike
+      ? (Array.isArray(stats.training_seeds) && stats.training_seeds.length
+        ? `, repeat seeds=${stats.training_seeds.join(", ")}`
+        : "")
+      : (stats.training_seed != null ? `, seed=${formatValue(stats.training_seed)}` : "");
+    refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlSeedSuffix}, time=${elapsedSeconds}s`;
+    updateStepIndicator(3);
+    activateTab("dl");
+    scrollToAnalysisResult("dl", { mode: repeatedCvLike ? "compare" : "single" });
+    showToast(`${refs.dlModelType.value.toUpperCase()} model trained`, "success", 3000);
+  } finally {
+    setRuntimeBanner("");
   }
-  if (payload.figures?.loss) {
-    purgePlot(refs.dlLossPlot);
-    refs.dlLossPlot.innerHTML = "";
-    await Plotly.newPlot(refs.dlLossPlot, payload.figures.loss.data, payload.figures.loss.layout, plotConfig("dl_loss"));
-  } else {
-    const lossEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
-      ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit a single training loss curve.</span></div>'
-      : '<div class="empty-state plot-empty"><span>No loss curve available</span></div>';
-    clearPlotShell(refs.dlLossPlot, lossEmpty);
-  }
-  const repeatedCvLike = stats.evaluation_mode === "repeated_cv" || stats.evaluation_mode === "repeated_cv_incomplete";
-  if (repeatedCvLike && Array.isArray(stats.repeat_results) && stats.repeat_results.length) {
-    if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Repeated-CV Repeat Summary";
-    renderTable(refs.dlComparisonShell, stats.repeat_results);
-  } else {
-    if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Deep Model Comparison";
-    refs.dlComparisonShell.innerHTML = '<div class="empty-state">Run "Compare All" to benchmark all deep models on the same feature set.</div>';
-  }
-  if (repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table) {
-    renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
-  } else {
-    refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Run "Compare All" to populate manuscript-ready deep comparison rows.</div>';
-  }
-  refs.dlComparisonPlot.innerHTML = "";
-  refs.dlComparisonPlot.classList.add("hidden");
-  refs.downloadDlComparisonButton.disabled = !(Array.isArray(stats.comparison_table) && stats.comparison_table.length);
-  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
-  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
-  setDlManuscriptDownloadsEnabled(!!(repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table?.length));
-  // Backend may emit either `scientific_summary` or `insight_board` depending on model implementation.
-  const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
-  renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning results.");
-  const epochsTrained = stats.epochs_trained || stats.epochs || refs.dlEpochs.value;
-  const dlMetricLabel = stats.evaluation_mode === "repeated_cv"
-    ? "Mean repeated-CV C-index"
-    : (stats.evaluation_mode === "repeated_cv_incomplete"
-      ? "Mean repeated-CV C-index (incomplete)"
-      : (stats.evaluation_mode === "holdout"
-        ? "Holdout C-index"
-        : (stats.evaluation_mode === "holdout_fallback_apparent" ? "Apparent fallback C-index" : "Apparent C-index")));
-  const dlEvalLabel = stats.evaluation_mode === "repeated_cv"
-    ? `${formatValue(stats.cv_repeats || refs.dlCvRepeats.value)}x${formatValue(stats.cv_folds || refs.dlCvFolds.value)} repeated CV`
-    : (stats.evaluation_mode === "repeated_cv_incomplete"
-      ? `${formatValue(stats.cv_repeats || refs.dlCvRepeats.value)}x${formatValue(stats.cv_folds || refs.dlCvFolds.value)} repeated CV (incomplete; fallback folds excluded)`
-      : (stats.evaluation_mode === "holdout_fallback_apparent"
-        ? "holdout requested, reported as apparent fallback"
-        : formatValue(stats.evaluation_mode)));
-  const dlSeedSuffix = repeatedCvLike
-    ? (Array.isArray(stats.training_seeds) && stats.training_seeds.length
-      ? `, repeat seeds=${stats.training_seeds.join(", ")}`
-      : "")
-    : (stats.training_seed != null ? `, seed=${formatValue(stats.training_seed)}` : "");
-  refs.dlMetaBanner.textContent = `${refs.dlModelType.value.toUpperCase()}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlSeedSuffix}`;
-  updateStepIndicator(3);
-  activateTab("dl");
-  scrollToAnalysisResult("dl", { mode: repeatedCvLike ? "compare" : "single" });
-  showToast(`${refs.dlModelType.value.toUpperCase()} model trained`, "success", 3000);
 }
 
 async function runDlCompareModels() {
@@ -4062,8 +4100,8 @@ function initListeners() {
   refs.dlModelFeatureChecklist?.addEventListener("change", () => { syncModelFeatureMirrors(refs.dlModelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.dlModelCategoricalChecklist?.addEventListener("change", () => { syncModelCategoricalMirrors(refs.dlModelCategoricalChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.cohortVariableChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.reviewMlFeaturesButton?.addEventListener("click", focusModelFeatureEditor);
-  refs.reviewDlFeaturesButton?.addEventListener("click", focusModelFeatureEditor);
+  refs.reviewMlFeaturesButton?.addEventListener("click", () => focusModelFeatureEditor("ml"));
+  refs.reviewDlFeaturesButton?.addEventListener("click", () => focusModelFeatureEditor("dl"));
   refs.selectAllModelFeaturesButton?.addEventListener("click", () => {
     setSharedModelFeatureSelection(modelFeatureCandidateColumns());
     showToast("Selected all eligible ML/DL model features.", "success", 2400);

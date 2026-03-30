@@ -349,6 +349,16 @@ def test_guided_dl_inline_compare_uses_clicked_button_as_loading_target() -> Non
     assert 'void runGuidedGoal("dl", refs.runDlCompareInlineButton, runDlCompareModels);' in text
 
 
+def test_review_shared_features_buttons_keep_the_user_on_matching_model_tab() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'function focusModelFeatureEditor(tabName = "ml") {' in text
+    assert 'const featureChecklist = tabName === "dl" ? refs.dlModelFeatureChecklist : refs.modelFeatureChecklist;' in text
+    assert 'refs.reviewMlFeaturesButton?.addEventListener("click", () => focusModelFeatureEditor("ml"));' in text
+    assert 'refs.reviewDlFeaturesButton?.addEventListener("click", () => focusModelFeatureEditor("dl"));' in text
+
+
 def test_guided_grouping_context_only_uses_guided_goal_inside_guided_mode() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
