@@ -1277,12 +1277,20 @@ def _fit_evaluate_cox_split(
     model = PHReg(train_times, train_encoded.to_numpy(dtype=float), status=train_status, ties="efron")
     results = model.fit(disp=False)
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
-    risk_score = (test_encoded.to_numpy(dtype=float) @ results.params).astype(float)
+    param_vector = np.asarray(results.params, dtype=float)
+    risk_score = (test_encoded.to_numpy(dtype=float) @ param_vector).astype(float)
+    fit_components = [param_vector, risk_score]
+    llf_value = float(results.llf) if getattr(results, "llf", None) is not None else np.nan
+    if (not np.isfinite(llf_value)) or any(not np.isfinite(component).all() for component in fit_components):
+        raise ValueError(
+            "Cox PH fit produced non-finite estimates on the shared evaluation path. "
+            "This usually means redundant covariates, sparse categories, or quasi-complete separation."
+        )
 
     return {
         "model": "Cox PH",
         "c_index": _safe_float(_harrell_c_index(test_times, test_status.astype(float), risk_score)),
-        "n_features": len(results.params),
+        "n_features": len(param_vector),
         "training_time_ms": training_time_ms,
         "train_n": int(train_eval.shape[0]),
         "test_n": int(test_eval.shape[0]),

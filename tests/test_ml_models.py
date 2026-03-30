@@ -243,6 +243,78 @@ def test_compare_models_passes_requested_hyperparameters(monkeypatch) -> None:
     assert ("gbs", 37, 0.2, 99) in seen
 
 
+def test_fit_evaluate_cox_split_rejects_nonfinite_estimates(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    frame = make_example_dataset(seed=321, n_patients=80).loc[:, ["os_months", "os_event", "age", "biomarker_score"]]
+    train = frame.iloc[:50].reset_index(drop=True)
+    test = frame.iloc[50:].reset_index(drop=True)
+
+    class _FakeResults:
+        params = np.array([np.nan, 0.25], dtype=float)
+        llf = -12.3
+
+    class _FakePHReg:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def fit(self, disp: bool = False):
+            return _FakeResults()
+
+    monkeypatch.setattr(ml_models, "PHReg", _FakePHReg)
+
+    with pytest.raises(ValueError, match="non-finite estimates"):
+        ml_models._fit_evaluate_cox_split(
+            train,
+            test,
+            time_column="os_months",
+            event_column="os_event",
+            features=["age", "biomarker_score"],
+        )
+
+
+def test_compare_models_excludes_cox_when_shared_holdout_fit_is_nonfinite(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    df = make_example_dataset(seed=322, n_patients=120).loc[:, ["os_months", "os_event", "age", "biomarker_score"]]
+
+    class _FakeResults:
+        params = np.array([np.nan, 0.25], dtype=float)
+        llf = -9.5
+
+    class _FakePHReg:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def fit(self, disp: bool = False):
+            return _FakeResults()
+
+    def _fake_rsf(*args, **kwargs):
+        return {"c_index": 0.62, "n_features": 2, "training_time_ms": 1.0}
+
+    def _fake_gbs(*args, **kwargs):
+        return {"c_index": 0.64, "n_features": 2, "training_time_ms": 1.0}
+
+    monkeypatch.setattr(ml_models, "PHReg", _FakePHReg)
+    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
+    monkeypatch.setattr(ml_models, "_fit_evaluate_rsf_split", _fake_rsf)
+    monkeypatch.setattr(ml_models, "_fit_evaluate_gbs_split", _fake_gbs)
+
+    result = ml_models.compare_survival_models(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score"],
+        random_state=17,
+    )
+
+    assert {row["model"] for row in result["comparison_table"]} == {
+        "Random Survival Forest",
+        "Gradient Boosted Survival",
+    }
+    assert any(error["model"] == "Cox PH" for error in result["errors"])
+
+
 def test_feature_encoder_imputes_missing_numeric_and_categorical_values() -> None:
     import survival_toolkit.ml_models as ml_models
 
