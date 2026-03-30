@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
+import survival_toolkit.app as app_module
 from survival_toolkit.app import DeepModelRequest, app, fail_bad_request, store
 from survival_toolkit.sample_data import make_example_dataset
 
@@ -59,6 +60,7 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="dlLayers"' in response.text
     assert 'id="dlLatentDim"' in response.text
     assert 'id="dlClusters"' in response.text
+    assert 'id="shutdownButton"' in response.text
 
 
 def test_index_mentions_fleming_harrington_p_only_label() -> None:
@@ -409,6 +411,34 @@ def test_guided_rail_status_tracks_running_ready_and_stale_states() -> None:
     assert "function renderGuidedRailStatus() {" in text
     assert 'refs.guidedRailStatus.className = `guided-rail-status guided-rail-status-${status.tone}`;' in text
     assert "renderGuidedRailStatus();" in text
+
+
+def test_frontend_exposes_shutdown_button_and_stop_flow_copy() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'shutdownButton: document.getElementById("shutdownButton")' in text
+    assert "async function shutdownServer() {" in text
+    assert "Stopping the local SurvStudio server. This will cancel active runs and release memory." in text
+    assert "SurvStudio server stopped" in text
+    assert 'await fetchJSON("/api/shutdown", { method: "POST" });' in text
+    assert 'refs.shutdownButton?.addEventListener("click", () => {' in text
+
+
+def test_shutdown_endpoint_schedules_local_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = {"count": 0}
+
+    def _fake_schedule(delay_seconds: float = 0.35) -> None:
+        called["count"] += 1
+
+    monkeypatch.setattr(app_module, "_schedule_process_shutdown", _fake_schedule)
+
+    response = client.post("/api/shutdown")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "shutting_down"
+    assert "restart the server" in response.json()["detail"]
+    assert called["count"] == 1
 
 
 def test_guided_grouping_context_only_uses_guided_goal_inside_guided_mode() -> None:
