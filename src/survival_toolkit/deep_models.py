@@ -863,7 +863,7 @@ def _scientific_summary_dl(
 ) -> dict[str, Any]:
     """Build an insight board dict for deep learning models."""
     c_val = c_index if c_index is not None else 0.5
-    metric_name = _metric_name_for_evaluation("holdout" if evaluation_mode == "holdout" else "apparent")
+    metric_name = _metric_name_for_evaluation(evaluation_mode)
 
     if c_val > 0.65:
         status = "robust"
@@ -1330,6 +1330,7 @@ def compare_deep_survival_models(
             incomplete = (len(holdout_rows) + n_failures) < expected_evaluations or n_failures > 0
             if summary is None and n_failures == 0:
                 continue
+            row_evaluation_mode = "repeated_cv_incomplete" if incomplete else "repeated_cv"
             comparison.append({
                 "model": model_name,
                 "c_index": None if incomplete or summary is None else float(summary["c_index"]),
@@ -1346,7 +1347,7 @@ def compare_deep_survival_models(
                 "n_apparent_fallbacks": len(fallback_rows),
                 "cv_folds": cv_folds,
                 "cv_repeats": cv_repeats,
-                "evaluation_mode": "repeated_cv" if not fallback_rows else "repeated_cv_incomplete",
+                "evaluation_mode": row_evaluation_mode,
                 "training_seed": None if not holdout_rows else (int(holdout_rows[0]["training_seed"]) if len({int(row["training_seed"]) for row in holdout_rows if row.get("training_seed") is not None}) == 1 else None),
                 "split_seed": None if not holdout_rows else (int(holdout_rows[0]["split_seed"]) if len({int(row["split_seed"]) for row in holdout_rows if row.get("split_seed") is not None}) == 1 else None),
                 "monitor_seed": None if not holdout_rows else (int(holdout_rows[0]["monitor_seed"]) if len({int(row["monitor_seed"]) for row in holdout_rows if row.get("monitor_seed") is not None}) == 1 else None),

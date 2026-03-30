@@ -1012,6 +1012,9 @@ def test_compare_deep_survival_models_marks_incomplete_repeated_cv_rows(monkeypa
     row = next(row for row in result["comparison_table"] if row["model"] == "DeepSurv")
     assert row["n_failures"] == 1
     assert row["c_index"] is None
+    assert row["evaluation_mode"] == "repeated_cv_incomplete"
+    assert result["evaluation_mode"] == "repeated_cv_incomplete"
+    assert "incomplete" in result["manuscript_tables"]["caption"].lower()
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -1242,6 +1245,24 @@ def test_evaluate_single_deep_survival_model_repeated_cv_preserves_incomplete_st
     assert result["evaluation_mode"] == "repeated_cv_incomplete"
     evaluation_metric = next(metric for metric in result["scientific_summary"]["metrics"] if metric["label"] == "Evaluation mode")
     assert evaluation_metric["value"] == "repeated_cv_incomplete"
+
+
+def test_scientific_summary_dl_preserves_fallback_metric_name() -> None:
+    from survival_toolkit.deep_models import _scientific_summary_dl
+
+    summary = _scientific_summary_dl(
+        "DeepSurv",
+        c_index=0.58,
+        train_samples=100,
+        eval_samples=20,
+        n_features=5,
+        epochs=10,
+        loss_history=[1.2, 1.0, 0.9],
+        evaluation_mode="holdout_fallback_apparent",
+    )
+
+    assert summary["metrics"][0]["label"] == "Apparent fallback C-index"
+    assert "apparent fallback c-index" in summary["headline"].lower()
 
 
 def test_deep_models_module_can_load_when_torch_is_missing(monkeypatch) -> None:

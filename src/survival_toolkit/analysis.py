@@ -439,12 +439,19 @@ def _cohort_frame(
     return frame
 
 
-def _sorted_group_labels(series: pd.Series) -> list[str]:
+def _sorted_group_labels(series: pd.Series, column_name: str | None = None) -> list[str]:
     labels = series.astype("string").dropna().unique().tolist()
-    return sorted(labels, key=lambda value: (len(str(value)), str(value)))
+    label_strings = [str(value) for value in labels]
+    if not label_strings:
+        return []
+    numeric_values = pd.to_numeric(pd.Series(label_strings, dtype="string"), errors="coerce")
+    if numeric_values.notna().all():
+        ordered_numeric = np.sort(numeric_values.astype(float).unique())
+        return [str(int(value)) if float(value).is_integer() else str(value) for value in ordered_numeric]
+    return _ordered_reference_categories(label_strings, column_name or str(series.name or ""))
 
 
-def _ordered_level_strings(series: pd.Series) -> list[str]:
+def _ordered_level_strings(series: pd.Series, column_name: str | None = None) -> list[str]:
     non_missing = series.dropna()
     if non_missing.empty:
         return []
@@ -452,7 +459,7 @@ def _ordered_level_strings(series: pd.Series) -> list[str]:
     if numeric_values.notna().all():
         ordered_numeric = np.sort(numeric_values.unique().astype(float))
         return [str(int(value)) if float(value).is_integer() else str(value) for value in ordered_numeric]
-    return list(dict.fromkeys(non_missing.astype("string").tolist()))
+    return _ordered_reference_categories(non_missing.astype("string").tolist(), column_name or str(series.name or ""))
 
 
 def _is_binary_numeric_series(series: pd.Series) -> bool:
@@ -1723,7 +1730,7 @@ def compute_km_analysis(
     if group_column:
         frame[group_column] = frame[group_column].astype("string")
         frame = frame.dropna(subset=[group_column]).reset_index(drop=True)
-        group_labels = _sorted_group_labels(frame[group_column])
+        group_labels = _sorted_group_labels(frame[group_column], group_column)
     else:
         group_labels = ["Overall"]
 
@@ -1914,6 +1921,22 @@ def _prepare_cox_frame(
     return frame
 
 
+def _validate_cox_covariates(covariates: Sequence[str]) -> None:
+    covariate_set = {str(column) for column in covariates}
+    overlapping_stage_sets = [
+        {"stage", "stage_group"},
+        {"pathologic_stage", "stage_group"},
+        {"stage", "pathologic_stage"},
+    ]
+    for overlap in overlapping_stage_sets:
+        if overlap <= covariate_set:
+            joined = ", ".join(sorted(overlap))
+            raise ValueError(
+                f"Cox PH cannot fit overlapping stage representations together ({joined}). "
+                "Select one stage variable to avoid redundant encoding."
+            )
+
+
 def _build_cox_formula(time_column: str, covariates: Sequence[str], categorical_covariates: Sequence[str]) -> str:
     if not covariates:
         raise ValueError("Select at least one covariate for the Cox PH model.")
@@ -2068,6 +2091,7 @@ def compute_cox_analysis(
     categorical_covariates: Sequence[str] | None = None,
     event_positive_value: Any = None,
 ) -> dict[str, Any]:
+    _validate_cox_covariates(covariates)
     categorical_covariates = list(dict.fromkeys(categorical_covariates or _categorical_candidates(df, covariates)))
     frame = _prepare_cox_frame(
         df,
@@ -2082,13 +2106,26 @@ def compute_cox_analysis(
     model = PHReg.from_formula(formula, data=frame, status=status, ties="efron")
     results = model.fit(disp=False)
 
+    conf_int = np.asarray(results.conf_int(), dtype=float)
+    param_vector = np.asarray(results.params, dtype=float)
+    bse_vector = np.asarray(results.bse, dtype=float)
+    z_vector = np.asarray(results.tvalues, dtype=float)
+    p_vector = np.asarray(results.pvalues, dtype=float)
+    llf_value = float(results.llf) if results.llf is not None else np.nan
+
     reference_levels = _reference_levels(frame, categorical_covariates)
-    risk_score = results.model.exog @ results.params
-    conf_int = results.conf_int()
+    risk_score = np.asarray(results.model.exog @ results.params, dtype=float)
+    fit_components = [param_vector, conf_int.reshape(-1), bse_vector, z_vector, p_vector, risk_score]
+    if (not np.isfinite(llf_value)) or any(not np.isfinite(component).all() for component in fit_components):
+        raise ValueError(
+            "Cox PH fit produced non-finite estimates. This usually means redundant covariates, sparse categories, "
+            "or quasi-complete separation. Remove overlapping variables or collapse sparse levels."
+        )
+
     model_rows: list[dict[str, Any]] = []
     for idx, term in enumerate(results.model.exog_names):
         variable, label, reference = _clean_term(term, reference_levels)
-        beta = float(results.params[idx])
+        beta = float(param_vector[idx])
         hr = _safe_exp(beta)
         ci_low = _safe_exp(conf_int[idx, 0])
         ci_high = _safe_exp(conf_int[idx, 1])
@@ -2101,9 +2138,9 @@ def compute_cox_analysis(
                 "Hazard ratio": hr,
                 "CI lower": ci_low,
                 "CI upper": ci_high,
-                "SE": float(results.bse[idx]),
-                "Z": float(results.tvalues[idx]),
-                "P value": float(results.pvalues[idx]),
+                "SE": float(bse_vector[idx]),
+                "Z": float(z_vector[idx]),
+                "P value": float(p_vector[idx]),
             }
         )
 
@@ -2143,9 +2180,9 @@ def compute_cox_analysis(
             "events": n_events,
             "parameters": k_params,
             "events_per_parameter": float(n_events / k_params) if k_params else None,
-            "partial_log_likelihood": _safe_float(results.llf),
-            "aic": _safe_float(-2 * results.llf + 2 * k_params),
-            "bic": _safe_float(-2 * results.llf + k_params * np.log(max(n_obs, 1))),
+            "partial_log_likelihood": _safe_float(llf_value),
+            "aic": _safe_float(-2 * llf_value + 2 * k_params),
+            "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),
             "tie_method": "efron",
         },
@@ -2160,9 +2197,9 @@ def compute_cox_analysis(
             "events": n_events,
             "parameters": k_params,
             "events_per_parameter": float(n_events / k_params) if k_params else None,
-            "partial_log_likelihood": _safe_float(results.llf),
-            "aic": _safe_float(-2 * results.llf + 2 * k_params),
-            "bic": _safe_float(-2 * results.llf + k_params * np.log(max(n_obs, 1))),
+            "partial_log_likelihood": _safe_float(llf_value),
+            "aic": _safe_float(-2 * llf_value + 2 * k_params),
+            "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),
             "apparent_c_index": _safe_float(c_index),
             "c_index_label": "Apparent C-index",
@@ -2184,13 +2221,16 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
     frame = df[columns].copy()
 
     group_frames: OrderedDict[str, pd.DataFrame] = OrderedDict()
-    group_frames["Overall"] = frame
     if group_column:
         string_group = frame[group_column].astype("string")
-        group_labels = _sorted_group_labels(string_group)
+        frame = frame.loc[string_group.notna()].copy()
+        string_group = frame[group_column].astype("string")
+        group_frames["Overall"] = frame
+        group_labels = _sorted_group_labels(string_group, group_column)
         for label in group_labels:
             group_frames[label] = frame.loc[string_group == label]
     else:
+        group_frames["Overall"] = frame
         group_labels = []
 
     rows: list[dict[str, Any]] = []
@@ -2233,7 +2273,7 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
             continue
 
         source_series = pd.to_numeric(series, errors="coerce") if is_binary_numeric else series.astype("string")
-        levels = _ordered_level_strings(source_series)
+        levels = _ordered_level_strings(source_series, variable)
         for level in levels:
             row = {"Variable": variable, "Statistic": str(level)}
             for label, group_frame in group_frames.items():
