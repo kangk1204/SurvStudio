@@ -335,7 +335,7 @@
             <button class="button primary compact-btn" id="deriveButton">Create</button>
             <div class="derive-status" id="deriveStatus" aria-live="polite"></div>
           </div>
-          <div class="toolbar-grid compact hidden" id="deriveOptimalControls">
+          <div class="derive-optimal-controls hidden" id="deriveOptimalControls">
             <label class="toolbar-field">
               <span>Min group frac</span>
               <input id="deriveMinGroupFraction" type="number" min="0.02" max="0.45" step="0.01" value="0.1" />
@@ -526,11 +526,23 @@
           </div>
           <div class="checklist-grid">
             <div class="selection-card">
-              <h3>Model Covariates <button class="help-dot" type="button" data-tooltip="Variables to include in the model. Check the ones you want to test as potential risk factors.">?</button></h3>
+              <div class="selection-card-head">
+                <h3>Model Covariates <button class="help-dot" type="button" data-tooltip="Variables to include in the model. Check the ones you want to test as potential risk factors.">?</button></h3>
+                <div class="selection-card-actions">
+                  <button class="button ghost compact-btn" id="selectAllCoxCovariatesButton" type="button">Select all</button>
+                  <button class="button ghost compact-btn" id="clearCoxCovariatesButton" type="button">Clear</button>
+                </div>
+              </div>
               <div class="checklist" id="covariateChecklist"></div>
             </div>
             <div class="selection-card">
-              <h3>Treat as Categorical <button class="help-dot" type="button" data-tooltip="Check variables that represent categories (e.g., gender, stage) rather than continuous values.">?</button></h3>
+              <div class="selection-card-head">
+                <h3>Treat as Categorical <button class="help-dot" type="button" data-tooltip="Check variables that represent categories (e.g., gender, stage) rather than continuous values.">?</button></h3>
+                <div class="selection-card-actions">
+                  <button class="button ghost compact-btn" id="selectAllCoxCategoricalsButton" type="button">Select all</button>
+                  <button class="button ghost compact-btn" id="clearCoxCategoricalsButton" type="button">Clear</button>
+                </div>
+              </div>
               <div class="checklist" id="categoricalChecklist"></div>
             </div>
           </div>

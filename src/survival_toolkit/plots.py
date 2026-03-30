@@ -173,6 +173,14 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
             align="right", xanchor="right", yanchor="top",
             bgcolor="rgba(255,255,255,0.85)", borderpad=4,
         )
+    elif km_result.get("outcome_informed_group"):
+        fig.add_annotation(
+            text="Outcome-informed grouping: fresh raw p-value suppressed",
+            xref="paper", yref="paper", x=0.98, y=0.98,
+            showarrow=False, font={"size": 12, "color": INK},
+            align="right", xanchor="right", yanchor="top",
+            bgcolor="rgba(255,255,255,0.85)", borderpad=4,
+        )
     fig.update_xaxes(title=f"Time ({time_unit_label})", **_COMMON_AXES, range=[0, km_result["display_horizon"]])
     fig.update_yaxes(title="Survival probability", tickformat=".0%", range=[0, 1.02], **_COMMON_AXES)
     return figure_to_json(fig)

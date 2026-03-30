@@ -139,6 +139,10 @@ const refs = {
   downloadKmSvgButton: document.getElementById("downloadKmSvgButton"),
   covariateChecklist: document.getElementById("covariateChecklist"),
   categoricalChecklist: document.getElementById("categoricalChecklist"),
+  selectAllCoxCovariatesButton: document.getElementById("selectAllCoxCovariatesButton"),
+  clearCoxCovariatesButton: document.getElementById("clearCoxCovariatesButton"),
+  selectAllCoxCategoricalsButton: document.getElementById("selectAllCoxCategoricalsButton"),
+  clearCoxCategoricalsButton: document.getElementById("clearCoxCategoricalsButton"),
   modelFeatureChecklist: document.getElementById("modelFeatureChecklist"),
   modelCategoricalChecklist: document.getElementById("modelCategoricalChecklist"),
   dlModelFeatureChecklist: document.getElementById("dlModelFeatureChecklist"),
@@ -1299,7 +1303,15 @@ function buttonsForScope(scope) {
   if (scope === "ml") return [refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton];
   if (scope === "dl") return [refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton];
   if (scope === "km") return [refs.runKmButton, refs.runSignatureSearchButton];
-  if (scope === "cox") return [refs.runCoxButton];
+  if (scope === "cox") {
+    return [
+      refs.runCoxButton,
+      refs.selectAllCoxCovariatesButton,
+      refs.clearCoxCovariatesButton,
+      refs.selectAllCoxCategoricalsButton,
+      refs.clearCoxCategoricalsButton,
+    ];
+  }
   if (scope === "tables") return [refs.runCohortTableButton];
   return [];
 }
@@ -1742,6 +1754,11 @@ function renderChecklist(container, values, selected = []) {
 function selectedCheckboxValues(container) {
   if (!container) return [];
   return [...container.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+}
+
+function allCheckboxValues(container) {
+  if (!container) return [];
+  return [...container.querySelectorAll('input[type="checkbox"]')].map((input) => input.value);
 }
 
 function formatValue(value, options = {}) {
@@ -4747,6 +4764,35 @@ function initListeners() {
   refs.confidenceLevel.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.covariateChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.categoricalChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.selectAllCoxCovariatesButton?.addEventListener("click", () => {
+    setCheckedValues(refs.covariateChecklist, allCheckboxValues(refs.covariateChecklist));
+    renderSharedFeatureSummary();
+    queueHistorySync();
+    showToast("Selected all Cox covariates.", "success", 2200);
+  });
+  refs.clearCoxCovariatesButton?.addEventListener("click", () => {
+    setCheckedValues(refs.covariateChecklist, []);
+    setCheckedValues(refs.categoricalChecklist, []);
+    renderSharedFeatureSummary();
+    queueHistorySync();
+    showToast("Cleared all Cox covariates and categorical flags.", "success", 2200);
+  });
+  refs.selectAllCoxCategoricalsButton?.addEventListener("click", () => {
+    const covariates = selectedCheckboxValues(refs.covariateChecklist);
+    setCheckedValues(
+      refs.categoricalChecklist,
+      covariates.length ? covariates : allCheckboxValues(refs.categoricalChecklist),
+    );
+    renderSharedFeatureSummary();
+    queueHistorySync();
+    showToast("Marked the current Cox covariates as categorical.", "success", 2200);
+  });
+  refs.clearCoxCategoricalsButton?.addEventListener("click", () => {
+    setCheckedValues(refs.categoricalChecklist, []);
+    renderSharedFeatureSummary();
+    queueHistorySync();
+    showToast("Cleared Cox categorical flags.", "success", 2200);
+  });
   refs.modelFeatureChecklist?.addEventListener("change", () => { syncModelFeatureMirrors(refs.modelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.modelCategoricalChecklist?.addEventListener("change", () => { syncModelCategoricalMirrors(refs.modelCategoricalChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.dlModelFeatureChecklist?.addEventListener("change", () => { syncModelFeatureMirrors(refs.dlModelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
