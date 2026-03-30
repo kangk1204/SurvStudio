@@ -84,6 +84,10 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="guidedShell"' in response.text
     assert 'id="guidedSummaryBar"' in response.text
     assert 'id="guidedPanel"' in response.text
+    assert 'id="guidedRailStatus"' in response.text
+    assert 'id="guidedRailStatusLabel"' in response.text
+    assert 'id="guidedRailStatusTitle"' in response.text
+    assert 'id="guidedRailStatusText"' in response.text
     assert 'class="guided-rail"' in response.text
     assert "Guided workflow" in response.text
     assert "Move one decision at a time." in response.text
@@ -357,6 +361,35 @@ def test_review_shared_features_buttons_keep_the_user_on_matching_model_tab() ->
     assert 'const featureChecklist = tabName === "dl" ? refs.dlModelFeatureChecklist : refs.modelFeatureChecklist;' in text
     assert 'refs.reviewMlFeaturesButton?.addEventListener("click", () => focusModelFeatureEditor("ml"));' in text
     assert 'refs.reviewDlFeaturesButton?.addEventListener("click", () => focusModelFeatureEditor("dl"));' in text
+
+
+def test_shared_feature_controls_lock_while_ml_or_dl_scope_is_busy() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function setChecklistDisabled(container, isDisabled) {" in text
+    assert 'const isBusy = isScopeBusy("ml") || isScopeBusy("dl");' in text
+    assert "refs.reviewMlFeaturesButton," in text
+    assert "refs.reviewDlFeaturesButton," in text
+    assert "refs.selectAllModelFeaturesButton," in text
+    assert "refs.clearModelFeaturesButton," in text
+    assert "setChecklistDisabled(refs.modelFeatureChecklist, isBusy);" in text
+    assert "setChecklistDisabled(refs.dlModelFeatureChecklist, isBusy);" in text
+    assert "syncSharedFeatureControlsBusy();" in text
+
+
+def test_guided_rail_status_tracks_running_ready_and_stale_states() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function guidedRailStatusState() {" in text
+    assert 'label: "Running"' in text
+    assert 'label: "Ready"' in text
+    assert 'label: "Needs rerun"' in text
+    assert 'label: "No result yet"' in text
+    assert "function renderGuidedRailStatus() {" in text
+    assert 'refs.guidedRailStatus.className = `guided-rail-status guided-rail-status-${status.tone}`;' in text
+    assert "renderGuidedRailStatus();" in text
 
 
 def test_guided_grouping_context_only_uses_guided_goal_inside_guided_mode() -> None:
@@ -3518,6 +3551,8 @@ def test_compare_all_actions_surface_pending_feedback() -> None:
     assert "function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
     assert 'setRuntimeBanner("Screening all ML models on one shared evaluation path. This can take a little while on larger cohorts.", "info");' in app_js
     assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");' in app_js
+    assert 'busyText: "DL model run in progress. Deep-learning runs can take longer, and review results will open automatically when the run finishes."' in app_js
+    assert 'class="guided-run-status" role="status"' in app_js
     assert "refs.mlMetaBanner.textContent = mlComparePendingBannerText({" in app_js
     assert "refs.dlMetaBanner.textContent = dlComparePendingBannerText({" in app_js
 
