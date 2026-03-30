@@ -199,6 +199,14 @@ def test_cohort_frame_rejects_identical_time_and_event_columns() -> None:
         )
 
 
+def test_ordered_level_strings_deduplicates_string_levels() -> None:
+    from survival_toolkit.analysis import _ordered_level_strings
+
+    series = pd.Series(["no", "yes", "no", None], dtype="string")
+
+    assert _ordered_level_strings(series, "horTh") == ["no", "yes"]
+
+
 def test_looks_binary_accepts_nonstandard_two_value_numeric_status() -> None:
     series = pd.Series([1, 2, 1, 2, None])
 
@@ -636,6 +644,21 @@ def test_cohort_table_treats_binary_numeric_variables_as_counts() -> None:
     assert ("binary_flag", "0") in stats
     assert ("binary_flag", "1") in stats
     assert "%" in str(stats[("binary_flag", "1")])
+
+
+def test_cohort_table_deduplicates_string_levels() -> None:
+    df = pd.DataFrame(
+        {
+            "age": [50, 55, 60, 65],
+            "horTh": pd.Series(["no", "yes", "no", None], dtype="string"),
+            "group_flag": ["A", "A", "B", "B"],
+        }
+    )
+
+    table = compute_cohort_table(df, variables=["horTh"], group_column="group_flag")
+    hormone_rows = [row for row in table["rows"] if row["Variable"] == "horTh"]
+
+    assert [row["Statistic"] for row in hormone_rows] == ["no", "yes", "Missing"]
 
 
 def test_tertile_split_handles_tied_quantile_edges() -> None:
