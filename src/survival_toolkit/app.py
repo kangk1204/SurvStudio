@@ -3,10 +3,13 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 from collections import OrderedDict
 from pathlib import Path
+import signal
 import tempfile
 import threading
+import time
 import zipfile
 from typing import Any, Callable, Literal, NoReturn, Sequence
 from xml.sax.saxutils import escape as xml_escape
@@ -819,6 +822,31 @@ async def index(request: Request) -> HTMLResponse:
 @app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _schedule_process_shutdown(delay_seconds: float = 0.35) -> None:
+    pid = os.getpid()
+
+    def _shutdown() -> None:
+        time.sleep(delay_seconds)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            os._exit(0)
+
+    threading.Thread(target=_shutdown, daemon=True).start()
+
+
+@app.post("/api/shutdown")
+async def shutdown_server(request: Request) -> dict[str, str]:
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+        raise HTTPException(status_code=403, detail="Shutdown is allowed only from a local session.")
+    _schedule_process_shutdown()
+    return {
+        "status": "shutting_down",
+        "detail": "SurvStudio is stopping. You can close this tab or restart the server with `python -m survival_toolkit`.",
+    }
 
 
 _MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB

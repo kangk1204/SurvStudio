@@ -38,6 +38,7 @@ const refs = {
   guidedModeButton: document.getElementById("guidedModeButton"),
   expertModeButton: document.getElementById("expertModeButton"),
   uploadButton: document.getElementById("uploadButton"),
+  shutdownButton: document.getElementById("shutdownButton"),
   loadTcgaUploadReadyButton: document.getElementById("loadTcgaUploadReadyButton"),
   loadTcgaButton: document.getElementById("loadTcgaButton"),
   loadGbsg2Button: document.getElementById("loadGbsg2Button"),
@@ -320,6 +321,23 @@ function setRuntimeBanner(text = "", tone = "info") {
   }
   refs.runtimeBanner.textContent = text;
   refs.runtimeBanner.className = `runtime-banner runtime-banner-${tone}`;
+}
+
+function renderServerStoppedState(message) {
+  const safeMessage = escapeHtml(
+    message || "SurvStudio is stopping. You can close this tab or restart the server with `python -m survival_toolkit`."
+  );
+  document.body.innerHTML = `
+    <div class="landing" style="display:grid;min-height:100vh;place-items:center;padding:24px;">
+      <div class="landing-card" style="max-width:720px;width:min(100%,720px);">
+        <div class="landing-hero-copy" style="padding:12px 8px;">
+          <h2>SurvStudio server stopped</h2>
+          <p>${safeMessage}</p>
+          <p>Restart with <code>python -m survival_toolkit</code>, then reopen <code>http://127.0.0.1:8000</code>.</p>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function activeTabName() {
@@ -1167,6 +1185,28 @@ function showToast(message, type = "error", duration = 5000) {
 }
 
 function showError(message) { showToast(message, "error"); }
+
+async function shutdownServer() {
+  const activeScopes = Object.entries(runtime.busyScopes || {})
+    .filter(([, isBusy]) => Boolean(isBusy))
+    .map(([scope]) => scope.toUpperCase());
+  const warning = activeScopes.length
+    ? `A run is still in progress (${activeScopes.join(", ")}). Stopping the server will cancel it and release memory. Continue?`
+    : "Stop the local SurvStudio server and release its memory?";
+  if (!window.confirm(warning)) return;
+
+  refs.shutdownButton.disabled = true;
+  setButtonLoading(refs.shutdownButton, true);
+  setRuntimeBanner("Stopping the local SurvStudio server. This will cancel active runs and release memory.", "warning");
+  try {
+    const payload = await fetchJSON("/api/shutdown", { method: "POST" });
+    renderServerStoppedState(payload?.detail);
+  } catch (error) {
+    refs.shutdownButton.disabled = false;
+    setButtonLoading(refs.shutdownButton, false);
+    throw error;
+  }
+}
 
 function renderSelect(select, options, { includeBlank = false, blankLabel = "None", selected = null } = {}) {
   select.innerHTML = "";
@@ -4228,6 +4268,9 @@ function initListeners() {
     if (refs.datasetFile.files?.length) withLoading(refs.uploadButton, uploadDataset);
   });
   refs.uploadButton.addEventListener("click", () => refs.datasetFile.click());
+  refs.shutdownButton?.addEventListener("click", () => {
+    void withLoading(refs.shutdownButton, shutdownServer);
+  });
   refs.loadTcgaUploadReadyButton.addEventListener("click", () => withLoading(refs.loadTcgaUploadReadyButton, loadTcgaUploadReadyDataset));
   refs.loadTcgaButton.addEventListener("click", () => withLoading(refs.loadTcgaButton, loadTcgaDataset));
   refs.loadGbsg2Button.addEventListener("click", () => withLoading(refs.loadGbsg2Button, loadGbsg2Dataset));
