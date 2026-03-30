@@ -730,11 +730,15 @@ Deep learning comparison can take substantial time on CPU-only machines, especia
 - `Compare All`
 - `Repeated Stratified CV`
 - large `Epochs`
+- larger shared ML/DL feature sets
+
+`Compare All` is the slowest DL path because it trains all implemented deep models in sequence. For example, a 100+ feature input set can take noticeably longer than the same cohort with a compact feature set.
 
 If you are running on a laptop without GPU acceleration, start with:
 - `Epochs = 100`
 - `Holdout`
 - a compact feature set
+- `Train Model` before `Compare All`
 
 Then increase epochs or switch to repeated CV only after the single-run workflow looks correct.
 
