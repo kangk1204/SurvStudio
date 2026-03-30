@@ -7,6 +7,7 @@ from survival_toolkit.plots import (
     build_feature_importance_figure,
     build_model_comparison_figure,
     build_loss_curve_figure,
+    build_shap_figure,
     build_time_dependent_importance_figure,
 )
 
@@ -102,6 +103,36 @@ def test_build_feature_importance_figure_supports_custom_title_label() -> None:
         title_label="Gradient-Based Feature Salience",
     )
     assert figure["layout"]["title"]["text"] == "TRANSFORMER Gradient-Based Feature Salience"
+
+
+def test_build_feature_importance_figure_wraps_long_feature_labels_without_losing_hover_label() -> None:
+    long_name = "histology_Lung Adenocarcinoma-Not Otherwise Specified (NOS)"
+    importances = [
+        {"feature": long_name, "importance": 0.3},
+        {"feature": "stage_group", "importance": 0.2},
+    ]
+
+    figure = build_feature_importance_figure(importances, model_name="RSF")
+
+    assert "<br>" in figure["data"][0]["y"][1] or figure["data"][0]["y"][1].endswith("…")
+    assert figure["data"][0]["customdata"][1] == long_name
+    assert figure["layout"]["margin"]["l"] >= 200
+
+
+def test_build_shap_figure_wraps_long_feature_labels_without_losing_hover_label() -> None:
+    long_name = "pathologic_stage: Stage IIIB vs Stage I reference group"
+    shap_result = {
+        "feature_importance": [
+            {"feature": long_name, "mean_abs_shap": 2.5},
+            {"feature": "age", "mean_abs_shap": 1.1},
+        ]
+    }
+
+    figure = build_shap_figure(shap_result)
+
+    assert "<br>" in figure["data"][0]["y"][1] or figure["data"][0]["y"][1].endswith("…")
+    assert figure["data"][0]["customdata"][1] == long_name
+    assert figure["layout"]["margin"]["l"] >= 200
 
 
 def test_build_model_comparison_figure() -> None:

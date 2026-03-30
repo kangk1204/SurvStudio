@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import numpy as np
@@ -29,9 +30,73 @@ _COMMON_AXES = dict(
     gridcolor="rgba(0,0,0,0.04)",
 )
 
+_FEATURE_LABEL_BREAK_PATTERN = re.compile(r"( vs |__|_|:|/|-)")
+
 
 def figure_to_json(fig: go.Figure) -> dict[str, Any]:
     return json.loads(pio.to_json(fig, pretty=False))
+
+
+def _truncate_label_fragment(text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+    if width <= 1:
+        return "…"
+    return f"{text[: width - 1].rstrip()}…"
+
+
+def _wrap_feature_axis_label(label: Any, *, width: int = 26, max_lines: int = 2) -> tuple[str, int]:
+    raw = str(label)
+    if len(raw) <= width:
+        return raw, 1
+
+    tokens: list[str] = []
+    cursor = 0
+    for match in _FEATURE_LABEL_BREAK_PATTERN.finditer(raw):
+        tokens.append(raw[cursor : match.end()])
+        cursor = match.end()
+    if cursor < len(raw):
+        tokens.append(raw[cursor:])
+    if not tokens:
+        tokens = [raw]
+
+    lines: list[str] = []
+    current = ""
+    for token in tokens:
+        candidate = f"{current}{token}"
+        if current and len(candidate.strip()) > width:
+            lines.append(current.strip())
+            current = token.lstrip()
+        else:
+            current = candidate
+    if current.strip():
+        lines.append(current.strip())
+
+    if len(lines) > max_lines:
+        remainder = "".join(lines[max_lines - 1 :]).strip()
+        lines = lines[: max_lines - 1] + [_truncate_label_fragment(remainder, width)]
+
+    lines = [_truncate_label_fragment(line.strip(), width) for line in lines if line.strip()]
+    if not lines:
+        lines = [_truncate_label_fragment(raw, width)]
+    return "<br>".join(lines), len(lines)
+
+
+def _feature_plot_axis_layout(labels: list[Any]) -> tuple[list[str], dict[str, int]]:
+    wrapped: list[str] = []
+    max_line_chars = 0
+    total_lines = 0
+
+    for label in labels:
+        wrapped_label, line_count = _wrap_feature_axis_label(label)
+        wrapped.append(wrapped_label)
+        total_lines += line_count
+        for line in wrapped_label.split("<br>"):
+            max_line_chars = max(max_line_chars, len(line))
+
+    left_margin = min(320, max(200, 70 + max_line_chars * 6))
+    height = max(400, 100 + total_lines * 30)
+    return wrapped, {"l": left_margin, "r": 30, "t": 80, "b": 60, "height": height}
 
 
 # ── KM & Cox (existing) ────────────────────────────────────────
@@ -284,30 +349,32 @@ def build_feature_importance_figure(
     top = importances[:20]
     top = list(reversed(top))
     labels = [row["feature"] for row in top]
+    display_labels, axis_layout = _feature_plot_axis_layout(labels)
     values = [row["importance"] for row in top]
 
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
             x=values,
-            y=labels,
+            y=display_labels,
             orientation="h",
+            customdata=labels,
             marker={"color": SLATE, "line": {"width": 0}},
-            hovertemplate="%{y}: %{x:.4f}<extra></extra>",
+            hovertemplate="%{customdata}: %{x:.4f}<extra></extra>",
         )
     )
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": 200, "r": 30, "t": 80, "b": 60},
+        margin={k: v for k, v in axis_layout.items() if k != "height"},
         title={
             "text": f"{model_name} {title_label}",
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
             "x": 0.02,
         },
-        height=max(400, 60 + 28 * len(top)),
+        height=axis_layout["height"],
     )
     fig.update_xaxes(title="Importance", **_COMMON_AXES)
-    fig.update_yaxes(**_COMMON_AXES)
+    fig.update_yaxes(automargin=True, **_COMMON_AXES)
     return figure_to_json(fig)
 
 
@@ -322,30 +389,32 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
     top = importance[:15]
     top = list(reversed(top))
     labels = [row["feature"] for row in top]
+    display_labels, axis_layout = _feature_plot_axis_layout(labels)
     values = [row["mean_abs_shap"] for row in top]
 
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
             x=values,
-            y=labels,
+            y=display_labels,
             orientation="h",
+            customdata=labels,
             marker={"color": ACCENT, "line": {"width": 0}},
-            hovertemplate="%{y}: mean|SHAP| = %{x:.4f}<extra></extra>",
+            hovertemplate="%{customdata}: mean|SHAP| = %{x:.4f}<extra></extra>",
         )
     )
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": 200, "r": 30, "t": 80, "b": 60},
+        margin={k: v for k, v in axis_layout.items() if k != "height"},
         title={
             "text": "SHAP Feature Importance",
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
             "x": 0.02,
         },
-        height=max(400, 60 + 28 * len(top)),
+        height=axis_layout["height"],
     )
     fig.update_xaxes(title="Mean |SHAP value|", **_COMMON_AXES)
-    fig.update_yaxes(**_COMMON_AXES)
+    fig.update_yaxes(automargin=True, **_COMMON_AXES)
     return figure_to_json(fig)
 
 

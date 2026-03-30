@@ -126,6 +126,29 @@ def test_km_analysis_returns_grouped_results() -> None:
     assert result["scientific_summary"]["metrics"]
 
 
+def test_km_analysis_extends_curve_to_followup_horizon_when_last_observation_is_censored() -> None:
+    df = pd.DataFrame(
+        {
+            "time": [5.0, 8.0, 12.0],
+            "event": [1, 0, 0],
+        }
+    )
+
+    result = compute_km_analysis(
+        df,
+        time_column="time",
+        event_column="event",
+        event_positive_value=1,
+    )
+
+    curve = result["curves"][0]
+    assert curve["timeline"][-1] == pytest.approx(12.0)
+    assert curve["survival"][-1] == pytest.approx(curve["survival"][-2])
+    assert curve["ci_lower"][-1] == pytest.approx(curve["ci_lower"][-2])
+    assert curve["ci_upper"][-1] == pytest.approx(curve["ci_upper"][-2])
+    assert curve["censor_times"] == [8.0, 12.0]
+
+
 def test_weighted_km_does_not_report_weighted_test_as_logrank_p() -> None:
     df = make_example_dataset(seed=12, n_patients=180)
     result = compute_km_analysis(
