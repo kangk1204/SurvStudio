@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections import Counter
+from pathlib import Path
+
 import numpy as np
 import pytest
 import pandas as pd
 
 from survival_toolkit.__main__ import main as cli_main
 from survival_toolkit.analysis import (
+    MAX_MODEL_FEATURE_CANDIDATES,
     _ordered_reference_categories,
     _prepare_cox_frame,
     _reference_levels,
@@ -18,6 +22,7 @@ from survival_toolkit.analysis import (
     coerce_event,
     discover_feature_signature,
     derive_group_column,
+    ensure_model_feature_candidate_limit,
     load_dataframe_from_path,
     looks_binary,
 )
@@ -48,6 +53,48 @@ def test_load_dataframe_from_path_rejects_unknown_suffix(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Unsupported input file extension"):
         load_dataframe_from_path(path)
+
+
+def test_model_feature_candidate_limit_accepts_1000_and_rejects_1001() -> None:
+    base = {
+        "os_months": [12, 18, 24],
+        "os_event": [1, 0, 1],
+    }
+    allowed = pd.DataFrame(base | {f"gene_{idx}": [idx, idx + 1, idx + 2] for idx in range(MAX_MODEL_FEATURE_CANDIDATES)})
+    assert ensure_model_feature_candidate_limit(allowed) == MAX_MODEL_FEATURE_CANDIDATES
+
+    too_wide = pd.DataFrame(base | {f"gene_{idx}": [idx, idx + 1, idx + 2] for idx in range(MAX_MODEL_FEATURE_CANDIDATES + 1)})
+    with pytest.raises(ValueError, match="supports at most 1000 model features"):
+        ensure_model_feature_candidate_limit(too_wide)
+
+
+def test_rnaseq_top100_upload_example_matches_bundled_tcga_clinical_rows() -> None:
+    root = Path(__file__).resolve().parents[1]
+    bundled = pd.read_csv(root / "src" / "survival_toolkit" / "data" / "tcga_luad_xena_example.csv")
+    upload = pd.read_csv(root / "examples" / "tcga_luad_rnaseq_top100_upload.csv")
+
+    key_columns = ["os_months", "os_event", "age", "sex", "stage_group"]
+    gene_columns = [column for column in upload.columns if column not in {
+        "patient_id",
+        "os_months",
+        "os_event",
+        "age",
+        "sex",
+        "stage_group",
+        "smoking_status",
+        "pack_years_smoked",
+        "tumor_longest_dimension_cm",
+        "kras_status",
+        "egfr_status",
+        "expression_subtype",
+    }]
+
+    assert upload.shape == (609, 112)
+    assert len(gene_columns) == 100
+    assert int(upload[gene_columns[0]].isna().sum()) == 4
+    assert Counter(map(tuple, upload[key_columns].itertuples(index=False, name=None))) == Counter(
+        map(tuple, bundled[key_columns].itertuples(index=False, name=None))
+    )
 
 
 def test_cli_inspect_reports_profile(tmp_path, capsys) -> None:

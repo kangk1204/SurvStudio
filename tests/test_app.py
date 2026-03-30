@@ -515,6 +515,43 @@ def test_upload_dataset_accepts_tsv_files() -> None:
     assert {column["name"] for column in body["columns"]} >= {"os_months", "os_event", "age"}
 
 
+def test_upload_dataset_accepts_exactly_1000_model_feature_candidates() -> None:
+    feature_names = [f"gene_{idx}" for idx in range(1000)]
+    header = ",".join(["os_months", "os_event", *feature_names])
+    rows = [
+        ",".join(["12", "1", *(str(idx) for idx in range(1000))]),
+        ",".join(["18", "0", *(str(idx + 1) for idx in range(1000))]),
+    ]
+    payload = (header + "\n" + "\n".join(rows) + "\n").encode("utf-8")
+
+    response = client.post(
+        "/api/upload",
+        files={"file": ("wide_1000.csv", payload, "text/csv")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model_feature_candidate_count"] == 1000
+
+
+def test_upload_dataset_rejects_more_than_1000_model_feature_candidates() -> None:
+    feature_names = [f"gene_{idx}" for idx in range(1001)]
+    header = ",".join(["os_months", "os_event", *feature_names])
+    rows = [
+        ",".join(["12", "1", *(str(idx) for idx in range(1001))]),
+        ",".join(["18", "0", *(str(idx + 1) for idx in range(1001))]),
+    ]
+    payload = (header + "\n" + "\n".join(rows) + "\n").encode("utf-8")
+
+    response = client.post(
+        "/api/upload",
+        files={"file": ("wide_1001.csv", payload, "text/csv")},
+    )
+
+    assert response.status_code == 400
+    assert "supports at most 1000 model features" in response.json()["detail"]
+
+
 def test_readme_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -> None:
     readme = Path(__file__).resolve().parents[1] / "README.md"
     text = readme.read_text()
