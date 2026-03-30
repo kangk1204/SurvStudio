@@ -583,6 +583,7 @@ Single-model and comparison DL runs expose:
 Model-specific advanced controls are shown only when relevant:
 - DeepHit / Neural MTLR:
   - `time bins`
+  - `batch size`
 - Survival Transformer:
   - `transformer width`
   - `attention heads`
@@ -590,10 +591,16 @@ Model-specific advanced controls are shown only when relevant:
 - Survival VAE:
   - `latent dim`
   - `clusters`
+  - `batch size` is ignored because the current VAE path uses full-batch optimization
 
 Architecture note:
 - `Hidden Layers` uses the full comma-separated stack for DeepSurv, DeepHit, Neural MTLR, and Survival VAE
 - `Dropout` is applied to all current deep model paths, including Neural MTLR
+- `Batch Size` currently affects DeepHit and Neural MTLR only. DeepSurv, Survival Transformer, and Survival VAE use full-batch optimization in the current implementation.
+- Adam-based DL optimizers use light L2 regularization (`weight_decay=1e-4`) and gradient clipping for stability on wider feature sets.
+- DeepHit uses a stabilized ranking-loss scale (`sigma=1.0`) rather than the earlier sharper default.
+- `Neural MTLR` is implemented as an MTLR-inspired discrete-time neural variant for workflow comparison, not as a literal reference reproduction of the original formulation.
+- `Survival VAE` should be interpreted as a VAE-inspired latent representation model for clustering and risk screening. SurvStudio does not claim validated generative simulation or uncertainty estimation from this path.
 
 ## How To Read Results
 

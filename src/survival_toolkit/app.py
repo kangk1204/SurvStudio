@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import csv
 import io
 import json
@@ -71,6 +72,10 @@ store = DatasetStore()
 _MAX_ML_ARTIFACT_CACHE = 32
 _ML_ARTIFACT_CACHE: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
 _ML_ARTIFACT_CACHE_LOCK = threading.Lock()
+_MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
+_MAX_UPLOAD_ROWS = 100_000
+_MAX_UPLOAD_COLUMNS = 5_000
+_MAX_UPLOAD_CELLS = 5_000_000
 
 
 # ── Request models ──────────────────────────────────────────────
@@ -290,14 +295,15 @@ def _remember_ml_artifact(dataset_id: str, request_config: dict[str, Any], resul
     x_encoded = result.get("_X_encoded")
     if model is None or x_encoded is None:
         return
+    artifact_result = {
+        "_model": model,
+        "_X_encoded": x_encoded,
+        "_feature_encoder": result.get("_feature_encoder"),
+        "_analysis_frame": result.get("_analysis_frame"),
+    }
     artifact = {
         "signature": _ml_artifact_signature(request_config),
-        "result": {
-            "_model": model,
-            "_X_encoded": x_encoded,
-            "_feature_encoder": result.get("_feature_encoder"),
-            "_analysis_frame": result.get("_analysis_frame"),
-        },
+        "result": copy.deepcopy(artifact_result),
     }
     with _ML_ARTIFACT_CACHE_LOCK:
         cache_key = (dataset_id, model_type)
@@ -317,10 +323,32 @@ def _get_ml_artifact(dataset_id: str, request_config: dict[str, Any]) -> dict[st
         cached = _ML_ARTIFACT_CACHE.get(cache_key)
         if cached is not None:
             _ML_ARTIFACT_CACHE.move_to_end(cache_key)
-    if not cached or cached.get("signature") != expected:
-        return None
-    result = cached.get("result")
-    return result if isinstance(result, dict) else None
+        if not cached or cached.get("signature") != expected:
+            return None
+        result = cached.get("result")
+        if not isinstance(result, dict):
+            return None
+        return copy.deepcopy(result)
+
+
+def _enforce_upload_shape_limits(dataframe: Any) -> None:
+    if not hasattr(dataframe, "shape"):
+        return
+    n_rows = int(dataframe.shape[0])
+    n_columns = int(dataframe.shape[1])
+    n_cells = int(n_rows * n_columns)
+    if n_rows > _MAX_UPLOAD_ROWS:
+        raise ValueError(
+            f"Upload has {n_rows:,} rows. SurvStudio currently supports at most {_MAX_UPLOAD_ROWS:,} rows per uploaded cohort."
+        )
+    if n_columns > _MAX_UPLOAD_COLUMNS:
+        raise ValueError(
+            f"Upload has {n_columns:,} columns. SurvStudio currently supports at most {_MAX_UPLOAD_COLUMNS:,} columns per uploaded cohort."
+        )
+    if n_cells > _MAX_UPLOAD_CELLS:
+        raise ValueError(
+            f"Upload expands to {n_cells:,} cells after parsing. SurvStudio currently supports at most {_MAX_UPLOAD_CELLS:,} parsed cells per uploaded cohort."
+        )
 
 
 def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -> list[str]:
@@ -849,9 +877,6 @@ async def shutdown_server(request: Request) -> dict[str, str]:
     }
 
 
-_MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
-
-
 async def _load_builtin_dataset_response(
     loader: Callable[[], Any],
     *,
@@ -860,6 +885,7 @@ async def _load_builtin_dataset_response(
 ) -> dict[str, Any]:
     try:
         dataframe = await run_in_threadpool(loader)
+        _enforce_upload_shape_limits(dataframe)
         ensure_model_feature_candidate_limit(dataframe)
         stored = store.create(dataframe, filename=filename, source=source)
         return await run_in_threadpool(dataset_response, stored.dataset_id)
@@ -885,6 +911,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
                     raise HTTPException(status_code=413, detail="Upload exceeds the 200 MB limit.")
                 temp_file.write(chunk)
         dataframe = await run_in_threadpool(load_dataframe_from_path, temp_path)
+        _enforce_upload_shape_limits(dataframe)
         ensure_model_feature_candidate_limit(dataframe)
         stored = store.create(dataframe, filename=filename, source="upload")
         return await run_in_threadpool(dataset_response, stored.dataset_id)

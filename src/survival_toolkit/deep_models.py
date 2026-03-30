@@ -5,7 +5,7 @@ Provides PyTorch-based models for survival analysis:
 - DeepHit (Discrete-time single-event survival)
 - Neural MTLR (Multi-Task Logistic Regression)
 - Survival Transformer (Self-attention for feature interactions)
-- Survival VAE (Variational Autoencoder for risk group discovery)
+- Survival VAE (VAE-inspired latent model for risk group discovery)
 
 All functions return plain dicts (JSON-serializable) suitable for FastAPI responses.
 """
@@ -39,6 +39,8 @@ _TORCH_INSTALL_MSG = (
     "PyTorch is required for deep learning models. "
     "Install with: pip install torch  (see https://pytorch.org for GPU options)"
 )
+_ADAM_WEIGHT_DECAY = 1e-4
+_DEEPHIT_RANKING_SIGMA = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,24 @@ _TORCH_INSTALL_MSG = (
 def _require_torch() -> None:
     if not TORCH_AVAILABLE:
         raise ImportError(_TORCH_INSTALL_MSG)
+
+
+def _seed_torch(random_seed: int) -> None:
+    torch.manual_seed(random_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(random_seed)
+
+
+def _clip_gradients(model: nn.Module, max_norm: float = 1.0) -> None:
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
+
+
+def _transformer_feed_forward(layer: nn.TransformerEncoderLayer, x: torch.Tensor) -> torch.Tensor:
+    hidden = layer.linear1(x)
+    hidden = layer.activation(hidden)
+    hidden = layer.dropout(hidden)
+    hidden = layer.linear2(hidden)
+    return layer.dropout2(hidden)
 
 
 def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
@@ -554,6 +574,12 @@ def _compute_c_index_torch(
     risk_np = risk_scores.detach().cpu().numpy().ravel()
     time_np = times.detach().cpu().numpy().ravel()
     event_np = events.detach().cpu().numpy().ravel()
+    if not np.all(np.isfinite(risk_np)):
+        raise ValueError("Deep learning risk scores contain NaN or Inf values.")
+    if not np.all(np.isfinite(time_np)):
+        raise ValueError("Evaluation times contain NaN or Inf values.")
+    if not np.all(np.isfinite(event_np)):
+        raise ValueError("Evaluation events contain NaN or Inf values.")
 
     concordant = 0.0
     comparable = 0.0
@@ -898,6 +924,22 @@ def _scientific_summary_dl(
         tail = loss_history[-5:]
         if max(tail) - min(tail) < 1e-6:
             cautions.append("Loss plateaued in the final epochs; model may benefit from more epochs or a learning rate change.")
+    if model_name == "DeepSurv":
+        cautions.append(
+            "This DeepSurv path uses full-batch Cox optimization; overfitting risk rises with wide feature sets relative to cohort size."
+        )
+    if model_name == "DeepHit":
+        cautions.append(
+            "DeepHit uses a stabilized ranking-loss term; wide discrete-time bin grids still need review on strongly right-skewed survival data."
+        )
+    if model_name == "Neural MTLR":
+        cautions.append(
+            "This path is a Neural MTLR-inspired discrete-time variant, not a literal reference implementation of the original MTLR parameterization."
+        )
+    if model_name == "Survival VAE":
+        cautions.append(
+            "This path should be interpreted as a VAE-inspired latent representation model for clustering and risk screening, not as a validated generative simulator or uncertainty estimator."
+        )
 
     if not next_steps:
         next_steps.append("Validate with external data or cross-validation to confirm generalizability.")
@@ -1730,8 +1772,7 @@ def train_deepsurv(
     feature_importance, risk_scores, predicted_survival_function, and insight_board.
     """
     _require_torch()
-    torch.manual_seed(random_seed)
-    # np.random.seed removed — torch.manual_seed handles PyTorch reproducibility
+    _seed_torch(random_seed)
 
     hidden_layers = hidden_layers if hidden_layers is not None else [64, 64]
     data, eval_split = _prepare_deep_training_inputs(
@@ -1759,7 +1800,7 @@ def train_deepsurv(
     x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
 
     model = DeepSurvNet(data["n_features"], hidden_layers, dropout)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
 
     loss_history: list[float] = []
     best_monitor: float | None = None
@@ -1771,6 +1812,7 @@ def train_deepsurv(
         risk = model(x_train)
         loss = _cox_partial_likelihood_loss(risk, t_train, e_train)
         loss.backward()
+        _clip_gradients(model)
         optimizer.step()
         loss_history.append(float(loss.item()))
         if monitor_idx is not None:
@@ -1996,7 +2038,8 @@ def _deephit_loss(
             subject_survival = survival_at_edges[:, event_times]
             event_survival = survival_at_edges[chunk, event_times]
             diff = event_survival.unsqueeze(0) - subject_survival
-            ranking_terms.append(torch.exp(diff / 0.1)[later_mask])
+            scaled_diff = torch.clamp(diff / _DEEPHIT_RANKING_SIGMA, min=-20.0, max=20.0)
+            ranking_terms.append(torch.exp(scaled_diff)[later_mask])
         ranking_loss = (
             torch.cat(ranking_terms).mean()
             if ranking_terms
@@ -2035,8 +2078,7 @@ def train_deephit(
     predicted_survival_curves, and feature_importance.
     """
     _require_torch()
-    torch.manual_seed(random_seed)
-    # np.random.seed removed — torch.manual_seed handles PyTorch reproducibility
+    _seed_torch(random_seed)
 
     hidden_layers = hidden_layers if hidden_layers is not None else [64, 64]
     data, eval_split = _prepare_deep_training_inputs(
@@ -2084,7 +2126,7 @@ def train_deephit(
         monitor_bin_tensor = torch.tensor(monitor_bin_indices, dtype=torch.long)
 
     model = DeepHitNet(data["n_features"], hidden_layers, num_time_bins, dropout)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
     dataset = TensorDataset(x_train, bin_tensor, e_train)
     loader_generator = torch.Generator().manual_seed(random_seed)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=loader_generator)
@@ -2101,6 +2143,7 @@ def train_deephit(
             pmf = model(x_b)
             loss = _deephit_loss(pmf, bin_b, e_b, alpha)
             loss.backward()
+            _clip_gradients(model)
             optimizer.step()
             epoch_losses.append(float(loss.item()))
         loss_history.append(float(np.mean(epoch_losses)))
@@ -2315,8 +2358,7 @@ def train_neural_mtlr(
     predicted_survival_curves, and calibration_data.
     """
     _require_torch()
-    torch.manual_seed(random_seed)
-    # np.random.seed removed — torch.manual_seed handles PyTorch reproducibility
+    _seed_torch(random_seed)
 
     hidden_layers = hidden_layers if hidden_layers is not None else [64]
     data, eval_split = _prepare_deep_training_inputs(
@@ -2364,7 +2406,7 @@ def train_neural_mtlr(
         monitor_bin_tensor = torch.tensor(monitor_bin_indices, dtype=torch.long)
 
     model = NeuralMTLRNet(data["n_features"], hidden_layers, num_time_bins, dropout=dropout)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
     dataset = TensorDataset(x_train, bin_tensor, e_train)
     loader_generator = torch.Generator().manual_seed(random_seed)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=loader_generator)
@@ -2381,6 +2423,7 @@ def train_neural_mtlr(
             cumsum_logits = model(x_b)
             loss = _mtlr_loss(cumsum_logits, bin_b, e_b, num_time_bins)
             loss.backward()
+            _clip_gradients(model)
             optimizer.step()
             epoch_losses.append(float(loss.item()))
         loss_history.append(float(np.mean(epoch_losses)))
@@ -2583,21 +2626,29 @@ class SurvivalTransformerNet(_TorchModuleBase):
         return self.output_layer(pooled)  # (batch, 1)
 
     def get_attention_weights(self, x: torch.Tensor) -> list[list[list[float]]]:
-        """Extract attention weights from the last encoder layer."""
+        """Extract attention weights from the encoder without a duplicate attention pass."""
         self.eval()
         tokens = x.unsqueeze(-1)
         embedded = self.feature_embed(tokens)
         embedded = self.pos_encoding(embedded)
 
-        # Manually pass through encoder layers to capture attention
         output = embedded
         attention_maps: list[list[list[float]]] = []
         for layer in self.transformer.layers:
-            # Use the self-attention sublayer directly
+            attn_input = layer.norm1(output) if getattr(layer, "norm_first", False) else output
             attn_output, attn_weights = layer.self_attn(
-                output, output, output, need_weights=True
+                attn_input,
+                attn_input,
+                attn_input,
+                need_weights=True,
+                average_attn_weights=False,
             )
-            output = layer(output)
+            if getattr(layer, "norm_first", False):
+                output = output + layer.dropout1(attn_output)
+                output = output + _transformer_feed_forward(layer, layer.norm2(output))
+            else:
+                output = layer.norm1(output + layer.dropout1(attn_output))
+                output = layer.norm2(output + _transformer_feed_forward(layer, output))
             # attn_weights shape: (batch, n_heads, seq, seq) or (batch, seq, seq)
             attn_np = attn_weights.detach().cpu().numpy()
             # Average over batch and heads (if present)
@@ -2634,8 +2685,7 @@ def train_survival_transformer(
     attention_weights, feature_importance, and risk_scores.
     """
     _require_torch()
-    torch.manual_seed(random_seed)
-    # np.random.seed removed — torch.manual_seed handles PyTorch reproducibility
+    _seed_torch(random_seed)
 
     data, eval_split = _prepare_deep_training_inputs(
         df,
@@ -2667,7 +2717,7 @@ def train_survival_transformer(
     model = SurvivalTransformerNet(
         data["n_features"], d_model=d_model, n_heads=n_heads, n_layers=n_layers, dropout=dropout
     )
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
 
     loss_history: list[float] = []
     best_monitor: float | None = None
@@ -2679,6 +2729,7 @@ def train_survival_transformer(
         risk = model(x_train)
         loss = _cox_partial_likelihood_loss(risk, t_train, e_train)
         loss.backward()
+        _clip_gradients(model)
         optimizer.step()
         loss_history.append(float(loss.item()))
         if monitor_idx is not None:
@@ -2797,16 +2848,16 @@ def train_survival_transformer(
 
 
 # ---------------------------------------------------------------------------
-# 5. Survival VAE (Variational Autoencoder)
+# 5. Survival VAE (VAE-inspired latent model)
 # ---------------------------------------------------------------------------
 
 
 class SurvivalVAENet(_TorchModuleBase):
-    """Variational Autoencoder with a survival risk head.
+    """VAE-inspired autoencoder with a survival risk head.
 
     Encoder: Input -> Hidden -> (mu, log_var)
     Decoder: Latent -> Hidden -> Reconstructed input
-    Survival head: Latent -> Risk score
+    Survival head: Latent mean -> Risk score
     """
 
     def __init__(
@@ -2986,8 +3037,7 @@ def train_survival_vae(
     latent_embeddings, cluster_labels, cluster_survival_curves, and risk_scores.
     """
     _require_torch()
-    torch.manual_seed(random_seed)
-    # np.random.seed removed — torch.manual_seed handles PyTorch reproducibility
+    _seed_torch(random_seed)
     hidden_layers = list(hidden_layers or ([hidden_dim] if hidden_dim is not None else [64]))
 
     data, eval_split = _prepare_deep_training_inputs(
@@ -3015,7 +3065,7 @@ def train_survival_vae(
     x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
 
     model = SurvivalVAENet(data["n_features"], hidden_layers=hidden_layers, latent_dim=latent_dim, dropout=dropout)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
 
     loss_history: list[float] = []
     best_monitor: float | None = None
@@ -3027,6 +3077,7 @@ def train_survival_vae(
         x_recon, mu, log_var, risk = model(x_train)
         loss = _vae_combined_loss(x_train, x_recon, mu, log_var, risk, t_train, e_train)
         loss.backward()
+        _clip_gradients(model)
         optimizer.step()
         loss_history.append(float(loss.item()))
         if monitor_idx is not None:

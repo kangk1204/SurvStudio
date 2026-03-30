@@ -24,6 +24,7 @@ from survival_toolkit.analysis import (
     derive_group_column,
     ensure_model_feature_candidate_limit,
     load_dataframe_from_path,
+    make_unique_columns,
     looks_binary,
 )
 from survival_toolkit.sample_data import make_example_dataset
@@ -45,6 +46,10 @@ def test_derive_group_column_creates_named_split() -> None:
 def test_make_example_dataset_small_n_is_supported() -> None:
     df = make_example_dataset(seed=3, n_patients=10)
     assert df.shape[0] == 10
+
+
+def test_make_unique_columns_handles_preexisting_suffixes() -> None:
+    assert make_unique_columns(["A", "A_2", "A"]) == ["A", "A_2", "A_3"]
 
 
 def test_load_dataframe_from_path_rejects_unknown_suffix(tmp_path) -> None:
