@@ -1763,6 +1763,12 @@ def compute_km_analysis(
         censor_times = group_frame.loc[group_frame[event_column] == 0, time_column].to_numpy(dtype=float)
         censor_survival = _step_values(event_times, sf.surv_prob.astype(float), censor_times) if censor_times.size else np.array([])
 
+        if step_timeline[-1] < display_horizon:
+            step_timeline = np.concatenate((step_timeline, [display_horizon]))
+            step_survival = np.concatenate((step_survival, [step_survival[-1]]))
+            lower = np.concatenate((lower, [lower[-1]]))
+            upper = np.concatenate((upper, [upper[-1]]))
+
         median_survival = _safe_float(sf.quantile(0.5))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
