@@ -227,6 +227,27 @@ def test_cox_analysis_keeps_low_cardinality_numeric_covariates_continuous_by_def
     assert result["results_table"][0]["Reference"] is None
 
 
+def test_cox_analysis_rejects_overlapping_stage_representations() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [10, 12, 14, 16, 18, 20],
+            "os_event": [1, 0, 1, 0, 1, 1],
+            "pathologic_stage": ["Stage I", "Stage II", "Stage III", "Stage I", "Stage II", "Stage III"],
+            "stage_group": ["Stage I", "Stage II", "Stage III", "Stage I", "Stage II", "Stage III"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="overlapping stage representations"):
+        compute_cox_analysis(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            event_positive_value=1,
+            covariates=["pathologic_stage", "stage_group"],
+            categorical_covariates=["pathologic_stage", "stage_group"],
+        )
+
+
 def test_cox_reference_ordering_prefers_clinical_baselines_for_common_categories() -> None:
     df = pd.DataFrame(
         {
@@ -310,6 +331,67 @@ def test_ordered_reference_categories_keeps_unknown_levels_last() -> None:
     assert ordered == ["Stage I", "Stage II", "Stage III", "unknown"]
 
 
+def test_km_analysis_orders_common_group_labels_clinically() -> None:
+    stage_group = (["Stage IV"] * 10) + (["Stage II"] * 10) + (["Stage I"] * 10) + (["Stage III"] * 10) + (["unknown"] * 5)
+    df = pd.DataFrame(
+        {
+            "os_months": np.linspace(6, 120, len(stage_group)),
+            "os_event": [1 if idx % 3 != 0 else 0 for idx in range(len(stage_group))],
+            "stage_group": stage_group,
+        }
+    )
+
+    result = compute_km_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        group_column="stage_group",
+        event_positive_value=1,
+    )
+
+    assert [row["Group"] for row in result["summary_table"]] == ["Stage I", "Stage II", "Stage III", "Stage IV", "unknown"]
+
+
+def test_cohort_table_orders_group_columns_clinically() -> None:
+    df = pd.DataFrame(
+        {
+            "age": np.linspace(45, 75, 8),
+            "sex": ["Female", "Male", "Female", "Male", "Female", "Male", "Female", "Male"],
+            "stage_group": [
+                "Stage III",
+                "Stage I",
+                "unknown",
+                "Stage II",
+                "Stage IV",
+                "Stage I",
+                "Stage II",
+                "Stage III",
+            ],
+        }
+    )
+
+    table = compute_cohort_table(df, variables=["age", "sex"], group_column="stage_group")
+
+    assert table["columns"] == ["Variable", "Statistic", "Overall", "Stage I", "Stage II", "Stage III", "Stage IV", "unknown"]
+
+
+def test_cohort_table_overall_matches_grouped_subset_when_group_values_missing() -> None:
+    df = pd.DataFrame(
+        {
+            "age": [50, 55, 60, 65],
+            "sex": ["Female", "Male", "Female", "Male"],
+            "group_flag": ["A", "B", None, "A"],
+        }
+    )
+
+    table = compute_cohort_table(df, variables=["age", "sex"], group_column="group_flag")
+    cohort_size_row = next(row for row in table["rows"] if row["Variable"] == "Cohort size")
+
+    assert cohort_size_row["Overall"] == 3
+    assert cohort_size_row["A"] == 2
+    assert cohort_size_row["B"] == 1
+
+
 def test_cox_analysis_caps_extreme_hazard_ratios_instead_of_crashing(monkeypatch) -> None:
     import survival_toolkit.analysis as analysis
 
@@ -362,6 +444,53 @@ def test_cox_analysis_caps_extreme_hazard_ratios_instead_of_crashing(monkeypatch
     assert row["Hazard ratio"] == np.finfo(float).max
     assert row["CI lower"] == np.finfo(float).max
     assert row["CI upper"] == np.finfo(float).max
+
+
+def test_cox_analysis_rejects_non_finite_model_fit(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    df = make_example_dataset(seed=23, n_patients=40)
+    frame = pd.DataFrame(
+        {
+            "os_months": np.linspace(1.0, 40.0, 40),
+            "os_event": [1] * 20 + [0] * 20,
+            "age": np.linspace(50.0, 80.0, 40),
+        }
+    )
+
+    class _FakeResults:
+        params = np.asarray([np.nan], dtype=float)
+        bse = np.asarray([np.nan], dtype=float)
+        tvalues = np.asarray([np.nan], dtype=float)
+        pvalues = np.asarray([np.nan], dtype=float)
+        schoenfeld_residuals = np.ones((40, 1), dtype=float)
+        llf = np.nan
+        model = type("_FakeModelMeta", (), {"exog_names": ["Q(\"age\")"], "exog": np.ones((40, 1), dtype=float)})()
+
+        def conf_int(self):
+            return np.asarray([[np.nan, np.nan]], dtype=float)
+
+    class _FakePHReg:
+        @staticmethod
+        def from_formula(*args, **kwargs):
+            class _FakeFit:
+                @staticmethod
+                def fit(disp=False):
+                    return _FakeResults()
+
+            return _FakeFit()
+
+    monkeypatch.setattr(analysis, "_prepare_cox_frame", lambda *args, **kwargs: frame.copy())
+    monkeypatch.setattr(analysis, "PHReg", _FakePHReg)
+
+    with pytest.raises(ValueError, match="non-finite estimates"):
+        compute_cox_analysis(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            event_positive_value=1,
+            covariates=["age"],
+        )
 
 
 def test_cohort_table_includes_overall_column() -> None:
