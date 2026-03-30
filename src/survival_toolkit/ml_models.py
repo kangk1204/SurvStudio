@@ -177,24 +177,25 @@ def _transform_feature_encoder(
         encoder["features"],
         encoder["categorical_features"],
     )
-    encoded = pd.DataFrame(index=selected.index)
+    encoded_columns: dict[str, pd.Series] = {}
 
     for col in encoder["categorical_features"]:
         mapping = encoder["categorical_mappings"][col]
         values = selected[col].astype("string")
         all_levels = pd.Index(mapping["all_levels"], dtype="string")
         for level in mapping["retained_levels"]:
-            encoded[f"{col}_{level}"] = values.eq(level).fillna(False).astype(float)
+            encoded_columns[f"{col}_{level}"] = values.eq(level).fillna(False).astype(float)
         missing_mask = values.isna()
         unknown_mask = values.notna() & ~values.isin(all_levels)
-        encoded[mapping["unknown_column"]] = unknown_mask.astype(float)
-        encoded[mapping["missing_column"]] = missing_mask.astype(float)
+        encoded_columns[mapping["unknown_column"]] = unknown_mask.astype(float)
+        encoded_columns[mapping["missing_column"]] = missing_mask.astype(float)
 
     for col in encoder["numeric_features"]:
         impute_value = float(encoder["numeric_impute_values"].get(col, 0.0))
         numeric_series = pd.to_numeric(selected[col], errors="coerce")
-        encoded[col] = numeric_series.fillna(impute_value).astype(float)
+        encoded_columns[col] = numeric_series.fillna(impute_value).astype(float)
 
+    encoded = pd.DataFrame(encoded_columns, index=selected.index)
     encoded = encoded.reindex(columns=encoder["feature_names"], fill_value=0.0)
     encoded = encoded.replace([np.inf, -np.inf], np.nan)
     for col in encoder["numeric_features"]:
@@ -230,6 +231,8 @@ def _sksurv_c_index(
         try:
             c_index, _, _, _, _ = concordance_index_censored(events, times, risk_scores)
             return _safe_float(c_index)
+        except (MemoryError, KeyboardInterrupt):
+            raise
         except Exception:
             pass
 

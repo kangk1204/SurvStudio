@@ -996,6 +996,21 @@ def test_rsf_permutation_importance_caps_rows_and_repeats(monkeypatch) -> None:
     assert seen["n_repeats"] == 2
 
 
+def test_sksurv_c_index_reraises_memory_error(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
+
+    def _boom(*args, **kwargs):
+        raise MemoryError("oom")
+
+    monkeypatch.setattr(ml_models, "concordance_index_censored", _boom)
+
+    y_true = np.array([(True, 10.0), (False, 12.0)], dtype=[("event", bool), ("time", float)])
+    with pytest.raises(MemoryError, match="oom"):
+        ml_models._sksurv_c_index(y_true, np.array([0.2, 0.1], dtype=float))
+
+
 def test_time_dependent_importance_raises_on_internal_classifier_failure(monkeypatch) -> None:
     import survival_toolkit.ml_models as ml_models
 

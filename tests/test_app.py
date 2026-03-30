@@ -159,6 +159,8 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'class="table-card-head"' in response.text
     assert "screening comparison across Cox PH, RSF, and GBS" in response.text
     assert "Partial dependence and counterfactual analysis are available for tree-model runs only" in response.text
+    assert "Fresh datasets preselect up to 20 eligible model features for a faster first run." in response.text
+    assert 'id="dlBatchSizeHint"' in response.text
 
 
 def test_frontend_tracks_workspace_controls_in_history_state() -> None:
@@ -174,6 +176,17 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "updateGroupingDetailsVisibility(tabName);" in text
     assert "function scrollWorkspaceEntryToTop()" in text
     assert "updateAfterDataset(payload, { scrollToTop: true });" in text
+
+
+def test_frontend_limits_fresh_model_feature_defaults_and_marks_dl_batch_size_scope() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "const DEFAULT_MODEL_FEATURE_SELECTION_LIMIT = 20;" in text
+    assert "const defaultModelFeatures = availableCovariates.slice(0, DEFAULT_MODEL_FEATURE_SELECTION_LIMIT);" in text
+    assert 'refs.dlBatchSize.disabled = !usesMiniBatchTraining;' in text
+    assert "Batch size applies only to DeepHit and Neural MTLR." in text
+    assert "Ignored for this architecture because training is full-batch." in text
 
 
 def test_readme_states_current_scope_and_validation_limitations() -> None:
@@ -317,6 +330,15 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert "Screening all ML models on one shared evaluation path." in text
     assert "Screening top model=" in text
     assert "Model comparison screening complete" in text
+
+
+def test_frontend_labels_incomplete_repeated_cv_compare_as_mean_c_index() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'const repeatedCvLike = evaluationMode === "repeated_cv" || evaluationMode === "repeated_cv_incomplete";' in text
+    assert 'const mlMetricLabel = repeatedCvLike ? "Mean C-index" : "C-index";' in text
+    assert 'repeated CV (incomplete)' in text
 
 
 def test_plot_config_removes_box_and_lasso_select_tools() -> None:
@@ -601,6 +623,30 @@ def test_upload_dataset_preserves_too_large_status(monkeypatch) -> None:
     assert "200 MB limit" in response.json()["detail"]
 
 
+def test_upload_dataset_rejects_too_many_rows(monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "_MAX_UPLOAD_ROWS", 1)
+
+    response = client.post(
+        "/api/upload",
+        files={"file": ("rows.csv", b"os_months,os_event,age\n12,1,60\n18,0,55\n", "text/csv")},
+    )
+
+    assert response.status_code == 400
+    assert "supports at most 1 rows" in response.json()["detail"]
+
+
+def test_upload_dataset_rejects_too_many_cells(monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "_MAX_UPLOAD_CELLS", 4)
+
+    response = client.post(
+        "/api/upload",
+        files={"file": ("cells.csv", b"os_months,os_event,age\n12,1,60\n18,0,55\n", "text/csv")},
+    )
+
+    assert response.status_code == 400
+    assert "supports at most 4 parsed cells" in response.json()["detail"]
+
+
 def test_upload_dataset_accepts_tsv_files() -> None:
     payload = b"os_months\tos_event\tage\n12\t1\t60\n18\t0\t55\n24\t1\t70\n"
     response = client.post(
@@ -652,6 +698,42 @@ def test_upload_dataset_rejects_more_than_1000_model_feature_candidates() -> Non
     assert "supports at most 1000 model features" in response.json()["detail"]
 
 
+def test_get_ml_artifact_returns_isolated_copy() -> None:
+    import pandas as pd
+
+    request_config = {
+        "model_type": "rsf",
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "event_positive_value": 1,
+        "features": ["age"],
+        "categorical_features": [],
+        "n_estimators": 20,
+        "max_depth": None,
+        "random_state": 42,
+    }
+    app_module._remember_ml_artifact(
+        "dataset-cache",
+        request_config,
+        {
+            "_model": {"state": ["original"]},
+            "_X_encoded": pd.DataFrame({"age": [10.0, 20.0]}),
+            "_feature_encoder": {"features": ["age"]},
+            "_analysis_frame": pd.DataFrame({"age": [10.0, 20.0]}),
+        },
+    )
+
+    first = app_module._get_ml_artifact("dataset-cache", request_config)
+    second = app_module._get_ml_artifact("dataset-cache", request_config)
+
+    assert first is not None
+    assert second is not None
+    first["_model"]["state"].append("mutated")
+    first["_X_encoded"].iloc[0, 0] = -999.0
+    assert second["_model"]["state"] == ["original"]
+    assert second["_X_encoded"].iloc[0, 0] == pytest.approx(10.0)
+
+
 def test_readme_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -> None:
     readme = Path(__file__).resolve().parents[1] / "README.md"
     text = readme.read_text()
@@ -661,6 +743,11 @@ def test_readme_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -
     assert "survival-toolkit inspect path/to/data.csv" in text
     assert "This is the fastest way to catch file-format problems before uploading a cohort in the browser." in text
     assert "## DL Runtime Note" in text
+    assert "Batch Size` currently affects DeepHit and Neural MTLR only." in text
+    assert "weight_decay=1e-4" in text
+    assert "DeepHit uses a stabilized ranking-loss scale (`sigma=1.0`)" in text
+    assert "MTLR-inspired discrete-time neural variant" in text
+    assert "SurvStudio does not claim validated generative simulation or uncertainty estimation from this path." in text
 
 
 def test_kaplan_meier_response_exposes_groups_and_logrank_p_summary_fields() -> None:

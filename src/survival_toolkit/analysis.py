@@ -98,15 +98,17 @@ _BASELINE_STATUS_PATTERNS = (
 
 def make_unique_columns(columns: Iterable[Any]) -> list[str]:
     seen: dict[str, int] = {}
+    used: set[str] = set()
     output: list[str] = []
     for raw_name in columns:
         name = str(raw_name).strip() or "unnamed"
         counter = seen.get(name, 0)
-        if counter:
+        unique_name = name if counter == 0 else f"{name}_{counter + 1}"
+        while unique_name in used:
+            counter += 1
             unique_name = f"{name}_{counter + 1}"
-        else:
-            unique_name = name
         seen[name] = counter + 1
+        used.add(unique_name)
         output.append(unique_name)
     return output
 

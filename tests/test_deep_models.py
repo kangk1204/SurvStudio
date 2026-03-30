@@ -411,6 +411,63 @@ def test_deephit_ranking_loss_is_invariant_to_row_order_when_many_events() -> No
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_deephit_ranking_loss_stays_finite_for_large_pairwise_gaps() -> None:
+    import torch
+
+    from survival_toolkit.deep_models import _deephit_loss
+
+    events = torch.tensor([1.0, 0.0], dtype=torch.float32)
+    time_bins = torch.tensor([0, 1], dtype=torch.long)
+    pmf = torch.tensor(
+        [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=torch.float32,
+    )
+
+    loss = _deephit_loss(pmf, time_bins, events, alpha=0.0)
+
+    assert torch.isfinite(loss)
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_compute_c_index_torch_rejects_nonfinite_risk_scores() -> None:
+    import torch
+
+    from survival_toolkit.deep_models import _compute_c_index_torch
+
+    with pytest.raises(ValueError, match="NaN or Inf"):
+        _compute_c_index_torch(
+            torch.tensor([0.1, float("nan")], dtype=torch.float32),
+            torch.tensor([5.0, 8.0], dtype=torch.float32),
+            torch.tensor([1.0, 0.0], dtype=torch.float32),
+        )
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_transformer_attention_extraction_calls_self_attention_once_per_layer() -> None:
+    import torch
+
+    from survival_toolkit.deep_models import SurvivalTransformerNet
+
+    model = SurvivalTransformerNet(in_features=4, d_model=8, n_heads=2, n_layers=2, dropout=0.0)
+    x = torch.randn(3, 4, dtype=torch.float32)
+    calls = {"count": 0}
+
+    for layer in model.transformer.layers:
+        original_forward = layer.self_attn.forward
+
+        def _counting_forward(*args, _original=original_forward, **kwargs):
+            calls["count"] += 1
+            return _original(*args, **kwargs)
+
+        layer.self_attn.forward = _counting_forward
+
+    attention = model.get_attention_weights(x)
+
+    assert len(attention) == 2
+    assert calls["count"] == 2
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 def test_discrete_survival_helper_keeps_tail_mass() -> None:
     import torch
 

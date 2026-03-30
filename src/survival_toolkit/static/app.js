@@ -213,6 +213,7 @@ const refs = {
   dlHiddenLayers: document.getElementById("dlHiddenLayers"),
   dlDropout: document.getElementById("dlDropout"),
   dlBatchSize: document.getElementById("dlBatchSize"),
+  dlBatchSizeHint: document.getElementById("dlBatchSizeHint"),
   dlRandomSeed: document.getElementById("dlRandomSeed"),
   dlEvaluationStrategy: document.getElementById("dlEvaluationStrategy"),
   dlCvFoldsWrap: document.getElementById("dlCvFoldsWrap"),
@@ -252,6 +253,8 @@ const refs = {
   tabButtons: [...document.querySelectorAll(".tab-button")],
   tabPanels: [...document.querySelectorAll(".tab-panel")],
 };
+
+const DEFAULT_MODEL_FEATURE_SELECTION_LIMIT = 20;
 
 const EVENT_TRUE_TOKENS = new Set([
   "1", "true", "t", "yes", "y", "event", "dead", "deceased", "died", "failure",
@@ -1950,6 +1953,7 @@ function updateDlModelControlVisibility() {
   const usesTransformer = modelType === "transformer";
   const usesVae = modelType === "vae";
   const usesHiddenLayers = !usesTransformer;
+  const usesMiniBatchTraining = usesDiscreteTime;
 
   refs.dlHiddenLayers?.closest(".toolbar-field")?.classList.toggle("hidden", !usesHiddenLayers);
   refs.dlNumTimeBinsWrap?.classList.toggle("hidden", !usesDiscreteTime);
@@ -1958,6 +1962,18 @@ function updateDlModelControlVisibility() {
   refs.dlLayersWrap?.classList.toggle("hidden", !usesTransformer);
   refs.dlLatentDimWrap?.classList.toggle("hidden", !usesVae);
   refs.dlClustersWrap?.classList.toggle("hidden", !usesVae);
+  if (refs.dlBatchSize) {
+    refs.dlBatchSize.disabled = !usesMiniBatchTraining;
+    refs.dlBatchSize.title = usesMiniBatchTraining
+      ? ""
+      : "Batch size applies only to DeepHit and Neural MTLR. This architecture uses full-batch optimization.";
+    refs.dlBatchSize.closest(".toolbar-field")?.classList.toggle("is-disabled", !usesMiniBatchTraining);
+  }
+  if (refs.dlBatchSizeHint) {
+    refs.dlBatchSizeHint.textContent = usesMiniBatchTraining
+      ? "Applies to the current discrete-time trainer."
+      : "Ignored for this architecture because training is full-batch.";
+  }
 }
 
 function purgePlot(el) {
@@ -2029,11 +2045,12 @@ function refreshVariableSelections() {
     .filter((c) => ["categorical", "binary"].includes(c.kind) || c.n_unique <= 6)
     .map((c) => c.name)
     .filter((name) => availableCovariates.includes(name));
+  const defaultModelFeatures = availableCovariates.slice(0, DEFAULT_MODEL_FEATURE_SELECTION_LIMIT);
   renderChecklist(refs.covariateChecklist, availableCovariates, previousCovariates.length ? previousCovariates : availableCovariates.slice(0, 4));
   renderChecklist(refs.categoricalChecklist, availableCovariates, previousCategoricals.length ? previousCategoricals : defaultCategoricals);
-  renderChecklist(refs.modelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : availableCovariates);
+  renderChecklist(refs.modelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
   renderChecklist(refs.modelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
-  renderChecklist(refs.dlModelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : availableCovariates);
+  renderChecklist(refs.dlModelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
   renderChecklist(refs.dlModelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
   renderChecklist(refs.cohortVariableChecklist, availableCovariates, previousTableVars.length ? previousTableVars : availableCovariates.slice(0, 6));
   const numericOptions = state.dataset.numeric_columns.filter((c) => ![refs.timeColumn.value, refs.eventColumn.value].includes(c));
@@ -3559,10 +3576,13 @@ async function runCompareModels() {
     const comparisonRows = payload.analysis?.comparison_table || [];
     const bestRow = comparisonRows[0] || {};
     const evaluationMode = payload.analysis?.evaluation_mode || refs.mlEvaluationStrategy.value;
+    const repeatedCvLike = evaluationMode === "repeated_cv" || evaluationMode === "repeated_cv_incomplete";
     const evalLabel = evaluationMode === "repeated_cv"
       ? `${payload.analysis?.cv_repeats || refs.mlCvRepeats.value}x${payload.analysis?.cv_folds || refs.mlCvFolds.value} repeated CV`
-      : evaluationMode;
-    const mlMetricLabel = evaluationMode === "repeated_cv" ? "Mean C-index" : "C-index";
+      : (evaluationMode === "repeated_cv_incomplete"
+        ? `${payload.analysis?.cv_repeats || refs.mlCvRepeats.value}x${payload.analysis?.cv_folds || refs.mlCvFolds.value} repeated CV (incomplete)`
+        : evaluationMode);
+    const mlMetricLabel = repeatedCvLike ? "Mean C-index" : "C-index";
     refs.mlMetaBanner.textContent = `Screening top model=${formatValue(bestRow.model)}, ${mlMetricLabel}=${formatValue(bestRow.c_index)}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}`;
     refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
     if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !(payload.figure?.data?.length);

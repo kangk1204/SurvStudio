@@ -2120,6 +2120,12 @@ h3 {
   letter-spacing: 0.05em;
 }
 
+.toolbar-field > small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
 .toolbar-field input,
 .toolbar-field select {
   width: 130px;

@@ -633,7 +633,7 @@
                   <button class="button ghost compact-btn" id="clearModelFeaturesButton" type="button">Clear all</button>
                 </div>
               </div>
-              <p class="selection-card-note">Fresh datasets start with all eligible model features selected.</p>
+              <p class="selection-card-note">Fresh datasets preselect up to 20 eligible model features for a faster first run.</p>
               <div class="checklist tall" id="modelFeatureChecklist"></div>
             </div>
             <div class="selection-card">
@@ -792,6 +792,7 @@
                 <label class="toolbar-field">
                   <span>Batch Size</span>
                   <input id="dlBatchSize" type="number" min="8" max="512" step="8" value="64" />
+                  <small id="dlBatchSizeHint">Applies to the current discrete-time trainer.</small>
                 </label>
                 <label class="toolbar-field">
                   <span>Random Seed</span>
