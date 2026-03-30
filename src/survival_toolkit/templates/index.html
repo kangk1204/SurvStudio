@@ -335,6 +335,20 @@
             <button class="button primary compact-btn" id="deriveButton">Create</button>
             <div class="derive-status" id="deriveStatus" aria-live="polite"></div>
           </div>
+          <div class="toolbar-grid compact hidden" id="deriveOptimalControls">
+            <label class="toolbar-field">
+              <span>Min group frac</span>
+              <input id="deriveMinGroupFraction" type="number" min="0.02" max="0.45" step="0.01" value="0.1" />
+            </label>
+            <label class="toolbar-field">
+              <span>Permutation iter</span>
+              <input id="derivePermutationIterations" type="number" min="0" max="500" step="10" value="100" />
+            </label>
+            <label class="toolbar-field">
+              <span>Seed</span>
+              <input id="deriveRandomSeed" type="number" min="0" step="1" value="20260311" />
+            </label>
+          </div>
         </details>
 
         <div class="derive-result hidden" id="deriveSummary"></div>
@@ -471,7 +485,7 @@
           </div>
           <div class="analysis-banner" id="kmMetaBanner">Configure your study columns above, then click Run Analysis.</div>
           <div class="insight-board" id="kmInsightBoard">
-            <div class="empty-state">AI-powered interpretation will appear here after analysis.</div>
+            <div class="empty-state">Interpretation notes will appear here after analysis.</div>
           </div>
 
           <div class="table-grid">
@@ -527,7 +541,7 @@
             </div>
           </div>
           <div class="analysis-banner" id="coxMetaBanner">Select covariates above, then click Run Analysis.</div>
-          <div class="insight-board" id="coxInsightBoard"><div class="empty-state">AI-powered model diagnostics will appear here after analysis.</div></div>
+          <div class="insight-board" id="coxInsightBoard"><div class="empty-state">Model interpretation and diagnostic notes will appear here after analysis.</div></div>
           <div class="table-grid stacked">
             <div class="table-card full-width"><h3>Hazard Ratios</h3><div class="table-shell" id="coxResultsShell"><div class="empty-state">Fit a Cox model.</div></div></div>
             <div class="table-card full-width"><h3>PH Diagnostics</h3><div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Rank-based Schoenfeld residual diagnostics against log time appear here.</div></div></div>
@@ -913,7 +927,7 @@
           <div class="dependency-card" id="tableDependencyCard">
             <div class="dependency-copy">
               <strong>What this tab uses</strong>
-              <span id="tableDependencyText">The cohort table uses the selected variables below and applies Group by only when grouping is set.</span>
+              <span id="tableDependencyText">The cohort table uses the selected variables below and applies Group by only when grouping is set. When Group by is active, Overall summarizes the grouped non-missing subset.</span>
               <div class="dataset-preset-chips hidden" id="tableDependencyChips"></div>
               <span class="dependency-status hidden" id="tableOutputStatusText"></span>
             </div>

@@ -1684,7 +1684,7 @@ def cross_validate_survival_models(
             "n_failures": n_failures,
             "cv_folds": cv_folds,
             "cv_repeats": cv_repeats,
-            "evaluation_mode": "repeated_cv",
+            "evaluation_mode": "repeated_cv_incomplete" if incomplete else "repeated_cv",
             "repeat_results": [] if summary is None else summary["repeat_results"],
             "training_samples": None if summary is None else int(summary["train_n"]),
             "evaluation_samples": None if summary is None else int(summary["test_n"]),
@@ -1704,13 +1704,18 @@ def cross_validate_survival_models(
     mean_train_events = int(round(np.mean([row["train_events"] for row in fold_results]))) if fold_results else n_events
     mean_test_events = int(round(np.mean([row["test_events"] for row in fold_results]))) if fold_results else n_events
     best = comparison[0]
+    aggregate_mode = (
+        "repeated_cv_incomplete"
+        if errors or any(str(row.get("evaluation_mode")) == "repeated_cv_incomplete" for row in comparison)
+        else "repeated_cv"
+    )
     scientific_summary = _scientific_summary_ml(
         model_name=f"Repeated-CV Model Comparison Screening (top: {best['model']})",
         c_index=best["c_index"],
         n_patients=n_patients,
         n_events=n_events,
         n_features=best["n_features"],
-        evaluation_mode="repeated_cv",
+        evaluation_mode=aggregate_mode,
         n_evaluation_patients=mean_test_n,
         n_evaluation_events=mean_test_events,
         n_fit_patients=mean_train_n,
@@ -1734,7 +1739,7 @@ def cross_validate_survival_models(
         "excluded_models": sorted({str(error["model"]) for error in errors}),
         "n_patients": n_patients,
         "n_events": n_events,
-        "evaluation_mode": "repeated_cv",
+        "evaluation_mode": aggregate_mode,
         "cv_folds": cv_folds,
         "cv_repeats": cv_repeats,
         "scientific_summary": scientific_summary,
@@ -1902,7 +1907,17 @@ def compute_partial_dependence(
 
     if analysis_frame is not None and feature_name in analysis_frame.columns:
         if feature_name in categorical_features:
-            category_values = _ordered_category_values(analysis_frame[feature_name])
+            encoder_levels: list[str] = []
+            if feature_encoder is not None:
+                encoder_levels = [
+                    str(level)
+                    for level in (
+                        feature_encoder.get("categorical_mappings", {})
+                        .get(feature_name, {})
+                        .get("all_levels", [])
+                    )
+                ]
+            category_values = encoder_levels or _ordered_category_values(analysis_frame[feature_name])
             if len(category_values) < 2:
                 raise ValueError(
                     f"Feature '{feature_name}' has fewer than two observed categories. "

@@ -1179,3 +1179,87 @@ def test_time_dependent_importance_uses_proxy_language() -> None:
     summary = result["scientific_summary"]
     assert "proxy" in summary["headline"].lower()
     assert any("not be described as formal survshap" in caution.lower() for caution in summary["cautions"])
+
+
+def test_cross_validate_survival_models_flags_incomplete_screening_when_a_fold_fails(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    df = make_example_dataset(seed=91, n_patients=120)
+
+    def _ok(train_frame, test_frame, **kwargs):
+        return {
+            "c_index": 0.61,
+            "n_features": len(kwargs["features"]),
+            "training_time_ms": 1.0,
+            "train_n": len(train_frame),
+            "test_n": len(test_frame),
+            "train_events": int(train_frame["os_event"].sum()),
+            "test_events": int(test_frame["os_event"].sum()),
+        }
+
+    seen_failures = {"count": 0}
+
+    def _sometimes_fail(train_frame, test_frame, **kwargs):
+        seen_failures["count"] += 1
+        if seen_failures["count"] == 1:
+            raise ValueError("synthetic fold failure")
+        return _ok(train_frame, test_frame, **kwargs)
+
+    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
+    monkeypatch.setattr(ml_models, "_fit_evaluate_cox_split", _ok)
+    monkeypatch.setattr(ml_models, "_fit_evaluate_rsf_split", _sometimes_fail)
+    monkeypatch.setattr(ml_models, "_fit_evaluate_gbs_split", _ok)
+
+    result = ml_models.cross_validate_survival_models(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score"],
+        cv_folds=3,
+        cv_repeats=2,
+        random_state=17,
+    )
+
+    assert result["evaluation_mode"] == "repeated_cv_incomplete"
+    assert any(row["evaluation_mode"] == "repeated_cv_incomplete" for row in result["comparison_table"])
+    assert any(error["model"] == "Random Survival Forest" for error in result["errors"])
+
+
+def test_partial_dependence_uses_encoder_levels_for_categorical_features() -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    class _DummyModel:
+        def predict(self, x):
+            return np.asarray(x[:, 0], dtype=float)
+
+    analysis_frame = pd.DataFrame({"marker": pd.Series(["a", "z", "a"], dtype="string")})
+    encoder = {
+        "features": ["marker"],
+        "categorical_features": ["marker"],
+        "categorical_mappings": {
+            "marker": {
+                "all_levels": ["a", "__unknown"],
+                "retained_levels": ["a"],
+                "missing_label": "__missing",
+                "unknown_column": "marker____unknown",
+                "missing_column": "marker__missing",
+            }
+        },
+        "encoded_columns": ["marker__a", "marker____unknown", "marker__missing"],
+        "feature_names": ["marker__a", "marker____unknown", "marker__missing"],
+        "numeric_features": [],
+        "numeric_impute_values": {},
+    }
+    encoded = ml_models._transform_feature_encoder(analysis_frame, encoder)
+
+    result = ml_models.compute_partial_dependence(
+        _DummyModel(),
+        encoded,
+        feature_name="marker",
+        categorical_features=["marker"],
+        feature_encoder=encoder,
+        analysis_frame=analysis_frame,
+    )
+
+    assert result["feature_type"] == "categorical"
+    assert result["values"] == ["a", "__unknown"]

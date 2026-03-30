@@ -186,6 +186,13 @@ def test_coerce_event_rejects_multistate_numeric_status_columns() -> None:
         coerce_event(series, event_positive_value=1)
 
 
+def test_coerce_event_rejects_mixed_recognized_multistate_tokens() -> None:
+    series = pd.Series(["alive", "death", "relapse", "alive"], dtype="string")
+
+    with pytest.raises(ValueError, match="more than one recognized event state|binary event indicator"):
+        coerce_event(series, event_positive_value="death")
+
+
 def test_cohort_frame_rejects_identical_time_and_event_columns() -> None:
     df = pd.DataFrame({"status": [1, 0, 1], "age": [60, 55, 70]})
 
@@ -213,6 +220,12 @@ def test_looks_binary_accepts_nonstandard_two_value_numeric_status() -> None:
     assert looks_binary(series) is True
 
 
+def test_looks_binary_rejects_mixed_recognized_event_families() -> None:
+    series = pd.Series(["alive", "death", "relapse"], dtype="string")
+
+    assert looks_binary(series) is False
+
+
 def test_km_analysis_returns_grouped_results() -> None:
     df = make_example_dataset(seed=11, n_patients=180)
     updated, column_name, _ = derive_group_column(
@@ -236,6 +249,33 @@ def test_km_analysis_returns_grouped_results() -> None:
     assert result["scientific_summary"]["metrics"]
 
 
+def test_km_analysis_marks_outcome_informed_group_results_as_descriptive() -> None:
+    df = make_example_dataset(seed=18, n_patients=180)
+    updated, column_name, _ = derive_group_column(
+        df,
+        source_column="biomarker_score",
+        method="median_split",
+        new_column_name="biomarker_group",
+    )
+
+    result = compute_km_analysis(
+        updated,
+        time_column="os_months",
+        event_column="os_event",
+        group_column=column_name,
+        event_positive_value=1,
+        suppress_group_inference=True,
+        outcome_informed_group=True,
+    )
+
+    assert result["test"] is None
+    assert result["pairwise_table"] == []
+    assert result["logrank_p"] is None
+    assert result["outcome_informed_group"] is True
+    assert "descriptive" in result["scientific_summary"]["headline"].lower()
+    assert any("exploratory rather than confirmatory" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
 def test_km_analysis_extends_curve_to_followup_horizon_when_last_observation_is_censored() -> None:
     df = pd.DataFrame(
         {
@@ -257,6 +297,28 @@ def test_km_analysis_extends_curve_to_followup_horizon_when_last_observation_is_
     assert curve["ci_lower"][-1] == pytest.approx(curve["ci_lower"][-2])
     assert curve["ci_upper"][-1] == pytest.approx(curve["ci_upper"][-2])
     assert curve["censor_times"] == [8.0, 12.0]
+
+
+def test_derive_group_column_tracks_optimal_cutpoint_reproducibility_settings() -> None:
+    df = make_example_dataset(seed=16, n_patients=200)
+    updated, column_name, summary = derive_group_column(
+        df,
+        source_column="biomarker_score",
+        method="optimal_cutpoint",
+        new_column_name="optimal_group",
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        min_group_fraction=0.15,
+        permutation_iterations=20,
+        random_seed=777,
+    )
+
+    assert column_name == "optimal_group"
+    assert "optimal_group" in updated.columns
+    assert summary["min_group_fraction"] == pytest.approx(0.15)
+    assert summary["permutation_iterations"] == 20
+    assert summary["random_seed"] == 777
 
 
 def test_weighted_km_does_not_report_weighted_test_as_logrank_p() -> None:
@@ -341,6 +403,14 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert any("spearman" in strength.lower() and "schoenfeld" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("external-cohort apply workflow" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("changing the covariate set" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
+def test_compute_cohort_table_discloses_grouped_subset_overall_scope() -> None:
+    df = make_example_dataset(seed=27, n_patients=120)
+    result = compute_cohort_table(df, variables=["age", "sex"], group_column="stage")
+
+    assert result["columns"][2] == "Overall (grouped subset)"
+    assert "grouped subset" in result["overall_scope"].lower()
 
 
 def test_cox_analysis_keeps_low_cardinality_numeric_covariates_continuous_by_default() -> None:
@@ -505,7 +575,7 @@ def test_cohort_table_orders_group_columns_clinically() -> None:
 
     table = compute_cohort_table(df, variables=["age", "sex"], group_column="stage_group")
 
-    assert table["columns"] == ["Variable", "Statistic", "Overall", "Stage I", "Stage II", "Stage III", "Stage IV", "unknown"]
+    assert table["columns"] == ["Variable", "Statistic", "Overall (grouped subset)", "Stage I", "Stage II", "Stage III", "Stage IV", "unknown"]
 
 
 def test_cohort_table_overall_matches_grouped_subset_when_group_values_missing() -> None:
@@ -629,7 +699,7 @@ def test_cox_analysis_rejects_non_finite_model_fit(monkeypatch) -> None:
 def test_cohort_table_includes_overall_column() -> None:
     df = make_example_dataset(seed=5, n_patients=120)
     table = compute_cohort_table(df, variables=["age", "sex", "stage"], group_column="treatment")
-    assert "Overall" in table["columns"]
+    assert "Overall (grouped subset)" in table["columns"]
     assert any(row["Variable"] == "age" for row in table["rows"])
 
 

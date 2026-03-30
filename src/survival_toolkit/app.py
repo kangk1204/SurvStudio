@@ -72,7 +72,7 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 store = DatasetStore()
 _MAX_ML_ARTIFACT_CACHE = 32
 _ML_ARTIFACT_CACHE: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
-_ML_ARTIFACT_CACHE_LOCK = threading.Lock()
+_ML_ARTIFACT_CACHE_LOCK = threading.RLock()
 _MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
 _MAX_UPLOAD_ROWS = 100_000
 _MAX_UPLOAD_COLUMNS = 5_000
@@ -94,6 +94,9 @@ class DeriveGroupRequest(BaseModel):
     time_column: str | None = None
     event_column: str | None = None
     event_positive_value: Any = None
+    min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
+    permutation_iterations: int = Field(default=100, ge=0, le=500)
+    random_seed: int = 20260311
 
 
 class KaplanMeierRequest(BaseModel):
@@ -1025,6 +1028,9 @@ async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
                 time_column=request_model.time_column,
                 event_column=request_model.event_column,
                 event_positive_value=request_model.event_positive_value,
+                min_group_fraction=request_model.min_group_fraction,
+                permutation_iterations=request_model.permutation_iterations,
+                random_seed=request_model.random_seed,
             )
             provenance = dict(stored.metadata.get("derived_column_provenance", {}))
             provenance[column_name] = {
@@ -1051,6 +1057,10 @@ async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
     try:
         stored = store.get(request_model.dataset_id)
         request_config = request_model.model_dump()
+        outcome_informed_group = (
+            request_model.group_column is not None
+            and str(request_model.group_column) in _outcome_informed_columns(stored)
+        )
 
         def _run() -> dict[str, Any]:
             analysis = compute_km_analysis(
@@ -1064,6 +1074,8 @@ async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
                 risk_table_points=request_model.risk_table_points,
                 logrank_weight=request_model.logrank_weight,
                 fh_p=request_model.fh_p,
+                suppress_group_inference=outcome_informed_group,
+                outcome_informed_group=outcome_informed_group,
             )
             figure = build_km_figure(
                 analysis,
@@ -1110,6 +1122,12 @@ async def cohort_table(request_model: CohortTableRequest) -> dict[str, Any]:
     try:
         stored = store.get(request_model.dataset_id)
         request_config = request_model.model_dump()
+        if request_model.group_column:
+            _reject_outcome_informed_columns(
+                stored,
+                [request_model.group_column],
+                context="grouped cohort tables",
+            )
 
         def _run() -> dict[str, Any]:
             return {"analysis": compute_cohort_table(
@@ -1127,6 +1145,7 @@ async def cohort_table(request_model: CohortTableRequest) -> dict[str, Any]:
 async def discover_signature(request_model: SignatureSearchRequest) -> dict[str, Any]:
     try:
         stored = store.get(request_model.dataset_id)
+        request_config = request_model.model_dump()
         _reject_outcome_informed_columns(
             stored,
             request_model.candidate_columns,
@@ -1163,6 +1182,7 @@ async def discover_signature(request_model: SignatureSearchRequest) -> dict[str,
         })
         payload["derived_column"] = column_name
         payload["signature_analysis"] = analysis
+        payload["signature_request_config"] = request_config
         return payload
     except Exception as exc:
         fail_bad_request(exc)
@@ -1255,6 +1275,12 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                 figure = build_model_comparison_figure(comparison)
                 return {"analysis": comparison, "figure": figure, "request_config": request_config}
 
+            if request_model.evaluation_strategy != "holdout":
+                raise ValueError(
+                    "Train Model currently supports deterministic holdout only. "
+                    "Use Compare All for repeated cross-validation screening."
+                )
+
             common_ml = dict(
                 df=df,
                 time_column=request_model.time_column,
@@ -1278,7 +1304,9 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
             shap_figure = None
             shap_error = None
             model_obj = result.get("_model")
-            x_encoded = result.get("_X_encoded")
+            x_encoded = result.get("_X_eval_encoded")
+            if x_encoded is None:
+                x_encoded = result.get("_X_encoded")
             if request_model.compute_shap and model_obj is not None and x_encoded is not None:
                 try:
                     shap_result = compute_shap_values(model_obj, x_encoded, result["feature_names"])
@@ -1503,24 +1531,25 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
         request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
-            artifact = _get_ml_artifact(request_model.dataset_id, request_config)
-            analysis = counterfactual_survival(
-                stored.dataframe,
-                time_column=request_model.time_column,
-                event_column=request_model.event_column,
-                event_positive_value=request_model.event_positive_value,
-                features=request_model.features,
-                categorical_features=request_model.categorical_features,
-                target_feature=request_model.target_feature,
-                original_value=request_model.original_value,
-                counterfactual_value=request_model.counterfactual_value,
-                model_type=request_model.model_type,
-                n_estimators=request_model.n_estimators,
-                max_depth=request_model.max_depth,
-                learning_rate=request_model.learning_rate,
-                random_state=request_model.random_state,
-                trained_result=artifact,
-            )
+            with _ML_ARTIFACT_CACHE_LOCK:
+                artifact = _get_ml_artifact(request_model.dataset_id, request_config)
+                analysis = counterfactual_survival(
+                    stored.dataframe,
+                    time_column=request_model.time_column,
+                    event_column=request_model.event_column,
+                    event_positive_value=request_model.event_positive_value,
+                    features=request_model.features,
+                    categorical_features=request_model.categorical_features,
+                    target_feature=request_model.target_feature,
+                    original_value=request_model.original_value,
+                    counterfactual_value=request_model.counterfactual_value,
+                    model_type=request_model.model_type,
+                    n_estimators=request_model.n_estimators,
+                    max_depth=request_model.max_depth,
+                    learning_rate=request_model.learning_rate,
+                    random_state=request_model.random_state,
+                    trained_result=artifact,
+                )
             analysis["artifact_reused"] = artifact is not None
             analysis["explanation_scope"] = (
                 "trained_tree_model" if artifact is not None else "refit_tree_model"
@@ -1557,29 +1586,28 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
         request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
-            trained = _get_ml_artifact(request_model.dataset_id, request_config)
-            artifact_reused = trained is not None
-            if trained is None:
-                common_kwargs = dict(
-                    df=df,
-                    time_column=request_model.time_column,
-                    event_column=request_model.event_column,
-                    event_positive_value=request_model.event_positive_value,
-                    features=request_model.features,
-                    categorical_features=request_model.categorical_features,
-                    n_estimators=request_model.n_estimators,
-                    max_depth=request_model.max_depth,
-                    random_state=request_model.random_state,
-                )
-                if request_model.model_type == "gbs":
-                    trained = train_gradient_boosted_survival(
-                        **common_kwargs,
-                        learning_rate=request_model.learning_rate,
+            with _ML_ARTIFACT_CACHE_LOCK:
+                trained = _get_ml_artifact(request_model.dataset_id, request_config)
+                artifact_reused = trained is not None
+                if trained is None:
+                    common_kwargs = dict(
+                        df=df,
+                        time_column=request_model.time_column,
+                        event_column=request_model.event_column,
+                        event_positive_value=request_model.event_positive_value,
+                        features=request_model.features,
+                        categorical_features=request_model.categorical_features,
+                        n_estimators=request_model.n_estimators,
+                        max_depth=request_model.max_depth,
+                        random_state=request_model.random_state,
                     )
-                else:
-                    trained = train_random_survival_forest(**common_kwargs)
-            else:
-                trained = dict(trained)
+                    if request_model.model_type == "gbs":
+                        trained = train_gradient_boosted_survival(
+                            **common_kwargs,
+                            learning_rate=request_model.learning_rate,
+                        )
+                    else:
+                        trained = train_random_survival_forest(**common_kwargs)
             model = trained["_model"]
             X_encoded = trained["_X_encoded"]
             feature_encoder = trained.get("_feature_encoder")
