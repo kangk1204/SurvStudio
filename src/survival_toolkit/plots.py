@@ -99,14 +99,23 @@ def _feature_plot_axis_layout(labels: list[Any]) -> tuple[list[str], dict[str, i
     return wrapped, {"l": left_margin, "r": 30, "t": 80, "b": 60, "height": height}
 
 
+def _km_group_color(label: Any, fallback_index: int) -> str:
+    normalized = str(label or "").strip().lower()
+    if normalized in {"high", "high risk"}:
+        return ACCENT
+    if normalized in {"low", "low risk"}:
+        return SLATE
+    return PALETTE[fallback_index % len(PALETTE)]
+
+
 # ── KM & Cox (existing) ────────────────────────────────────────
 
 
 def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", show_confidence_bands: bool = True) -> dict[str, Any]:
     fig = go.Figure()
     for idx, curve in enumerate(km_result["curves"]):
-        color = PALETTE[idx % len(PALETTE)]
         label = curve["group"]
+        color = _km_group_color(label, idx)
         if show_confidence_bands:
             fig.add_trace(
                 go.Scatter(

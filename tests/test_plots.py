@@ -34,6 +34,40 @@ def test_build_km_figure_returns_json_structure() -> None:
     assert len(figure["data"]) >= 2  # CI band + line
 
 
+def test_build_km_figure_uses_fixed_high_low_colors_regardless_of_curve_order() -> None:
+    km_result = {
+        "curves": [
+            {
+                "group": "High",
+                "timeline": [0.0, 1.0, 2.0],
+                "survival": [1.0, 0.7, 0.5],
+                "ci_lower": [1.0, 0.6, 0.4],
+                "ci_upper": [1.0, 0.8, 0.6],
+                "censor_times": [],
+                "censor_survival": [],
+            },
+            {
+                "group": "Low",
+                "timeline": [0.0, 1.0, 2.0],
+                "survival": [1.0, 0.8, 0.6],
+                "ci_lower": [1.0, 0.7, 0.5],
+                "ci_upper": [1.0, 0.9, 0.7],
+                "censor_times": [],
+                "censor_survival": [],
+            },
+        ],
+        "test": None,
+        "display_horizon": 3.0,
+    }
+
+    figure = build_km_figure(km_result)
+
+    line_traces = [trace for trace in figure["data"] if trace.get("mode") == "lines"]
+    line_colors = {trace["name"]: trace["line"]["color"] for trace in line_traces}
+    assert line_colors["High"] == "#db583b"
+    assert line_colors["Low"] == "#2563eb"
+
+
 def test_build_cox_forest_figure_returns_json() -> None:
     cox_result = {
         "results_table": [
