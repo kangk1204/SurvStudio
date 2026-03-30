@@ -346,7 +346,27 @@ def test_plot_config_removes_box_and_lasso_select_tools() -> None:
     text = app_js.read_text()
 
     assert "function plotConfig(filename)" in text
-    assert 'modeBarButtonsToRemove: ["select2d", "lasso2d"]' in text
+    assert 'function isReadonlyPlot(filename) {' in text
+    assert 'return ["dl_loss", "ml_importance", "shap_importance", "dl_importance"].includes(filename);' in text
+    assert "function plotLayoutConfig(layout, filename) {" in text
+    assert "nextLayout.dragmode = false;" in text
+    assert 'const isStaticReadonlyPlot = isReadonlyPlot(filename);' in text
+    assert "scrollZoom: !isStaticReadonlyPlot," in text
+    assert 'doubleClick: isStaticReadonlyPlot ? false : "reset+autosize",' in text
+    assert 'modeBarButtonsToRemove: isStaticReadonlyPlot' in text
+    assert ': ["select2d", "lasso2d"],' in text
+    assert '"resetScale2d"' in text
+    assert '"autoScale2d"' in text
+
+
+def test_frontend_guards_identical_outcome_columns_and_preserves_boundary_precision() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'if (timeColumn === eventColumn) {' in text
+    assert 'throw new Error("The survival time column and event column must be different.");' in text
+    assert 'if (absValue > 0 && absValue < 0.1) return value.toFixed(4).replace(/\\.?0+$/, "");' in text
+    assert 'AIC=${formatValue(stats.aic, { scientificLarge: false })}' in text
 
 
 def test_cox_plot_reset_axes_restores_initial_layout() -> None:
@@ -2246,6 +2266,7 @@ def test_frontend_csv_download_sanitizes_formula_like_cells() -> None:
 
     assert "function downloadCsv(filename, rows, columns = null)" in app_js
     assert "const sanitizeCsvCell = (value) => {" in app_js
+    assert 'if (/^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$/.test(trimmed)) return text;' in app_js
     assert 'trimmed.startsWith("=")' in app_js
     assert 'trimmed.startsWith("+")' in app_js
     assert 'trimmed.startsWith("-")' in app_js
@@ -2631,7 +2652,7 @@ def test_export_table_endpoint_sanitizes_formula_like_csv_cells() -> None:
     assert first_row[0] == "'=cmd|'/C calc'!A0"
     assert first_row[1] == "'+SUM(1,1)"
     assert first_row[2] == "'@risk"
-    assert second_row[0] == "'-10"
+    assert second_row[0] == "-10"
 
 
 def test_export_table_endpoint_returns_journal_latex() -> None:

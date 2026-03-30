@@ -996,6 +996,86 @@ def test_rsf_permutation_importance_caps_rows_and_repeats(monkeypatch) -> None:
     assert seen["n_repeats"] == 2
 
 
+@pytest.mark.parametrize(
+    ("train_fn_name", "model_attr"),
+    [
+        ("train_random_survival_forest", "RandomSurvivalForest"),
+        ("train_gradient_boosted_survival", "GradientBoostingSurvivalAnalysis"),
+    ],
+)
+def test_tree_model_training_keeps_encoded_matrices_and_targets_aligned(
+    monkeypatch,
+    train_fn_name: str,
+    model_attr: str,
+) -> None:
+    import numpy as np
+    import pandas as pd
+    import survival_toolkit.ml_models as ml_models
+
+    train_encoded = pd.DataFrame({"age": [50.0, 60.0, 70.0]})
+    eval_encoded = pd.DataFrame({"age": [80.0, 90.0]})
+    full_encoded = pd.concat([train_encoded, eval_encoded], ignore_index=True)
+    train_frame = pd.DataFrame({"os_months": [10.0, 20.0, 30.0], "os_event": [1.0, 0.0, 1.0]})
+    eval_frame = pd.DataFrame({"os_months": [40.0, 50.0], "os_event": [0.0, 1.0]})
+    full_frame = pd.concat([train_frame, eval_frame], ignore_index=True)
+
+    class _DummyTreeModel:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        @property
+        def feature_importances_(self):
+            return np.array([1.0], dtype=float)
+
+        def fit(self, X, y):
+            return self
+
+        def predict(self, X):
+            return np.linspace(0.1, 0.9, X.shape[0], dtype=float)
+
+    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
+    monkeypatch.setattr(ml_models, model_attr, _DummyTreeModel)
+    monkeypatch.setattr(
+        ml_models,
+        "_prepare_model_evaluation_split",
+        lambda *args, **kwargs: {
+            "train_frame": train_frame,
+            "eval_frame": eval_frame,
+            "full_frame": full_frame,
+            "train_encoded": train_encoded,
+            "eval_encoded": eval_encoded,
+            "full_encoded": full_encoded,
+            "evaluation_mode": "holdout",
+            "metric_name": "Holdout C-index",
+            "feature_encoder": None,
+        },
+    )
+    monkeypatch.setattr(
+        ml_models,
+        "_prepare_sksurv_data",
+        lambda frame, time_column, event_column: np.array(
+            list(zip(frame[event_column].astype(bool), frame[time_column].astype(float), strict=False)),
+            dtype=[("event", bool), ("time", float)],
+        ),
+    )
+    monkeypatch.setattr(ml_models, "_sksurv_c_index", lambda y, scores: 0.61)
+
+    train_fn = getattr(ml_models, train_fn_name)
+    kwargs = {
+        "df": full_frame.assign(age=[50.0, 60.0, 70.0, 80.0, 90.0]),
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "features": ["age"],
+        "random_state": 42,
+    }
+    if train_fn_name == "train_gradient_boosted_survival":
+        kwargs["learning_rate"] = 0.1
+    result = train_fn(**kwargs)
+
+    assert result["_X_encoded"].shape[0] == result["_y"].shape[0] == full_frame.shape[0]
+    assert result["_X_eval_encoded"].shape[0] == result["_y_eval"].shape[0] == eval_frame.shape[0]
+
+
 def test_sksurv_c_index_reraises_memory_error(monkeypatch) -> None:
     import survival_toolkit.ml_models as ml_models
 

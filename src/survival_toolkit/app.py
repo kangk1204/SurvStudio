@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import os
+import re
 from collections import OrderedDict
 from pathlib import Path
 import signal
@@ -76,6 +77,7 @@ _MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
 _MAX_UPLOAD_ROWS = 100_000
 _MAX_UPLOAD_COLUMNS = 5_000
 _MAX_UPLOAD_CELLS = 5_000_000
+_SIGNED_NUMERIC_CSV_LITERAL = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 
 
 # ── Request models ──────────────────────────────────────────────
@@ -589,6 +591,8 @@ def _export_columns(rows: list[dict[str, Any]]) -> list[str]:
 def _sanitize_csv_cell(value: Any) -> str:
     text = "" if value is None else str(value)
     stripped = text.lstrip()
+    if _SIGNED_NUMERIC_CSV_LITERAL.fullmatch(stripped):
+        return text
     if stripped.startswith(("=", "+", "-", "@")):
         return f"'{text}"
     return text

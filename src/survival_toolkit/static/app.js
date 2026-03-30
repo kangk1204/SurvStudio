@@ -1567,11 +1567,14 @@ function selectedCheckboxValues(container) {
   return [...container.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
 }
 
-function formatValue(value) {
+function formatValue(value, options = {}) {
   if (value === null || value === undefined || value === "") return "NA";
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return "NA";
-    if (Math.abs(value) >= 1000 || Math.abs(value) < 0.001) return value.toExponential(2);
+    const { scientificLarge = true } = options;
+    const absValue = Math.abs(value);
+    if (absValue > 0 && absValue < 0.1) return value.toFixed(4).replace(/\.?0+$/, "");
+    if ((scientificLarge && absValue >= 1000) || (absValue > 0 && absValue < 0.001)) return value.toExponential(2);
     return value.toFixed(3).replace(/\.?0+$/, "");
   }
   return String(value);
@@ -1724,6 +1727,7 @@ function downloadCsv(filename, rows, columns = null) {
   const sanitizeCsvCell = (value) => {
     const text = value === null || value === undefined ? "" : String(value);
     const trimmed = text.trimStart();
+    if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) return text;
     if (trimmed.startsWith("=") || trimmed.startsWith("+") || trimmed.startsWith("-") || trimmed.startsWith("@")) {
       return `'${text}`;
     }
@@ -1873,11 +1877,41 @@ function downloadPlotImage(plotEl, filename, format) {
   Plotly.downloadImage(plotEl, { format, filename, height: 900, width: 1400, scale: format === "png" ? 3 : 1 });
 }
 
+function isReadonlyPlot(filename) {
+  return ["dl_loss", "ml_importance", "shap_importance", "dl_importance"].includes(filename);
+}
+
+function plotLayoutConfig(layout, filename) {
+  const nextLayout = { ...(layout || {}) };
+  if (isReadonlyPlot(filename)) {
+    nextLayout.dragmode = false;
+  }
+  return nextLayout;
+}
+
 function plotConfig(filename) {
+  const isStaticReadonlyPlot = isReadonlyPlot(filename);
   return {
     responsive: true,
     displaylogo: false,
-    modeBarButtonsToRemove: ["select2d", "lasso2d"],
+    displayModeBar: true,
+    scrollZoom: !isStaticReadonlyPlot,
+    doubleClick: isStaticReadonlyPlot ? false : "reset+autosize",
+    modeBarButtonsToRemove: isStaticReadonlyPlot
+      ? [
+          "zoom2d",
+          "pan2d",
+          "select2d",
+          "lasso2d",
+          "zoomIn2d",
+          "zoomOut2d",
+          "autoScale2d",
+          "resetScale2d",
+          "hoverClosestCartesian",
+          "hoverCompareCartesian",
+          "toggleSpikelines",
+        ]
+      : ["select2d", "lasso2d"],
     toImageButtonOptions: {
       format: "svg",
       filename: buildDownloadFilename(filename, "svg").replace(/\.svg$/, ""),
@@ -2798,6 +2832,9 @@ function currentBaseConfig() {
   const timeColumn = refs.timeColumn.value;
   const eventColumn = refs.eventColumn.value;
   if (!timeColumn || !eventColumn) throw new Error("Select both a time column and an event column.");
+  if (timeColumn === eventColumn) {
+    throw new Error("The survival time column and event column must be different.");
+  }
   const eventWarning = currentEventColumnWarning();
   if (eventWarning?.tone === "error") throw new Error(eventWarning.message);
   if (eventWarning?.tone === "warning" && !refs.showAllEventColumns?.checked) {
@@ -3417,7 +3454,7 @@ async function runCox() {
   renderInsightBoard(refs.coxInsightBoard, payload.analysis.scientific_summary, "Run Cox PH to review diagnostics.");
   const stats = payload.analysis.model_stats;
   const coxMetricLabel = stats.c_index_label || ((stats.evaluation_mode === "apparent") ? "Apparent C-index" : "C-index");
-  refs.coxMetaBanner.textContent = `N=${stats.n}, events=${stats.events}, parameters=${stats.parameters}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricLabel}=${formatValue(stats.c_index)}, AIC=${formatValue(stats.aic)}`;
+  refs.coxMetaBanner.textContent = `N=${stats.n}, events=${stats.events}, parameters=${stats.parameters}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricLabel}=${formatValue(stats.c_index)}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
   refs.downloadCoxResultsButton.disabled = false;
   refs.downloadCoxDiagnosticsButton.disabled = false;
   if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.disabled = false;
@@ -3492,7 +3529,7 @@ async function runMlModel() {
   if (payload.importance_figure) {
     purgePlot(refs.mlImportancePlot);
     refs.mlImportancePlot.innerHTML = "";
-    await Plotly.newPlot(refs.mlImportancePlot, payload.importance_figure.data, payload.importance_figure.layout, plotConfig("ml_importance"));
+    await Plotly.newPlot(refs.mlImportancePlot, payload.importance_figure.data, plotLayoutConfig(payload.importance_figure.layout, "ml_importance"), plotConfig("ml_importance"));
     stabilizePlotShellHeight(refs.mlImportancePlot);
   } else {
     clearPlotShell(refs.mlImportancePlot, '<div class="empty-state plot-empty"><span>No feature importance available</span></div>');
@@ -3500,7 +3537,7 @@ async function runMlModel() {
   if (payload.shap_figure) {
     purgePlot(refs.mlShapPlot);
     refs.mlShapPlot.innerHTML = "";
-    await Plotly.newPlot(refs.mlShapPlot, payload.shap_figure.data, payload.shap_figure.layout, plotConfig("shap_importance"));
+    await Plotly.newPlot(refs.mlShapPlot, payload.shap_figure.data, plotLayoutConfig(payload.shap_figure.layout, "shap_importance"), plotConfig("shap_importance"));
     stabilizePlotShellHeight(refs.mlShapPlot);
   } else {
     clearPlotShell(
@@ -3657,7 +3694,7 @@ async function runDlModel() {
     if (payload.figures?.importance) {
       purgePlot(refs.dlImportancePlot);
       refs.dlImportancePlot.innerHTML = "";
-      await Plotly.newPlot(refs.dlImportancePlot, payload.figures.importance.data, payload.figures.importance.layout, plotConfig("dl_importance"));
+      await Plotly.newPlot(refs.dlImportancePlot, payload.figures.importance.data, plotLayoutConfig(payload.figures.importance.layout, "dl_importance"), plotConfig("dl_importance"));
       stabilizePlotShellHeight(refs.dlImportancePlot);
     } else {
       const importanceEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
@@ -3668,7 +3705,7 @@ async function runDlModel() {
     if (payload.figures?.loss) {
       purgePlot(refs.dlLossPlot);
       refs.dlLossPlot.innerHTML = "";
-      await Plotly.newPlot(refs.dlLossPlot, payload.figures.loss.data, payload.figures.loss.layout, plotConfig("dl_loss"));
+      await Plotly.newPlot(refs.dlLossPlot, payload.figures.loss.data, plotLayoutConfig(payload.figures.loss.layout, "dl_loss"), plotConfig("dl_loss"));
       stabilizePlotShellHeight(refs.dlLossPlot);
     } else {
       const lossEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
