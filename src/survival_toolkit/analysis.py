@@ -276,6 +276,18 @@ def _model_feature_candidate_columns_from_metadata(
     return candidates
 
 
+def _survival_outcome_like_columns(df: pd.DataFrame) -> set[str]:
+    suggestions = suggest_columns(df)
+    likely_time_columns = set(suggestions.get("time_columns", []))
+    binary_candidate_columns = {column for column in df.columns if looks_binary(df[column])}
+    likely_event_columns = {
+        column
+        for column in binary_candidate_columns
+        if _is_event_like_column_name(column) and not _looks_like_baseline_status_column(column)
+    }
+    return likely_time_columns | likely_event_columns
+
+
 def _normalize_token(value: Any) -> str | None:
     if pd.isna(value):
         return None
@@ -1216,6 +1228,11 @@ def derive_group_column(
     permutation_iterations: int = 100,
     random_seed: int = 20260311,
 ) -> tuple[pd.DataFrame, str, dict[str, Any]]:
+    if source_column in _survival_outcome_like_columns(df):
+        raise ValueError(
+            f'"{source_column}" looks like a survival endpoint column. '
+            "Do not derive groups from survival time or event indicators."
+        )
     numeric_series = pd.to_numeric(df[source_column], errors="coerce")
     usable = numeric_series.dropna()
     if usable.empty:

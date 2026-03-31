@@ -331,11 +331,10 @@
               <span>Column name <span class="scope-tag scope-grouping">Grouping</span></span>
               <input id="deriveColumnName" type="text" placeholder="biomarker_group" />
             </label>
-            <label class="toggle derive-toggle-option">
-              <input id="deriveApplyToGroup" type="checkbox" />
-              <span>Use new column as Group by</span>
-            </label>
-            <button class="button primary compact-btn" id="deriveButton">Create</button>
+            <div class="derive-action-buttons">
+              <button class="button ghost compact-btn" id="deriveButton" type="button">Create only</button>
+              <button class="button primary compact-btn" id="deriveApplyButton" type="button">Create and apply</button>
+            </div>
             <div class="derive-status" id="deriveStatus" aria-live="polite"></div>
           </div>
           <div class="derive-optimal-controls hidden" id="deriveOptimalControls">

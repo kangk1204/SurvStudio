@@ -66,6 +66,18 @@ def test_percentile_split_top_vs_rest_creates_two_groups() -> None:
     assert len(summary["cutoffs"]) == 1
 
 
+def test_derive_group_rejects_survival_endpoint_source_column() -> None:
+    df = make_example_dataset(seed=21, n_patients=100)
+
+    with pytest.raises(ValueError, match="looks like a survival endpoint column"):
+        derive_group_column(
+            df,
+            source_column="os_months",
+            method="median_split",
+            new_column_name="os_months_split",
+        )
+
+
 def test_percentile_split_50_matches_median_split_with_ties() -> None:
     df = pd.DataFrame({"age": [1, 2, 2, 2, 3, 4]})
     median_updated, median_column, _ = derive_group_column(

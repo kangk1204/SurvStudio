@@ -496,12 +496,11 @@ def test_browser_km_derive_defaults_to_group_when_current_group_is_overall_only(
 
             assert page.locator("#groupColumn").input_value() == ""
             page.locator("#deriveToggle").click()
-            assert page.locator("#deriveApplyToGroup").is_checked()
 
             page.locator("#deriveSource").select_option("age")
             page.locator("#deriveMethod").select_option("median_split")
             page.locator("#deriveColumnName").fill("age_guided_split")
-            page.locator("#deriveButton").click()
+            page.locator("#deriveApplyButton").click()
             page.wait_for_function(
                 "document.getElementById('groupColumn').value === 'age_guided_split'"
             )
@@ -512,7 +511,7 @@ def test_browser_km_derive_defaults_to_group_when_current_group_is_overall_only(
 
             assert page.locator("#groupColumn").input_value() == "age_guided_split"
             assert "Refreshing Kaplan-Meier with the new grouping" in page.locator("#deriveStatus").inner_text()
-            assert "Group by now uses age_guided_split" in page.locator("#deriveSummary").inner_text()
+            assert "Current grouping now uses age_guided_split" in page.locator("#deriveSummary").inner_text()
             assert page.locator("#kmMetaBanner").inner_text() != initial_banner
 
             browser.close()
