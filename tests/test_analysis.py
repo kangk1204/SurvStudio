@@ -310,6 +310,26 @@ def test_cohort_frame_rejects_identical_time_and_event_columns() -> None:
         )
 
 
+def test_cohort_frame_rejects_non_time_numeric_column_when_likely_time_exists() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [12, 18, 24],
+            "os_event": [1, 0, 1],
+            "SFTPC": [6.1, 8.4, 5.9],
+            "age": [60, 55, 70],
+        }
+    )
+
+    with pytest.raises(ValueError, match="does not look like a survival follow-up time column"):
+        _cohort_frame(
+            df,
+            time_column="SFTPC",
+            event_column="os_event",
+            event_positive_value=1,
+            extra_columns=["age"],
+        )
+
+
 def test_ordered_level_strings_deduplicates_string_levels() -> None:
     from survival_toolkit.analysis import _ordered_level_strings
 
