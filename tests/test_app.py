@@ -96,8 +96,6 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="guidedRailStatusTitle"' in response.text
     assert 'id="guidedRailStatusText"' in response.text
     assert 'class="guided-rail"' in response.text
-    assert "Guided workflow" in response.text
-    assert "Move one decision at a time." in response.text
     assert "Confirm outcome" in response.text
     assert "Choose analysis" in response.text
     assert "Configure &amp; run" in response.text
@@ -105,7 +103,7 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert "Upload or open a sample cohort" in response.text
     assert "Configure &amp; run" in response.text
     assert '<span>Evaluation Mode</span>' in response.text
-    assert "Evaluation Mode applies to both <strong>Train Model</strong> and <strong>Compare All</strong>" in response.text
+    assert "Evaluation Mode applies to both <strong>Train a model</strong> and <strong>Compare All</strong>" in response.text
     assert "Risk table ticks" in response.text
     assert "It does not change the Kaplan-Meier curve itself." in response.text
     assert "Used everywhere" in response.text
@@ -314,7 +312,7 @@ def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
     assert "latent_dim: Number(refs.dlLatentDim.value)" in text
     assert "n_clusters: Number(refs.dlClusters.value)" in text
     assert "rerun seed=" in text
-    assert "rerun a single architecture with Train Model while keeping repeated CV selected" in text
+    assert "rerun a single architecture with Train a model while keeping repeated CV selected" in text
     assert "seed=" in text
 
 
@@ -330,7 +328,8 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert "compute_shap: computeShap" in text
     assert "SHAP skipped in Fast mode" in text
     assert "SHAP failed:" in text
-    assert "SHAP=${shapStatus}, time=${elapsedSeconds}s" in text
+    assert "SHAP approx=" in text
+    assert "SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s" in text
     assert "Screening Cox PH, Random Survival Forest, and Gradient Boosted Survival" in text
     assert "Screening all ML models on one shared evaluation path." in text
     assert "Screening top model=" in text
@@ -346,6 +345,14 @@ def test_frontend_labels_incomplete_repeated_cv_compare_as_mean_c_index() -> Non
     assert 'repeated CV (incomplete)' in text
 
 
+def test_frontend_warns_that_large_full_batch_dl_runs_can_hit_memory_limits() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function dlPendingBannerText(" in text
+    assert 'This full-batch objective can run out of memory on larger cohorts, so start smaller if local RAM is limited.' in text
+
+
 def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repeated_cv() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
@@ -354,9 +361,9 @@ def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repea
     assert 'goHome({ syncHistory: true, historyMode: "replace" });' in text
     assert 'The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.' in text
     assert 'refs.runMlButton.disabled = singleModelBlocked || isScopeBusy("ml");' in text
-    assert 'Train Model uses deterministic holdout only. Use Compare All for repeated CV screening.' in text
+    assert 'Train a model uses deterministic holdout only. Use Compare All for repeated CV screening.' in text
     assert 'if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {' in text
-    assert 'Train Model uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.' in text
+    assert 'Train a model uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.' in text
 
 
 def test_plot_config_removes_box_and_lasso_select_tools() -> None:
@@ -469,8 +476,43 @@ def test_guided_rail_status_tracks_running_ready_and_stale_states() -> None:
     assert 'label: "Needs rerun"' in text
     assert 'label: "No result yet"' in text
     assert "function renderGuidedRailStatus() {" in text
-    assert 'refs.guidedRailStatus.className = `guided-rail-status guided-rail-status-${status.tone}`;' in text
+    assert 'refs.guidedRailStatus.className = `guided-rail-status guided-rail-status-${compactStatus.tone}${showReviewActions ? " guided-rail-status-actionable" : ""}`;' in text
+    assert 'guided-rail-status-actionable' in text
     assert "renderGuidedRailStatus();" in text
+
+
+def test_refresh_cox_preview_does_not_rerender_guided_chrome_during_loading_state() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+    refresh_body = text.split("async function refreshCoxPreview({ force = false } = {}) {", 1)[1].split("function scheduleCoxPreview(", 1)[0]
+
+    assert 'status: "loading"' in refresh_body
+    assert 'error: "",\n  };\n  try {' in refresh_body
+
+
+def test_legacy_derive_restore_only_reuses_cutoff_when_method_is_still_available() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "const restoredDeriveMethod = setSelectValueIfPresent(refs.deriveMethod, snapshot.deriveMethod);" in text
+    assert 'refs.deriveCutoff.value = "";' in text
+
+
+def test_dl_guided_review_hides_compare_tables_when_single_mode_is_active() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'const hasCompareTable = resultMode === "compare" && hasRenderedTable(refs.dlComparisonShell);' in text
+    assert 'const hasManuscript = resultMode === "compare" && hasRenderedTable(refs.dlManuscriptShell);' in text
+
+
+def test_guided_cox_preview_summary_surfaces_parameter_count_and_epv() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function renderGuidedCoxPreviewSummary() {" in text
+    assert "<strong>Parameters</strong>" in text
+    assert "<strong>EPV</strong>" in text
 
 
 def test_expert_surface_status_tracks_running_current_and_stale_states() -> None:
@@ -1986,6 +2028,8 @@ def test_cox_preview_reports_complete_case_counts() -> None:
     payload = response.json()["preview"]
     assert payload["outcome_rows"] >= payload["analyzable_rows"] >= 1
     assert payload["events"] >= 1
+    assert payload["estimated_parameters"] >= 1
+    assert payload["events_per_parameter"] is None or payload["events_per_parameter"] > 0
     assert payload["covariates"] == ["age", "sex", "stage"]
     assert payload["categorical_covariates"] == ["sex", "stage"]
 
@@ -2555,8 +2599,8 @@ def test_guided_confirm_outcome_shows_ready_status_when_event_value_is_set() -> 
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    assert 'const issueHeading = eventWarning || !eventValueSelected ? "Blocking issue" : "Ready status";' in app_js
-    assert '"Time, event, and event value are all set. You can continue."' in app_js
+    assert 'const issueHeading = canContinue ? "Ready to continue" : "What still needs attention";' in app_js
+    assert '`SurvStudio is ready to use ${refs.timeColumn?.value || "time"}, ${refs.eventColumn?.value || "event"}, and ${refs.eventPositiveValue?.value || "event value"}.`' in app_js
 
 
 def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
@@ -2586,8 +2630,8 @@ def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
     assert 'runDlCompareInlineButton' in app_js
     assert 'if (action === "run-ml-compare")' in app_js
     assert 'if (action === "run-dl-compare")' in app_js
-    assert "#panel-ml #runCompareButton" not in styles
-    assert "#panel-dl #runDlCompareButton" not in styles
+    assert 'body[data-ui-mode="guided"][data-guided-step="5"] #panel-ml #runCompareButton' in styles
+    assert 'body[data-ui-mode="guided"][data-guided-step="5"] #panel-dl #runDlCompareButton' in styles
     assert ".guided-actions-priority" in styles
     assert ".guided-run-choice" in styles
     assert ".run-setup-quick-actions" in styles
@@ -3976,7 +4020,7 @@ def test_guided_tables_configure_panel_uses_stacked_layout() -> None:
         / "styles.css"
     ).read_text(encoding="utf-8")
 
-    assert 'const panelGridClass = `guided-panel-grid${goal === "tables" ? " guided-panel-grid-stacked" : ""}`;' in app_js
+    assert '<div class="guided-panel-grid guided-panel-grid-compact">' in app_js
     assert ".guided-panel-grid.guided-panel-grid-stacked {" in styles
     assert "grid-template-columns: 1fr;" in styles
     assert ".guided-actions-priority:not(.guided-actions-dual) .guided-run-choice {" in styles

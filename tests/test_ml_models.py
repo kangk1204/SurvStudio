@@ -915,6 +915,8 @@ def test_compute_shap_values_caps_kernel_fallback_work(monkeypatch) -> None:
     result = ml_models.compute_shap_values(object(), encoded, feature_names=list(encoded.columns))
 
     assert result["method"] == "kernel"
+    assert result["background_samples"] == 20
+    assert result["n_samples"] == 20
     assert seen["background_shape"] == (20, 5)
     assert seen["eval_shape"] == (20, 5)
     assert seen["nsamples"] == 40

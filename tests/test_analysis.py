@@ -27,6 +27,7 @@ from survival_toolkit.analysis import (
     load_dataframe_from_path,
     make_unique_columns,
     looks_binary,
+    preview_cox_analysis_inputs,
 )
 from survival_toolkit.sample_data import load_tcga_luad_example_dataset
 from survival_toolkit.sample_data import make_example_dataset
@@ -43,6 +44,9 @@ def test_derive_group_column_creates_named_split() -> None:
     assert column_name == "biomarker_group"
     assert "biomarker_group" in updated.columns
     assert summary["counts"]
+    assert summary["recipe"]["source_column"] == "biomarker_score"
+    assert summary["recipe"]["column_name"] == "biomarker_group"
+    assert summary["recipe"]["method"] == "median_split"
 
 
 def test_percentile_split_top_vs_rest_creates_two_groups() -> None:
@@ -81,6 +85,32 @@ def test_percentile_split_50_matches_median_split_with_ties() -> None:
     median_is_high = median_updated[median_column].astype(str) == "High"
     percentile_is_top = percentile_updated[percentile_column].astype(str) == "Top 50%"
     assert median_is_high.tolist() == percentile_is_top.tolist()
+
+
+def test_cox_preview_warns_when_events_per_parameter_is_extremely_low() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [1, 2, 3, 4, 5, 6],
+            "os_event": [1, 0, 1, 0, 0, 0],
+            "age": [50, 51, 52, 53, 54, 55],
+            "marker": [10, 11, 12, 13, 14, 15],
+            "sex": ["Female", "Male", "Female", "Male", "Female", "Male"],
+            "stage": ["I", "I", "II", "II", "III", "III"],
+        }
+    )
+
+    preview = preview_cox_analysis_inputs(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        covariates=["age", "marker", "sex", "stage"],
+        categorical_covariates=["sex", "stage"],
+        event_positive_value=1,
+    )
+
+    assert preview["estimated_parameters"] == 5
+    assert preview["events_per_parameter"] == pytest.approx(0.4)
+    assert any("Events per parameter is 0.40" in warning for warning in preview["stability_warnings"])
 
 
 def test_percentile_split_two_tails_creates_three_groups() -> None:
@@ -669,7 +699,7 @@ def test_cohort_table_overall_matches_grouped_subset_when_group_values_missing()
     assert cohort_size_row["B"] == 1
 
 
-def test_cox_analysis_caps_extreme_hazard_ratios_instead_of_crashing(monkeypatch) -> None:
+def test_cox_analysis_marks_extreme_hazard_ratios_as_non_estimable(monkeypatch) -> None:
     import survival_toolkit.analysis as analysis
 
     df = make_example_dataset(seed=23, n_patients=40)
@@ -717,10 +747,13 @@ def test_cox_analysis_caps_extreme_hazard_ratios_instead_of_crashing(monkeypatch
     )
 
     row = result["results_table"][0]
-    assert np.isfinite(row["Hazard ratio"])
-    assert row["Hazard ratio"] == np.finfo(float).max
-    assert row["CI lower"] == np.finfo(float).max
-    assert row["CI upper"] == np.finfo(float).max
+    assert row["Hazard ratio"] is None
+    assert row["CI lower"] is None
+    assert row["CI upper"] is None
+    assert any(
+        "non-estimable hazard ratios or confidence intervals" in caution
+        for caution in result["scientific_summary"]["cautions"]
+    )
 
 
 def test_cox_analysis_rejects_non_finite_model_fit(monkeypatch) -> None:

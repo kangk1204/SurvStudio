@@ -54,6 +54,7 @@ const refs = {
   datasetPreviewShell: document.getElementById("datasetPreviewShell"),
   guidedShell: document.getElementById("guidedShell"),
   stepIndicator: document.getElementById("stepIndicator"),
+  guidedSummaryBar: document.getElementById("guidedSummaryBar"),
   guidedSummaryTitle: document.getElementById("guidedSummaryTitle"),
   guidedSummaryText: document.getElementById("guidedSummaryText"),
   guidedSummaryChips: document.getElementById("guidedSummaryChips"),
@@ -460,6 +461,11 @@ function evaluationModeLabel(goal) {
   return null;
 }
 
+function guidedResultModeLabel(goal) {
+  if (goal !== "ml" && goal !== "dl") return null;
+  return (runtime.resultPreference?.[goal] || "single") === "compare" ? "Compare all" : "Train a model";
+}
+
 function arrayEquals(left = [], right = []) {
   if (left.length !== right.length) return false;
   return left.every((value, index) => value === right[index]);
@@ -552,7 +558,6 @@ async function refreshCoxPreview({ force = false } = {}) {
     payload: null,
     error: "",
   };
-  if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") renderGuidedChrome();
   try {
     const payload = await fetchJSON("/api/cox-preview", {
       method: "POST",
@@ -921,6 +926,9 @@ function renderGuidedCoxPreviewSummary() {
     .slice(0, 4)
     .map((item) => `${item.column} (${formatValue(item.missing_rows)})`);
   const stabilityWarnings = (preview.stability_warnings || []).slice(0, 2);
+  const epvValue = preview.events_per_parameter == null
+    ? "NA"
+    : formatValue(preview.events_per_parameter, { scientificLarge: false });
   const noteText = preview.dropped_rows
     ? `Complete-case Cox will drop rows with missing selected covariates. Biggest drops: ${missingNotes.join(", ")}${preview.missing_by_covariate.length > 4 ? " ..." : ""}.`
     : "All rows remain analyzable with the current covariate set.";
@@ -939,6 +947,14 @@ function renderGuidedCoxPreviewSummary() {
         <div class="guided-quick-item">
           <strong>Dropped by missing</strong>
           <span>${escapeHtml(formatValue(preview.dropped_rows))}</span>
+        </div>
+        <div class="guided-quick-item">
+          <strong>Parameters</strong>
+          <span>${escapeHtml(formatValue(preview.estimated_parameters))}</span>
+        </div>
+        <div class="guided-quick-item">
+          <strong>EPV</strong>
+          <span>${escapeHtml(epvValue)}</span>
         </div>
       </div>
       ${stabilityWarnings.length ? `<div class="event-warning event-warning-warning">${stabilityWarnings.map((warning) => escapeHtml(warning)).join("<br>")}</div>` : ""}
@@ -998,31 +1014,44 @@ function renderGuidedRailStatus() {
   const showReviewActions = runtime.uiMode === "guided" && currentGuidedStep() === 5 && Boolean(runtime.guidedGoal);
   const reviewGoal = showReviewActions ? runtime.guidedGoal : null;
   const reviewScopeBusy = reviewGoal ? isScopeBusy(reviewGoal) : false;
+  const reviewMode = reviewGoal ? guidedResultModeLabel(reviewGoal) : null;
   const mlSingleModelBlocked = reviewGoal === "ml" && refs.mlEvaluationStrategy?.value === "repeated_cv";
-  const reviewRunActions = {
-    km: [
-      { label: "Run again", action: "run-km", tone: "primary" },
-    ],
-    cox: [
-      { label: "Run again", action: "run-cox", tone: "primary" },
-    ],
-    tables: [
-      { label: "Build again", action: "run-tables", tone: "primary" },
-    ],
-    ml: [
-      { label: "Compare all", action: "run-ml-compare", tone: "ghost" },
-      { label: "Train a model", action: "run-ml", tone: "primary", disabled: mlSingleModelBlocked },
-    ],
-    dl: [
-      { label: "Compare all", action: "run-dl-compare", tone: "ghost" },
-      { label: "Train a model", action: "run-dl", tone: "primary" },
-    ],
-  }[reviewGoal] || [];
+  const reviewRunActions = reviewGoal === "ml"
+    ? ((runtime.resultPreference?.ml || "single") === "compare"
+      ? [
+          { label: "Compare all", action: "run-ml-compare", tone: "primary" },
+          { label: "Train a model", action: "run-ml", tone: "ghost", disabled: mlSingleModelBlocked },
+        ]
+      : [
+          { label: "Train a model", action: "run-ml", tone: "primary", disabled: mlSingleModelBlocked },
+          { label: "Compare all", action: "run-ml-compare", tone: "ghost" },
+        ])
+    : reviewGoal === "dl"
+      ? ((runtime.resultPreference?.dl || "single") === "compare"
+        ? [
+            { label: "Compare all", action: "run-dl-compare", tone: "primary" },
+            { label: "Train a model", action: "run-dl", tone: "ghost" },
+          ]
+        : [
+            { label: "Train a model", action: "run-dl", tone: "primary" },
+            { label: "Compare all", action: "run-dl-compare", tone: "ghost" },
+          ])
+      : {
+          km: [
+            { label: "Run again", action: "run-km", tone: "primary" },
+          ],
+          cox: [
+            { label: "Run again", action: "run-cox", tone: "primary" },
+          ],
+          tables: [
+            { label: "Build again", action: "run-tables", tone: "primary" },
+          ],
+        }[reviewGoal] || [];
   const compactStatus = showReviewActions
     ? {
         ...status,
         title: status.tone === "ready"
-          ? `${goalLabel(runtime.guidedGoal)} current`
+          ? `${goalLabel(runtime.guidedGoal)} current${reviewMode ? ` (${reviewMode})` : ""}`
           : status.title,
         text: status.tone === "ready" ? "" : status.text,
       }
@@ -1466,11 +1495,13 @@ function setInputValue(control, value) {
 }
 
 function setSelectValueIfPresent(control, value) {
-  if (!control || value === undefined || value === null) return;
+  if (!control || value === undefined || value === null) return false;
   const wanted = String(value);
   if ([...control.options].some((option) => option.value === wanted)) {
     control.value = wanted;
+    return true;
   }
+  return false;
 }
 
 function applyControlSnapshot(snapshot) {
@@ -1489,7 +1520,12 @@ function applyControlSnapshot(snapshot) {
   setInputValue(refs.maxTime, snapshot.maxTime);
   setInputValue(refs.confidenceLevel, snapshot.confidenceLevel);
   setSelectValueIfPresent(refs.deriveSource, snapshot.deriveSource);
-  setInputValue(refs.deriveCutoff, snapshot.deriveCutoff);
+  const restoredDeriveMethod = setSelectValueIfPresent(refs.deriveMethod, snapshot.deriveMethod);
+  if (restoredDeriveMethod || snapshot.deriveMethod === undefined || snapshot.deriveMethod === null) {
+    setInputValue(refs.deriveCutoff, snapshot.deriveCutoff);
+  } else if (refs.deriveCutoff) {
+    refs.deriveCutoff.value = "";
+  }
   setInputValue(refs.deriveColumnName, snapshot.deriveColumnName);
   runtime.deriveApplyTouched = snapshot.deriveApplyToGroup !== undefined;
   if (refs.deriveApplyToGroup) {
@@ -1529,7 +1565,6 @@ function applyControlSnapshot(snapshot) {
   setInputValue(refs.dlLayers, snapshot.dlLayers);
   setInputValue(refs.dlLatentDim, snapshot.dlLatentDim);
   setInputValue(refs.dlClusters, snapshot.dlClusters);
-  setSelectValueIfPresent(refs.deriveMethod, snapshot.deriveMethod);
   setInputValue(refs.deriveMinGroupFraction, snapshot.deriveMinGroupFraction);
   setInputValue(refs.derivePermutationIterations, snapshot.derivePermutationIterations);
   setInputValue(refs.deriveRandomSeed, snapshot.deriveRandomSeed);
@@ -2335,6 +2370,8 @@ function humanizeHeader(key) {
     .trim();
 }
 
+const COHORT_TABLE_EMPTY_STATE_HTML = '<div class="empty-state">Check variables on the left, then click <strong>Build Table</strong>.</div>';
+
 function renderTable(shell, rows, columns = null) {
   if (!rows || rows.length === 0) {
     shell.innerHTML = '<div class="empty-state">No rows returned.</div>';
@@ -2364,6 +2401,16 @@ function renderTable(shell, rows, columns = null) {
   table.append(thead, tbody);
   shell.innerHTML = "";
   shell.appendChild(table);
+}
+
+function clearCohortTableOutput({ rerenderChrome = true, syncHistory = true } = {}) {
+  state.cohort = null;
+  if (refs.cohortTableShell) refs.cohortTableShell.innerHTML = COHORT_TABLE_EMPTY_STATE_HTML;
+  if (refs.downloadCohortTableButton) refs.downloadCohortTableButton.disabled = true;
+  renderSharedFeatureSummary();
+  syncDownloadButtonAvailability();
+  if (rerenderChrome) renderGuidedChrome();
+  if (syncHistory) queueHistorySync();
 }
 
 function downloadCsv(filename, rows, columns = null) {
@@ -2641,7 +2688,7 @@ function updateMlEvaluationControls() {
   if (refs.mlCvRepeats) refs.mlCvRepeats.disabled = !isRepeatedCv;
   const singleModelBlocked = isRepeatedCv;
   const singleModelMessage = singleModelBlocked
-    ? "Train Model uses deterministic holdout only. Use Compare All for repeated CV screening."
+    ? "Train a model uses deterministic holdout only. Use Compare All for repeated CV screening."
     : "";
   if (refs.runMlButton) {
     refs.runMlButton.disabled = singleModelBlocked || isScopeBusy("ml");
@@ -2933,6 +2980,9 @@ function dlPendingBannerText({ modelType, rowCount, epochs, evaluationStrategy, 
   } else {
     message += " Early stopping can still end training before the epoch limit.";
   }
+  if (Number(rowCount) >= 10000 && (modelType === "deepsurv" || modelType === "transformer")) {
+    message += " This full-batch objective can run out of memory on larger cohorts, so start smaller if local RAM is limited.";
+  }
   return message;
 }
 
@@ -3152,8 +3202,8 @@ function renderGuidedChrome() {
   const timeColumn = refs.timeColumn?.value || "time";
   const eventColumn = refs.eventColumn?.value || "event";
   const eventValue = refs.eventPositiveValue?.value || "choose event value";
-  const groupBy = refs.groupColumn?.value || "Overall only";
   const evaluation = evaluationModeLabel(goal);
+  const resultMode = guidedResultModeLabel(goal);
   const summaryText = {
     2: "Check the three fields below. If they look right, continue. Keep grouping and advanced settings for later.",
     3: "The endpoint is ready. Pick one analysis path and keep the rest hidden for now.",
@@ -3173,6 +3223,7 @@ function renderGuidedChrome() {
     refs.guidedSummaryTitle.textContent = `${step}. ${["Load data", "Confirm outcome", "Choose analysis", "Configure & run", "Review results"][step - 1]}`;
   }
   if (refs.guidedSummaryText) refs.guidedSummaryText.textContent = summaryText;
+  refs.guidedSummaryBar?.classList.toggle("hidden", step >= 3);
   const summaryChips = step === 2
     ? [`Dataset: ${state.dataset.filename}`]
     : step === 3
@@ -3185,10 +3236,14 @@ function renderGuidedChrome() {
         ? [
             `Dataset: ${state.dataset.filename}`,
             ...(goal ? [`Analysis: ${goalLabel(goal)}`] : []),
+            ...(evaluation ? [`Evaluation: ${evaluation}`] : []),
+            ...(resultMode ? [`Result mode: ${resultMode}`] : []),
           ]
         : [
             `Dataset: ${state.dataset.filename}`,
             ...(goal ? [`Analysis: ${goalLabel(goal)}`] : []),
+            ...(evaluation ? [`Evaluation: ${evaluation}`] : []),
+            ...(resultMode ? [`Result mode: ${resultMode}`] : []),
           ];
   renderGuidedSummaryChips(summaryChips);
 
@@ -3365,7 +3420,7 @@ function guidedPanelMarkup(step) {
     const scopeBusy = isScopeBusy(configureCopy.runScope);
     const mlSingleModelBlocked = goal === "ml" && refs.mlEvaluationStrategy?.value === "repeated_cv";
     const mlSingleModelBlockedText = mlSingleModelBlocked
-      ? "Train ML model is disabled while Repeated CV is selected. Use Compare all ML models or switch Evaluation Mode back to Deterministic Holdout."
+      ? "Train a model is disabled while Repeated CV is selected. Use Compare all ML models or switch Evaluation Mode back to Deterministic Holdout."
       : "";
     const helpBlock = guidedHelpDetails("Show run tips", [
       configureCopy.text,
@@ -3827,7 +3882,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.signatureShell.innerHTML = '<div class="empty-state">Use auto-discovery to find the best feature combinations.</div>';
   refs.coxResultsShell.innerHTML = '<div class="empty-state">Hazard ratios will appear after running Cox analysis.</div>';
   refs.coxDiagnosticsShell.innerHTML = '<div class="empty-state">Model assumption checks will appear here.</div>';
-  refs.cohortTableShell.innerHTML = '<div class="empty-state">Check variables on the left, then click <strong>Build Table</strong>.</div>';
+  refs.cohortTableShell.innerHTML = COHORT_TABLE_EMPTY_STATE_HTML;
   refs.mlComparisonShell.innerHTML = '<div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div>';
   if (refs.mlComparisonTitle) refs.mlComparisonTitle.textContent = "Model Comparison";
   refs.mlManuscriptShell.innerHTML = '<div class="empty-state">Comparison-ready manuscript rows appear after running a comparison.</div>';
@@ -4037,6 +4092,8 @@ async function deriveGroup() {
   }
   const previousGroup = preservedGroup || "Overall only";
   const stayedOverall = !applyToGroup && !preservedGroup;
+  const shouldClearTableOutput = currentCohortTableOutputState().hasOutput
+    && (activeTabName() === "tables" || runtime.guidedGoal === "tables");
   runtime.lastDerivedGroup = {
     derivedColumn: payload.derived_column,
     summary: payload.derive_summary,
@@ -4057,13 +4114,15 @@ async function deriveGroup() {
     : "";
   updateDatasetBadge();
   renderDerivedGroupSummary(payload.derived_column, payload.derive_summary);
-  if (!shouldRefreshKm) {
+  if (shouldClearTableOutput) {
+    clearCohortTableOutput();
+  } else if (!shouldRefreshKm) {
     renderSharedFeatureSummary();
   }
   showToast(
     shouldRefreshKm
       ? `Created ${payload.derived_column}. ${featureUseMessage} Kaplan-Meier is refreshing now.`
-      : `Created ${payload.derived_column}. ${featureUseMessage}`,
+      : `Created ${payload.derived_column}. ${featureUseMessage}${shouldClearTableOutput ? " Previous cohort table output was cleared; build the table again to match the new grouping." : ""}`,
     "success",
     5200,
   );
@@ -4104,8 +4163,8 @@ function updateMethodVisibility() {
   }
   if (refs.deriveCutoffHelp) {
     refs.deriveCutoffHelp.dataset.tooltip = isExtremeSplit
-      ? "Use one percentile from each tail. Example: 25 = bottom 25% vs top 25%, with the middle 50% excluded from grouped analyses."
-      : "Use percentiles from the observed distribution. Example: 25 = top 25% vs rest. Example: 50 matches Median split. Example: 25,25 = bottom 25% / middle 50% / top 25%.";
+      ? "Use one percentile from each tail. Example: 25 = bottom 25% vs top 25%, with the middle 50% excluded. Ties at the threshold can make the realized groups slightly larger."
+      : "Use percentile thresholds from the observed distribution. Example: 25 = top 25% threshold vs rest. Example: 50 matches Median split. Example: 25,25 = bottom 25% / middle 50% / top 25%. Ties at the threshold can make the realized groups slightly larger.";
   }
   if (refs.deriveCutoff) {
     refs.deriveCutoff.placeholder = isExtremeSplit ? "25" : "25 or 25,25";
@@ -4303,7 +4362,7 @@ async function runCohortTable() {
 async function runMlModel() {
   runtime.resultPreference.ml = "single";
   if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {
-    throw new Error("Train Model uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.");
+    throw new Error("Train a model uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.");
   }
   const base = currentBaseConfig();
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
@@ -4372,7 +4431,10 @@ async function runMlModel() {
   const mlMetricLabel = stats.metric_name || ((stats.evaluation_mode === "holdout") ? "Holdout C-index" : "Apparent C-index");
   const mlEvaluationMode = stats.evaluation_mode || "unknown";
   const shapStatus = payload.shap_figure ? "computed" : (payload.shap_error ? "failed" : (computeShap ? "unavailable" : "skipped"));
-  refs.mlMetaBanner.textContent = `${refs.mlModelType.value.toUpperCase()}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}, time=${elapsedSeconds}s`;
+  const shapApproximationNote = payload.shap_result?.method === "kernel"
+    ? `, SHAP approx=${formatValue(payload.shap_result.n_samples)} eval / ${formatValue(payload.shap_result.background_samples)} bg`
+    : "";
+  refs.mlMetaBanner.textContent = `${refs.mlModelType.value.toUpperCase()}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s`;
   updateStepIndicator(3);
   revealCompletedResultIfCurrent("ml", {
     mode: "single",
@@ -4688,7 +4750,7 @@ async function runDlCompareModels() {
       ? `, rerun seed=${formatValue(bestRow.training_seed)}`
       : "";
     const repeatedCvRerunNote = dlEvalMode === "repeated_cv"
-      ? ", rerun a single architecture with Train Model while keeping repeated CV selected"
+      ? ", rerun a single architecture with Train a model while keeping repeated CV selected"
       : "";
     refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, ${dlMetricLabel}=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
     refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
@@ -5107,8 +5169,8 @@ function updateGuidedResultVisibility() {
     const hasSingleLoss = resultMode === "single" && hasRenderedPlot(refs.dlLossPlot);
     const hasSingleGrid = hasSingleImportance || hasSingleLoss;
     const hasComparePlot = resultMode === "compare" && hasRenderedPlot(refs.dlComparisonPlot);
-    const hasCompareTable = hasRenderedTable(refs.dlComparisonShell);
-    const hasManuscript = hasRenderedTable(refs.dlManuscriptShell);
+    const hasCompareTable = resultMode === "compare" && hasRenderedTable(refs.dlComparisonShell);
+    const hasManuscript = resultMode === "compare" && hasRenderedTable(refs.dlManuscriptShell);
     const hasInsight = hasRenderedInsight(refs.dlInsightBoard);
     const hasAny = hasSingleGrid || hasComparePlot || hasCompareTable || hasManuscript || hasInsight;
 
