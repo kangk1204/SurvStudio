@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from survival_toolkit.analysis import (
@@ -196,6 +196,15 @@ class DeepModelRequest(BaseModel):
     # VAE specific
     latent_dim: int = Field(default=8, ge=2, le=32)
     n_clusters: int = Field(default=3, ge=2, le=10)
+
+    @field_validator("hidden_layers")
+    @classmethod
+    def validate_hidden_layers(cls, value: list[int]) -> list[int]:
+        if not value:
+            raise ValueError("Hidden layers must contain at least one positive integer.")
+        if any((not isinstance(layer, int)) or layer <= 0 for layer in value):
+            raise ValueError("Hidden layers must contain positive integers only.")
+        return value
 
     @model_validator(mode="after")
     def validate_transformer_width(self) -> "DeepModelRequest":

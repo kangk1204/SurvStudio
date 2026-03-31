@@ -289,10 +289,22 @@ function apiUrl(url) {
 }
 
 function parseHiddenLayers(control = refs.dlHiddenLayers) {
-  return String(control?.value || "")
-    .split(",")
-    .map((value) => Number(value.trim()))
-    .filter((value) => Number.isInteger(value) && value > 0);
+  const raw = String(control?.value || "").trim();
+  if (!raw) return [];
+  const tokens = raw.split(",").map((value) => value.trim());
+  if (!tokens.length || tokens.some((token) => token.length === 0)) return [];
+  const parsed = tokens.map((value) => Number(value));
+  if (!parsed.every((value) => Number.isInteger(value) && value > 0)) return [];
+  return parsed;
+}
+
+function parseHiddenLayersStrict(control = refs.dlHiddenLayers) {
+  const hiddenLayerText = String(control?.value || "").trim();
+  const hiddenLayers = parseHiddenLayers(control);
+  if (!hiddenLayerText || !hiddenLayers.length) {
+    throw new Error(`Hidden layers must be a comma-separated list of positive integers. Current value: ${hiddenLayerText || "(empty)"}.`);
+  }
+  return hiddenLayers;
 }
 
 async function fetchJSON(url, options = {}) {
@@ -304,7 +316,16 @@ async function fetchJSON(url, options = {}) {
     ...options,
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(extractErrorMessage(payload));
+  if (!response.ok) {
+    const message = extractErrorMessage(payload);
+    if (response.status === 404 && /Unknown dataset id:/i.test(message) && state.dataset) {
+      const datasetName = state.dataset?.filename || state.dataset?.dataset_id || "current cohort";
+      goHome({ syncHistory: true, historyMode: "replace" });
+      setRuntimeBanner(`The previously loaded cohort (${datasetName}) is no longer available on the server. Reload it to continue.`, "warning");
+      throw new Error("The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.");
+    }
+    throw new Error(message);
+  }
   return payload;
 }
 
@@ -1358,6 +1379,8 @@ function setScopeBusy(scope, isBusy, activeButton = null) {
     button.classList.toggle("is-loading", false);
   });
   syncSharedFeatureControlsBusy();
+  if (scope === "ml") updateMlEvaluationControls();
+  if (scope === "dl") updateDlEvaluationControls();
   renderGuidedChrome();
 }
 
@@ -2188,6 +2211,15 @@ function updateMlEvaluationControls() {
   refs.mlCvRepeatsWrap?.classList.toggle("hidden", !isRepeatedCv);
   if (refs.mlCvFolds) refs.mlCvFolds.disabled = !isRepeatedCv;
   if (refs.mlCvRepeats) refs.mlCvRepeats.disabled = !isRepeatedCv;
+  const singleModelBlocked = isRepeatedCv;
+  const singleModelMessage = singleModelBlocked
+    ? "Train Model uses deterministic holdout only. Use Compare All for repeated CV screening."
+    : "";
+  if (refs.runMlButton) {
+    refs.runMlButton.disabled = singleModelBlocked || isScopeBusy("ml");
+    refs.runMlButton.title = singleModelMessage;
+  }
+  renderGuidedChrome();
 }
 
 function updateDlEvaluationControls() {
@@ -2853,6 +2885,10 @@ function guidedPanelMarkup(step) {
       runScope: null,
     };
     const scopeBusy = isScopeBusy(configureCopy.runScope);
+    const mlSingleModelBlocked = goal === "ml" && refs.mlEvaluationStrategy?.value === "repeated_cv";
+    const mlSingleModelBlockedText = mlSingleModelBlocked
+      ? "Train ML model is disabled while Repeated CV is selected. Use Compare all ML models or switch Evaluation Mode back to Deterministic Holdout."
+      : "";
     const panelGridClass = `guided-panel-grid${goal === "tables" ? " guided-panel-grid-stacked" : ""}`;
     return `
       <div class="${panelGridClass}">
@@ -2863,8 +2899,9 @@ function guidedPanelMarkup(step) {
             ${configureCopy.secondaryAction
               ? `<button class="button ghost compact-btn guided-run-choice guided-run-choice-secondary" type="button" data-guided-action="${escapeHtml(configureCopy.secondaryAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.secondaryLabel)}</button>`
               : ""}
-            <button class="button primary compact-btn guided-run-choice" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.runLabel)}</button>
+            <button class="button primary compact-btn guided-run-choice" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${(scopeBusy || mlSingleModelBlocked) ? " disabled" : ""}>${escapeHtml(configureCopy.runLabel)}</button>
           </div>
+          ${mlSingleModelBlockedText ? `<div class="guided-run-status" role="status">${escapeHtml(mlSingleModelBlockedText)}</div>` : ""}
           ${scopeBusy && configureCopy.busyText ? `<div class="guided-run-status" role="status">${escapeHtml(configureCopy.busyText)}</div>` : ""}
           <div class="guided-actions guided-actions-secondary">
             <button class="button ghost compact-btn" type="button" data-guided-action="previous-step">Back</button>
@@ -3123,14 +3160,7 @@ function validateDlControls() {
     throw new Error(`Dropout must be between 0 and 0.5. Current value: ${formatValue(dropout)}.`);
   }
   if (modelType !== "transformer") {
-    const hiddenLayerText = refs.dlHiddenLayers?.value?.trim() || "";
-    if (!hiddenLayerText) {
-      throw new Error("Hidden layers must be a comma-separated list of positive integers, for example 64,64.");
-    }
-    const hiddenLayers = parseHiddenLayers();
-    if (!hiddenLayers.length) {
-      throw new Error(`Hidden layers must be a comma-separated list of positive integers. Current value: ${hiddenLayerText}.`);
-    }
+    parseHiddenLayersStrict();
   }
   const batchSize = Number(refs.dlBatchSize?.value);
   if (!Number.isFinite(batchSize) || batchSize < 8 || batchSize > 512) {
@@ -3760,6 +3790,9 @@ async function runCohortTable() {
 
 async function runMlModel() {
   runtime.resultPreference.ml = "single";
+  if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {
+    throw new Error("Train Model uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.");
+  }
   const base = currentBaseConfig();
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
@@ -3919,8 +3952,7 @@ async function runDlModel() {
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
   const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
-  const hiddenLayers = parseHiddenLayers();
-  if (!hiddenLayers.length) hiddenLayers.push(64, 64);
+  const hiddenLayers = parseHiddenLayersStrict();
   const startedAt = performance.now();
 
   setShimmer(refs.dlImportancePlot);
@@ -4061,8 +4093,7 @@ async function runDlCompareModels() {
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
   const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
-  const hiddenLayers = parseHiddenLayers();
-  if (!hiddenLayers.length) hiddenLayers.push(64, 64);
+  const hiddenLayers = parseHiddenLayersStrict();
 
   refs.dlMetaBanner.textContent = dlComparePendingBannerText({
     rowCount: base.row_count,

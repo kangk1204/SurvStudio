@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from pathlib import Path
 import tomllib
 import zipfile
@@ -343,6 +344,19 @@ def test_frontend_labels_incomplete_repeated_cv_compare_as_mean_c_index() -> Non
     assert 'const repeatedCvLike = evaluationMode === "repeated_cv" || evaluationMode === "repeated_cv_incomplete";' in text
     assert 'const mlMetricLabel = repeatedCvLike ? "Mean C-index" : "C-index";' in text
     assert 'repeated CV (incomplete)' in text
+
+
+def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repeated_cv() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'if (response.status === 404 && /Unknown dataset id:/i.test(message) && state.dataset) {' in text
+    assert 'goHome({ syncHistory: true, historyMode: "replace" });' in text
+    assert 'The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.' in text
+    assert 'refs.runMlButton.disabled = singleModelBlocked || isScopeBusy("ml");' in text
+    assert 'Train Model uses deterministic holdout only. Use Compare All for repeated CV screening.' in text
+    assert 'if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {' in text
+    assert 'Train Model uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.' in text
 
 
 def test_plot_config_removes_box_and_lasso_select_tools() -> None:
@@ -3943,6 +3957,44 @@ def test_ml_single_model_endpoint_rejects_repeated_cv_strategy() -> None:
 
     assert response.status_code == 400
     assert "deterministic holdout only" in response.json()["detail"]
+
+
+def test_deep_model_endpoint_rejects_empty_hidden_layers() -> None:
+    dataset = client.post("/api/load-example").json()
+
+    response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "model_type": "deepsurv",
+            "features": ["age"],
+            "categorical_features": [],
+            "hidden_layers": [],
+            "dropout": 0.1,
+            "learning_rate": 0.001,
+            "epochs": 10,
+            "batch_size": 8,
+            "random_seed": 42,
+            "evaluation_strategy": "holdout",
+            "cv_folds": 2,
+            "cv_repeats": 1,
+            "early_stopping_patience": 1,
+            "early_stopping_min_delta": 0.0,
+            "parallel_jobs": 1,
+            "num_time_bins": 10,
+            "n_heads": 1,
+            "d_model": 16,
+            "n_layers": 1,
+            "latent_dim": 2,
+            "n_clusters": 2,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Hidden layers must contain at least one positive integer." in json.dumps(response.json())
 
 
 def test_cohort_table_rejects_outcome_informed_grouping_column() -> None:
