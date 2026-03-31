@@ -118,6 +118,25 @@ def test_build_cox_forest_figure_returns_json() -> None:
     assert "Apparent C-index = 0.650" in annotation_text
 
 
+def test_build_cox_forest_figure_wraps_long_labels() -> None:
+    cox_result = {
+        "results_table": [
+            {
+                "Label": "histology: Lung Adenocarcinoma Mixed Subtype vs Lung Acinar Adenocarcinoma",
+                "Hazard ratio": 1.25,
+                "CI lower": 1.05,
+                "CI upper": 1.52,
+                "P value": 0.01,
+            },
+        ],
+        "model_stats": {"n": 220, "events": 99, "c_index": 0.68, "c_index_label": "Apparent C-index"},
+    }
+
+    figure = build_cox_forest_figure(cox_result)
+
+    assert "<br>" in figure["layout"]["yaxis"]["ticktext"][0] or figure["layout"]["yaxis"]["ticktext"][0].endswith("…")
+
+
 def test_build_cutpoint_scan_figure_with_data() -> None:
     result = {
         "scan_data": [

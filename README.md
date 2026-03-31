@@ -36,7 +36,7 @@ The app includes four built-in example datasets:
 - includes demographic, treatment, stage, and biomarker variables
 - useful for quick demos and testing
 
-2. `Load TCGA LUAD`
+2. `TCGA LUAD (Real)`
 - a bundled public TCGA LUAD cohort curated from UCSC Xena
 - useful for a more realistic demo with a real public dataset
 
@@ -44,7 +44,7 @@ The app includes four built-in example datasets:
 - a compact TCGA LUAD overall-survival table intended for immediate upload-style testing
 - useful when you want a smaller real cohort without the extra clinical columns
 
-4. `GBSG2`
+4. `GBSG2 (Real)`
 - a real public breast-cancer recurrence dataset
 - useful for a fast end-to-end Kaplan-Meier, Cox, and ML smoke test with no missing values
 
@@ -369,7 +369,8 @@ If this is your first time:
    - median split
    - tertile split
    - quartile split
-   - custom cutoff
+   - percentile split
+   - extreme split
    - optimal cutpoint
 5. Move to ML or DL comparison only after the classical analysis makes sense
 6. If you want to validate a file before opening the UI, run:
@@ -689,9 +690,9 @@ Single-model ML training also supports:
 - feature-importance output for trained models
 
 Practical note:
-- `Compare All` is usually faster than single-model `Train Model`
+- `Compare All` is usually faster than single-model `Train a model`
 - `Compare All` focuses on cross-model scoring
-- single-model `Train Model` may do extra post-fit work such as feature importance and optional SHAP computation
+- single-model `Train a model` may do extra post-fit work such as feature importance and optional SHAP computation
 - for quick RSF checks on larger cohorts, leave `Fast mode` enabled
 
 ### Deep Learning
@@ -738,6 +739,7 @@ Architecture note:
 - DeepHit uses a stabilized ranking-loss scale (`sigma=1.0`) rather than the earlier sharper default.
 - `Neural MTLR` is implemented as an MTLR-inspired discrete-time neural variant for workflow comparison, not as a literal reference reproduction of the original formulation.
 - `Survival VAE` should be interpreted as a VAE-inspired latent representation model for clustering and risk screening. SurvStudio does not claim validated generative simulation or uncertainty estimation from this path.
+- DL loss plots show both `Training loss` and `Monitor loss`. `Monitor loss` is a validation-like internal checkpoint signal drawn from the training partition for early stopping; it is not the final holdout or external validation metric.
 
 ## How To Read Results
 
@@ -776,6 +778,14 @@ If you use them in a manuscript:
 - report how the cutpoint was selected
 - prefer selection-adjusted p-values when available
 - validate the cutpoint on separate data
+
+Current derive-group options also include:
+- `Percentile split`
+  - `25` means `Top 25% vs Rest`
+  - `25,25` means `Bottom 25% / Middle 50% / Top 25%`
+- `Extreme split`
+  - `25` means `Bottom 25% vs Top 25%`
+  - the middle `50%` is excluded from grouped analyses for that derived split
 
 If you derive a `High/Low` grouping from the same cohort with optimal cutpointing or signature discovery and then send that new column back into Kaplan-Meier or grouped summaries on the same cohort:
 - treat the follow-up KM/table output as descriptive
@@ -836,7 +846,7 @@ They are formatting helpers, not official publisher-certified house styles.
 
 ## Evaluation Contract
 
-- ML `Train Model` currently supports the deterministic holdout path for a single fitted model.
+- ML `Train a model` currently supports the deterministic holdout path for a single fitted model.
 - ML `Compare All` is the screening path for shared-model comparison, including repeated cross-validation when selected.
 - DL single-model runs can use holdout or repeated-CV according to the visible evaluation controls.
 
@@ -898,7 +908,7 @@ If you are running on a laptop without GPU acceleration, start with:
 - `Epochs = 100`
 - `Holdout`
 - a compact feature set
-- `Train Model` before `Compare All`
+- `Train a model` before `Compare All`
 
 Then increase epochs or switch to repeated CV only after the single-run workflow looks correct.
 

@@ -32,6 +32,7 @@ from survival_toolkit.analysis import (
     derive_group_column,
     ensure_model_feature_candidate_limit,
     load_dataframe_from_path,
+    preview_cox_analysis_inputs,
     profile_dataframe,
 )
 from survival_toolkit.plots import build_cox_forest_figure, build_km_figure
@@ -86,9 +87,17 @@ _SIGNED_NUMERIC_CSV_LITERAL = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][
 class DeriveGroupRequest(BaseModel):
     dataset_id: str
     source_column: str
-    method: Literal["median_split", "tertile_split", "quartile_split", "custom_cutoff", "optimal_cutpoint"]
+    method: Literal[
+        "median_split",
+        "tertile_split",
+        "quartile_split",
+        "percentile_split",
+        "extreme_split",
+        "custom_cutoff",
+        "optimal_cutpoint",
+    ]
     new_column_name: str | None = None
-    cutoff: float | None = None
+    cutoff: str | float | None = None
     lower_label: str = "Low"
     upper_label: str = "High"
     time_column: str | None = None
@@ -1120,6 +1129,33 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
             )
             figure = build_cox_forest_figure(analysis)
             return {"analysis": analysis, "figure": figure, "request_config": request_config}
+
+        return await run_in_threadpool(_run)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+@app.post("/api/cox-preview")
+async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
+    try:
+        stored = store.get(request_model.dataset_id)
+        request_config = request_model.model_dump()
+        _reject_outcome_informed_columns(
+            stored,
+            [*request_model.covariates, *request_model.categorical_covariates],
+            context="Cox covariates",
+        )
+
+        def _run() -> dict[str, Any]:
+            preview = preview_cox_analysis_inputs(
+                stored.dataframe,
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                covariates=request_model.covariates,
+                categorical_covariates=request_model.categorical_covariates,
+            )
+            return {"preview": preview, "request_config": request_config}
 
         return await run_in_threadpool(_run)
     except Exception as exc:
