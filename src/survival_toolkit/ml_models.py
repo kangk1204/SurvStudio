@@ -1788,6 +1788,7 @@ def compute_shap_values(
 
     shap_method = "tree"
     X_eval = X_array
+    background_samples = None
     try:
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(X_array)
@@ -1803,6 +1804,7 @@ def compute_shap_values(
         bg_idx = rng.choice(n, size=bg_n, replace=False) if n > bg_n else np.arange(n)
         X_bg = X_array[bg_idx]
         X_eval = X_array[:eval_n]
+        background_samples = int(X_bg.shape[0])
 
         def _predict_fn(x: np.ndarray) -> np.ndarray:
             return np.asarray(model.predict(x), dtype=float)
@@ -1853,6 +1855,7 @@ def compute_shap_values(
         "feature_importance": importance_records,
         "shap_summary": shap_summary,
         "n_samples": int(X_eval.shape[0]),
+        "background_samples": background_samples,
         "n_features": int(X_array.shape[1]),
     }
 
@@ -1898,7 +1901,7 @@ def compute_partial_dependence(
                     f"Feature '{feature_name}' not found in the encoded data. "
                     f"Available: {list(X_encoded.columns)}"
                 )
-            X_variant = X_encoded.to_numpy(dtype=float)
+            X_variant = X_encoded.to_numpy(dtype=float, copy=True)
             col_idx = list(X_encoded.columns).index(feature_name)
             replacement = pd.to_numeric(frame_variant[feature_name], errors="coerce").to_numpy(dtype=float)
             X_variant[:, col_idx] = replacement

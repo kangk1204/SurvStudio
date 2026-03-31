@@ -594,7 +594,7 @@
                 <button class="button ghost compact-btn" id="runCompareInlineButton" type="button">Compare All Models</button>
               </div>
               <div class="toolbar-grid expert-parameter-grid">
-                <label class="toolbar-field">
+                <label class="toolbar-field model-choice-field">
                   <span>Model</span>
                   <select id="mlModelType">
                     <option value="rsf">Random Survival Forest</option>
@@ -618,7 +618,7 @@
             <section class="control-section">
               <div class="control-section-head">
                 <strong>Evaluation</strong>
-                <span>These settings apply to Compare All screening only. Train Model uses its own holdout/apparent path.</span>
+                <span>These settings apply to Compare All screening only. Train a model uses its own holdout/apparent path.</span>
               </div>
               <div class="toolbar-grid expert-parameter-grid">
                 <label class="toolbar-field">
@@ -639,7 +639,7 @@
               </div>
             </section>
           </div>
-          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH, RSF, and GBS on one shared evaluation path. <strong>Train Model</strong> fits one RSF or GBS model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF returns much faster on larger cohorts.</div>
+          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH, RSF, and GBS on one shared evaluation path. <strong>Train a model</strong> fits one RSF or GBS model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF returns much faster on larger cohorts.</div>
           <div class="toolbar-note">Partial dependence and counterfactual analysis are available for tree-model runs only (<strong>RSF</strong> or <strong>GBS</strong>). They reuse the latest matching trained tree model when available; otherwise they refit the same requested tree settings.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">
@@ -739,7 +739,7 @@
                 <button class="button ghost compact-btn" id="runDlCompareInlineButton" type="button">Compare All Models</button>
               </div>
               <div class="toolbar-grid expert-parameter-grid">
-                <label class="toolbar-field">
+                <label class="toolbar-field model-choice-field">
                   <span>Model</span>
                   <select id="dlModelType">
                     <option value="deepsurv">DeepSurv (Neural Cox)</option>
@@ -852,7 +852,7 @@
               </div>
             </section>
           </div>
-          <div class="toolbar-note">Evaluation Mode applies to both <strong>Train Model</strong> and <strong>Compare All</strong>. <strong>Holdout</strong> is the fastest default and returns one fitted model with plots. <strong>Repeated CV</strong> is slower, returns aggregate performance, and skips single-fit plots such as one loss curve or one feature-importance chart.</div>
+          <div class="toolbar-note">Evaluation Mode applies to both <strong>Train a model</strong> and <strong>Compare All</strong>. <strong>Holdout</strong> is the fastest default and returns one fitted model with plots. <strong>Repeated CV</strong> is slower, returns aggregate performance, and skips single-fit plots such as one loss curve or one feature-importance chart.</div>
           <div class="toolbar-note">Allowed ranges: <strong>Epochs 10-1000</strong>, <strong>Learning rate 0-0.1</strong>, <strong>Dropout 0-0.5</strong>, <strong>Batch size 8-512</strong>, <strong>CV folds 2-10</strong>, <strong>CV repeats 1-20</strong>, <strong>Patience 1-100</strong>, <strong>Min delta 0-0.1</strong>, and <strong>Parallel jobs 1-16</strong>. Hidden layers use the full comma-separated stack such as <strong>64,64</strong>.</div>
           <div class="shared-feature-card" id="dlFeatureSummaryCard">
             <div class="shared-feature-copy">

@@ -315,6 +315,7 @@ def test_build_cox_forest_figure_ignores_nonfinite_rows() -> None:
         "results_table": [
             {"Label": "age", "Hazard ratio": 1.1, "CI lower": 1.01, "CI upper": 1.2, "P value": 0.01},
             {"Label": "bad", "Hazard ratio": float("inf"), "CI lower": 0.9, "CI upper": float("inf"), "P value": 0.02},
+            {"Label": "non-estimable", "Hazard ratio": None, "CI lower": None, "CI upper": None, "P value": 0.03},
         ],
         "model_stats": {"n": 100, "events": 50, "c_index": 0.65, "c_index_label": "Apparent C-index"},
     }

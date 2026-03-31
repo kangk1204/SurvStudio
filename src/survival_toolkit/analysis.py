@@ -717,6 +717,34 @@ def _safe_exp(value: Any) -> float:
     return math.exp(exponent)
 
 
+def _safe_exp_or_none(value: Any) -> float | None:
+    try:
+        exponent = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(exponent):
+        return None
+    if exponent >= _MAX_EXP_INPUT or exponent <= _MIN_EXP_INPUT:
+        return None
+    return math.exp(exponent)
+
+
+def _cox_estimated_parameter_count(
+    frame: pd.DataFrame,
+    covariates: Sequence[str],
+    categorical_covariates: Sequence[str],
+) -> int:
+    estimated_parameters = 0
+    categorical_set = {str(column) for column in categorical_covariates}
+    for column in covariates:
+        if column in categorical_set:
+            observed_levels = int(frame[column].dropna().nunique()) if column in frame.columns else 0
+            estimated_parameters += max(observed_levels - 1, 0)
+        else:
+            estimated_parameters += 1
+    return int(estimated_parameters)
+
+
 def _summarize_labels(labels: Sequence[str], max_items: int = 3) -> str:
     cleaned = [str(label) for label in labels if label]
     if not cleaned:
@@ -891,6 +919,11 @@ def _cox_scientific_summary(
     reference_alerts = [str(item) for item in categorical_alerts.get("reference_levels", []) if item]
     sparse_level_alerts = [str(item) for item in categorical_alerts.get("sparse_levels", []) if item]
     wide_ci_terms = _cox_wide_ci_alert_terms(model_rows)
+    non_estimable_terms = [
+        str(row.get("Label", row.get("Variable", "")))
+        for row in model_rows
+        if row.get("Hazard ratio") is None or row.get("CI lower") is None or row.get("CI upper") is None
+    ]
 
     strengths = [
         "Cox regression was fit with the Efron tie method.",
@@ -927,6 +960,11 @@ def _cox_scientific_summary(
             f"Some hazard-ratio intervals are very wide, which suggests unstable estimates: {_summarize_labels(wide_ci_terms, max_items=4)}."
         )
         next_steps.append("Treat wide-interval terms as unstable unless the category encoding or cohort size is improved.")
+    if non_estimable_terms:
+        cautions.append(
+            f"Some Cox contrasts produced non-estimable hazard ratios or confidence intervals: {_summarize_labels(non_estimable_terms, max_items=4)}."
+        )
+        next_steps.append("Collapse sparse categories or remove quasi-separated terms before interpreting those contrasts.")
     if c_index is not None and c_index < 0.6:
         cautions.append("Apparent model discrimination is modest (C-index below 0.60).")
     cautions.append("The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.")
@@ -937,10 +975,16 @@ def _cox_scientific_summary(
         cautions.append("No model term shows clear nominal evidence at p < 0.05.")
 
     if significant_terms:
-        headline = (
-            f"Model fit identified {len(significant_terms)} term(s) with nominal hazard association: "
-            f"{_summarize_labels(significant_terms)}."
-        )
+        if ph_alert_terms or reference_alerts or sparse_level_alerts or wide_ci_terms or non_estimable_terms:
+            headline = (
+                f"Model fit shows {len(significant_terms)} term(s) with nominal hazard association, "
+                f"but some estimates appear unstable: {_summarize_labels(significant_terms)}."
+            )
+        else:
+            headline = (
+                f"Model fit identified {len(significant_terms)} term(s) with nominal hazard association: "
+                f"{_summarize_labels(significant_terms)}."
+            )
         next_steps.append("Interpret hazard ratios together with confidence intervals, not p-values alone.")
     else:
         headline = "Model fit completed, but no term shows clear nominal hazard association under the current specification."
@@ -1343,6 +1387,24 @@ def derive_group_column(
     summary["column_name"] = column_name
     summary["outcome_informed"] = outcome_informed
     summary["counts"] = counts
+    summary["recipe"] = {
+        "source_column": source_column,
+        "column_name": column_name,
+        "method": method,
+        "cutoff": summary.get("cutoff"),
+        "cutoff_spec": summary.get("cutoff_spec"),
+        "cutoffs": list(summary.get("cutoffs", [])),
+        "percentiles": list(summary.get("percentiles", [])),
+        "lower_label": lower_label,
+        "upper_label": upper_label,
+        "time_column": time_column,
+        "event_column": event_column,
+        "event_positive_value": event_positive_value,
+        "min_group_fraction": summary.get("min_group_fraction"),
+        "permutation_iterations": summary.get("permutation_iterations"),
+        "random_seed": summary.get("random_seed"),
+        "outcome_informed": outcome_informed,
+    }
     return updated, column_name, summary
 
 
@@ -2510,9 +2572,9 @@ def compute_cox_analysis(
     for idx, term in enumerate(results.model.exog_names):
         variable, label, reference = _clean_term(term, reference_levels)
         beta = float(param_vector[idx])
-        hr = _safe_exp(beta)
-        ci_low = _safe_exp(conf_int[idx, 0])
-        ci_high = _safe_exp(conf_int[idx, 1])
+        hr = _safe_exp_or_none(beta)
+        ci_low = _safe_exp_or_none(conf_int[idx, 0])
+        ci_high = _safe_exp_or_none(conf_int[idx, 1])
         model_rows.append(
             {
                 "Variable": variable,
@@ -2633,6 +2695,13 @@ def preview_cox_analysis_inputs(
     complete_case = preview_frame.dropna(subset=list(covariates)).reset_index(drop=True)
     if complete_case.empty:
         raise ValueError("No rows remain after removing missing values for the Cox model.")
+    estimated_parameters = _cox_estimated_parameter_count(complete_case, covariates, categorical_covariates)
+    event_count = int(complete_case[event_column].sum())
+    events_per_parameter = (
+        float(event_count / estimated_parameters)
+        if estimated_parameters > 0
+        else None
+    )
     stability_warnings: list[str] = []
     risky_levels: list[dict[str, Any]] = []
     for column in categorical_covariates:
@@ -2685,12 +2754,23 @@ def preview_cox_analysis_inputs(
                 f'{column} has level(s) with only events or only censored rows after missing-value filtering: {preview_levels}'
                 f'{" ..." if len(one_sided_levels) > 3 else ""}. This can produce non-finite Cox estimates.'
             )
+    if events_per_parameter is not None:
+        if events_per_parameter < 5:
+            stability_warnings.append(
+                f"Events per parameter is {events_per_parameter:.2f}, which is extremely low for Cox regression. Reduce covariates or add more events before treating the fit as stable."
+            )
+        elif events_per_parameter < 10:
+            stability_warnings.append(
+                f"Events per parameter is {events_per_parameter:.2f}, so coefficient estimates may still be unstable."
+            )
     missing_by_covariate.sort(key=lambda item: (-int(item["missing_rows"]), str(item["column"])))
     return {
         "outcome_rows": int(frame.shape[0]),
         "analyzable_rows": int(complete_case.shape[0]),
         "dropped_rows": int(frame.shape[0] - complete_case.shape[0]),
-        "events": int(complete_case[event_column].sum()),
+        "events": event_count,
+        "estimated_parameters": int(estimated_parameters),
+        "events_per_parameter": events_per_parameter,
         "covariates": list(covariates),
         "categorical_covariates": list(categorical_covariates),
         "missing_by_covariate": missing_by_covariate,
@@ -2703,6 +2783,7 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
     variables = [variable for variable in variables if variable != group_column]
     if not variables:
         raise ValueError("Select at least one variable for the cohort summary table.")
+    overall_label = "Overall (grouped subset)" if group_column else "Overall"
     columns = [*variables]
     if group_column:
         columns.append(group_column)
@@ -2713,12 +2794,12 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
         string_group = frame[group_column].astype("string")
         frame = frame.loc[string_group.notna()].copy()
         string_group = frame[group_column].astype("string")
-        group_frames["Overall"] = frame
+        group_frames[overall_label] = frame
         group_labels = _sorted_group_labels(string_group, group_column)
         for label in group_labels:
             group_frames[label] = frame.loc[string_group == label]
     else:
-        group_frames["Overall"] = frame
+        group_frames[overall_label] = frame
         group_labels = []
 
     rows: list[dict[str, Any]] = []
@@ -2787,7 +2868,6 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
             }
         )
 
-    overall_label = "Overall (grouped subset)" if group_column else "Overall"
     return {
         "columns": ["Variable", "Statistic", overall_label, *group_labels],
         "rows": rows,

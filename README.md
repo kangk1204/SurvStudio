@@ -694,6 +694,7 @@ Practical note:
 - `Compare All` focuses on cross-model scoring
 - single-model `Train a model` may do extra post-fit work such as feature importance and optional SHAP computation
 - for quick RSF checks on larger cohorts, leave `Fast mode` enabled
+- if `TreeExplainer` is unsupported, SHAP falls back to a tightly capped `KernelExplainer` approximation using a small background/evaluation sample, so treat the ranking as approximate rather than publication-grade
 
 ### Deep Learning
 
@@ -781,11 +782,13 @@ If you use them in a manuscript:
 
 Current derive-group options also include:
 - `Percentile split`
-  - `25` means `Top 25% vs Rest`
-  - `25,25` means `Bottom 25% / Middle 50% / Top 25%`
+  - `25` means `Top-25% threshold vs Rest`
+  - `25,25` means `Bottom-25% threshold / Middle / Top-25% threshold`
+  - ties at the percentile threshold can make the realized groups slightly larger than the nominal percentages
 - `Extreme split`
-  - `25` means `Bottom 25% vs Top 25%`
+  - `25` means `Bottom-25% threshold vs Top-25% threshold`
   - the middle `50%` is excluded from grouped analyses for that derived split
+  - ties at either threshold can make the kept tails slightly larger than the nominal percentages
 
 If you derive a `High/Low` grouping from the same cohort with optimal cutpointing or signature discovery and then send that new column back into Kaplan-Meier or grouped summaries on the same cohort:
 - treat the follow-up KM/table output as descriptive
@@ -903,6 +906,8 @@ Deep learning comparison can take substantial time on CPU-only machines, especia
 - larger shared ML/DL feature sets
 
 `Compare All` is the slowest DL path because it trains all implemented deep models in sequence. For example, a 100+ feature input set can take noticeably longer than the same cohort with a compact feature set.
+
+For larger cohorts, note that the current `DeepSurv` and `Survival Transformer` paths use a full-batch Cox-style objective. That is statistically fine, but it can hit memory limits sooner than mini-batch tree workflows on 10k+ rows.
 
 If you are running on a laptop without GPU acceleration, start with:
 - `Epochs = 100`
