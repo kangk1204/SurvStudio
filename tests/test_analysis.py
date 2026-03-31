@@ -64,6 +64,8 @@ def test_percentile_split_top_vs_rest_creates_two_groups() -> None:
     assert summary["cutoff_spec"] == "25"
     assert summary["n_groups"] == 2
     assert len(summary["cutoffs"]) == 1
+    assert "Realized non-missing shares:" in summary["assignment_rule"]
+    assert summary["realized_group_shares"]
 
 
 def test_derive_group_rejects_survival_endpoint_source_column() -> None:
@@ -726,7 +728,7 @@ def test_cohort_table_overall_matches_grouped_subset_when_group_values_missing()
     table = compute_cohort_table(df, variables=["age", "sex"], group_column="group_flag")
     cohort_size_row = next(row for row in table["rows"] if row["Variable"] == "Cohort size")
 
-    assert cohort_size_row["Overall"] == 3
+    assert cohort_size_row["Overall (grouped subset)"] == 3
     assert cohort_size_row["A"] == 2
     assert cohort_size_row["B"] == 1
 

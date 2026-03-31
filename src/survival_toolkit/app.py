@@ -93,7 +93,6 @@ class DeriveGroupRequest(BaseModel):
         "quartile_split",
         "percentile_split",
         "extreme_split",
-        "custom_cutoff",
         "optimal_cutpoint",
     ]
     new_column_name: str | None = None
@@ -631,12 +630,6 @@ def _export_rows_to_csv(
         raise ValueError("No rows available for export.")
     columns = _export_columns(rows)
     buffer = io.StringIO()
-    resolved_caption = _resolve_export_caption(caption, template) if caption or notes else ""
-    export_notes = [str(note).strip() for note in (notes or []) if str(note).strip()]
-    if resolved_caption:
-        buffer.write(f"# {resolved_caption}\n")
-    for note in export_notes:
-        buffer.write(f"# {note}\n")
     writer = csv.writer(buffer)
     writer.writerow([_sanitize_csv_cell(column) for column in columns])
     for row in rows:
@@ -1053,6 +1046,7 @@ async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
             provenance = dict(stored.metadata.get("derived_column_provenance", {}))
             provenance[column_name] = {
                 "outcome_informed": bool(summary.get("outcome_informed")),
+                "recipe": copy.deepcopy(summary.get("recipe", {})),
             }
             new_metadata = {
                 **stored.metadata,

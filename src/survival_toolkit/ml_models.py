@@ -282,10 +282,10 @@ def _scientific_summary_ml(
     epv = fit_events / max(n_features, 1)
     if epv < 10:
         cautions.append(
-            f"Events per feature is {epv:.1f} (< 10); results may be overfit."
+            f"Event-to-feature ratio is {epv:.1f}; screening models can overfit when events are sparse relative to selected features."
         )
         next_steps.append(
-            "Reduce the number of features or increase the cohort size before trusting these estimates."
+            "Reduce the feature set or use repeated resampling before treating this screening result as stable."
         )
 
     if fit_events < 20:
@@ -308,7 +308,7 @@ def _scientific_summary_ml(
     # Headline
     if c_index is not None:
         headline = (
-            f"{model_name} achieved a {metric_name.lower()} of {c_index:.3f} on the current evaluation path."
+            f"{model_name} estimated a {metric_name.lower()} of {c_index:.3f} on the current evaluation path."
         )
     else:
         headline = f"{model_name} training completed but the {metric_name.lower()} could not be computed."
@@ -1205,6 +1205,10 @@ def compare_survival_models(
                 "n_features": result["n_features"],
                 "training_time_ms": result["training_time_ms"],
                 "evaluation_mode": evaluation_mode,
+                "training_samples": result.get("train_n"),
+                "evaluation_samples": result.get("test_n"),
+                "train_events": result.get("train_events"),
+                "test_events": result.get("test_events"),
             })
         except Exception as exc:
             errors.append({"model": model_name, "error": str(exc)})
@@ -1249,6 +1253,10 @@ def compare_survival_models(
         "excluded_models": sorted({str(error["model"]) for error in errors}),
         "n_patients": n_patients,
         "n_events": n_events,
+        "n_fit_patients": int(train_frame.shape[0]),
+        "n_fit_events": int(train_frame[event_column].sum()),
+        "n_evaluation_patients": int(test_frame.shape[0]),
+        "n_evaluation_events": int(test_frame[event_column].sum()),
         "evaluation_mode": evaluation_mode,
         "scientific_summary": scientific_summary,
     }
@@ -1477,6 +1485,12 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
                 "Evaluations, n": row.get("n_evaluations"),
                 "Failures, n": row.get("n_failures"),
                 "Features, n": row.get("n_features"),
+                "Patients, n": result.get("n_patients"),
+                "Events, n": result.get("n_events"),
+                "Mean Training Patients, n": row.get("training_samples"),
+                "Mean Training Events, n": row.get("train_events"),
+                "Mean Evaluation Patients, n": row.get("evaluation_samples"),
+                "Mean Evaluation Events, n": row.get("test_events"),
                 "Mean Training Time, ms": _safe_float(row.get("training_time_ms")),
             }
             if include_fallback_counts:
@@ -1514,6 +1528,10 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
                 "Validation Strategy": row.get("evaluation_mode", evaluation_mode),
                 "C-index": _safe_float(row.get("c_index")),
                 "Features, n": row.get("n_features"),
+                "Patients, n": result.get("n_patients"),
+                "Events, n": result.get("n_events"),
+                "Evaluation Patients, n": row.get("evaluation_samples", result.get("n_evaluation_patients")),
+                "Evaluation Events, n": row.get("test_events", result.get("n_evaluation_events")),
                 "Training Time, ms": _safe_float(row.get("training_time_ms")),
             })
         table_notes = [

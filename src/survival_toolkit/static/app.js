@@ -525,7 +525,7 @@ function resetCoxPreview({ rerender = true } = {}) {
     error: "",
   };
   if (rerender && runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
-    renderGuidedChrome();
+    if (!syncGuidedCoxPanelMounts()) renderGuidedChrome();
   }
 }
 
@@ -544,12 +544,16 @@ async function refreshCoxPreview({ force = false } = {}) {
       payload: null,
       error: error.message || "Cox preview is unavailable until the endpoint is configured.",
     };
-    if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") renderGuidedChrome();
+    if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
+      if (!syncGuidedCoxPanelMounts()) renderGuidedChrome();
+    }
     return;
   }
   if (!requestConfig) {
     resetCoxPreview({ rerender: false });
-    if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") renderGuidedChrome();
+    if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
+      if (!syncGuidedCoxPanelMounts()) renderGuidedChrome();
+    }
     return;
   }
   const requestKey = coxPreviewRequestKey(requestConfig);
@@ -561,6 +565,9 @@ async function refreshCoxPreview({ force = false } = {}) {
     payload: null,
     error: "",
   };
+  if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
+    syncGuidedCoxPanelMounts();
+  }
   try {
     const payload = await fetchJSON("/api/cox-preview", {
       method: "POST",
@@ -582,17 +589,20 @@ async function refreshCoxPreview({ force = false } = {}) {
       error: error.message || "Cox preview is unavailable.",
     };
   }
-  if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") renderGuidedChrome();
+  if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
+    if (!syncGuidedCoxPanelMounts()) renderGuidedChrome();
+  }
 }
 
 function scheduleCoxPreview({ delay = 180, force = false } = {}) {
   if (runtime.coxPreviewTimer) {
     window.clearTimeout(runtime.coxPreviewTimer);
   }
+  const effectiveDelay = delay <= 0 ? 60 : delay;
   runtime.coxPreviewTimer = window.setTimeout(() => {
     runtime.coxPreviewTimer = null;
     void refreshCoxPreview({ force });
-  }, delay);
+  }, effectiveDelay);
 }
 
 function requestConfigFromPayload(payload) {
@@ -964,6 +974,22 @@ function renderGuidedCoxPreviewSummary() {
       <span class="guided-inline-note">${escapeHtml(noteText)}</span>
     </div>
   `;
+}
+
+function guidedCoxSummaryMount(name) {
+  return refs.guidedPanel?.querySelector(`#${name}`) || null;
+}
+
+function syncGuidedCoxPanelMounts() {
+  if (runtime.uiMode !== "guided" || runtime.guidedGoal !== "cox" || currentGuidedStep() !== 4) {
+    return false;
+  }
+  const selectionMount = guidedCoxSummaryMount("guidedCoxSelectionMount");
+  const previewMount = guidedCoxSummaryMount("guidedCoxPreviewMount");
+  if (!selectionMount || !previewMount) return false;
+  selectionMount.innerHTML = renderGuidedCoxSelectionSummary();
+  previewMount.innerHTML = renderGuidedCoxPreviewSummary();
+  return true;
 }
 
 function guidedRailStatusState() {
@@ -2268,9 +2294,31 @@ function selectedCheckboxValues(container) {
   return [...container.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
 }
 
-function allCheckboxValues(container) {
+function allCheckboxValues(container, { visibleOnly = false } = {}) {
   if (!container) return [];
-  return [...container.querySelectorAll('input[type="checkbox"]')].map((input) => input.value);
+  return [...container.querySelectorAll('input[type="checkbox"]')]
+    .filter((input) => !visibleOnly || !input.closest(".check-item")?.classList.contains("hidden-by-filter"))
+    .map((input) => input.value);
+}
+
+function resetChecklistSearch(container) {
+  const searchControl = searchControlForChecklist(container);
+  if (!searchControl) return;
+  searchControl.value = "";
+  applyChecklistSearch(container);
+}
+
+function normalizeDerivedColumnProvenance(provenance = {}) {
+  return Object.fromEntries(
+    Object.entries(provenance || {}).map(([columnName, meta]) => {
+      const normalizedMeta = meta && typeof meta === "object" ? meta : {};
+      return [columnName, {
+        ...normalizedMeta,
+        outcomeInformed: Boolean(normalizedMeta.outcomeInformed ?? normalizedMeta.outcome_informed),
+        recipe: normalizedMeta.recipe || {},
+      }];
+    }),
+  );
 }
 
 function availableCoxStageVariables() {
@@ -2401,7 +2449,6 @@ function humanizeDeriveMethod(method) {
     quartile_split: "Quartile split",
     percentile_split: "Percentile split",
     extreme_split: "Extreme split",
-    custom_cutoff: "Custom cutoff",
     optimal_cutpoint: "Optimal cutpoint",
   };
   return labelMap[method] || humanizeHeader(method || "NA");
@@ -2929,6 +2976,7 @@ function refreshVariableSelections() {
   const numericOptions = state.dataset.numeric_columns.filter((c) => !isSurvivalOutcomeLikeColumn(c));
   renderSelect(refs.deriveSource, numericOptions, { selected: numericOptions.includes(refs.deriveSource.value) ? refs.deriveSource.value : numericOptions[0] || null });
   renderSharedFeatureSummary();
+  syncGuidedCoxPanelMounts();
 }
 
 function setSharedModelFeatureSelection(nextFeatures = [], { clearCategoricals = false } = {}) {
@@ -3346,23 +3394,17 @@ function renderGuidedChrome() {
           `Outcome: ${timeColumn} / ${eventColumn} = ${eventValue}`,
           ...(goal ? [`Analysis: ${goalLabel(goal)}`] : []),
         ]
-      : step === 4
-        ? [
-            `Dataset: ${state.dataset.filename}`,
-            ...(goal ? [`Analysis: ${goalLabel(goal)}`] : []),
-            ...(evaluation ? [`Evaluation: ${evaluation}`] : []),
-            ...(resultMode ? [`Result mode: ${resultMode}`] : []),
-          ]
-        : [
-            `Dataset: ${state.dataset.filename}`,
-            ...(goal ? [`Analysis: ${goalLabel(goal)}`] : []),
-            ...(evaluation ? [`Evaluation: ${evaluation}`] : []),
-            ...(resultMode ? [`Result mode: ${resultMode}`] : []),
-          ];
+      : [
+          `Dataset: ${state.dataset.filename}`,
+          ...(goal ? [`Analysis: ${goalLabel(goal)}`] : []),
+          ...(evaluation ? [`Evaluation: ${evaluation}`] : []),
+          ...(resultMode ? [`Result mode: ${resultMode}`] : []),
+        ];
   renderGuidedSummaryChips(summaryChips);
 
   updateStepIndicator(step);
   refs.guidedPanel.innerHTML = guidedPanelMarkup(step);
+  syncGuidedCoxPanelMounts();
   renderGuidedRailStatus();
   renderExpertSurfaceStatus();
   updateGuidedResultVisibility();
@@ -3474,8 +3516,8 @@ function guidedPanelMarkup(step) {
   }
 
   if (step === 4) {
-    const coxSelectionSummary = goal === "cox" ? renderGuidedCoxSelectionSummary() : "";
-    const coxPreviewSummary = goal === "cox" ? renderGuidedCoxPreviewSummary() : "";
+    const coxSelectionSummary = goal === "cox" ? '<div id="guidedCoxSelectionMount"></div>' : "";
+    const coxPreviewSummary = goal === "cox" ? '<div id="guidedCoxPreviewMount"></div>' : "";
     const configureCopy = {
       km: {
         title: "Run Kaplan-Meier",
@@ -3939,6 +3981,8 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   const columnNames = state.dataset.columns.map((c) => c.name);
   const suggestions = state.dataset.suggestions;
   if (refs.showAllEventColumns) refs.showAllEventColumns.checked = false;
+  if (refs.covariateSearchInput) refs.covariateSearchInput.value = "";
+  if (refs.categoricalSearchInput) refs.categoricalSearchInput.value = "";
   renderTimeColumnOptions({ preferred: inferDefault(columnNames, suggestions.time_columns, 0), silent: true });
   renderEventColumnOptions({
     preferred: inferDefault(columnNames, suggestions.event_columns, 1),
@@ -3980,7 +4024,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.deriveSummary.innerHTML = "";
   refs.deriveSummary.classList.add("hidden");
   runtime.lastDerivedGroup = null;
-  runtime.derivedColumnProvenance = payload.derived_column_provenance || {};
+  runtime.derivedColumnProvenance = normalizeDerivedColumnProvenance(payload.derived_column_provenance);
   runtime.resultPreference.ml = "single";
   runtime.resultPreference.dl = "single";
   resetCoxPreview({ rerender: false });
@@ -4061,7 +4105,7 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
     : null;
 
   state.dataset = payload;
-  runtime.derivedColumnProvenance = payload.derived_column_provenance || {};
+  runtime.derivedColumnProvenance = normalizeDerivedColumnProvenance(payload.derived_column_provenance);
   runtime.guidedGoal = preservedGuidedGoal;
   runtime.guidedStep = preservedGuidedStep;
   resetCoxPreview({ rerender: false });
@@ -4144,8 +4188,7 @@ async function deriveGroup({ applyToGroup = false } = {}) {
   const method = refs.deriveMethod.value;
   const isPercentileSplit = method === "percentile_split";
   const isExtremeSplit = method === "extreme_split";
-  const isCustomCutoff = method === "custom_cutoff";
-  const usesCutoffInput = isPercentileSplit || isExtremeSplit || isCustomCutoff;
+  const usesCutoffInput = isPercentileSplit || isExtremeSplit;
   const isOptimal = method === "optimal_cutpoint";
   const requestedColumnName = validateDerivedColumnName(refs.deriveColumnName.value);
   const preservedGroup = refs.groupColumn.value || "";
@@ -4158,15 +4201,10 @@ async function deriveGroup({ applyToGroup = false } = {}) {
           ? "Enter one percentile value, for example 25."
           : isPercentileSplit
             ? "Enter percentile values, for example 25 or 25,25."
-            : "Enter a numeric cutoff value.",
+            : "Enter percentile values.",
       );
     }
-    if (isCustomCutoff) {
-      cutoffValue = Number(cutoffInput);
-      if (!Number.isFinite(cutoffValue)) throw new Error("Cutoff must be a finite numeric value.");
-    } else {
-      cutoffValue = cutoffInput;
-    }
+    cutoffValue = cutoffInput;
   }
   refs.deriveStatus.textContent = isOptimal
     ? (applyToGroup ? "Scanning and applying a new grouping column..." : "Scanning a new grouping column...")
@@ -4193,7 +4231,8 @@ async function deriveGroup({ applyToGroup = false } = {}) {
   const payload = await fetchJSON("/api/derive-group", { method: "POST", body: JSON.stringify(body) });
   updateAfterDerivedDataset(payload, { deferChrome: shouldRefreshKm });
   runtime.derivedColumnProvenance[payload.derived_column] = {
-    outcomeInformed: isOptimal,
+    outcomeInformed: Boolean(payload.derive_summary?.outcome_informed),
+    recipe: payload.derive_summary?.recipe || {},
   };
   refreshVariableSelections();
   if (applyToGroup) {
@@ -4267,7 +4306,7 @@ function updateMethodVisibility() {
   const isOptimal = refs.deriveMethod.value === "optimal_cutpoint";
   const isPercentileSplit = refs.deriveMethod.value === "percentile_split";
   const isExtremeSplit = refs.deriveMethod.value === "extreme_split";
-  const usesCutoffInput = isPercentileSplit || isExtremeSplit || refs.deriveMethod.value === "custom_cutoff";
+  const usesCutoffInput = isPercentileSplit || isExtremeSplit;
   refs.cutoffWrap.classList.toggle("hidden", !usesCutoffInput);
   if (refs.deriveCutoffLabel) {
     refs.deriveCutoffLabel.firstChild.textContent = isExtremeSplit ? "Extreme percentile " : "Percentile(s) ";
@@ -4402,6 +4441,7 @@ async function runSignatureSearch() {
   updateAfterDataset(payload);
   runtime.derivedColumnProvenance[payload.derived_column] = {
     outcomeInformed: true,
+    recipe: payload.signature_analysis?.signature_recipe || {},
   };
   refreshVariableSelections();
   state.signature = {
@@ -5656,6 +5696,7 @@ function initListeners() {
       autoCategoricalValues: input?.checked ? [input.value] : [],
     });
     renderSharedFeatureSummary();
+    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview();
   });
@@ -5664,6 +5705,7 @@ function initListeners() {
   });
   refs.categoricalChecklist?.addEventListener("change", () => {
     renderSharedFeatureSummary();
+    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview();
   });
@@ -5671,10 +5713,11 @@ function initListeners() {
     applyChecklistSearch(refs.categoricalChecklist);
   });
   refs.selectAllCoxCovariatesButton?.addEventListener("click", () => {
-    const covariates = allCheckboxValues(refs.covariateChecklist);
+    const covariates = allCheckboxValues(refs.covariateChecklist, { visibleOnly: true });
     setCheckedValues(refs.covariateChecklist, covariates);
     syncCoxCovariateSelection({ autoCategoricalValues: covariates });
     renderSharedFeatureSummary();
+    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Selected all Cox covariates.", "success", 2200);
@@ -5684,6 +5727,7 @@ function initListeners() {
     setCheckedValues(refs.categoricalChecklist, []);
     syncCoxCovariateSelection();
     renderSharedFeatureSummary();
+    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Cleared all Cox covariates and categorical flags.", "success", 2200);
@@ -5692,9 +5736,10 @@ function initListeners() {
     const covariates = selectedCheckboxValues(refs.covariateChecklist);
     setCheckedValues(
       refs.categoricalChecklist,
-      covariates.length ? covariates : allCheckboxValues(refs.categoricalChecklist),
+      covariates.length ? covariates : allCheckboxValues(refs.categoricalChecklist, { visibleOnly: true }),
     );
     renderSharedFeatureSummary();
+    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Marked the current Cox covariates as categorical.", "success", 2200);
@@ -5702,6 +5747,7 @@ function initListeners() {
   refs.clearCoxCategoricalsButton?.addEventListener("click", () => {
     setCheckedValues(refs.categoricalChecklist, []);
     renderSharedFeatureSummary();
+    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Cleared Cox categorical flags.", "success", 2200);

@@ -338,6 +338,8 @@ def test_build_manuscript_result_tables_handles_incomplete_repeated_cv() -> None
     manuscript = build_manuscript_result_tables(
         {
             "evaluation_mode": "repeated_cv_incomplete",
+            "n_patients": 120,
+            "n_events": 58,
             "comparison_table": [
                 {
                     "model": "Survival Transformer",
@@ -350,6 +352,10 @@ def test_build_manuscript_result_tables_handles_incomplete_repeated_cv() -> None
                     "n_failures": 2,
                     "n_apparent_fallbacks": 2,
                     "n_features": 10,
+                    "training_samples": 96,
+                    "train_events": 46,
+                    "evaluation_samples": 24,
+                    "test_events": 12,
                     "training_time_ms": 123.4,
                     "training_seeds": [42, 43, 44],
                     "split_seeds": [42, 43, 44],
@@ -361,7 +367,12 @@ def test_build_manuscript_result_tables_handles_incomplete_repeated_cv() -> None
 
     assert "incomplete repeated stratified cross-validation" in manuscript["caption"].lower()
     assert any("repeated-cv incomplete" in note.lower() for note in manuscript["table_notes"])
-    assert manuscript["model_performance_table"][0]["Validation Strategy"].endswith("(incomplete)")
+    first_row = manuscript["model_performance_table"][0]
+    assert first_row["Validation Strategy"].endswith("(incomplete)")
+    assert first_row["Patients, n"] == 120
+    assert first_row["Events, n"] == 58
+    assert first_row["Mean Evaluation Patients, n"] == 24
+    assert first_row["Mean Evaluation Events, n"] == 12
 
 
 def test_prepare_model_evaluation_split_keeps_outcome_valid_rows_with_missing_features() -> None:
