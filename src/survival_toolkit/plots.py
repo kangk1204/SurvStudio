@@ -254,6 +254,20 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         align="right", xanchor="right", yanchor="top",
         bgcolor="rgba(255,255,255,0.85)", borderpad=4,
     )
+    fig.add_annotation(
+        text="Red: term p &lt; 0.05. Blue: term p ≥ 0.05. PH diagnostics are reviewed separately below.",
+        xref="paper",
+        yref="paper",
+        x=0.02,
+        y=1.08,
+        showarrow=False,
+        font={"size": 10, "color": INK},
+        align="left",
+        xanchor="left",
+        yanchor="bottom",
+        bgcolor="rgba(255,255,255,0.85)",
+        borderpad=4,
+    )
     if not rows:
         fig.add_annotation(
             text="No finite hazard ratios are available to plot.",
