@@ -1872,9 +1872,14 @@ body {
   min-width: 0;
 }
 
-.derive-panel > .button {
+.derive-action-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
   align-self: flex-end;
-  justify-self: stretch;
+}
+
+.derive-action-buttons > .button {
   width: 100%;
   min-width: 0;
 }
@@ -1895,30 +1900,14 @@ body {
   width: 100%;
 }
 
-.derive-toggle-option {
-  align-self: stretch;
-  min-height: 52px;
-  min-width: 0;
-  padding: 8px 12px;
-  line-height: 1.25;
-}
-
-.derive-toggle-option span:last-child {
-  font-size: 0.78rem;
-  font-weight: 600;
-  line-height: 1.25;
-  white-space: normal;
-  max-width: none;
-}
-
-.derive-toggle-option input {
-  margin-top: 2px;
-}
-
 @media (max-width: 760px) {
   .derive-panel {
     grid-template-columns: 1fr;
     max-height: 640px;
+  }
+
+  .derive-action-buttons {
+    grid-template-columns: 1fr;
   }
 
   .derive-optimal-controls {

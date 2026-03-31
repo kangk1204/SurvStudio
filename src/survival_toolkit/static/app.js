@@ -17,7 +17,6 @@ const runtime = {
   uiMode: "guided",
   guidedGoal: null,
   guidedStep: 1,
-  deriveApplyTouched: false,
   historyRestoreToken: 0,
   derivedColumnProvenance: {},
   busyScopes: {},
@@ -113,12 +112,12 @@ const refs = {
   derivePermutationIterations: document.getElementById("derivePermutationIterations"),
   deriveRandomSeed: document.getElementById("deriveRandomSeed"),
   deriveColumnName: document.getElementById("deriveColumnName"),
-  deriveApplyToGroup: document.getElementById("deriveApplyToGroup"),
   cutoffWrap: document.getElementById("cutoffWrap"),
   deriveCutoffLabel: document.getElementById("deriveCutoffLabel"),
   deriveCutoffHelp: document.getElementById("deriveCutoffHelp"),
   deriveOptimalControls: document.getElementById("deriveOptimalControls"),
   deriveButton: document.getElementById("deriveButton"),
+  deriveApplyButton: document.getElementById("deriveApplyButton"),
   deriveStatus: document.getElementById("deriveStatus"),
   deriveSummary: document.getElementById("deriveSummary"),
   cutpointPlot: document.getElementById("cutpointPlot"),
@@ -1139,16 +1138,6 @@ function guidedGroupingContextActive() {
   );
 }
 
-function preferredDeriveApplyToGroup() {
-  return guidedGroupingContextActive() && !(refs.groupColumn?.value || "");
-}
-
-function syncDeriveApplyPreference({ force = false } = {}) {
-  if (!refs.deriveApplyToGroup) return;
-  if (!force && runtime.deriveApplyTouched) return;
-  refs.deriveApplyToGroup.checked = preferredDeriveApplyToGroup();
-}
-
 function endpointIsReady() {
   if (!state.dataset) return false;
   try {
@@ -1430,7 +1419,6 @@ function captureControlSnapshot() {
     derivePermutationIterations: refs.derivePermutationIterations?.value || "",
     deriveRandomSeed: refs.deriveRandomSeed?.value || "",
     deriveColumnName: refs.deriveColumnName?.value || "",
-    deriveApplyToGroup: Boolean(refs.deriveApplyToGroup?.checked),
     showConfidenceBands: Boolean(refs.showConfidenceBands?.checked),
     riskTablePoints: refs.riskTablePoints?.value || "",
     logrankWeight: refs.logrankWeight?.value || "",
@@ -1529,12 +1517,6 @@ function applyControlSnapshot(snapshot) {
     refs.deriveCutoff.value = "";
   }
   setInputValue(refs.deriveColumnName, snapshot.deriveColumnName);
-  runtime.deriveApplyTouched = snapshot.deriveApplyToGroup !== undefined;
-  if (refs.deriveApplyToGroup) {
-    refs.deriveApplyToGroup.checked = runtime.deriveApplyTouched
-      ? Boolean(snapshot.deriveApplyToGroup)
-      : preferredDeriveApplyToGroup();
-  }
   setInputValue(refs.riskTablePoints, snapshot.riskTablePoints);
   setInputValue(refs.fhPower, snapshot.fhPower);
   setInputValue(refs.signatureMaxDepth, snapshot.signatureMaxDepth);
@@ -2408,18 +2390,18 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
     : "";
   const stayedOverall = !appliedToGroup && currentGroupLabel === "Overall only";
   const groupingNote = appliedToGroup
-    ? `Group by now uses ${derivedColumn}. ML and DL feature selections did not change automatically.`
+    ? `Current grouping now uses ${derivedColumn}. ML and DL feature selections did not change automatically.`
     : stayedOverall
-      ? `Group by stayed as Overall only, so Kaplan-Meier remains ungrouped until you apply ${derivedColumn}. ML and DL feature selections did not change automatically.`
-      : `Group by stayed as ${currentGroupLabel}. ML and DL feature selections did not change automatically.`;
+      ? `New column created. Current grouping is still Overall only. Apply ${derivedColumn} only if you want Kaplan-Meier and grouped tables to split by it.`
+      : `New column created. Current grouping still uses ${currentGroupLabel}. Apply ${derivedColumn} only if you want Kaplan-Meier and grouped tables to switch.`;
   const groupingAction = appliedToGroup
     ? ""
     : `<div class="derive-action-row">
         <button class="button ghost compact-btn" type="button" id="applyDerivedGroupButton" data-derived-column="${escapeHtml(derivedColumn || "")}">Set as Group by</button>
         <span class="derive-action-hint">${escapeHtml(
           stayedOverall
-            ? "Apply this if you want Kaplan-Meier and grouped tables to split by the new derived column."
-            : `Apply this only if you want Kaplan-Meier and grouped tables to switch from ${currentGroupLabel} to the new derived column.`,
+            ? "Not applied yet."
+            : `Not applied yet. Current grouping: ${currentGroupLabel}.`,
         )}</span>
       </div>`;
   const summaryCell = (label, value, extraClass = "") => `
@@ -2909,7 +2891,7 @@ function refreshVariableSelections() {
   renderChecklist(refs.dlModelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
   renderChecklist(refs.dlModelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
   renderChecklist(refs.cohortVariableChecklist, availableCovariates, previousTableVars.length ? previousTableVars : availableCovariates.slice(0, 6));
-  const numericOptions = state.dataset.numeric_columns.filter((c) => ![refs.timeColumn.value, refs.eventColumn.value].includes(c));
+  const numericOptions = state.dataset.numeric_columns.filter((c) => !isSurvivalOutcomeLikeColumn(c));
   renderSelect(refs.deriveSource, numericOptions, { selected: numericOptions.includes(refs.deriveSource.value) ? refs.deriveSource.value : numericOptions[0] || null });
   renderSharedFeatureSummary();
 }
@@ -3901,7 +3883,6 @@ function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", his
   refs.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tabName));
   if (setGuidedGoal && GUIDED_GOALS.includes(tabName)) runtime.guidedGoal = tabName;
   updateGroupingDetailsVisibility(tabName);
-  syncDeriveApplyPreference();
   if (state.dataset) syncHistoryState(historyMode);
   renderGuidedChrome();
   requestAnimationFrame(() => {
@@ -3934,7 +3915,6 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   renderSharedFeatureSummary();
   renderDatasetPreview();
   updateDatasetPresetBar();
-  syncDeriveApplyPreference({ force: true });
   refs.downloadSignatureButton.disabled = true;
   showWorkspace();
   if (scrollToTop) scrollWorkspaceEntryToTop();
@@ -3965,7 +3945,6 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.deriveSummary.innerHTML = "";
   refs.deriveSummary.classList.add("hidden");
   runtime.lastDerivedGroup = null;
-  runtime.deriveApplyTouched = false;
   runtime.derivedColumnProvenance = payload.derived_column_provenance || {};
   runtime.resultPreference.ml = "single";
   runtime.resultPreference.dl = "single";
@@ -3973,7 +3952,6 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.datasetPresetBar?.classList.add("hidden");
   refs.deriveStatus.textContent = "";
   setSelectValueIfPresent(refs.deriveMethod, "median_split");
-  if (refs.deriveApplyToGroup) refs.deriveApplyToGroup.checked = preferredDeriveApplyToGroup();
   if (refs.cutpointPlot) { refs.cutpointPlot.innerHTML = ""; refs.cutpointPlot.classList.add("hidden"); }
   refs.kmSummaryShell.innerHTML = '<div class="empty-state">Survival statistics will appear after you run the analysis.</div>';
   refs.kmRiskShell.innerHTML = '<div class="empty-state">Number of patients at risk over time.</div>';
@@ -4125,7 +4103,7 @@ async function loadGbsg2Dataset() {
   syncHistoryState("push");
 }
 
-async function deriveGroup() {
+async function deriveGroup({ applyToGroup = false } = {}) {
   const sourceColumn = refs.deriveSource.value;
   if (!sourceColumn) throw new Error("Select a numeric source column.");
   const method = refs.deriveMethod.value;
@@ -4136,7 +4114,6 @@ async function deriveGroup() {
   const isOptimal = method === "optimal_cutpoint";
   const requestedColumnName = validateDerivedColumnName(refs.deriveColumnName.value);
   const preservedGroup = refs.groupColumn.value || "";
-  const applyToGroup = Boolean(refs.deriveApplyToGroup?.checked);
   const cutoffInput = refs.deriveCutoff.value.trim();
   let cutoffValue = null;
   if (usesCutoffInput) {
@@ -4157,8 +4134,8 @@ async function deriveGroup() {
     }
   }
   refs.deriveStatus.textContent = isOptimal
-    ? "Scanning candidate cutpoints for a new grouping column..."
-    : "Creating a derived grouping column...";
+    ? (applyToGroup ? "Scanning and applying a new grouping column..." : "Scanning a new grouping column...")
+    : (applyToGroup ? "Creating and applying a new grouping column..." : "Creating a new grouping column...");
 
   const body = {
     dataset_id: state.dataset.dataset_id,
@@ -4220,7 +4197,7 @@ async function deriveGroup() {
   }
   showToast(
     shouldRefreshKm
-      ? `Created ${payload.derived_column}. ${featureUseMessage} Kaplan-Meier is refreshing now.`
+      ? `Created and applied ${payload.derived_column}. ${featureUseMessage} Kaplan-Meier is refreshing now.`
       : `Created ${payload.derived_column}. ${featureUseMessage}${shouldClearTableOutput ? " Previous cohort table output was cleared; build the table again to match the new grouping." : ""}`,
     "success",
     5200,
@@ -5611,7 +5588,6 @@ function initListeners() {
     queueHistorySync();
   });
   refs.groupColumn.addEventListener("change", () => {
-    syncDeriveApplyPreference();
     if (runtime.lastDerivedGroup) {
       renderDerivedGroupSummary(runtime.lastDerivedGroup.derivedColumn, runtime.lastDerivedGroup.summary);
     }
@@ -5624,7 +5600,6 @@ function initListeners() {
     if (!button) return;
     const derivedColumn = button.dataset.derivedColumn;
     if (!derivedColumn) return;
-    runtime.deriveApplyTouched = true;
     refs.groupColumn.value = derivedColumn;
     if (runtime.lastDerivedGroup?.derivedColumn === derivedColumn) {
       renderDerivedGroupSummary(runtime.lastDerivedGroup.derivedColumn, runtime.lastDerivedGroup.summary);
@@ -5714,10 +5689,6 @@ function initListeners() {
     showToast("Cleared the shared ML/DL model feature list.", "success", 2400);
   });
   refs.deriveMethod.addEventListener("change", () => { updateMethodVisibility(); queueHistorySync(); });
-  refs.deriveApplyToGroup?.addEventListener("change", () => {
-    runtime.deriveApplyTouched = true;
-    queueHistorySync();
-  });
   refs.logrankWeight.addEventListener("change", () => { updateWeightVisibility(); queueHistorySync(); });
   refs.mlModelType.addEventListener("change", () => { runtime.resultPreference.ml = "single"; updateMlModelControlVisibility(); queueHistorySync(); });
   refs.mlEvaluationStrategy.addEventListener("change", () => { updateMlEvaluationControls(); queueHistorySync(); });
@@ -5729,7 +5700,8 @@ function initListeners() {
     syncDeriveToggleButton();
     queueHistorySync();
   });
-  refs.deriveButton.addEventListener("click", () => withLoading(refs.deriveButton, deriveGroup));
+  refs.deriveButton.addEventListener("click", () => withLoading(refs.deriveButton, () => deriveGroup({ applyToGroup: false })));
+  refs.deriveApplyButton?.addEventListener("click", () => withLoading(refs.deriveApplyButton, () => deriveGroup({ applyToGroup: true })));
   refs.runKmButton.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
       runtime.guidedGoal = "km";

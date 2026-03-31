@@ -125,8 +125,8 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert "The reported C-index is apparent on the analyzable cohort." in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
-    assert 'id="deriveApplyToGroup"' in response.text
-    assert "Use new column as Group by" in response.text
+    assert 'id="deriveApplyButton"' in response.text
+    assert "Create and apply" in response.text
     assert "Rank-based Schoenfeld residual diagnostics against log time appear here." in response.text
 
 
@@ -175,7 +175,7 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "applyControlSnapshot(historyState.controls || null);" in text
     assert "queueHistorySync()" in text
     assert "showAllEventColumns: Boolean(refs.showAllEventColumns?.checked)" in text
-    assert "deriveApplyToGroup: Boolean(refs.deriveApplyToGroup?.checked)" in text
+    assert 'deriveApplyButton: document.getElementById("deriveApplyButton")' in text
     assert "updateGroupingDetailsVisibility(tabName);" in text
     assert "function scrollWorkspaceEntryToTop()" in text
     assert "updateAfterDataset(payload, { scrollToTop: true });" in text
@@ -2493,7 +2493,7 @@ def test_frontend_uses_inline_cutpoint_figure_without_refetch() -> None:
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    derive_start = app_js.index("async function deriveGroup()")
+    derive_start = app_js.index("async function deriveGroup({ applyToGroup = false } = {})")
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
     assert "payload.cutpoint_figure" in derive_body
@@ -2509,10 +2509,10 @@ def test_frontend_derive_group_explains_that_dl_features_do_not_change() -> None
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    assert 'const applyToGroup = Boolean(refs.deriveApplyToGroup?.checked);' in app_js
-    assert 'Group by stayed as ${previousGroup}.' in app_js
-    assert "Kaplan-Meier remains ungrouped until you apply this column." in app_js
-    assert 'Use "Set as Group by" only if you want Kaplan-Meier and grouped tables to switch.' in app_js
+    assert "async function deriveGroup({ applyToGroup = false } = {})" in app_js
+    assert "Current grouping still uses" in app_js
+    assert "Current grouping is still Overall only." in app_js
+    assert "Not applied yet." in app_js
     assert "Set as Group by. ML/DL features were not changed." in app_js
     assert "Use it for grouping or visualization, not as an ML/DL training feature." in app_js
     assert "Grouping only:" in app_js
@@ -2529,26 +2529,12 @@ def test_frontend_derive_group_preserves_existing_group_unless_user_applies_new_
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    derive_start = app_js.index("async function deriveGroup()")
+    derive_start = app_js.index("async function deriveGroup({ applyToGroup = false } = {})")
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
     assert "const preservedGroup = refs.groupColumn.value || \"\";" in derive_body
     assert "setSelectValueIfPresent(refs.groupColumn, preservedGroup);" in derive_body
-    assert "Use \"Set as Group by\" only if you want Kaplan-Meier and grouped tables to switch." in derive_body
-
-
-def test_frontend_prefers_applying_new_group_in_km_when_group_is_still_overall_only() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
-
-    assert "function preferredDeriveApplyToGroup()" in app_js
-    assert "return guidedGroupingContextActive() && !(refs.groupColumn?.value || \"\");" in app_js
-    assert "function syncDeriveApplyPreference({ force = false } = {})" in app_js
+    assert "if (applyToGroup) {" in derive_body
 
 
 def test_frontend_refreshes_km_after_creating_and_applying_a_new_group() -> None:
@@ -2560,7 +2546,7 @@ def test_frontend_refreshes_km_after_creating_and_applying_a_new_group() -> None
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    derive_start = app_js.index("async function deriveGroup()")
+    derive_start = app_js.index("async function deriveGroup({ applyToGroup = false } = {})")
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
     assert 'const guidedKmRefresh = runtime.uiMode === "guided" && runtime.guidedGoal === "km";' in derive_body
@@ -2583,7 +2569,7 @@ def test_frontend_derive_group_uses_lightweight_dataset_refresh() -> None:
     assert "state.km = preservedStates.km;" in app_js
     assert "state.ml = preservedStates.ml;" in app_js
     assert "if (!deferChrome) {" in app_js
-    derive_start = app_js.index("async function deriveGroup()")
+    derive_start = app_js.index("async function deriveGroup({ applyToGroup = false } = {})")
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
     assert "updateAfterDerivedDataset(payload, { deferChrome: shouldRefreshKm });" in derive_body
