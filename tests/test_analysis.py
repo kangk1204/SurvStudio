@@ -60,7 +60,7 @@ def test_percentile_split_top_vs_rest_creates_two_groups() -> None:
     )
 
     observed = set(updated[column_name].dropna().astype(str).unique().tolist())
-    assert observed == {"Rest", "Top 25%"}
+    assert observed == {"Rest", "At/above 75th percentile threshold"}
     assert summary["cutoff_spec"] == "25"
     assert summary["n_groups"] == 2
     assert len(summary["cutoffs"]) == 1
@@ -138,7 +138,11 @@ def test_percentile_split_two_tails_creates_three_groups() -> None:
     )
 
     observed = set(updated[column_name].dropna().astype(str).unique().tolist())
-    assert observed == {"Bottom 25%", "Middle 50%", "Top 25%"}
+    assert observed == {
+        "At/below 25th percentile threshold",
+        "Between percentile thresholds",
+        "At/above 75th percentile threshold",
+    }
     assert summary["cutoff_spec"] == "25,25"
     assert summary["n_groups"] == 3
     assert len(summary["cutoffs"]) == 2
@@ -155,7 +159,7 @@ def test_extreme_split_excludes_middle_rows() -> None:
     )
 
     observed = set(updated[column_name].dropna().astype(str).unique().tolist())
-    assert observed == {"Bottom 25%", "Top 25%"}
+    assert observed == {"At/below 25th percentile threshold", "At/above 75th percentile threshold"}
     assert int(updated[column_name].isna().sum()) > 0
     assert summary["cutoff_spec"] == "25"
     assert summary["excluded_count"] > 0

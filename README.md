@@ -782,11 +782,11 @@ If you use them in a manuscript:
 
 Current derive-group options also include:
 - `Percentile split`
-  - `25` means `Top-25% threshold vs Rest`
-  - `25,25` means `Bottom-25% threshold / Middle / Top-25% threshold`
+  - `25` means `at/above the 75th-percentile threshold vs Rest`
+  - `25,25` means `at/below the 25th-percentile threshold / between thresholds / at/above the 75th-percentile threshold`
   - ties at the percentile threshold can make the realized groups slightly larger than the nominal percentages
 - `Extreme split`
-  - `25` means `Bottom-25% threshold vs Top-25% threshold`
+  - `25` means `at/below the 25th-percentile threshold vs at/above the 75th-percentile threshold`
   - the middle `50%` is excluded from grouped analyses for that derived split
   - ties at either threshold can make the kept tails slightly larger than the nominal percentages
 
