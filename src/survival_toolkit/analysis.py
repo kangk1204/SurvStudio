@@ -1240,6 +1240,19 @@ def _append_realized_group_share_note(
     ).strip()
 
 
+def _percentile_threshold_label(percentile: float, direction: str) -> str:
+    value = _format_percent_value(percentile)
+    if direction == "above":
+        return f"At/above {value}th percentile threshold"
+    if direction == "below":
+        return f"At/below {value}th percentile threshold"
+    if direction == "strict_above":
+        return f"Above {value}th percentile threshold"
+    if direction == "strict_below":
+        return f"Below {value}th percentile threshold"
+    raise ValueError(f"Unsupported percentile-threshold direction: {direction}")
+
+
 def derive_group_column(
     df: pd.DataFrame,
     source_column: str,
@@ -1343,15 +1356,18 @@ def derive_group_column(
             top_percent = percentiles[0]
             quantile = 1 - (top_percent / 100.0)
             split_point = float(usable.quantile(quantile))
-            top_label = f"Top {_format_percent_value(top_percent)}%"
+            threshold_percent = 100.0 - top_percent
             rest_label = "Rest"
             # Match median_split at 50th percentile so ties at the threshold stay in the lower/rest group.
             if math.isclose(top_percent, 50.0):
+                top_label = _percentile_threshold_label(threshold_percent, "strict_above")
+                rest_label = _percentile_threshold_label(threshold_percent, "below")
                 labels = np.where(numeric_series <= split_point, rest_label, top_label)
                 assignment_rule = (
                     f"{source_column} > percentile threshold ({split_point:.3f}) -> {top_label}, else -> {rest_label}"
                 )
             else:
+                top_label = _percentile_threshold_label(threshold_percent, "above")
                 labels = np.where(numeric_series >= split_point, top_label, rest_label)
                 assignment_rule = (
                     f"{source_column} >= percentile threshold ({split_point:.3f}) -> {top_label}, else -> {rest_label}"
@@ -1371,9 +1387,9 @@ def derive_group_column(
             high_threshold = float(usable.quantile(1 - (top_percent / 100.0)))
             if not low_threshold < high_threshold:
                 raise ValueError("Percentile split thresholds overlap. Choose less aggressive percentiles or a variable with more distinct values.")
-            bottom_label = f"Bottom {_format_percent_value(bottom_percent)}%"
-            middle_label = f"Middle {_format_percent_value(middle_percent)}%"
-            top_label = f"Top {_format_percent_value(top_percent)}%"
+            bottom_label = _percentile_threshold_label(bottom_percent, "below")
+            middle_label = "Between percentile thresholds"
+            top_label = _percentile_threshold_label(100.0 - top_percent, "above")
             labels = np.where(
                 numeric_series <= low_threshold,
                 bottom_label,
@@ -1399,8 +1415,8 @@ def derive_group_column(
         high_threshold = float(usable.quantile(1 - (tail_percent / 100.0)))
         if not low_threshold < high_threshold:
             raise ValueError("Extreme split thresholds overlap. Choose a smaller percentile or a variable with more distinct values.")
-        bottom_label = f"Bottom {cutoff_spec}%"
-        top_label = f"Top {cutoff_spec}%"
+        bottom_label = _percentile_threshold_label(tail_percent, "below")
+        top_label = _percentile_threshold_label(100.0 - tail_percent, "above")
         labels = np.full(len(numeric_series), pd.NA, dtype=object)
         low_mask = (numeric_series <= low_threshold).fillna(False).to_numpy()
         high_mask = (numeric_series >= high_threshold).fillna(False).to_numpy()

@@ -4313,8 +4313,8 @@ function updateMethodVisibility() {
   }
   if (refs.deriveCutoffHelp) {
     refs.deriveCutoffHelp.dataset.tooltip = isExtremeSplit
-      ? "Use one percentile from each tail. Example: 25 = bottom 25% vs top 25%, with the middle 50% excluded. Ties at the threshold can make the realized groups slightly larger."
-      : "Use percentile thresholds from the observed distribution. Example: 25 = top 25% threshold vs rest. Example: 50 matches Median split. Example: 25,25 = bottom 25% / middle 50% / top 25%. Ties at the threshold can make the realized groups slightly larger.";
+      ? "Use one percentile from each tail. Example: 25 = at/below the 25th-percentile threshold vs at/above the 75th-percentile threshold, with the middle range excluded. Ties at the threshold can make the realized groups slightly larger."
+      : "Use percentile thresholds from the observed distribution. Example: 25 = at/above the 75th-percentile threshold vs rest. Example: 50 matches Median split. Example: 25,25 = at/below the 25th-percentile threshold / between thresholds / at/above the 75th-percentile threshold. Ties at the threshold can make the realized groups slightly larger.";
   }
   if (refs.deriveCutoff) {
     refs.deriveCutoff.placeholder = isExtremeSplit ? "25" : "25 or 25,25";
