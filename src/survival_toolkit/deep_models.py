@@ -967,7 +967,7 @@ def _scientific_summary_dl(
     return {
         "status": status,
         "headline": (
-            f"{model_name} achieved a {metric_name.lower()} of {c_val:.3f} on "
+            f"{model_name} estimated a {metric_name.lower()} of {c_val:.3f} on "
             f"{evaluation_mode.replace('_', ' ')} evaluation."
         ),
         "strengths": strengths,
@@ -1212,7 +1212,7 @@ def compare_deep_survival_models(
         summary = {
             "status": status,
             "headline": (
-                f"Deep model comparison ranked {best['model']} first"
+                f"Deep model screening placed {best['model']} first"
                 + (" among holdout-evaluable models" if mixed_evaluation else "")
                 + f" with {metric_name.lower()} "
                 f"of {best['c_index']:.3f}."
@@ -1583,7 +1583,10 @@ def evaluate_single_deep_survival_model(
             ),
             "strengths": list(compare_result["scientific_summary"].get("strengths", [])),
             "cautions": list(compare_result["scientific_summary"].get("cautions", [])),
-            "next_steps": list(compare_result["scientific_summary"].get("next_steps", [])),
+            "next_steps": [
+                "Use this repeated-CV estimate to judge this architecture on its own rather than as part of a cross-model screen.",
+                "Run a separate single-fit analysis only if you need loss curves, feature-importance outputs, or deployment-ready artifacts.",
+            ],
             "metrics": [
                 {"label": "Model", "value": canonical_name},
                 {"label": "Mean C-index", "value": row.get("c_index")},

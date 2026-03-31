@@ -1213,6 +1213,33 @@ def _parse_percentile_values(cutoff: str | float | None, *, mode: str) -> list[f
     return values
 
 
+def _append_realized_group_share_note(
+    summary: dict[str, Any],
+    counts: Sequence[dict[str, Any]],
+) -> None:
+    non_missing = [row for row in counts if str(row.get("group")) != "Missing"]
+    total = sum(int(row.get("n", 0) or 0) for row in non_missing)
+    if total <= 0:
+        return
+    realized = [
+        {
+            "group": str(row.get("group")),
+            "n": int(row.get("n", 0) or 0),
+            "fraction": float((int(row.get("n", 0) or 0) / total) * 100.0),
+        }
+        for row in non_missing
+    ]
+    summary["realized_group_shares"] = realized
+    realized_text = ", ".join(
+        f"{item['group']} = {item['fraction']:.1f}%"
+        for item in realized
+    )
+    summary["assignment_rule"] = (
+        f"{summary.get('assignment_rule', '')} "
+        f"Realized non-missing shares: {realized_text}. Ties at the threshold can shift these from the nominal target."
+    ).strip()
+
+
 def derive_group_column(
     df: pd.DataFrame,
     source_column: str,
@@ -1393,12 +1420,6 @@ def derive_group_column(
                 "else -> excluded middle range"
             ),
         }
-    elif method == "custom_cutoff":
-        if cutoff is None:
-            raise ValueError("A numeric cutoff is required for a custom split.")
-        split_point = float(cutoff)
-        labels = np.where(numeric_series <= split_point, lower_label, upper_label)
-        summary = {"method": method, "cutoff": split_point}
     else:
         raise ValueError(f"Unsupported derive-group method: {method}")
 
@@ -1435,6 +1456,8 @@ def derive_group_column(
     summary["column_name"] = column_name
     summary["outcome_informed"] = outcome_informed
     summary["counts"] = counts
+    if method in {"percentile_split", "extreme_split"}:
+        _append_realized_group_share_note(summary, counts)
     summary["recipe"] = {
         "source_column": source_column,
         "column_name": column_name,
@@ -2393,6 +2416,8 @@ def _prepare_cox_frame(
     covariates: Sequence[str],
     categorical_covariates: Sequence[str],
     event_positive_value: Any = None,
+    *,
+    drop_missing_covariates: bool = True,
 ) -> pd.DataFrame:
     required_columns = [*covariates]
     frame = _cohort_frame(
@@ -2409,7 +2434,9 @@ def _prepare_cox_frame(
             frame[column] = pd.Categorical(string_values, categories=categories)
         else:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    frame = frame.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
+    frame = frame.replace([np.inf, -np.inf], np.nan)
+    if drop_missing_covariates:
+        frame = frame.dropna().reset_index(drop=True)
     if frame.empty:
         raise ValueError("No rows remain after removing missing values for the Cox model.")
     return frame
@@ -2718,24 +2745,16 @@ def preview_cox_analysis_inputs(
         raise ValueError("Select at least one covariate for the Cox model.")
     _validate_cox_covariates(covariates)
     categorical_covariates = list(dict.fromkeys(categorical_covariates or _categorical_candidates(df, covariates)))
-    frame = _cohort_frame(
+    preview_frame = _prepare_cox_frame(
         df,
         time_column=time_column,
         event_column=event_column,
+        covariates=covariates,
+        categorical_covariates=categorical_covariates,
         event_positive_value=event_positive_value,
-        extra_columns=[*covariates],
-        drop_missing_extra_columns=False,
+        drop_missing_covariates=False,
     )
-    preview_frame = frame.copy()
     missing_by_covariate: list[dict[str, Any]] = []
-    for column in covariates:
-        if column in categorical_covariates:
-            string_values = preview_frame[column].astype("string")
-            categories = _ordered_reference_categories(string_values.dropna().unique().tolist(), column)
-            preview_frame[column] = pd.Categorical(string_values, categories=categories)
-        else:
-            preview_frame[column] = pd.to_numeric(preview_frame[column], errors="coerce")
-    preview_frame = preview_frame.replace([np.inf, -np.inf], np.nan)
     for column in covariates:
         missing_count = int(preview_frame[column].isna().sum())
         if missing_count > 0:
@@ -2813,9 +2832,9 @@ def preview_cox_analysis_inputs(
             )
     missing_by_covariate.sort(key=lambda item: (-int(item["missing_rows"]), str(item["column"])))
     return {
-        "outcome_rows": int(frame.shape[0]),
+        "outcome_rows": int(preview_frame.shape[0]),
         "analyzable_rows": int(complete_case.shape[0]),
-        "dropped_rows": int(frame.shape[0] - complete_case.shape[0]),
+        "dropped_rows": int(preview_frame.shape[0] - complete_case.shape[0]),
         "events": event_count,
         "estimated_parameters": int(estimated_parameters),
         "events_per_parameter": events_per_parameter,

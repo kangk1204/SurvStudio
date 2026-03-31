@@ -1233,7 +1233,12 @@ def test_evaluate_single_deep_survival_model_repeated_cv_reuses_compare_path(mon
                 {"model": "DeepSurv", "repeat": 1, "fold": 1, "c_index": 0.69},
             ],
             "manuscript_tables": {"model_performance_table": [{"Model": "Neural MTLR"}]},
-            "scientific_summary": {"status": "review", "strengths": ["summary"], "cautions": [], "next_steps": []},
+            "scientific_summary": {
+                "status": "review",
+                "strengths": ["summary"],
+                "cautions": [],
+                "next_steps": ["Use the ranking to narrow candidates."],
+            },
         }
 
     monkeypatch.setattr(deep_models, "compare_deep_survival_models", _fake_compare)
@@ -1255,6 +1260,7 @@ def test_evaluate_single_deep_survival_model_repeated_cv_reuses_compare_path(mon
     assert result["training_seeds"] == [42, 43]
     assert result["fold_results"] == [{"model": "Neural MTLR", "repeat": 1, "fold": 1, "c_index": 0.71}]
     assert "aggregate repeated-cv estimate" in result["scientific_summary"]["cautions"][-1].lower()
+    assert all("ranking" not in step.lower() for step in result["scientific_summary"]["next_steps"])
 
 
 def test_evaluate_single_deep_survival_model_repeated_cv_preserves_incomplete_state(monkeypatch) -> None:

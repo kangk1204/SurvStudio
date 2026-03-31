@@ -487,7 +487,27 @@ def test_refresh_cox_preview_does_not_rerender_guided_chrome_during_loading_stat
     refresh_body = text.split("async function refreshCoxPreview({ force = false } = {}) {", 1)[1].split("function scheduleCoxPreview(", 1)[0]
 
     assert 'status: "loading"' in refresh_body
-    assert 'error: "",\n  };\n  try {' in refresh_body
+    assert 'syncGuidedCoxPanelMounts();' in refresh_body
+    assert 'if (!syncGuidedCoxPanelMounts()) renderGuidedChrome();' in refresh_body
+
+
+def test_cox_checklist_search_select_all_is_limited_to_visible_rows() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function allCheckboxValues(container, { visibleOnly = false } = {}) {" in text
+    assert '!input.closest(".check-item")?.classList.contains("hidden-by-filter")' in text
+    assert 'allCheckboxValues(refs.covariateChecklist, { visibleOnly: true })' in text
+    assert 'allCheckboxValues(refs.categoricalChecklist, { visibleOnly: true })' in text
+
+
+def test_dataset_refresh_clears_cox_search_filters() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    update_body = text.split("function updateControlsFromDataset({ scrollToTop = false } = {}) {", 1)[1].split("function updateAfterDataset(", 1)[0]
+    assert 'refs.covariateSearchInput.value = "";' in update_body
+    assert 'refs.categoricalSearchInput.value = "";' in update_body
 
 
 def test_legacy_derive_restore_only_reuses_cutoff_when_method_is_still_available() -> None:
@@ -2125,6 +2145,8 @@ def test_derive_group_response_tracks_outcome_informed_provenance() -> None:
     assert response.status_code == 200
     provenance = response.json()["derived_column_provenance"]
     assert provenance["age_bin"]["outcome_informed"] is True
+    assert provenance["age_bin"]["recipe"]["method"] == "optimal_cutpoint"
+    assert provenance["age_bin"]["recipe"]["source_column"] == "age"
 
 
 def test_signature_search_rejects_existing_column_name_collision() -> None:
@@ -2844,6 +2866,26 @@ def test_export_table_endpoint_preserves_union_of_row_keys() -> None:
     assert response.status_code == 200
     assert "Mean C-index" in response.text.splitlines()[0]
     assert "0.7011" in response.text
+
+
+def test_export_table_endpoint_csv_ignores_caption_and_notes_preamble() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [
+                {"Rank": 1, "Model": "Cox PH", "C-index": 0.712},
+            ],
+            "format": "csv",
+            "style": "plain",
+            "caption": "Table 1. Should not appear in CSV preamble.",
+            "notes": ["This note should stay out of the CSV body."],
+        },
+    )
+
+    assert response.status_code == 200
+    lines = response.text.splitlines()
+    assert lines[0] == "Rank,Model,C-index"
+    assert not response.text.startswith("# ")
 
 
 def test_export_table_endpoint_sanitizes_formula_like_csv_cells() -> None:
