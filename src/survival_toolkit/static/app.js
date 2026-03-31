@@ -91,6 +91,8 @@ const refs = {
   configStrip: document.getElementById("configStrip"),
   tabStrip: document.getElementById("tabStrip"),
   timeColumn: document.getElementById("timeColumn"),
+  timeColumnHelp: document.getElementById("timeColumnHelp"),
+  timeColumnWarning: document.getElementById("timeColumnWarning"),
   eventColumn: document.getElementById("eventColumn"),
   eventPositiveValue: document.getElementById("eventPositiveValue"),
   showAllEventColumns: document.getElementById("showAllEventColumns"),
@@ -1913,6 +1915,101 @@ function datasetColumnNames() {
   return state.dataset?.columns?.map((column) => column.name) || [];
 }
 
+function recommendedTimeColumns() {
+  const names = new Set(datasetColumnNames());
+  return (state.dataset?.suggestions?.time_columns || []).filter((column) => names.has(column));
+}
+
+function allowedTimeColumns() {
+  const recommended = recommendedTimeColumns();
+  if (recommended.length) return recommended;
+  const names = new Set(datasetColumnNames());
+  return (state.dataset?.numeric_columns || []).filter((column) => names.has(column));
+}
+
+function currentTimeColumnWarning() {
+  const timeColumn = refs.timeColumn?.value || "";
+  if (!state.dataset || !timeColumn) return null;
+
+  const numericSet = new Set(state.dataset.numeric_columns || []);
+  if (!numericSet.has(timeColumn)) {
+    return {
+      tone: "error",
+      message: `"${timeColumn}" is not numeric. Choose a true follow-up time column such as os_months, pfs_months, days, or follow-up time.`,
+    };
+  }
+
+  const recommended = recommendedTimeColumns();
+  if (!recommended.length || recommended.includes(timeColumn)) return null;
+  return {
+    tone: "error",
+    message: `"${timeColumn}" does not look like a survival follow-up time column. Choose one of the likely time columns instead: ${recommended.slice(0, 3).join(", ")}.`,
+  };
+}
+
+function updateTimeColumnGuidance() {
+  if (!state.dataset) return;
+
+  const recommended = recommendedTimeColumns();
+  const numericColumns = allowedTimeColumns();
+  const compactGuidedCopy = runtime.uiMode === "guided" && currentGuidedStep() === 2;
+  if (refs.timeColumnHelp) {
+    if (recommended.length) {
+      refs.timeColumnHelp.textContent = compactGuidedCopy
+        ? "Showing likely time columns only. Genes and baseline covariates are hidden here."
+        : "Showing likely follow-up time columns only. Genes and baseline covariates are hidden here.";
+    } else if (numericColumns.length) {
+      refs.timeColumnHelp.textContent = compactGuidedCopy
+        ? "No clear time-style name was found. Showing numeric columns only."
+        : "No clear time-style name was found. Showing numeric columns only, so confirm the follow-up field carefully.";
+    } else {
+      refs.timeColumnHelp.textContent = "No numeric time candidates were detected in this dataset.";
+    }
+  }
+
+  const warning = currentTimeColumnWarning();
+  if (!refs.timeColumnWarning) return;
+  if (!warning) {
+    refs.timeColumnWarning.textContent = "";
+    refs.timeColumnWarning.className = "event-warning hidden";
+    return;
+  }
+  refs.timeColumnWarning.textContent = warning.message;
+  refs.timeColumnWarning.className = `event-warning event-warning-${warning.tone}`;
+}
+
+function renderTimeColumnOptions({ preferred = null, silent = true } = {}) {
+  if (!state.dataset) return;
+  const options = allowedTimeColumns();
+  const recommended = recommendedTimeColumns();
+  const currentValue = preferred ?? refs.timeColumn?.value ?? "";
+  const nextValue = options.includes(currentValue)
+    ? currentValue
+    : recommended.length
+      ? inferDefault(options, recommended, 0)
+      : "";
+  renderSelect(refs.timeColumn, options, {
+    includeBlank: !recommended.length || !nextValue,
+    blankLabel: "Select time column",
+    selected: nextValue || "",
+  });
+  updateTimeColumnGuidance();
+
+  if (!silent && currentValue && nextValue && currentValue !== nextValue) {
+    showToast(
+      `Time column reset to ${nextValue}. Use a true follow-up time field, not a gene or baseline covariate.`,
+      "warning",
+      3600,
+    );
+  } else if (!silent && currentValue && !nextValue) {
+    showToast(
+      "Time column cleared. Choose the follow-up time field again before running an analysis.",
+      "warning",
+      3600,
+    );
+  }
+}
+
 function normalizeEventToken(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === "boolean") return value ? "1" : "0";
@@ -3651,6 +3748,8 @@ function currentBaseConfig() {
   if (timeColumn === eventColumn) {
     throw new Error("The survival time column and event column must be different.");
   }
+  const timeWarning = currentTimeColumnWarning();
+  if (timeWarning?.tone === "error") throw new Error(timeWarning.message);
   const eventWarning = currentEventColumnWarning();
   if (eventWarning?.tone === "error") throw new Error(eventWarning.message);
   if (eventWarning?.tone === "warning" && !refs.showAllEventColumns?.checked) {
@@ -3824,7 +3923,7 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   const columnNames = state.dataset.columns.map((c) => c.name);
   const suggestions = state.dataset.suggestions;
   if (refs.showAllEventColumns) refs.showAllEventColumns.checked = false;
-  renderSelect(refs.timeColumn, columnNames, { selected: inferDefault(columnNames, suggestions.time_columns, 0) });
+  renderTimeColumnOptions({ preferred: inferDefault(columnNames, suggestions.time_columns, 0), silent: true });
   renderEventColumnOptions({
     preferred: inferDefault(columnNames, suggestions.event_columns, 1),
     silent: true,
@@ -3955,7 +4054,7 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   resetCoxPreview({ rerender: false });
 
   if (refs.showAllEventColumns) refs.showAllEventColumns.checked = Boolean(snapshot?.showAllEventColumns);
-  renderSelect(refs.timeColumn, columnNames, { selected: preferredTime });
+  renderTimeColumnOptions({ preferred: preferredTime, silent: true });
   renderEventColumnOptions({ preferred: preferredEvent, silent: true });
   renderSelect(refs.groupColumn, columnNames, { includeBlank: true, blankLabel: "Overall only", selected: preferredGroup });
   refreshVariableSelections();
@@ -5481,6 +5580,7 @@ function initListeners() {
   refs.applyBasicPresetButton?.addEventListener("click", () => applyDatasetPreset("basic"));
   refs.applyModelPresetButton?.addEventListener("click", () => applyDatasetPreset("models"));
   refs.timeColumn.addEventListener("change", () => {
+    updateTimeColumnGuidance();
     refreshVariableSelections();
     updateDatasetBadge();
     renderSharedFeatureSummary();

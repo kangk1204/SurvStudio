@@ -77,6 +77,26 @@ _EVENT_NAME_PATTERNS = (
     re.compile(r"failure"),
     re.compile(r"censor"),
 )
+_TIME_NAME_TOKENS = (
+    "time",
+    "month",
+    "day",
+    "week",
+    "year",
+    "os",
+    "pfs",
+    "dfs",
+    "rfs",
+    "efs",
+    "tts",
+    "tte",
+    "follow",
+    "followup",
+    "follow_up",
+    "fup",
+    "duration",
+    "survival",
+)
 _BASELINE_STATUS_PATTERNS = (
     re.compile(r"egfr"),
     re.compile(r"kras"),
@@ -465,7 +485,7 @@ def looks_binary(series: pd.Series) -> bool:
 def suggest_columns(df: pd.DataFrame) -> dict[str, list[str]]:
     columns = list(df.columns)
     event_tokens = ("event", "status", "death", "progress", "relapse", "censor")
-    time_raw = _column_keywords(columns, ("time", "month", "day", "week", "year", "os", "pfs", "dfs"))
+    time_raw = _column_keywords(columns, _TIME_NAME_TOKENS)
     time_columns = [c for c in time_raw if not any(tok in c.lower() for tok in event_tokens)]
     suggestions = {
         "time_columns": time_columns,
@@ -575,6 +595,16 @@ def _ensure_positive_times(time_values: pd.Series) -> pd.Series:
     return positive
 
 
+def _validate_time_column_choice(df: pd.DataFrame, time_column: str) -> None:
+    likely_time_columns = suggest_columns(df).get("time_columns", [])
+    if likely_time_columns and time_column not in likely_time_columns:
+        examples = ", ".join(likely_time_columns[:3])
+        raise ValueError(
+            f'"{time_column}" does not look like a survival follow-up time column. '
+            f"Choose one of the likely time columns instead: {examples}."
+        )
+
+
 def _cohort_frame(
     df: pd.DataFrame,
     time_column: str,
@@ -585,6 +615,7 @@ def _cohort_frame(
 ) -> pd.DataFrame:
     if time_column == event_column:
         raise ValueError("The survival time column and event column must be different.")
+    _validate_time_column_choice(df, time_column)
     extra_columns = list(extra_columns or [])
     required_columns = [time_column, event_column, *extra_columns]
     frame = df[required_columns].copy()
