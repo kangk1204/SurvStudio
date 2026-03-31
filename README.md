@@ -59,6 +59,57 @@ If you want a file that you can upload manually instead of clicking a built-in l
 
 - Python `3.11` or newer
 - internet access during the first install so `pip` can download dependencies
+- if `python --version` or `python3 --version` prints `3.10` or older, do **not** use the standard `venv` path yet; use the `Project-local Conda fallback` section below first
+
+## 1-Minute Quick Start
+
+Use the first block that matches your machine.
+
+### If You Already Have Python 3.11+
+
+On macOS or Linux:
+
+```bash
+git clone https://github.com/kangk1204/SurvStudio.git
+cd SurvStudio
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e .
+python -m survival_toolkit
+```
+
+On Windows 11 PowerShell:
+
+```powershell
+git clone https://github.com/kangk1204/SurvStudio.git
+cd SurvStudio
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m survival_toolkit
+```
+
+### If Your Machine Only Has Python 3.10 But You Have Conda Or Micromamba
+
+```bash
+git clone https://github.com/kangk1204/SurvStudio.git
+cd SurvStudio
+conda create -y -p .conda python=3.11 pip
+./.conda/bin/python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e .
+python -m survival_toolkit
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+Click `Synthetic Example` first.
 
 ## Install
 
@@ -72,7 +123,8 @@ Before you start:
 - if another virtual environment is active, run `deactivate`
 - if Conda is active, run `conda deactivate`
 - the commands below create a project-local `.venv` and do not overwrite your system Python
-- this install path is for the app itself and does not require Playwright
+- this install path is for running the app itself
+- ML, DL, pytest, and Playwright can be added later only if you need them
 
 ```bash
 brew install python@3.11
@@ -83,7 +135,7 @@ source .venv/bin/activate
 which python
 python --version
 python -m pip install --upgrade pip
-pip install -e ".[dev]"
+pip install -e .
 python -m survival_toolkit
 ```
 
@@ -105,7 +157,9 @@ Before you start:
 - if another virtual environment is active, run `deactivate`
 - if Conda is active, run `conda deactivate`
 - the commands below create a project-local `.venv` and do not overwrite your system Python
-- this install path is for the app itself and does not require Playwright
+- this install path is for running the app itself
+- ML, DL, pytest, and Playwright can be added later only if you need them
+- on Ubuntu `22.04`, `python3` is often still `3.10`; if you cannot install `python3.11` system-wide, use the `Project-local Conda fallback` section below
 
 ```bash
 sudo apt update
@@ -117,7 +171,7 @@ source .venv/bin/activate
 which python
 python --version
 python -m pip install --upgrade pip
-pip install -e ".[dev]"
+pip install -e .
 python -m survival_toolkit
 ```
 
@@ -129,11 +183,12 @@ http://127.0.0.1:8000
 
 ### Standard install
 
-This is the easiest path once Python is already available. It installs the dashboard plus the optional ML and DL features.
+This is the easiest path once Python `3.11+` is already available. It installs the dashboard and the classical analysis stack first. ML, DL, and development tools can be added later.
 
 Before you start:
 - if another virtual environment is active, run `deactivate`
 - if Conda is active, run `conda deactivate`
+- if `python3 --version` prints `3.10` or older, stop here and use the `Project-local Conda fallback` section below
 - after activation, confirm that `which python` points to `.venv/bin/python`
 
 ```bash
@@ -142,31 +197,102 @@ source .venv/bin/activate
 which python
 python --version
 python -m pip install --upgrade pip
-pip install -e ".[dev]"
-```
-
-This path is for running the app and the normal test suite. It does **not** install Playwright or browser binaries.
-
-### Smaller installs
-
-If you only want part of the stack:
-
-- Core dashboard only:
-
-```bash
 pip install -e .
 ```
 
-- Core + ML only:
+This path is for running the app. It does **not** install the optional ML stack, DL stack, pytest extras, or Playwright.
+
+### Easiest Path For A New Windows 11 Machine
+
+Tested path target:
+- Windows `11`
+- PowerShell
+- Python `3.11` or newer installed
+- Git for Windows installed
+
+Before you start:
+- open a new PowerShell window after installing Python so the `py` launcher is available
+- confirm `py -3.11 --version` works before continuing
+- the commands below avoid PowerShell activation-policy issues by calling the venv Python directly
+- this install path is for running the app itself
+- ML, DL, pytest, and Playwright can be added later only if you need them
+
+```powershell
+git clone https://github.com/kangk1204/SurvStudio.git
+cd SurvStudio
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m survival_toolkit
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+If you prefer to activate the environment first in PowerShell, use:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python --version
+python -m survival_toolkit
+```
+
+### Project-local Conda fallback
+
+Use this when your machine has Conda or Micromamba available but the system Python is only `3.10` or older.
+
+This is the safest fallback on:
+- Ubuntu `22.04`
+- shared servers where you cannot use `sudo`
+- WSL setups where the OS Python is older than the project requirement
+
+It bootstraps a project-local Python `3.11`, then creates the normal `.venv` from that interpreter.
+
+```bash
+git clone https://github.com/kangk1204/SurvStudio.git
+cd SurvStudio
+conda create -y -p .conda python=3.11 pip
+./.conda/bin/python -m venv .venv
+source .venv/bin/activate
+which python
+python --version
+python -m pip install --upgrade pip
+pip install -e .
+python -m survival_toolkit
+```
+
+If you prefer to run directly from the Conda environment without creating `.venv`, this also works:
+
+```bash
+conda create -y -p .conda python=3.11 pip
+conda run -p ./.conda python -m pip install --upgrade pip
+conda run -p ./.conda python -m pip install -e .
+conda run -p ./.conda python -m survival_toolkit
+```
+
+### Optional ML, DL, and development installs
+
+Start with the app-only install above, then add extras only if you need them:
+
+- Add ML models:
 
 ```bash
 pip install -e ".[ml]"
 ```
 
-- Core + DL only:
+- Add deep learning models:
 
 ```bash
 pip install -e ".[dl]"
+```
+
+- Full local development stack:
+
+```bash
+pip install -e ".[dev]"
 ```
 
 - Everything:
@@ -174,6 +300,13 @@ pip install -e ".[dl]"
 ```bash
 pip install -e ".[all]"
 ```
+
+Notes:
+- `.[ml]` adds `scikit-survival` and `shap`
+- `.[dl]` adds `torch`
+- `.[dev]` includes pytest and httpx plus the ML and DL extras
+- on Linux, `.[dl]`, `.[dev]`, and `.[all]` can download a large PyTorch wheel and, depending on platform resolution, additional CUDA runtime packages
+- if you only want to run the dashboard or classical survival workflows, stay with `pip install -e .`
 
 ### Optional Browser E2E Test Install
 
@@ -211,8 +344,12 @@ If `python -m survival_toolkit` does not start the server, check:
 
 ## Installation Notes
 
-- The beginner install path is `pip install -e ".[dev]"`.
-- That path installs the app, ML support, DL support, and the normal pytest suite.
+- The fastest first run is `pip install -e .`.
+- Add `.[ml]` only when you need the optional machine-learning models.
+- Add `.[dl]` only when you need the optional deep-learning models.
+- Add `.[dev]` when you want the full local development stack and normal pytest suite.
+- On Linux, `.[dl]` and `.[dev]` may be large because PyTorch can pull platform-specific runtime packages.
+- If your machine only has Python `3.10`, bootstrap Python `3.11` first with the `Project-local Conda fallback` section.
 - Browser E2E testing is optional and uses the separate `e2e` extra.
 - The app itself does not need Playwright.
 

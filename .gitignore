@@ -5,6 +5,7 @@ __pycache__/
 dist/
 build/
 .venv/
+.conda/
 .env
 *.egg
 .pytest_cache/
