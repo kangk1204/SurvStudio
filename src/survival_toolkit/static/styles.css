@@ -2885,6 +2885,16 @@ h3 {
   line-height: 1.5;
 }
 
+.selection-search {
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 0.82rem;
+}
+
 .table-card.full-width {
   grid-column: 1 / -1;
 }
@@ -2970,6 +2980,20 @@ tr:nth-child(even) td {
 
 .check-item input {
   width: auto;
+}
+
+.check-item.hidden-by-filter {
+  display: none;
+}
+
+.checklist-filter-empty {
+  padding: 10px 12px;
+  border-radius: var(--radius-xs);
+  border: 1px dashed rgba(41, 77, 98, 0.18);
+  background: rgba(41, 77, 98, 0.04);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
 }
 
 /* ─── Signature Summary (Derive Result) ─── */

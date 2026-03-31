@@ -155,6 +155,8 @@ const refs = {
   downloadKmSvgButton: document.getElementById("downloadKmSvgButton"),
   covariateChecklist: document.getElementById("covariateChecklist"),
   categoricalChecklist: document.getElementById("categoricalChecklist"),
+  covariateSearchInput: document.getElementById("covariateSearchInput"),
+  categoricalSearchInput: document.getElementById("categoricalSearchInput"),
   coxCovariateWarning: document.getElementById("coxCovariateWarning"),
   selectAllCoxCovariatesButton: document.getElementById("selectAllCoxCovariatesButton"),
   clearCoxCovariatesButton: document.getElementById("clearCoxCovariatesButton"),
@@ -2217,6 +2219,7 @@ function renderChecklist(container, values, selected = []) {
   values.forEach((value) => {
     const label = document.createElement("label");
     label.className = "check-item";
+    label.dataset.filterValue = String(value).toLowerCase();
     const input = document.createElement("input");
     input.type = "checkbox";
     input.value = value;
@@ -2226,6 +2229,38 @@ function renderChecklist(container, values, selected = []) {
     label.append(input, span);
     container.appendChild(label);
   });
+  applyChecklistSearch(container);
+}
+
+function searchControlForChecklist(container) {
+  if (!container) return null;
+  if (container === refs.covariateChecklist) return refs.covariateSearchInput;
+  if (container === refs.categoricalChecklist) return refs.categoricalSearchInput;
+  return null;
+}
+
+function applyChecklistSearch(container) {
+  if (!container) return;
+  const searchControl = searchControlForChecklist(container);
+  if (!searchControl) return;
+
+  const query = String(searchControl.value || "").trim().toLowerCase();
+  let visibleCount = 0;
+  container.querySelectorAll(".check-item").forEach((item) => {
+    const match = !query || String(item.dataset.filterValue || "").includes(query);
+    item.classList.toggle("hidden-by-filter", !match);
+    if (match) visibleCount += 1;
+  });
+
+  let emptyState = container.querySelector(".checklist-filter-empty");
+  if (!emptyState) {
+    emptyState = document.createElement("div");
+    emptyState.className = "checklist-filter-empty hidden";
+    container.appendChild(emptyState);
+  }
+  const showEmpty = Boolean(query) && visibleCount === 0;
+  emptyState.textContent = showEmpty ? `No matches for "${searchControl.value}".` : "";
+  emptyState.classList.toggle("hidden", !showEmpty);
 }
 
 function selectedCheckboxValues(container) {
@@ -5624,10 +5659,16 @@ function initListeners() {
     queueHistorySync();
     scheduleCoxPreview();
   });
+  refs.covariateSearchInput?.addEventListener("input", () => {
+    applyChecklistSearch(refs.covariateChecklist);
+  });
   refs.categoricalChecklist?.addEventListener("change", () => {
     renderSharedFeatureSummary();
     queueHistorySync();
     scheduleCoxPreview();
+  });
+  refs.categoricalSearchInput?.addEventListener("input", () => {
+    applyChecklistSearch(refs.categoricalChecklist);
   });
   refs.selectAllCoxCovariatesButton?.addEventListener("click", () => {
     const covariates = allCheckboxValues(refs.covariateChecklist);

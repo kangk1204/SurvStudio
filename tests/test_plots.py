@@ -116,6 +116,7 @@ def test_build_cox_forest_figure_returns_json() -> None:
     assert any(shape.get("type") == "line" and shape.get("x0") == 1.0 and shape.get("x1") == 1.0 for shape in shapes)
     annotation_text = " ".join(str(annotation.get("text", "")) for annotation in figure["layout"].get("annotations", []))
     assert "Apparent C-index = 0.650" in annotation_text
+    assert "Red: term p &lt; 0.05" in annotation_text
 
 
 def test_build_cox_forest_figure_wraps_long_labels() -> None:
