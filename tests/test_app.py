@@ -1895,9 +1895,15 @@ def test_classical_endpoint_option_matrix_runs_without_errors() -> None:
         },
         {
             "source_column": "immune_index",
-            "method": "custom_cutoff",
-            "new_column_name": "immune_custom_group",
-            "cutoff": 0.0,
+            "method": "percentile_split",
+            "new_column_name": "immune_percentile_group",
+            "cutoff": "25,25",
+        },
+        {
+            "source_column": "age",
+            "method": "extreme_split",
+            "new_column_name": "age_extreme_group",
+            "cutoff": "20",
         },
     ]
 
@@ -1955,6 +1961,90 @@ def test_classical_endpoint_option_matrix_runs_without_errors() -> None:
     )
     assert cohort_response.status_code == 200
     assert cohort_response.json()["analysis"]["rows"]
+
+
+def test_cox_preview_reports_complete_case_counts() -> None:
+    stored = store.create(
+        make_example_dataset(seed=71, n_patients=120),
+        filename="cox_preview.csv",
+        copy_dataframe=False,
+    )
+
+    response = client.post(
+        "/api/cox-preview",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "covariates": ["age", "sex", "stage"],
+            "categorical_covariates": ["sex", "stage"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["preview"]
+    assert payload["outcome_rows"] >= payload["analyzable_rows"] >= 1
+    assert payload["events"] >= 1
+    assert payload["covariates"] == ["age", "sex", "stage"]
+    assert payload["categorical_covariates"] == ["sex", "stage"]
+
+
+def test_cox_preview_flags_one_sided_categorical_levels() -> None:
+    dataset = client.post("/api/load-tcga-example").json()
+
+    response = client.post(
+        "/api/cox-preview",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "covariates": ["age", "sex", "pathologic_stage", "histology", "kras_status", "egfr_status"],
+            "categorical_covariates": ["sex", "pathologic_stage", "histology", "kras_status", "egfr_status"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["preview"]
+    assert payload["stability_warnings"]
+    assert any("histology" in warning for warning in payload["stability_warnings"])
+    assert any(item["column"] == "histology" for item in payload["risky_levels"])
+
+
+def test_cox_preview_flags_small_reference_levels() -> None:
+    dataset = client.post("/api/load-tcga-example").json()
+
+    response = client.post(
+        "/api/cox-preview",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "covariates": [
+                "age",
+                "sex",
+                "pathologic_stage",
+                "kras_status",
+                "egfr_status",
+                "expression_subtype",
+                "tumor_longest_dimension_cm",
+            ],
+            "categorical_covariates": [
+                "sex",
+                "pathologic_stage",
+                "kras_status",
+                "egfr_status",
+                "expression_subtype",
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["preview"]
+    assert any("reference level" in warning for warning in payload["stability_warnings"])
+    assert any(item["column"] == "pathologic_stage" and item["issue"] == "small_reference_level" for item in payload["risky_levels"])
 
 
 def test_derive_group_rejects_existing_column_name_collision() -> None:

@@ -22,6 +22,14 @@ const runtime = {
   derivedColumnProvenance: {},
   busyScopes: {},
   plotResizeTimer: null,
+  coxPreview: {
+    key: "",
+    status: "idle",
+    payload: null,
+    error: "",
+  },
+  coxPreviewTimer: null,
+  coxPreviewToken: 0,
   resultPreference: {
     ml: "single",
     dl: "single",
@@ -53,6 +61,8 @@ const refs = {
   guidedRailStatusLabel: document.getElementById("guidedRailStatusLabel"),
   guidedRailStatusTitle: document.getElementById("guidedRailStatusTitle"),
   guidedRailStatusText: document.getElementById("guidedRailStatusText"),
+  guidedRailActions: document.getElementById("guidedRailActions"),
+  guidedRailPanelMount: document.getElementById("guidedRailPanelMount"),
   guidedConfigMount: document.getElementById("guidedConfigMount"),
   guidedPanel: document.getElementById("guidedPanel"),
   guidedActivePanelMount: document.getElementById("guidedActivePanelMount"),
@@ -72,6 +82,8 @@ const refs = {
   datasetPresetChips: document.getElementById("datasetPresetChips"),
   groupingDetails: document.getElementById("groupingDetails"),
   groupingSummaryText: document.getElementById("groupingSummaryText"),
+  configTitleText: document.getElementById("configTitleText"),
+  configHint: document.getElementById("configHint"),
   applyBasicPresetButton: document.getElementById("applyBasicPresetButton"),
   applyModelPresetButton: document.getElementById("applyModelPresetButton"),
   tooltipPopup: document.getElementById("tooltipPopup"),
@@ -100,6 +112,8 @@ const refs = {
   deriveColumnName: document.getElementById("deriveColumnName"),
   deriveApplyToGroup: document.getElementById("deriveApplyToGroup"),
   cutoffWrap: document.getElementById("cutoffWrap"),
+  deriveCutoffLabel: document.getElementById("deriveCutoffLabel"),
+  deriveCutoffHelp: document.getElementById("deriveCutoffHelp"),
   deriveOptimalControls: document.getElementById("deriveOptimalControls"),
   deriveButton: document.getElementById("deriveButton"),
   deriveStatus: document.getElementById("deriveStatus"),
@@ -139,6 +153,7 @@ const refs = {
   downloadKmSvgButton: document.getElementById("downloadKmSvgButton"),
   covariateChecklist: document.getElementById("covariateChecklist"),
   categoricalChecklist: document.getElementById("categoricalChecklist"),
+  coxCovariateWarning: document.getElementById("coxCovariateWarning"),
   selectAllCoxCovariatesButton: document.getElementById("selectAllCoxCovariatesButton"),
   clearCoxCovariatesButton: document.getElementById("clearCoxCovariatesButton"),
   selectAllCoxCategoricalsButton: document.getElementById("selectAllCoxCategoricalsButton"),
@@ -263,6 +278,7 @@ const refs = {
 };
 
 const DEFAULT_MODEL_FEATURE_SELECTION_LIMIT = 20;
+const COX_STAGE_VARIABLE_PREFERENCE = ["stage_group", "pathologic_stage", "stage"];
 
 const EVENT_TRUE_TOKENS = new Set([
   "1", "true", "t", "yes", "y", "event", "dead", "deceased", "died", "failure",
@@ -393,6 +409,40 @@ function goalLabel(goal) {
   }[goal] || "Choose analysis";
 }
 
+function guidedGoalMeta(goal) {
+  return {
+    km: {
+      badge: "Start here",
+      description: "See survival curves first. This is the easiest first check for most datasets.",
+      note: "Best first run for beginners",
+    },
+    cox: {
+      badge: "Good next step",
+      description: "Estimate which variables are linked to higher or lower risk over time.",
+      note: "Use after Kaplan-Meier makes sense",
+    },
+    tables: {
+      badge: "Useful summary",
+      description: "Make a cohort summary table for baseline characteristics and reporting.",
+      note: "Good for manuscripts and QC",
+    },
+    ml: {
+      badge: "Advanced",
+      description: "Compare Cox, random survival forest, and gradient boosting models.",
+      note: "Use after the classical analysis looks right",
+    },
+    dl: {
+      badge: "Advanced",
+      description: "Train deep survival models such as DeepSurv, DeepHit, and Transformer.",
+      note: "Slowest option and easiest to misuse",
+    },
+  }[goal] || {
+    badge: "Analysis",
+    description: "Choose the analysis you want to run next.",
+    note: "",
+  };
+}
+
 function goalFeatureCount(goal) {
   if (goal === "cox") return selectedCheckboxValues(refs.covariateChecklist).length;
   if (goal === "ml" || goal === "dl") return selectedCheckboxValues(refs.modelFeatureChecklist).length;
@@ -417,6 +467,124 @@ function arrayEquals(left = [], right = []) {
 
 function sortedStrings(values = []) {
   return [...values].map((value) => String(value)).sort();
+}
+
+function currentCoxSelections() {
+  const covariates = selectedCheckboxValues(refs.covariateChecklist);
+  return {
+    covariates,
+    categoricalCovariates: selectedCheckboxValues(refs.categoricalChecklist).filter((value) => covariates.includes(value)),
+  };
+}
+
+function coxPreviewRequestFromCurrentState() {
+  const { covariates, categoricalCovariates } = currentCoxSelections();
+  if (!covariates.length) return null;
+  const base = currentBaseConfig();
+  return {
+    dataset_id: base.dataset_id,
+    time_column: base.time_column,
+    event_column: base.event_column,
+    event_positive_value: base.event_positive_value,
+    covariates,
+    categorical_covariates: categoricalCovariates,
+  };
+}
+
+function coxPreviewRequestKey(requestConfig) {
+  if (!requestConfig) return "";
+  return JSON.stringify({
+    dataset_id: requestConfig.dataset_id,
+    time_column: requestConfig.time_column,
+    event_column: requestConfig.event_column,
+    event_positive_value: requestConfig.event_positive_value,
+    covariates: sortedStrings(requestConfig.covariates || []),
+    categorical_covariates: sortedStrings(requestConfig.categorical_covariates || []),
+  });
+}
+
+function resetCoxPreview({ rerender = true } = {}) {
+  if (runtime.coxPreviewTimer) {
+    window.clearTimeout(runtime.coxPreviewTimer);
+    runtime.coxPreviewTimer = null;
+  }
+  runtime.coxPreviewToken += 1;
+  runtime.coxPreview = {
+    key: "",
+    status: "idle",
+    payload: null,
+    error: "",
+  };
+  if (rerender && runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
+    renderGuidedChrome();
+  }
+}
+
+async function refreshCoxPreview({ force = false } = {}) {
+  if (!state.dataset) {
+    resetCoxPreview({ rerender: false });
+    return;
+  }
+  let requestConfig = null;
+  try {
+    requestConfig = coxPreviewRequestFromCurrentState();
+  } catch (error) {
+    runtime.coxPreview = {
+      key: "",
+      status: "blocked",
+      payload: null,
+      error: error.message || "Cox preview is unavailable until the endpoint is configured.",
+    };
+    if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") renderGuidedChrome();
+    return;
+  }
+  if (!requestConfig) {
+    resetCoxPreview({ rerender: false });
+    if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") renderGuidedChrome();
+    return;
+  }
+  const requestKey = coxPreviewRequestKey(requestConfig);
+  if (!force && runtime.coxPreview.key === requestKey && runtime.coxPreview.status === "ready") return;
+  const previewToken = ++runtime.coxPreviewToken;
+  runtime.coxPreview = {
+    key: requestKey,
+    status: "loading",
+    payload: null,
+    error: "",
+  };
+  if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") renderGuidedChrome();
+  try {
+    const payload = await fetchJSON("/api/cox-preview", {
+      method: "POST",
+      body: JSON.stringify(requestConfig),
+    });
+    if (previewToken !== runtime.coxPreviewToken) return;
+    runtime.coxPreview = {
+      key: requestKey,
+      status: "ready",
+      payload,
+      error: "",
+    };
+  } catch (error) {
+    if (previewToken !== runtime.coxPreviewToken) return;
+    runtime.coxPreview = {
+      key: requestKey,
+      status: "error",
+      payload: null,
+      error: error.message || "Cox preview is unavailable.",
+    };
+  }
+  if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") renderGuidedChrome();
+}
+
+function scheduleCoxPreview({ delay = 180, force = false } = {}) {
+  if (runtime.coxPreviewTimer) {
+    window.clearTimeout(runtime.coxPreviewTimer);
+  }
+  runtime.coxPreviewTimer = window.setTimeout(() => {
+    runtime.coxPreviewTimer = null;
+    void refreshCoxPreview({ force });
+  }, delay);
 }
 
 function requestConfigFromPayload(payload) {
@@ -689,6 +857,96 @@ function goalResultStatusState(goal, { currentLabel = "Ready", noResultLabel = "
   };
 }
 
+function renderGuidedCoxSelectionSummary() {
+  const { covariates, categoricalCovariates } = currentCoxSelections();
+  if (!covariates.length) {
+    return `
+      <div class="guided-readiness">
+        <strong>No covariates selected</strong>
+        <span>Select the variables you want to test before running Cox PH.</span>
+      </div>
+    `;
+  }
+  const categoricalSet = new Set(categoricalCovariates);
+  const chips = covariates.map((value) => `
+    <span class="dataset-preset-chip guided-selection-chip${categoricalSet.has(value) ? " is-categorical" : ""}">
+      ${escapeHtml(value)}
+      ${categoricalSet.has(value) ? '<span class="guided-selection-chip-tag">cat</span>' : ""}
+    </span>
+  `).join("");
+  return `
+    <div class="guided-selection-block">
+      <strong>Selected covariates (${covariates.length})</strong>
+      <div class="dataset-preset-chips guided-selection-chips">${chips}</div>
+    </div>
+  `;
+}
+
+function renderGuidedCoxPreviewSummary() {
+  const { covariates } = currentCoxSelections();
+  if (!covariates.length) {
+    return `
+      <div class="guided-readiness">
+        <strong>Cox preview</strong>
+        <span>Select at least one covariate to see how many rows remain analyzable.</span>
+      </div>
+    `;
+  }
+  if (runtime.coxPreview.status === "loading") {
+    return `
+      <div class="guided-readiness">
+        <strong>Cox preview</strong>
+        <span>Checking analyzable rows for the current covariate set.</span>
+      </div>
+    `;
+  }
+  if (runtime.coxPreview.status === "blocked" || runtime.coxPreview.status === "error") {
+    return `
+      <div class="guided-readiness">
+        <strong>Cox preview unavailable</strong>
+        <span>${escapeHtml(runtime.coxPreview.error || "Preview could not be computed for the current inputs.")}</span>
+      </div>
+    `;
+  }
+  const preview = runtime.coxPreview.payload?.preview;
+  if (!preview) {
+    return `
+      <div class="guided-readiness">
+        <strong>Cox preview</strong>
+        <span>Preview will appear here before you run the model.</span>
+      </div>
+    `;
+  }
+  const missingNotes = (preview.missing_by_covariate || [])
+    .slice(0, 4)
+    .map((item) => `${item.column} (${formatValue(item.missing_rows)})`);
+  const stabilityWarnings = (preview.stability_warnings || []).slice(0, 2);
+  const noteText = preview.dropped_rows
+    ? `Complete-case Cox will drop rows with missing selected covariates. Biggest drops: ${missingNotes.join(", ")}${preview.missing_by_covariate.length > 4 ? " ..." : ""}.`
+    : "All rows remain analyzable with the current covariate set.";
+  return `
+    <div class="guided-selection-block">
+      <strong>Cox preview</strong>
+      <div class="guided-quick-grid guided-quick-grid-compact">
+        <div class="guided-quick-item">
+          <strong>Analyzable rows</strong>
+          <span>${escapeHtml(`${formatValue(preview.analyzable_rows)} / ${formatValue(preview.outcome_rows)}`)}</span>
+        </div>
+        <div class="guided-quick-item">
+          <strong>Events</strong>
+          <span>${escapeHtml(formatValue(preview.events))}</span>
+        </div>
+        <div class="guided-quick-item">
+          <strong>Dropped by missing</strong>
+          <span>${escapeHtml(formatValue(preview.dropped_rows))}</span>
+        </div>
+      </div>
+      ${stabilityWarnings.length ? `<div class="event-warning event-warning-warning">${stabilityWarnings.map((warning) => escapeHtml(warning)).join("<br>")}</div>` : ""}
+      <span class="guided-inline-note">${escapeHtml(noteText)}</span>
+    </div>
+  `;
+}
+
 function guidedRailStatusState() {
   if (!state.dataset) {
     return {
@@ -737,10 +995,55 @@ function guidedRailStatusState() {
 function renderGuidedRailStatus() {
   if (!refs.guidedRailStatus || !refs.guidedRailStatusLabel || !refs.guidedRailStatusTitle || !refs.guidedRailStatusText) return;
   const status = guidedRailStatusState();
-  refs.guidedRailStatus.className = `guided-rail-status guided-rail-status-${status.tone}`;
-  refs.guidedRailStatusLabel.textContent = status.label;
-  refs.guidedRailStatusTitle.textContent = status.title;
-  refs.guidedRailStatusText.textContent = status.text;
+  const showReviewActions = runtime.uiMode === "guided" && currentGuidedStep() === 5 && Boolean(runtime.guidedGoal);
+  const reviewGoal = showReviewActions ? runtime.guidedGoal : null;
+  const reviewScopeBusy = reviewGoal ? isScopeBusy(reviewGoal) : false;
+  const mlSingleModelBlocked = reviewGoal === "ml" && refs.mlEvaluationStrategy?.value === "repeated_cv";
+  const reviewRunActions = {
+    km: [
+      { label: "Run again", action: "run-km", tone: "primary" },
+    ],
+    cox: [
+      { label: "Run again", action: "run-cox", tone: "primary" },
+    ],
+    tables: [
+      { label: "Build again", action: "run-tables", tone: "primary" },
+    ],
+    ml: [
+      { label: "Compare all", action: "run-ml-compare", tone: "ghost" },
+      { label: "Train a model", action: "run-ml", tone: "primary", disabled: mlSingleModelBlocked },
+    ],
+    dl: [
+      { label: "Compare all", action: "run-dl-compare", tone: "ghost" },
+      { label: "Train a model", action: "run-dl", tone: "primary" },
+    ],
+  }[reviewGoal] || [];
+  const compactStatus = showReviewActions
+    ? {
+        ...status,
+        title: status.tone === "ready"
+          ? `${goalLabel(runtime.guidedGoal)} current`
+          : status.title,
+        text: status.tone === "ready" ? "" : status.text,
+      }
+    : status;
+  refs.guidedRailStatus.className = `guided-rail-status guided-rail-status-${compactStatus.tone}${showReviewActions ? " guided-rail-status-actionable" : ""}`;
+  refs.guidedRailStatusLabel.textContent = compactStatus.label;
+  refs.guidedRailStatusTitle.textContent = compactStatus.title;
+  refs.guidedRailStatusText.textContent = compactStatus.text;
+  refs.guidedRailStatusText.classList.toggle("hidden", !compactStatus.text);
+  if (refs.guidedRailActions) {
+    refs.guidedRailActions.classList.toggle("hidden", !showReviewActions);
+    refs.guidedRailActions.innerHTML = showReviewActions
+      ? `
+        ${reviewRunActions.map((item) => `
+          <button class="button ${item.tone} compact-btn" type="button" data-guided-action="${escapeHtml(item.action)}"${(reviewScopeBusy || item.disabled) ? " disabled" : ""}>${escapeHtml(item.label)}</button>
+        `).join("")}
+        <button class="button ghost compact-btn" type="button" data-guided-action="previous-step">Adjust settings</button>
+        <button class="button ghost compact-btn" type="button" data-guided-action="choose-another-analysis">New analysis</button>
+      `
+      : "";
+  }
 }
 
 function expertSurfaceStatusState() {
@@ -863,6 +1166,7 @@ function setGuidedStep(step, { syncHistory = true, historyMode = "replace", scro
     document.body.dataset.guidedGoal = runtime.guidedGoal || "";
   }
   renderGuidedChrome();
+  if (runtime.guidedGoal === "cox" && runtime.guidedStep >= 4) scheduleCoxPreview({ delay: 0 });
   if (scroll) refs.guidedShell?.scrollIntoView({ behavior: "smooth", block: "start" });
   if (syncHistory && state.dataset) syncHistoryState(historyMode);
 }
@@ -925,6 +1229,7 @@ function updateGuidedSurfaceVisibility() {
   const showGroupingConfig = guidedActive && goalNeedsGrouping && (step === 4 || step === 5);
   const showConfigStrip = !guidedActive || showOutcomeConfig || showGroupingConfig;
   const showGuidedReviewPanel = guidedActive && (step === 4 || step === 5) && GUIDED_GOALS.includes(goal);
+  const showGuidedRailPanel = guidedActive && step === 4 && GUIDED_GOALS.includes(goal);
   const preservedUiState = captureReparentUiState();
   let didMove = false;
 
@@ -965,6 +1270,18 @@ function updateGuidedSurfaceVisibility() {
     });
   }
 
+  if (refs.guidedPanel) {
+    if (showGuidedRailPanel && refs.guidedRailPanelMount) {
+      if (refs.guidedPanel.parentElement !== refs.guidedRailPanelMount) {
+        refs.guidedRailPanelMount.appendChild(refs.guidedPanel);
+        didMove = true;
+      }
+    } else if (refs.guidedActivePanelMount && refs.guidedPanel.parentElement !== refs.guidedActivePanelMount.parentElement) {
+      refs.guidedActivePanelMount.before(refs.guidedPanel);
+      didMove = true;
+    }
+  }
+
   refs.configStrip?.classList.toggle("hidden", !showConfigStrip);
   refs.outcomeConfigBlock?.classList.toggle("hidden", guidedActive && !showOutcomeConfig);
   refs.groupingConfigBlock?.classList.toggle("hidden", guidedActive && !showGroupingConfig);
@@ -1002,6 +1319,7 @@ function setUiMode(mode, { syncHistory = true, historyMode = "replace" } = {}) {
   refs.guidedShell?.classList.toggle("hidden", mode !== "guided" || !state.dataset);
   runtime.guidedStep = normalizedGuidedStep(runtime.guidedStep);
   renderGuidedChrome();
+  if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") scheduleCoxPreview({ delay: 0 });
   queueVisiblePlotResize();
   if (syncHistory && window.history?.replaceState) syncHistoryState(historyMode);
 }
@@ -1058,6 +1376,7 @@ function setGuidedGoal(goal, { activate = true, syncHistory = true, historyMode 
   runtime.guidedStep = normalizedGuidedStep(runtime.guidedGoal ? 4 : 3);
   if (document.body) document.body.dataset.guidedGoal = runtime.guidedGoal || "";
   renderGuidedChrome();
+  if (runtime.guidedGoal === "cox") scheduleCoxPreview({ delay: 0 });
   if (syncHistory && state.dataset) syncHistoryState(historyMode);
 }
 
@@ -1097,6 +1416,7 @@ function captureControlSnapshot() {
     signatureRandomSeed: refs.signatureRandomSeed?.value || "",
     covariates: selectedCheckboxValues(refs.covariateChecklist),
     categoricals: selectedCheckboxValues(refs.categoricalChecklist),
+    coxPreviewKey: runtime.coxPreview?.key || "",
     modelFeatures: selectedCheckboxValues(refs.modelFeatureChecklist),
     modelCategoricals: selectedCheckboxValues(refs.modelCategoricalChecklist),
     cohortVariables: selectedCheckboxValues(refs.cohortVariableChecklist),
@@ -1235,11 +1555,13 @@ function applyControlSnapshot(snapshot) {
   setCheckedValues(refs.dlModelFeatureChecklist, snapshot.modelFeatures || []);
   setCheckedValues(refs.dlModelCategoricalChecklist, snapshot.modelCategoricals || []);
   setCheckedValues(refs.cohortVariableChecklist, snapshot.cohortVariables || []);
+  syncCoxCovariateSelection();
   renderSharedFeatureSummary();
   updateDatasetBadge();
   const derivePanelOpen = Boolean(snapshot.derivePanelOpen);
   refs.derivePanel?.classList.toggle("hidden", !derivePanelOpen);
-  if (refs.deriveToggle) refs.deriveToggle.textContent = derivePanelOpen ? "Close" : "Derive Group";
+  syncDeriveToggleButton();
+  scheduleCoxPreview({ delay: 0 });
 }
 
 function currentHistoryState() {
@@ -1299,6 +1621,15 @@ async function restoreHistoryState(historyState) {
   } finally {
     runtime.historySyncPaused = false;
   }
+}
+
+function syncDeriveToggleButton() {
+  if (!refs.deriveToggle || !refs.derivePanel) return;
+  const derivePanelOpen = !refs.derivePanel.classList.contains("hidden");
+  refs.deriveToggle.textContent = derivePanelOpen ? "Close" : "Derive Group";
+  refs.deriveToggle.classList.toggle("primary", !derivePanelOpen);
+  refs.deriveToggle.classList.toggle("ghost", derivePanelOpen);
+  refs.deriveToggle.setAttribute("aria-expanded", derivePanelOpen ? "true" : "false");
 }
 
 function setButtonLoading(button, isLoading) {
@@ -1657,15 +1988,24 @@ function updateEventColumnGuidance() {
 
   const binaryColumns = binaryCandidateColumns();
   const recommendedColumns = recommendedEventColumns();
+  const compactGuidedCopy = runtime.uiMode === "guided" && currentGuidedStep() === 2;
   if (refs.eventColumnHelp) {
     if (refs.showAllEventColumns?.checked) {
-      refs.eventColumnHelp.textContent = "Advanced mode is on. Every column is shown here, so use only a true binary event indicator.";
+      refs.eventColumnHelp.textContent = compactGuidedCopy
+        ? "Advanced mode is on. Every column is shown, so use only a true binary event column."
+        : "Advanced mode is on. Every column is shown here, so use only a true binary event indicator.";
     } else if (recommendedColumns.length && recommendedColumns.length < datasetColumnNames().length) {
-      refs.eventColumnHelp.textContent = "Showing event-like binary columns only. Turn on Show all columns if your event indicator uses a non-standard name.";
+      refs.eventColumnHelp.textContent = compactGuidedCopy
+        ? "Showing likely event columns only. Turn on Show all columns only if yours is missing."
+        : "Showing event-like binary columns only. Turn on Show all columns if your event indicator uses a non-standard name.";
     } else if (binaryColumns.length) {
-      refs.eventColumnHelp.textContent = "No clear event-style name was found. Showing binary candidate columns only.";
+      refs.eventColumnHelp.textContent = compactGuidedCopy
+        ? "Showing binary columns that could be the event field."
+        : "No clear event-style name was found. Showing binary candidate columns only.";
     } else {
-      refs.eventColumnHelp.textContent = "No binary event candidates were detected. Turn on Show all columns only if you already know which column is the event indicator.";
+      refs.eventColumnHelp.textContent = compactGuidedCopy
+        ? "No clear event column was found. Turn on Show all columns only if you already know it."
+        : "No binary event candidates were detected. Turn on Show all columns only if you already know which column is the event indicator.";
     }
   }
 
@@ -1784,6 +2124,70 @@ function allCheckboxValues(container) {
   return [...container.querySelectorAll('input[type="checkbox"]')].map((input) => input.value);
 }
 
+function availableCoxStageVariables() {
+  const available = new Set(allCheckboxValues(refs.covariateChecklist));
+  return COX_STAGE_VARIABLE_PREFERENCE.filter((value) => available.has(value));
+}
+
+function renderCoxCovariateWarning({ kept = null, removed = [] } = {}) {
+  if (!refs.coxCovariateWarning) return;
+  const availableStageVars = availableCoxStageVariables();
+  if (!kept || availableStageVars.length < 2) {
+    refs.coxCovariateWarning.textContent = "";
+    refs.coxCovariateWarning.className = "event-warning event-warning-warning hidden";
+    return;
+  }
+  const alternatives = availableStageVars.filter((value) => value !== kept);
+  refs.coxCovariateWarning.textContent = removed.length
+    ? `Cox can use only one stage variable at a time. Keeping ${kept}; cleared ${removed.join(", ")}.`
+    : `Cox can use only one stage variable at a time. Using ${kept}. Leave ${alternatives.join(" or ")} unchecked to avoid redundant stage encoding.`;
+  refs.coxCovariateWarning.className = "event-warning event-warning-warning";
+}
+
+function shouldAutoCategorizeCoxCovariate(columnName) {
+  const meta = getColumnMeta(columnName);
+  if (!meta) return false;
+  return meta.kind === "categorical" || meta.kind === "binary";
+}
+
+function syncCoxCovariateSelection({ preferredValue = null, notify = false, autoCategoricalValues = [] } = {}) {
+  if (!refs.covariateChecklist) return { kept: null, removed: [], changed: false };
+  const selected = selectedCheckboxValues(refs.covariateChecklist);
+  const selectedStageVars = COX_STAGE_VARIABLE_PREFERENCE.filter((value) => selected.includes(value));
+  let kept = selectedStageVars[0] || null;
+  let removed = [];
+  let normalizedCovariates = [...selected];
+
+  if (selectedStageVars.length > 1) {
+    kept = selectedStageVars.includes(preferredValue)
+      ? preferredValue
+      : COX_STAGE_VARIABLE_PREFERENCE.find((value) => selectedStageVars.includes(value)) || selectedStageVars[0];
+    removed = selectedStageVars.filter((value) => value !== kept);
+    normalizedCovariates = selected.filter((value) => !removed.includes(value));
+    setCheckedValues(refs.covariateChecklist, normalizedCovariates);
+  }
+
+  if (refs.categoricalChecklist) {
+    const normalizedCategoricals = selectedCheckboxValues(refs.categoricalChecklist).filter((value) => normalizedCovariates.includes(value));
+    [...new Set(autoCategoricalValues)].forEach((value) => {
+      if (
+        value
+        && normalizedCovariates.includes(value)
+        && shouldAutoCategorizeCoxCovariate(value)
+        && !normalizedCategoricals.includes(value)
+      ) {
+        normalizedCategoricals.push(value);
+      }
+    });
+    setCheckedValues(refs.categoricalChecklist, normalizedCategoricals);
+  }
+  renderCoxCovariateWarning({ kept, removed });
+  if (notify && removed.length) {
+    showToast(`Cox can use only one stage variable. Keeping ${kept} and clearing ${removed.join(", ")}.`, "warning", 3600);
+  }
+  return { kept, removed, changed: removed.length > 0 };
+}
+
 function formatValue(value, options = {}) {
   if (value === null || value === undefined || value === "") return "NA";
   if (typeof value === "number") {
@@ -1841,6 +2245,19 @@ function deriveGroupCountLabel(group) {
   return group;
 }
 
+function humanizeDeriveMethod(method) {
+  const labelMap = {
+    median_split: "Median split",
+    tertile_split: "Tertile split",
+    quartile_split: "Quartile split",
+    percentile_split: "Percentile split",
+    extreme_split: "Extreme split",
+    custom_cutoff: "Custom cutoff",
+    optimal_cutpoint: "Optimal cutpoint",
+  };
+  return labelMap[method] || humanizeHeader(method || "NA");
+}
+
 function humanizePValueLabel(label) {
   if (label === "selection_adjusted_p_value") return "Selection-adjusted p-value";
   if (label === "raw_p_value") return "Raw p-value";
@@ -1853,6 +2270,10 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
   const counts = summary?.counts || [];
   const assignmentRule = summary?.assignment_rule || null;
   const pValueLabel = humanizePValueLabel(summary?.p_value_label);
+  const percentileSpec = summary?.cutoff_spec || null;
+  const thresholds = Array.isArray(summary?.cutoffs)
+    ? summary.cutoffs.map((value) => formatValue(value)).join(", ")
+    : "";
   const stayedOverall = !appliedToGroup && currentGroupLabel === "Overall only";
   const groupingNote = appliedToGroup
     ? `Group by now uses ${derivedColumn}. ML and DL feature selections did not change automatically.`
@@ -1873,7 +2294,11 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
       <div class="${extraClass}">
         <strong>${escapeHtml(label)}</strong>
         <span class="summary-value" title="${escapeHtml(String(value ?? "NA"))}">${escapeHtml(String(value ?? "NA"))}</span>
-      </div>`;
+    </div>`;
+  if (refs.cutpointPlot && summary?.method !== "optimal_cutpoint") {
+    refs.cutpointPlot.innerHTML = "";
+    refs.cutpointPlot.classList.add("hidden");
+  }
   refs.deriveSummary.classList.remove("hidden");
   refs.deriveSummary.innerHTML = `
     <div class="count-strip">
@@ -1882,11 +2307,14 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
     ${summary?.method === "optimal_cutpoint" ? '<div class="note-box">High/Low indicate risk direction, not whether the source value itself is numerically high or low.</div>' : ""}
     <div class="note-box">${escapeHtml(groupingNote)}</div>
     ${summary?.method === "optimal_cutpoint" ? '<div class="note-box">This optimal cutpoint used outcome information. Use it for grouping or visualization, not as an ML/DL training feature.</div>' : ""}
+    ${summary?.method === "extreme_split" ? '<div class="note-box">Middle-range rows are excluded from grouped analyses for extreme split.</div>' : ""}
     ${groupingAction}
     <div class="signature-summary-grid">
       ${summaryCell("Derived column", derivedColumn || "NA")}
-      ${summaryCell("Method", summary?.method || "NA")}
-      ${summaryCell("Cutoff", formatValue(summary?.cutoff))}
+      ${summaryCell("Method", humanizeDeriveMethod(summary?.method || "NA"))}
+      ${percentileSpec ? summaryCell("Percentile(s)", percentileSpec) : ""}
+      ${thresholds ? summaryCell(Array.isArray(summary?.cutoffs) && summary.cutoffs.length > 1 ? "Thresholds" : "Threshold", thresholds) : ""}
+      ${!percentileSpec && !thresholds ? summaryCell("Cutoff", formatValue(summary?.cutoff)) : ""}
       ${summary?.p_value != null ? summaryCell(pValueLabel, formatValue(summary.p_value), "pvalue-card") : ""}
       ${summaryCell("Groups", formatValue(summary?.n_groups || counts.length || "NA"))}
       ${summary?.method === "optimal_cutpoint" ? summaryCell("Min group fraction", formatValue(summary?.min_group_fraction)) : ""}
@@ -2538,8 +2966,10 @@ function renderContextCards({
 }) {
   if (refs.groupingSummaryText) {
     refs.groupingSummaryText.textContent = !hasDataset
-      ? "Used mainly for Kaplan-Meier and grouped tables. Group by does not change Cox, ML, or DL inputs."
-      : `Current Group by: ${groupLabel}. These settings mainly affect Kaplan-Meier and grouped tables. Cox, ML, and DL use the outcome definition plus their own feature selections.`;
+      ? "Used mainly for Kaplan-Meier and grouped tables."
+      : runtime.uiMode === "guided"
+        ? `Current Group by: ${groupLabel}. Open this only if you want subgroup curves or grouped tables.`
+        : `Current Group by: ${groupLabel}. These settings mainly affect Kaplan-Meier and grouped tables. Cox, ML, and DL use the outcome definition plus their own feature selections.`;
   }
   if (refs.groupColumnWarning) {
     const warning = hasDataset ? currentGroupColumnWarning() : null;
@@ -2629,6 +3059,7 @@ function syncDownloadButtonAvailability() {
 
 function renderSharedFeatureSummary() {
   const hasDataset = Boolean(state.dataset);
+  syncCoxCovariateSelection();
   const coxFeatures = hasDataset ? selectedCheckboxValues(refs.covariateChecklist) : [];
   const coxCategoricals = hasDataset ? selectedCheckboxValues(refs.categoricalChecklist).filter((value) => coxFeatures.includes(value)) : [];
   const features = hasDataset ? selectedCheckboxValues(refs.modelFeatureChecklist) : [];
@@ -2682,9 +3113,25 @@ function renderSharedFeatureSummary() {
 
 function renderGuidedSummaryChips(items) {
   if (!refs.guidedSummaryChips) return;
+  refs.guidedSummaryChips.classList.toggle("hidden", items.length === 0);
   refs.guidedSummaryChips.innerHTML = items.length
     ? items.map((item) => `<span class="guided-summary-chip">${escapeHtml(item)}</span>`).join("")
     : "";
+}
+
+function guidedHelpDetails(summaryLabel, lines = []) {
+  const cleanLines = lines.filter(Boolean);
+  if (!cleanLines.length) return "";
+  return `
+    <details class="guided-help-toggle">
+      <summary class="guided-help-summary">${escapeHtml(summaryLabel)}</summary>
+      <div class="guided-help-body">
+        <ul class="guided-help-list">
+          ${cleanLines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}
+        </ul>
+      </div>
+    </details>
+  `;
 }
 
 function renderGuidedChrome() {
@@ -2706,34 +3153,50 @@ function renderGuidedChrome() {
   const eventColumn = refs.eventColumn?.value || "event";
   const eventValue = refs.eventPositiveValue?.value || "choose event value";
   const groupBy = refs.groupColumn?.value || "Overall only";
-  const features = goalFeatureCount(goal);
   const evaluation = evaluationModeLabel(goal);
   const summaryText = {
-    2: "Choose the time column, event column, and the value that means the event happened before running anything.",
+    2: "Check the three fields below. If they look right, continue. Keep grouping and advanced settings for later.",
     3: "The endpoint is ready. Pick one analysis path and keep the rest hidden for now.",
-    4: "Configure only the controls that matter for the selected analysis, then run it once before moving on.",
-    5: "Review the result, confirm the evaluation mode, then export or switch to another analysis path.",
+    4: "Use the settings below and run once. Change only one thing at a time if you need to adjust it.",
+    5: "Check whether the result looks sensible before moving on or exporting anything.",
   }[step] || "Load a dataset or sample cohort to begin.";
 
+  if (refs.configTitleText) {
+    refs.configTitleText.textContent = step === 2 ? "Outcome setup" : "Study Design";
+  }
+  if (refs.configHint) {
+    refs.configHint.textContent = step === 2
+      ? "Choose only the time column, event column, and the value that means the event happened."
+      : "Open Group by only if you need subgroup curves or grouped tables.";
+  }
   if (refs.guidedSummaryTitle) {
     refs.guidedSummaryTitle.textContent = `${step}. ${["Load data", "Confirm outcome", "Choose analysis", "Configure & run", "Review results"][step - 1]}`;
   }
   if (refs.guidedSummaryText) refs.guidedSummaryText.textContent = summaryText;
-  renderGuidedSummaryChips([
-    `Dataset: ${state.dataset.filename}`,
-    `Time: ${timeColumn}`,
-    `Event: ${eventColumn} = ${eventValue}`,
-    `Group by: ${groupBy}`,
-    `Mode: ${runtime.uiMode === "guided" ? "Guided" : "Expert"}`,
-    `Goal: ${goalLabel(goal)}`,
-    ...(goal ? [`Features: ${features}`] : []),
-    ...(evaluation ? [`Eval: ${evaluation}`] : []),
-  ]);
+  const summaryChips = step === 2
+    ? [`Dataset: ${state.dataset.filename}`]
+    : step === 3
+      ? [
+          `Dataset: ${state.dataset.filename}`,
+          `Outcome: ${timeColumn} / ${eventColumn} = ${eventValue}`,
+          ...(goal ? [`Analysis: ${goalLabel(goal)}`] : []),
+        ]
+      : step === 4
+        ? [
+            `Dataset: ${state.dataset.filename}`,
+            ...(goal ? [`Analysis: ${goalLabel(goal)}`] : []),
+          ]
+        : [
+            `Dataset: ${state.dataset.filename}`,
+            ...(goal ? [`Analysis: ${goalLabel(goal)}`] : []),
+          ];
+  renderGuidedSummaryChips(summaryChips);
 
   updateStepIndicator(step);
   refs.guidedPanel.innerHTML = guidedPanelMarkup(step);
   renderGuidedRailStatus();
   renderExpertSurfaceStatus();
+  updateGuidedResultVisibility();
 }
 
 function eventPreviewValues(columnName) {
@@ -2745,137 +3208,151 @@ function guidedPanelMarkup(step) {
   const eventWarning = currentEventColumnWarning();
   const eventValueSelected = Boolean(refs.eventPositiveValue?.value);
   const eventValues = eventPreviewValues(refs.eventColumn?.value || "");
+  const suggestedTime = state.dataset?.suggestions?.time_columns?.[0] || refs.timeColumn?.value || "";
+  const suggestedEvent = recommendedEventColumns()[0] || refs.eventColumn?.value || "";
   const datasetName = escapeHtml(state.dataset?.filename || "dataset");
-  const goalCards = GUIDED_GOALS.map((entry) => `
-    <button class="guided-goal-card${goal === entry ? " active" : ""}" type="button" data-guided-action="choose-goal" data-goal="${entry}">
-      <strong>${escapeHtml(goalLabel(entry))}</strong>
-      <span>${escapeHtml({
-        km: "Start with overall survival, then add an optional Group by.",
-        cox: "Estimate covariate effects after the endpoint is confirmed.",
-        ml: "Benchmark Cox, RSF, and GBS with the shared model features.",
-        dl: "Benchmark DeepSurv, DeepHit, Neural MTLR, Transformer, and VAE models.",
-        tables: "Build a grouped or overall cohort summary table for reporting.",
-      }[entry])}</span>
-    </button>
-  `).join("");
+  const goalCards = ["km", "cox", "tables", "ml", "dl"].map((entry) => {
+    const meta = guidedGoalMeta(entry);
+    return `
+      <button class="guided-goal-card${goal === entry ? " active" : ""}" type="button" data-guided-action="choose-goal" data-goal="${entry}">
+        <div class="guided-goal-top">
+          <strong>${escapeHtml(goalLabel(entry))}</strong>
+          <span class="guided-goal-badge">${escapeHtml(meta.badge)}</span>
+        </div>
+        <span>${escapeHtml(meta.description)}</span>
+        <small>${escapeHtml(meta.note)}</small>
+      </button>
+    `;
+  }).join("");
 
   if (step === 2) {
     const canContinue = endpointIsReady() && !eventWarning && eventValueSelected;
-    const issueHeading = eventWarning || !eventValueSelected ? "Blocking issue" : "Ready status";
+    const issueHeading = canContinue ? "Ready to continue" : "What still needs attention";
     const issueMessage = eventWarning?.message
-      || (!eventValueSelected
-        ? `Choose the Event Value that means the event happened for "${refs.eventColumn?.value || "event"}".`
-        : "Time, event, and event value are all set. You can continue.");
+      || (!refs.timeColumn?.value
+        ? "Choose the time column first."
+        : !refs.eventColumn?.value
+          ? "Choose the event column next."
+          : !eventValueSelected
+            ? `Choose which value means the event happened${eventValues.length ? `: ${eventValues.join(", ")}` : ""}.`
+            : `SurvStudio is ready to use ${refs.timeColumn?.value || "time"}, ${refs.eventColumn?.value || "event"}, and ${refs.eventPositiveValue?.value || "event value"}.`);
+    const recommendationCards = [
+      suggestedTime ? `
+        <div class="guided-quick-item">
+          <strong>Suggested time</strong>
+          <span>${escapeHtml(suggestedTime)}</span>
+        </div>
+      ` : "",
+      suggestedEvent ? `
+        <div class="guided-quick-item">
+          <strong>Suggested event</strong>
+          <span>${escapeHtml(suggestedEvent)}</span>
+        </div>
+      ` : "",
+      refs.eventColumn?.value ? `
+        <div class="guided-quick-item">
+          <strong>Values seen</strong>
+          <span>${escapeHtml(eventValues.length ? eventValues.join(", ") : "Unavailable")}</span>
+        </div>
+      ` : "",
+    ].filter(Boolean).join("");
+    const helpBlock = guidedHelpDetails("Show help", [
+      "SurvStudio usually guesses these columns for you. Just confirm them before moving on.",
+      "Leave Group by for later. This step is only about time, event, and the event-happened value.",
+    ]);
     return `
-      <div class="guided-panel-grid">
-        <article class="guided-card">
-          <h3>Confirm outcome</h3>
-          <p>Choose the columns that define time-to-event analysis. This is the only global decision. The rest stays hidden until this is clear.</p>
-          <div class="guided-actions">
+      <div class="guided-panel-grid guided-panel-grid-compact">
+        <article class="guided-card guided-card-focus">
+          <span class="guided-kicker">Step 2 of 5</span>
+          <h3>Tell SurvStudio what counts as survival time and event</h3>
+          ${recommendationCards ? `<div class="guided-quick-grid">${recommendationCards}</div>` : ""}
+          <div class="guided-readiness${canContinue ? " ready" : " warning"}">
+            <strong>${escapeHtml(issueHeading)}</strong>
+            <span>${escapeHtml(issueMessage)}</span>
+          </div>
+          <div class="guided-actions guided-actions-outcome">
             <button class="button ghost compact-btn" type="button" data-guided-action="go-home">Back to data</button>
-            <button class="button primary compact-btn" type="button" data-guided-action="next-step"${canContinue ? "" : " disabled"}>Continue</button>
+            <button class="button primary compact-btn" type="button" data-guided-action="next-step"${canContinue ? "" : " disabled"}>Looks good, continue</button>
           </div>
-          <span class="guided-inline-note">Keep Group by for later. First confirm time, event, and the value that means the event happened.</span>
+          ${helpBlock}
         </article>
-        <aside class="guided-card">
-          <h4>Current checks</h4>
-          <div class="guided-status-list">
-            <div class="guided-status-item">
-              <strong>Time column</strong>
-              <span>${escapeHtml(refs.timeColumn?.value || "Not selected")}</span>
-            </div>
-            <div class="guided-status-item">
-              <strong>Event column</strong>
-              <span>${escapeHtml(refs.eventColumn?.value || "Not selected")}</span>
-            </div>
-            <div class="guided-status-item">
-              <strong>Observed event values</strong>
-              <span>${escapeHtml(eventValues.length ? eventValues.join(", ") : "Unavailable")}</span>
-            </div>
-            <div class="guided-status-item${eventWarning || !eventValueSelected ? " warning" : ""}">
-              <strong>${escapeHtml(issueHeading)}</strong>
-              <span>${escapeHtml(issueMessage)}</span>
-            </div>
-          </div>
-        </aside>
       </div>
     `;
   }
 
   if (step === 3) {
+    const helpBlock = guidedHelpDetails("How do I choose?", [
+      "Pick one analysis first. SurvStudio will keep the other paths hidden for now.",
+      "If you are unsure, start with Kaplan-Meier. It is the easiest result to sanity-check.",
+    ]);
     return `
-      <div class="guided-panel-grid">
-        <article class="guided-card">
-          <h3>Choose one analysis path</h3>
-          <p>Choose one path. The app will show only that analysis next. Kaplan-Meier is the safest first run.</p>
+      <div class="guided-panel-grid guided-panel-grid-compact">
+        <article class="guided-card guided-card-focus">
+          <span class="guided-kicker">Step 3 of 5</span>
+          <h3>Choose what you want to do next</h3>
+          <div class="guided-readiness ready">
+            <strong>Current outcome</strong>
+            <span>${escapeHtml(`${datasetName}: ${refs.timeColumn?.value || "time"} / ${refs.eventColumn?.value || "event"} = ${refs.eventPositiveValue?.value || "choose event value"}`)}</span>
+          </div>
           <div class="guided-goal-grid">${goalCards}</div>
           <div class="guided-actions">
             <button class="button ghost compact-btn" type="button" data-guided-action="previous-step">Back</button>
           </div>
+          ${helpBlock}
         </article>
-        <aside class="guided-card">
-          <h4>Current endpoint</h4>
-          <div class="guided-status-list">
-            <div class="guided-status-item">
-              <strong>Dataset</strong>
-              <span>${datasetName}</span>
-            </div>
-            <div class="guided-status-item">
-              <strong>Outcome</strong>
-              <span>${escapeHtml(`${refs.timeColumn?.value || "time"} / ${refs.eventColumn?.value || "event"} = ${refs.eventPositiveValue?.value || "choose event value"}`)}</span>
-            </div>
-            <div class="guided-status-item">
-              <strong>Grouping</strong>
-              <span>${escapeHtml(refs.groupColumn?.value || "Overall only")}</span>
-            </div>
-          </div>
-        </aside>
       </div>
     `;
   }
 
   if (step === 4) {
+    const coxSelectionSummary = goal === "cox" ? renderGuidedCoxSelectionSummary() : "";
+    const coxPreviewSummary = goal === "cox" ? renderGuidedCoxPreviewSummary() : "";
     const configureCopy = {
       km: {
-        title: "Configure Kaplan-Meier",
-        text: "Only the KM settings are shown below. Group by stays optional. Leave it as Overall only unless you want subgroup curves.",
+        title: "Run Kaplan-Meier",
+        text: "Check the settings below, then run once.",
         runAction: "run-km",
         runLabel: "Run Kaplan-Meier",
         runScope: "km",
+        tip: "Start simple. Keep Group by as Overall only unless you want subgroup curves.",
       },
       cox: {
-        title: "Configure Cox PH",
-        text: "Only the Cox inputs are shown below. Group by does not affect Cox unless you add that column as a covariate.",
+        title: "Run Cox PH",
+        text: "Check the settings below, then run once.",
         runAction: "run-cox",
         runLabel: "Run Cox",
         runScope: "cox",
+        tip: "Change covariates first if the result looks wrong.",
       },
       ml: {
-        title: "Configure ML models",
-        text: "Only ML inputs are shown below. Confirm the model features and evaluation mode, then train one model or compare all models.",
+        title: "Train One ML Model",
+        text: "Check the settings below, then start with one run.",
         runAction: "run-ml",
-        runLabel: "Train ML model",
+        runLabel: "Train a model",
         secondaryAction: "run-ml-compare",
         secondaryLabel: "Compare all ML models",
         runScope: "ml",
         busyText: "ML model run in progress. Stay on this analysis path if you want the updated result to open here when the run finishes.",
+        tip: "Use this after the classical analysis looks right.",
       },
       dl: {
-        title: "Configure DL models",
-        text: "Only DL inputs are shown below. Confirm the model features and evaluation mode, then train one model or compare all models.",
+        title: "Train One DL Model",
+        text: "Check the settings below, then start with one run.",
         runAction: "run-dl",
-        runLabel: "Train DL model",
+        runLabel: "Train a model",
         secondaryAction: "run-dl-compare",
         secondaryLabel: "Compare all DL models",
         runScope: "dl",
         busyText: "DL model run in progress. Deep-learning runs can take longer, so stay on this analysis path if you want the updated result to open here when the run finishes.",
+        tip: "This is the slowest and most advanced path.",
       },
       tables: {
-        title: "Configure cohort table",
-        text: "Only the table inputs are shown below. Group by is optional and affects grouped summaries only.",
+        title: "Build Cohort Table",
+        text: "Check the settings below, then build once.",
         runAction: "run-tables",
         runLabel: "Build cohort table",
         runScope: "tables",
+        tip: "Grouping is optional here.",
       },
     }[goal] || {
       title: "Configure analysis",
@@ -2883,18 +3360,23 @@ function guidedPanelMarkup(step) {
       runAction: "previous-step",
       runLabel: "Go back",
       runScope: null,
+      tip: "",
     };
     const scopeBusy = isScopeBusy(configureCopy.runScope);
     const mlSingleModelBlocked = goal === "ml" && refs.mlEvaluationStrategy?.value === "repeated_cv";
     const mlSingleModelBlockedText = mlSingleModelBlocked
       ? "Train ML model is disabled while Repeated CV is selected. Use Compare all ML models or switch Evaluation Mode back to Deterministic Holdout."
       : "";
-    const panelGridClass = `guided-panel-grid${goal === "tables" ? " guided-panel-grid-stacked" : ""}`;
+    const helpBlock = guidedHelpDetails("Show run tips", [
+      configureCopy.text,
+      configureCopy.tip || "Run once, then adjust only if something looks wrong.",
+      "If the result looks odd, go back and change only one setting before running again.",
+    ]);
     return `
-      <div class="${panelGridClass}">
-        <article class="guided-card">
+      <div class="guided-panel-grid guided-panel-grid-compact">
+        <article class="guided-card guided-card-focus">
+          <span class="guided-kicker">Step 4 of 5</span>
           <h3>${escapeHtml(configureCopy.title)}</h3>
-          <p>${escapeHtml(configureCopy.text)}</p>
           <div class="guided-actions guided-actions-priority${configureCopy.secondaryAction ? " guided-actions-dual" : ""}">
             ${configureCopy.secondaryAction
               ? `<button class="button ghost compact-btn guided-run-choice guided-run-choice-secondary" type="button" data-guided-action="${escapeHtml(configureCopy.secondaryAction)}"${scopeBusy ? " disabled" : ""}>${escapeHtml(configureCopy.secondaryLabel)}</button>`
@@ -2907,63 +3389,55 @@ function guidedPanelMarkup(step) {
             <button class="button ghost compact-btn" type="button" data-guided-action="previous-step">Back</button>
             <button class="button ghost compact-btn" type="button" data-guided-action="choose-another-analysis">Change analysis</button>
           </div>
+          ${coxSelectionSummary}
+          ${coxPreviewSummary}
+          ${helpBlock}
         </article>
-        <aside class="guided-card">
-          <h4>Run summary</h4>
-          <div class="guided-status-list">
-            <div class="guided-status-item">
-              <strong>Goal</strong>
-              <span>${escapeHtml(goalLabel(goal))}</span>
-            </div>
-            <div class="guided-status-item">
-              <strong>Group by</strong>
-              <span>${escapeHtml(refs.groupColumn?.value || "Overall only")}</span>
-            </div>
-            <div class="guided-status-item">
-              <strong>Selected features</strong>
-              <span>${escapeHtml(String(goalFeatureCount(goal)))}</span>
-            </div>
-            <div class="guided-status-item">
-              <strong>Evaluation</strong>
-              <span>${escapeHtml(evaluationModeLabel(goal) || "Not applicable")}</span>
-            </div>
-          </div>
-        </aside>
       </div>
     `;
   }
 
+  const reviewChecks = {
+    km: [
+      "Do the curves and sample counts look plausible?",
+      "If grouped, are the groups the ones you intended?",
+      "If it looks wrong, go back and re-check Group by or max time.",
+    ],
+    cox: [
+      "Do the covariates match the variables you meant to test?",
+      "Are the hazard ratio directions roughly what you expected?",
+      "If not, go back and check the covariate list first.",
+    ],
+    tables: [
+      "Does the table contain the variables you wanted to summarize?",
+      "If grouped, is the grouping field correct?",
+      "If not, go back and adjust the table variable list.",
+    ],
+    ml: [
+      "Did you choose the evaluation mode intentionally?",
+      "Does the feature count look reasonable for this cohort size?",
+      "If not, go back and simplify the feature set first.",
+    ],
+    dl: [
+      "Did you choose the evaluation mode intentionally?",
+      "Are you comfortable with the longer runtime of this path?",
+      "If not, go back and start with a smaller or simpler run.",
+    ],
+  }[goal] || [
+    "Check that this is the analysis you meant to run.",
+    "If something looks wrong, go back one step and change only one thing.",
+  ];
   return `
-    <div class="guided-panel-grid">
-      <article class="guided-card">
-        <h3>Review results</h3>
-        <p>${escapeHtml(`${goalLabel(goal)} is ready. Check the plot, sample counts, and evaluation mode before interpreting the result.`)}</p>
-        <div class="guided-actions">
-          <button class="button ghost compact-btn" type="button" data-guided-action="previous-step">Back to configure</button>
-          <button class="button primary compact-btn" type="button" data-guided-action="choose-another-analysis">Choose another analysis</button>
-        </div>
+    <div class="guided-panel-grid guided-panel-grid-compact">
+      <article class="guided-card guided-card-focus">
+        <span class="guided-kicker">Step 5 of 5</span>
+        <h3>Check the result before you trust it</h3>
+        ${guidedHelpDetails("Show review checklist", [
+          `${goalLabel(goal)} finished. Do one quick sanity check before you move on or export anything.`,
+          ...reviewChecks,
+          "If something looks off, go back one step, change one thing, and run again.",
+        ])}
       </article>
-      <aside class="guided-card">
-        <h4>What to verify</h4>
-        <div class="guided-status-list">
-          <div class="guided-status-item">
-            <strong>Goal</strong>
-            <span>${escapeHtml(goalLabel(goal))}</span>
-          </div>
-          <div class="guided-status-item">
-            <strong>Outcome</strong>
-            <span>${escapeHtml(`${refs.timeColumn?.value || "time"} / ${refs.eventColumn?.value || "event"} = ${refs.eventPositiveValue?.value || "choose event value"}`)}</span>
-          </div>
-          <div class="guided-status-item">
-            <strong>Evaluation</strong>
-            <span>${escapeHtml(evaluationModeLabel(goal) || "Not applicable")}</span>
-          </div>
-          <div class="guided-status-item">
-            <strong>Grouping</strong>
-            <span>${escapeHtml(refs.groupColumn?.value || "Overall only")}</span>
-          </div>
-        </div>
-      </aside>
     </div>
   `;
 }
@@ -3032,6 +3506,7 @@ function applyDatasetPreset(mode) {
   } else {
     setCheckedValues(refs.covariateChecklist, covariates);
     setCheckedValues(refs.categoricalChecklist, categoricals);
+    syncCoxCovariateSelection();
   }
   setCheckedValues(refs.cohortVariableChecklist, tableVariables);
   updateDatasetBadge();
@@ -3340,8 +3815,10 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   runtime.derivedColumnProvenance = payload.derived_column_provenance || {};
   runtime.resultPreference.ml = "single";
   runtime.resultPreference.dl = "single";
+  resetCoxPreview({ rerender: false });
   refs.datasetPresetBar?.classList.add("hidden");
   refs.deriveStatus.textContent = "";
+  setSelectValueIfPresent(refs.deriveMethod, "median_split");
   if (refs.deriveApplyToGroup) refs.deriveApplyToGroup.checked = preferredDeriveApplyToGroup();
   if (refs.cutpointPlot) { refs.cutpointPlot.innerHTML = ""; refs.cutpointPlot.classList.add("hidden"); }
   refs.kmSummaryShell.innerHTML = '<div class="empty-state">Survival statistics will appear after you run the analysis.</div>';
@@ -3420,6 +3897,7 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   runtime.derivedColumnProvenance = payload.derived_column_provenance || {};
   runtime.guidedGoal = preservedGuidedGoal;
   runtime.guidedStep = preservedGuidedStep;
+  resetCoxPreview({ rerender: false });
 
   if (refs.showAllEventColumns) refs.showAllEventColumns.checked = Boolean(snapshot?.showAllEventColumns);
   renderSelect(refs.timeColumn, columnNames, { selected: preferredTime });
@@ -3497,17 +3975,32 @@ async function deriveGroup() {
   const sourceColumn = refs.deriveSource.value;
   if (!sourceColumn) throw new Error("Select a numeric source column.");
   const method = refs.deriveMethod.value;
+  const isPercentileSplit = method === "percentile_split";
+  const isExtremeSplit = method === "extreme_split";
   const isCustomCutoff = method === "custom_cutoff";
+  const usesCutoffInput = isPercentileSplit || isExtremeSplit || isCustomCutoff;
   const isOptimal = method === "optimal_cutpoint";
   const requestedColumnName = validateDerivedColumnName(refs.deriveColumnName.value);
   const preservedGroup = refs.groupColumn.value || "";
   const applyToGroup = Boolean(refs.deriveApplyToGroup?.checked);
   const cutoffInput = refs.deriveCutoff.value.trim();
   let cutoffValue = null;
-  if (isCustomCutoff) {
-    if (cutoffInput === "") throw new Error("Enter a numeric cutoff value.");
-    cutoffValue = Number(cutoffInput);
-    if (!Number.isFinite(cutoffValue)) throw new Error("Cutoff must be a finite numeric value.");
+  if (usesCutoffInput) {
+    if (cutoffInput === "") {
+      throw new Error(
+        isExtremeSplit
+          ? "Enter one percentile value, for example 25."
+          : isPercentileSplit
+            ? "Enter percentile values, for example 25 or 25,25."
+            : "Enter a numeric cutoff value.",
+      );
+    }
+    if (isCustomCutoff) {
+      cutoffValue = Number(cutoffInput);
+      if (!Number.isFinite(cutoffValue)) throw new Error("Cutoff must be a finite numeric value.");
+    } else {
+      cutoffValue = cutoffInput;
+    }
   }
   refs.deriveStatus.textContent = isOptimal
     ? "Scanning candidate cutpoints for a new grouping column..."
@@ -3601,8 +4094,27 @@ async function deriveGroup() {
 }
 
 function updateMethodVisibility() {
-  refs.cutoffWrap.classList.toggle("hidden", refs.deriveMethod.value !== "custom_cutoff");
-  refs.deriveOptimalControls?.classList.toggle("hidden", refs.deriveMethod.value !== "optimal_cutpoint");
+  const isOptimal = refs.deriveMethod.value === "optimal_cutpoint";
+  const isPercentileSplit = refs.deriveMethod.value === "percentile_split";
+  const isExtremeSplit = refs.deriveMethod.value === "extreme_split";
+  const usesCutoffInput = isPercentileSplit || isExtremeSplit || refs.deriveMethod.value === "custom_cutoff";
+  refs.cutoffWrap.classList.toggle("hidden", !usesCutoffInput);
+  if (refs.deriveCutoffLabel) {
+    refs.deriveCutoffLabel.firstChild.textContent = isExtremeSplit ? "Extreme percentile " : "Percentile(s) ";
+  }
+  if (refs.deriveCutoffHelp) {
+    refs.deriveCutoffHelp.dataset.tooltip = isExtremeSplit
+      ? "Use one percentile from each tail. Example: 25 = bottom 25% vs top 25%, with the middle 50% excluded from grouped analyses."
+      : "Use percentiles from the observed distribution. Example: 25 = top 25% vs rest. Example: 50 matches Median split. Example: 25,25 = bottom 25% / middle 50% / top 25%.";
+  }
+  if (refs.deriveCutoff) {
+    refs.deriveCutoff.placeholder = isExtremeSplit ? "25" : "25 or 25,25";
+  }
+  refs.deriveOptimalControls?.classList.toggle("hidden", !isOptimal);
+  if (!isOptimal && refs.cutpointPlot) {
+    refs.cutpointPlot.innerHTML = "";
+    refs.cutpointPlot.classList.add("hidden");
+  }
 }
 
 function updateWeightVisibility() {
@@ -4469,6 +4981,150 @@ function isVisibleResultNode(node) {
   return Boolean(node && !node.classList?.contains("hidden"));
 }
 
+function hasRenderedTable(shell) {
+  return Boolean(shell && !shell.querySelector(".empty-state") && shell.querySelector("table"));
+}
+
+function hasRenderedInsight(board) {
+  return Boolean(board && !board.querySelector(".empty-state") && board.textContent.trim());
+}
+
+function hasRenderedPlot(plot) {
+  if (!plot || plot.classList?.contains("hidden")) return false;
+  if (plot.querySelector(".empty-state")) return false;
+  if (Array.isArray(plot.data) && plot.data.length) return true;
+  return Boolean(plot.querySelector(".js-plotly-plot, .plotly, .main-svg"));
+}
+
+function setGuidedResultNodeVisible(node, visible) {
+  if (!node) return;
+  node.classList.toggle("guided-result-hidden", !visible);
+}
+
+function updateGuidedResultVisibility() {
+  const trackedNodes = [
+    refs.kmPlot,
+    refs.kmMetaBanner,
+    refs.kmInsightBoard,
+    refs.kmSummaryShell?.closest(".table-card"),
+    refs.kmRiskShell?.closest(".table-card"),
+    refs.kmPairwiseShell?.closest(".table-card"),
+    refs.signatureInsightBoard?.closest(".table-card"),
+    refs.signatureShell?.closest(".table-card"),
+    refs.coxPlot,
+    refs.coxMetaBanner,
+    refs.coxInsightBoard,
+    refs.coxResultsShell?.closest(".table-card"),
+    refs.coxDiagnosticsShell?.closest(".table-card"),
+    refs.mlImportancePlot,
+    refs.mlShapPlot,
+    refs.mlImportancePlot?.closest(".ml-plots-grid"),
+    refs.mlComparisonPlot,
+    refs.mlMetaBanner,
+    refs.mlInsightBoard,
+    refs.mlComparisonShell?.closest(".table-card"),
+    refs.mlManuscriptShell?.closest(".table-card"),
+    refs.dlImportancePlot,
+    refs.dlLossPlot,
+    refs.dlImportancePlot?.closest(".ml-plots-grid"),
+    refs.dlComparisonPlot,
+    refs.dlMetaBanner,
+    refs.dlInsightBoard,
+    refs.dlComparisonShell?.closest(".table-card"),
+    refs.dlManuscriptShell?.closest(".table-card"),
+    refs.cohortTableShell?.closest(".table-card"),
+  ];
+  trackedNodes.forEach((node) => setGuidedResultNodeVisible(node, true));
+
+  const guidedReview = runtime.uiMode === "guided" && currentGuidedStep() === 5 && Boolean(runtime.guidedGoal);
+  if (!guidedReview) return;
+
+  const goal = runtime.guidedGoal;
+  const reveal = (node, visible) => setGuidedResultNodeVisible(node, visible);
+
+  if (goal === "km") {
+    const hasPlot = hasRenderedPlot(refs.kmPlot);
+    const hasInsight = hasRenderedInsight(refs.kmInsightBoard);
+    const hasSummary = hasRenderedTable(refs.kmSummaryShell);
+    const hasRisk = hasRenderedTable(refs.kmRiskShell);
+    const hasPairwise = hasRenderedTable(refs.kmPairwiseShell);
+    const hasSignatureInsight = hasRenderedInsight(refs.signatureInsightBoard);
+    const hasSignatureTable = hasRenderedTable(refs.signatureShell);
+    const hasAny = hasPlot || hasInsight || hasSummary || hasRisk || hasPairwise || hasSignatureInsight || hasSignatureTable;
+
+    reveal(refs.kmPlot, hasPlot);
+    reveal(refs.kmMetaBanner, hasAny);
+    reveal(refs.kmInsightBoard, hasInsight);
+    reveal(refs.kmSummaryShell?.closest(".table-card"), hasSummary);
+    reveal(refs.kmRiskShell?.closest(".table-card"), hasRisk);
+    reveal(refs.kmPairwiseShell?.closest(".table-card"), hasPairwise);
+    reveal(refs.signatureInsightBoard?.closest(".table-card"), hasSignatureInsight);
+    reveal(refs.signatureShell?.closest(".table-card"), hasSignatureTable);
+  }
+
+  if (goal === "cox") {
+    const hasPlot = hasRenderedPlot(refs.coxPlot);
+    const hasInsight = hasRenderedInsight(refs.coxInsightBoard);
+    const hasResults = hasRenderedTable(refs.coxResultsShell);
+    const hasDiagnostics = hasRenderedTable(refs.coxDiagnosticsShell);
+    const hasAny = hasPlot || hasInsight || hasResults || hasDiagnostics;
+
+    reveal(refs.coxPlot, hasPlot);
+    reveal(refs.coxMetaBanner, hasAny);
+    reveal(refs.coxInsightBoard, hasInsight);
+    reveal(refs.coxResultsShell?.closest(".table-card"), hasResults);
+    reveal(refs.coxDiagnosticsShell?.closest(".table-card"), hasDiagnostics);
+  }
+
+  if (goal === "tables") {
+    reveal(refs.cohortTableShell?.closest(".table-card"), hasRenderedTable(refs.cohortTableShell));
+  }
+
+  if (goal === "ml") {
+    const resultMode = runtime.resultPreference?.ml || "single";
+    const hasSingleImportance = resultMode === "single" && hasRenderedPlot(refs.mlImportancePlot);
+    const hasSingleShap = resultMode === "single" && hasRenderedPlot(refs.mlShapPlot);
+    const hasSingleGrid = hasSingleImportance || hasSingleShap;
+    const hasComparePlot = resultMode === "compare" && hasRenderedPlot(refs.mlComparisonPlot);
+    const hasCompareTable = resultMode === "compare" && hasRenderedTable(refs.mlComparisonShell);
+    const hasManuscript = resultMode === "compare" && hasRenderedTable(refs.mlManuscriptShell);
+    const hasInsight = hasRenderedInsight(refs.mlInsightBoard);
+    const hasAny = hasSingleGrid || hasComparePlot || hasCompareTable || hasManuscript || hasInsight;
+
+    reveal(refs.mlImportancePlot, hasSingleImportance);
+    reveal(refs.mlShapPlot, hasSingleShap);
+    reveal(refs.mlImportancePlot?.closest(".ml-plots-grid"), hasSingleGrid);
+    reveal(refs.mlComparisonPlot, hasComparePlot);
+    reveal(refs.mlComparisonShell?.closest(".table-card"), hasCompareTable);
+    reveal(refs.mlManuscriptShell?.closest(".table-card"), hasManuscript);
+    reveal(refs.mlInsightBoard, hasInsight);
+    reveal(refs.mlMetaBanner, hasAny);
+  }
+
+  if (goal === "dl") {
+    const resultMode = runtime.resultPreference?.dl || "single";
+    const hasSingleImportance = resultMode === "single" && hasRenderedPlot(refs.dlImportancePlot);
+    const hasSingleLoss = resultMode === "single" && hasRenderedPlot(refs.dlLossPlot);
+    const hasSingleGrid = hasSingleImportance || hasSingleLoss;
+    const hasComparePlot = resultMode === "compare" && hasRenderedPlot(refs.dlComparisonPlot);
+    const hasCompareTable = hasRenderedTable(refs.dlComparisonShell);
+    const hasManuscript = hasRenderedTable(refs.dlManuscriptShell);
+    const hasInsight = hasRenderedInsight(refs.dlInsightBoard);
+    const hasAny = hasSingleGrid || hasComparePlot || hasCompareTable || hasManuscript || hasInsight;
+
+    reveal(refs.dlImportancePlot, hasSingleImportance);
+    reveal(refs.dlLossPlot, hasSingleLoss);
+    reveal(refs.dlImportancePlot?.closest(".ml-plots-grid"), hasSingleGrid);
+    reveal(refs.dlComparisonPlot, hasComparePlot);
+    reveal(refs.dlComparisonShell?.closest(".table-card"), hasCompareTable);
+    reveal(refs.dlManuscriptShell?.closest(".table-card"), hasManuscript);
+    reveal(refs.dlInsightBoard, hasInsight);
+    reveal(refs.dlMetaBanner, hasAny);
+  }
+
+  scheduleVisiblePlotResize(40);
+}
+
 function resultAnchorFor(tabName, { mode = "single" } = {}) {
   const candidates = {
     km: [refs.kmPlot, refs.kmSummaryShell],
@@ -4502,6 +5158,7 @@ function revealCompletedResultIfCurrent(goal, { mode = "single", successMessage 
   const shouldReveal = shouldRevealCompletedResult(goal);
   if (shouldReveal) {
     activateTab(goal);
+    updateGuidedResultVisibility();
     scrollToAnalysisResult(goal, { mode });
   }
   showToast(
@@ -4703,6 +5360,7 @@ function goHome({ syncHistory = true, historyMode = "replace" } = {}) {
   runtime.guidedStep = 1;
   runtime.resultPreference.ml = "single";
   runtime.resultPreference.dl = "single";
+  resetCoxPreview({ rerender: false });
   renderSharedFeatureSummary();
   renderGuidedChrome();
   setRuntimeBanner("");
@@ -4717,6 +5375,11 @@ function initListeners() {
   refs.guidedModeButton?.addEventListener("click", () => setUiMode("guided", { historyMode: "push" }));
   refs.expertModeButton?.addEventListener("click", () => setUiMode("expert", { historyMode: "push" }));
   refs.guidedPanel?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-guided-action]");
+    if (!button) return;
+    handleGuidedPanelAction(button);
+  });
+  refs.guidedRailActions?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-guided-action]");
     if (!button) return;
     handleGuidedPanelAction(button);
@@ -4755,9 +5418,29 @@ function initListeners() {
   refs.loadExampleButton.addEventListener("click", () => withLoading(refs.loadExampleButton, loadExampleDataset));
   refs.applyBasicPresetButton?.addEventListener("click", () => applyDatasetPreset("basic"));
   refs.applyModelPresetButton?.addEventListener("click", () => applyDatasetPreset("models"));
-  refs.timeColumn.addEventListener("change", () => { refreshVariableSelections(); updateDatasetBadge(); renderSharedFeatureSummary(); updateEventColumnGuidance(); queueHistorySync(); });
-  refs.eventColumn.addEventListener("change", () => { updateEventPositiveOptions(); refreshVariableSelections(); updateDatasetBadge(); renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.eventPositiveValue.addEventListener("change", () => { updateEventPositiveOptions(); renderSharedFeatureSummary(); updateEventColumnGuidance(); queueHistorySync(); });
+  refs.timeColumn.addEventListener("change", () => {
+    refreshVariableSelections();
+    updateDatasetBadge();
+    renderSharedFeatureSummary();
+    updateEventColumnGuidance();
+    queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
+  });
+  refs.eventColumn.addEventListener("change", () => {
+    updateEventPositiveOptions();
+    refreshVariableSelections();
+    updateDatasetBadge();
+    renderSharedFeatureSummary();
+    queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
+  });
+  refs.eventPositiveValue.addEventListener("change", () => {
+    updateEventPositiveOptions();
+    renderSharedFeatureSummary();
+    updateEventColumnGuidance();
+    queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
+  });
   refs.showAllEventColumns?.addEventListener("change", () => {
     renderEventColumnOptions({ silent: false });
     refreshVariableSelections();
@@ -4793,19 +5476,38 @@ function initListeners() {
   refs.timeUnitLabel.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.maxTime.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.confidenceLevel.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.covariateChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.categoricalChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.selectAllCoxCovariatesButton?.addEventListener("click", () => {
-    setCheckedValues(refs.covariateChecklist, allCheckboxValues(refs.covariateChecklist));
+  refs.covariateChecklist?.addEventListener("change", (event) => {
+    const input = event.target.closest('input[type="checkbox"]');
+    syncCoxCovariateSelection({
+      preferredValue: input?.checked ? input.value : null,
+      notify: Boolean(input?.checked),
+      autoCategoricalValues: input?.checked ? [input.value] : [],
+    });
     renderSharedFeatureSummary();
     queueHistorySync();
+    scheduleCoxPreview();
+  });
+  refs.categoricalChecklist?.addEventListener("change", () => {
+    renderSharedFeatureSummary();
+    queueHistorySync();
+    scheduleCoxPreview();
+  });
+  refs.selectAllCoxCovariatesButton?.addEventListener("click", () => {
+    const covariates = allCheckboxValues(refs.covariateChecklist);
+    setCheckedValues(refs.covariateChecklist, covariates);
+    syncCoxCovariateSelection({ autoCategoricalValues: covariates });
+    renderSharedFeatureSummary();
+    queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
     showToast("Selected all Cox covariates.", "success", 2200);
   });
   refs.clearCoxCovariatesButton?.addEventListener("click", () => {
     setCheckedValues(refs.covariateChecklist, []);
     setCheckedValues(refs.categoricalChecklist, []);
+    syncCoxCovariateSelection();
     renderSharedFeatureSummary();
     queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
     showToast("Cleared all Cox covariates and categorical flags.", "success", 2200);
   });
   refs.selectAllCoxCategoricalsButton?.addEventListener("click", () => {
@@ -4816,12 +5518,14 @@ function initListeners() {
     );
     renderSharedFeatureSummary();
     queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
     showToast("Marked the current Cox covariates as categorical.", "success", 2200);
   });
   refs.clearCoxCategoricalsButton?.addEventListener("click", () => {
     setCheckedValues(refs.categoricalChecklist, []);
     renderSharedFeatureSummary();
     queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
     showToast("Cleared Cox categorical flags.", "success", 2200);
   });
   refs.modelFeatureChecklist?.addEventListener("change", () => { syncModelFeatureMirrors(refs.modelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
@@ -4860,7 +5564,7 @@ function initListeners() {
   refs.deriveToggle.addEventListener("click", () => {
     if (refs.groupingDetails) refs.groupingDetails.open = true;
     refs.derivePanel.classList.toggle("hidden");
-    refs.deriveToggle.textContent = refs.derivePanel.classList.contains("hidden") ? "Derive Group" : "Close";
+    syncDeriveToggleButton();
     queueHistorySync();
   });
   refs.deriveButton.addEventListener("click", () => withLoading(refs.deriveButton, deriveGroup));
@@ -5007,6 +5711,7 @@ updateMlModelControlVisibility();
 updateMlEvaluationControls();
 updateDlModelControlVisibility();
 updateDlEvaluationControls();
+syncDeriveToggleButton();
 initializeRuntime();
 
 if (refs.smartBannerClose) {

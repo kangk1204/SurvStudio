@@ -726,6 +726,53 @@ def _summarize_labels(labels: Sequence[str], max_items: int = 3) -> str:
     return f"{', '.join(cleaned[:max_items])} +{len(cleaned) - max_items} more"
 
 
+def _cox_categorical_stability_alerts(
+    frame: pd.DataFrame,
+    categorical_covariates: Sequence[str],
+    *,
+    min_level_n: int = 5,
+) -> dict[str, list[str]]:
+    reference_alerts: list[str] = []
+    sparse_level_alerts: list[str] = []
+    for column in categorical_covariates:
+        if column not in frame.columns:
+            continue
+        series = frame[column]
+        counts = series.value_counts(dropna=True)
+        if counts.empty:
+            continue
+        if hasattr(series, "cat") and len(series.cat.categories) > 0:
+            reference_level = str(series.cat.categories[0])
+        else:
+            reference_level = str(counts.index[0])
+        reference_count = int(counts.get(reference_level, 0))
+        if 0 < reference_count < min_level_n:
+            reference_alerts.append(f'{column} reference "{reference_level}" (n={reference_count})')
+        for level, count in counts.items():
+            if 0 < int(count) < min_level_n:
+                sparse_level_alerts.append(f"{column}={level} (n={int(count)})")
+    return {
+        "reference_levels": reference_alerts,
+        "sparse_levels": sparse_level_alerts,
+    }
+
+
+def _cox_wide_ci_alert_terms(
+    model_rows: Sequence[dict[str, Any]],
+    *,
+    width_ratio_threshold: float = 8.0,
+) -> list[str]:
+    wide_terms: list[str] = []
+    for row in model_rows:
+        ci_low = _safe_float(row.get("CI lower"))
+        ci_high = _safe_float(row.get("CI upper"))
+        if ci_low is None or ci_high is None or ci_low <= 0:
+            continue
+        if (ci_high / ci_low) >= width_ratio_threshold:
+            wide_terms.append(str(row.get("Label", row.get("Variable", ""))))
+    return wide_terms
+
+
 def _weighted_test_label(test_name: str | None, *, fh_p: float | None = None) -> str:
     label_map = {
         "logrank": "log-rank",
@@ -823,6 +870,8 @@ def _cox_scientific_summary(
     model_rows: Sequence[dict[str, Any]],
     diagnostic_rows: Sequence[dict[str, Any]],
     model_stats: dict[str, Any],
+    *,
+    categorical_alerts: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     significant_terms = [
         row["Label"]
@@ -838,6 +887,10 @@ def _cox_scientific_summary(
         for row in diagnostic_rows
         if row["P value"] is not None and float(row["P value"]) < 0.05
     ]
+    categorical_alerts = categorical_alerts or {"reference_levels": [], "sparse_levels": []}
+    reference_alerts = [str(item) for item in categorical_alerts.get("reference_levels", []) if item]
+    sparse_level_alerts = [str(item) for item in categorical_alerts.get("sparse_levels", []) if item]
+    wide_ci_terms = _cox_wide_ci_alert_terms(model_rows)
 
     strengths = [
         "Cox regression was fit with the Efron tie method.",
@@ -856,9 +909,24 @@ def _cox_scientific_summary(
     cautions.append("Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.")
     if ph_alert_terms:
         cautions.append(
-            f"Possible proportional-hazards violations detected for: {_summarize_labels(ph_alert_terms)}."
+            f"Possible proportional-hazards violations detected for: {', '.join(ph_alert_terms)}."
         )
         next_steps.append("Consider stratification or time-varying effects for PH-violating terms.")
+    if reference_alerts:
+        cautions.append(
+            f"Some Cox reference levels are very small after missing-value filtering: {_summarize_labels(reference_alerts, max_items=4)}."
+        )
+        next_steps.append("Use a more stable reference level or collapse sparse categories before interpreting reference-based contrasts.")
+    if sparse_level_alerts:
+        cautions.append(
+            f"Sparse categorical levels remain in the analyzable cohort: {_summarize_labels(sparse_level_alerts, max_items=4)}."
+        )
+        next_steps.append("Collapse rare categorical levels before treating term-specific hazard ratios as stable.")
+    if wide_ci_terms:
+        cautions.append(
+            f"Some hazard-ratio intervals are very wide, which suggests unstable estimates: {_summarize_labels(wide_ci_terms, max_items=4)}."
+        )
+        next_steps.append("Treat wide-interval terms as unstable unless the category encoding or cohort size is improved.")
     if c_index is not None and c_index < 0.6:
         cautions.append("Apparent model discrimination is modest (C-index below 0.60).")
     cautions.append("The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.")
@@ -881,7 +949,7 @@ def _cox_scientific_summary(
     status = "robust"
     if cautions:
         status = "review"
-    if (epv is not None and epv < 5) or len(ph_alert_terms) >= 2:
+    if (epv is not None and epv < 5) or len(ph_alert_terms) >= 2 or reference_alerts or sparse_level_alerts:
         status = "caution"
 
     return {
@@ -1023,12 +1091,47 @@ def _coerce_numeric_if_needed(series: pd.Series) -> pd.Series:
     return series
 
 
+def _format_percent_value(value: float) -> str:
+    numeric = float(value)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:.2f}".rstrip("0").rstrip(".")
+
+
+def _parse_percentile_values(cutoff: str | float | None, *, mode: str) -> list[float]:
+    if cutoff is None:
+        raise ValueError("Enter percentile value(s) before creating a grouped column.")
+    if isinstance(cutoff, (int, float, np.integer, np.floating)):
+        tokens = [str(float(cutoff))]
+    else:
+        tokens = [token.strip() for token in str(cutoff).split(",") if token.strip()]
+    if not tokens:
+        raise ValueError("Enter percentile value(s) before creating a grouped column.")
+    try:
+        values = [float(token) for token in tokens]
+    except ValueError as exc:
+        raise ValueError("Percentile values must be numeric, for example 25 or 25,25.") from exc
+    if any((not math.isfinite(value)) or value <= 0 or value >= 100 for value in values):
+        raise ValueError("Percentile values must be greater than 0 and less than 100.")
+    if mode == "percentile_split":
+        if len(values) not in {1, 2}:
+            raise ValueError("Percentile split accepts one value (25) or two values (25,25).")
+        if len(values) == 2 and sum(values) >= 100:
+            raise ValueError("Two percentile values must sum to less than 100 so a middle group remains.")
+    elif mode == "extreme_split":
+        if len(values) != 1:
+            raise ValueError("Extreme split accepts one value, for example 25.")
+        if values[0] >= 50:
+            raise ValueError("Extreme split percentile must be less than 50 so a middle range remains excluded.")
+    return values
+
+
 def derive_group_column(
     df: pd.DataFrame,
     source_column: str,
     method: str,
     new_column_name: str | None = None,
-    cutoff: float | None = None,
+    cutoff: str | float | None = None,
     lower_label: str = "Low",
     upper_label: str = "High",
     time_column: str | None = None,
@@ -1114,6 +1217,90 @@ def derive_group_column(
         labels, summary = quantile_split(n_bins=3, prefix="T", method_name=method)
     elif method == "quartile_split":
         labels, summary = quantile_split(n_bins=4, prefix="Q", method_name=method)
+    elif method == "percentile_split":
+        percentiles = _parse_percentile_values(cutoff, mode=method)
+        cutoff_spec = ",".join(_format_percent_value(value) for value in percentiles)
+        if len(percentiles) == 1:
+            top_percent = percentiles[0]
+            quantile = 1 - (top_percent / 100.0)
+            split_point = float(usable.quantile(quantile))
+            top_label = f"Top {_format_percent_value(top_percent)}%"
+            rest_label = "Rest"
+            # Match median_split at 50th percentile so ties at the threshold stay in the lower/rest group.
+            if math.isclose(top_percent, 50.0):
+                labels = np.where(numeric_series <= split_point, rest_label, top_label)
+                assignment_rule = (
+                    f"{source_column} > percentile threshold ({split_point:.3f}) -> {top_label}, else -> {rest_label}"
+                )
+            else:
+                labels = np.where(numeric_series >= split_point, top_label, rest_label)
+                assignment_rule = (
+                    f"{source_column} >= percentile threshold ({split_point:.3f}) -> {top_label}, else -> {rest_label}"
+                )
+            summary = {
+                "method": method,
+                "cutoff_spec": cutoff_spec,
+                "percentiles": percentiles,
+                "cutoffs": [split_point],
+                "n_groups": 2,
+                "assignment_rule": assignment_rule,
+            }
+        else:
+            bottom_percent, top_percent = percentiles
+            middle_percent = 100.0 - bottom_percent - top_percent
+            low_threshold = float(usable.quantile(bottom_percent / 100.0))
+            high_threshold = float(usable.quantile(1 - (top_percent / 100.0)))
+            if not low_threshold < high_threshold:
+                raise ValueError("Percentile split thresholds overlap. Choose less aggressive percentiles or a variable with more distinct values.")
+            bottom_label = f"Bottom {_format_percent_value(bottom_percent)}%"
+            middle_label = f"Middle {_format_percent_value(middle_percent)}%"
+            top_label = f"Top {_format_percent_value(top_percent)}%"
+            labels = np.where(
+                numeric_series <= low_threshold,
+                bottom_label,
+                np.where(numeric_series >= high_threshold, top_label, middle_label),
+            )
+            summary = {
+                "method": method,
+                "cutoff_spec": cutoff_spec,
+                "percentiles": percentiles,
+                "cutoffs": [low_threshold, high_threshold],
+                "n_groups": 3,
+                "assignment_rule": (
+                    f"{source_column} <= lower percentile threshold ({low_threshold:.3f}) -> {bottom_label}; "
+                    f"{source_column} >= upper percentile threshold ({high_threshold:.3f}) -> {top_label}; "
+                    f"else -> {middle_label}"
+                ),
+            }
+    elif method == "extreme_split":
+        percentiles = _parse_percentile_values(cutoff, mode=method)
+        tail_percent = percentiles[0]
+        cutoff_spec = _format_percent_value(tail_percent)
+        low_threshold = float(usable.quantile(tail_percent / 100.0))
+        high_threshold = float(usable.quantile(1 - (tail_percent / 100.0)))
+        if not low_threshold < high_threshold:
+            raise ValueError("Extreme split thresholds overlap. Choose a smaller percentile or a variable with more distinct values.")
+        bottom_label = f"Bottom {cutoff_spec}%"
+        top_label = f"Top {cutoff_spec}%"
+        labels = np.full(len(numeric_series), pd.NA, dtype=object)
+        low_mask = (numeric_series <= low_threshold).fillna(False).to_numpy()
+        high_mask = (numeric_series >= high_threshold).fillna(False).to_numpy()
+        labels[low_mask] = bottom_label
+        labels[high_mask] = top_label
+        excluded_middle_count = int((numeric_series.notna() & ~pd.Series(low_mask | high_mask, index=numeric_series.index)).sum())
+        summary = {
+            "method": method,
+            "cutoff_spec": cutoff_spec,
+            "percentiles": percentiles,
+            "cutoffs": [low_threshold, high_threshold],
+            "n_groups": 2,
+            "excluded_count": excluded_middle_count,
+            "assignment_rule": (
+                f"{source_column} <= lower percentile threshold ({low_threshold:.3f}) -> {bottom_label}; "
+                f"{source_column} >= upper percentile threshold ({high_threshold:.3f}) -> {top_label}; "
+                "else -> excluded middle range"
+            ),
+        }
     elif method == "custom_cutoff":
         if cutoff is None:
             raise ValueError("A numeric cutoff is required for a custom split.")
@@ -1125,6 +1312,12 @@ def derive_group_column(
 
     label_series = pd.Series(labels, index=df.index, dtype="string")
     label_series.loc[numeric_series.isna()] = pd.NA
+    observed_groups = int(label_series.dropna().nunique())
+    expected_groups = summary.get("n_groups")
+    if method == "percentile_split" and expected_groups == 3 and observed_groups < 3:
+        raise ValueError("Percentile split did not produce three distinct groups. Choose a less aggressive percentile setting or another variable.")
+    if method in {"percentile_split", "extreme_split"} and observed_groups < 2:
+        raise ValueError("Selected percentile thresholds did not produce at least two non-empty groups.")
 
     requested_name = (new_column_name or "").strip() or None
     if requested_name is not None:
@@ -2377,6 +2570,7 @@ def compute_cox_analysis(
             "c_index": _safe_float(c_index),
             "tie_method": "efron",
         },
+        categorical_alerts=_cox_categorical_stability_alerts(frame, categorical_covariates),
     )
 
     return {
@@ -2399,6 +2593,109 @@ def compute_cox_analysis(
         },
         "categorical_covariates": categorical_covariates,
         "scientific_summary": scientific_summary,
+    }
+
+
+def preview_cox_analysis_inputs(
+    df: pd.DataFrame,
+    time_column: str,
+    event_column: str,
+    covariates: Sequence[str],
+    categorical_covariates: Sequence[str] | None = None,
+    event_positive_value: Any = None,
+) -> dict[str, Any]:
+    if not covariates:
+        raise ValueError("Select at least one covariate for the Cox model.")
+    _validate_cox_covariates(covariates)
+    categorical_covariates = list(dict.fromkeys(categorical_covariates or _categorical_candidates(df, covariates)))
+    frame = _cohort_frame(
+        df,
+        time_column=time_column,
+        event_column=event_column,
+        event_positive_value=event_positive_value,
+        extra_columns=[*covariates],
+        drop_missing_extra_columns=False,
+    )
+    preview_frame = frame.copy()
+    missing_by_covariate: list[dict[str, Any]] = []
+    for column in covariates:
+        if column in categorical_covariates:
+            string_values = preview_frame[column].astype("string")
+            categories = _ordered_reference_categories(string_values.dropna().unique().tolist(), column)
+            preview_frame[column] = pd.Categorical(string_values, categories=categories)
+        else:
+            preview_frame[column] = pd.to_numeric(preview_frame[column], errors="coerce")
+    preview_frame = preview_frame.replace([np.inf, -np.inf], np.nan)
+    for column in covariates:
+        missing_count = int(preview_frame[column].isna().sum())
+        if missing_count > 0:
+            missing_by_covariate.append({"column": column, "missing_rows": missing_count})
+    complete_case = preview_frame.dropna(subset=list(covariates)).reset_index(drop=True)
+    if complete_case.empty:
+        raise ValueError("No rows remain after removing missing values for the Cox model.")
+    stability_warnings: list[str] = []
+    risky_levels: list[dict[str, Any]] = []
+    for column in categorical_covariates:
+        if column not in complete_case.columns:
+            continue
+        grouped = complete_case.groupby(column, dropna=True)[event_column].agg(["size", "sum"])
+        categories = list(complete_case[column].cat.categories) if hasattr(complete_case[column], "cat") else []
+        if categories:
+            reference_level = str(categories[0])
+            if reference_level in grouped.index:
+                reference_row = grouped.loc[reference_level]
+                reference_count = int(reference_row["size"])
+                reference_events = int(reference_row["sum"])
+                reference_censored = reference_count - reference_events
+                if reference_count < 5:
+                    risky_levels.append(
+                        {
+                            "column": str(column),
+                            "level": reference_level,
+                            "rows": reference_count,
+                            "events": reference_events,
+                            "censored": reference_censored,
+                            "issue": "small_reference_level",
+                        }
+                    )
+                    stability_warnings.append(
+                        f'{column} uses "{reference_level}" as the Cox reference level, but only {reference_count} row'
+                        f'{"s" if reference_count != 1 else ""} remain after missing-value filtering. Comparisons against this reference can look unstable.'
+                    )
+        one_sided_levels: list[str] = []
+        for level, row in grouped.iterrows():
+            total_count = int(row["size"])
+            event_count = int(row["sum"])
+            censored_count = total_count - event_count
+            if event_count == 0 or censored_count == 0:
+                risky_levels.append(
+                    {
+                        "column": str(column),
+                        "level": str(level),
+                        "rows": total_count,
+                        "events": event_count,
+                        "censored": censored_count,
+                        "issue": "one_sided_outcome",
+                    }
+                )
+                one_sided_levels.append(f"{level} ({total_count} rows)")
+        if one_sided_levels:
+            preview_levels = ", ".join(one_sided_levels[:3])
+            stability_warnings.append(
+                f'{column} has level(s) with only events or only censored rows after missing-value filtering: {preview_levels}'
+                f'{" ..." if len(one_sided_levels) > 3 else ""}. This can produce non-finite Cox estimates.'
+            )
+    missing_by_covariate.sort(key=lambda item: (-int(item["missing_rows"]), str(item["column"])))
+    return {
+        "outcome_rows": int(frame.shape[0]),
+        "analyzable_rows": int(complete_case.shape[0]),
+        "dropped_rows": int(frame.shape[0] - complete_case.shape[0]),
+        "events": int(complete_case[event_column].sum()),
+        "covariates": list(covariates),
+        "categorical_covariates": list(categorical_covariates),
+        "missing_by_covariate": missing_by_covariate,
+        "stability_warnings": stability_warnings,
+        "risky_levels": risky_levels,
     }
 
 

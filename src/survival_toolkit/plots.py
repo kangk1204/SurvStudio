@@ -82,13 +82,18 @@ def _wrap_feature_axis_label(label: Any, *, width: int = 26, max_lines: int = 2)
     return "<br>".join(lines), len(lines)
 
 
-def _feature_plot_axis_layout(labels: list[Any]) -> tuple[list[str], dict[str, int]]:
+def _feature_plot_axis_layout(
+    labels: list[Any],
+    *,
+    width: int = 26,
+    max_lines: int = 2,
+) -> tuple[list[str], dict[str, int]]:
     wrapped: list[str] = []
     max_line_chars = 0
     total_lines = 0
 
     for label in labels:
-        wrapped_label, line_count = _wrap_feature_axis_label(label)
+        wrapped_label, line_count = _wrap_feature_axis_label(label, width=width, max_lines=max_lines)
         wrapped.append(wrapped_label)
         total_lines += line_count
         for line in wrapped_label.split("<br>"):
@@ -202,6 +207,7 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         and float(row["CI upper"]) > 0.0
     ]
     labels = [row["Label"] for row in rows]
+    display_labels, axis_layout = _feature_plot_axis_layout(labels, width=34, max_lines=3)
     hazard_ratios = [row["Hazard ratio"] for row in rows]
     error_plus = [row["CI upper"] - row["Hazard ratio"] for row in rows]
     error_minus = [row["Hazard ratio"] - row["CI lower"] for row in rows]
@@ -219,22 +225,23 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             x=hazard_ratios,
             y=labels,
             mode="markers",
+            customdata=labels,
             marker={"size": 12, "color": colors, "line": {"width": 1, "color": INK}},
             error_x={"type": "data", "array": error_plus, "arrayminus": error_minus, "thickness": 1.5, "width": 0},
-            hovertemplate="Hazard ratio: %{x:.3f}<extra></extra>",
+            hovertemplate="%{customdata}<br>Hazard ratio: %{x:.3f}<extra></extra>",
         )
     )
 
     stats = cox_result["model_stats"]
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": 220, "r": 40, "t": 90, "b": 70},
+        margin={"l": axis_layout["l"], "r": 40, "t": 90, "b": 70},
         title={
             "text": "Cox PH Forest Plot",
             "font": {"family": "Source Serif 4, serif", "size": 24, "color": INK},
             "x": 0.02,
         },
-        height=max(420, 90 + 46 * max(len(rows), 1)),
+        height=max(420, axis_layout["height"]),
     )
     stat_parts = [f"N = {stats['n']}", f"events = {stats['events']}"]
     if stats.get("c_index") is not None:
@@ -259,7 +266,13 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             align="center",
         )
     fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_COMMON_AXES)
-    fig.update_yaxes(**_COMMON_AXES)
+    fig.update_yaxes(
+        automargin=True,
+        tickmode="array",
+        tickvals=labels,
+        ticktext=display_labels,
+        **_COMMON_AXES,
+    )
     return figure_to_json(fig)
 
 

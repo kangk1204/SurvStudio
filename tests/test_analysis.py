@@ -28,6 +28,7 @@ from survival_toolkit.analysis import (
     make_unique_columns,
     looks_binary,
 )
+from survival_toolkit.sample_data import load_tcga_luad_example_dataset
 from survival_toolkit.sample_data import make_example_dataset
 
 
@@ -42,6 +43,79 @@ def test_derive_group_column_creates_named_split() -> None:
     assert column_name == "biomarker_group"
     assert "biomarker_group" in updated.columns
     assert summary["counts"]
+
+
+def test_percentile_split_top_vs_rest_creates_two_groups() -> None:
+    df = make_example_dataset(seed=17, n_patients=120)
+    updated, column_name, summary = derive_group_column(
+        df,
+        source_column="age",
+        method="percentile_split",
+        new_column_name="age_percentile_group",
+        cutoff="25",
+    )
+
+    observed = set(updated[column_name].dropna().astype(str).unique().tolist())
+    assert observed == {"Rest", "Top 25%"}
+    assert summary["cutoff_spec"] == "25"
+    assert summary["n_groups"] == 2
+    assert len(summary["cutoffs"]) == 1
+
+
+def test_percentile_split_50_matches_median_split_with_ties() -> None:
+    df = pd.DataFrame({"age": [1, 2, 2, 2, 3, 4]})
+    median_updated, median_column, _ = derive_group_column(
+        df,
+        source_column="age",
+        method="median_split",
+        new_column_name="age_median_group",
+    )
+    percentile_updated, percentile_column, _ = derive_group_column(
+        df,
+        source_column="age",
+        method="percentile_split",
+        new_column_name="age_percentile_group",
+        cutoff="50",
+    )
+
+    median_is_high = median_updated[median_column].astype(str) == "High"
+    percentile_is_top = percentile_updated[percentile_column].astype(str) == "Top 50%"
+    assert median_is_high.tolist() == percentile_is_top.tolist()
+
+
+def test_percentile_split_two_tails_creates_three_groups() -> None:
+    df = make_example_dataset(seed=19, n_patients=150)
+    updated, column_name, summary = derive_group_column(
+        df,
+        source_column="age",
+        method="percentile_split",
+        new_column_name="age_three_band_group",
+        cutoff="25,25",
+    )
+
+    observed = set(updated[column_name].dropna().astype(str).unique().tolist())
+    assert observed == {"Bottom 25%", "Middle 50%", "Top 25%"}
+    assert summary["cutoff_spec"] == "25,25"
+    assert summary["n_groups"] == 3
+    assert len(summary["cutoffs"]) == 2
+
+
+def test_extreme_split_excludes_middle_rows() -> None:
+    df = make_example_dataset(seed=23, n_patients=160)
+    updated, column_name, summary = derive_group_column(
+        df,
+        source_column="age",
+        method="extreme_split",
+        new_column_name="age_extreme_group",
+        cutoff="25",
+    )
+
+    observed = set(updated[column_name].dropna().astype(str).unique().tolist())
+    assert observed == {"Bottom 25%", "Top 25%"}
+    assert int(updated[column_name].isna().sum()) > 0
+    assert summary["cutoff_spec"] == "25"
+    assert summary["excluded_count"] > 0
+    assert summary["n_groups"] == 2
 
 
 def test_make_example_dataset_small_n_is_supported() -> None:
@@ -694,6 +768,50 @@ def test_cox_analysis_rejects_non_finite_model_fit(monkeypatch) -> None:
             event_positive_value=1,
             covariates=["age"],
         )
+
+
+def test_cox_analysis_lists_all_ph_alert_terms_and_sparse_category_warnings() -> None:
+    df = load_tcga_luad_example_dataset()
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age", "sex", "stage_group", "kras_status", "egfr_status"],
+        categorical_covariates=["sex", "stage_group", "kras_status", "egfr_status"],
+    )
+
+    cautions = result["scientific_summary"]["cautions"]
+    assert any(
+        "sex: Male vs Female" in caution
+        and "stage_group: Stage II vs Stage I" in caution
+        and "stage_group: Stage III vs Stage I" in caution
+        and "kras_status: Mutated vs Wildtype" in caution
+        for caution in cautions
+    )
+
+
+def test_cox_analysis_warns_when_reference_levels_are_too_small() -> None:
+    df = load_tcga_luad_example_dataset()
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=[
+            "age",
+            "sex",
+            "pathologic_stage",
+            "kras_status",
+            "egfr_status",
+            "expression_subtype",
+            "tumor_longest_dimension_cm",
+        ],
+        categorical_covariates=["sex", "pathologic_stage", "kras_status", "egfr_status", "expression_subtype"],
+    )
+
+    cautions = result["scientific_summary"]["cautions"]
+    assert any('pathologic_stage reference "Stage I" (n=2)' in caution for caution in cautions)
 
 
 def test_cohort_table_includes_overall_column() -> None:
