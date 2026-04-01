@@ -106,6 +106,21 @@ def _coerce_feature_subset(
     return selected, resolved_categorical, numeric_features
 
 
+def _validate_model_feature_columns(
+    features: Sequence[str],
+    *,
+    time_column: str,
+    event_column: str,
+) -> None:
+    offenders = sorted({str(feature) for feature in features if str(feature) in {str(time_column), str(event_column)}})
+    if offenders:
+        raise ValueError(
+            "Survival outcome columns cannot be used as ML model features: "
+            + ", ".join(offenders)
+            + "."
+        )
+
+
 def _ordered_category_values(series: pd.Series) -> list[str]:
     """Return observed category values in a deterministic, semantically stable order."""
     non_missing = series.dropna()
@@ -241,6 +256,29 @@ def _sksurv_c_index(
         events.astype(int).astype(float),
         risk_scores.astype(float),
     )
+
+
+def _representative_subsample_indices(values: np.ndarray, n_samples: int) -> np.ndarray:
+    values_arr = np.asarray(values, dtype=float).reshape(-1)
+    total_n = int(values_arr.shape[0])
+    if total_n <= n_samples:
+        return np.arange(total_n, dtype=int)
+
+    order = np.argsort(values_arr, kind="mergesort")
+    target_positions = np.linspace(0, total_n - 1, num=n_samples)
+    chosen = order[np.round(target_positions).astype(int)]
+    chosen = np.unique(chosen)
+    if chosen.shape[0] < n_samples:
+        seen = set(int(idx) for idx in chosen.tolist())
+        for idx in order:
+            idx_int = int(idx)
+            if idx_int in seen:
+                continue
+            chosen = np.append(chosen, idx_int)
+            seen.add(idx_int)
+            if chosen.shape[0] >= n_samples:
+                break
+    return np.sort(chosen[:n_samples].astype(int))
 
 
 def _scientific_summary_ml(
@@ -815,6 +853,7 @@ def train_random_survival_forest(
             "scikit-survival is required for Random Survival Forest. "
             "Install it with: pip install scikit-survival"
         )
+    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
 
     frame = _cohort_frame(
         df,
@@ -989,6 +1028,7 @@ def train_gradient_boosted_survival(
             "scikit-survival is required for Gradient Boosted Survival. "
             "Install it with: pip install scikit-survival"
         )
+    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
 
     frame = _cohort_frame(
         df,
@@ -1136,6 +1176,7 @@ def compare_survival_models(
     holdout C-index, feature count, and training time for each model.
     """
     categorical_features = list(categorical_features or [])
+    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
 
     # Prepare a common clean frame
     frame = _cohort_frame(
@@ -1590,6 +1631,7 @@ def cross_validate_survival_models(
         raise ValueError("cv_folds must be at least 2.")
     if cv_repeats < 1:
         raise ValueError("cv_repeats must be at least 1.")
+    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
 
     frame = _cohort_frame(
         df,
@@ -1805,6 +1847,8 @@ def compute_shap_values(
     X_array = X_encoded.to_numpy() if isinstance(X_encoded, pd.DataFrame) else np.asarray(X_encoded)
 
     shap_method = "tree"
+    stability = "native_tree"
+    usage_note = "TreeExplainer ran on the encoded evaluation matrix."
     X_eval = X_array
     background_samples = None
     try:
@@ -1812,23 +1856,36 @@ def compute_shap_values(
         shap_values = explainer.shap_values(X_array)
     except Exception:
         # scikit-survival estimators are often unsupported by TreeExplainer.
-        # Fall back to a tightly capped KernelExplainer run so single-model
-        # training does not appear hung on larger cohorts.
+        # Fall back to a capped KernelExplainer run only for moderate feature
+        # counts. High-dimensional Kernel SHAP is too unstable for reporting.
         shap_method = "kernel"
-        rng = np.random.default_rng(20260311)
+        stability = "approximate_screening_only"
         n = int(X_array.shape[0])
-        bg_n = min(20, n)
-        eval_n = min(20, n)
-        bg_idx = rng.choice(n, size=bg_n, replace=False) if n > bg_n else np.arange(n)
+        encoded_feature_count = int(X_array.shape[1])
+        if encoded_feature_count > 80:
+            raise ValueError(
+                "TreeExplainer is unavailable for this fitted model, and approximate Kernel SHAP "
+                f"is disabled for high-dimensional inputs ({encoded_feature_count} encoded features). "
+                "Reduce the ML feature set or rely on the model's built-in importance ranking instead."
+            )
+        risk_scores = np.asarray(model.predict(X_array), dtype=float).reshape(-1)
+        bg_n = min(40, n)
+        eval_n = min(60, n)
+        bg_idx = _representative_subsample_indices(risk_scores, bg_n)
+        eval_idx = _representative_subsample_indices(risk_scores, eval_n)
         X_bg = X_array[bg_idx]
-        X_eval = X_array[:eval_n]
+        X_eval = X_array[eval_idx]
         background_samples = int(X_bg.shape[0])
+        usage_note = (
+            "Kernel SHAP was approximated on representative subsamples of the encoded evaluation matrix. "
+            "Use these attributions for screening rather than manuscript claims."
+        )
 
         def _predict_fn(x: np.ndarray) -> np.ndarray:
             return np.asarray(model.predict(x), dtype=float)
 
         explainer = shap.KernelExplainer(_predict_fn, X_bg)
-        kernel_nsamples = min(60, max(20, X_bg.shape[1] * 8))
+        kernel_nsamples = min(160, max(40, X_bg.shape[1] * 6))
         try:
             shap_values = explainer.shap_values(
                 X_eval,
@@ -1870,6 +1927,8 @@ def compute_shap_values(
 
     return {
         "method": shap_method,
+        "stability": stability,
+        "usage_note": usage_note,
         "feature_importance": importance_records,
         "shap_summary": shap_summary,
         "n_samples": int(X_eval.shape[0]),
@@ -2479,6 +2538,7 @@ def compute_time_dependent_importance(
         and ``scientific_summary``.
     """
     _ = model_type
+    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
 
     frame = _cohort_frame(
         df,
@@ -2724,6 +2784,7 @@ def counterfactual_survival(
             "scikit-survival is required for counterfactual survival analysis. "
             "Install it with: pip install scikit-survival"
         )
+    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
 
     if not target_feature:
         raise ValueError("target_feature must be specified.")

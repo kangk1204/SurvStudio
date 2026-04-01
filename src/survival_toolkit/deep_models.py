@@ -239,6 +239,13 @@ def _coerce_deep_frame(
         raise ValueError("Select at least one feature for deep learning models.")
     if time_column == event_column:
         raise ValueError("The survival time column and event column must be different.")
+    overlapping_outcomes = sorted({str(feature) for feature in features if str(feature) in {str(time_column), str(event_column)}})
+    if overlapping_outcomes:
+        raise ValueError(
+            "Survival outcome columns cannot be used as deep-learning features: "
+            + ", ".join(overlapping_outcomes)
+            + "."
+        )
     required_columns = [*features, time_column, event_column]
     missing_columns = [column for column in required_columns if column not in df.columns]
     if missing_columns:
@@ -947,6 +954,13 @@ def _scientific_summary_dl(
     if model_name == "DeepSurv":
         cautions.append(
             "This DeepSurv path uses full-batch Cox optimization; overfitting risk rises with wide feature sets relative to cohort size."
+        )
+    if model_name == "Survival Transformer":
+        cautions.append(
+            "This Survival Transformer path uses full-batch Cox optimization; larger cohorts or wide feature sets can strain memory on local machines."
+        )
+        cautions.append(
+            "The transformer treats each feature as a token with a learned feature-identity embedding. Interpret it as an exploratory tabular attention model and validate against simpler baselines."
         )
     if model_name == "DeepHit":
         cautions.append(
@@ -2649,28 +2663,22 @@ def train_neural_mtlr(
 # ---------------------------------------------------------------------------
 
 
-class _PositionalEncoding(_TorchModuleBase):
-    """Fixed sinusoidal positional encoding for feature positions."""
+class _FeatureIdentityEncoding(_TorchModuleBase):
+    """Learned feature-identity embedding for tabular feature tokens."""
 
-    def __init__(self, d_model: int, max_len: int = 512) -> None:
+    def __init__(self, n_features: int, d_model: int) -> None:
         super().__init__()
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        if d_model > 1:
-            pe[:, 1::2] = torch.cos(position * div_term[: d_model // 2])
-        self.register_buffer("pe", pe.unsqueeze(0))  # (1, max_len, d_model)
+        self.embedding = nn.Embedding(n_features, d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (batch, seq_len, d_model)
-        return x + self.pe[:, : x.size(1), :]
+        feature_ids = torch.arange(x.size(1), device=x.device)
+        return x + self.embedding(feature_ids).unsqueeze(0)
 
 
 class SurvivalTransformerNet(_TorchModuleBase):
     """Transformer encoder for survival risk prediction.
 
-    Each feature is treated as a token: Linear embed -> Positional Encoding ->
+    Each feature is treated as a token: Linear embed -> Feature identity embed ->
     TransformerEncoder -> Mean pool -> Linear(1).
     """
 
@@ -2686,7 +2694,7 @@ class SurvivalTransformerNet(_TorchModuleBase):
         self.in_features = in_features
         self.d_model = d_model
         self.feature_embed = nn.Linear(1, d_model)
-        self.pos_encoding = _PositionalEncoding(d_model, max_len=in_features)
+        self.feature_identity = _FeatureIdentityEncoding(in_features, d_model)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=n_heads, dropout=dropout, batch_first=True
         )
@@ -2698,7 +2706,7 @@ class SurvivalTransformerNet(_TorchModuleBase):
         # x: (batch, in_features) -> treat each feature as a token
         tokens = x.unsqueeze(-1)  # (batch, seq_len, 1)
         embedded = self.feature_embed(tokens)  # (batch, seq_len, d_model)
-        embedded = self.pos_encoding(embedded)
+        embedded = self.feature_identity(embedded)
         encoded = self.transformer(embedded)  # (batch, seq_len, d_model)
         pooled = encoded.mean(dim=1)  # (batch, d_model)
         return self.output_layer(pooled)  # (batch, 1)
@@ -2708,7 +2716,7 @@ class SurvivalTransformerNet(_TorchModuleBase):
         self.eval()
         tokens = x.unsqueeze(-1)
         embedded = self.feature_embed(tokens)
-        embedded = self.pos_encoding(embedded)
+        embedded = self.feature_identity(embedded)
 
         output = embedded
         attention_maps: list[list[list[float]]] = []

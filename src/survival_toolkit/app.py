@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from survival_toolkit.analysis import (
+    _survival_outcome_like_columns,
     compute_cohort_table,
     compute_cox_analysis,
     compute_km_analysis,
@@ -288,6 +289,25 @@ def _reject_outcome_informed_columns(
             f"Outcome-informed derived columns cannot be used for {context}: "
             + ", ".join(offenders)
             + ". Use them only for exploratory grouping/visualization."
+        )
+
+
+def _reject_survival_outcome_feature_columns(
+    stored: Any,
+    columns: Sequence[str],
+    *,
+    time_column: str,
+    event_column: str,
+    context: str,
+) -> None:
+    forbidden = {str(time_column), str(event_column)}
+    forbidden.update(str(column) for column in _survival_outcome_like_columns(stored.dataframe))
+    offenders = sorted({str(column) for column in columns if str(column) in forbidden})
+    if offenders:
+        raise ValueError(
+            f"Survival outcome columns cannot be used for {context}: "
+            + ", ".join(offenders)
+            + ". Use baseline covariates or biomarker features instead."
         )
 
 
@@ -1271,6 +1291,13 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
         stored = store.get(request_model.dataset_id)
         df = stored.dataframe
         request_config = request_model.model_dump()
+        _reject_survival_outcome_feature_columns(
+            stored,
+            [*request_model.features, *request_model.categorical_features],
+            time_column=request_model.time_column,
+            event_column=request_model.event_column,
+            context="machine-learning model inputs",
+        )
         _reject_outcome_informed_columns(
             stored,
             [*request_model.features, *request_model.categorical_features],
@@ -1384,6 +1411,13 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
         stored = store.get(request_model.dataset_id)
         df = stored.dataframe
         request_config = request_model.model_dump()
+        _reject_survival_outcome_feature_columns(
+            stored,
+            [*request_model.features, *request_model.categorical_features],
+            time_column=request_model.time_column,
+            event_column=request_model.event_column,
+            context="deep-learning model inputs",
+        )
         _reject_outcome_informed_columns(
             stored,
             [*request_model.features, *request_model.categorical_features],
@@ -1532,6 +1566,13 @@ async def time_dependent_importance(request_model: TimeDependentImportanceReques
         from survival_toolkit.plots import build_time_dependent_importance_figure
 
         stored = store.get(request_model.dataset_id)
+        _reject_survival_outcome_feature_columns(
+            stored,
+            [*request_model.features, *request_model.categorical_features],
+            time_column=request_model.time_column,
+            event_column=request_model.event_column,
+            context="time-dependent importance inputs",
+        )
         _reject_outcome_informed_columns(
             stored,
             [*request_model.features, *request_model.categorical_features],
@@ -1562,6 +1603,13 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
         from survival_toolkit.ml_models import counterfactual_survival
 
         stored = store.get(request_model.dataset_id)
+        _reject_survival_outcome_feature_columns(
+            stored,
+            [*request_model.features, *request_model.categorical_features, request_model.target_feature],
+            time_column=request_model.time_column,
+            event_column=request_model.event_column,
+            context="counterfactual analysis",
+        )
         _reject_outcome_informed_columns(
             stored,
             [*request_model.features, *request_model.categorical_features, request_model.target_feature],
@@ -1617,6 +1665,13 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
 
         stored = store.get(request_model.dataset_id)
         df = stored.dataframe
+        _reject_survival_outcome_feature_columns(
+            stored,
+            [*request_model.features, *request_model.categorical_features, request_model.target_feature],
+            time_column=request_model.time_column,
+            event_column=request_model.event_column,
+            context="partial dependence analysis",
+        )
         _reject_outcome_informed_columns(
             stored,
             [*request_model.features, *request_model.categorical_features, request_model.target_feature],

@@ -435,6 +435,10 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
     importance = shap_result.get("feature_importance", [])
     if not importance:
         return figure_to_json(go.Figure())
+    method = str(shap_result.get("method", "tree"))
+    title_text = "SHAP Feature Importance"
+    if method == "kernel":
+        title_text = "Approximate SHAP Screening Importance"
 
     top = importance[:15]
     top = list(reversed(top))
@@ -457,7 +461,7 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
         **_COMMON_LAYOUT,
         margin={k: v for k, v in axis_layout.items() if k != "height"},
         title={
-            "text": "SHAP Feature Importance",
+            "text": title_text,
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
             "x": 0.02,
         },
