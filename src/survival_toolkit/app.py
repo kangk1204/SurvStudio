@@ -165,7 +165,7 @@ class MLModelRequest(BaseModel):
     event_positive_value: Any = 1
     features: list[str]
     categorical_features: list[str] = Field(default_factory=list)
-    model_type: Literal["rsf", "gbs", "compare"]
+    model_type: Literal["rsf", "gbs", "lasso_cox", "compare"]
     n_estimators: int = Field(default=100, ge=10, le=1000)
     max_depth: int | None = None
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
@@ -1282,6 +1282,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
         from survival_toolkit.ml_models import (
             train_random_survival_forest,
             train_gradient_boosted_survival,
+            train_lasso_cox,
             compare_survival_models,
             cross_validate_survival_models,
             compute_shap_values,
@@ -1354,17 +1355,29 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                 features=request_model.features,
                 categorical_features=request_model.categorical_features,
                 event_positive_value=request_model.event_positive_value,
-                n_estimators=request_model.n_estimators,
-                max_depth=request_model.max_depth,
                 random_state=request_model.random_state,
             )
             if request_model.model_type == "gbs":
+                common_ml["n_estimators"] = request_model.n_estimators
+                common_ml["max_depth"] = request_model.max_depth
                 common_ml["learning_rate"] = request_model.learning_rate
                 result = train_gradient_boosted_survival(**common_ml)
+            elif request_model.model_type == "lasso_cox":
+                result = train_lasso_cox(**common_ml)
             else:
+                common_ml["n_estimators"] = request_model.n_estimators
+                common_ml["max_depth"] = request_model.max_depth
                 result = train_random_survival_forest(**common_ml)
             _remember_ml_artifact(request_model.dataset_id, request_config, result)
-            importance_figure = build_feature_importance_figure(result["feature_importance"], model_name=request_model.model_type.upper())
+            model_label = {
+                "rsf": "Random Survival Forest",
+                "gbs": "Gradient Boosted Survival",
+                "lasso_cox": "LASSO-Cox",
+            }.get(request_model.model_type, request_model.model_type.upper())
+            importance_figure = build_feature_importance_figure(
+                result["feature_importance"],
+                model_name=model_label,
+            )
 
             shap_result = None
             shap_figure = None
@@ -1373,7 +1386,10 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
             x_encoded = result.get("_X_eval_encoded")
             if x_encoded is None:
                 x_encoded = result.get("_X_encoded")
-            if request_model.compute_shap and model_obj is not None and x_encoded is not None:
+            shap_supported = request_model.model_type in {"rsf", "gbs"}
+            if request_model.compute_shap and not shap_supported:
+                shap_error = "SHAP is currently available for tree models only (RSF or GBS)."
+            elif request_model.compute_shap and model_obj is not None and x_encoded is not None:
                 try:
                     shap_result = compute_shap_values(model_obj, x_encoded, result["feature_names"])
                     from survival_toolkit.plots import build_shap_figure

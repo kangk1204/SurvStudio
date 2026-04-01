@@ -227,11 +227,21 @@ def _column_kind(series: pd.Series) -> str:
     return "categorical"
 
 
+def _column_matches_keyword(column: str, token: str) -> bool:
+    lowered = str(column).lower()
+    normalized_token = str(token).lower()
+    if not lowered or not normalized_token:
+        return False
+    pluralizable_time_units = {"day", "week", "month", "year"}
+    suffix = "s?" if normalized_token in pluralizable_time_units else ""
+    pattern = rf"(^|[^a-z0-9]){re.escape(normalized_token)}{suffix}([^a-z0-9]|$)"
+    return re.search(pattern, lowered) is not None
+
+
 def _column_keywords(columns: Sequence[str], tokens: Sequence[str]) -> list[str]:
     matches: list[str] = []
     for column in columns:
-        lowered = column.lower()
-        if any(token in lowered for token in tokens):
+        if any(_column_matches_keyword(column, token) for token in tokens):
             matches.append(column)
     return matches
 

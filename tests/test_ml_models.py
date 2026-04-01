@@ -123,6 +123,29 @@ def test_gbs_reports_holdout_evaluation_on_large_cohort() -> None:
     not _sksurv_available(),
     reason="scikit-survival not installed",
 )
+def test_lasso_cox_reports_holdout_evaluation_on_large_cohort() -> None:
+    from survival_toolkit.ml_models import train_lasso_cox
+
+    df = make_example_dataset(seed=24, n_patients=200)
+    result = train_lasso_cox(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+        random_state=42,
+    )
+    assert result["model_stats"]["c_index"] is not None
+    assert result["model_stats"]["evaluation_mode"] == "holdout"
+    assert result["model_stats"]["n_evaluation_patients"] < result["model_stats"]["n_patients"]
+    assert result["model_stats"]["alpha"] is not None
+    assert result["model_stats"]["n_active_features"] >= 1
+    assert "LASSO-Cox" in result["scientific_summary"]["headline"]
+
+
+@pytest.mark.skipif(
+    not _sksurv_available(),
+    reason="scikit-survival not installed",
+)
 @pytest.mark.parametrize(
     "trainer,kwargs",
     [
@@ -171,6 +194,7 @@ def test_compare_models_returns_table() -> None:
     assert result["evaluation_mode"] in {"holdout", "apparent"}
     models = {row["model"] for row in result["comparison_table"]}
     assert "Cox PH" in models
+    assert "LASSO-Cox" in models
     assert len(result["comparison_table"]) >= 1
     assert all("evaluation_mode" in row for row in result["comparison_table"])
     assert "manuscript_tables" in result
@@ -199,6 +223,7 @@ def test_compare_models_handles_common_categorical_presets_without_cox_singulari
 
     assert {row["model"] for row in result["comparison_table"]} == {
         "Cox PH",
+        "LASSO-Cox",
         "Random Survival Forest",
         "Gradient Boosted Survival",
     }
@@ -224,8 +249,13 @@ def test_compare_models_passes_requested_hyperparameters(monkeypatch) -> None:
         )
         return {"c_index": 0.63, "n_features": 2, "training_time_ms": 1.0}
 
+    def _fake_lasso(*args, **kwargs):
+        seen.append(("lasso", kwargs.get("random_state"), kwargs.get("time_column"), kwargs.get("event_column")))
+        return {"c_index": 0.64, "n_features": 2, "training_time_ms": 1.0}
+
     monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
     monkeypatch.setattr(ml_models, "_fit_evaluate_cox_split", _fake_cox)
+    monkeypatch.setattr(ml_models, "_fit_evaluate_lasso_cox_split", _fake_lasso)
     monkeypatch.setattr(ml_models, "_fit_evaluate_rsf_split", _fake_rsf)
     monkeypatch.setattr(ml_models, "_fit_evaluate_gbs_split", _fake_gbs)
 
@@ -241,6 +271,7 @@ def test_compare_models_passes_requested_hyperparameters(monkeypatch) -> None:
     )
 
     assert result["comparison_table"]
+    assert ("lasso", 99, "os_months", "os_event") in seen
     assert ("rsf", 37, 5, 99) in seen
     assert ("gbs", 37, 0.2, 99) in seen
 
@@ -297,8 +328,12 @@ def test_compare_models_excludes_cox_when_shared_holdout_fit_is_nonfinite(monkey
     def _fake_gbs(*args, **kwargs):
         return {"c_index": 0.64, "n_features": 2, "training_time_ms": 1.0}
 
+    def _fake_lasso(*args, **kwargs):
+        return {"c_index": 0.63, "n_features": 2, "training_time_ms": 1.0}
+
     monkeypatch.setattr(ml_models, "PHReg", _FakePHReg)
     monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
+    monkeypatch.setattr(ml_models, "_fit_evaluate_lasso_cox_split", _fake_lasso)
     monkeypatch.setattr(ml_models, "_fit_evaluate_rsf_split", _fake_rsf)
     monkeypatch.setattr(ml_models, "_fit_evaluate_gbs_split", _fake_gbs)
 
@@ -311,6 +346,7 @@ def test_compare_models_excludes_cox_when_shared_holdout_fit_is_nonfinite(monkey
     )
 
     assert {row["model"] for row in result["comparison_table"]} == {
+        "LASSO-Cox",
         "Random Survival Forest",
         "Gradient Boosted Survival",
     }
@@ -423,6 +459,7 @@ def test_cross_validated_compare_models_returns_manuscript_tables() -> None:
     assert result["repeat_results"]
     assert result["manuscript_tables"]["model_performance_table"]
     assert "repeated" in result["manuscript_tables"]["caption"].lower()
+    assert "LASSO-Cox" in {row["model"] for row in result["comparison_table"]}
     assert all(row["evaluation_mode"] == "repeated_cv" for row in result["comparison_table"])
     assert all("c_index_std" in row for row in result["comparison_table"])
     assert all(row["n_repeats"] == 2 for row in result["comparison_table"])
@@ -457,6 +494,7 @@ def test_cross_validated_compare_models_handles_common_categorical_presets_witho
 
     assert {row["model"] for row in result["comparison_table"]} == {
         "Cox PH",
+        "LASSO-Cox",
         "Random Survival Forest",
         "Gradient Boosted Survival",
     }
@@ -506,8 +544,21 @@ def test_cross_validated_compare_models_pass_requested_hyperparameters(monkeypat
             "test_events": 10,
         }
 
+    def _fake_lasso(*args, **kwargs):
+        seen.append(("lasso", kwargs.get("random_state"), kwargs.get("time_column"), kwargs.get("event_column")))
+        return {
+            "c_index": 0.615,
+            "n_features": 2,
+            "training_time_ms": 1.0,
+            "train_n": 40,
+            "test_n": 40,
+            "train_events": 10,
+            "test_events": 10,
+        }
+
     monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
     monkeypatch.setattr(ml_models, "_fit_evaluate_cox_split", _fake_cox)
+    monkeypatch.setattr(ml_models, "_fit_evaluate_lasso_cox_split", _fake_lasso)
     monkeypatch.setattr(ml_models, "_fit_evaluate_rsf_split", _fake_rsf)
     monkeypatch.setattr(ml_models, "_fit_evaluate_gbs_split", _fake_gbs)
 
@@ -525,6 +576,7 @@ def test_cross_validated_compare_models_pass_requested_hyperparameters(monkeypat
     )
 
     assert result["comparison_table"]
+    assert ("lasso", 13, "os_months", "os_event") in seen
     assert ("rsf", 41, 7, 13) in seen
     assert ("gbs", 41, 0.15, 13) in seen
 
@@ -571,8 +623,20 @@ def test_cross_validated_compare_models_blanks_aggregate_if_any_fold_fails(monke
             "test_events": 10,
         }
 
+    def _fake_lasso(*args, **kwargs):
+        return {
+            "c_index": 0.605,
+            "n_features": 2,
+            "training_time_ms": 1.0,
+            "train_n": 40,
+            "test_n": 40,
+            "train_events": 10,
+            "test_events": 10,
+        }
+
     monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
     monkeypatch.setattr(ml_models, "_fit_evaluate_cox_split", _fake_cox)
+    monkeypatch.setattr(ml_models, "_fit_evaluate_lasso_cox_split", _fake_lasso)
     monkeypatch.setattr(ml_models, "_fit_evaluate_rsf_split", _fake_rsf)
     monkeypatch.setattr(ml_models, "_fit_evaluate_gbs_split", _fake_gbs)
 

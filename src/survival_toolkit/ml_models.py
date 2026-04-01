@@ -1,10 +1,10 @@
 """Machine-learning survival models and cutpoint optimisation utilities.
 
-This module provides tree-based survival models (Random Survival Forest,
-Gradient Boosted Survival), optimal cutpoint scanning, SHAP explanations,
-and partial-dependence computation.  Every public function returns a plain
-``dict`` that is JSON-serialisable so it can be served directly by the
-FastAPI backend.
+This module provides penalized and tree-based survival models
+(LASSO-Cox, Random Survival Forest, Gradient Boosted Survival),
+optimal cutpoint scanning, SHAP explanations, and partial-dependence
+computation.  Every public function returns a plain ``dict`` that is
+JSON-serialisable so it can be served directly by the FastAPI backend.
 
 Optional heavy dependencies (scikit-survival, shap) are imported lazily
 behind availability flags so the rest of the toolkit keeps working when
@@ -42,6 +42,7 @@ try:
         GradientBoostingSurvivalAnalysis,
         RandomSurvivalForest,
     )
+    from sksurv.linear_model import CoxnetSurvivalAnalysis
     from sksurv.metrics import concordance_index_censored
 
     SKSURV_AVAILABLE = True
@@ -331,8 +332,16 @@ def _scientific_summary_ml(
 
     if evaluation_mode == "holdout":
         strengths.append("Discrimination was estimated on a deterministic holdout split.")
+        cautions.append(
+            "Deterministic holdout reports one split only, so no confidence interval or standard deviation is shown."
+        )
     elif evaluation_mode == "repeated_cv":
         strengths.append("Discrimination was estimated with repeated stratified cross-validation.")
+    elif evaluation_mode == "repeated_cv_incomplete":
+        strengths.append("Discrimination was estimated with repeated stratified cross-validation.")
+        cautions.append(
+            "One or more repeated-CV folds failed or fell back, so the reported mean excludes incomplete fold-level estimates."
+        )
     else:
         cautions.append(
             "Discrimination was estimated on the training cohort because a stable holdout split was not feasible; this apparent C-index is optimistic."
@@ -340,8 +349,14 @@ def _scientific_summary_ml(
 
     if c_index is not None:
         strengths.append(f"{metric_name} = {c_index:.3f}.")
+        if c_index >= 0.70:
+            strengths.append(
+                "C-index is well above chance-level ranking (0.50), which can be useful for screening if independent validation agrees."
+            )
         if c_index < 0.60:
             cautions.append(f"{metric_name} is below 0.60, so discrimination is limited.")
+        if c_index < 0.55:
+            cautions.append("C-index is close to chance-level ranking (0.50).")
 
     # Headline
     if c_index is not None:
@@ -384,6 +399,10 @@ def _metric_name_for_evaluation(evaluation_mode: str) -> str:
         return "Holdout C-index"
     if evaluation_mode == "repeated_cv":
         return "Repeated-CV mean C-index"
+    if evaluation_mode == "repeated_cv_incomplete":
+        return "Repeated-CV mean C-index (incomplete)"
+    if evaluation_mode == "holdout_fallback_apparent":
+        return "Apparent fallback C-index"
     return "Apparent C-index"
 
 
@@ -529,6 +548,154 @@ def _drop_constant_train_columns(
         train_encoded.loc[:, varying_columns].copy(),
         eval_encoded.loc[:, varying_columns].copy(),
     )
+
+
+def _standardize_encoded_matrices(
+    train_encoded: pd.DataFrame,
+    eval_encoded: pd.DataFrame,
+    full_encoded: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None, dict[str, pd.Series]]:
+    """Standardize encoded matrices using training-split moments only."""
+    train_float = train_encoded.astype(float).copy()
+    eval_float = eval_encoded.astype(float).copy()
+    full_float = full_encoded.astype(float).copy() if full_encoded is not None else None
+
+    means = train_float.mean(axis=0).astype(float)
+    scales = train_float.std(axis=0, ddof=0).astype(float).replace(0.0, 1.0)
+
+    def _apply(frame: pd.DataFrame | None) -> pd.DataFrame | None:
+        if frame is None:
+            return None
+        scaled = (frame - means) / scales
+        scaled = scaled.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        return scaled.astype(float)
+
+    return _apply(train_float), _apply(eval_float), _apply(full_float), {
+        "mean": means,
+        "scale": scales,
+    }
+
+
+def _make_lasso_coxnet_model(*, alpha: float | None = None) -> CoxnetSurvivalAnalysis:
+    kwargs: dict[str, Any] = {
+        "l1_ratio": 1.0,
+        "normalize": False,
+        "tol": 1e-7,
+        "max_iter": 100000,
+    }
+    if alpha is None:
+        kwargs.update({"n_alphas": 40, "alpha_min_ratio": "auto"})
+    else:
+        kwargs["alphas"] = [float(alpha)]
+    return CoxnetSurvivalAnalysis(**kwargs)
+
+
+def _coerce_coxnet_coef_vector(model: CoxnetSurvivalAnalysis) -> np.ndarray:
+    coef = np.asarray(model.coef_, dtype=float)
+    if coef.ndim == 1:
+        return coef.astype(float)
+    if coef.ndim == 2 and coef.shape[1] >= 1:
+        return coef[:, -1].astype(float)
+    raise ValueError("LASSO-Cox did not produce a usable coefficient vector.")
+
+
+def _select_lasso_alpha(
+    train_frame: pd.DataFrame,
+    train_encoded: pd.DataFrame,
+    *,
+    time_column: str,
+    event_column: str,
+    random_state: int,
+) -> dict[str, Any]:
+    """Choose an L1 penalty using only the training split."""
+    if not SKSURV_AVAILABLE:
+        raise ImportError("scikit-survival is not installed.")
+
+    n_train = int(train_frame.shape[0])
+    train_events = train_frame[event_column].astype(int).to_numpy()
+    train_positions = np.arange(n_train)
+    selection_mode = "inner_holdout"
+
+    if n_train < 30 or len(np.unique(train_events)) < 2 or pd.Series(train_events).value_counts().min() < 4:
+        inner_train_idx = train_positions
+        inner_eval_idx = train_positions
+        selection_mode = "apparent"
+    else:
+        try:
+            inner_train_idx, inner_eval_idx = train_test_split(
+                train_positions,
+                test_size=0.25,
+                random_state=random_state,
+                stratify=train_events,
+            )
+        except ValueError:
+            inner_train_idx = train_positions
+            inner_eval_idx = train_positions
+            selection_mode = "apparent"
+
+    inner_train_frame = train_frame.iloc[inner_train_idx].reset_index(drop=True)
+    inner_eval_frame = train_frame.iloc[inner_eval_idx].reset_index(drop=True)
+    inner_train_encoded = train_encoded.iloc[inner_train_idx].reset_index(drop=True)
+    inner_eval_encoded = train_encoded.iloc[inner_eval_idx].reset_index(drop=True)
+    inner_train_encoded, inner_eval_encoded = _drop_constant_train_columns(
+        inner_train_encoded,
+        inner_eval_encoded,
+    )
+    inner_train_encoded, inner_eval_encoded, _, _ = _standardize_encoded_matrices(
+        inner_train_encoded,
+        inner_eval_encoded,
+    )
+
+    y_inner_train = _prepare_sksurv_data(inner_train_frame, time_column, event_column)
+    y_inner_eval = _prepare_sksurv_data(inner_eval_frame, time_column, event_column)
+    path_model = _make_lasso_coxnet_model()
+    path_model.fit(inner_train_encoded.to_numpy(), y_inner_train)
+
+    alphas = np.asarray(path_model.alphas_, dtype=float)
+    coef_path = np.asarray(path_model.coef_, dtype=float)
+    if coef_path.ndim == 1:
+        coef_path = coef_path[:, np.newaxis]
+
+    candidate_rows: list[dict[str, Any]] = []
+    for idx, alpha in enumerate(alphas.tolist()):
+        try:
+            risk_scores = np.asarray(
+                path_model.predict(inner_eval_encoded.to_numpy(), alpha=float(alpha)),
+                dtype=float,
+            )
+        except Exception:
+            continue
+        c_index = _sksurv_c_index(y_inner_eval, risk_scores)
+        if c_index is None or not np.isfinite(float(c_index)):
+            continue
+        coef_vector = coef_path[:, idx] if idx < coef_path.shape[1] else coef_path[:, -1]
+        n_nonzero = int(np.count_nonzero(np.abs(coef_vector) > 1e-10))
+        candidate_rows.append({
+            "alpha": float(alpha),
+            "c_index": float(c_index),
+            "n_nonzero_features": n_nonzero,
+        })
+
+    if not candidate_rows:
+        raise ValueError("LASSO-Cox could not find a valid penalty along the fitted Coxnet path.")
+
+    nonzero_rows = [row for row in candidate_rows if row["n_nonzero_features"] > 0]
+    search_rows = nonzero_rows or candidate_rows
+    best = max(
+        search_rows,
+        key=lambda row: (
+            float(row["c_index"]),
+            -int(row["n_nonzero_features"]),
+            float(row["alpha"]),
+        ),
+    )
+    return {
+        "alpha": float(best["alpha"]),
+        "selection_mode": selection_mode,
+        "inner_selection_c_index": float(best["c_index"]),
+        "n_nonzero_features": int(best["n_nonzero_features"]),
+        "n_alpha_candidates": int(len(candidate_rows)),
+    }
 
 
 def _prepare_model_evaluation_split(
@@ -1155,7 +1322,181 @@ def train_gradient_boosted_survival(
 
 
 # ===================================================================
-# 4. Model comparison
+# 4. LASSO-Cox
+# ===================================================================
+
+
+def train_lasso_cox(
+    df: pd.DataFrame,
+    time_column: str,
+    event_column: str,
+    features: Sequence[str],
+    categorical_features: Sequence[str] | None = None,
+    event_positive_value: Any = None,
+    random_state: int = 42,
+    internal_evaluation: bool = True,
+) -> dict[str, Any]:
+    """Train an L1-penalized Cox model for high-dimensional screening."""
+    if not SKSURV_AVAILABLE:
+        raise ImportError(
+            "scikit-survival is required for LASSO-Cox. "
+            "Install it with: pip install scikit-survival"
+        )
+    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
+
+    frame = _cohort_frame(
+        df,
+        time_column=time_column,
+        event_column=event_column,
+        event_positive_value=event_positive_value,
+        extra_columns=list(features),
+        drop_missing_extra_columns=False,
+    )
+
+    if internal_evaluation:
+        split = _prepare_model_evaluation_split(
+            frame,
+            time_column=time_column,
+            event_column=event_column,
+            features=features,
+            categorical_features=categorical_features,
+            random_state=random_state,
+        )
+        train_frame = split["train_frame"]
+        eval_frame = split["eval_frame"]
+        full_frame = split["full_frame"]
+        train_encoded = split["train_encoded"]
+        eval_encoded = split["eval_encoded"]
+        full_encoded = split["full_encoded"]
+        evaluation_mode = split["evaluation_mode"]
+        metric_name = split["metric_name"]
+        feature_encoder = split["feature_encoder"]
+    else:
+        feature_encoder = _fit_feature_encoder(frame, features, categorical_features)
+        full_encoded = _transform_feature_encoder(frame, feature_encoder).reset_index(drop=True)
+        full_frame = frame.reset_index(drop=True)
+        if full_encoded.empty:
+            raise ValueError("No analyzable rows remain after encoding features for LASSO-Cox.")
+        train_frame = eval_frame = full_frame
+        train_encoded = eval_encoded = full_encoded
+        evaluation_mode = "apparent"
+        metric_name = _metric_name_for_evaluation(evaluation_mode)
+
+    train_encoded, eval_encoded = _drop_constant_train_columns(train_encoded, eval_encoded)
+    full_encoded = full_encoded.loc[:, train_encoded.columns].copy().reset_index(drop=True)
+    alpha_meta = _select_lasso_alpha(
+        train_frame,
+        train_encoded,
+        time_column=time_column,
+        event_column=event_column,
+        random_state=random_state,
+    )
+    train_encoded, eval_encoded, full_encoded, scaler = _standardize_encoded_matrices(
+        train_encoded,
+        eval_encoded,
+        full_encoded,
+    )
+
+    y_train = _prepare_sksurv_data(train_frame, time_column, event_column)
+    y_eval = _prepare_sksurv_data(eval_frame, time_column, event_column)
+    y_full = _prepare_sksurv_data(full_frame, time_column, event_column)
+
+    t_start = time.monotonic()
+    model = _make_lasso_coxnet_model(alpha=alpha_meta["alpha"])
+    model.fit(train_encoded.to_numpy(), y_train)
+    training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
+
+    evaluation_risk_scores = np.asarray(model.predict(eval_encoded.to_numpy()), dtype=float)
+    c_index = _sksurv_c_index(y_eval, evaluation_risk_scores)
+    risk_scores = np.asarray(model.predict(full_encoded.to_numpy()), dtype=float)
+    coef_vector = _coerce_coxnet_coef_vector(model)
+    feature_names = list(train_encoded.columns)
+    n_active_features = int(np.count_nonzero(np.abs(coef_vector) > 1e-10))
+    importance_records = sorted(
+        [
+            {
+                "feature": name,
+                "importance": _safe_float(abs(coef)),
+                "coefficient": _safe_float(coef),
+            }
+            for name, coef in zip(feature_names, coef_vector, strict=False)
+        ],
+        key=lambda row: row["importance"] if row["importance"] is not None else 0.0,
+        reverse=True,
+    )
+
+    n_patients = int(full_frame.shape[0])
+    n_events = int(full_frame[event_column].sum())
+    n_eval_patients = int(eval_frame.shape[0])
+    n_eval_events = int(eval_frame[event_column].sum())
+
+    scientific_summary = _scientific_summary_ml(
+        model_name="LASSO-Cox",
+        c_index=c_index,
+        n_patients=n_patients,
+        n_events=n_events,
+        n_features=len(feature_names),
+        evaluation_mode=evaluation_mode,
+        n_evaluation_patients=n_eval_patients,
+        n_evaluation_events=n_eval_events,
+        n_fit_patients=int(train_frame.shape[0]),
+        n_fit_events=int(train_frame[event_column].sum()),
+        extra_strengths=[
+            (
+                f"L1-penalized Coxnet selected alpha={alpha_meta['alpha']:.4g} "
+                f"with {n_active_features} non-zero coefficient(s)."
+            ),
+        ],
+        extra_cautions=[
+            (
+                "This penalized Cox path is intended for predictive screening in wide feature sets. "
+                "Do not interpret its shrunk coefficients like inferential Cox PH hazard ratios."
+            ),
+            (
+                "Penalty selection used an inner training-only holdout split."
+                if alpha_meta["selection_mode"] == "inner_holdout"
+                else "Penalty selection fell back to apparent training performance because an inner holdout was not stable."
+            ),
+        ],
+    )
+
+    return {
+        "model_type": "LassoCox",
+        "model_stats": {
+            "c_index": _safe_float(c_index),
+            "metric_name": metric_name,
+            "evaluation_mode": evaluation_mode,
+            "alpha": _safe_float(alpha_meta["alpha"]),
+            "alpha_selection_mode": alpha_meta["selection_mode"],
+            "alpha_selection_c_index": _safe_float(alpha_meta["inner_selection_c_index"]),
+            "n_alpha_candidates": int(alpha_meta["n_alpha_candidates"]),
+            "n_active_features": n_active_features,
+            "n_patients": n_patients,
+            "n_events": n_events,
+            "n_evaluation_patients": n_eval_patients,
+            "n_evaluation_events": n_eval_events,
+            "n_features": len(feature_names),
+            "training_time_ms": training_time_ms,
+        },
+        "feature_importance": importance_records,
+        "predicted_risk_scores": [_safe_float(v) for v in risk_scores],
+        "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
+        "feature_names": feature_names,
+        "scientific_summary": scientific_summary,
+        "_model": model,
+        "_X_encoded": full_encoded,
+        "_X_eval_encoded": eval_encoded,
+        "_feature_encoder": feature_encoder,
+        "_analysis_frame": full_frame,
+        "_analysis_eval_frame": eval_frame,
+        "_y": y_full,
+        "_y_eval": y_eval,
+        "_feature_scaler": scaler,
+    }
+
+
+# ===================================================================
+# 5. Model comparison
 # ===================================================================
 
 
@@ -1171,7 +1512,7 @@ def compare_survival_models(
     learning_rate: float = 0.1,
     random_state: int = 42,
 ) -> dict[str, Any]:
-    """Train Cox PH, Random Survival Forest, and Gradient Boosted Survival
+    """Train Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival
     on a deterministic train/test split and return a comparison table with
     holdout C-index, feature count, and training time for each model.
     """
@@ -1198,12 +1539,11 @@ def compare_survival_models(
         random_state=random_state,
     )
 
-    model_specs: list[tuple[str, Any, dict[str, Any]]] = [
-        ("Cox PH", _fit_evaluate_cox_split, {}),
-    ]
+    model_specs: list[tuple[str, Any, dict[str, Any]]] = [("Cox PH", _fit_evaluate_cox_split, {})]
     if SKSURV_AVAILABLE:
         model_specs.extend(
             [
+                ("LASSO-Cox", _fit_evaluate_lasso_cox_split, {}),
                 (
                     "Random Survival Forest",
                     _fit_evaluate_rsf_split,
@@ -1223,6 +1563,7 @@ def compare_survival_models(
     else:
         errors.extend(
             [
+                {"model": "LASSO-Cox", "error": "scikit-survival is not installed."},
                 {"model": "Random Survival Forest", "error": "scikit-survival is not installed."},
                 {"model": "Gradient Boosted Survival", "error": "scikit-survival is not installed."},
             ]
@@ -1351,6 +1692,67 @@ def _fit_evaluate_cox_split(
         "model": "Cox PH",
         "c_index": _safe_float(_harrell_c_index(test_times, test_status.astype(float), risk_score)),
         "n_features": len(param_vector),
+        "training_time_ms": training_time_ms,
+        "train_n": int(train_eval.shape[0]),
+        "test_n": int(test_eval.shape[0]),
+        "train_events": int(train_eval[event_column].sum()),
+        "test_events": int(test_eval[event_column].sum()),
+    }
+
+
+def _fit_evaluate_lasso_cox_split(
+    train_frame: pd.DataFrame,
+    test_frame: pd.DataFrame,
+    *,
+    time_column: str,
+    event_column: str,
+    features: Sequence[str],
+    categorical_features: Sequence[str] | None = None,
+    random_state: int = 42,
+) -> dict[str, Any]:
+    if not SKSURV_AVAILABLE:
+        raise ImportError("scikit-survival is not installed.")
+
+    train_encoded, test_encoded, _ = _encode_train_test_features(
+        train_frame,
+        test_frame,
+        features,
+        categorical_features,
+    )
+    train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
+    train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
+    test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
+    if train_encoded.empty or test_encoded.empty:
+        raise ValueError("No valid rows remain after encoding features for LASSO-Cox.")
+
+    alpha_meta = _select_lasso_alpha(
+        train_eval,
+        train_encoded,
+        time_column=time_column,
+        event_column=event_column,
+        random_state=random_state,
+    )
+    train_encoded, test_encoded, _, _ = _standardize_encoded_matrices(train_encoded, test_encoded)
+    y_train = _prepare_sksurv_data(train_eval, time_column, event_column)
+
+    t_start = time.monotonic()
+    model = _make_lasso_coxnet_model(alpha=alpha_meta["alpha"])
+    model.fit(train_encoded.to_numpy(), y_train)
+    training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
+    risk_score = np.asarray(model.predict(test_encoded.to_numpy()), dtype=float)
+    coef_vector = _coerce_coxnet_coef_vector(model)
+
+    return {
+        "model": "LASSO-Cox",
+        "c_index": _safe_float(
+            _harrell_c_index(
+                test_eval[time_column].to_numpy(dtype=float),
+                test_eval[event_column].astype(int).to_numpy().astype(float),
+                risk_score,
+            )
+        ),
+        "n_features": int(train_encoded.shape[1]),
+        "n_active_features": int(np.count_nonzero(np.abs(coef_vector) > 1e-10)),
         "training_time_ms": training_time_ms,
         "train_n": int(train_eval.shape[0]),
         "test_n": int(test_eval.shape[0]),
@@ -1625,7 +2027,7 @@ def cross_validate_survival_models(
     cv_repeats: int = 3,
     random_state: int = 42,
 ) -> dict[str, Any]:
-    """Evaluate Cox PH, RSF, and GBS with repeated stratified cross-validation."""
+    """Evaluate Cox PH, LASSO-Cox, RSF, and GBS with repeated stratified cross-validation."""
     categorical_features = list(categorical_features or [])
     if cv_folds < 2:
         raise ValueError("cv_folds must be at least 2.")
@@ -1654,6 +2056,7 @@ def cross_validate_survival_models(
     if SKSURV_AVAILABLE:
         model_specs.extend(
             [
+                ("LASSO-Cox", _fit_evaluate_lasso_cox_split, {}),
                 (
                     "Random Survival Forest",
                     _fit_evaluate_rsf_split,
@@ -1672,6 +2075,7 @@ def cross_validate_survival_models(
         )
     else:
         errors = [
+            {"model": "LASSO-Cox", "error": "scikit-survival is not installed."},
             {"model": "Random Survival Forest", "error": "scikit-survival is not installed."},
             {"model": "Gradient Boosted Survival", "error": "scikit-survival is not installed."},
         ]

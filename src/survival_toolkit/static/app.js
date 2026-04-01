@@ -2058,6 +2058,13 @@ function inferEventPositiveSelection(eventColumn, values, previousValue = "") {
   const uniqueTokens = [...new Set(normalized.map((entry) => entry.token))];
   const numericTokens = uniqueTokens.filter((token) => /^-?\d+(?:\.\d+)?$/.test(token));
   if (uniqueTokens.length === 2 && numericTokens.length === 2) {
+    const numericPair = numericTokens.map((token) => Number(token)).sort((a, b) => a - b);
+    if (numericPair[0] === 1 && numericPair[1] === 2) {
+      return {
+        value: "",
+        warning: `"${eventColumn}" looks like TCGA-style 1/2 coding (${values.map((value) => String(value)).join(", ")}). Confirm whether 1 means the event and 2 means censoring before running an analysis.`,
+      };
+    }
     return {
       value: "",
       warning: `"${eventColumn}" uses non-standard binary values (${values.map((value) => String(value)).join(", ")}). Choose which value means the event happened before running an analysis.`,
@@ -3095,19 +3102,38 @@ function formatOutcomeChip(timeLabel, eventLabel, eventValue) {
   return `Outcome: ${timeLabel} / ${eventLabel}=${eventValue}`;
 }
 
+function mlModelLabel(modelType) {
+  const labels = {
+    rsf: "Random Survival Forest",
+    gbs: "Gradient Boosted Survival",
+    lasso_cox: "LASSO-Cox",
+  };
+  return labels[String(modelType || "").toLowerCase()] || String(modelType || "ML model");
+}
+
+function mlModelSupportsShap(modelType) {
+  return ["rsf", "gbs"].includes(String(modelType || "").toLowerCase());
+}
+
 function mlPendingBannerText({ modelType, nEstimators, rowCount, computeShap }) {
-  const label = modelType === "gbs" ? "Gradient Boosted Survival" : "Random Survival Forest";
-  const treeSuffix = Number.isFinite(nEstimators) ? ` with ${nEstimators} trees` : "";
+  const label = mlModelLabel(modelType);
+  const treeSuffix = ["rsf", "gbs"].includes(String(modelType || "").toLowerCase()) && Number.isFinite(nEstimators)
+    ? ` with ${nEstimators} trees`
+    : "";
   const cohortSuffix = Number.isFinite(rowCount) ? ` on ${rowCount} rows` : "";
   let message = `Training ${label}${treeSuffix}${cohortSuffix}.`;
-  if (modelType === "rsf" && Number(nEstimators) >= 100 && Number(rowCount) >= 500) {
+  if (modelType === "lasso_cox") {
+    message += " This penalized Cox path can still take longer on wide feature sets because the training split tunes its penalty internally.";
+  } else if (modelType === "rsf" && Number(nEstimators) >= 100 && Number(rowCount) >= 500) {
     message += " This can take longer on a local CPU for real cohorts.";
   } else {
     message += " This usually finishes quickly on small cohorts.";
   }
-  message += computeShap
+  message += mlModelSupportsShap(modelType) && computeShap
     ? " SHAP is computed after fitting and can add a short delay."
-    : " Fast mode is on, so SHAP will be skipped for a faster result.";
+    : (mlModelSupportsShap(modelType)
+      ? " Fast mode is on, so SHAP will be skipped for a faster result."
+      : " SHAP is currently available for tree models only.");
   return message;
 }
 
@@ -3116,7 +3142,7 @@ function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvR
   const evalSuffix = evaluationStrategy === "repeated_cv"
     ? ` using ${cvRepeats}x${cvFolds} repeated CV`
     : " using deterministic holdout";
-  return `Screening Cox PH, Random Survival Forest, and Gradient Boosted Survival${cohortSuffix}${evalSuffix}.`;
+  return `Screening Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival${cohortSuffix}${evalSuffix}.`;
 }
 
 function dlPendingBannerText({ modelType, rowCount, epochs, evaluationStrategy, cvFolds, cvRepeats }) {
@@ -3205,8 +3231,8 @@ function renderContextCards({
 
   if (refs.coxDependencyText) {
     refs.coxDependencyText.textContent = !hasDataset
-      ? "Cox uses the Study Design outcome definition and the covariates selected below. The reported C-index is apparent on the analyzable cohort."
-      : "Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort.";
+      ? "Cox uses the Study Design outcome definition and the covariates selected below. The reported C-index is apparent on the analyzable cohort, and PH diagnostics below are approximate rank-based checks rather than a full cox.zph test."
+      : "Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, and PH diagnostics below are approximate rank-based checks rather than a full cox.zph test.";
     renderChipList(refs.coxDependencyChips, hasDataset ? [
       formatOutcomeChip(timeLabel, eventLabel, eventValue),
       formatGroupChip(groupLabel),
@@ -4404,8 +4430,22 @@ function updateWeightVisibility() {
 }
 
 function updateMlModelControlVisibility() {
+  const selectedModelType = String(refs.mlModelType?.value || "rsf");
+  const treeCountField = refs.mlNEstimators?.closest(".toolbar-field");
   const learningRateField = refs.mlLearningRate?.closest(".toolbar-field");
-  const learningRateApplies = refs.mlModelType?.value !== "rsf";
+  const learningRateApplies = selectedModelType === "gbs";
+  const treeCountApplies = selectedModelType === "rsf" || selectedModelType === "gbs";
+  const shapApplies = mlModelSupportsShap(selectedModelType);
+  if (refs.mlNEstimators) {
+    refs.mlNEstimators.disabled = !treeCountApplies;
+    refs.mlNEstimators.setAttribute("aria-disabled", String(!treeCountApplies));
+  }
+  if (treeCountField) {
+    treeCountField.classList.toggle("is-disabled", !treeCountApplies);
+    treeCountField.title = treeCountApplies
+      ? ""
+      : "Tree count applies to Random Survival Forest and Gradient Boosted Survival only.";
+  }
   if (refs.mlLearningRate) {
     refs.mlLearningRate.disabled = !learningRateApplies;
     refs.mlLearningRate.setAttribute("aria-disabled", String(!learningRateApplies));
@@ -4415,6 +4455,13 @@ function updateMlModelControlVisibility() {
     learningRateField.title = learningRateApplies
       ? ""
       : "Learning rate applies to Gradient Boosted Survival only.";
+  }
+  if (refs.mlSkipShap) {
+    if (!shapApplies) refs.mlSkipShap.checked = true;
+    refs.mlSkipShap.disabled = !shapApplies;
+    refs.mlSkipShap.title = shapApplies
+      ? ""
+      : "SHAP is currently available for Random Survival Forest and Gradient Boosted Survival only.";
   }
 }
 
@@ -4592,11 +4639,13 @@ async function runMlModel() {
   const features = selectedCheckboxValues(refs.modelFeatureChecklist);
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
   const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
-  const computeShap = !refs.mlSkipShap?.checked;
+  const selectedModelType = refs.mlModelType.value;
+  const modelLabel = mlModelLabel(selectedModelType);
+  const computeShap = mlModelSupportsShap(selectedModelType) && !refs.mlSkipShap?.checked;
   const startedAt = performance.now();
   setShimmer(refs.mlImportancePlot);
   refs.mlMetaBanner.textContent = mlPendingBannerText({
-    modelType: refs.mlModelType.value,
+    modelType: selectedModelType,
     nEstimators: Number(refs.mlNEstimators.value),
     rowCount: Number(state.dataset?.n_rows),
     computeShap,
@@ -4608,7 +4657,7 @@ async function runMlModel() {
       dataset_id: base.dataset_id, time_column: base.time_column,
       event_column: base.event_column, event_positive_value: base.event_positive_value,
       features, categorical_features: categoricalFeatures,
-      model_type: refs.mlModelType.value,
+      model_type: selectedModelType,
       n_estimators: Number(refs.mlNEstimators.value),
       learning_rate: Number(refs.mlLearningRate.value),
       compute_shap: computeShap,
@@ -4646,7 +4695,9 @@ async function runMlModel() {
       `<div class="empty-state plot-empty"><span>${
         payload.shap_error
           ? `SHAP failed: ${escapeHtml(payload.shap_error)}`
-          : (computeShap ? "SHAP not available for this model" : "SHAP skipped in Fast mode")
+          : (!mlModelSupportsShap(selectedModelType)
+            ? "SHAP is currently available for tree models only"
+            : (computeShap ? "SHAP not available for this model" : "SHAP skipped in Fast mode"))
       }</span></div>`,
     );
   }
@@ -4654,18 +4705,20 @@ async function runMlModel() {
   const stats = payload.analysis?.model_stats || {};
   const mlMetricLabel = stats.metric_name || ((stats.evaluation_mode === "holdout") ? "Holdout C-index" : "Apparent C-index");
   const mlEvaluationMode = stats.evaluation_mode || "unknown";
-  const shapStatus = payload.shap_result?.method === "kernel"
-    ? "approx-screening"
-    : (payload.shap_figure ? "computed" : (payload.shap_error ? "failed" : (computeShap ? "unavailable" : "skipped")));
+  const shapStatus = !mlModelSupportsShap(selectedModelType)
+    ? "tree-only"
+    : (payload.shap_result?.method === "kernel"
+      ? "approx-screening"
+      : (payload.shap_figure ? "computed" : (payload.shap_error ? "failed" : (computeShap ? "unavailable" : "skipped"))));
   const shapApproximationNote = payload.shap_result?.method === "kernel"
     ? ` (${formatValue(payload.shap_result.n_samples)} eval / ${formatValue(payload.shap_result.background_samples)} bg)`
     : "";
-  refs.mlMetaBanner.textContent = `${refs.mlModelType.value.toUpperCase()}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s`;
+  refs.mlMetaBanner.textContent = `${modelLabel}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s`;
   updateStepIndicator(3);
   revealCompletedResultIfCurrent("ml", {
     mode: "single",
-    successMessage: `${refs.mlModelType.value.toUpperCase()} model trained`,
-    backgroundMessage: `${refs.mlModelType.value.toUpperCase()} model finished in the background. Switch back to ML Models when you are ready to review it.`,
+    successMessage: `${modelLabel} model trained`,
+    backgroundMessage: `${modelLabel} model finished in the background. Switch back to ML Models when you are ready to review it.`,
   });
 }
 
@@ -4681,7 +4734,7 @@ async function runCompareModels() {
     cvFolds: Number(refs.mlCvFolds.value),
     cvRepeats: Number(refs.mlCvRepeats.value),
   });
-  setRuntimeBanner("Screening all ML models on one shared evaluation path. This can take a little while on larger cohorts.", "info");
+  setRuntimeBanner("Screening Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info");
   setShimmer(refs.mlComparisonShell);
 
   try {

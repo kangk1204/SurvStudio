@@ -28,6 +28,7 @@ from survival_toolkit.analysis import (
     make_unique_columns,
     looks_binary,
     preview_cox_analysis_inputs,
+    suggest_columns,
 )
 from survival_toolkit.sample_data import load_tcga_luad_example_dataset
 from survival_toolkit.sample_data import make_example_dataset
@@ -366,6 +367,24 @@ def test_looks_binary_rejects_mixed_recognized_event_families() -> None:
     series = pd.Series(["alive", "death", "relapse"], dtype="string")
 
     assert looks_binary(series) is False
+
+
+def test_suggest_columns_does_not_treat_menostat_as_time_or_event() -> None:
+    df = pd.DataFrame(
+        {
+            "rfs_days": [100, 200, 300],
+            "rfs_event": [1, 0, 1],
+            "menostat": ["Pre", "Post", "Post"],
+            "age": [45, 52, 61],
+        }
+    )
+
+    suggestions = suggest_columns(df)
+
+    assert "rfs_days" in suggestions["time_columns"]
+    assert "rfs_event" in suggestions["event_columns"]
+    assert "menostat" not in suggestions["time_columns"]
+    assert "menostat" not in suggestions["event_columns"]
 
 
 def test_km_analysis_returns_grouped_results() -> None:

@@ -676,6 +676,7 @@ Use this when you want:
 ### Machine Learning
 
 Implemented ML paths:
+- LASSO-Cox (penalized Cox)
 - Random Survival Forest
 - Gradient Boosted Survival
 - model comparison against Cox PH
@@ -688,6 +689,11 @@ Comparison supports:
 Single-model ML training also supports:
 - `Fast mode (skip SHAP)` for faster turnaround
 - feature-importance output for trained models
+
+LASSO-Cox note:
+- use this when the feature set is too wide for stable unpenalized Cox PH
+- it is a predictive penalized Cox path, not an inferential hazard-ratio workflow
+- SHAP, partial dependence, and counterfactual analysis remain tree-model features only
 
 Practical note:
 - `Compare All` is usually faster than single-model `Train a model`
@@ -765,12 +771,18 @@ The app explicitly distinguishes different evaluation modes:
 
 - `Holdout C-index`
   - discrimination measured on a deterministic holdout split
+  - this is one split only, so no CI or SD is shown
 - `Repeated-CV mean C-index`
   - average discrimination across repeated stratified CV
 - `Apparent C-index`
   - measured on the training/analyzable cohort
   - optimistic
   - should not be treated as external validation
+
+Rough interpretation:
+- `0.50` is chance-level ranking
+- values above about `0.70` can be useful for screening
+- the evaluation design still matters more than the threshold itself
 
 ### Cutpoints
 
@@ -930,6 +942,7 @@ Then increase epochs or switch to repeated CV only after the single-run workflow
 ## Current Limitations
 
 - Cox PH currently reports an apparent C-index only. If you need bootstrap optimism correction or cross-validated Cox discrimination, run that validation outside the current dashboard workflow.
+- Standard unpenalized Cox PH is not the right tool for very wide `p >> n` settings. Use the ML-panel `LASSO-Cox` path for penalized predictive screening instead of forcing a classical Cox PH fit.
 - External-cohort validation is currently a manual workflow: load the separate cohort, reproduce the endpoint and covariate specification, and rerun the analysis.
 - Left truncation and competing risks are outside the current scope.
 
