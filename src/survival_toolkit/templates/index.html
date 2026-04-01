@@ -522,7 +522,7 @@
           <div class="dependency-card" id="coxDependencyCard">
             <div class="dependency-copy">
               <strong>What this tab uses</strong>
-              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort.</span>
+              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, and PH diagnostics below are approximate rank-based checks rather than a full cox.zph test.</span>
               <div class="dataset-preset-chips hidden" id="coxDependencyChips"></div>
             </div>
           </div>
@@ -561,7 +561,7 @@
           <div class="insight-board" id="coxInsightBoard"><div class="empty-state">Model interpretation and diagnostic notes will appear here after analysis.</div></div>
           <div class="table-grid stacked">
             <div class="table-card full-width"><h3>Hazard Ratios</h3><div class="table-shell" id="coxResultsShell"><div class="empty-state">Fit a Cox model.</div></div></div>
-            <div class="table-card full-width"><h3>PH Diagnostics</h3><div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Rank-based Schoenfeld residual diagnostics against log time appear here.</div></div></div>
+            <div class="table-card full-width"><h3>PH Diagnostics</h3><div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Approximate rank-based Spearman screening of Schoenfeld residuals against log time appears here. This is useful for screening PH problems, not a full cox.zph test.</div></div></div>
           </div>
         </article>
       </section>
@@ -593,7 +593,7 @@
             <section class="control-section">
               <div class="control-section-head">
                 <strong>Run setup</strong>
-                <span>Train one RSF or GBS model here. Compare All below is a separate screening run.</span>
+                <span>Train one RSF, GBS, or LASSO-Cox model here. Compare All below is a separate screening run.</span>
               </div>
               <div class="button-row run-setup-quick-actions">
                 <button class="button ghost compact-btn" id="runCompareInlineButton" type="button">Compare All Models</button>
@@ -604,6 +604,7 @@
                   <select id="mlModelType">
                     <option value="rsf">Random Survival Forest</option>
                     <option value="gbs">Gradient Boosted Survival</option>
+                    <option value="lasso_cox">LASSO-Cox (Penalized)</option>
                   </select>
                 </label>
                 <label class="toolbar-field">
@@ -644,7 +645,8 @@
               </div>
             </section>
           </div>
-          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH, RSF, and GBS on one shared evaluation path. <strong>Train a model</strong> fits one RSF or GBS model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF returns much faster on larger cohorts. If TreeExplainer is unavailable, SHAP falls back to an approximate screening view rather than a manuscript-ready attribution.</div>
+          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH, LASSO-Cox, RSF, and GBS on one shared evaluation path. <strong>Train a model</strong> fits one RSF, GBS, or LASSO-Cox model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF and GBS return faster on larger cohorts. If TreeExplainer is unavailable, SHAP falls back to an approximate screening view rather than a manuscript-ready attribution.</div>
+          <div class="toolbar-note">As a rough interpretation guide, a C-index near <strong>0.50</strong> is chance-level ranking. Values above about <strong>0.70</strong> can be useful for screening, but external validation matters more than thresholds.</div>
           <div class="toolbar-note">Partial dependence and counterfactual analysis are available for tree-model runs only (<strong>RSF</strong> or <strong>GBS</strong>). They reuse the latest matching trained tree model when available; otherwise they refit the same requested tree settings.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">

@@ -122,12 +122,12 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="tableDependencyText"' in response.text
     assert 'id="tableOutputStatusText"' in response.text
     assert 'id="runCohortTableButtonLabel"' in response.text
-    assert "The reported C-index is apparent on the analyzable cohort." in response.text
+    assert "The reported C-index is apparent on the analyzable cohort, and PH diagnostics below are approximate rank-based checks rather than a full cox.zph test." in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
     assert 'id="deriveApplyButton"' in response.text
     assert "Create and apply" in response.text
-    assert "Rank-based Schoenfeld residual diagnostics against log time appear here." in response.text
+    assert "Approximate rank-based Spearman screening of Schoenfeld residuals against log time appears here." in response.text
 
 
 def test_index_exposes_dataset_preset_feedback_ui() -> None:
@@ -160,7 +160,8 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert "Run setup" in response.text
     assert "Validation and runtime" in response.text
     assert 'class="table-card-head"' in response.text
-    assert "screening comparison across Cox PH, RSF, and GBS" in response.text
+    assert 'option value="lasso_cox"' in response.text
+    assert "screening comparison across Cox PH, LASSO-Cox, RSF, and GBS" in response.text
     assert "Partial dependence and counterfactual analysis are available for tree-model runs only" in response.text
     assert "Fresh datasets preselect up to 20 eligible model features for a faster first run." in response.text
     assert 'id="dlBatchSizeHint"' in response.text
@@ -229,6 +230,8 @@ def test_readme_states_current_scope_and_validation_limitations() -> None:
     assert 'no built-in "apply the locked model directly to an external cohort" workflow yet' in readme
     assert "Apparent C-index" in readme
     assert "rank-based Spearman correlations between Schoenfeld residuals and log time" in readme
+    assert "LASSO-Cox (penalized Cox)" in readme
+    assert "0.50` is chance-level ranking" in readme
 
 
 def test_app_uses_threadpool_for_builtin_loaders_and_derive_group() -> None:
@@ -291,6 +294,7 @@ def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selec
     assert "function updateEventValueGuidance(" in text
     assert "function currentEventColumnWarning()" in text
     assert "Turn on Show all columns to select non-standard event fields." in text
+    assert "looks like TCGA-style 1/2 coding" in text
     assert "looks more like a baseline characteristic than a time-to-event indicator" in text
     assert "does not look like a binary event indicator" in text
     assert 'If this is intentional, turn on Show all columns for Event first.' in text
@@ -305,8 +309,11 @@ def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
     text = app_js.read_text()
 
     assert "function updateMlModelControlVisibility()" in text
-    assert 'refs.mlModelType?.value !== "rsf"' in text
+    assert 'const treeCountApplies = selectedModelType === "rsf" || selectedModelType === "gbs";' in text
+    assert 'const learningRateApplies = selectedModelType === "gbs";' in text
     assert "Learning rate applies to Gradient Boosted Survival only." in text
+    assert "Tree count applies to Random Survival Forest and Gradient Boosted Survival only." in text
+    assert "SHAP is currently available for Random Survival Forest and Gradient Boosted Survival only." in text
     assert 'refs.mlModelType.addEventListener("change", () => { runtime.resultPreference.ml = "single"; updateMlModelControlVisibility(); queueHistorySync(); });' in text
 
 
@@ -351,15 +358,17 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert "This can take longer on a local CPU for real cohorts." in text
     assert "SHAP is computed after fitting and can add a short delay." in text
     assert "Fast mode is on, so SHAP will be skipped for a faster result." in text
+    assert "SHAP is currently available for tree models only." in text
     assert "refs.mlMetaBanner.textContent = mlPendingBannerText(" in text
     assert "compute_shap: computeShap" in text
     assert "SHAP skipped in Fast mode" in text
     assert "SHAP failed:" in text
-    assert 'const shapStatus = payload.shap_result?.method === "kernel"' in text
+    assert "SHAP is currently available for tree models only" in text
+    assert 'const shapStatus = !mlModelSupportsShap(selectedModelType)' in text
     assert '? "approx-screening"' in text
     assert "SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s" in text
-    assert "Screening Cox PH, Random Survival Forest, and Gradient Boosted Survival" in text
-    assert "Screening all ML models on one shared evaluation path." in text
+    assert "Screening Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival" in text
+    assert "Screening Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path." in text
     assert "Screening top model=" in text
     assert "Model comparison screening complete" in text
 
@@ -388,7 +397,8 @@ def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repea
     assert 'if (response.status === 404 && /Unknown dataset id:/i.test(message) && state.dataset) {' in text
     assert 'goHome({ syncHistory: true, historyMode: "replace" });' in text
     assert 'The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.' in text
-    assert 'refs.runMlButton.disabled = singleModelBlocked || isScopeBusy("ml");' in text
+    assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");' in text
+    assert 'setActionDisabledState(refs.runMlButton, mlSingleDisabled, mlSingleTitle);' in text
     assert 'Train a model uses deterministic holdout only. Use Compare All for repeated CV screening.' in text
     assert 'if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {' in text
     assert 'Train a model uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.' in text
@@ -760,6 +770,54 @@ def test_ml_model_surfaces_shap_failures_without_failing_entire_request(monkeypa
     assert body["shap_result"] is None
     assert body["shap_figure"] is None
     assert body["shap_error"] == "RuntimeError: kernel failed"
+
+
+def test_ml_model_supports_lasso_cox_without_tree_shap(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    stored = store.create(
+        make_example_dataset(seed=188, n_patients=64),
+        filename="ml_lasso.csv",
+        copy_dataframe=False,
+    )
+
+    monkeypatch.setattr(
+        ml_models,
+        "train_lasso_cox",
+        lambda *args, **kwargs: {
+            "feature_importance": [{"feature": "age", "importance": 0.8, "coefficient": 0.8}],
+            "feature_names": ["age"],
+            "model_stats": {
+                "c_index": 0.69,
+                "evaluation_mode": "holdout",
+                "n_patients": 64,
+                "n_features": 1,
+                "n_active_features": 1,
+                "alpha": 0.01,
+            },
+        },
+    )
+
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age"],
+            "categorical_features": [],
+            "model_type": "lasso_cox",
+            "compute_shap": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analysis"]["model_stats"]["alpha"] == pytest.approx(0.01)
+    assert body["shap_result"] is None
+    assert body["shap_figure"] is None
+    assert body["shap_error"] == "SHAP is currently available for tree models only (RSF or GBS)."
 
 
 def test_deep_model_request_accepts_1000_epochs() -> None:
@@ -4082,7 +4140,7 @@ def test_compare_all_actions_surface_pending_feedback() -> None:
 
     assert "function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
     assert "function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
-    assert 'setRuntimeBanner("Screening all ML models on one shared evaluation path. This can take a little while on larger cohorts.", "info");' in app_js
+    assert 'setRuntimeBanner("Screening Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info");' in app_js
     assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");' in app_js
     assert 'busyText: "DL model run in progress. Deep-learning runs can take longer, so stay on this analysis path if you want the updated result to open here when the run finishes."' in app_js
     assert 'class="guided-run-status" role="status"' in app_js

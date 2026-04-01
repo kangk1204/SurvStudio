@@ -906,6 +906,7 @@ def _scientific_summary_dl(
     c_index: float | None,
     train_samples: int,
     eval_samples: int,
+    train_events: int | None,
     n_features: int,
     epochs: int,
     loss_history: list[float],
@@ -926,7 +927,13 @@ def _scientific_summary_dl(
         status = "caution"
 
     strengths: list[str] = [
-        f"{model_name} trained for {epochs_trained or epochs} epoch(s) on {train_samples} sample(s) with {n_features} features.",
+        f"{model_name} trained for {epochs_trained or epochs} epoch(s) on {train_samples} sample(s)"
+        + (
+            f" ({int(train_events)} events)"
+            if train_events is not None
+            else ""
+        )
+        + f" with {n_features} features.",
     ]
     if len(loss_history) >= 2 and loss_history[-1] < loss_history[0]:
         strengths.append("Training loss decreased over epochs, indicating successful optimization.")
@@ -940,12 +947,27 @@ def _scientific_summary_dl(
     if train_samples < 100:
         cautions.append("Sample size is small for a deep learning model; results may be unreliable.")
         next_steps.append("Consider using classical survival models (Cox PH, KM) for small datasets.")
+    if train_events is not None:
+        events_per_feature = float(train_events) / max(float(n_features), 1.0)
+        if events_per_feature < 10:
+            cautions.append(
+                f"Training events per feature is {events_per_feature:.1f}; deep models can overfit quickly when feature count is high relative to events."
+            )
     if c_val < 0.55:
         cautions.append(f"{metric_name} ({c_val:.3f}) suggests weak discrimination.")
         next_steps.append("Try different architectures, hyperparameters, or additional features.")
     elif c_val < 0.65:
         cautions.append(f"{metric_name} ({c_val:.3f}) indicates moderate discrimination.")
         next_steps.append("Validate on held-out data; consider ensemble approaches.")
+    elif c_val >= 0.70:
+        strengths.append(
+            "C-index is well above chance-level ranking (0.50), which can be useful for screening if independent validation agrees."
+        )
+
+    if evaluation_mode == "holdout":
+        cautions.append(
+            "Deterministic holdout reports one split only, so no confidence interval or standard deviation is shown."
+        )
 
     if len(loss_history) >= 5:
         tail = loss_history[-5:]
@@ -965,6 +987,9 @@ def _scientific_summary_dl(
     if model_name == "DeepHit":
         cautions.append(
             "DeepHit uses a stabilized ranking-loss term; wide discrete-time bin grids still need review on strongly right-skewed survival data."
+        )
+        cautions.append(
+            "This implementation uses a smooth stabilized ranking-loss surrogate rather than a literal step-function reference formulation."
         )
     if model_name == "Neural MTLR":
         cautions.append(
@@ -991,6 +1016,7 @@ def _scientific_summary_dl(
             {"label": metric_name, "value": c_val},
             {"label": "Evaluation mode", "value": evaluation_mode},
             {"label": "Training samples", "value": train_samples},
+            {"label": "Training events", "value": train_events},
             {"label": "Evaluation samples", "value": eval_samples},
             {"label": "Features", "value": n_features},
             {"label": "Epochs", "value": epochs_trained or epochs},
@@ -1984,6 +2010,7 @@ def train_deepsurv(
         c_index,
         int(train_idx.numel()),
         int(eval_idx.numel()),
+        int(e_all[train_idx].sum().item()),
         data["n_features"],
         epochs,
         loss_history,
@@ -2305,6 +2332,7 @@ def train_deephit(
         c_index,
         int(train_idx.numel()),
         int(eval_idx.numel()),
+        int(e_all[train_idx].sum().item()),
         data["n_features"],
         epochs,
         loss_history,
@@ -2620,6 +2648,7 @@ def train_neural_mtlr(
         c_index,
         int(train_idx.numel()),
         int(eval_idx.numel()),
+        int(e_all[train_idx].sum().item()),
         data["n_features"],
         epochs,
         loss_history,
@@ -2903,6 +2932,7 @@ def train_survival_transformer(
         c_index,
         int(train_idx.numel()),
         int(eval_idx.numel()),
+        int(e_all[train_idx].sum().item()),
         data["n_features"],
         epochs,
         loss_history,
@@ -3281,6 +3311,7 @@ def train_survival_vae(
         c_index,
         int(train_idx.numel()),
         int(eval_idx.numel()),
+        int(e_all[train_idx].sum().item()),
         data["n_features"],
         epochs,
         loss_history,
