@@ -118,6 +118,7 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="groupingDetails"' in response.text
     assert 'id="groupingSummaryText"' in response.text
     assert 'id="kmDependencyText"' in response.text
+    assert 'id="deriveCutoff" type="text" inputmode="text" placeholder="e.g. 25 or 25,25"' in response.text
     assert 'id="coxDependencyText"' in response.text
     assert 'id="tableDependencyText"' in response.text
     assert 'id="tableOutputStatusText"' in response.text
@@ -554,6 +555,7 @@ def test_legacy_derive_restore_only_reuses_cutoff_when_method_is_still_available
 
     assert "const restoredDeriveMethod = setSelectValueIfPresent(refs.deriveMethod, snapshot.deriveMethod);" in text
     assert 'refs.deriveCutoff.value = "";' in text
+    assert 'refs.deriveCutoff.placeholder = isExtremeSplit ? "e.g. 25" : "e.g. 25 or 25,25";' in text
 
 
 def test_dl_guided_review_hides_compare_tables_when_single_mode_is_active() -> None:
@@ -4157,7 +4159,7 @@ def test_guided_run_tips_use_polished_analysis_specific_copy() -> None:
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    assert 'text: "Review the settings below, then run the curve once."' in app_js
+    assert 'text: "Run the curve once with the current endpoint. Open Group by only if you need subgroup curves or grouped tables."' in app_js
     assert 'text: "Review the settings below, then fit the model once."' in app_js
     assert app_js.count('text: "Review the settings below, then start with one run."') >= 2
     assert 'text: "Review the settings below, then build the table once."' in app_js

@@ -2081,6 +2081,11 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(37, 115, 135, 0.1);
 }
 
+#deriveCutoff::placeholder {
+  color: rgba(41, 77, 98, 0.52);
+  opacity: 1;
+}
+
 label {
   display: grid;
   gap: 5px;
