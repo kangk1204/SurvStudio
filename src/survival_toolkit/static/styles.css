@@ -2606,6 +2606,48 @@ h3 {
   width: 100%;
 }
 
+.ml-run-setup-grid {
+  align-items: stretch;
+  grid-template-columns: minmax(280px, 1.35fr) minmax(180px, 0.9fr);
+}
+
+.ml-model-choice-field {
+  min-width: 0;
+}
+
+.ml-model-choice-field select {
+  min-height: 42px;
+}
+
+.ml-run-secondary-stack {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.ml-run-secondary-stack .toolbar-field input {
+  width: 100%;
+}
+
+.ml-fast-toggle {
+  grid-column: 1 / 2;
+  align-self: start;
+  justify-self: start;
+  min-width: 180px;
+  width: fit-content;
+}
+
+@media (max-width: 900px) {
+  .ml-run-setup-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ml-fast-toggle {
+    grid-column: auto;
+    width: 100%;
+  }
+}
+
 .control-inline-toggle {
   align-self: end;
   min-height: 40px;

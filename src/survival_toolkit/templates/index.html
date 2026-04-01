@@ -598,8 +598,8 @@
               <div class="button-row run-setup-quick-actions">
                 <button class="button ghost compact-btn" id="runCompareInlineButton" type="button">Compare All Models</button>
               </div>
-              <div class="toolbar-grid expert-parameter-grid">
-                <label class="toolbar-field model-choice-field">
+              <div class="toolbar-grid expert-parameter-grid ml-run-setup-grid">
+                <label class="toolbar-field model-choice-field ml-model-choice-field">
                   <span>Model</span>
                   <select id="mlModelType">
                     <option value="rsf">Random Survival Forest</option>
@@ -607,15 +607,17 @@
                     <option value="lasso_cox">LASSO-Cox (Penalized)</option>
                   </select>
                 </label>
-                <label class="toolbar-field">
-                  <span>Trees</span>
-                  <input id="mlNEstimators" type="number" min="10" max="1000" step="10" value="100" />
-                </label>
-                <label class="toolbar-field">
-                  <span>Learning Rate</span>
-                  <input id="mlLearningRate" type="number" min="0.001" max="1" step="0.01" value="0.1" />
-                </label>
-                <label class="toggle control-inline-toggle" title="Skip SHAP to return the fitted model faster. Turn this off only when you need SHAP values.">
+                <div class="ml-run-secondary-stack">
+                  <label class="toolbar-field">
+                    <span>Trees</span>
+                    <input id="mlNEstimators" type="number" min="10" max="1000" step="10" value="100" />
+                  </label>
+                  <label class="toolbar-field">
+                    <span>Learning Rate</span>
+                    <input id="mlLearningRate" type="number" min="0.001" max="1" step="0.01" value="0.1" />
+                  </label>
+                </div>
+                <label class="toggle control-inline-toggle ml-fast-toggle" title="Skip SHAP to return the fitted model faster. Turn this off only when you need SHAP values.">
                   <input id="mlSkipShap" type="checkbox" checked />
                   <span>Fast mode (skip SHAP)</span>
                 </label>

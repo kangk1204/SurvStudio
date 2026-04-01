@@ -387,6 +387,24 @@ def test_suggest_columns_does_not_treat_menostat_as_time_or_event() -> None:
     assert "menostat" not in suggestions["event_columns"]
 
 
+def test_suggest_columns_detects_concatenated_survival_naming_patterns() -> None:
+    df = pd.DataFrame(
+        {
+            "OverallSurvivalMonths": [12, 24, 36],
+            "deathstatus": [1, 0, 1],
+            "riskgroup": ["A", "B", "A"],
+            "treatmentarm": ["x", "y", "x"],
+        }
+    )
+
+    suggestions = suggest_columns(df)
+
+    assert "OverallSurvivalMonths" in suggestions["time_columns"]
+    assert "deathstatus" in suggestions["event_columns"]
+    assert "riskgroup" in suggestions["group_columns"]
+    assert "treatmentarm" in suggestions["group_columns"]
+
+
 def test_km_analysis_returns_grouped_results() -> None:
     df = make_example_dataset(seed=11, n_patients=180)
     updated, column_name, _ = derive_group_column(
