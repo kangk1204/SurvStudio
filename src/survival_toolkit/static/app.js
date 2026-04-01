@@ -3467,7 +3467,7 @@ function renderGuidedChrome() {
   const resultMode = guidedResultModeLabel(goal);
   const summaryText = {
     2: "Check the three fields below. If they look right, continue. Keep grouping and advanced settings for later.",
-    3: "The endpoint is ready. Pick one analysis path and keep the rest hidden for now.",
+    3: "The endpoint is ready. Pick one analysis first. After you choose one, Guided mode shows one analysis path at a time to keep the workflow focused.",
     4: "Use the settings below and run once. Change only one thing at a time if you need to adjust it.",
     5: "Check whether the result looks sensible before moving on or exporting anything.",
   }[step] || "Load a dataset or sample cohort to begin.";
@@ -3592,7 +3592,7 @@ function guidedPanelMarkup(step) {
 
   if (step === 3) {
     const helpBlock = guidedHelpDetails("How do I choose?", [
-      "Pick one analysis first. SurvStudio will keep the other paths hidden for now.",
+      "Pick one analysis first. After you choose one, Guided mode shows one analysis path at a time to keep the workflow focused.",
       "If you are unsure, start with Kaplan-Meier. It is the easiest result to sanity-check.",
     ]);
     return `
@@ -3620,11 +3620,11 @@ function guidedPanelMarkup(step) {
     const configureCopy = {
       km: {
         title: "Run Kaplan-Meier",
-        text: "Review the settings below, then run the curve once.",
+        text: "Run the curve once with the current endpoint. Open Group by only if you need subgroup curves or grouped tables.",
         runAction: "run-km",
         runLabel: "Run Kaplan-Meier",
         runScope: "km",
-        tip: "Start simple. Keep Group by as Overall only unless you need subgroup curves.",
+        tip: "Start with Overall only and the default log-rank test.",
       },
       cox: {
         title: "Run Cox PH",
@@ -4416,7 +4416,7 @@ function updateMethodVisibility() {
       : "Use percentile thresholds from the observed distribution. Example: 25 = at/above the 75th-percentile threshold vs rest. Example: 50 matches Median split. Example: 25,25 = at/below the 25th-percentile threshold / between thresholds / at/above the 75th-percentile threshold. Ties at the threshold can make the realized groups slightly larger.";
   }
   if (refs.deriveCutoff) {
-    refs.deriveCutoff.placeholder = isExtremeSplit ? "25" : "25 or 25,25";
+    refs.deriveCutoff.placeholder = isExtremeSplit ? "e.g. 25" : "e.g. 25 or 25,25";
   }
   refs.deriveOptimalControls?.classList.toggle("hidden", !isOptimal);
   if (!isOptimal && refs.cutpointPlot) {
