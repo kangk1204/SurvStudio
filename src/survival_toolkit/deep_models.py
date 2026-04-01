@@ -33,6 +33,13 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
+try:
+    from sksurv.metrics import concordance_index_censored as _sksurv_concordance
+
+    _SKSURV_METRICS_AVAILABLE = True
+except ImportError:
+    _SKSURV_METRICS_AVAILABLE = False
+
 _TorchModuleBase = nn.Module if TORCH_AVAILABLE else object
 
 _TORCH_INSTALL_MSG = (
@@ -586,7 +593,12 @@ def _compute_c_index_torch(
     times: torch.Tensor,
     events: torch.Tensor,
 ) -> float | None:
-    """Compute Harrell's concordance index from torch tensors."""
+    """Compute Harrell's concordance index from torch tensors.
+
+    Delegates to sksurv.metrics.concordance_index_censored when available
+    (O(n log n) via sorted comparisons), falling back to a pure-NumPy O(n²)
+    loop only when sksurv is not installed.
+    """
     risk_np = risk_scores.detach().cpu().numpy().ravel()
     time_np = times.detach().cpu().numpy().ravel()
     event_np = events.detach().cpu().numpy().ravel()
@@ -597,6 +609,18 @@ def _compute_c_index_torch(
     if not np.all(np.isfinite(event_np)):
         raise ValueError("Evaluation events contain NaN or Inf values.")
 
+    event_bool = event_np.astype(bool)
+    if not event_bool.any():
+        return None
+
+    if _SKSURV_METRICS_AVAILABLE:
+        try:
+            result = _sksurv_concordance(event_bool, time_np, risk_np)
+            return float(result[0])
+        except Exception:
+            pass
+
+    # Fallback: pure-NumPy O(n²) implementation
     concordant = 0.0
     comparable = 0.0
     for idx in range(len(time_np)):

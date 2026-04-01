@@ -4148,6 +4148,24 @@ def test_compare_all_actions_surface_pending_feedback() -> None:
     assert "refs.dlMetaBanner.textContent = dlComparePendingBannerText({" in app_js
 
 
+def test_guided_run_tips_use_polished_analysis_specific_copy() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'text: "Review the settings below, then run the curve once."' in app_js
+    assert 'text: "Review the settings below, then fit the model once."' in app_js
+    assert app_js.count('text: "Review the settings below, then start with one run."') >= 2
+    assert 'text: "Review the settings below, then build the table once."' in app_js
+    assert 'tip: "Use this after the classical analyses look right."' in app_js
+    assert 'tip: "Start with one model. This is the slowest and most advanced path."' in app_js
+    assert 'If the result looks odd, go back and change one setting before running again.' in app_js
+
+
 def test_guided_tables_configure_panel_uses_stacked_layout() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]

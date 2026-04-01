@@ -232,6 +232,8 @@ def _column_matches_keyword(column: str, token: str) -> bool:
     normalized_token = str(token).lower()
     if not lowered or not normalized_token:
         return False
+    if len(normalized_token) >= 4:
+        return normalized_token in lowered
     pluralizable_time_units = {"day", "week", "month", "year"}
     suffix = "s?" if normalized_token in pluralizable_time_units else ""
     pattern = rf"(^|[^a-z0-9]){re.escape(normalized_token)}{suffix}([^a-z0-9]|$)"

@@ -3620,45 +3620,45 @@ function guidedPanelMarkup(step) {
     const configureCopy = {
       km: {
         title: "Run Kaplan-Meier",
-        text: "Check the settings below, then run once.",
+        text: "Review the settings below, then run the curve once.",
         runAction: "run-km",
         runLabel: "Run Kaplan-Meier",
         runScope: "km",
-        tip: "Start simple. Keep Group by as Overall only unless you want subgroup curves.",
+        tip: "Start simple. Keep Group by as Overall only unless you need subgroup curves.",
       },
       cox: {
         title: "Run Cox PH",
-        text: "Check the settings below, then run once.",
+        text: "Review the settings below, then fit the model once.",
         runAction: "run-cox",
         runLabel: "Run Cox",
         runScope: "cox",
-        tip: "Change covariates first if the result looks wrong.",
+        tip: "If the result looks wrong, change the covariates first.",
       },
       ml: {
         title: "Train One ML Model",
-        text: "Check the settings below, then start with one run.",
+        text: "Review the settings below, then start with one run.",
         runAction: "run-ml",
         runLabel: "Train a model",
         secondaryAction: "run-ml-compare",
         secondaryLabel: "Compare all ML models",
         runScope: "ml",
         busyText: "ML model run in progress. Stay on this analysis path if you want the updated result to open here when the run finishes.",
-        tip: "Use this after the classical analysis looks right.",
+        tip: "Use this after the classical analyses look right.",
       },
       dl: {
         title: "Train One DL Model",
-        text: "Check the settings below, then start with one run.",
+        text: "Review the settings below, then start with one run.",
         runAction: "run-dl",
         runLabel: "Train a model",
         secondaryAction: "run-dl-compare",
         secondaryLabel: "Compare all DL models",
         runScope: "dl",
         busyText: "DL model run in progress. Deep-learning runs can take longer, so stay on this analysis path if you want the updated result to open here when the run finishes.",
-        tip: "This is the slowest and most advanced path.",
+        tip: "Start with one model. This is the slowest and most advanced path.",
       },
       tables: {
         title: "Build Cohort Table",
-        text: "Check the settings below, then build once.",
+        text: "Review the settings below, then build the table once.",
         runAction: "run-tables",
         runLabel: "Build cohort table",
         runScope: "tables",
@@ -3680,7 +3680,7 @@ function guidedPanelMarkup(step) {
     const helpBlock = guidedHelpDetails("Show run tips", [
       configureCopy.text,
       configureCopy.tip || "Run once, then adjust only if something looks wrong.",
-      "If the result looks odd, go back and change only one setting before running again.",
+      "If the result looks odd, go back and change one setting before running again.",
     ]);
     return `
       <div class="guided-panel-grid guided-panel-grid-compact">
