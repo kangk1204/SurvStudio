@@ -178,7 +178,34 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert 'deriveApplyButton: document.getElementById("deriveApplyButton")' in text
     assert "updateGroupingDetailsVisibility(tabName);" in text
     assert "function scrollWorkspaceEntryToTop()" in text
+    assert "syncModelFeatureMirrors(refs.modelFeatureChecklist);" in text
+    assert "syncModelCategoricalMirrors(refs.modelCategoricalChecklist);" in text
+
+
+def test_guided_step_indicator_exposes_navigation_a11y_labels() -> None:
+    index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
+    html = index_html.read_text()
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'id="stepIndicator" role="navigation" aria-label="Guided workflow steps"' in html
+    assert 'aria-label="Step 1: Load data"' in html
+    assert 'aria-label="Step 5: Review results"' in html
+    assert 'el.setAttribute("aria-disabled", String(s > reachableStep));' in text
     assert "updateAfterDataset(payload, { scrollToTop: true });" in text
+
+
+def test_frontend_disables_expert_run_buttons_until_endpoint_is_ready() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function syncAnalysisRunButtonAvailability()" in text
+    assert 'const readyMessage = endpointReadinessMessage();' in text
+    assert "refs.runKmButton," in text
+    assert "refs.runCoxButton," in text
+    assert "refs.runCohortTableButton," in text
+    assert 'setActionDisabledState(refs.runMlButton, mlSingleDisabled, mlSingleTitle);' in text
+    assert 'setActionDisabledState(refs.runDlButton, dlSingleDisabled, dlSingleTitle);' in text
 
 
 def test_frontend_limits_fresh_model_feature_defaults_and_marks_dl_batch_size_scope() -> None:
@@ -328,7 +355,8 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert "compute_shap: computeShap" in text
     assert "SHAP skipped in Fast mode" in text
     assert "SHAP failed:" in text
-    assert "SHAP approx=" in text
+    assert 'const shapStatus = payload.shap_result?.method === "kernel"' in text
+    assert '? "approx-screening"' in text
     assert "SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s" in text
     assert "Screening Cox PH, Random Survival Forest, and Gradient Boosted Survival" in text
     assert "Screening all ML models on one shared evaluation path." in text
@@ -1578,6 +1606,36 @@ def test_modeling_and_xai_endpoints_reject_outcome_informed_columns() -> None:
     for response in [ml_response, deep_response, cox_response, pdp_response, counterfactual_response]:
         assert response.status_code == 400
         assert "Outcome-informed derived columns" in response.json()["detail"]
+
+
+def test_modeling_and_xai_endpoints_reject_survival_outcome_columns_as_features() -> None:
+    stored = store.create(
+        make_example_dataset(seed=271, n_patients=96),
+        filename="outcome_feature_guard.csv",
+        copy_dataframe=False,
+    )
+
+    common = {
+        "dataset_id": stored.dataset_id,
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "event_positive_value": 1,
+        "features": ["os_months", "age"],
+        "categorical_features": [],
+    }
+
+    ml_response = client.post("/api/ml-model", json={**common, "model_type": "rsf"})
+    deep_response = client.post("/api/deep-model", json={**common, "model_type": "deepsurv"})
+    time_dep_response = client.post("/api/time-dependent-importance", json={**common})
+    pdp_response = client.post("/api/pdp", json={**common, "target_feature": "age"})
+    counterfactual_response = client.post(
+        "/api/counterfactual",
+        json={**common, "target_feature": "age", "counterfactual_value": 70},
+    )
+
+    for response in [ml_response, deep_response, time_dep_response, pdp_response, counterfactual_response]:
+        assert response.status_code == 400
+        assert "Survival outcome columns cannot be used" in response.json()["detail"]
 
 
 def test_xai_endpoints_support_explicit_event_positive_value_and_categorical_counterfactual() -> None:

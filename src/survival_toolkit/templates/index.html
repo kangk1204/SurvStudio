@@ -131,8 +131,8 @@
 
     <main class="workspace hidden" id="workspace">
       <section class="guided-shell" id="guidedShell">
-        <div class="step-indicator" id="stepIndicator">
-        <button class="step completed" data-step="1" type="button">
+        <div class="step-indicator" id="stepIndicator" role="navigation" aria-label="Guided workflow steps">
+        <button class="step completed" data-step="1" type="button" aria-label="Step 1: Load data">
           <div class="step-circle">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </div>
@@ -142,7 +142,7 @@
           </div>
         </button>
         <div class="step-connector completed"></div>
-        <button class="step" data-step="2" type="button">
+        <button class="step" data-step="2" type="button" aria-label="Step 2: Confirm outcome">
           <div class="step-circle">2</div>
           <div class="step-copy">
             <span class="step-label">Confirm outcome</span>
@@ -150,7 +150,7 @@
           </div>
         </button>
         <div class="step-connector"></div>
-        <button class="step" data-step="3" type="button">
+        <button class="step" data-step="3" type="button" aria-label="Step 3: Choose analysis">
           <div class="step-circle">3</div>
           <div class="step-copy">
             <span class="step-label">Choose analysis</span>
@@ -158,7 +158,7 @@
           </div>
         </button>
         <div class="step-connector"></div>
-        <button class="step" data-step="4" type="button">
+        <button class="step" data-step="4" type="button" aria-label="Step 4: Configure and run">
           <div class="step-circle">4</div>
           <div class="step-copy">
             <span class="step-label">Configure &amp; run</span>
@@ -166,7 +166,7 @@
           </div>
         </button>
         <div class="step-connector"></div>
-        <button class="step" data-step="5" type="button">
+        <button class="step" data-step="5" type="button" aria-label="Step 5: Review results">
           <div class="step-circle">5</div>
           <div class="step-copy">
             <span class="step-label">Review results</span>
@@ -644,7 +644,7 @@
               </div>
             </section>
           </div>
-          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH, RSF, and GBS on one shared evaluation path. <strong>Train a model</strong> fits one RSF or GBS model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF returns much faster on larger cohorts.</div>
+          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH, RSF, and GBS on one shared evaluation path. <strong>Train a model</strong> fits one RSF or GBS model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF returns much faster on larger cohorts. If TreeExplainer is unavailable, SHAP falls back to an approximate screening view rather than a manuscript-ready attribution.</div>
           <div class="toolbar-note">Partial dependence and counterfactual analysis are available for tree-model runs only (<strong>RSF</strong> or <strong>GBS</strong>). They reuse the latest matching trained tree model when available; otherwise they refit the same requested tree settings.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">
@@ -659,7 +659,7 @@
           <div class="checklist-grid">
             <div class="selection-card">
               <div class="selection-card-head">
-                <h3>Model Features <button class="help-dot" type="button" data-tooltip="Variables used by ML and DL models. Survival outcome columns and outcome-informed derived groups are excluded from this list by default.">?</button></h3>
+                <h3>Model Features <button class="help-dot" type="button" data-tooltip="Variables used by ML and DL models. Survival outcome columns and outcome-informed derived groups are excluded here and rejected server-side if requested anyway.">?</button></h3>
                 <div class="selection-card-actions">
                   <button class="button ghost compact-btn" id="selectAllModelFeaturesButton" type="button">Select all eligible</button>
                   <button class="button ghost compact-btn" id="clearModelFeaturesButton" type="button">Clear all</button>

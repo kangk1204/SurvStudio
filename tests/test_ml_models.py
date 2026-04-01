@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import types
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -923,15 +925,39 @@ def test_compute_shap_values_caps_kernel_fallback_work(monkeypatch) -> None:
     )
 
     encoded = pd.DataFrame(np.arange(240 * 5, dtype=float).reshape(240, 5), columns=list("abcde"))
-    result = ml_models.compute_shap_values(object(), encoded, feature_names=list(encoded.columns))
+    model = types.SimpleNamespace(predict=lambda matrix: np.asarray(matrix).sum(axis=1))
+    result = ml_models.compute_shap_values(model, encoded, feature_names=list(encoded.columns))
 
     assert result["method"] == "kernel"
-    assert result["background_samples"] == 20
-    assert result["n_samples"] == 20
-    assert seen["background_shape"] == (20, 5)
-    assert seen["eval_shape"] == (20, 5)
+    assert result["stability"] == "approximate_screening_only"
+    assert "screening" in result["usage_note"].lower()
+    assert result["background_samples"] == 40
+    assert result["n_samples"] == 60
+    assert seen["background_shape"] == (40, 5)
+    assert seen["eval_shape"] == (60, 5)
     assert seen["nsamples"] == 40
     assert seen["silent"] is True
+
+
+def test_compute_shap_values_rejects_high_dimensional_kernel_fallback(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    class _FakeTreeExplainer:
+        def __init__(self, model) -> None:
+            raise RuntimeError("tree unsupported")
+
+    monkeypatch.setattr(ml_models, "SHAP_AVAILABLE", True)
+    monkeypatch.setattr(
+        ml_models,
+        "shap",
+        types.SimpleNamespace(TreeExplainer=_FakeTreeExplainer, KernelExplainer=object),
+    )
+
+    encoded = pd.DataFrame(np.arange(120 * 81, dtype=float).reshape(120, 81), columns=[f"f{i}" for i in range(81)])
+    model = types.SimpleNamespace(predict=lambda matrix: np.asarray(matrix).sum(axis=1))
+
+    with pytest.raises(ValueError, match="disabled for high-dimensional inputs"):
+        ml_models.compute_shap_values(model, encoded, feature_names=list(encoded.columns))
 
 
 def test_rsf_permutation_importance_caps_rows_and_repeats(monkeypatch) -> None:

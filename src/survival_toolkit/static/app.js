@@ -1601,6 +1601,8 @@ function applyControlSnapshot(snapshot) {
   setCheckedValues(refs.modelCategoricalChecklist, snapshot.modelCategoricals || []);
   setCheckedValues(refs.dlModelFeatureChecklist, snapshot.modelFeatures || []);
   setCheckedValues(refs.dlModelCategoricalChecklist, snapshot.modelCategoricals || []);
+  syncModelFeatureMirrors(refs.modelFeatureChecklist);
+  syncModelCategoricalMirrors(refs.modelCategoricalChecklist);
   setCheckedValues(refs.cohortVariableChecklist, snapshot.cohortVariables || []);
   syncCoxCovariateSelection();
   renderSharedFeatureSummary();
@@ -2847,14 +2849,7 @@ function updateMlEvaluationControls() {
   refs.mlCvRepeatsWrap?.classList.toggle("hidden", !isRepeatedCv);
   if (refs.mlCvFolds) refs.mlCvFolds.disabled = !isRepeatedCv;
   if (refs.mlCvRepeats) refs.mlCvRepeats.disabled = !isRepeatedCv;
-  const singleModelBlocked = isRepeatedCv;
-  const singleModelMessage = singleModelBlocked
-    ? "Train a model uses deterministic holdout only. Use Compare All for repeated CV screening."
-    : "";
-  if (refs.runMlButton) {
-    refs.runMlButton.disabled = singleModelBlocked || isScopeBusy("ml");
-    refs.runMlButton.title = singleModelMessage;
-  }
+  syncAnalysisRunButtonAvailability();
   renderGuidedChrome();
 }
 
@@ -2865,6 +2860,7 @@ function updateDlEvaluationControls() {
   if (refs.dlCvFolds) refs.dlCvFolds.disabled = !isRepeatedCv;
   if (refs.dlCvRepeats) refs.dlCvRepeats.disabled = !isRepeatedCv;
   if (refs.dlParallelJobs) refs.dlParallelJobs.disabled = !isRepeatedCv;
+  syncAnalysisRunButtonAvailability();
 }
 
 function updateDlModelControlVisibility() {
@@ -3269,6 +3265,82 @@ function syncDownloadButtonAvailability() {
   setDlManuscriptDownloadsEnabled(Boolean(currentDl?.analysis?.manuscript_tables?.model_performance_table?.length));
 }
 
+function endpointReadinessMessage() {
+  if (!state.dataset) return "Load a dataset first.";
+  try {
+    currentBaseConfig();
+    return "";
+  } catch (error) {
+    return error?.message || "Complete the outcome definition first.";
+  }
+}
+
+function setActionDisabledState(button, disabled, title = "") {
+  if (!button) return;
+  button.disabled = Boolean(disabled);
+  button.setAttribute("aria-disabled", String(Boolean(disabled)));
+  button.title = title;
+}
+
+function syncAnalysisRunButtonAvailability() {
+  const endpointReady = endpointIsReady();
+  const readyMessage = endpointReadinessMessage();
+  const sharedFeatureCount = selectedCheckboxValues(refs.modelFeatureChecklist).length;
+  const hasSharedFeatures = sharedFeatureCount > 0;
+  const sharedFeatureMessage = "Select at least one shared ML/DL model feature.";
+  const mlRepeatedCv = refs.mlEvaluationStrategy?.value === "repeated_cv";
+  const mlSingleMessage = mlRepeatedCv
+    ? "Train a model uses deterministic holdout only. Use Compare All for repeated CV screening."
+    : "";
+
+  setActionDisabledState(
+    refs.runKmButton,
+    !endpointReady || isScopeBusy("km"),
+    endpointReady ? "" : readyMessage,
+  );
+  setActionDisabledState(
+    refs.runSignatureSearchButton,
+    !endpointReady || isScopeBusy("km"),
+    endpointReady ? "" : readyMessage,
+  );
+  setActionDisabledState(
+    refs.runCoxButton,
+    !endpointReady || isScopeBusy("cox"),
+    endpointReady ? "" : readyMessage,
+  );
+  setActionDisabledState(
+    refs.runCohortTableButton,
+    !endpointReady || isScopeBusy("tables"),
+    endpointReady ? "" : readyMessage,
+  );
+
+  const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");
+  const mlSingleTitle = !endpointReady
+    ? readyMessage
+    : (!hasSharedFeatures ? sharedFeatureMessage : mlSingleMessage);
+  setActionDisabledState(refs.runMlButton, mlSingleDisabled, mlSingleTitle);
+
+  const mlCompareDisabled = !endpointReady || !hasSharedFeatures || isScopeBusy("ml");
+  const mlCompareTitle = !endpointReady
+    ? readyMessage
+    : (!hasSharedFeatures ? sharedFeatureMessage : "");
+  setActionDisabledState(refs.runCompareButton, mlCompareDisabled, mlCompareTitle);
+  setActionDisabledState(refs.runCompareInlineButton, mlCompareDisabled, mlCompareTitle);
+
+  const dlSingleDisabled = !endpointReady || !hasSharedFeatures || isScopeBusy("dl");
+  const dlSingleTitle = !endpointReady
+    ? readyMessage
+    : (!hasSharedFeatures ? sharedFeatureMessage : "");
+  setActionDisabledState(refs.runDlButton, dlSingleDisabled, dlSingleTitle);
+
+  const dlCompareDisabled = !endpointReady || !hasSharedFeatures || isScopeBusy("dl");
+  const dlCompareTitle = !endpointReady
+    ? readyMessage
+    : (!hasSharedFeatures ? sharedFeatureMessage : "");
+  setActionDisabledState(refs.runDlCompareButton, dlCompareDisabled, dlCompareTitle);
+  setActionDisabledState(refs.runDlCompareInlineButton, dlCompareDisabled, dlCompareTitle);
+}
+
 function renderSharedFeatureSummary() {
   const hasDataset = Boolean(state.dataset);
   syncCoxCovariateSelection();
@@ -3320,6 +3392,7 @@ function renderSharedFeatureSummary() {
     tableVariables,
   });
   syncDownloadButtonAvailability();
+  syncAnalysisRunButtonAvailability();
   renderGuidedChrome();
 }
 
@@ -4581,9 +4654,11 @@ async function runMlModel() {
   const stats = payload.analysis?.model_stats || {};
   const mlMetricLabel = stats.metric_name || ((stats.evaluation_mode === "holdout") ? "Holdout C-index" : "Apparent C-index");
   const mlEvaluationMode = stats.evaluation_mode || "unknown";
-  const shapStatus = payload.shap_figure ? "computed" : (payload.shap_error ? "failed" : (computeShap ? "unavailable" : "skipped"));
+  const shapStatus = payload.shap_result?.method === "kernel"
+    ? "approx-screening"
+    : (payload.shap_figure ? "computed" : (payload.shap_error ? "failed" : (computeShap ? "unavailable" : "skipped")));
   const shapApproximationNote = payload.shap_result?.method === "kernel"
-    ? `, SHAP approx=${formatValue(payload.shap_result.n_samples)} eval / ${formatValue(payload.shap_result.background_samples)} bg`
+    ? ` (${formatValue(payload.shap_result.n_samples)} eval / ${formatValue(payload.shap_result.background_samples)} bg)`
     : "";
   refs.mlMetaBanner.textContent = `${refs.mlModelType.value.toUpperCase()}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s`;
   updateStepIndicator(3);
@@ -5451,6 +5526,7 @@ function updateStepIndicator(step = currentGuidedStep()) {
   steps.forEach((el) => {
     const s = Number(el.dataset.step);
     const circle = el.querySelector(".step-circle");
+    const label = el.querySelector(".step-label")?.textContent?.trim() || `Step ${s}`;
     el.classList.remove("active", "completed");
     if (circle) circle.textContent = String(s);
     if (s < activeStep) {
@@ -5460,6 +5536,8 @@ function updateStepIndicator(step = currentGuidedStep()) {
       el.classList.add("active");
     }
     if ("disabled" in el) el.disabled = s > reachableStep;
+    el.setAttribute("aria-disabled", String(s > reachableStep));
+    el.setAttribute("aria-label", `Step ${s}: ${label}`);
     if (s === activeStep) {
       el.setAttribute("aria-current", "step");
     } else {

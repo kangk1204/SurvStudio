@@ -1328,6 +1328,25 @@ def test_scientific_summary_dl_preserves_fallback_metric_name() -> None:
     assert "apparent fallback c-index" in summary["headline"].lower()
 
 
+def test_scientific_summary_dl_flags_transformer_as_exploratory_tabular_attention() -> None:
+    from survival_toolkit.deep_models import _scientific_summary_dl
+
+    summary = _scientific_summary_dl(
+        "Survival Transformer",
+        c_index=0.61,
+        train_samples=180,
+        eval_samples=40,
+        n_features=24,
+        epochs=12,
+        loss_history=[1.4, 1.0, 0.8],
+        evaluation_mode="holdout",
+    )
+
+    cautions_text = " ".join(summary["cautions"]).lower()
+    assert "full-batch cox optimization" in cautions_text
+    assert "feature-identity embedding" in cautions_text
+
+
 def test_deep_models_module_can_load_when_torch_is_missing(monkeypatch) -> None:
     module_path = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "deep_models.py"
     source = module_path.read_text(encoding="utf-8")
