@@ -29,9 +29,11 @@ from statsmodels.duration.survfunc import survdiff
 from survival_toolkit.analysis import (
     _cohort_frame,
     _harrell_c_index,
+    _restricted_mean_survival_time,
     _safe_float,
     coerce_event,
 )
+from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
 
 # ---------------------------------------------------------------------------
 # Optional dependency guards
@@ -67,6 +69,7 @@ _EXPECTED_CUTPOINT_SCAN_ERRORS = (
     OverflowError,
     np.linalg.LinAlgError,
 )
+_TREE_N_JOBS = -1
 
 
 def _prepare_sksurv_data(
@@ -314,9 +317,9 @@ def _scientific_summary_ml(
     next_steps: list[str] = []
 
     if extra_strengths:
-        strengths.extend(extra_strengths)
+        strengths.extend([item for item in extra_strengths if item])
     if extra_cautions:
-        cautions.extend(extra_cautions)
+        cautions.extend([item for item in extra_cautions if item])
 
     epv = fit_events / max(n_features, 1)
     if epv < 10:
@@ -394,16 +397,20 @@ def _scientific_summary_ml(
     }
 
 
-def _metric_name_for_evaluation(evaluation_mode: str) -> str:
+def _manuscript_validation_strategy_label(evaluation_mode: str) -> str:
     if evaluation_mode == "holdout":
-        return "Holdout C-index"
-    if evaluation_mode == "repeated_cv":
-        return "Repeated-CV mean C-index"
-    if evaluation_mode == "repeated_cv_incomplete":
-        return "Repeated-CV mean C-index (incomplete)"
+        return "Deterministic holdout"
+    if evaluation_mode == "apparent":
+        return "Apparent (resubstitution)"
     if evaluation_mode == "holdout_fallback_apparent":
-        return "Apparent fallback C-index"
-    return "Apparent C-index"
+        return "Apparent fallback after holdout failure"
+    if evaluation_mode == "mixed_holdout_apparent":
+        return "Mixed holdout/apparent"
+    if evaluation_mode == "repeated_cv":
+        return "Repeated stratified CV"
+    if evaluation_mode == "repeated_cv_incomplete":
+        return "Repeated stratified CV (incomplete)"
+    return str(evaluation_mode or "unknown").replace("_", " ")
 
 
 def _summarize_repeated_cv_rows(
@@ -599,6 +606,35 @@ def _coerce_coxnet_coef_vector(model: CoxnetSurvivalAnalysis) -> np.ndarray:
     raise ValueError("LASSO-Cox did not produce a usable coefficient vector.")
 
 
+def _estimate_c_index_standard_error(
+    y_eval: np.ndarray,
+    risk_scores: np.ndarray,
+    *,
+    random_state: int,
+    n_bootstrap: int = 30,
+) -> float | None:
+    if len(risk_scores) < 20 or len(y_eval) != len(risk_scores):
+        return None
+    if np.unique(y_eval["event"]).size < 2:
+        return None
+
+    rng = np.random.default_rng(random_state)
+    bootstrap_scores: list[float] = []
+    for _ in range(int(n_bootstrap)):
+        sample_idx = rng.integers(0, len(risk_scores), size=len(risk_scores))
+        sample_y = y_eval[sample_idx]
+        if np.unique(sample_y["event"]).size < 2:
+            continue
+        c_index = _sksurv_c_index(sample_y, risk_scores[sample_idx])
+        if c_index is None or not np.isfinite(float(c_index)):
+            continue
+        bootstrap_scores.append(float(c_index))
+
+    if len(bootstrap_scores) < 2:
+        return None
+    return float(np.std(np.asarray(bootstrap_scores, dtype=float), ddof=1))
+
+
 def _select_lasso_alpha(
     train_frame: pd.DataFrame,
     train_encoded: pd.DataFrame,
@@ -674,25 +710,50 @@ def _select_lasso_alpha(
             "alpha": float(alpha),
             "c_index": float(c_index),
             "n_nonzero_features": n_nonzero,
+            "_risk_scores": risk_scores,
         })
 
     if not candidate_rows:
         raise ValueError("LASSO-Cox could not find a valid penalty along the fitted Coxnet path.")
 
+    for idx, row in enumerate(candidate_rows):
+        row["c_index_se"] = _estimate_c_index_standard_error(
+            y_inner_eval,
+            np.asarray(row["_risk_scores"], dtype=float),
+            random_state=random_state + 500 + idx,
+        )
+        row.pop("_risk_scores", None)
+
     nonzero_rows = [row for row in candidate_rows if row["n_nonzero_features"] > 0]
     search_rows = nonzero_rows or candidate_rows
+    best_c_index = max(float(row["c_index"]) for row in search_rows)
+    reference_row = max(search_rows, key=lambda row: float(row["c_index"]))
+    selection_rule = "max_c_index"
+    selection_threshold = best_c_index
+    reference_se = reference_row.get("c_index_se")
+    eligible_rows = search_rows
+    if reference_se is not None and np.isfinite(float(reference_se)) and float(reference_se) > 0.0:
+        selection_rule = "one_se_bootstrap"
+        selection_threshold = best_c_index - float(reference_se)
+        eligible_rows = [
+            row for row in search_rows
+            if float(row["c_index"]) >= selection_threshold - 1e-12
+        ]
     best = max(
-        search_rows,
+        eligible_rows,
         key=lambda row: (
-            float(row["c_index"]),
-            -int(row["n_nonzero_features"]),
             float(row["alpha"]),
+            -int(row["n_nonzero_features"]),
+            float(row["c_index"]),
         ),
     )
     return {
         "alpha": float(best["alpha"]),
         "selection_mode": selection_mode,
+        "selection_rule": selection_rule,
+        "selection_threshold_c_index": float(selection_threshold),
         "inner_selection_c_index": float(best["c_index"]),
+        "inner_selection_c_index_se": _safe_float(best.get("c_index_se")),
         "n_nonzero_features": int(best["n_nonzero_features"]),
         "n_alpha_candidates": int(len(candidate_rows)),
     }
@@ -779,7 +840,7 @@ def find_optimal_cutpoint(
     min_group_fraction: float = 0.1,
     lower_label: str = "Low",
     upper_label: str = "High",
-    permutation_iterations: int = 100,
+    permutation_iterations: int = 500,
     random_seed: int = 20260311,
 ) -> dict[str, Any]:
     """Scan all unique values of *variable* and return the cutpoint that
@@ -879,17 +940,11 @@ def find_optimal_cutpoint(
         event_times = sf.surv_times.astype(float)
         step_timeline = np.concatenate(([0.0], event_times))
         step_survival = np.concatenate(([1.0], sf.surv_prob.astype(float)))
-        horizon = float(max(horizon, 1e-9))
-        area = 0.0
-        clipped = np.clip(step_timeline, 0, horizon)
-        for i in range(len(clipped) - 1):
-            left = clipped[i]
-            right = clipped[i + 1]
-            if right > left:
-                area += float(step_survival[i]) * float(right - left)
-        if clipped[-1] < horizon:
-            area += float(step_survival[-1]) * float(horizon - clipped[-1])
-        return float(area)
+        return _restricted_mean_survival_time(
+            step_timeline,
+            step_survival,
+            horizon=float(max(horizon, 1e-9)),
+        )
 
     # Compare median survival (fallback to RMST if medians are not estimable).
     from statsmodels.duration.survfunc import SurvfuncRight as _SFR
@@ -1071,7 +1126,7 @@ def train_random_survival_forest(
             max_depth=max_depth,
             min_samples_leaf=min_samples_leaf,
             random_state=random_state,
-            n_jobs=1,
+            n_jobs=_TREE_N_JOBS,
         )
         model.fit(train_encoded.to_numpy(), y_train)
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
@@ -1096,14 +1151,24 @@ def train_random_survival_forest(
             perm_eval_encoded = eval_encoded.iloc[sampled_idx].reset_index(drop=True)
             perm_y_eval = y_eval[sampled_idx]
         perm_repeats = 3 if int(perm_eval_encoded.shape[1]) <= 20 else 2
-        perm_result = _perm_imp(
-            model,
-            perm_eval_encoded.to_numpy(),
-            perm_y_eval,
-            n_repeats=perm_repeats,
-            random_state=random_state,
-            n_jobs=1,
-        )
+        try:
+            perm_result = _perm_imp(
+                model,
+                perm_eval_encoded.to_numpy(),
+                perm_y_eval,
+                n_repeats=perm_repeats,
+                random_state=random_state,
+                n_jobs=_TREE_N_JOBS,
+            )
+        except (NotImplementedError, PermissionError, OSError):
+            perm_result = _perm_imp(
+                model,
+                perm_eval_encoded.to_numpy(),
+                perm_y_eval,
+                n_repeats=perm_repeats,
+                random_state=random_state,
+                n_jobs=1,
+            )
         importances = perm_result.importances_mean
     importance_records = sorted(
         [
@@ -1446,6 +1511,12 @@ def train_lasso_cox(
                 f"L1-penalized Coxnet selected alpha={alpha_meta['alpha']:.4g} "
                 f"with {n_active_features} non-zero coefficient(s)."
             ),
+            (
+                "Penalty selection used a bootstrap 1-SE rule to prefer the sparsest alpha "
+                "whose inner-holdout C-index stayed within one standard error of the best candidate."
+                if alpha_meta.get("selection_rule") == "one_se_bootstrap"
+                else "Penalty selection used the highest inner-holdout C-index when a stable 1-SE band was not available."
+            ),
         ],
         extra_cautions=[
             (
@@ -1468,7 +1539,10 @@ def train_lasso_cox(
             "evaluation_mode": evaluation_mode,
             "alpha": _safe_float(alpha_meta["alpha"]),
             "alpha_selection_mode": alpha_meta["selection_mode"],
+            "alpha_selection_rule": alpha_meta.get("selection_rule"),
             "alpha_selection_c_index": _safe_float(alpha_meta["inner_selection_c_index"]),
+            "alpha_selection_c_index_se": _safe_float(alpha_meta.get("inner_selection_c_index_se")),
+            "alpha_selection_threshold_c_index": _safe_float(alpha_meta.get("selection_threshold_c_index")),
             "n_alpha_candidates": int(alpha_meta["n_alpha_candidates"]),
             "n_active_features": n_active_features,
             "n_patients": n_patients,
@@ -1668,6 +1742,7 @@ def _fit_evaluate_cox_split(
     test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
     if train_encoded.empty or test_encoded.empty:
         raise ValueError("No valid rows remain after encoding features for Cox PH.")
+    train_encoded, test_encoded, _, _ = _standardize_encoded_matrices(train_encoded, test_encoded)
 
     train_times = train_eval[time_column].to_numpy(dtype=float)
     train_status = train_eval[event_column].astype(int).to_numpy()
@@ -1688,9 +1763,10 @@ def _fit_evaluate_cox_split(
             "This usually means redundant covariates, sparse categories, or quasi-complete separation."
         )
 
+    y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
     return {
         "model": "Cox PH",
-        "c_index": _safe_float(_harrell_c_index(test_times, test_status.astype(float), risk_score)),
+        "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
         "n_features": len(param_vector),
         "training_time_ms": training_time_ms,
         "train_n": int(train_eval.shape[0]),
@@ -1742,17 +1818,13 @@ def _fit_evaluate_lasso_cox_split(
     risk_score = np.asarray(model.predict(test_encoded.to_numpy()), dtype=float)
     coef_vector = _coerce_coxnet_coef_vector(model)
 
+    y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
     return {
         "model": "LASSO-Cox",
-        "c_index": _safe_float(
-            _harrell_c_index(
-                test_eval[time_column].to_numpy(dtype=float),
-                test_eval[event_column].astype(int).to_numpy().astype(float),
-                risk_score,
-            )
-        ),
+        "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
         "n_features": int(train_encoded.shape[1]),
         "n_active_features": int(np.count_nonzero(np.abs(coef_vector) > 1e-10)),
+        "alpha_selection_rule": alpha_meta.get("selection_rule"),
         "training_time_ms": training_time_ms,
         "train_n": int(train_eval.shape[0]),
         "test_n": int(test_eval.shape[0]),
@@ -1797,21 +1869,16 @@ def _fit_evaluate_rsf_split(
             max_depth=max_depth,
             min_samples_leaf=min_samples_leaf,
             random_state=random_state,
-            n_jobs=1,
+            n_jobs=_TREE_N_JOBS,
         )
         model.fit(train_encoded.to_numpy(), y_train)
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
     risk_score = model.predict(test_encoded.to_numpy())
 
+    y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
     return {
         "model": "Random Survival Forest",
-        "c_index": _safe_float(
-            _harrell_c_index(
-                test_eval[time_column].to_numpy(dtype=float),
-                test_eval[event_column].astype(int).to_numpy().astype(float),
-                risk_score,
-            )
-        ),
+        "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
         "n_features": int(train_encoded.shape[1]),
         "training_time_ms": training_time_ms,
         "train_n": int(train_eval.shape[0]),
@@ -1864,15 +1931,10 @@ def _fit_evaluate_gbs_split(
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
     risk_score = model.predict(test_encoded.to_numpy())
 
+    y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
     return {
         "model": "Gradient Boosted Survival",
-        "c_index": _safe_float(
-            _harrell_c_index(
-                test_eval[time_column].to_numpy(dtype=float),
-                test_eval[event_column].astype(int).to_numpy().astype(float),
-                risk_score,
-            )
-        ),
+        "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
         "n_features": int(train_encoded.shape[1]),
         "training_time_ms": training_time_ms,
         "train_n": int(train_eval.shape[0]),
@@ -1968,7 +2030,7 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             rows.append({
                 "Rank": rank_value if rank_value is not None else "Not ranked",
                 "Model": row["model"],
-                "Validation Strategy": row.get("evaluation_mode", evaluation_mode),
+                "Validation Strategy": _manuscript_validation_strategy_label(str(row.get("evaluation_mode", evaluation_mode))),
                 "C-index": _safe_float(row.get("c_index")),
                 "Features, n": row.get("n_features"),
                 "Patients, n": result.get("n_patients"),
@@ -3013,7 +3075,7 @@ def compute_time_dependent_importance(
                 max_depth=5,
                 min_samples_leaf=10,
                 random_state=42,
-                n_jobs=1,
+                n_jobs=_TREE_N_JOBS,
             )
             clf.fit(X_t, y_t)
             importances = clf.feature_importances_

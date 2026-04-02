@@ -12,8 +12,8 @@ from typing import Any, Iterable, Sequence
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
+from scipy.special import ndtri
 from scipy import stats
-from scipy.stats import norm
 from statsmodels.duration.hazard_regression import PHReg
 from statsmodels.duration.survfunc import SurvfuncRight, survdiff
 
@@ -38,6 +38,7 @@ FALSE_TOKENS = {
     "n",
     "censored",
     "alive",
+    "living",
     "diseasefree",
     "disease-free",
     "nonevent",
@@ -68,6 +69,7 @@ _EVENT_NAME_PATTERNS = (
     re.compile(r"event"),
     re.compile(r"death"),
     re.compile(r"mort"),
+    re.compile(r"status$"),
     re.compile(r"vital_status"),
     re.compile(r"survival_status"),
     re.compile(r"outcome_status"),
@@ -77,12 +79,32 @@ _EVENT_NAME_PATTERNS = (
     re.compile(r"failure"),
     re.compile(r"censor"),
 )
+_SURVIVAL_ENDPOINT_ABBREVIATIONS = {"os", "pfs", "dfs", "rfs", "efs", "tts", "tte", "dss", "css", "mfs", "dmfs"}
+_TIME_UNIT_TOKENS = {"day", "days", "week", "weeks", "month", "months", "year", "years"}
+_TIME_CONTEXT_TOKENS = {
+    "time",
+    "duration",
+    "survival",
+    "follow",
+    "followup",
+    "follow_up",
+    "fup",
+}
+_OUTCOME_CONTEXT_TOKENS = {
+    "event",
+    "death",
+    "mort",
+    "status",
+    "progress",
+    "progression",
+    "relapse",
+    "recur",
+    "recurrence",
+    "failure",
+    "censor",
+}
 _TIME_NAME_TOKENS = (
     "time",
-    "month",
-    "day",
-    "week",
-    "year",
     "os",
     "pfs",
     "dfs",
@@ -90,13 +112,41 @@ _TIME_NAME_TOKENS = (
     "efs",
     "tts",
     "tte",
+    "dss",
+    "css",
     "follow",
     "followup",
     "follow_up",
     "fup",
-    "duration",
     "survival",
 )
+_OUTCOME_STATUS_VALUE_FAMILIES = {
+    "alive": "censor",
+    "alivewithoutdisease": "censor",
+    "censored": "censor",
+    "diseasefree": "censor",
+    "living": "censor",
+    "ned": "censor",
+    "noevidenceofdisease": "censor",
+    "nonevent": "censor",
+    "awd": "event_progression",
+    "alivewithdisease": "event_progression",
+    "deceased": "event_death",
+    "dead": "event_death",
+    "deadofdisease": "event_death",
+    "death": "event_death",
+    "deathofdisease": "event_death",
+    "died": "event_death",
+    "doc": "event_death",
+    "dod": "event_death",
+    "failure": "event_progression",
+    "progressed": "event_progression",
+    "progression": "event_progression",
+    "recurrence": "event_progression",
+    "recurred": "event_progression",
+    "relapse": "event_progression",
+    "relapsed": "event_progression",
+}
 _BASELINE_STATUS_PATTERNS = (
     re.compile(r"egfr"),
     re.compile(r"kras"),
@@ -252,6 +302,106 @@ def _normalize_column_label(name: str) -> str:
     return str(name or "").strip().lower()
 
 
+def _token_variants(token: str | None) -> tuple[str, ...]:
+    raw = str(token or "").strip().lower()
+    if not raw:
+        return ()
+    variants: list[str] = []
+
+    def _add(value: str) -> None:
+        if value and value not in variants:
+            variants.append(value)
+
+    _add(raw)
+    compact = re.sub(r"[^a-z0-9]+", "", raw)
+    _add(compact)
+    for part in re.split(r"[^a-z0-9]+", raw):
+        _add(part)
+    return tuple(variants)
+
+
+def _column_name_tokens(name: str) -> list[str]:
+    expanded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(name or ""))
+    return [token for token in re.split(r"[^a-z0-9]+", expanded.lower()) if token]
+
+
+def _tokens_contain_phrase(tokens: Sequence[str], phrase: Sequence[str]) -> bool:
+    if not tokens or not phrase or len(tokens) < len(phrase):
+        return False
+    width = len(phrase)
+    return any(tuple(tokens[idx:idx + width]) == tuple(phrase) for idx in range(len(tokens) - width + 1))
+
+
+def _endpoint_family_from_column_name(name: str) -> str | None:
+    tokens = _column_name_tokens(name)
+    if not tokens:
+        return None
+    token_set = set(tokens)
+    phrase_families = (
+        ("os", ("overall", "survival")),
+        ("pfs", ("progression", "free")),
+        ("dfs", ("disease", "free")),
+        ("rfs", ("recurrence", "free")),
+        ("rfs", ("relapse", "free")),
+        ("efs", ("event", "free")),
+        ("dss", ("disease", "specific")),
+        ("css", ("cancer", "specific")),
+    )
+    for family, phrase in phrase_families:
+        if _tokens_contain_phrase(tokens, phrase):
+            return family
+    for family in ("os", "pfs", "dfs", "rfs", "efs", "tts", "tte", "dss", "css"):
+        if family in token_set:
+            return family
+    return None
+
+
+def _validate_endpoint_family_pair(time_column: str, event_column: str) -> None:
+    time_family = _endpoint_family_from_column_name(time_column)
+    event_family = _endpoint_family_from_column_name(event_column)
+    if time_family and event_family and time_family != event_family:
+        raise ValueError(
+            f'"{time_column}" and "{event_column}" look like different survival endpoints. '
+            "Choose a matched time/event pair from the same endpoint family."
+        )
+
+
+def _looks_like_survival_time_column_name(name: str) -> bool:
+    normalized = _normalize_column_label(name)
+    tokens = _column_name_tokens(name)
+    if not normalized or not tokens:
+        return False
+
+    token_set = set(tokens)
+    has_time_units = bool(token_set & _TIME_UNIT_TOKENS)
+    has_abbreviation = bool(token_set & _SURVIVAL_ENDPOINT_ABBREVIATIONS)
+    has_followup = (
+        "followup" in token_set
+        or _tokens_contain_phrase(tokens, ("follow", "up"))
+        or "fu" in token_set
+        or "fup" in token_set
+    )
+    has_survival_context = has_abbreviation or "survival" in token_set or "surv" in token_set or has_followup
+    has_event_context = bool(token_set & _OUTCOME_CONTEXT_TOKENS)
+    has_time_keyword = "time" in token_set
+    has_duration_keyword = "duration" in token_set
+    has_generic_time_context = has_time_keyword or has_duration_keyword
+
+    if normalized in {"time", "survival_time", "event_time", "time_to_event", "followup_time"}:
+        return True
+    if _looks_like_baseline_status_column(name) and not (has_survival_context or has_event_context):
+        return False
+    if has_duration_keyword and has_time_units and not (has_survival_context or has_event_context):
+        return False
+    if has_survival_context and (has_time_units or has_generic_time_context or not has_event_context):
+        return True
+    if has_generic_time_context and (len(tokens) == 1 or has_survival_context or has_event_context):
+        return True
+    if has_time_units and (has_survival_context or has_event_context or has_time_keyword):
+        return True
+    return False
+
+
 def _is_event_like_column_name(name: str) -> bool:
     normalized = _normalize_column_label(name)
     if not normalized:
@@ -266,6 +416,54 @@ def _looks_like_baseline_status_column(name: str) -> bool:
     if not normalized:
         return False
     return any(pattern.search(normalized) for pattern in _BASELINE_STATUS_PATTERNS)
+
+
+def _outcome_status_value_family(value: Any) -> str | None:
+    normalized = _normalize_token(value)
+    if normalized is None:
+        return None
+    for candidate in _token_variants(normalized):
+        family = _OUTCOME_STATUS_VALUE_FAMILIES.get(candidate)
+        if family is not None:
+            return family
+    for candidate in _token_variants(normalized):
+        if candidate in _EVENT_TOKEN_FAMILIES:
+            return _EVENT_TOKEN_FAMILIES[candidate]
+    return None
+
+
+def _looks_like_event_outcome_column(name: str, series: pd.Series) -> bool:
+    if not _is_event_like_column_name(name) or _looks_like_baseline_status_column(name):
+        return False
+    if looks_binary(series):
+        return True
+    families = {
+        family
+        for family in (_outcome_status_value_family(value) for value in series.dropna().unique().tolist())
+        if family is not None
+    }
+    return bool(families)
+
+
+def _has_recognizable_event_coding(series: pd.Series) -> bool:
+    valid = series.dropna()
+    if valid.empty:
+        return False
+
+    numeric_series = pd.to_numeric(valid, errors="coerce")
+    if numeric_series.notna().sum() == len(valid):
+        observed_numeric = {float(value) for value in numeric_series.astype(float).unique().tolist()}
+        if observed_numeric in ({0.0, 1.0}, {1.0, 2.0}):
+            return True
+        if len(observed_numeric) == 1 and next(iter(observed_numeric)) in {0.0, 1.0, 2.0}:
+            return True
+
+    families = {
+        family
+        for family in (_outcome_status_value_family(value) for value in valid.unique().tolist())
+        if family is not None
+    }
+    return bool(families - {"censor"})
 
 
 def _model_feature_candidate_columns_from_metadata(
@@ -289,13 +487,9 @@ def _model_feature_candidate_columns_from_metadata(
 
 
 def _survival_outcome_like_columns(df: pd.DataFrame) -> set[str]:
-    suggestions = suggest_columns(df)
-    likely_time_columns = set(suggestions.get("time_columns", []))
-    binary_candidate_columns = {column for column in df.columns if looks_binary(df[column])}
+    likely_time_columns = {column for column in df.columns if _looks_like_survival_time_column_name(column)}
     likely_event_columns = {
-        column
-        for column in binary_candidate_columns
-        if _is_event_like_column_name(column) and not _looks_like_baseline_status_column(column)
+        column for column in df.columns if _looks_like_event_outcome_column(column, df[column])
     }
     return likely_time_columns | likely_event_columns
 
@@ -381,11 +575,11 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
             )
 
         observed_tokens = sorted(set(value_tokens.loc[valid].astype(str).tolist()))
-        observed_families = {
-            _EVENT_TOKEN_FAMILIES[token]
+        observed_family_map = {
+            token: _outcome_status_value_family(token)
             for token in observed_tokens
-            if token in _EVENT_TOKEN_FAMILIES
         }
+        observed_families = {family for family in observed_family_map.values() if family is not None}
 
         def _raise_if_multistate_family(target_family: str) -> None:
             disallowed = sorted(observed_families - {target_family, "censor"})
@@ -397,26 +591,28 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
 
         # If the target is a known event/censor token, decode using the full token vocabulary.
         if target_token in TRUE_TOKENS:
-            allowed = TRUE_TOKENS | FALSE_TOKENS
-            unknown = [tok for tok in observed_tokens if tok not in allowed]
+            unknown = [tok for tok, family in observed_family_map.items() if family is None]
             if unknown:
                 raise ValueError(
                     "Event coding contains unrecognized tokens alongside standard event/censor labels: "
                     + ", ".join(unknown[:6])
                     + (" ..." if len(unknown) > 6 else "")
                 )
-            target_family = _EVENT_TOKEN_FAMILIES.get(target_token)
+            target_family = _outcome_status_value_family(target_token)
             if target_family is None:
                 raise ValueError("The selected event-positive value could not be mapped to a supported event family.")
+            if target_family == "event_generic":
+                concrete_event_families = sorted(observed_families - {"censor"})
+                if len(concrete_event_families) == 1:
+                    target_family = concrete_event_families[0]
             _raise_if_multistate_family(target_family)
             event_tokens = {
                 token
-                for token in TRUE_TOKENS
-                if _EVENT_TOKEN_FAMILIES.get(token) == target_family
+                for token, family in observed_family_map.items()
+                if family == target_family
             }
         elif target_token in FALSE_TOKENS:
-            allowed = TRUE_TOKENS | FALSE_TOKENS
-            unknown = [tok for tok in observed_tokens if tok not in allowed]
+            unknown = [tok for tok, family in observed_family_map.items() if family is None]
             if unknown:
                 raise ValueError(
                     "Event coding contains unrecognized tokens alongside standard event/censor labels: "
@@ -443,35 +639,14 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
         out.loc[valid] = value_tokens.loc[valid].isin(event_tokens).astype(float)
         return out
 
-    if is_bool_dtype(series):
-        out.loc[valid] = series.loc[valid].astype(int).astype(float)
-        return out
-
-    numeric_series = pd.to_numeric(series, errors="coerce")
-    if numeric_series.notna().sum() == valid.sum():
-        unique_floats = set(numeric_series.loc[valid].unique().tolist())
-        if unique_floats.issubset({0.0, 1.0}):
-            out.loc[valid] = numeric_series.loc[valid].astype(float)
-            return out
-
-    normalized = series.map(_normalize_token)
-    mapped = pd.Series(np.nan, index=series.index, dtype=float)
-    mapped.loc[normalized.isin(TRUE_TOKENS)] = 1.0
-    mapped.loc[normalized.isin(FALSE_TOKENS)] = 0.0
-    if mapped.loc[valid].notna().sum() == valid.sum():
-        observed_tokens = set(normalized.loc[valid].dropna().astype(str).tolist())
-        observed_families = {
-            _EVENT_TOKEN_FAMILIES[token]
-            for token in observed_tokens
-            if token in _EVENT_TOKEN_FAMILIES
-        }
-        event_families = observed_families - {"censor"}
-        if len(event_families) > 1:
-            raise ValueError(
-                "The event column contains more than one recognized event state. "
-                "Recode it to a binary event indicator before survival analysis."
-            )
-        return mapped
+    inferred, inference_error = _try_coerce_binary_event(series)
+    if inferred is not None:
+        return inferred
+    if inference_error == "multistate":
+        raise ValueError(
+            "The event column contains more than one recognized event state. "
+            "Recode it to a binary event indicator before survival analysis."
+        )
 
     raise ValueError(
         "Could not infer event coding. Select the value that represents the event in the dashboard."
@@ -479,38 +654,118 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
 
 
 def looks_binary(series: pd.Series) -> bool:
-    try:
-        coerced = coerce_event(series)
-    except ValueError:
-        valid = series.dropna()
-        if valid.empty:
-            return False
+    valid = series.dropna()
+    if valid.empty:
+        return False
 
-        numeric_series = pd.to_numeric(valid, errors="coerce")
-        if numeric_series.notna().sum() == len(valid):
-            observed_numeric = {float(value) for value in numeric_series.astype(float).tolist()}
-            return len(observed_numeric) == 2
+    inferred, inference_error = _try_coerce_binary_event(series)
+    if inferred is not None:
+        non_missing = inferred.dropna()
+        return not non_missing.empty and set(non_missing.unique()).issubset({0.0, 1.0})
+    if inference_error == "multistate":
+        return False
 
-        normalized = valid.map(_normalize_token)
-        normalized_non_missing = normalized.dropna()
-        if len(normalized_non_missing) == len(valid):
+    numeric_series = pd.to_numeric(valid, errors="coerce")
+    if numeric_series.notna().sum() == len(valid):
+        observed_numeric = {float(value) for value in numeric_series.astype(float).tolist()}
+        return len(observed_numeric) == 2
+
+    normalized = valid.map(_normalize_token)
+    normalized_non_missing = normalized.dropna()
+    if len(normalized_non_missing) == len(valid):
+        observed_families = {
+            family
+            for family in (_outcome_status_value_family(token) for token in normalized_non_missing.tolist())
+            if family is not None
+        }
+        if not observed_families:
             observed_tokens = set(normalized_non_missing.tolist())
-            if not observed_tokens.issubset(set(_EVENT_TOKEN_FAMILIES)):
-                return len(observed_tokens) == 2
-            families = {_EVENT_TOKEN_FAMILIES[token] for token in observed_tokens}
-            event_families = families - {"censor"}
-            return len(event_families) == 1 and bool(event_families)
+            return len(observed_tokens) == 2
+        event_families = observed_families - {"censor"}
+        return len(event_families) == 1 and bool(event_families)
 
-        return int(valid.nunique(dropna=True)) == 2
-    non_missing = coerced.dropna()
-    return not non_missing.empty and set(non_missing.unique()).issubset({0.0, 1.0})
+    return int(valid.nunique(dropna=True)) == 2
+
+
+def _try_coerce_binary_event(series: pd.Series) -> tuple[pd.Series | None, str | None]:
+    valid = series.notna()
+    if not valid.any():
+        return pd.Series(np.nan, index=series.index, dtype=float), None
+
+    out = pd.Series(np.nan, index=series.index, dtype=float)
+    if is_bool_dtype(series):
+        out.loc[valid] = series.loc[valid].astype(int).astype(float)
+        return out, None
+
+    numeric_series = pd.to_numeric(series, errors="coerce")
+    if numeric_series.notna().sum() == int(valid.sum()):
+        unique_floats = set(numeric_series.loc[valid].unique().tolist())
+        if unique_floats.issubset({0.0, 1.0}):
+            out.loc[valid] = numeric_series.loc[valid].astype(float)
+            return out, None
+
+    normalized_families = series.map(_outcome_status_value_family)
+    mapped = pd.Series(np.nan, index=series.index, dtype=float)
+    mapped.loc[normalized_families.eq("censor")] = 0.0
+    mapped.loc[normalized_families.notna() & normalized_families.ne("censor")] = 1.0
+    if mapped.loc[valid].notna().sum() == int(valid.sum()):
+        observed_families = {
+            family
+            for family in normalized_families.loc[valid].dropna().astype(str).tolist()
+        }
+        event_families = observed_families - {"censor"}
+        if len(event_families) > 1:
+            return None, "multistate"
+        return mapped, None
+
+    return None, "unrecognized"
+
+
+def find_event_equivalent_columns(
+    df: pd.DataFrame,
+    event_column: str,
+    event_positive_value: Any = None,
+) -> set[str]:
+    if event_column not in df.columns:
+        return set()
+    try:
+        reference = coerce_event(df[event_column], event_positive_value=event_positive_value)
+    except ValueError:
+        return set()
+
+    reference_valid = reference.notna()
+    if not reference_valid.any():
+        return set()
+
+    equivalents: set[str] = set()
+    reference_values = reference.to_numpy(dtype=float, na_value=np.nan)
+    for column in df.columns:
+        if column == event_column or _looks_like_baseline_status_column(column):
+            continue
+        series = df[column]
+        if not looks_binary(series) and not _has_recognizable_event_coding(series):
+            continue
+        try:
+            candidate = coerce_event(series)
+        except ValueError:
+            continue
+        overlap = reference_valid & candidate.notna()
+        if int(overlap.sum()) < 3:
+            continue
+        candidate_values = candidate.to_numpy(dtype=float, na_value=np.nan)
+        if np.array_equal(candidate_values[overlap.to_numpy(dtype=bool)], reference_values[overlap.to_numpy(dtype=bool)]):
+            equivalents.add(str(column))
+    return equivalents
 
 
 def suggest_columns(df: pd.DataFrame) -> dict[str, list[str]]:
     columns = list(df.columns)
     event_tokens = ("event", "status", "death", "progress", "relapse", "censor")
-    time_raw = _column_keywords(columns, _TIME_NAME_TOKENS)
-    time_columns = [c for c in time_raw if not any(tok in c.lower() for tok in event_tokens)]
+    time_columns = [
+        column
+        for column in columns
+        if _looks_like_survival_time_column_name(column)
+    ]
     suggestions = {
         "time_columns": time_columns,
         "event_columns": _column_keywords(columns, event_tokens),
@@ -629,6 +884,47 @@ def _validate_time_column_choice(df: pd.DataFrame, time_column: str) -> None:
         )
 
 
+def _validate_event_column_choice(df: pd.DataFrame, event_column: str) -> None:
+    series = df[event_column]
+    likely_event_columns = [
+        column for column in df.columns if _looks_like_event_outcome_column(column, df[column])
+    ]
+    if event_column in likely_event_columns:
+        return
+
+    if not looks_binary(series):
+        if _is_event_like_column_name(event_column):
+            return
+        raise ValueError(
+            f'"{event_column}" is not a binary event column. '
+            "Choose a 0/1-style event column or recode it before survival analysis."
+        )
+
+    if _looks_like_baseline_status_column(event_column):
+        examples = ", ".join(column for column in likely_event_columns[:3] if column != event_column)
+        hint = f" Choose one of the likely event columns instead: {examples}." if examples else ""
+        raise ValueError(
+            f'"{event_column}" looks more like a baseline characteristic than a survival event column.{hint}'
+        )
+
+    if _has_recognizable_event_coding(series):
+        return
+
+    if _is_event_like_column_name(event_column):
+        return
+
+    examples = ", ".join(column for column in likely_event_columns[:3] if column != event_column)
+    if examples:
+        raise ValueError(
+            f'"{event_column}" does not look like a survival event column. '
+            f"Choose one of the likely event columns instead: {examples}."
+        )
+    raise ValueError(
+        f'"{event_column}" does not look like a survival event column. '
+        "Use a true event indicator or recode the dataset before survival analysis."
+    )
+
+
 def _cohort_frame(
     df: pd.DataFrame,
     time_column: str,
@@ -639,7 +935,9 @@ def _cohort_frame(
 ) -> pd.DataFrame:
     if time_column == event_column:
         raise ValueError("The survival time column and event column must be different.")
+    _validate_endpoint_family_pair(time_column, event_column)
     _validate_time_column_choice(df, time_column)
+    _validate_event_column_choice(df, event_column)
     extra_columns = list(extra_columns or [])
     required_columns = [time_column, event_column, *extra_columns]
     frame = df[required_columns].copy()
@@ -661,28 +959,24 @@ def _cohort_frame(
     return frame
 
 
-def _sorted_group_labels(series: pd.Series, column_name: str | None = None) -> list[str]:
-    labels = series.astype("string").dropna().unique().tolist()
-    label_strings = [str(value) for value in labels]
-    if not label_strings:
-        return []
-    numeric_values = pd.to_numeric(pd.Series(label_strings, dtype="string"), errors="coerce")
-    if numeric_values.notna().all():
-        ordered_numeric = np.sort(numeric_values.astype(float).unique())
-        return [str(int(value)) if float(value).is_integer() else str(value) for value in ordered_numeric]
-    return _ordered_reference_categories(label_strings, column_name or str(series.name or ""))
-
-
-def _ordered_level_strings(series: pd.Series, column_name: str | None = None) -> list[str]:
+def _ordered_unique_level_strings(series: pd.Series, column_name: str | None = None) -> list[str]:
     non_missing = series.dropna()
     if non_missing.empty:
         return []
-    numeric_values = pd.to_numeric(non_missing, errors="coerce")
+    level_strings = [str(value) for value in non_missing.unique().tolist()]
+    numeric_values = pd.to_numeric(pd.Series(level_strings, dtype="string"), errors="coerce")
     if numeric_values.notna().all():
-        ordered_numeric = np.sort(numeric_values.unique().astype(float))
+        ordered_numeric = np.sort(numeric_values.astype(float).unique())
         return [str(int(value)) if float(value).is_integer() else str(value) for value in ordered_numeric]
-    level_strings = non_missing.astype("string").unique().tolist()
     return _ordered_reference_categories(level_strings, column_name or str(series.name or ""))
+
+
+def _sorted_group_labels(series: pd.Series, column_name: str | None = None) -> list[str]:
+    return _ordered_unique_level_strings(series.astype("string"), column_name)
+
+
+def _ordered_level_strings(series: pd.Series, column_name: str | None = None) -> list[str]:
+    return _ordered_unique_level_strings(series, column_name)
 
 
 def _is_binary_numeric_series(series: pd.Series) -> bool:
@@ -693,41 +987,44 @@ def _is_binary_numeric_series(series: pd.Series) -> bool:
 
 
 def _pointwise_km_ci(survival: np.ndarray, se: np.ndarray, alpha: float) -> tuple[np.ndarray, np.ndarray]:
-    z_value = norm.ppf(1 - alpha / 2)
+    survival = np.asarray(survival, dtype=float)
+    se = np.asarray(se, dtype=float)
+    z_value = float(ndtri(1 - alpha / 2))
     lower = survival.copy()
     upper = survival.copy()
 
-    for idx, (s_value, se_value) in enumerate(zip(survival, se, strict=False)):
-        if not np.isfinite(s_value):
-            lower[idx] = np.nan
-            upper[idx] = np.nan
-            continue
-        if s_value <= 0:
-            lower[idx] = 0.0
-            upper[idx] = 0.0
-            continue
-        log_s = math.log(s_value)
-        denominator = s_value * log_s
-        if (
-            s_value >= 1 - 1e-12
-            or not np.isfinite(se_value)
-            or se_value <= 0
-            or not np.isfinite(log_s)
-            or abs(denominator) <= 1e-12
-        ):
-            lower[idx] = s_value
-            upper[idx] = s_value
-            continue
-        transformed = np.log(-np.log(s_value))
-        transformed_se = abs(se_value / denominator)
-        if not np.isfinite(transformed_se):
-            lower[idx] = s_value
-            upper[idx] = s_value
-            continue
-        low = np.exp(-np.exp(transformed + z_value * transformed_se))
-        high = np.exp(-np.exp(transformed - z_value * transformed_se))
-        lower[idx] = np.clip(low, 0.0, 1.0)
-        upper[idx] = np.clip(high, 0.0, 1.0)
+    finite_mask = np.isfinite(survival)
+    lower[~finite_mask] = np.nan
+    upper[~finite_mask] = np.nan
+
+    zero_mask = finite_mask & (survival <= 0.0)
+    lower[zero_mask] = 0.0
+    upper[zero_mask] = 0.0
+
+    log_s = np.full_like(survival, np.nan, dtype=float)
+    candidate_mask = finite_mask & ~zero_mask
+    log_s[candidate_mask] = np.log(survival[candidate_mask])
+    denominator = survival * log_s
+    valid_mask = (
+        candidate_mask
+        & (survival < 1 - 1e-12)
+        & np.isfinite(se)
+        & (se > 0)
+        & np.isfinite(log_s)
+        & np.isfinite(denominator)
+        & (np.abs(denominator) > 1e-12)
+    )
+
+    transformed = np.full_like(survival, np.nan, dtype=float)
+    transformed[valid_mask] = np.log(-log_s[valid_mask])
+    transformed_se = np.full_like(survival, np.nan, dtype=float)
+    transformed_se[valid_mask] = np.abs(se[valid_mask] / denominator[valid_mask])
+    valid_mask &= np.isfinite(transformed_se)
+
+    low = np.exp(-np.exp(transformed[valid_mask] + z_value * transformed_se[valid_mask]))
+    high = np.exp(-np.exp(transformed[valid_mask] - z_value * transformed_se[valid_mask]))
+    lower[valid_mask] = np.clip(low, 0.0, 1.0)
+    upper[valid_mask] = np.clip(high, 0.0, 1.0)
     return lower, upper
 
 
@@ -740,16 +1037,17 @@ def _step_values(event_times: np.ndarray, survival: np.ndarray, query_times: np.
 
 
 def _restricted_mean_survival_time(timeline: np.ndarray, survival: np.ndarray, horizon: float) -> float:
-    clipped_timeline = np.clip(timeline, 0, horizon)
-    area = 0.0
-    for idx in range(len(clipped_timeline) - 1):
-        left = clipped_timeline[idx]
-        right = clipped_timeline[idx + 1]
-        if right <= left:
-            continue
-        area += survival[idx] * (right - left)
-    if clipped_timeline[-1] < horizon:
-        area += survival[-1] * (horizon - clipped_timeline[-1])
+    timeline = np.asarray(timeline, dtype=float)
+    survival = np.asarray(survival, dtype=float)
+    if timeline.size == 0 or survival.size == 0:
+        return 0.0
+    horizon = float(max(horizon, 0.0))
+    clipped_timeline = np.clip(timeline, 0.0, horizon)
+    widths = np.maximum(np.diff(clipped_timeline), 0.0)
+    area = float(np.dot(survival[:-1], widths)) if widths.size else 0.0
+    tail_width = max(horizon - float(clipped_timeline[-1]), 0.0)
+    if tail_width > 0.0:
+        area += float(survival[-1]) * tail_width
     return float(area)
 
 
@@ -807,6 +1105,150 @@ def _summarize_labels(labels: Sequence[str], max_items: int = 3) -> str:
     if len(cleaned) <= max_items:
         return ", ".join(cleaned)
     return f"{', '.join(cleaned[:max_items])} +{len(cleaned) - max_items} more"
+
+
+def _cox_stability_snapshot(
+    frame: pd.DataFrame,
+    event_column: str,
+    covariates: Sequence[str],
+    categorical_covariates: Sequence[str],
+) -> dict[str, Any]:
+    estimated_parameters = _cox_estimated_parameter_count(frame, covariates, categorical_covariates)
+    event_count = int(frame[event_column].sum())
+    events_per_parameter = (
+        float(event_count / estimated_parameters)
+        if estimated_parameters > 0
+        else None
+    )
+    stability_warnings: list[str] = []
+    risky_levels: list[dict[str, Any]] = []
+    for column in categorical_covariates:
+        if column not in frame.columns:
+            continue
+        grouped = frame.groupby(column, dropna=True, observed=False)[event_column].agg(["size", "sum"])
+        categories = list(frame[column].cat.categories) if hasattr(frame[column], "cat") else []
+        if categories:
+            reference_level = str(categories[0])
+            if reference_level in grouped.index:
+                reference_row = grouped.loc[reference_level]
+                reference_count = int(reference_row["size"])
+                reference_events = int(reference_row["sum"])
+                reference_censored = reference_count - reference_events
+                if reference_count < 5:
+                    risky_levels.append(
+                        {
+                            "column": str(column),
+                            "level": reference_level,
+                            "rows": reference_count,
+                            "events": reference_events,
+                            "censored": reference_censored,
+                            "issue": "small_reference_level",
+                        }
+                    )
+                    stability_warnings.append(
+                        f'{column} uses "{reference_level}" as the Cox reference level, but only {reference_count} row'
+                        f'{"s" if reference_count != 1 else ""} remain after missing-value filtering. Comparisons against this reference can look unstable.'
+                    )
+        one_sided_levels: list[str] = []
+        for level, row in grouped.iterrows():
+            total_count = int(row["size"])
+            level_event_count = int(row["sum"])
+            censored_count = total_count - level_event_count
+            if level_event_count == 0 or censored_count == 0:
+                risky_levels.append(
+                    {
+                        "column": str(column),
+                        "level": str(level),
+                        "rows": total_count,
+                        "events": level_event_count,
+                        "censored": censored_count,
+                        "issue": "one_sided_outcome",
+                    }
+                )
+                one_sided_levels.append(f"{level} ({total_count} rows)")
+        if one_sided_levels:
+            preview_levels = ", ".join(one_sided_levels[:3])
+            stability_warnings.append(
+                f'{column} has level(s) with only events or only censored rows after missing-value filtering: {preview_levels}'
+                f'{" ..." if len(one_sided_levels) > 3 else ""}. This can produce non-finite Cox estimates.'
+            )
+    if events_per_parameter is not None:
+        if events_per_parameter < 5:
+            stability_warnings.append(
+                f"Events per parameter is {events_per_parameter:.2f}, which is extremely low for Cox regression. Reduce covariates or add more events before treating the fit as stable."
+            )
+        elif events_per_parameter < 10:
+            stability_warnings.append(
+                f"Events per parameter is {events_per_parameter:.2f}, so coefficient estimates may still be unstable."
+            )
+    return {
+        "events": event_count,
+        "estimated_parameters": int(estimated_parameters),
+        "events_per_parameter": events_per_parameter,
+        "stability_warnings": stability_warnings,
+        "risky_levels": risky_levels,
+    }
+
+
+def _cox_nonfinite_estimate_message(stability_snapshot: dict[str, Any]) -> str:
+    details: list[str] = []
+    risky_levels = list(stability_snapshot.get("risky_levels") or [])
+    epv = _safe_float(stability_snapshot.get("events_per_parameter"))
+    if epv is not None and epv < 10:
+        details.append(f"EPV={epv:.2f}")
+
+    small_reference_examples = [
+        f'{item["column"]}="{item["level"]}" (n={int(item["rows"])})'
+        for item in sorted(
+            (level for level in risky_levels if level.get("issue") == "small_reference_level"),
+            key=lambda level: (
+                int(level.get("rows", 0)),
+                str(level.get("column", "")),
+                str(level.get("level", "")),
+            ),
+        )
+    ]
+    if small_reference_examples:
+        details.append(
+            f"sparse reference levels such as {_summarize_labels(small_reference_examples, max_items=3)}"
+        )
+
+    one_sided_examples = [
+        f'{item["column"]}="{item["level"]}" (n={int(item["rows"])})'
+        for item in sorted(
+            (level for level in risky_levels if level.get("issue") == "one_sided_outcome"),
+            key=lambda level: (
+                int(level.get("rows", 0)),
+                str(level.get("column", "")),
+                str(level.get("level", "")),
+            ),
+        )
+    ]
+    if one_sided_examples:
+        details.append(
+            f'levels with only events or only censored rows such as {_summarize_labels(one_sided_examples, max_items=3)}'
+        )
+
+    detail_text = f" Problem signals in the analyzable cohort: {'; '.join(details)}." if details else ""
+    return (
+        "Cox PH fit produced non-finite estimates. This usually means redundant covariates, sparse categories, "
+        "or quasi-complete separation. Remove overlapping variables or collapse sparse levels."
+        f"{detail_text}"
+    )
+
+
+def _cox_fit_failure_message(exc: Exception, stability_snapshot: dict[str, Any]) -> str:
+    raw = str(exc).strip()
+    lowered = raw.lower()
+    if "singular matrix" in lowered:
+        detail = _cox_nonfinite_estimate_message(stability_snapshot)
+        return (
+            "Cox PH fit failed because the design matrix is singular. This usually means redundant covariates, "
+            "overlapping encodings of the same signal, or sparse categorical levels. "
+            "Remove one of the overlapping variables or collapse sparse levels. "
+            f"{detail}"
+        )
+    return _cox_nonfinite_estimate_message(stability_snapshot)
 
 
 def _cox_categorical_stability_alerts(
@@ -980,9 +1422,25 @@ def _cox_scientific_summary(
         if row.get("Hazard ratio") is None or row.get("CI lower") is None or row.get("CI upper") is None
     ]
 
+    complete_case_n = int(model_stats["n"])
+    outcome_rows_raw = model_stats.get("outcome_rows")
+    dropped_rows_raw = model_stats.get("dropped_rows")
+    outcome_rows = int(outcome_rows_raw) if outcome_rows_raw is not None else None
+    dropped_rows = int(dropped_rows_raw) if dropped_rows_raw is not None else None
+    dropped_fraction = None
+    if outcome_rows is not None and outcome_rows > 0 and dropped_rows is not None:
+        dropped_fraction = float(dropped_rows / outcome_rows)
+
+    cohort_statement = f"Model estimates use the analyzable cohort after dropping rows with missing selected covariates (N = {complete_case_n})."
+    if outcome_rows is not None:
+        cohort_statement = (
+            "Model estimates use the analyzable cohort after dropping rows with missing selected covariates "
+            f"(N = {complete_case_n} of {int(outcome_rows)} outcome-valid rows)."
+        )
+
     strengths = [
         "Cox regression was fit with the Efron tie method.",
-        f"Model estimates use the analyzable cohort after dropping rows with missing selected covariates (N = {int(model_stats['n'])}).",
+        cohort_statement,
         "Proportional-hazards diagnostics were evaluated from rank-based Spearman correlations between Schoenfeld residuals and log time.",
         "The reported discrimination metric is an apparent C-index computed on the fitted cohort.",
     ]
@@ -995,6 +1453,15 @@ def _cox_scientific_summary(
         cautions.append("Events per parameter is below 10, so coefficients may be unstable or overfit.")
         next_steps.append("Reduce model complexity or increase the event count before treating estimates as final.")
     cautions.append("Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.")
+    if dropped_rows:
+        drop_message = f"{int(dropped_rows)} outcome-valid rows were excluded because at least one selected covariate was missing."
+        if dropped_fraction is not None:
+            drop_message = (
+                f"{int(dropped_rows)} outcome-valid rows ({dropped_fraction:.1%}) were excluded "
+                "because at least one selected covariate was missing."
+            )
+        cautions.append(drop_message)
+        next_steps.append("Review missingness patterns or use an imputation strategy before treating the fitted cohort as representative.")
     if ph_alert_terms:
         cautions.append(
             f"Possible proportional-hazards violations detected for: {', '.join(ph_alert_terms)}."
@@ -1029,11 +1496,24 @@ def _cox_scientific_summary(
     if not significant_terms:
         cautions.append("No model term shows clear nominal evidence at p < 0.05.")
 
+    structural_instability = bool(
+        (epv is not None and epv < 10)
+        or reference_alerts
+        or sparse_level_alerts
+        or wide_ci_terms
+        or non_estimable_terms
+    )
+
     if significant_terms:
-        if ph_alert_terms or reference_alerts or sparse_level_alerts or wide_ci_terms or non_estimable_terms:
+        if structural_instability:
             headline = (
                 f"Model fit shows {len(significant_terms)} term(s) with nominal hazard association, "
                 f"but some estimates appear unstable: {_summarize_labels(significant_terms)}."
+            )
+        elif ph_alert_terms:
+            headline = (
+                f"Model fit shows {len(significant_terms)} term(s) with nominal hazard association, "
+                f"but some terms need closer proportional-hazards review: {_summarize_labels(ph_alert_terms)}."
             )
         else:
             headline = (
@@ -1042,7 +1522,16 @@ def _cox_scientific_summary(
             )
         next_steps.append("Interpret hazard ratios together with confidence intervals, not p-values alone.")
     else:
-        headline = "Model fit completed, but no term shows clear nominal hazard association under the current specification."
+        if structural_instability:
+            headline = (
+                "Model fit completed, but no term shows clear nominal hazard association and some estimates remain unstable under the current specification."
+            )
+        elif ph_alert_terms:
+            headline = (
+                "Model fit completed, but no term shows clear nominal hazard association and some terms still need closer proportional-hazards review under the current specification."
+            )
+        else:
+            headline = "Model fit completed, but no term shows clear nominal hazard association under the current specification."
         next_steps.append("Revisit covariate selection, encoding, and cohort size before forcing interpretation.")
 
     status = "robust"
@@ -1058,6 +1547,8 @@ def _cox_scientific_summary(
         "cautions": cautions,
         "next_steps": next_steps,
         "metrics": [
+            {"label": "Outcome-valid rows", "value": outcome_rows},
+            {"label": "Dropped for missing covariates", "value": dropped_rows},
             {"label": "Events", "value": int(model_stats["events"])},
             {"label": "Parameters", "value": int(model_stats["parameters"])},
             {"label": "EPV", "value": epv},
@@ -1277,7 +1768,7 @@ def derive_group_column(
     event_column: str | None = None,
     event_positive_value: Any = None,
     min_group_fraction: float = 0.1,
-    permutation_iterations: int = 100,
+    permutation_iterations: int = 500,
     random_seed: int = 20260311,
 ) -> tuple[pd.DataFrame, str, dict[str, Any]]:
     if source_column in _survival_outcome_like_columns(df):
@@ -1606,6 +2097,7 @@ def _signature_mask(
 def _stability_score(row: dict[str, Any]) -> float:
     # Composite score balancing significance, robustness, effect size, and parsimony.
     bh_p = max(float(row["BH adjusted p"]), 1e-12)
+    significance_score = min(-math.log10(bh_p), 10.0)
     effect = abs(math.log(max(float(row["Hazard ratio (signature+ vs -)"]), 1e-12)))
     support = row["Bootstrap support (p<alpha)"]
     support_value = float(support) if support is not None else 0.0
@@ -1623,7 +2115,7 @@ def _stability_score(row: dict[str, Any]) -> float:
         permutation_penalty = max(float(permutation_p) - 0.05, 0.0)
     complexity_penalty = 0.18 * max(int(row["Rule count"]) - 1, 0)
     return float(
-        (-math.log10(bh_p))
+        significance_score
         + (0.35 * effect)
         + (0.85 * support_value)
         + (0.55 * direction_consistency_value)
@@ -2227,15 +2719,30 @@ def discover_feature_signature(
         best_split=rows[best_idx],
         search_space=search_space,
     )
+    best_row = rows[best_idx]
+    signature_recipe = {
+        "column_name": best_column_name,
+        "operator": str(best_operator),
+        "features": list(best_row.get("Features", [])),
+        "signature": str(best_row.get("Signature", "")),
+        "positive_label": "Signature+",
+        "negative_label": "Signature-",
+        "statistically_significant": bool(best_row.get("Statistically significant")),
+        "outcome_informed": True,
+        "random_seed": int(random_seed),
+    }
 
     payload = {
         "results_table": ranked_rows,
-        "best_split": rows[best_idx],
+        "best_split": best_row,
         "search_space": search_space,
+        "signature_recipe": signature_recipe,
         "derived_group": {
             "column_name": best_column_name,
             "counts": counts,
             "outcome_informed": True,
+            "auto_apply_recommended": bool(best_row.get("Statistically significant")),
+            "recipe": signature_recipe,
         },
         "scientific_summary": scientific_summary,
     }
@@ -2454,6 +2961,7 @@ def _prepare_cox_frame(
         event_column=event_column,
         event_positive_value=event_positive_value,
         extra_columns=required_columns,
+        drop_missing_extra_columns=drop_missing_covariates,
     )
     for column in covariates:
         if column in categorical_covariates:
@@ -2612,22 +3120,53 @@ def _clean_term(term: str, reference_levels: dict[str, str]) -> tuple[str, str, 
 
 def _harrell_c_index(time_values: np.ndarray, event_values: np.ndarray, risk_score: np.ndarray) -> float | None:
     event_mask = event_values == 1
-    event_idx = np.where(event_mask)[0]
-    if len(event_idx) == 0:
+    if int(np.sum(event_mask)) == 0:
         return None
-    t_event = time_values[event_idx]
-    r_event = risk_score[event_idx]
-    t_all = time_values
-    r_all = risk_score
-    # Broadcast: compare each event subject against all subjects with longer time
-    later_mask = t_all[np.newaxis, :] > t_event[:, np.newaxis]  # (n_event, n_all)
-    if not later_mask.any():
-        return None
-    r_diff = r_event[:, np.newaxis] - r_all[np.newaxis, :]  # (n_event, n_all)
-    concordant = float(np.sum((r_diff > 0) & later_mask))
-    concordant += 0.5 * float(np.sum((r_diff == 0) & later_mask))
-    comparable = float(np.sum(later_mask))
-    if comparable == 0:
+
+    order = np.argsort(time_values, kind="mergesort")
+    unique_risks, inverse = np.unique(risk_score.astype(float), return_inverse=True)
+    ranks = inverse + 1  # Fenwick tree is 1-indexed.
+    tree = np.zeros(len(unique_risks) + 1, dtype=np.int64)
+
+    def _fenwick_add(index: int, delta: int) -> None:
+        while index < tree.size:
+            tree[index] += delta
+            index += index & -index
+
+    def _fenwick_prefix(index: int) -> int:
+        total = 0
+        while index > 0:
+            total += int(tree[index])
+            index -= index & -index
+        return total
+
+    concordant = 0.0
+    comparable = 0.0
+    later_count = 0
+    cursor = len(order) - 1
+
+    while cursor >= 0:
+        time_value = time_values[order[cursor]]
+        group_end = cursor
+        while cursor >= 0 and time_values[order[cursor]] == time_value:
+            cursor -= 1
+        group_indices = order[cursor + 1:group_end + 1]
+
+        if later_count:
+            for idx in group_indices:
+                if event_values[idx] != 1:
+                    continue
+                rank = int(ranks[idx])
+                lower = _fenwick_prefix(rank - 1)
+                equal = _fenwick_prefix(rank) - lower
+                concordant += float(lower) + 0.5 * float(equal)
+                comparable += float(later_count)
+
+        for idx in group_indices:
+            _fenwick_add(int(ranks[idx]), 1)
+            later_count += 1
+
+    if comparable <= 0.0:
         return None
     return concordant / comparable
 
@@ -2642,18 +3181,30 @@ def compute_cox_analysis(
 ) -> dict[str, Any]:
     _validate_cox_covariates(covariates)
     categorical_covariates = list(dict.fromkeys(categorical_covariates or _categorical_candidates(df, covariates)))
-    frame = _prepare_cox_frame(
+    preview_frame = _prepare_cox_frame(
         df,
         time_column=time_column,
         event_column=event_column,
         covariates=covariates,
         categorical_covariates=categorical_covariates,
         event_positive_value=event_positive_value,
+        drop_missing_covariates=False,
     )
+    frame = preview_frame.dropna().reset_index(drop=True)
+    if frame.empty:
+        raise ValueError("No rows remain after removing missing values for the Cox model.")
+    for column in categorical_covariates:
+        string_values = frame[column].astype("string")
+        categories = _ordered_reference_categories(string_values.dropna().unique().tolist(), column)
+        frame[column] = pd.Categorical(string_values, categories=categories)
     formula = _build_cox_formula(time_column, covariates, categorical_covariates)
     status = frame[event_column].astype(int).to_numpy()
+    stability_snapshot = _cox_stability_snapshot(frame, event_column, covariates, categorical_covariates)
     model = PHReg.from_formula(formula, data=frame, status=status, ties="efron")
-    results = model.fit(disp=False)
+    try:
+        results = model.fit(disp=False)
+    except Exception as exc:
+        raise ValueError(_cox_fit_failure_message(exc, stability_snapshot)) from exc
 
     conf_int = np.asarray(results.conf_int(), dtype=float)
     param_vector = np.asarray(results.params, dtype=float)
@@ -2666,10 +3217,7 @@ def compute_cox_analysis(
     risk_score = np.asarray(results.model.exog @ results.params, dtype=float)
     fit_components = [param_vector, conf_int.reshape(-1), bse_vector, z_vector, p_vector, risk_score]
     if (not np.isfinite(llf_value)) or any(not np.isfinite(component).all() for component in fit_components):
-        raise ValueError(
-            "Cox PH fit produced non-finite estimates. This usually means redundant covariates, sparse categories, "
-            "or quasi-complete separation. Remove overlapping variables or collapse sparse levels."
-        )
+        raise ValueError(_cox_nonfinite_estimate_message(stability_snapshot))
 
     model_rows: list[dict[str, Any]] = []
     for idx, term in enumerate(results.model.exog_names):
@@ -2713,6 +3261,8 @@ def compute_cox_analysis(
         )
 
     n_obs = int(frame.shape[0])
+    outcome_rows = int(preview_frame.shape[0])
+    dropped_rows = int(outcome_rows - n_obs)
     n_events = int(frame[event_column].sum())
     k_params = len(results.params)
     c_index = _harrell_c_index(
@@ -2726,6 +3276,8 @@ def compute_cox_analysis(
         diagnostic_rows=diagnostic_rows,
         model_stats={
             "n": n_obs,
+            "outcome_rows": outcome_rows,
+            "dropped_rows": dropped_rows,
             "events": n_events,
             "parameters": k_params,
             "events_per_parameter": float(n_events / k_params) if k_params else None,
@@ -2744,6 +3296,8 @@ def compute_cox_analysis(
         "diagnostics_table": diagnostic_rows,
         "model_stats": {
             "n": n_obs,
+            "outcome_rows": outcome_rows,
+            "dropped_rows": dropped_rows,
             "events": n_events,
             "parameters": k_params,
             "events_per_parameter": float(n_events / k_params) if k_params else None,
@@ -2790,87 +3344,20 @@ def preview_cox_analysis_inputs(
     complete_case = preview_frame.dropna(subset=list(covariates)).reset_index(drop=True)
     if complete_case.empty:
         raise ValueError("No rows remain after removing missing values for the Cox model.")
-    estimated_parameters = _cox_estimated_parameter_count(complete_case, covariates, categorical_covariates)
-    event_count = int(complete_case[event_column].sum())
-    events_per_parameter = (
-        float(event_count / estimated_parameters)
-        if estimated_parameters > 0
-        else None
-    )
-    stability_warnings: list[str] = []
-    risky_levels: list[dict[str, Any]] = []
-    for column in categorical_covariates:
-        if column not in complete_case.columns:
-            continue
-        grouped = complete_case.groupby(column, dropna=True)[event_column].agg(["size", "sum"])
-        categories = list(complete_case[column].cat.categories) if hasattr(complete_case[column], "cat") else []
-        if categories:
-            reference_level = str(categories[0])
-            if reference_level in grouped.index:
-                reference_row = grouped.loc[reference_level]
-                reference_count = int(reference_row["size"])
-                reference_events = int(reference_row["sum"])
-                reference_censored = reference_count - reference_events
-                if reference_count < 5:
-                    risky_levels.append(
-                        {
-                            "column": str(column),
-                            "level": reference_level,
-                            "rows": reference_count,
-                            "events": reference_events,
-                            "censored": reference_censored,
-                            "issue": "small_reference_level",
-                        }
-                    )
-                    stability_warnings.append(
-                        f'{column} uses "{reference_level}" as the Cox reference level, but only {reference_count} row'
-                        f'{"s" if reference_count != 1 else ""} remain after missing-value filtering. Comparisons against this reference can look unstable.'
-                    )
-        one_sided_levels: list[str] = []
-        for level, row in grouped.iterrows():
-            total_count = int(row["size"])
-            event_count = int(row["sum"])
-            censored_count = total_count - event_count
-            if event_count == 0 or censored_count == 0:
-                risky_levels.append(
-                    {
-                        "column": str(column),
-                        "level": str(level),
-                        "rows": total_count,
-                        "events": event_count,
-                        "censored": censored_count,
-                        "issue": "one_sided_outcome",
-                    }
-                )
-                one_sided_levels.append(f"{level} ({total_count} rows)")
-        if one_sided_levels:
-            preview_levels = ", ".join(one_sided_levels[:3])
-            stability_warnings.append(
-                f'{column} has level(s) with only events or only censored rows after missing-value filtering: {preview_levels}'
-                f'{" ..." if len(one_sided_levels) > 3 else ""}. This can produce non-finite Cox estimates.'
-            )
-    if events_per_parameter is not None:
-        if events_per_parameter < 5:
-            stability_warnings.append(
-                f"Events per parameter is {events_per_parameter:.2f}, which is extremely low for Cox regression. Reduce covariates or add more events before treating the fit as stable."
-            )
-        elif events_per_parameter < 10:
-            stability_warnings.append(
-                f"Events per parameter is {events_per_parameter:.2f}, so coefficient estimates may still be unstable."
-            )
+    stability_snapshot = _cox_stability_snapshot(complete_case, event_column, covariates, categorical_covariates)
     missing_by_covariate.sort(key=lambda item: (-int(item["missing_rows"]), str(item["column"])))
     return {
         "outcome_rows": int(preview_frame.shape[0]),
         "analyzable_rows": int(complete_case.shape[0]),
         "dropped_rows": int(preview_frame.shape[0] - complete_case.shape[0]),
-        "events": event_count,
-        "estimated_parameters": int(estimated_parameters),
-        "events_per_parameter": events_per_parameter,
+        "events": int(stability_snapshot["events"]),
+        "estimated_parameters": int(stability_snapshot["estimated_parameters"]),
+        "events_per_parameter": stability_snapshot["events_per_parameter"],
         "covariates": list(covariates),
         "categorical_covariates": list(categorical_covariates),
         "missing_by_covariate": missing_by_covariate,
-        "stability_warnings": stability_warnings,
-        "risky_levels": risky_levels,
+        "stability_warnings": list(stability_snapshot["stability_warnings"]),
+        "risky_levels": list(stability_snapshot["risky_levels"]),
     }
 
 

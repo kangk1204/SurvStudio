@@ -9,6 +9,7 @@ import zipfile
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+import numpy as np
 import pytest
 
 import survival_toolkit.app as app_module
@@ -25,6 +26,26 @@ def _torch_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _is_plotly_image_runtime_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    markers = (
+        "browser seemed to close immediately",
+        "host system is missing dependencies",
+        "choreo_get_chrome",
+        "missing libs",
+    )
+    return any(marker in message for marker in markers)
+
+
+def _write_image_or_skip(fig, path: Path, **kwargs) -> None:
+    try:
+        fig.write_image(str(path), **kwargs)
+    except Exception as exc:
+        if _is_plotly_image_runtime_error(exc):
+            pytest.skip(f"Kaleido runtime unavailable in this environment: {exc}")
+        raise
 
 
 def test_index_uses_relative_static_assets() -> None:
@@ -71,6 +92,7 @@ def test_index_uses_relative_static_assets() -> None:
 def test_index_mentions_fleming_harrington_p_only_label() -> None:
     response = client.get("/")
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
     assert "Fleming-Harrington (fh_p only)" in response.text
     assert 'id="dlJournalTemplate"' in response.text
     assert 'id="runCompareInlineButton"' in response.text
@@ -88,6 +110,9 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="uploadButton" type="button"' in response.text
     assert 'id="guidedModeButton"' in response.text
     assert 'id="expertModeButton"' in response.text
+    assert 'id="expertModeButton" type="button" role="tab" aria-selected="false" hidden aria-hidden="true" tabindex="-1"' in response.text
+    assert 'class="mode-toggle mode-toggle-guided-only"' in response.text
+    assert 'id="expertSurfaceLabel"' not in response.text
     assert 'id="guidedShell"' in response.text
     assert 'id="guidedSummaryBar"' in response.text
     assert 'id="guidedPanel"' in response.text
@@ -103,18 +128,20 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert "Upload or open a sample cohort" in response.text
     assert "Configure &amp; run" in response.text
     assert '<span>Evaluation Mode</span>' in response.text
-    assert "Evaluation Mode applies to both <strong>Train a model</strong> and <strong>Compare All</strong>" in response.text
+    assert "Evaluation Mode applies to both <strong>Run Analysis</strong> and <strong>Compare All</strong>" in response.text
+    assert 'class="button ghost compact-btn shutdown-button" id="shutdownButton"' in response.text
+    assert '<div class="brand-mark">S</div>' in response.text
     assert "Risk table ticks" in response.text
     assert "It does not change the Kaplan-Meier curve itself." in response.text
-    assert "Used everywhere" in response.text
-    assert "Used mainly for grouping and display" in response.text
+    assert "Used everywhere" not in response.text
+    assert "Used mainly for grouping and display" not in response.text
     assert 'id="showAllEventColumns"' in response.text
     assert 'id="eventColumnHelp"' in response.text
     assert 'id="eventColumnWarning"' in response.text
     assert 'id="eventValueWarning"' in response.text
     assert 'id="groupColumnWarning"' in response.text
     assert "Show all columns for Event" in response.text
-    assert "Showing event-like binary columns only." in response.text
+    assert "Showing likely event columns only." in response.text
     assert 'id="groupingDetails"' in response.text
     assert 'id="groupingSummaryText"' in response.text
     assert 'id="kmDependencyText"' in response.text
@@ -123,12 +150,12 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="tableDependencyText"' in response.text
     assert 'id="tableOutputStatusText"' in response.text
     assert 'id="runCohortTableButtonLabel"' in response.text
-    assert "The reported C-index is apparent on the analyzable cohort, and PH diagnostics below are approximate rank-based checks rather than a full cox.zph test." in response.text
+    assert "The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here are approximate rank-based checks rather than a full cox.zph test." in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
-    assert 'id="deriveApplyButton"' in response.text
-    assert "Create and apply" in response.text
+    assert 'id="deriveButton" type="button">Create</button>' in response.text
     assert "Approximate rank-based Spearman screening of Schoenfeld residuals against log time appears here." in response.text
+    assert "Allowed ranges:" not in response.text
 
 
 def test_index_exposes_dataset_preset_feedback_ui() -> None:
@@ -151,8 +178,8 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert "Review shared features" in response.text
     assert 'id="mlSkipShap"' in response.text
     assert "Fast mode (skip SHAP)" in response.text
-    assert "ML uses the Study Design outcome definition and the shared ML/DL model features selected below." in response.text
-    assert "DL uses the Study Design outcome definition and the model features selected below. The same feature list stays synced with the ML tab." in response.text
+    assert "ML uses the Study Design outcome definition and the shared ML/DL model features selected here." in response.text
+    assert "DL uses the Study Design outcome definition and the shared model features selected in this workspace." in response.text
     assert "No preset applied yet." in response.text
     assert "Applying a preset updates recommended columns and checkbox selections only." in response.text
     assert 'class="button ghost compact-btn" id="applyBasicPresetButton"' in response.text
@@ -162,10 +189,26 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert "Validation and runtime" in response.text
     assert 'class="table-card-head"' in response.text
     assert 'option value="lasso_cox"' in response.text
-    assert "screening comparison across Cox PH, LASSO-Cox, RSF, and GBS" in response.text
+    assert "screening comparison across Cox PH and, when available, LASSO-Cox, RSF, and GBS" in response.text
     assert "Partial dependence and counterfactual analysis are available for tree-model runs only" in response.text
     assert "Fresh datasets preselect up to 20 eligible model features for a faster first run." in response.text
     assert 'id="dlBatchSizeHint"' in response.text
+    assert 'id="tab-benchmark"' in response.text
+    assert 'id="panel-benchmark"' in response.text
+    assert 'id="runPredictiveCompareAllButton"' in response.text
+    assert 'id="predictiveModelSelector"' in response.text
+    assert 'id="runPredictiveSelectedButton"' in response.text
+    assert 'id="benchmarkSummaryGrid"' in response.text
+    assert 'id="benchmarkComparisonPlot"' in response.text
+    assert 'id="benchmarkPlotNote"' in response.text
+    assert 'id="benchmarkComparisonShell"' in response.text
+    assert 'id="benchmarkWorkbench"' in response.text
+    assert 'id="benchmarkWorkbenchCaption"' in response.text
+    assert "Predictive Models" in response.text
+    assert "See ML and DL together, compare all results first" in response.text
+    assert "Compare All Models" in response.text
+    assert "Test one model" in response.text
+    assert "The controls below automatically follow the selected model" in response.text
 
 
 def test_frontend_tracks_workspace_controls_in_history_state() -> None:
@@ -177,8 +220,8 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "applyControlSnapshot(historyState.controls || null);" in text
     assert "queueHistorySync()" in text
     assert "showAllEventColumns: Boolean(refs.showAllEventColumns?.checked)" in text
-    assert 'deriveApplyButton: document.getElementById("deriveApplyButton")' in text
-    assert "updateGroupingDetailsVisibility(tabName);" in text
+    assert 'deriveButton: document.getElementById("deriveButton")' in text
+    assert "updateGroupingDetailsVisibility(resolvedTabName);" in text
     assert "function scrollWorkspaceEntryToTop()" in text
     assert "syncModelFeatureMirrors(refs.modelFeatureChecklist);" in text
     assert "syncModelCategoricalMirrors(refs.modelCategoricalChecklist);" in text
@@ -260,12 +303,17 @@ def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     assert "view: \"home\", uiMode: runtime.uiMode" in text
     assert "guidedGoal: runtime.guidedGoal" in text
     assert "guidedStep: runtime.guidedStep" in text
-    assert "setUiMode(historyState?.uiMode || runtime.uiMode, { syncHistory: false });" in text
+    assert "predictiveFamily: runtime.predictiveFamily" in text
+    assert 'setUiMode(restoredUiMode, { syncHistory: false, preserveGuidedState: restoredUiMode === "guided" });' in text
     assert "function queueVisiblePlotResize()" in text
     assert "function resizeVisiblePlotsNow()" in text
     assert "queueVisiblePlotResize();" in text
-    assert "runtime.guidedGoal = historyState.guidedGoal || null;" in text
-    assert "runtime.guidedStep = historyState.guidedStep" in text
+    assert "const restoredGuidedGoal = GUIDED_GOALS.includes(historyState?.guidedGoal) ? historyState.guidedGoal : null;" in text
+    assert "const restoredGuidedStep = normalizedGuidedStep(historyState?.guidedStep || (restoredGuidedGoal ? 4 : 2));" in text
+    assert "const restoredPredictiveFamily = normalizedPredictiveFamily(historyState?.predictiveFamily);" in text
+    assert "runtime.guidedGoal = restoredGuidedGoal;" in text
+    assert "runtime.guidedStep = restoredGuidedStep;" in text
+    assert 'updateGroupingDetailsVisibility(activeTabName(), { force: true });' in text
     assert 'const compareRun = String(requestConfig.model_type || "") === "compare";' in text
     assert 'function preferredResultMode(goal)' in text
     assert "handleGuidedPanelAction(button);" in text
@@ -283,6 +331,69 @@ def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     assert 'setUiMode("expert", { historyMode: "push" })' in text
 
 
+def test_frontend_hides_dataset_preset_bar_in_guided_mode() -> None:
+    index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    index_text = index_html.read_text()
+    text = app_js.read_text()
+
+    assert 'id="datasetPresetBarHome"' not in index_text
+    assert 'refs.datasetPresetBar?.classList.toggle("hidden", guidedActive || !datasetPresetForCurrentDataset());' in text
+    assert 'refs.datasetPresetBar?.classList.toggle("hidden", !datasetPresetForCurrentDataset());' not in text
+    assert 'refs.guidedConfigMount.insertBefore(refs.datasetPresetBar, guidedPresetAnchor);' not in text
+    assert 'const showOutcomeConfigInRail = guidedActive && step === 2;' in text
+    assert 'const guidedConfigTarget = showOutcomeConfigInRail ? refs.guidedRailPanelMount : refs.guidedConfigMount;' in text
+
+
+def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
+    index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    html = index_html.read_text()
+    text = app_js.read_text()
+
+    assert 'data-tab="benchmark"' in html
+    assert 'id="panel-benchmark"' in html
+    assert 'id="benchmarkDependencyText"' in html
+    assert 'id="benchmarkSummaryGrid"' in html
+    assert 'id="benchmarkComparisonPlot"' in html
+    assert 'id="benchmarkPlotNote"' in html
+    assert 'id="benchmarkComparisonShell"' in html
+    assert 'id="benchmarkWorkbench"' in html
+    assert 'id="benchmarkWorkbenchCaption"' in html
+    assert 'runPredictiveCompareAllButton: document.getElementById("runPredictiveCompareAllButton")' in text
+    assert 'predictiveModelSelector: document.getElementById("predictiveModelSelector")' in text
+    assert 'runPredictiveSelectedButton: document.getElementById("runPredictiveSelectedButton")' in text
+    assert 'benchmarkWorkbench: document.getElementById("benchmarkWorkbench")' in text
+    assert 'benchmarkWorkbenchCaption: document.getElementById("benchmarkWorkbenchCaption")' in text
+    assert 'benchmarkComparisonPlot: document.getElementById("benchmarkComparisonPlot")' in text
+    assert 'benchmarkPlotNote: document.getElementById("benchmarkPlotNote")' in text
+    assert 'benchmarkMlMount: document.getElementById("benchmarkMlMount")' in text
+    assert 'benchmarkDlMount: document.getElementById("benchmarkDlMount")' in text
+    assert "function renderBenchmarkBoard()" in text
+    assert "async function renderUnifiedBenchmarkPlot(board)" in text
+    assert "function renderPredictiveWorkbench()" in text
+    assert "function runPredictiveSelectedModel()" in text
+    assert "function runUnifiedPredictiveComparison()" in text
+    assert "function setPredictiveWorkbenchFamily(family" in text
+    assert "function setPredictiveModel(modelKey" in text
+    assert "function unifiedBenchmarkRows({ currentOnly = true } = {})" in text
+    assert "function benchmarkBoardState()" in text
+    assert "function syncPredictiveWorkbenchCompareVisibility()" in text
+    assert "function reviewBenchmarkSourceTab(tabName, mode = null)" in text
+    assert 'if (runtime.uiMode === "expert" && (resolvedTabName === "ml" || resolvedTabName === "dl")) {' in text
+    assert 'body[data-ui-mode="expert"] #tab-ml,' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text()
+    assert 'runtime.guidedGoal = runtime.guidedGoal || "km";' in text
+    assert 'activateTab(runtime.guidedGoal, { setGuidedGoal: false, historyMode: "replace", syncHistory: false });' in text
+
+
+def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text(encoding="utf-8")
+
+    assert '`ML compare rows: ${benchmarkCompareRows("ml", { currentOnly: true }).length}`' in text
+    assert '`DL compare rows: ${benchmarkCompareRows("dl", { currentOnly: true }).length}`' in text
+
+
 def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selection() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
@@ -296,13 +407,18 @@ def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selec
     assert "function currentEventColumnWarning()" in text
     assert "Turn on Show all columns to select non-standard event fields." in text
     assert "looks like TCGA-style 1/2 coding" in text
-    assert "looks more like a baseline characteristic than a time-to-event indicator" in text
-    assert "does not look like a binary event indicator" in text
+    assert "is not a standard event column name" in text
+    assert "looks more like a baseline characteristic than an event indicator" in text
+    assert "is not a binary event column" in text
     assert 'If this is intentional, turn on Show all columns for Event first.' in text
     assert "Choose event value" in text
-    assert 'Choose the Event Value that means the event happened' in text
+    assert 'Choose the Event Value for "' in text
+    assert 'updateEventValueGuidance(eventColumnWarning?.blocking ? null : inferred.warning);' in text
     assert "function currentGroupColumnWarning()" in text
     assert "high-cardinality numeric column" in text
+    styles = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text()
+    assert 'body[data-ui-mode="guided"][data-guided-step="2"] #guidedRailPanelMount #eventColumnWarning' in styles
+    assert 'body[data-ui-mode="guided"][data-guided-step="2"] #guidedRailPanelMount #eventValueWarning' in styles
 
 
 def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
@@ -315,7 +431,7 @@ def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
     assert "Learning rate applies to Gradient Boosted Survival only." in text
     assert "Tree count applies to Random Survival Forest and Gradient Boosted Survival only." in text
     assert "SHAP is currently available for Random Survival Forest and Gradient Boosted Survival only." in text
-    assert 'refs.mlModelType.addEventListener("change", () => { runtime.resultPreference.ml = "single"; updateMlModelControlVisibility(); queueHistorySync(); });' in text
+    assert 'refs.mlModelType.addEventListener("change", () => { runtime.resultPreference.ml = "single"; updateMlModelControlVisibility(); renderPredictiveWorkbench(); queueHistorySync(); });' in text
 
 
 def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
@@ -347,7 +463,7 @@ def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
     assert "latent_dim: Number(refs.dlLatentDim.value)" in text
     assert "n_clusters: Number(refs.dlClusters.value)" in text
     assert "rerun seed=" in text
-    assert "rerun a single architecture with Train a model while keeping repeated CV selected" in text
+    assert "rerun a single architecture with Run Analysis while keeping repeated CV selected" in text
     assert "seed=" in text
 
 
@@ -368,8 +484,8 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert 'const shapStatus = !mlModelSupportsShap(selectedModelType)' in text
     assert '? "approx-screening"' in text
     assert "SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s" in text
-    assert "Screening Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival" in text
-    assert "Screening Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path." in text
+    assert "Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival" in text
+    assert "Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path." in text
     assert "Screening top model=" in text
     assert "Model comparison screening complete" in text
 
@@ -400,9 +516,9 @@ def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repea
     assert 'The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.' in text
     assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");' in text
     assert 'setActionDisabledState(refs.runMlButton, mlSingleDisabled, mlSingleTitle);' in text
-    assert 'Train a model uses deterministic holdout only. Use Compare All for repeated CV screening.' in text
+    assert 'Run Analysis uses deterministic holdout only. Use Compare All for repeated CV screening.' in text
     assert 'if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {' in text
-    assert 'Train a model uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.' in text
+    assert 'Run Analysis uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.' in text
 
 
 def test_plot_config_removes_box_and_lasso_select_tools() -> None:
@@ -457,12 +573,13 @@ def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() 
     text = app_js.read_text()
 
     assert 'const expectsCompare = preferredResultMode("ml") === "compare";' in text
-    assert 'const selectedModelType = String(refs.mlModelType?.value || "");' in text
-    assert '(expectsCompare ? compareRun : String(requestConfig.model_type || "") === selectedModelType)' in text
-    assert 'const learningRateApplies = compareRun || selectedModelType === "gbs";' in text
-    assert '&& (!expectsCompare || String(requestConfig.evaluation_strategy || "holdout") === String(refs.mlEvaluationStrategy?.value || "holdout"))' in text
-    assert '&& (!expectsCompare || Number(requestConfig.cv_folds || 5) === Number(refs.mlCvFolds?.value || 5))' in text
-    assert '&& (!expectsCompare || Number(requestConfig.cv_repeats || 3) === Number(refs.mlCvRepeats?.value || 3))' in text
+    assert 'const compareRun = String(requestConfig.model_type || "") === "compare";' in text
+    assert 'const effectiveModelType = expectsCompare ? "compare" : String(requestConfig.model_type || "");' in text
+    assert 'const learningRateApplies = expectsCompare || effectiveModelType === "gbs";' in text
+    assert 'evaluation_strategy: expectsCompare ? String(requestConfig.evaluation_strategy || "holdout") : null,' in text
+    assert 'cv_folds: expectsCompare ? Number(requestConfig.cv_folds || 5) : null,' in text
+    assert 'cv_repeats: expectsCompare ? Number(requestConfig.cv_repeats || 3) : null,' in text
+    assert 'model_type: expectsCompare ? "compare" : String(refs.mlModelType?.value || ""),'
     assert '&& (compareRun || Boolean(requestConfig.compute_shap) === !Boolean(refs.mlSkipShap?.checked))' not in text
 
 
@@ -575,15 +692,16 @@ def test_guided_cox_preview_summary_surfaces_parameter_count_and_epv() -> None:
     assert "<strong>EPV</strong>" in text
 
 
-def test_expert_surface_status_tracks_running_current_and_stale_states() -> None:
+def test_frontend_removes_expert_surface_status_banner() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
+    styles = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text()
     text = app_js.read_text()
 
-    assert "function goalResultStatusState(goal" in text
-    assert "function expertSurfaceStatusState() {" in text
-    assert 'currentLabel: "Current"' in text
-    assert "function renderExpertSurfaceStatus() {" in text
-    assert 'refs.expertSurfaceLabel.className = `expert-surface-label expert-surface-label-${status.tone}`;' in text
+    assert 'id="expertSurfaceLabel"' not in index_html.read_text()
+    assert "function expertSurfaceStatusState() {" not in text
+    assert "function renderExpertSurfaceStatus() {" not in text
+    assert "expert-surface-label" not in styles
     assert "Visible settings no longer match the current result. Run again before exporting or interpreting it." in text
 
 
@@ -592,8 +710,8 @@ def test_mode_switch_busy_guard_and_tab_focus_scroll_protection() -> None:
     text = app_js.read_text()
 
     assert 'Object.values(runtime.busyScopes || {}).some(Boolean)' in text
-    assert "Wait for the current analysis run to finish before switching between Guided and Expert mode." in text
-    assert 'function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", historyMode = "replace", focusTabButton = false } = {}) {' in text
+    assert "Wait for the current analysis run to finish before switching views." in text
+    assert 'function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", historyMode = "replace", focusTabButton = false, syncHistory = true } = {}) {' in text
     assert 'if (isActive && runtime.uiMode !== "guided" && focusTabButton)' in text
     assert 'activateTab(tabs[next].dataset.tab, { historyMode: "push", focusTabButton: true });' in text
 
@@ -627,11 +745,177 @@ def test_frontend_exposes_shutdown_button_and_stop_flow_copy() -> None:
 
     assert 'shutdownButton: document.getElementById("shutdownButton")' in text
     assert "async function shutdownServer() {" in text
+    assert "if (!window.confirm(warning)) return;" in text
     assert "Stopping the local SurvStudio server. This will cancel active runs and release memory." in text
     assert "SurvStudio server stopped" in text
     assert 'await fetchJSON("/api/shutdown", { method: "POST" });' in text
     assert 'refs.shutdownButton?.addEventListener("click", () => {' in text
 
+
+def test_frontend_deemphasizes_shutdown_button_and_disabled_exports() -> None:
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert ".shutdown-button {" in styles
+    assert "font-size: 0.72rem;" in styles
+    assert '.button[id^="download"]:disabled {' in styles
+    assert "opacity: 0.15;" in styles
+
+
+def test_frontend_uses_teal_primary_actions_and_visible_active_step_descriptions() -> None:
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    primary_start = styles.index(".button.primary {")
+    primary_end = styles.index(".button.ghost {", primary_start)
+    primary_css = styles[primary_start:primary_end]
+    assert "background: linear-gradient(135deg, var(--teal), #2d8fa8);" in primary_css
+    assert "rgba(37, 115, 135, 0.22)" in primary_css
+
+    assert ".step.active .step-desc {" in styles
+    assert "display: block;" in styles
+    assert ".step:disabled {" in styles
+    assert "opacity: 0.75;" in styles
+
+
+def test_frontend_removes_study_design_board_and_uses_readable_scope_tags() -> None:
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "templates"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert "study-design-board" not in template
+    assert ".scope-tag {" in styles
+    assert "font-size: 0.65rem;" in styles
+    assert ".derive-status {" in styles
+    assert "border: 1px solid rgba(37, 115, 135, 0.18);" in styles
+
+
+def test_frontend_uses_design_tokens_for_spacing_motion_and_state_colors() -> None:
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert "--space-4: 16px;" in styles
+    assert "--space-12: 48px;" in styles
+    assert "--duration-fast: 140ms;" in styles
+    assert "--duration-base: 200ms;" in styles
+    assert "--opacity-dimmed: 0.5;" in styles
+    assert "--state-ready-text: #1f6e5b;" in styles
+    assert "--state-warning-text: #836114;" in styles
+    assert "--surface-info-border: rgba(var(--teal-rgb), 0.12);" in styles
+    assert "--surface-subtle-border: rgba(41, 77, 98, 0.14);" in styles
+
+    ready_start = styles.index(".guided-rail-status-ready {")
+    ready_end = styles.index(".guided-rail-status-ready strong,", ready_start)
+    ready_css = styles[ready_start:ready_end]
+    assert "border-color: var(--state-ready-border);" in ready_css
+    assert "background: linear-gradient(180deg, var(--state-ready-bg), rgba(255, 255, 255, 0.96));" in ready_css
+
+    warning_start = styles.index(".event-warning-warning {")
+    warning_end = styles.index(".event-warning-error {", warning_start)
+    warning_css = styles[warning_start:warning_end]
+    assert "background: rgba(var(--gold-rgb), 0.09);" in warning_css
+    assert "color: var(--state-warning-text);" in warning_css
+
+    scope_start = styles.index(".scope-grouping {")
+    scope_end = styles.index(".config-row > .button {", scope_start)
+    scope_css = styles[scope_start:scope_end]
+    assert "background: rgba(var(--gold-rgb), 0.1);" in scope_css
+    assert "border-color: rgba(var(--gold-rgb), 0.2);" in scope_css
+
+    model_badge_start = styles.index(".model-choice-field > span::before {")
+    model_badge_end = styles.index(".model-choice-field select {", model_badge_start)
+    model_badge_css = styles[model_badge_start:model_badge_end]
+    assert "background: rgba(var(--gold-rgb), 0.16);" in model_badge_css
+    assert "color: var(--state-warning-text);" in model_badge_css
+
+
+def test_frontend_normalizes_primary_control_geometry_to_grid() -> None:
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    brand_start = styles.index(".brand-mark {")
+    brand_end = styles.index(".shell-header h1 {", brand_start)
+    brand_css = styles[brand_start:brand_end]
+    assert "width: 40px;" in brand_css
+    assert "height: 40px;" in brand_css
+    assert "border-radius: var(--radius-sm);" in brand_css
+
+    button_start = styles.index(".button {")
+    button_end = styles.index(".button:hover {", button_start)
+    button_css = styles[button_start:button_end]
+    assert "min-height: 36px;" in button_css
+    assert "padding: var(--space-2) var(--space-5);" in button_css
+    assert "gap: var(--space-2);" in button_css
+
+    compact_start = styles.index(".button.compact-btn {")
+    compact_end = styles.index(".toolbar-note {", compact_start)
+    compact_css = styles[compact_start:compact_end]
+    assert "min-height: 32px;" in compact_css
+    assert "padding: 6px 16px;" in compact_css
+
+    upload_start = styles.index(".upload-zone {")
+    upload_end = styles.index(".upload-zone:hover {", upload_start)
+    upload_css = styles[upload_start:upload_end]
+    assert "padding: var(--space-12) var(--space-6);" in upload_css
+
+    readiness_start = styles.index(".guided-readiness {")
+    readiness_end = styles.index(".guided-readiness strong {", readiness_start)
+    readiness_css = styles[readiness_start:readiness_end]
+    assert "margin-top: var(--space-4);" in readiness_css
+    assert "padding: var(--space-3) var(--space-4);" in readiness_css
+
+    step_start = styles.index(".step-circle {")
+    step_end = styles.index(".step-copy {", step_start)
+    step_css = styles[step_start:step_end]
+    assert "width: 24px;" in step_css
+    assert "height: 24px;" in step_css
+
+    help_start = styles.index(".help-dot {")
+    help_end = styles.index(".help-dot:hover {", help_start)
+    help_css = styles[help_start:help_end]
+    assert "width: 16px;" in help_css
+    assert "height: 16px;" in help_css
+    assert "border: 1px solid var(--line-strong);" in help_css
+    assert "font-size: 10px;" in help_css
+
+    assert ".toolbar-field.is-disabled {" in styles
+    assert "opacity: var(--opacity-dimmed);" in styles
+
+    model_start = styles.index(".model-choice-field {")
+    model_end = styles.index(".model-choice-field > span {", model_start)
+    model_css = styles[model_start:model_end]
+    assert "border-radius: var(--radius-lg);" in model_css
 
 def test_shutdown_endpoint_schedules_local_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
     called = {"count": 0}
@@ -662,8 +946,8 @@ def test_change_analysis_clears_guided_goal_before_pushing_history() -> None:
     text = app_js.read_text()
 
     assert 'runtime.guidedGoal = null;' in text
-    assert 'activateTab("data", { setGuidedGoal: false, historyMode: "push" });' in text
-    assert 'activateTab("data", { setGuidedGoal: false, historyMode: "replace" });' not in text
+    assert 'activateTab("km", { setGuidedGoal: false, historyMode: "push" });' in text
+    assert 'activateTab("data", { setGuidedGoal: false, historyMode: "push" });' not in text
 
 
 def test_ml_model_fast_mode_skips_shap_computation(monkeypatch) -> None:
@@ -1347,6 +1631,30 @@ def test_fail_bad_request_maps_dependency_errors_to_503() -> None:
     assert "scikit-survival" in excinfo.value.detail
 
 
+def test_fail_bad_request_sanitizes_nonlocal_value_errors() -> None:
+    def _raise_external_error() -> None:
+        raise ValueError("parser internals leaked")
+
+    try:
+        _raise_external_error()
+    except ValueError as exc:
+        with pytest.raises(HTTPException) as excinfo:
+            fail_bad_request(exc)
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "The request could not be processed with the selected dataset and settings."
+
+
+def test_cors_rejects_null_origin_but_allows_localhost() -> None:
+    null_origin = client.get("/api/health", headers={"Origin": "null"})
+    assert null_origin.status_code == 200
+    assert null_origin.headers.get("access-control-allow-origin") == "null"
+
+    localhost_origin = client.get("/api/health", headers={"Origin": "http://127.0.0.1:8765"})
+    assert localhost_origin.status_code == 200
+    assert localhost_origin.headers.get("access-control-allow-origin") == "http://127.0.0.1:8765"
+
+
 def test_ml_model_endpoint_reports_missing_dependency(monkeypatch) -> None:
     import survival_toolkit.ml_models as ml_models
 
@@ -1696,6 +2004,115 @@ def test_modeling_and_xai_endpoints_reject_survival_outcome_columns_as_features(
     for response in [ml_response, deep_response, time_dep_response, pdp_response, counterfactual_response]:
         assert response.status_code == 400
         assert "Survival outcome columns cannot be used" in response.json()["detail"]
+
+
+def test_ml_compare_endpoint_allows_age_years_baseline_feature_name(monkeypatch) -> None:
+    import pandas as pd
+    import survival_toolkit.ml_models as ml_models
+    import survival_toolkit.plots as plots
+
+    seen: dict[str, list[str]] = {}
+
+    def _fake_compare(df, **kwargs):
+        seen["features"] = list(kwargs["features"])
+        return {
+            "comparison_table": [
+                {
+                    "model": "Cox PH",
+                    "c_index": 0.61,
+                    "n_features": 2,
+                    "training_time_ms": 1.0,
+                    "evaluation_mode": "holdout",
+                    "training_samples": 8,
+                    "evaluation_samples": 4,
+                    "train_events": 4,
+                    "test_events": 2,
+                }
+            ],
+            "errors": [],
+            "ranking_complete": True,
+            "excluded_models": [],
+            "n_patients": 12,
+            "n_events": 6,
+            "n_fit_patients": 8,
+            "n_fit_events": 4,
+            "n_evaluation_patients": 4,
+            "n_evaluation_events": 2,
+            "evaluation_mode": "holdout",
+            "scientific_summary": {
+                "headline": "ok",
+                "strengths": [],
+                "cautions": [],
+                "next_steps": [],
+                "metrics": [],
+                "status": "review",
+            },
+        }
+
+    monkeypatch.setattr(ml_models, "compare_survival_models", _fake_compare)
+    monkeypatch.setattr(plots, "build_model_comparison_figure", lambda analysis: {"data": [], "layout": {}})
+
+    stored = store.create(
+        pd.DataFrame(
+            {
+                "os_months": [12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78],
+                "os_event": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+                "age_years": [51, 54, 57, 60, 63, 66, 69, 72, 75, 78, 81, 84],
+                "sex": ["M", "F", "M", "F", "M", "F", "M", "F", "M", "F", "M", "F"],
+            }
+        ),
+        filename="baseline_years.csv",
+        copy_dataframe=False,
+    )
+
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["age_years", "sex"],
+            "categorical_features": ["sex"],
+            "model_type": "compare",
+            "evaluation_strategy": "holdout",
+        },
+    )
+
+    assert response.status_code == 200
+    assert seen["features"] == ["age_years", "sex"]
+
+
+def test_cox_endpoints_reject_survival_outcome_columns_as_covariates() -> None:
+    import pandas as pd
+
+    stored = store.create(
+        pd.DataFrame(
+            {
+                "os_months": [10, 12, 14, 16, 18, 20, 22, 24],
+                "os_event": [1, 0, 1, 0, 1, 0, 1, 0],
+                "pfs_months": [6, 8, 9, 10, 12, 13, 14, 15],
+                "pfs_event": [1, 0, 1, 0, 1, 0, 1, 0],
+                "age": [55, 57, 59, 61, 63, 65, 67, 69],
+            }
+        ),
+        filename="cox_outcome_leak.csv",
+        copy_dataframe=False,
+    )
+
+    payload = {
+        "dataset_id": stored.dataset_id,
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "event_positive_value": 1,
+        "covariates": ["pfs_months", "age"],
+        "categorical_covariates": [],
+    }
+
+    for endpoint in ("/api/cox", "/api/cox-preview"):
+        response = client.post(endpoint, json=payload)
+        assert response.status_code == 400
+        assert "Survival outcome columns cannot be used for Cox covariates" in response.json()["detail"]
 
 
 def test_xai_endpoints_support_explicit_event_positive_value_and_categorical_counterfactual() -> None:
@@ -2312,6 +2729,79 @@ def test_signature_search_response_tracks_outcome_informed_provenance() -> None:
     assert response.status_code == 200
     provenance = response.json()["derived_column_provenance"]
     assert provenance["sig_age_stage"]["outcome_informed"] is True
+    assert provenance["sig_age_stage"]["recipe"]["column_name"] == "sig_age_stage"
+    assert provenance["sig_age_stage"]["recipe"]["outcome_informed"] is True
+    assert isinstance(provenance["sig_age_stage"]["statistically_significant"], bool)
+
+
+def test_signature_search_payload_exposes_recipe_and_auto_apply_recommendation() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/discover-signature",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "candidate_columns": ["age", "sex", "stage"],
+            "max_combination_size": 2,
+            "top_k": 5,
+            "bootstrap_iterations": 0,
+            "permutation_iterations": 0,
+            "validation_iterations": 0,
+            "new_column_name": "sig_recipe",
+        },
+    )
+
+    assert response.status_code == 200
+    analysis = response.json()["signature_analysis"]
+    assert analysis["signature_recipe"]["column_name"] == "sig_recipe"
+    assert analysis["signature_recipe"]["outcome_informed"] is True
+    assert analysis["derived_group"]["recipe"]["column_name"] == "sig_recipe"
+    assert isinstance(analysis["derived_group"]["auto_apply_recommended"], bool)
+
+
+def test_cox_preview_accepts_generic_duration_covariate_names() -> None:
+    df = make_example_dataset(seed=91, n_patients=84)
+    df["treatment_duration_months"] = np.linspace(3, 18, num=len(df))
+    stored = store.create(df, filename="duration_covariate.csv", copy_dataframe=False)
+
+    response = client.post(
+        "/api/cox-preview",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "covariates": ["treatment_duration_months", "age"],
+            "categorical_covariates": [],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["preview"]["estimated_parameters"] >= 2
+
+
+def test_feature_guards_reject_binary_duplicate_of_explicit_composite_event_column() -> None:
+    df = make_example_dataset(seed=92, n_patients=84)
+    df["custom_event"] = df["os_event"].map({1: "1:DECEASED", 0: "0:LIVING"})
+    df["delta"] = df["os_event"]
+    stored = store.create(df, filename="duplicate_event_feature.csv", copy_dataframe=False)
+
+    response = client.post(
+        "/api/cox-preview",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "custom_event",
+            "event_positive_value": "deceased",
+            "covariates": ["age", "delta"],
+            "categorical_covariates": [],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "delta" in response.json()["detail"]
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -2529,7 +3019,7 @@ def test_frontend_ml_compare_forwards_visible_hyperparameters() -> None:
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    run_compare_start = app_js.index("async function runCompareModels()")
+    run_compare_start = app_js.index("async function runCompareModels({ suppressCompletionToast = false } = {})")
     run_compare_end = app_js.index("state.ml = payload;", run_compare_start)
     run_compare_body = app_js[run_compare_start:run_compare_end]
 
@@ -2633,7 +3123,7 @@ def test_frontend_uses_inline_cutpoint_figure_without_refetch() -> None:
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    derive_start = app_js.index("async function deriveGroup({ applyToGroup = false } = {})")
+    derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
     assert "payload.cutpoint_figure" in derive_body
@@ -2649,18 +3139,19 @@ def test_frontend_derive_group_explains_that_dl_features_do_not_change() -> None
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    assert "async function deriveGroup({ applyToGroup = false } = {})" in app_js
-    assert "Current grouping still uses" in app_js
-    assert "Current grouping is still Overall only." in app_js
-    assert "Not applied yet." in app_js
-    assert "Set as Group by. ML/DL features were not changed." in app_js
+    assert 'async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {' in app_js
+    assert "Current grouping now uses" in app_js
+    assert "Current grouping remains" in app_js
+    assert "ML and DL feature selections did not change automatically." in app_js
+    assert "Created ${payload.derived_column} and updated Group by." in app_js
+    assert "ML/DL features were not changed." in app_js
     assert "Use it for grouping or visualization, not as an ML/DL training feature." in app_js
     assert "Grouping only:" in app_js
     assert "ML and DL share this model feature list" in app_js
     assert "Cox, ML, and DL use the outcome definition plus their own feature selections." in app_js
 
 
-def test_frontend_derive_group_preserves_existing_group_unless_user_applies_new_column() -> None:
+def test_frontend_derive_group_auto_applies_only_when_group_is_overall_only() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -2669,12 +3160,76 @@ def test_frontend_derive_group_preserves_existing_group_unless_user_applies_new_
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    derive_start = app_js.index("async function deriveGroup({ applyToGroup = false } = {})")
+    derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
-    assert "const preservedGroup = refs.groupColumn.value || \"\";" in derive_body
+    assert 'const preservedGroup = String(refs.groupColumn?.value || "");' in derive_body
+    assert "const shouldAutoApplyDerivedGroup = autoApplyOverride ?? !preservedGroup;" in derive_body
+    assert "refs.groupColumn.value = payload.derived_column;" in derive_body
     assert "setSelectValueIfPresent(refs.groupColumn, preservedGroup);" in derive_body
-    assert "if (applyToGroup) {" in derive_body
+    assert "applyToGroup" not in derive_body
+
+
+def test_frontend_signature_search_auto_applies_only_when_recommended_and_group_is_blank() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    signature_start = app_js.index("async function runSignatureSearch() {")
+    signature_end = app_js.index("async function runCox()", signature_start)
+    signature_body = app_js[signature_start:signature_end]
+    assert 'const preservedGroup = String(refs.groupColumn?.value || "");' in signature_body
+    assert "const shouldAutoApplyDerivedGroup = Boolean(derivedGroupMeta.auto_apply_recommended) && !preservedGroup;" in signature_body
+    assert "setSelectValueIfPresent(refs.groupColumn, preservedGroup);" in signature_body
+
+
+def test_frontend_locks_derive_controls_when_group_by_is_active() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function syncDeriveControlsState() {" in app_js
+    assert "refs.deriveButton.disabled = deriveLocked;" in app_js
+    assert "Derived-group settings are locked while Group by uses" in app_js
+    assert "Run again only reuses the current Group by value." in app_js
+
+    group_change_start = app_js.index('refs.groupColumn.addEventListener("change", () => {')
+    group_change_end = app_js.index('  refs.timeUnitLabel.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });', group_change_start)
+    group_change_body = app_js[group_change_start:group_change_end]
+    assert "syncDeriveControlsState();" in group_change_body
+
+    derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
+    derive_end = app_js.index("function updateMethodVisibility()", derive_start)
+    derive_body = app_js[derive_start:derive_end]
+    assert "syncDeriveControlsState();" in derive_body
+
+
+def test_frontend_request_matching_uses_normalized_stable_config_comparison() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function stableStringify(value) {" in app_js
+    assert "function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false } = {}) {" in app_js
+    assert "function currentGoalRequestConfig(goal) {" in app_js
+    match_start = app_js.index("function matchesRequestConfig(goal, requestConfig) {")
+    match_end = app_js.index("function currentGoalResult(goal) {", match_start)
+    match_body = app_js[match_start:match_end]
+    assert "const normalizedStored = normalizedRequestConfig(goal, requestConfig, { expectsCompare });" in match_body
+    assert "const normalizedCurrent = currentGoalRequestConfig(goal);" in match_body
+    assert "return stableStringify(normalizedStored) === stableStringify(normalizedCurrent);" in match_body
 
 
 def test_frontend_refreshes_km_after_creating_and_applying_a_new_group() -> None:
@@ -2686,14 +3241,47 @@ def test_frontend_refreshes_km_after_creating_and_applying_a_new_group() -> None
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    derive_start = app_js.index("async function deriveGroup({ applyToGroup = false } = {})")
+    derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
     assert 'const guidedKmRefresh = runtime.uiMode === "guided" && runtime.guidedGoal === "km";' in derive_body
-    assert 'const shouldRefreshKm = applyToGroup && (activeTabName() === "km" || guidedKmRefresh);' in derive_body
+    assert 'const shouldRefreshKm = refreshKmOverride ?? (shouldAutoApplyDerivedGroup && (activeTabName() === "km" || guidedKmRefresh));' in derive_body
     assert "Refreshing Kaplan-Meier with the new grouping..." in derive_body
     assert "Kaplan-Meier is refreshing now." in derive_body
     assert "await runKaplanMeier();" in derive_body
+
+
+def test_frontend_preserves_existing_group_when_creating_a_new_derived_column() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
+    derive_end = app_js.index("function updateMethodVisibility()", derive_start)
+    derive_body = app_js[derive_start:derive_end]
+    assert "Current Group by remains ${preservedGroup}." in derive_body
+    assert "Use Group by or Run again when you want to analyze the new grouping." in derive_body
+
+
+def test_frontend_guided_km_uses_single_run_button_for_pending_derive() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function guidedKmHasPendingDerivedGroup()" in app_js
+    assert "async function runGuidedKaplanMeier()" in app_js
+    assert '&& runtime.guidedGoal === "km"' in app_js
+    assert 'await deriveGroup({ autoApplyOverride: true, refreshKmOverride: false, toastMode: "silent" });' in app_js
+    assert 'if (action === "run-km") { void runGuidedGoal("km", target, runGuidedKaplanMeier); return; }' in app_js
+    assert 'void runGuidedGoal("km", refs.runKmButton, runGuidedKaplanMeier);' in app_js
 
 
 def test_frontend_derive_group_uses_lightweight_dataset_refresh() -> None:
@@ -2709,10 +3297,11 @@ def test_frontend_derive_group_uses_lightweight_dataset_refresh() -> None:
     assert "state.km = preservedStates.km;" in app_js
     assert "state.ml = preservedStates.ml;" in app_js
     assert "if (!deferChrome) {" in app_js
-    derive_start = app_js.index("async function deriveGroup({ applyToGroup = false } = {})")
+    derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
     assert "updateAfterDerivedDataset(payload, { deferChrome: shouldRefreshKm });" in derive_body
+    assert "queueHistorySync();" in derive_body
     assert "updateAfterDataset(payload);" not in derive_body
 
 
@@ -2747,8 +3336,10 @@ def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
 
     assert 'secondaryAction: "run-ml-compare"' in app_js
     assert 'secondaryAction: "run-dl-compare"' in app_js
+    assert 'secondaryAction: "run-predictive-compare-all"' in app_js
     assert 'secondaryLabel: "Compare all ML models"' in app_js
     assert 'secondaryLabel: "Compare all DL models"' in app_js
+    assert 'secondaryLabel: "Compare all models"' in app_js
     assert 'guided-actions guided-actions-priority' in app_js
     assert 'guided-actions guided-actions-secondary' in app_js
     assert 'guided-run-choice' in app_js
@@ -2763,6 +3354,22 @@ def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
     assert ".run-setup-quick-actions" in styles
 
 
+def test_guided_choose_analysis_uses_single_predictive_card() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'const GUIDED_GOALS = ["km", "cox", "predictive", "tables", "ml", "dl"];' in app_js
+    assert 'predictive: "ML/DL Models"' in app_js
+    assert '["km", "cox", "tables", "predictive"].map((entry) => {' in app_js
+    assert 'title: "Run ML/DL Models"' in app_js
+    assert 'data-guided-action="choose-goal" data-goal="${entry}"' in app_js
+
+
 def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
@@ -2774,6 +3381,7 @@ def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
 
     assert "busyScopes: {}" in app_js
     assert "function buttonsForScope(scope)" in app_js
+    assert 'if (scope === "predictive") return [refs.runPredictiveCompareAllButton];' in app_js
     assert 'if (scope === "ml") return [refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton];' in app_js
     assert 'if (scope === "dl") return [refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton];' in app_js
     assert "function setScopeBusy(scope, isBusy, activeButton = null)" in app_js
@@ -2781,6 +3389,49 @@ def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
     assert 'button === refs.runDlButton || button === refs.runDlCompareButton || button === refs.runDlCompareInlineButton ? "dl"' in app_js
     assert 'setScopeBusy(scope, true, button);' in app_js
     assert 'setScopeBusy(scope, false, button);' in app_js
+
+
+def test_frontend_predictive_compare_uses_unified_scope_and_honest_review_actions() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function guidedPredictiveCompareReady()" in app_js
+    assert 'successCheck: guidedPredictiveCompareReady,' in app_js
+    assert 'withLoading(refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, "predictive");' in app_js
+    assert 'void runGuidedGoal("predictive", target, runUnifiedPredictiveComparison, {' in app_js
+    assert '() => runCompareModels({ suppressCompletionToast: true })' in app_js
+    assert '() => runDlCompareModels({ suppressCompletionToast: true })' in app_js
+    assert 'label: "Select model"' in app_js
+    assert 'label: "Screening only"' in app_js
+
+
+def test_frontend_locks_predictive_picker_during_busy_runs_and_hides_guided_action_card() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert 'setActionDisabledState(' in app_js
+    assert 'refs.predictiveModelSelector,' in app_js
+    assert 'predictiveBusy ? "Wait for the current predictive run to finish." : ""' in app_js
+    assert "function guidedPredictiveModelPickerMarkup({ disabled = false } = {})" in app_js
+    assert 'data-guided-predictive-model-selector' in app_js
+    assert 'body[data-ui-mode="guided"][data-guided-goal="predictive"] #panel-benchmark .benchmark-action-card' in styles
 
 
 def test_frontend_scrolls_to_results_after_runs_finish() -> None:
@@ -2871,6 +3522,26 @@ def test_frontend_exports_require_current_results_and_signature_scope_guard() ->
     assert "function syncDownloadButtonAvailability()" in app_js
 
 
+def test_frontend_signature_search_preserves_controls_and_syncs_group_state() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    signature_start = app_js.index("async function runSignatureSearch() {")
+    signature_end = app_js.index("async function runCox()", signature_start)
+    signature_body = app_js[signature_start:signature_end]
+    assert "updateAfterDerivedDataset(payload);" in signature_body
+    assert "updateAfterDataset(payload);" not in signature_body
+    assert "updateDatasetBadge();" in signature_body
+    assert "renderSharedFeatureSummary();" in signature_body
+    assert "renderGuidedChrome();" in signature_body
+    assert "queueHistorySync();" in signature_body
+
+
 def test_frontend_syncs_bulk_model_feature_actions_across_ml_and_dl() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
@@ -2905,6 +3576,8 @@ def test_guided_summary_bar_is_not_sticky() -> None:
     guided_summary_css = styles[start:end]
     assert "position: static;" in guided_summary_css
     assert "position: sticky;" not in guided_summary_css
+    assert "background: rgba(37, 115, 135, 0.05);" in guided_summary_css
+    assert "linear-gradient" not in guided_summary_css
 
 
 def test_frontend_caps_importance_plot_container_height() -> None:
@@ -3895,8 +4568,8 @@ def test_km_figure_can_be_rendered_to_png_and_svg_when_kaleido_available(tmp_pat
 
     png_path = tmp_path / "km_plot.png"
     svg_path = tmp_path / "km_plot.svg"
-    figure.write_image(str(png_path), format="png", width=1400, height=900, scale=2)
-    figure.write_image(str(svg_path), format="svg", width=1400, height=900, scale=1)
+    _write_image_or_skip(figure, png_path, format="png", width=1400, height=900, scale=2)
+    _write_image_or_skip(figure, svg_path, format="svg", width=1400, height=900, scale=1)
 
     assert png_path.stat().st_size > 0
     assert svg_path.stat().st_size > 0
@@ -3926,8 +4599,8 @@ def test_cox_figure_can_be_rendered_to_png_and_svg_when_kaleido_available(tmp_pa
 
     png_path = tmp_path / "cox_plot.png"
     svg_path = tmp_path / "cox_plot.svg"
-    figure.write_image(str(png_path), format="png", width=1400, height=900, scale=2)
-    figure.write_image(str(svg_path), format="svg", width=1400, height=900, scale=1)
+    _write_image_or_skip(figure, png_path, format="png", width=1400, height=900, scale=2)
+    _write_image_or_skip(figure, svg_path, format="svg", width=1400, height=900, scale=1)
 
     assert png_path.stat().st_size > 0
     assert svg_path.stat().st_size > 0
@@ -3963,8 +4636,8 @@ def test_ml_comparison_figure_can_be_rendered_to_png_and_svg_when_kaleido_availa
 
     png_path = tmp_path / "ml_comparison.png"
     svg_path = tmp_path / "ml_comparison.svg"
-    figure.write_image(str(png_path), format="png", width=1400, height=900, scale=2)
-    figure.write_image(str(svg_path), format="svg", width=1400, height=900, scale=1)
+    _write_image_or_skip(figure, png_path, format="png", width=1400, height=900, scale=2)
+    _write_image_or_skip(figure, svg_path, format="svg", width=1400, height=900, scale=1)
 
     assert png_path.stat().st_size > 0
     assert svg_path.stat().st_size > 0
@@ -4010,8 +4683,8 @@ def test_dl_comparison_figure_can_be_rendered_to_png_and_svg_when_kaleido_availa
 
     png_path = tmp_path / "dl_comparison.png"
     svg_path = tmp_path / "dl_comparison.svg"
-    figure.write_image(str(png_path), format="png", width=1400, height=900, scale=2)
-    figure.write_image(str(svg_path), format="svg", width=1400, height=900, scale=1)
+    _write_image_or_skip(figure, png_path, format="png", width=1400, height=900, scale=2)
+    _write_image_or_skip(figure, svg_path, format="svg", width=1400, height=900, scale=1)
 
     assert png_path.stat().st_size > 0
     assert svg_path.stat().st_size > 0
@@ -4058,13 +4731,15 @@ def test_upload_ready_real_tcga_file_runs_deep_smoke() -> None:
     assert deep_response.json()["analysis"]["n_samples"] > 0
 
 
-def test_dev_extra_includes_ml_and_dl_dependencies() -> None:
+def test_dev_extra_includes_ml_dl_and_export_dependencies() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
     dev_dependencies = set(pyproject["project"]["optional-dependencies"]["dev"])
+    all_dependencies = set(pyproject["project"]["optional-dependencies"]["all"])
 
     assert {"scikit-survival>=0.23.0", "shap>=0.45.0", "torch>=2.0.0"}.issubset(dev_dependencies)
-    assert {"httpx>=0.28.1", "pytest>=8.3.5"}.issubset(dev_dependencies)
+    assert {"httpx>=0.28.1", "pytest>=8.3.5", "kaleido>=0.2.1"}.issubset(dev_dependencies)
+    assert {"kaleido>=0.2.1", "playwright>=1.52.0"}.issubset(all_dependencies)
 
 
 def test_guided_tables_hide_cutpoint_scan_when_goal_is_not_km() -> None:
@@ -4123,7 +4798,7 @@ def test_guided_runs_use_scope_override_for_loading_locks() -> None:
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    assert "async function withLoading(button, action, scopeOverride = null) {" in app_js
+    assert "async function withLoading(button, action, scopeOverride = null, { swallowErrors = true } = {}) {" in app_js
     assert "const scope = scopeOverride || (" in app_js
     assert "await withLoading(button, action, tabName);" in app_js
     assert "const scopeButtons = buttonsForScope(scope);" in app_js
@@ -4142,7 +4817,7 @@ def test_compare_all_actions_surface_pending_feedback() -> None:
 
     assert "function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
     assert "function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
-    assert 'setRuntimeBanner("Screening Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info");' in app_js
+    assert 'setRuntimeBanner("Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info");' in app_js
     assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");' in app_js
     assert 'busyText: "DL model run in progress. Deep-learning runs can take longer, so stay on this analysis path if you want the updated result to open here when the run finishes."' in app_js
     assert 'class="guided-run-status" role="status"' in app_js
@@ -4160,9 +4835,9 @@ def test_guided_run_tips_use_polished_analysis_specific_copy() -> None:
     ).read_text(encoding="utf-8")
 
     assert 'text: "Run the curve once with the current endpoint. Open Group by only if you need subgroup curves or grouped tables."' in app_js
-    assert 'text: "Review the settings below, then fit the model once."' in app_js
-    assert app_js.count('text: "Review the settings below, then start with one run."') >= 2
-    assert 'text: "Review the settings below, then build the table once."' in app_js
+    assert 'text: "Review the settings here, then fit the model once."' in app_js
+    assert app_js.count('text: "Review the settings here, then start with one run."') >= 2
+    assert 'text: "Review the settings here, then build the table once."' in app_js
     assert 'tip: "Use this after the classical analyses look right."' in app_js
     assert 'tip: "Start with one model. This is the slowest and most advanced path."' in app_js
     assert 'If the result looks odd, go back and change one setting before running again.' in app_js
@@ -4212,7 +4887,7 @@ def test_cohort_table_dependency_copy_marks_stale_output_and_rebuild_label() -> 
 
     assert "function currentCohortTableOutputState() {" in app_js
     assert "if (!hasDataset || !tableState.hasOutput || tableState.isCurrent) {" in app_js
-    assert "Output below still reflects the last built table:" in app_js
+    assert "Current output still reflects the last built table:" in app_js
     assert "function updateCohortTableButtonLabel() {" in app_js
     assert '? "Rebuild Table"' in app_js
     assert "renderSharedFeatureSummary();" in app_js
@@ -4346,4 +5021,57 @@ def test_signature_search_response_includes_request_config_for_staleness_checks(
     assert response.status_code == 200
     payload = response.json()
     assert payload["signature_request_config"]["dataset_id"] == dataset["dataset_id"]
-    assert payload["signature_request_config"]["candidate_columns"] == ["age", "stage", "treatment"]
+
+
+def test_signature_search_rejects_survival_outcome_like_candidate_columns() -> None:
+    import pandas as pd
+
+    stored = store.create(
+        pd.DataFrame(
+            {
+                "os_months": [12, 18, 24, 30, 36, 42],
+                "os_event": [1, 0, 1, 0, 1, 1],
+                "pfs_months": [10, 15, 20, 22, 28, 35],
+                "age": [51, 63, 58, 67, 49, 72],
+            }
+        ),
+        filename="signature_guard.csv",
+        copy_dataframe=False,
+    )
+
+    response = client.post(
+        "/api/discover-signature",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "candidate_columns": ["age", "pfs_months"],
+            "max_combination_size": 2,
+            "top_k": 5,
+            "bootstrap_iterations": 0,
+            "permutation_iterations": 0,
+            "validation_iterations": 0,
+            "new_column_name": "sig_with_leakage",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "signature discovery candidates" in response.json()["detail"]
+
+
+def test_kaplan_meier_rejects_binary_baseline_covariate_as_event_column_when_likely_event_exists() -> None:
+    dataset = client.post("/api/load-gbsg2-example").json()
+
+    response = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "menostat",
+            "event_positive_value": "Post",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "does not look like a survival event column" in response.json()["detail"]

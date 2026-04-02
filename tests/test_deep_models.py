@@ -262,6 +262,24 @@ def test_vae_reparameterize_clamps_extreme_log_variance() -> None:
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_survival_vae_uses_posterior_mean_for_risk_head_during_training() -> None:
+    import torch
+    import survival_toolkit.deep_models as deep_models
+
+    torch.manual_seed(3)
+    model = deep_models.SurvivalVAENet(in_features=4, hidden_layers=[8], latent_dim=2, dropout=0.0)
+    model.train()
+    x = torch.randn((5, 4), dtype=torch.float32)
+
+    x_recon_a, mu_a, _, risk_a = model(x)
+    x_recon_b, mu_b, _, risk_b = model(x)
+
+    assert not torch.allclose(x_recon_a, x_recon_b)
+    assert torch.allclose(mu_a, mu_b)
+    assert torch.allclose(risk_a, risk_b)
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 def test_prepare_deep_inputs_reports_missing_columns_cleanly() -> None:
     import survival_toolkit.deep_models as deep_models
 
@@ -324,6 +342,88 @@ def test_deep_encoder_imputes_missing_numeric_and_categorical_values() -> None:
     assert transformed["n_samples"] == cleaned.shape[0]
     assert torch.isfinite(transformed["X_tensor"]).all()
     assert "sex__missing" in transformed["feature_names"]
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_deep_encoder_records_categorical_and_numeric_reconstruction_indices() -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    frame = pd.DataFrame(
+        {
+            "os_months": [5, 6, 7, 8],
+            "os_event": [1, 0, 1, 0],
+            "age": [62, 58, 55, 67],
+            "sex": ["female", "male", pd.NA, "female"],
+        }
+    )
+    cleaned = deep_models._coerce_deep_frame(
+        frame,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "sex"],
+        categorical_features=["sex"],
+        event_positive_value=1,
+        min_samples=1,
+    )
+    encoder = deep_models._fit_deep_encoder(cleaned, ["age", "sex"], ["sex"])
+    transformed = deep_models._transform_deep_frame(
+        cleaned,
+        time_column="os_months",
+        event_column="os_event",
+        encoder=encoder,
+    )
+
+    assert transformed["feature_names"] == ["sex_male", "sex__unknown", "sex__missing", "age"]
+    assert transformed["categorical_feature_indices"] == [0, 1, 2]
+    assert transformed["numeric_feature_indices"] == [3]
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_vae_combined_loss_uses_bce_for_categorical_reconstruction_terms() -> None:
+    import torch
+    import torch.nn.functional as F
+
+    from survival_toolkit.deep_models import _vae_combined_loss
+
+    x = torch.tensor(
+        [
+            [1.0, 0.0, 0.5, -0.5],
+            [0.0, 1.0, -1.0, 0.25],
+        ],
+        dtype=torch.float32,
+    )
+    x_recon = torch.tensor(
+        [
+            [2.0, -1.0, 0.0, -1.0],
+            [-2.0, 3.0, -0.5, 0.75],
+        ],
+        dtype=torch.float32,
+    )
+    mu = torch.zeros((2, 2), dtype=torch.float32)
+    log_var = torch.zeros((2, 2), dtype=torch.float32)
+    risk = torch.zeros((2, 1), dtype=torch.float32)
+    times = torch.tensor([1.0, 2.0], dtype=torch.float32)
+    events = torch.tensor([1.0, 0.0], dtype=torch.float32)
+
+    loss = _vae_combined_loss(
+        x,
+        x_recon,
+        mu,
+        log_var,
+        risk,
+        times,
+        events,
+        kl_weight=0.0,
+        cox_weight=0.0,
+        categorical_feature_indices=[0, 1],
+        numeric_feature_indices=[2, 3],
+    )
+
+    expected = (
+        F.binary_cross_entropy_with_logits(x_recon[:, :2], x[:, :2], reduction="sum")
+        + F.mse_loss(x_recon[:, 2:], x[:, 2:], reduction="sum")
+    ) / x.numel()
+    assert torch.allclose(loss, expected)
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -426,6 +526,28 @@ def test_deephit_ranking_loss_stays_finite_for_large_pairwise_gaps() -> None:
     loss = _deephit_loss(pmf, time_bins, events, alpha=0.0)
 
     assert torch.isfinite(loss)
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_deephit_loss_stays_finite_for_near_zero_tail_survival() -> None:
+    import torch
+
+    from survival_toolkit.deep_models import _deephit_loss
+
+    pmf = torch.tensor(
+        [
+            [0.5, 0.5, 1e-12],
+            [0.2, 0.3, 0.5],
+        ],
+        dtype=torch.float32,
+    )
+    time_bins = torch.tensor([2, 1], dtype=torch.long)
+    events = torch.tensor([0.0, 1.0], dtype=torch.float32)
+
+    loss = _deephit_loss(pmf, time_bins, events, alpha=1.0)
+
+    assert torch.isfinite(loss)
+    assert loss.item() > 0.0
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -568,6 +690,36 @@ def test_neural_mtlr_net_uses_dropout_layers() -> None:
     dropout_layers = [module for module in model.encoder if isinstance(module, nn.Dropout)]
     assert len(dropout_layers) == 2
     assert all(layer.p == pytest.approx(0.2) for layer in dropout_layers)
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_neural_mtlr_uses_right_cumulative_parameterization() -> None:
+    import torch
+    import torch.nn as nn
+
+    from survival_toolkit.deep_models import NeuralMTLRNet
+
+    model = NeuralMTLRNet(in_features=2, hidden_layers=[2], num_time_bins=3, dropout=0.0)
+    model.encoder = nn.Identity()
+    model.output_layer = nn.Linear(2, 4, bias=False)
+    with torch.no_grad():
+        model.output_layer.weight.copy_(
+            torch.tensor(
+                [
+                    [1.0, 0.0],
+                    [0.0, 1.0],
+                    [1.0, 1.0],
+                    [2.0, -1.0],
+                ],
+                dtype=torch.float32,
+            )
+        )
+
+    x = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
+    logits = model.output_layer(x)
+    expected = torch.flip(torch.cumsum(torch.flip(logits, dims=[1]), dim=1), dims=[1])
+
+    assert torch.allclose(model(x), expected)
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")

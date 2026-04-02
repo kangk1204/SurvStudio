@@ -1,6 +1,7 @@
 # SurvStudio
 
 SurvStudio is a local-first survival analysis workbench for single-event right-censored tabular data.
+The public UI is a guided five-step workflow: load data, confirm the endpoint, choose one analysis path, run it, then review the result.
 
 It supports:
 - Kaplan-Meier curves and weighted log-rank tests
@@ -8,6 +9,7 @@ It supports:
 - optional machine-learning survival models
 - optional deep-learning survival models
 - manuscript-oriented table export
+- one unified Predictive Models workspace for ML and DL screening
 
 ## Who This Is For
 
@@ -16,6 +18,7 @@ This project is for users who have cohort data in a spreadsheet-like table and w
 - run standard survival analyses without writing much code
 - compare classical, ML, and DL survival models
 - export figures and tables for reports or manuscripts
+- keep one analysis visible at a time instead of juggling multiple panels
 
 This project is **not** a general survival-analysis platform for every survival setting.
 The current scope is:
@@ -304,7 +307,8 @@ pip install -e ".[all]"
 Notes:
 - `.[ml]` adds `scikit-survival` and `shap`
 - `.[dl]` adds `torch`
-- `.[dev]` includes pytest and httpx plus the ML and DL extras
+- `.[dev]` includes pytest, httpx, and `kaleido` plus the ML and DL extras
+- `.[all]` includes the ML, DL, export, and browser-test extras
 - on Linux, `.[dl]`, `.[dev]`, and `.[all]` can download a large PyTorch wheel and, depending on platform resolution, additional CUDA runtime packages
 - if you only want to run the dashboard or classical survival workflows, stay with `pip install -e .`
 
@@ -336,6 +340,8 @@ Then open:
 ```text
 http://127.0.0.1:8000
 ```
+
+The app opens in the guided workflow by default. For predictive modeling, use the unified `Predictive Models` workspace to compare ML and DL models together or test one selected model at a time.
 
 If `python -m survival_toolkit` does not start the server, check:
 - the virtual environment is activated
