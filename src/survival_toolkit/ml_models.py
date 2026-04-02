@@ -21,8 +21,6 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import StratifiedKFold, train_test_split
 from statsmodels.duration.hazard_regression import PHReg
 from statsmodels.duration.survfunc import survdiff
 
@@ -33,7 +31,25 @@ from survival_toolkit.analysis import (
     _safe_float,
     coerce_event,
 )
+from survival_toolkit.encoding import (
+    coerce_feature_subset as _coerce_feature_subset,
+    fit_feature_encoder as _fit_shared_feature_encoder,
+    ordered_category_values as _ordered_category_values,
+    transform_feature_encoder as _transform_shared_feature_encoder,
+)
+from survival_toolkit.errors import user_input_boundary
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
+
+try:
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import StratifiedKFold, train_test_split
+
+    _SKLEARN_AVAILABLE = True
+except ImportError:
+    RandomForestClassifier = None
+    StratifiedKFold = None
+    train_test_split = None
+    _SKLEARN_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Optional dependency guards
@@ -70,6 +86,10 @@ _EXPECTED_CUTPOINT_SCAN_ERRORS = (
     np.linalg.LinAlgError,
 )
 _TREE_N_JOBS = -1
+_SKLEARN_INSTALL_MSG = (
+    "scikit-learn is required for ML model splitting and time-dependent importance. "
+    "Install with: pip install 'survival-toolkit[ml]'"
+)
 
 
 def _prepare_sksurv_data(
@@ -88,26 +108,9 @@ def _prepare_sksurv_data(
     return y
 
 
-def _coerce_feature_subset(
-    df: pd.DataFrame,
-    features: Sequence[str],
-    categorical_features: Sequence[str] | None = None,
-) -> tuple[pd.DataFrame, list[str], list[str]]:
-    """Coerce a feature subset into numeric/categorical columns."""
-    categorical_features = list(categorical_features or [])
-    selected = df[list(features)].copy()
-    resolved_categorical: list[str] = []
-    for col in features:
-        if col in categorical_features:
-            selected[col] = selected[col].astype("string")
-            resolved_categorical.append(col)
-        elif is_numeric_dtype(selected[col]):
-            selected[col] = pd.to_numeric(selected[col], errors="coerce")
-        else:
-            selected[col] = selected[col].astype("string")
-            resolved_categorical.append(col)
-    numeric_features = [col for col in features if col not in resolved_categorical]
-    return selected, resolved_categorical, numeric_features
+def _require_sklearn() -> None:
+    if not _SKLEARN_AVAILABLE:
+        raise ImportError(_SKLEARN_INSTALL_MSG)
 
 
 def _validate_model_feature_columns(
@@ -125,102 +128,19 @@ def _validate_model_feature_columns(
         )
 
 
-def _ordered_category_values(series: pd.Series) -> list[str]:
-    """Return observed category values in a deterministic, semantically stable order."""
-    non_missing = series.dropna()
-    if non_missing.empty:
-        return []
-    if isinstance(series.dtype, pd.CategoricalDtype) and getattr(series.dtype, "ordered", False):
-        return [str(value) for value in series.dtype.categories.tolist() if pd.notna(value)]
-    numeric_values = pd.to_numeric(non_missing, errors="coerce")
-    if numeric_values.notna().all():
-        ordered_numeric = np.sort(numeric_values.unique().astype(float))
-        return [str(int(value)) if float(value).is_integer() else str(value) for value in ordered_numeric]
-    return list(dict.fromkeys(non_missing.astype("string").tolist()))
-
-
 def _fit_feature_encoder(
     df: pd.DataFrame,
     features: Sequence[str],
     categorical_features: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Fit a deterministic feature encoder with explicit unknown buckets."""
-    selected, resolved_categorical, numeric_features = _coerce_feature_subset(
-        df,
-        features,
-        categorical_features,
-    )
-    categorical_mappings: dict[str, dict[str, Any]] = {}
-    feature_names: list[str] = []
-    for col in resolved_categorical:
-        levels = sorted(
-            str(level) for level in selected[col].dropna().astype("string").unique().tolist()
-        )
-        baseline = levels[0] if levels else None
-        retained_levels = levels[1:] if len(levels) > 1 else []
-        unknown_column = f"{col}__unknown"
-        missing_column = f"{col}__missing"
-        categorical_mappings[col] = {
-            "all_levels": levels,
-            "baseline_level": baseline,
-            "retained_levels": retained_levels,
-            "unknown_column": unknown_column,
-            "missing_column": missing_column,
-        }
-        feature_names.extend([f"{col}_{level}" for level in retained_levels])
-        feature_names.append(unknown_column)
-        feature_names.append(missing_column)
-    numeric_impute_values: dict[str, float] = {}
-    for col in numeric_features:
-        numeric_series = pd.to_numeric(selected[col], errors="coerce")
-        median_value = numeric_series.median(skipna=True)
-        numeric_impute_values[col] = 0.0 if pd.isna(median_value) else float(median_value)
-    feature_names.extend(numeric_features)
-    return {
-        "features": list(features),
-        "categorical_features": resolved_categorical,
-        "numeric_features": numeric_features,
-        "categorical_mappings": categorical_mappings,
-        "numeric_impute_values": numeric_impute_values,
-        "feature_names": feature_names,
-    }
+    return _fit_shared_feature_encoder(df, features, categorical_features)
 
 
 def _transform_feature_encoder(
     df: pd.DataFrame,
     encoder: dict[str, Any],
 ) -> pd.DataFrame:
-    """Transform features with a fitted encoder and explicit unknown buckets."""
-    selected, _, _ = _coerce_feature_subset(
-        df,
-        encoder["features"],
-        encoder["categorical_features"],
-    )
-    encoded_columns: dict[str, pd.Series] = {}
-
-    for col in encoder["categorical_features"]:
-        mapping = encoder["categorical_mappings"][col]
-        values = selected[col].astype("string")
-        all_levels = pd.Index(mapping["all_levels"], dtype="string")
-        for level in mapping["retained_levels"]:
-            encoded_columns[f"{col}_{level}"] = values.eq(level).fillna(False).astype(float)
-        missing_mask = values.isna()
-        unknown_mask = values.notna() & ~values.isin(all_levels)
-        encoded_columns[mapping["unknown_column"]] = unknown_mask.astype(float)
-        encoded_columns[mapping["missing_column"]] = missing_mask.astype(float)
-
-    for col in encoder["numeric_features"]:
-        impute_value = float(encoder["numeric_impute_values"].get(col, 0.0))
-        numeric_series = pd.to_numeric(selected[col], errors="coerce")
-        encoded_columns[col] = numeric_series.fillna(impute_value).astype(float)
-
-    encoded = pd.DataFrame(encoded_columns, index=selected.index)
-    encoded = encoded.reindex(columns=encoder["feature_names"], fill_value=0.0)
-    encoded = encoded.replace([np.inf, -np.inf], np.nan)
-    for col in encoder["numeric_features"]:
-        encoded[col] = encoded[col].fillna(float(encoder["numeric_impute_values"].get(col, 0.0)))
-    encoded = encoded.fillna(0.0)
-    return encoded
+    return _transform_shared_feature_encoder(df, encoder, output="dataframe")
 
 
 def _encode_features(
@@ -503,6 +423,7 @@ def _split_train_test(
 
     Returns the split frames and a short evaluation-mode label.
     """
+    _require_sklearn()
     if len(frame) < 20:
         return frame.copy().reset_index(drop=True), frame.copy().reset_index(drop=True), "apparent"
 
@@ -646,6 +567,7 @@ def _select_lasso_alpha(
     """Choose an L1 penalty using only the training split."""
     if not SKSURV_AVAILABLE:
         raise ImportError("scikit-survival is not installed.")
+    _require_sklearn()
 
     n_train = int(train_frame.shape[0])
     train_events = train_frame[event_column].astype(int).to_numpy()
@@ -1054,6 +976,7 @@ def find_optimal_cutpoint(
 # ===================================================================
 
 
+@user_input_boundary
 def train_random_survival_forest(
     df: pd.DataFrame,
     time_column: str,
@@ -1238,6 +1161,7 @@ def train_random_survival_forest(
 # ===================================================================
 
 
+@user_input_boundary
 def train_gradient_boosted_survival(
     df: pd.DataFrame,
     time_column: str,
@@ -1391,6 +1315,7 @@ def train_gradient_boosted_survival(
 # ===================================================================
 
 
+@user_input_boundary
 def train_lasso_cox(
     df: pd.DataFrame,
     time_column: str,
@@ -1574,6 +1499,7 @@ def train_lasso_cox(
 # ===================================================================
 
 
+@user_input_boundary
 def compare_survival_models(
     df: pd.DataFrame,
     time_column: str,
@@ -2075,6 +2001,7 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@user_input_boundary
 def cross_validate_survival_models(
     df: pd.DataFrame,
     time_column: str,
@@ -2090,6 +2017,7 @@ def cross_validate_survival_models(
     random_state: int = 42,
 ) -> dict[str, Any]:
     """Evaluate Cox PH, LASSO-Cox, RSF, and GBS with repeated stratified cross-validation."""
+    _require_sklearn()
     categorical_features = list(categorical_features or [])
     if cv_folds < 2:
         raise ValueError("cv_folds must be at least 2.")
@@ -2408,6 +2336,7 @@ def compute_shap_values(
 # ===================================================================
 
 
+@user_input_boundary
 def compute_partial_dependence(
     model: Any,
     X_encoded: pd.DataFrame,
@@ -2597,6 +2526,9 @@ def compute_integrated_brier_score(
     events: np.ndarray | Sequence[int],
     predicted_survival_fn: Any,
     eval_times: np.ndarray | Sequence[float] | None = None,
+    *,
+    support_times: np.ndarray | Sequence[float] | None = None,
+    support_events: np.ndarray | Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """Compute Integrated Brier Score (IBS) for model calibration assessment.
 
@@ -2618,7 +2550,11 @@ def compute_integrated_brier_score(
     eval_times
         Optional array of time points at which to evaluate the Brier score.
         If *None*, 100 equally-spaced points from 0 to the largest
-        observed time are used.
+        event time in the IPCW support set are used.
+    support_times, support_events
+        Optional follow-up times and event indicators used to define the
+        IPCW censoring weights and the default evaluation-time support.
+        When omitted, the evaluation cohort is reused.
 
     Returns
     -------
@@ -2628,26 +2564,34 @@ def compute_integrated_brier_score(
     """
     times_arr = np.asarray(times, dtype=float)
     events_arr = np.asarray(events, dtype=float)
+    support_times_arr = np.asarray(support_times if support_times is not None else times_arr, dtype=float)
+    support_events_arr = np.asarray(support_events if support_events is not None else events_arr, dtype=float)
 
     if len(times_arr) != len(events_arr):
         raise ValueError("times and events must have the same length.")
+    if len(support_times_arr) != len(support_events_arr):
+        raise ValueError("support_times and support_events must have the same length.")
 
     n_samples = len(times_arr)
+    support_event_times = support_times_arr[support_events_arr == 1]
+    support_time_upper = (
+        float(np.max(support_event_times))
+        if support_event_times.size
+        else float(np.max(support_times_arr))
+    )
 
     # Default evaluation grid
     if eval_times is None:
-        t_max = float(np.max(times_arr))
-        eval_times_arr = np.linspace(0, t_max, 100)
+        eval_times_arr = np.linspace(0.0, support_time_upper, 100)
     else:
         eval_times_arr = np.asarray(eval_times, dtype=float)
 
-    # Remove eval times beyond the last observed time to avoid
-    # extrapolation artefacts
-    t_max_obs = float(np.max(times_arr))
-    eval_times_arr = eval_times_arr[eval_times_arr <= t_max_obs]
+    # Keep evaluation times within the IPCW support window to avoid
+    # extrapolation beyond the last event used for weighting support.
+    eval_times_arr = eval_times_arr[(eval_times_arr >= 0.0) & (eval_times_arr <= support_time_upper)]
     if len(eval_times_arr) == 0:
         raise ValueError(
-            "No evaluation time points fall within the observed follow-up range."
+            "No evaluation time points fall within the IPCW support range."
         )
 
     # Predicted survival matrix: (n_samples, n_eval_times)
@@ -2665,13 +2609,13 @@ def compute_integrated_brier_score(
     # - If t_i <= t and event_i == 0: weight = 0
     from statsmodels.duration.survfunc import SurvfuncRight
 
-    censor_status = (1.0 - events_arr).astype(float)
-    censor_sf = SurvfuncRight(times_arr, censor_status)
+    censor_status = (1.0 - support_events_arr).astype(float)
+    censor_sf = SurvfuncRight(support_times_arr, censor_status)
     censor_times = censor_sf.surv_times.astype(float)
     censor_surv = censor_sf.surv_prob.astype(float)
 
     def _G_hat(query_times: np.ndarray | float) -> np.ndarray:
-        qt = np.asarray(query_times, dtype=float)
+        qt = np.atleast_1d(np.asarray(query_times, dtype=float))
         if censor_times.size == 0:
             return np.ones_like(qt, dtype=float)
         idx = np.searchsorted(censor_times, qt, side="right") - 1
@@ -2707,9 +2651,14 @@ def compute_integrated_brier_score(
     # Integrated Brier Score via trapezoidal rule
     bs_arr = np.array(bs_values, dtype=float)
     if len(eval_times_arr) >= 2:
-        ibs = float(np.trapz(bs_arr, eval_times_arr)) / (
-            eval_times_arr[-1] - eval_times_arr[0]
-        )
+        trapezoid = getattr(np, "trapezoid", None)
+        if trapezoid is not None:
+            area = float(trapezoid(bs_arr, eval_times_arr))
+        else:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                area = float(np.trapz(bs_arr, eval_times_arr))
+        ibs = area / (eval_times_arr[-1] - eval_times_arr[0])
     else:
         ibs = float(bs_arr[0])
 
@@ -2718,6 +2667,7 @@ def compute_integrated_brier_score(
     strengths: list[str] = [
         f"IBS computed over {len(eval_times_arr)} time points for {n_samples} patients ({n_events} events).",
         "IBS is a descriptive score that summarizes predicted-vs-observed survival error across time.",
+        f"Evaluation times were restricted to the IPCW support window [0, {support_time_upper:.4g}] to avoid late-time extrapolation beyond the last support event.",
     ]
     cautions: list[str] = []
     next_steps: list[str] = []
@@ -2735,6 +2685,8 @@ def compute_integrated_brier_score(
         "This implementation uses IPCW Brier scores; if the censoring survival "
         "probability approaches 0 at late times, estimates can become unstable."
     )
+    if support_times is not None or support_events is not None:
+        strengths.append("IPCW censoring weights were estimated from the supplied support cohort rather than the evaluation cohort.")
     next_steps.append(
         "Compare IBS across models to select the best-calibrated predictor (lower is better)."
     )
@@ -2957,6 +2909,7 @@ def compute_calibration_data(
 # ===================================================================
 
 
+@user_input_boundary
 def compute_time_dependent_importance(
     df: pd.DataFrame,
     time_column: str,
@@ -3003,6 +2956,7 @@ def compute_time_dependent_importance(
         ``importance_matrix_orientation``, ``dominant_feature_per_time``,
         and ``scientific_summary``.
     """
+    _require_sklearn()
     _ = model_type
     _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
 
@@ -3185,6 +3139,7 @@ def compute_time_dependent_importance(
 # ===================================================================
 
 
+@user_input_boundary
 def counterfactual_survival(
     df: pd.DataFrame,
     time_column: str,

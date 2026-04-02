@@ -1,4 +1,4 @@
-const state = {
+const appState = {
   dataset: null,
   km: null,
   cox: null,
@@ -6,9 +6,6 @@ const state = {
   signature: null,
   ml: null,
   dl: null,
-};
-
-const runtime = {
   isFilePreview: window.location.protocol === "file:",
   apiBase: window.location.protocol === "file:" ? "http://127.0.0.1:8000" : "",
   historySyncPaused: false,
@@ -36,6 +33,13 @@ const runtime = {
   },
   predictiveFamily: "ml",
 };
+
+// Keep the legacy aliases, but route all mutable client state through one object.
+const state = appState;
+const runtime = appState;
+
+const shellHelpers = window.SurvStudioShell;
+const downloadHelpers = window.SurvStudioDownloads;
 
 
 const refs = {
@@ -190,6 +194,8 @@ const refs = {
   tableDependencyChips: document.getElementById("tableDependencyChips"),
   tableOutputStatusText: document.getElementById("tableOutputStatusText"),
   downloadCohortTableButton: document.getElementById("downloadCohortTableButton"),
+  uploadZone: document.getElementById("uploadZone"),
+  brandHome: document.getElementById("brandHome"),
   // ML
   runMlButton: document.getElementById("runMlButton"),
   runCompareButton: document.getElementById("runCompareButton"),
@@ -299,8 +305,52 @@ const refs = {
   tabPanels: [...document.querySelectorAll(".tab-panel")],
 };
 
+const REQUIRED_REF_KEYS = Object.freeze(Object.keys(refs));
+
+function assertRequiredRefs() {
+  const missing = REQUIRED_REF_KEYS.filter((key) => {
+    const value = refs[key];
+    return Array.isArray(value) ? value.length === 0 : value == null;
+  });
+  if (missing.length) {
+    throw new Error(`Missing required DOM references: ${missing.join(", ")}`);
+  }
+}
+
+assertRequiredRefs();
+
 const DEFAULT_MODEL_FEATURE_SELECTION_LIMIT = 20;
 const COX_STAGE_VARIABLE_PREFERENCE = ["stage_group", "pathologic_stage", "stage"];
+const DATASET_PRESETS = Object.freeze({
+  gbsg2: {
+    name: "GBSG2 preset",
+    summary: "RFS in days with horTh as the first KM split and a compact Cox or ML feature set.",
+    timeColumn: "rfs_days",
+    eventColumn: "rfs_event",
+    eventPositiveValue: "1",
+    timeUnitLabel: "Days",
+    basicGroup: "horTh",
+    tableVariables: ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+    coxCovariates: ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+    coxCategoricals: ["horTh", "menostat", "tgrade"],
+    modelFeatures: ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+    modelCategoricals: ["horTh", "menostat", "tgrade"],
+  },
+  tcga_luad: {
+    name: "TCGA LUAD preset",
+    summary: "Overall survival in months with stage_group for Kaplan-Meier and a compact smoking-aware feature set.",
+    timeColumn: "os_months",
+    eventColumn: "os_event",
+    eventPositiveValue: "1",
+    timeUnitLabel: "Months",
+    basicGroup: "stage_group",
+    tableVariables: ["age", "sex", "stage_group", "smoking_status"],
+    coxCovariates: ["age", "sex", "stage_group", "smoking_status"],
+    coxCategoricals: ["sex", "stage_group", "smoking_status"],
+    modelFeatures: ["age", "sex", "stage_group", "smoking_status"],
+    modelCategoricals: ["sex", "stage_group", "smoking_status"],
+  },
+});
 
 const EVENT_TRUE_TOKENS = new Set([
   "1", "true", "t", "yes", "y", "event", "dead", "deceased", "died", "failure",
@@ -1741,27 +1791,20 @@ function applyControlSnapshot(snapshot) {
 }
 
 function currentHistoryState() {
-  if (!state.dataset) return { view: "home", uiMode: runtime.uiMode };
-  return {
-    view: "workspace",
-    datasetId: state.dataset.dataset_id,
-    tab: activeTabName(),
-    uiMode: runtime.uiMode,
-    guidedGoal: runtime.guidedGoal,
-    guidedStep: runtime.guidedStep,
-    predictiveFamily: runtime.predictiveFamily,
-    controls: captureControlSnapshot(),
-  };
+  return shellHelpers.currentHistoryState({
+    state,
+    runtime,
+    activeTabName,
+    captureControlSnapshot,
+  });
 }
 
 function syncHistoryState(mode = "replace") {
-  if (runtime.historySyncPaused || !window.history?.replaceState) return;
-  const nextState = currentHistoryState();
-  if (mode === "push") {
-    window.history.pushState(nextState, "", window.location.href);
-    return;
-  }
-  window.history.replaceState(nextState, "", window.location.href);
+  return shellHelpers.syncHistoryState({
+    runtime,
+    nextState: currentHistoryState(),
+    mode,
+  });
 }
 
 async function restoreHistoryState(historyState) {
@@ -2008,25 +2051,14 @@ function showToast(message, type = "error", duration = 5000) {
 function showError(message) { showToast(message, "error"); }
 
 async function shutdownServer() {
-  const activeScopes = Object.entries(runtime.busyScopes || {})
-    .filter(([, isBusy]) => Boolean(isBusy))
-    .map(([scope]) => scope.toUpperCase());
-  const warning = activeScopes.length
-    ? `A run is still in progress (${activeScopes.join(", ")}). Stopping the server will cancel it and release memory. Continue?`
-    : "Stop the local SurvStudio server and release its memory?";
-  if (!window.confirm(warning)) return;
-
-  refs.shutdownButton.disabled = true;
-  setButtonLoading(refs.shutdownButton, true);
-  setRuntimeBanner("Stopping the local SurvStudio server. This will cancel active runs and release memory.", "warning");
-  try {
-    const payload = await fetchJSON("/api/shutdown", { method: "POST" });
-    renderServerStoppedState(payload?.detail);
-  } catch (error) {
-    refs.shutdownButton.disabled = false;
-    setButtonLoading(refs.shutdownButton, false);
-    throw error;
-  }
+  return shellHelpers.shutdownServer({
+    runtime,
+    refs,
+    setButtonLoading,
+    setRuntimeBanner,
+    fetchJSON,
+    renderServerStoppedState,
+  });
 }
 
 function renderSelect(select, options, { includeBlank = false, blankLabel = "None", selected = null } = {}) {
@@ -2860,114 +2892,56 @@ function clearCohortTableOutput({ rerenderChrome = true, syncHistory = true } = 
 }
 
 function downloadCsv(filename, rows, columns = null) {
-  if (!rows || rows.length === 0) {
-    showToast("No rows available for export.", "warning");
-    return;
-  }
-  const visibleColumns = columns || Object.keys(rows[0]);
-  const sanitizeCsvCell = (value) => {
-    const text = value === null || value === undefined ? "" : String(value);
-    const trimmed = text.trimStart();
-    if (trimmed.startsWith("'") && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed.slice(1))) {
-      return `${text.slice(0, text.length - trimmed.length)}${trimmed.slice(1)}`;
-    }
-    if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) return text;
-    if (trimmed.startsWith("=") || trimmed.startsWith("+") || trimmed.startsWith("-") || trimmed.startsWith("@")) {
-      return `'${text}`;
-    }
-    return text;
-  };
-  const escapeCell = (value) => {
-    const text = sanitizeCsvCell(value);
-    return `"${text.replaceAll('"', '""')}"`;
-  };
-  const lines = [visibleColumns.map(escapeCell).join(","), ...rows.map((row) => visibleColumns.map((column) => escapeCell(row[column])).join(","))];
-  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-  triggerBlobDownload(filename, blob);
+  return downloadHelpers.downloadCsv({ filename, rows, columns, showToast });
 }
 
 function downloadText(filename, text, mimeType = "text/plain;charset=utf-8;") {
-  const blob = new Blob([text], { type: mimeType });
-  triggerBlobDownload(filename, blob);
+  return downloadHelpers.downloadText({ filename, text, mimeType });
 }
 
 function slugifyDownloadToken(value, fallback = "na") {
-  const text = String(value ?? "").trim().toLowerCase();
-  if (!text) return fallback;
-  const slug = text
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 48);
-  return slug || fallback;
+  return downloadHelpers.slugifyDownloadToken(value, fallback);
 }
 
 function currentDatasetSlug() {
-  return slugifyDownloadToken(state.dataset?.filename || "survstudio_dataset", "survstudio_dataset");
+  return downloadHelpers.currentDatasetSlug(state);
 }
 
 function currentOutcomeSlug() {
-  return [
-    slugifyDownloadToken(refs.timeColumn?.value || "time", "time"),
-    slugifyDownloadToken(refs.eventColumn?.value || "event", "event"),
-  ].join("_");
+  return downloadHelpers.currentOutcomeSlug(refs);
 }
 
 function currentGroupSlug() {
-  return slugifyDownloadToken(refs.groupColumn?.value || "overall", "overall");
+  return downloadHelpers.currentGroupSlug(refs);
 }
 
 function buildDownloadFilename(stem, ext, { includeGroup = false, template = null } = {}) {
-  const parts = [currentDatasetSlug(), currentOutcomeSlug()];
-  if (includeGroup) parts.push(currentGroupSlug());
-  parts.push(slugifyDownloadToken(stem, "export"));
-  if (template) parts.push(slugifyDownloadToken(template, "default"));
-  return `${parts.filter(Boolean).join("_")}.${ext}`;
+  return downloadHelpers.buildDownloadFilename({
+    state,
+    refs,
+    stem,
+    ext,
+    includeGroup,
+    template,
+  });
 }
 
 function triggerBlobDownload(filename, blob) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return downloadHelpers.triggerBlobDownload(filename, blob);
 }
 
 async function downloadServerTable(filename, payload, fallbackMimeType = "text/plain;charset=utf-8;") {
-  if (!payload?.rows || payload.rows.length === 0) {
-    showToast("No rows available for export.", "warning");
-    return;
-  }
-  const response = await fetch(apiUrl("/api/export-table"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+  return downloadHelpers.downloadServerTable({
+    filename,
+    payload,
+    fallbackMimeType,
+    apiUrl,
+    showToast,
   });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || "Export failed.");
-  }
-  const blob = await response.blob();
-  triggerBlobDownload(filename, blob);
 }
 
 function buildMarkdownTable(rows, { caption = "", notes = [] } = {}) {
-  if (!rows || rows.length === 0) return "";
-  const columns = Object.keys(rows[0]);
-  const escapeCell = (value) => String(value ?? "").replaceAll("|", "\\|").replaceAll("\n", " ");
-  const header = `| ${columns.join(" | ")} |`;
-  const divider = `| ${columns.map(() => "---").join(" | ")} |`;
-  const body = rows.map((row) => `| ${columns.map((column) => escapeCell(formatValue(row[column]))).join(" | ")} |`);
-  const sections = [];
-  if (caption) sections.push(`**${caption}**`);
-  sections.push([header, divider, ...body].join("\n"));
-  if (notes.length) {
-    sections.push("Notes:");
-    sections.push(notes.map((note) => `- ${note}`).join("\n"));
-  }
-  return `${sections.join("\n\n")}\n`;
+  return downloadHelpers.buildMarkdownTable(rows, { caption, notes, formatValue });
 }
 
 function currentMlJournalTemplate() {
@@ -3017,8 +2991,7 @@ function manuscriptExportPayload(manuscript, format, template, fallbackCaption, 
 }
 
 function downloadPlotImage(plotEl, filename, format) {
-  if (!plotEl || !plotEl.data) return;
-  Plotly.downloadImage(plotEl, { format, filename, height: 900, width: 1400, scale: format === "png" ? 3 : 1 });
+  return downloadHelpers.downloadPlotImage({ plotEl, filename, format });
 }
 
 function requireCurrentResultForExport(goal, { payload = null } = {}) {
@@ -3043,15 +3016,11 @@ function requireCurrentResultForExport(goal, { payload = null } = {}) {
 }
 
 function isReadonlyPlot(filename) {
-  return ["dl_loss", "ml_importance", "shap_importance", "dl_importance"].includes(filename);
+  return downloadHelpers.isReadonlyPlot(filename);
 }
 
 function plotLayoutConfig(layout, filename) {
-  const nextLayout = { ...(layout || {}) };
-  if (isReadonlyPlot(filename)) {
-    nextLayout.dragmode = false;
-  }
-  return nextLayout;
+  return downloadHelpers.plotLayoutConfig(layout, filename);
 }
 
 function plotConfig(filename) {
@@ -3309,44 +3278,8 @@ function summarizeFeatureNames(values, limit = 4) {
 }
 
 function datasetPresetForCurrentDataset() {
-  if (!state.dataset?.preset_eligible) return null;
-  const filename = (state.dataset?.filename || "").toLowerCase();
-  const columns = new Set((state.dataset?.columns || []).map((column) => column.name));
-  const looksLikeGbsg2 = ["rfs_days", "rfs_event", "horTh", "menostat", "tgrade"].every((name) => columns.has(name));
-  const looksLikeTcgaLung = ["os_months", "os_event", "stage_group", "smoking_status"].every((name) => columns.has(name));
-  if (filename.includes("gbsg2") || looksLikeGbsg2) {
-    return {
-      name: "GBSG2 preset",
-      summary: "RFS in days with horTh as the first KM split and a compact Cox or ML feature set.",
-      timeColumn: "rfs_days",
-      eventColumn: "rfs_event",
-      eventPositiveValue: "1",
-      timeUnitLabel: "Days",
-      basicGroup: "horTh",
-      tableVariables: ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
-      coxCovariates: ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
-      coxCategoricals: ["horTh", "menostat", "tgrade"],
-      modelFeatures: ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
-      modelCategoricals: ["horTh", "menostat", "tgrade"],
-    };
-  }
-  if (filename.includes("tcga_luad") || looksLikeTcgaLung) {
-    return {
-      name: "TCGA LUAD preset",
-      summary: "Overall survival in months with stage_group for Kaplan-Meier and a compact smoking-aware feature set.",
-      timeColumn: "os_months",
-      eventColumn: "os_event",
-      eventPositiveValue: "1",
-      timeUnitLabel: "Months",
-      basicGroup: "stage_group",
-      tableVariables: ["age", "sex", "stage_group", "smoking_status"],
-      coxCovariates: ["age", "sex", "stage_group", "smoking_status"],
-      coxCategoricals: ["sex", "stage_group", "smoking_status"],
-      modelFeatures: ["age", "sex", "stage_group", "smoking_status"],
-      modelCategoricals: ["sex", "stage_group", "smoking_status"],
-    };
-  }
-  return null;
+  const presetName = String(state.dataset?.preset_name || "").trim();
+  return presetName ? (DATASET_PRESETS[presetName] || null) : null;
 }
 
 function setDatasetPresetButtonState(mode = null) {
@@ -6819,7 +6752,7 @@ function initTooltips() {
 }
 
 function initDragDrop() {
-  const zone = document.getElementById("uploadZone");
+  const zone = refs.uploadZone;
   if (!zone) return;
   let dragCounter = 0;
   zone.addEventListener("dragenter", (e) => { e.preventDefault(); dragCounter++; zone.classList.add("drag-over"); });
@@ -6844,32 +6777,22 @@ function initKeyboardShortcuts() {
 }
 
 function goHome({ syncHistory = true, historyMode = "replace" } = {}) {
-  state.dataset = null;
-  state.km = null;
-  state.cox = null;
-  state.cohort = null;
-  state.signature = null;
-  state.ml = null;
-  state.dl = null;
-  refs.workspace.classList.add("hidden");
-  refs.landing.classList.remove("hidden", "fade-out");
-  refs.datasetBadge.classList.add("hidden");
-  refs.datasetFile.value = "";
-  runtime.guidedGoal = null;
-  runtime.guidedStep = 1;
-  runtime.deriveDraftTouched = false;
-  runtime.predictiveFamily = "ml";
-  runtime.resultPreference.ml = "single";
-  runtime.resultPreference.dl = "single";
-  resetCoxPreview({ rerender: false });
-  renderSharedFeatureSummary();
-  renderGuidedChrome();
-  setRuntimeBanner("");
-  if (syncHistory) syncHistoryState(historyMode);
+  return shellHelpers.goHome({
+    state,
+    runtime,
+    refs,
+    syncHistory,
+    historyMode,
+    resetCoxPreview,
+    renderSharedFeatureSummary,
+    renderGuidedChrome,
+    setRuntimeBanner,
+    syncHistoryState,
+  });
 }
 
 function initListeners() {
-  const brandHome = document.getElementById("brandHome");
+  const brandHome = refs.brandHome;
   if (brandHome) {
     brandHome.addEventListener("click", (e) => { e.preventDefault(); goHome({ historyMode: "push" }); });
   }

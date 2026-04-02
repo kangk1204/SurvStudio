@@ -1014,6 +1014,7 @@ def test_partial_dependence_raises_on_internal_prediction_failure() -> None:
 
 def test_store_lru_eviction() -> None:
     from survival_toolkit.store import DatasetStore
+    from survival_toolkit.errors import DatasetNotFoundError
 
     store = DatasetStore(max_datasets=3, ttl_seconds=9999)
     df = make_example_dataset(seed=1, n_patients=30)
@@ -1022,7 +1023,7 @@ def test_store_lru_eviction() -> None:
         stored = store.create(df, filename=f"test_{i}")
         ids.append(stored.dataset_id)
     assert store.count == 3
-    with pytest.raises(KeyError):
+    with pytest.raises(DatasetNotFoundError):
         store.get(ids[0])
     store.get(ids[-1])
 
@@ -1047,12 +1048,13 @@ def test_store_create_and_get_are_defensive_against_shared_mutation() -> None:
 
 def test_store_delete() -> None:
     from survival_toolkit.store import DatasetStore
+    from survival_toolkit.errors import DatasetNotFoundError
 
     store = DatasetStore()
     df = make_example_dataset(seed=2, n_patients=30)
     stored = store.create(df, filename="to_delete")
     store.delete(stored.dataset_id)
-    with pytest.raises(KeyError):
+    with pytest.raises(DatasetNotFoundError):
         store.get(stored.dataset_id)
 
 
@@ -1513,3 +1515,49 @@ def test_partial_dependence_uses_encoder_levels_for_categorical_features() -> No
 
     assert result["feature_type"] == "categorical"
     assert result["values"] == ["a", "__unknown"]
+
+
+def test_integrated_brier_score_restricts_eval_times_to_support_event_window() -> None:
+    from survival_toolkit.ml_models import compute_integrated_brier_score
+
+    times = np.array([5.0, 12.0, 18.0, 30.0], dtype=float)
+    events = np.array([1, 0, 1, 0], dtype=int)
+    support_times = np.array([4.0, 8.0, 10.0, 40.0], dtype=float)
+    support_events = np.array([1, 1, 0, 0], dtype=int)
+
+    def _predicted(eval_times: np.ndarray) -> np.ndarray:
+        return np.full((len(times), len(eval_times)), 0.8, dtype=float)
+
+    result = compute_integrated_brier_score(
+        times,
+        events,
+        _predicted,
+        eval_times=[2.0, 6.0, 12.0, 20.0],
+        support_times=support_times,
+        support_events=support_events,
+    )
+
+    assert result["eval_times"] == [2.0, 6.0]
+    assert any("support window" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+
+
+def test_integrated_brier_score_falls_back_when_numpy_has_no_trapezoid(monkeypatch: pytest.MonkeyPatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    monkeypatch.delattr(ml_models.np, "trapezoid", raising=False)
+
+    times = np.array([5.0, 12.0, 18.0, 30.0], dtype=float)
+    events = np.array([1, 0, 1, 0], dtype=int)
+
+    def _predicted(eval_times: np.ndarray) -> np.ndarray:
+        return np.full((len(times), len(eval_times)), 0.8, dtype=float)
+
+    result = ml_models.compute_integrated_brier_score(
+        times,
+        events,
+        _predicted,
+        eval_times=[2.0, 6.0, 12.0],
+    )
+
+    assert result["ibs"] is not None
+    assert result["eval_times"] == [2.0, 6.0, 12.0]

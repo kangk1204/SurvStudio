@@ -774,6 +774,17 @@ def test_pointwise_km_ci_handles_survival_near_one_without_blowing_up() -> None:
     assert upper[0] == pytest.approx(1.0 - 1e-16)
 
 
+def test_pointwise_km_ci_keeps_exact_one_bounded_at_one() -> None:
+    lower, upper = _pointwise_km_ci(
+        np.asarray([1.0], dtype=float),
+        np.asarray([0.2], dtype=float),
+        alpha=0.05,
+    )
+
+    assert lower[0] == pytest.approx(1.0)
+    assert upper[0] == pytest.approx(1.0)
+
+
 def test_safe_float_returns_none_on_overflowing_float_conversion() -> None:
     class _OverflowingValue:
         def __float__(self) -> float:
@@ -800,15 +811,16 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert treatment_row["Label"] == "treatment: Standard vs Combination"
     assert treatment_row["Hazard ratio"] > 1.0
     assert result["model_stats"]["evaluation_mode"] == "apparent"
-    assert result["model_stats"]["c_index_label"] == "Apparent C-index"
+    assert result["model_stats"]["c_index_label"] == "Apparent C-index (training cohort)"
     assert result["model_stats"]["apparent_c_index"] == result["model_stats"]["c_index"]
     assert result["scientific_summary"]["headline"]
     assert result["scientific_summary"]["status"] in {"robust", "review", "caution"}
     assert result["scientific_summary"]["metrics"]
-    assert any(metric["label"] == "Apparent C-index" for metric in result["scientific_summary"]["metrics"])
+    assert any(metric["label"] == "Apparent C-index (training cohort)" for metric in result["scientific_summary"]["metrics"])
     assert any("apparent" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("analyzable cohort" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("spearman" in strength.lower() and "schoenfeld" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+    assert any("comparable patient pairs" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("external-cohort apply workflow" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("changing the covariate set" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
@@ -1401,6 +1413,22 @@ def test_stability_score_caps_extreme_significance_term() -> None:
     absurdly_extreme = _stability_score({**base_row, "BH adjusted p": 1e-50})
 
     assert absurdly_extreme == pytest.approx(moderately_extreme)
+
+
+def test_stability_score_tolerates_missing_hazard_ratio() -> None:
+    row = {
+        "Hazard ratio (signature+ vs -)": None,
+        "Bootstrap support (p<alpha)": 0.65,
+        "Bootstrap HR direction consistency": 0.8,
+        "Validation support (p<alpha)": 0.55,
+        "Permutation p": 0.02,
+        "Rule count": 2,
+        "BH adjusted p": 0.01,
+    }
+
+    score = _stability_score(row)
+
+    assert np.isfinite(score)
 
 
 def test_signature_rules_do_not_repeat_same_feature_within_combo() -> None:
