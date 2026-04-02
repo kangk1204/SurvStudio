@@ -21,9 +21,21 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedKFold, train_test_split
 
+from survival_toolkit.encoding import (
+    fit_feature_encoder as _fit_shared_feature_encoder,
+    transform_feature_encoder as _transform_shared_feature_encoder,
+)
+from survival_toolkit.errors import user_input_boundary
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
+
+try:
+    from sklearn.model_selection import StratifiedKFold
+
+    _SKLEARN_AVAILABLE = True
+except ImportError:
+    StratifiedKFold = None
+    _SKLEARN_AVAILABLE = False
 
 try:
     import torch
@@ -48,6 +60,10 @@ _TORCH_INSTALL_MSG = (
     "PyTorch is required for deep learning models. "
     "Install with: pip install torch  (see https://pytorch.org for GPU options)"
 )
+_SKLEARN_INSTALL_MSG = (
+    "scikit-learn is required for deep-learning holdout splits and repeated CV. "
+    "Install with: pip install 'survival-toolkit[dl]'"
+)
 _ADAM_WEIGHT_DECAY = 1e-4
 _DEEPHIT_RANKING_SIGMA = 1.0
 
@@ -60,6 +76,11 @@ _DEEPHIT_RANKING_SIGMA = 1.0
 def _require_torch() -> None:
     if not TORCH_AVAILABLE:
         raise ImportError(_TORCH_INSTALL_MSG)
+
+
+def _require_sklearn() -> None:
+    if not _SKLEARN_AVAILABLE:
+        raise ImportError(_SKLEARN_INSTALL_MSG)
 
 
 def _seed_torch(random_seed: int) -> None:
@@ -298,67 +319,13 @@ def _fit_deep_encoder(
     features: Sequence[str],
     categorical_features: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Fit a simple one-hot + standardization encoder on a training frame."""
-    categorical_features = [col for col in list(categorical_features or []) if col in features]
-    numeric_features = [f for f in features if f not in categorical_features]
-
-    categorical_levels: dict[str, list[str]] = {}
-    categorical_all_levels: dict[str, list[str]] = {}
-    categorical_unknown_columns: dict[str, str] = {}
-    categorical_missing_columns: dict[str, str] = {}
-    feature_names: list[str] = []
-    categorical_feature_indices: list[int] = []
-    for col in categorical_features:
-        levels = [str(level) for level in pd.Index(frame[col].dropna().astype("string").unique()).tolist()]
-        levels = sorted(levels)
-        retained_levels = levels[1:] if len(levels) > 1 else []
-        categorical_levels[col] = retained_levels
-        categorical_all_levels[col] = levels
-        categorical_unknown_columns[col] = f"{col}__unknown"
-        categorical_missing_columns[col] = f"{col}__missing"
-        start_idx = len(feature_names)
-        feature_names.extend([f"{col}_{level}" for level in retained_levels])
-        feature_names.append(categorical_unknown_columns[col])
-        feature_names.append(categorical_missing_columns[col])
-        categorical_feature_indices.extend(range(start_idx, len(feature_names)))
-
-    scaler_params: dict[str, dict[str, float]] = {}
-    numeric_feature_indices: list[int] = []
-    if numeric_features:
-        numeric_frame = frame[numeric_features].apply(pd.to_numeric, errors="coerce")
-        medians = numeric_frame.median(skipna=True).fillna(0.0)
-        numeric_array = numeric_frame.fillna(medians).values.astype(np.float64)
-        means = np.mean(numeric_array, axis=0)
-        stds = np.std(numeric_array, axis=0)
-        stds[stds < 1e-12] = 1.0
-        for idx, col in enumerate(numeric_features):
-            scaler_params[col] = {
-                "mean": float(means[idx]),
-                "std": float(stds[idx]),
-                "impute_value": float(medians[col]),
-            }
-        start_idx = len(feature_names)
-        feature_names.extend(numeric_features)
-        numeric_feature_indices.extend(range(start_idx, len(feature_names)))
-
-    if not feature_names:
-        raise ValueError(
-            "No usable features remain after encoding. "
-            "This can happen when all categorical features have only one level."
-        )
-
-    return {
-        "categorical_features": categorical_features,
-        "numeric_features": numeric_features,
-        "categorical_levels": categorical_levels,
-        "categorical_all_levels": categorical_all_levels,
-        "categorical_unknown_columns": categorical_unknown_columns,
-        "categorical_missing_columns": categorical_missing_columns,
-        "scaler_params": scaler_params,
-        "feature_names": feature_names,
-        "categorical_feature_indices": categorical_feature_indices,
-        "numeric_feature_indices": numeric_feature_indices,
-    }
+    """Fit the shared tabular encoder with numeric standardization enabled."""
+    return _fit_shared_feature_encoder(
+        frame,
+        features,
+        categorical_features,
+        standardize_numeric=True,
+    )
 
 
 def _transform_deep_frame(
@@ -369,55 +336,14 @@ def _transform_deep_frame(
     encoder: dict[str, Any],
 ) -> dict[str, Any]:
     """Transform a cleaned frame with a previously fitted encoder."""
-    encoded_parts: list[np.ndarray] = []
-    feature_names: list[str] = []
-
-    for col in encoder["categorical_features"]:
-        levels = encoder["categorical_levels"].get(col, [])
-        values = frame[col].astype("string")
-        column_blocks: list[np.ndarray] = []
-        for level in levels:
-            column_blocks.append(values.eq(level).fillna(False).astype(float).to_numpy().reshape(-1, 1))
-        known_levels = set(encoder["categorical_all_levels"].get(col, []))
-        unknown_mask = (
-            frame[col].notna()
-            & ~frame[col].astype("string").isin(pd.Index(sorted(known_levels), dtype="string"))
-        )
-        missing_mask = values.isna()
-        column_blocks.append(unknown_mask.astype(float).to_numpy().reshape(-1, 1))
-        column_blocks.append(missing_mask.astype(float).to_numpy().reshape(-1, 1))
-        encoded_parts.append(np.hstack(column_blocks))
-        feature_names.extend([f"{col}_{level}" for level in levels])
-        feature_names.append(encoder["categorical_unknown_columns"][col])
-        feature_names.append(encoder["categorical_missing_columns"][col])
-
-    numeric_features = encoder["numeric_features"]
-    if numeric_features:
-        numeric_frame = frame[numeric_features].apply(pd.to_numeric, errors="coerce")
-        for col in numeric_features:
-            numeric_frame[col] = numeric_frame[col].fillna(
-                float(encoder["scaler_params"][col].get("impute_value", 0.0))
-            )
-        numeric_array = numeric_frame.values.astype(np.float64)
-        standardized = np.empty_like(numeric_array, dtype=np.float64)
-        for idx, col in enumerate(numeric_features):
-            params = encoder["scaler_params"][col]
-            standardized[:, idx] = (numeric_array[:, idx] - params["mean"]) / params["std"]
-        encoded_parts.append(standardized)
-        feature_names.extend(numeric_features)
-
-    x_array = np.hstack(encoded_parts) if encoded_parts else np.empty((frame.shape[0], 0))
-    if x_array.shape[1] == 0:
-        raise ValueError(
-            "No usable features remain after encoding. "
-            "This can happen when all categorical features have only one level."
-        )
+    encoded = _transform_shared_feature_encoder(frame, encoder, output="dataframe")
+    x_array = encoded.to_numpy(dtype=np.float64, copy=False)
 
     return {
         "X_tensor": torch.tensor(x_array, dtype=torch.float32),
         "time_tensor": torch.tensor(frame[time_column].values.astype(np.float64), dtype=torch.float32),
         "event_tensor": torch.tensor(frame[event_column].values.astype(np.float64), dtype=torch.float32),
-        "feature_names": list(feature_names),
+        "feature_names": list(encoder["feature_names"]),
         "scaler_params": dict(encoder["scaler_params"]),
         "categorical_feature_indices": list(encoder.get("categorical_feature_indices", [])),
         "numeric_feature_indices": list(encoder.get("numeric_feature_indices", [])),
@@ -673,30 +599,6 @@ def _survival_from_log_cumulative_hazard(log_cumulative_hazard: np.ndarray) -> n
     survival[moderate] = np.exp(-np.exp(safe_log[moderate]))
     survival[~positive_mask] = 1.0
     return survival
-
-
-def _split_deep_indices(
-    events: torch.Tensor,
-    *,
-    random_seed: int = 42,
-    test_size: float = 0.3,
-) -> tuple[np.ndarray, np.ndarray, str]:
-    """Create deterministic train/evaluation indices for deep models."""
-    event_np = events.detach().cpu().numpy().astype(int).ravel()
-    n_samples = int(event_np.shape[0])
-    all_idx = np.arange(n_samples, dtype=int)
-    if n_samples < 12:
-        return all_idx, all_idx, "apparent"
-    unique, counts = np.unique(event_np, return_counts=True)
-    if len(unique) < 2 or counts.min() < 2:
-        return all_idx, all_idx, "apparent"
-    train_idx, eval_idx = train_test_split(
-        all_idx,
-        test_size=test_size,
-        random_state=random_seed,
-        stratify=event_np,
-    )
-    return np.sort(train_idx), np.sort(eval_idx), "holdout"
 
 
 def _expected_time_risk(pmf_with_tail: torch.Tensor, time_grid: torch.Tensor) -> torch.Tensor:
@@ -1105,6 +1007,7 @@ def _training_run_metadata(
     }
 
 
+@user_input_boundary
 def compare_deep_survival_models(
     df: pd.DataFrame,
     time_column: str,
@@ -1340,6 +1243,7 @@ def compare_deep_survival_models(
         return result
 
     if evaluation_strategy == "repeated_cv":
+        _require_sklearn()
         if cv_folds < 2:
             raise ValueError("cv_folds must be at least 2 for deep-learning repeated CV.")
         if cv_repeats < 1:
@@ -1893,6 +1797,7 @@ class DeepSurvNet(_TorchModuleBase):
         return self.network(x)
 
 
+@user_input_boundary
 def train_deepsurv(
     df: pd.DataFrame | None,
     time_column: str,
@@ -2211,6 +2116,7 @@ def _deephit_loss(
     return alpha * log_likelihood + (1.0 - alpha) * ranking_loss
 
 
+@user_input_boundary
 def train_deephit(
     df: pd.DataFrame | None,
     time_column: str,
@@ -2515,6 +2421,7 @@ def _mtlr_loss(
     return torch.cat(terms).mean() if terms else torch.tensor(0.0, device=cumsum_logits.device)
 
 
+@user_input_boundary
 def train_neural_mtlr(
     df: pd.DataFrame | None,
     time_column: str,
@@ -2844,6 +2751,7 @@ class SurvivalTransformerNet(_TorchModuleBase):
         return attention_maps
 
 
+@user_input_boundary
 def train_survival_transformer(
     df: pd.DataFrame | None,
     time_column: str,
@@ -3243,6 +3151,7 @@ def _simple_kmeans(data: np.ndarray, n_clusters: int, max_iter: int = 100, seed:
     return labels
 
 
+@user_input_boundary
 def train_survival_vae(
     df: pd.DataFrame | None,
     time_column: str,

@@ -13,7 +13,6 @@ import signal
 import tempfile
 import threading
 import time
-import traceback
 import zipfile
 from typing import Any, Callable, Literal, NoReturn, Sequence
 from xml.sax.saxutils import escape as xml_escape
@@ -23,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+import pandas as pd
 from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
@@ -39,7 +39,7 @@ from survival_toolkit.analysis import (
     preview_cox_analysis_inputs,
     profile_dataframe,
 )
-from survival_toolkit.plots import build_cox_forest_figure, build_km_figure
+from survival_toolkit.errors import NotFoundError, UserInputError
 from survival_toolkit.sample_data import (
     load_gbsg2_upload_ready_dataset,
     load_tcga_luad_example_dataset,
@@ -53,18 +53,21 @@ BASE_DIR = Path(__file__).resolve().parent
 
 @lru_cache(maxsize=1)
 def _static_asset_version() -> str:
-    asset_paths = (
-        BASE_DIR / "templates" / "index.html",
-        BASE_DIR / "static" / "styles.css",
-        BASE_DIR / "static" / "app.js",
-        BASE_DIR / "static" / "vendor" / "plotly-3.4.0.min.js",
+    asset_roots = (
+        BASE_DIR / "templates",
+        BASE_DIR / "static",
     )
     mtimes: list[float] = []
-    for asset_path in asset_paths:
-        try:
-            mtimes.append(asset_path.stat().st_mtime)
-        except OSError:
+    for asset_root in asset_roots:
+        if not asset_root.exists():
             continue
+        for asset_path in asset_root.rglob("*"):
+            if not asset_path.is_file():
+                continue
+            try:
+                mtimes.append(asset_path.stat().st_mtime)
+            except OSError:
+                continue
     return str(int(max(mtimes))) if mtimes else "0"
 
 app = FastAPI(
@@ -95,6 +98,27 @@ class _MlArtifactCache:
         self._items: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
         self._lock = threading.RLock()
 
+    @staticmethod
+    def _copy_frame(frame: Any) -> Any:
+        if isinstance(frame, pd.DataFrame):
+            return frame.copy(deep=True)
+        return frame
+
+    @staticmethod
+    def _copy_model(model: Any) -> Any:
+        if isinstance(model, (dict, list, tuple, set)):
+            return copy.deepcopy(model)
+        return model
+
+    @classmethod
+    def _copy_result(cls, result: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "_model": cls._copy_model(result.get("_model")),
+            "_X_encoded": cls._copy_frame(result.get("_X_encoded")),
+            "_feature_encoder": copy.deepcopy(result.get("_feature_encoder")),
+            "_analysis_frame": cls._copy_frame(result.get("_analysis_frame")),
+        }
+
     def remember(
         self,
         *,
@@ -104,8 +128,8 @@ class _MlArtifactCache:
         result: dict[str, Any],
     ) -> None:
         artifact = {
-            "signature": signature,
-            "result": copy.deepcopy(result),
+            "signature": copy.deepcopy(signature),
+            "result": self._copy_result(result),
         }
         with self._lock:
             cache_key = (dataset_id, model_type)
@@ -131,7 +155,7 @@ class _MlArtifactCache:
             result = cached.get("result")
             if not isinstance(result, dict):
                 return None
-            return copy.deepcopy(result)
+            return self._copy_result(result)
 
 
 _ml_artifact_cache = _MlArtifactCache(max_items=8)
@@ -173,6 +197,7 @@ class KaplanMeierRequest(BaseModel):
     confidence_level: float = Field(default=0.95, gt=0.5, lt=0.999)
     max_time: float | None = Field(default=None, gt=0)
     risk_table_points: int = Field(default=6, ge=4, le=12)
+    # UI display flag; confidence intervals are always computed server-side.
     show_confidence_bands: bool = True
     logrank_weight: Literal["logrank", "gehan_breslow", "tarone_ware", "fleming_harrington"] = "logrank"
     fh_p: float = Field(default=1.0, ge=0.0, le=5.0)
@@ -305,6 +330,7 @@ def dataset_response(dataset_id: str) -> dict[str, Any]:
     payload = profile_dataframe(stored.dataframe, dataset_id=stored.dataset_id, filename=stored.filename)
     payload["dataset_source"] = stored.source
     payload["preset_eligible"] = stored.source == "builtin_demo"
+    payload["preset_name"] = str(stored.metadata.get("preset_name")) if stored.metadata.get("preset_name") else None
     payload["derived_column_provenance"] = dict(stored.metadata.get("derived_column_provenance", {}))
     return payload
 
@@ -344,7 +370,7 @@ def _reject_outcome_informed_columns(
     forbidden = _outcome_informed_columns(stored)
     offenders = sorted({str(column) for column in columns if str(column) in forbidden})
     if offenders:
-        raise ValueError(
+        raise UserInputError(
             f"Outcome-informed derived columns cannot be used for {context}: "
             + ", ".join(offenders)
             + ". Use them only for exploratory grouping/visualization."
@@ -371,7 +397,7 @@ def _reject_survival_outcome_feature_columns(
     )
     offenders = sorted({str(column) for column in columns if str(column) in forbidden})
     if offenders:
-        raise ValueError(
+        raise UserInputError(
             f"Survival outcome columns cannot be used for {context}: "
             + ", ".join(offenders)
             + ". Use baseline covariates or biomarker features instead."
@@ -436,15 +462,15 @@ def _enforce_upload_shape_limits(dataframe: Any) -> None:
     n_columns = int(dataframe.shape[1])
     n_cells = int(n_rows * n_columns)
     if n_rows > _MAX_UPLOAD_ROWS:
-        raise ValueError(
+        raise UserInputError(
             f"Upload has {n_rows:,} rows. SurvStudio currently supports at most {_MAX_UPLOAD_ROWS:,} rows per uploaded cohort."
         )
     if n_columns > _MAX_UPLOAD_COLUMNS:
-        raise ValueError(
+        raise UserInputError(
             f"Upload has {n_columns:,} columns. SurvStudio currently supports at most {_MAX_UPLOAD_COLUMNS:,} columns per uploaded cohort."
         )
     if n_cells > _MAX_UPLOAD_CELLS:
-        raise ValueError(
+        raise UserInputError(
             f"Upload expands to {n_cells:,} cells after parsing. SurvStudio currently supports at most {_MAX_UPLOAD_CELLS:,} parsed cells per uploaded cohort."
         )
 
@@ -587,22 +613,15 @@ def fail_bad_request(exc: Exception) -> NoReturn:
         raise exc
     if isinstance(exc, ImportError):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if isinstance(exc, KeyError):
-        raw = str(exc)
-        if "not in index" in raw:
-            detail = f"Column not found in dataset. {raw}"
-        elif "Unknown dataset" in raw:
-            detail = raw
-        else:
-            detail = f"Not found: {raw}"
-        raise HTTPException(status_code=404, detail=detail) from exc
+    if isinstance(exc, NotFoundError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, UserInputError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if isinstance(exc, (ValueError, TypeError)):
-        detail = str(exc)
-        frames = traceback.extract_tb(exc.__traceback__) if exc.__traceback__ is not None else []
-        origin_path = Path(frames[-1].filename).resolve() if frames else None
-        if origin_path is None or BASE_DIR not in origin_path.parents:
-            detail = "The request could not be processed with the selected dataset and settings."
-        raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(
+            status_code=400,
+            detail="The request could not be processed with the selected dataset and settings.",
+        ) from exc
     raise exc
 
 
@@ -678,7 +697,7 @@ def _resolve_export_caption(caption: str | None, template: str) -> str:
 
 def _export_columns(rows: list[dict[str, Any]]) -> list[str]:
     if not rows:
-        raise ValueError("No rows available for export.")
+        raise UserInputError("No rows available for export.")
     columns: list[str] = []
     seen: set[str] = set()
     for row in rows:
@@ -711,7 +730,7 @@ def _export_rows_to_csv(
     template: str = "default",
 ) -> str:
     if not rows:
-        raise ValueError("No rows available for export.")
+        raise UserInputError("No rows available for export.")
     columns = _export_columns(rows)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -735,7 +754,7 @@ def _export_rows_to_markdown(
     template: str,
 ) -> str:
     if not rows:
-        raise ValueError("No rows available for export.")
+        raise UserInputError("No rows available for export.")
     columns = _export_columns(rows)
     template_profile = _export_template_profile(template)
     resolved_caption = _resolve_export_caption(caption, template)
@@ -784,7 +803,7 @@ def _export_rows_to_latex(
     template: str,
 ) -> str:
     if not rows:
-        raise ValueError("No rows available for export.")
+        raise UserInputError("No rows available for export.")
     columns = _export_columns(rows)
     template_profile = _export_template_profile(template)
     resolved_caption = _resolve_export_caption(caption, template)
@@ -885,7 +904,7 @@ def _export_rows_to_docx(
     template: str,
 ) -> bytes:
     if not rows:
-        raise ValueError("No rows available for export.")
+        raise UserInputError("No rows available for export.")
     template_profile = _export_template_profile(template)
     resolved_caption = _resolve_export_caption(caption, template)
     caption_bold = template in {"default", "jco"}
@@ -989,12 +1008,14 @@ async def _load_builtin_dataset_response(
     *,
     filename: str,
     source: str = "builtin_demo",
+    preset_name: str | None = None,
 ) -> dict[str, Any]:
     try:
         dataframe = await run_in_threadpool(loader)
         _enforce_upload_shape_limits(dataframe)
         ensure_model_feature_candidate_limit(dataframe)
-        stored = store.create(dataframe, filename=filename, source=source)
+        metadata = {"preset_name": preset_name} if preset_name else None
+        stored = store.create(dataframe, filename=filename, source=source, metadata=metadata)
         return await run_in_threadpool(dataset_response, stored.dataset_id)
     except Exception as exc:
         fail_bad_request(exc)
@@ -1039,17 +1060,29 @@ async def load_example() -> dict[str, Any]:
 
 @app.post("/api/load-tcga-example")
 async def load_tcga_example() -> dict[str, Any]:
-    return await _load_builtin_dataset_response(load_tcga_luad_example_dataset, filename="tcga_luad_xena_example")
+    return await _load_builtin_dataset_response(
+        load_tcga_luad_example_dataset,
+        filename="tcga_luad_xena_example",
+        preset_name="tcga_luad",
+    )
 
 
 @app.post("/api/load-tcga-upload-ready")
 async def load_tcga_upload_ready() -> dict[str, Any]:
-    return await _load_builtin_dataset_response(load_tcga_luad_upload_ready_dataset, filename="tcga_luad_upload_ready")
+    return await _load_builtin_dataset_response(
+        load_tcga_luad_upload_ready_dataset,
+        filename="tcga_luad_upload_ready",
+        preset_name="tcga_luad",
+    )
 
 
 @app.post("/api/load-gbsg2-example")
 async def load_gbsg2_example() -> dict[str, Any]:
-    return await _load_builtin_dataset_response(load_gbsg2_upload_ready_dataset, filename="gbsg2_upload_ready")
+    return await _load_builtin_dataset_response(
+        load_gbsg2_upload_ready_dataset,
+        filename="gbsg2_upload_ready",
+        preset_name="gbsg2",
+    )
 
 
 @app.get("/api/dataset/{dataset_id}")
@@ -1164,6 +1197,8 @@ async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
         )
 
         def _run() -> dict[str, Any]:
+            from survival_toolkit.plots import build_km_figure
+
             analysis = compute_km_analysis(
                 stored.dataframe,
                 time_column=request_model.time_column,
@@ -1210,6 +1245,8 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
         )
 
         def _run() -> dict[str, Any]:
+            from survival_toolkit.plots import build_cox_forest_figure
+
             analysis = compute_cox_analysis(
                 stored.dataframe,
                 time_column=request_model.time_column,
@@ -1445,7 +1482,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                 return {"analysis": comparison, "figure": figure, "request_config": request_config}
 
             if request_model.evaluation_strategy != "holdout":
-                raise ValueError(
+                raise UserInputError(
                     "Train Model currently supports deterministic holdout only. "
                     "Use Compare All for repeated cross-validation screening."
                 )

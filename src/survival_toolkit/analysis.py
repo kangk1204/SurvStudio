@@ -17,6 +17,8 @@ from scipy import stats
 from statsmodels.duration.hazard_regression import PHReg
 from statsmodels.duration.survfunc import SurvfuncRight, survdiff
 
+from survival_toolkit.errors import ColumnNotFoundError, user_input_boundary
+
 TRUE_TOKENS = {
     "1",
     "true",
@@ -233,6 +235,7 @@ def load_dataframe(file_bytes: bytes, filename: str) -> pd.DataFrame:
     return _load_dataframe_source(io.BytesIO(file_bytes), filename)
 
 
+@user_input_boundary
 def load_dataframe_from_path(path: str | Path) -> pd.DataFrame:
     path_obj = Path(path)
     if not path_obj.exists():
@@ -721,6 +724,7 @@ def _try_coerce_binary_event(series: pd.Series) -> tuple[pd.Series | None, str |
     return None, "unrecognized"
 
 
+@user_input_boundary
 def find_event_equivalent_columns(
     df: pd.DataFrame,
     event_column: str,
@@ -774,6 +778,27 @@ def suggest_columns(df: pd.DataFrame) -> dict[str, list[str]]:
     return suggestions
 
 
+def _require_dataframe_columns(df: pd.DataFrame, columns: Sequence[str | None]) -> None:
+    requested: list[str] = []
+    seen: set[str] = set()
+    for column in columns:
+        if column is None:
+            continue
+        name = str(column)
+        if not name or name in seen:
+            continue
+        requested.append(name)
+        seen.add(name)
+    missing = [name for name in requested if name not in df.columns]
+    if not missing:
+        return
+    if len(missing) == 1:
+        raise ColumnNotFoundError(f'Column not found in dataset: "{missing[0]}".')
+    quoted = ", ".join(f'"{name}"' for name in missing)
+    raise ColumnNotFoundError(f"Columns not found in dataset: {quoted}.")
+
+
+@user_input_boundary
 def profile_dataframe(df: pd.DataFrame, dataset_id: str, filename: str) -> dict[str, Any]:
     column_profiles: list[dict[str, Any]] = []
     numeric_columns: list[str] = []
@@ -836,6 +861,7 @@ def model_feature_candidate_columns(df: pd.DataFrame) -> list[str]:
     )
 
 
+@user_input_boundary
 def ensure_model_feature_candidate_limit(
     df: pd.DataFrame,
     *,
@@ -875,6 +901,7 @@ def _ensure_positive_times(time_values: pd.Series) -> pd.Series:
 
 
 def _validate_time_column_choice(df: pd.DataFrame, time_column: str) -> None:
+    _require_dataframe_columns(df, [time_column])
     likely_time_columns = suggest_columns(df).get("time_columns", [])
     if likely_time_columns and time_column not in likely_time_columns:
         examples = ", ".join(likely_time_columns[:3])
@@ -885,6 +912,7 @@ def _validate_time_column_choice(df: pd.DataFrame, time_column: str) -> None:
 
 
 def _validate_event_column_choice(df: pd.DataFrame, event_column: str) -> None:
+    _require_dataframe_columns(df, [event_column])
     series = df[event_column]
     likely_event_columns = [
         column for column in df.columns if _looks_like_event_outcome_column(column, df[column])
@@ -936,10 +964,11 @@ def _cohort_frame(
     if time_column == event_column:
         raise ValueError("The survival time column and event column must be different.")
     _validate_endpoint_family_pair(time_column, event_column)
-    _validate_time_column_choice(df, time_column)
-    _validate_event_column_choice(df, event_column)
     extra_columns = list(extra_columns or [])
     required_columns = [time_column, event_column, *extra_columns]
+    _require_dataframe_columns(df, required_columns)
+    _validate_time_column_choice(df, time_column)
+    _validate_event_column_choice(df, event_column)
     frame = df[required_columns].copy()
     frame[time_column] = pd.to_numeric(frame[time_column], errors="coerce")
     frame[event_column] = coerce_event(frame[event_column], event_positive_value=event_positive_value)
@@ -1000,9 +1029,12 @@ def _pointwise_km_ci(survival: np.ndarray, se: np.ndarray, alpha: float) -> tupl
     zero_mask = finite_mask & (survival <= 0.0)
     lower[zero_mask] = 0.0
     upper[zero_mask] = 0.0
+    one_mask = finite_mask & (survival >= 1.0 - 1e-12)
+    lower[one_mask] = np.clip(survival[one_mask], 0.0, 1.0)
+    upper[one_mask] = np.clip(survival[one_mask], 0.0, 1.0)
 
     log_s = np.full_like(survival, np.nan, dtype=float)
-    candidate_mask = finite_mask & ~zero_mask
+    candidate_mask = finite_mask & ~zero_mask & ~one_mask
     log_s[candidate_mask] = np.log(survival[candidate_mask])
     denominator = survival * log_s
     valid_mask = (
@@ -1062,6 +1094,7 @@ def _safe_float(value: Any) -> float | None:
 
 
 def _safe_exp(value: Any) -> float:
+    """Exponentiate with saturation, always returning a finite float."""
     exponent = float(value)
     if exponent >= _MAX_EXP_INPUT:
         return float(np.finfo(float).max)
@@ -1071,6 +1104,7 @@ def _safe_exp(value: Any) -> float:
 
 
 def _safe_exp_or_none(value: Any) -> float | None:
+    """Exponentiate only when safely representable; otherwise return None."""
     try:
         exponent = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -1080,6 +1114,13 @@ def _safe_exp_or_none(value: Any) -> float | None:
     if exponent >= _MAX_EXP_INPUT or exponent <= _MIN_EXP_INPUT:
         return None
     return math.exp(exponent)
+
+
+def _hazard_ratio_effect_size(value: Any) -> float:
+    hr = _safe_float(value)
+    if hr is None or hr <= 0.0:
+        return 0.0
+    return abs(math.log(max(hr, 1e-12)))
 
 
 def _cox_estimated_parameter_count(
@@ -1441,8 +1482,8 @@ def _cox_scientific_summary(
     strengths = [
         "Cox regression was fit with the Efron tie method.",
         cohort_statement,
-        "Proportional-hazards diagnostics were evaluated from rank-based Spearman correlations between Schoenfeld residuals and log time.",
-        "The reported discrimination metric is an apparent C-index computed on the fitted cohort.",
+        "Proportional-hazards screening used rank-based Spearman correlations between Schoenfeld residuals and log time; this is approximate and not a formal Grambsch-Therneau test.",
+        "The reported discrimination metric is an apparent C-index on the fitted cohort, so it reflects training-cohort ranking only.",
     ]
     cautions: list[str] = []
     next_steps: list[str] = []
@@ -1490,6 +1531,10 @@ def _cox_scientific_summary(
     if c_index is not None and c_index < 0.6:
         cautions.append("Apparent model discrimination is modest (C-index below 0.60).")
     cautions.append("The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.")
+    if c_index is not None:
+        strengths.append(
+            f"A C-index of {c_index:.3f} means the fitted model ranks about {c_index * 100:.1f}% of comparable patient pairs in the observed risk order."
+        )
     cautions.append(
         "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; validate the final specification on a separate cohort outside this run."
     )
@@ -1552,7 +1597,7 @@ def _cox_scientific_summary(
             {"label": "Events", "value": int(model_stats["events"])},
             {"label": "Parameters", "value": int(model_stats["parameters"])},
             {"label": "EPV", "value": epv},
-            {"label": "Apparent C-index", "value": c_index},
+            {"label": "Apparent C-index (training cohort)", "value": c_index},
         ],
     }
 
@@ -1566,6 +1611,9 @@ def _signature_scientific_summary(
     ]
     cautions: list[str] = []
     next_steps: list[str] = []
+    cautions.append(
+        "Stability score is a composite heuristic that mixes significance, effect size, replication support, and parsimony; its weights are expert-set and not independently validated."
+    )
 
     if search_space["permutation_iterations"] > 0:
         strengths.append("Permutation-based empirical filtering was enabled for top-ranked candidates.")
@@ -1756,6 +1804,7 @@ def _percentile_threshold_label(percentile: float, direction: str) -> str:
     raise ValueError(f"Unsupported percentile-threshold direction: {direction}")
 
 
+@user_input_boundary
 def derive_group_column(
     df: pd.DataFrame,
     source_column: str,
@@ -1771,6 +1820,7 @@ def derive_group_column(
     permutation_iterations: int = 500,
     random_seed: int = 20260311,
 ) -> tuple[pd.DataFrame, str, dict[str, Any]]:
+    _require_dataframe_columns(df, [source_column])
     if source_column in _survival_outcome_like_columns(df):
         raise ValueError(
             f'"{source_column}" looks like a survival endpoint column. '
@@ -2098,7 +2148,7 @@ def _stability_score(row: dict[str, Any]) -> float:
     # Composite score balancing significance, robustness, effect size, and parsimony.
     bh_p = max(float(row["BH adjusted p"]), 1e-12)
     significance_score = min(-math.log10(bh_p), 10.0)
-    effect = abs(math.log(max(float(row["Hazard ratio (signature+ vs -)"]), 1e-12)))
+    effect = _hazard_ratio_effect_size(row.get("Hazard ratio (signature+ vs -)"))
     support = row["Bootstrap support (p<alpha)"]
     support_value = float(support) if support is not None else 0.0
     direction_consistency = row.get("Bootstrap HR direction consistency")
@@ -2232,7 +2282,9 @@ def _bootstrap_signature_metrics(
         valid_resamples += 1
         p_float = float(p_value)
         p_values.append(p_float)
-        hazard_ratios.append(_safe_exp(cox_results.params[0]))
+        hr = _safe_exp_or_none(cox_results.params[0])
+        if hr is not None:
+            hazard_ratios.append(hr)
         if p_float < significance_level:
             significant_count += 1
 
@@ -2245,14 +2297,16 @@ def _bootstrap_signature_metrics(
             "Bootstrap valid resamples": 0,
         }
 
-    hr_array = np.asarray(hazard_ratios, dtype=float)
-    direction_consistency = float(
-        max(float(np.mean(hr_array >= 1.0)), float(np.mean(hr_array < 1.0)))
-    )
+    direction_consistency = None
+    if hazard_ratios:
+        hr_array = np.asarray(hazard_ratios, dtype=float)
+        direction_consistency = float(
+            max(float(np.mean(hr_array >= 1.0)), float(np.mean(hr_array < 1.0)))
+        )
 
     return {
         "Bootstrap support (p<alpha)": float(significant_count / valid_resamples),
-        "Bootstrap median HR": float(np.median(hazard_ratios)),
+        "Bootstrap median HR": float(np.median(hazard_ratios)) if hazard_ratios else None,
         "Bootstrap median p": float(np.median(p_values)),
         "Bootstrap HR direction consistency": direction_consistency,
         "Bootstrap valid resamples": int(valid_resamples),
@@ -2365,13 +2419,15 @@ def _validation_signature_metrics(
         except Exception:
             continue
 
-        ci_low = _safe_exp(conf_int[0, 0])
-        ci_high = _safe_exp(conf_int[0, 1])
+        ci_low = _safe_exp_or_none(conf_int[0, 0])
+        ci_high = _safe_exp_or_none(conf_int[0, 1])
         valid_folds += 1
         p_float = float(p_value)
         p_values.append(p_float)
-        hazard_ratios.append(_safe_exp(cox_results.params[0]))
-        if p_float <= significance_level and not (ci_low <= 1.0 <= ci_high):
+        hr = _safe_exp_or_none(cox_results.params[0])
+        if hr is not None:
+            hazard_ratios.append(hr)
+        if p_float <= significance_level and ci_low is not None and ci_high is not None and not (ci_low <= 1.0 <= ci_high):
             significant_count += 1
 
     if valid_folds == 0:
@@ -2384,12 +2440,13 @@ def _validation_signature_metrics(
 
     return {
         "Validation support (p<alpha)": float(significant_count / valid_folds),
-        "Validation median HR": float(np.median(hazard_ratios)),
+        "Validation median HR": float(np.median(hazard_ratios)) if hazard_ratios else None,
         "Validation median p": float(np.median(p_values)),
         "Validation valid folds": int(valid_folds),
     }
 
 
+@user_input_boundary
 def discover_feature_signature(
     df: pd.DataFrame,
     time_column: str,
@@ -2504,9 +2561,9 @@ def discover_feature_signature(
                 except Exception:
                     continue
                 conf_int = cox_results.conf_int()
-                hr = _safe_exp(cox_results.params[0])
-                ci_low = _safe_exp(conf_int[0, 0])
-                ci_high = _safe_exp(conf_int[0, 1])
+                hr = _safe_exp_or_none(cox_results.params[0])
+                ci_low = _safe_exp_or_none(conf_int[0, 0])
+                ci_high = _safe_exp_or_none(conf_int[0, 1])
 
                 sf_high = SurvfuncRight(times[mask], events[mask])
                 sf_low = SurvfuncRight(times[~mask], events[~mask])
@@ -2555,7 +2612,7 @@ def discover_feature_signature(
         raise ValueError("No analyzable feature combinations passed minimum group/event requirements.")
 
     adjusted = _bh_adjust([row["P value"] for row in rows])
-    for row, adj in zip(rows, adjusted, strict=False):
+    for row, adj in zip(rows, adjusted, strict=True):
         row["BH adjusted p"] = adj
 
     primary_ranked_idx = sorted(
@@ -2563,7 +2620,7 @@ def discover_feature_signature(
         key=lambda idx: (
             rows[idx]["BH adjusted p"],
             rows[idx]["P value"],
-            -abs(math.log(max(rows[idx]["Hazard ratio (signature+ vs -)"], 1e-8))),
+            -_hazard_ratio_effect_size(rows[idx].get("Hazard ratio (signature+ vs -)")),
         ),
     )
     # Compute expensive robustness metrics for (a) output candidates and (b)
@@ -2749,6 +2806,7 @@ def discover_feature_signature(
     return output_df, best_column_name, payload
 
 
+@user_input_boundary
 def compute_km_analysis(
     df: pd.DataFrame,
     time_column: str,
@@ -2883,7 +2941,7 @@ def compute_km_analysis(
                 }
             )
         adjusted = _bh_adjust(raw_p_values)
-        for row, adjusted_p in zip(pairwise_rows, adjusted, strict=False):
+        for row, adjusted_p in zip(pairwise_rows, adjusted, strict=True):
             row["BH adjusted p"] = adjusted_p
 
     cohort_summary = {
@@ -3171,6 +3229,7 @@ def _harrell_c_index(time_values: np.ndarray, event_values: np.ndarray, risk_sco
     return concordant / comparable
 
 
+@user_input_boundary
 def compute_cox_analysis(
     df: pd.DataFrame,
     time_column: str,
@@ -3306,7 +3365,7 @@ def compute_cox_analysis(
             "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),
             "apparent_c_index": _safe_float(c_index),
-            "c_index_label": "Apparent C-index",
+            "c_index_label": "Apparent C-index (training cohort)",
             "evaluation_mode": "apparent",
             "tie_method": "efron",
         },
@@ -3315,6 +3374,7 @@ def compute_cox_analysis(
     }
 
 
+@user_input_boundary
 def preview_cox_analysis_inputs(
     df: pd.DataFrame,
     time_column: str,
@@ -3361,6 +3421,7 @@ def preview_cox_analysis_inputs(
     }
 
 
+@user_input_boundary
 def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_column: str | None = None) -> dict[str, Any]:
     variables = [variable for variable in variables if variable != group_column]
     if not variables:
@@ -3369,6 +3430,7 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
     columns = [*variables]
     if group_column:
         columns.append(group_column)
+    _require_dataframe_columns(df, columns)
     frame = df[columns].copy()
 
     group_frames: OrderedDict[str, pd.DataFrame] = OrderedDict()

@@ -10,10 +10,12 @@ import zipfile
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import numpy as np
+import pandas as pd
 import pytest
 
 import survival_toolkit.app as app_module
 from survival_toolkit.app import DeepModelRequest, app, fail_bad_request, store
+from survival_toolkit.errors import ColumnNotFoundError, DatasetNotFoundError, UserInputError
 from survival_toolkit.sample_data import make_example_dataset
 
 
@@ -213,10 +215,12 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
 
 def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    shell_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_shell.js"
     text = app_js.read_text()
+    shell_text = shell_js.read_text()
 
     assert "captureControlSnapshot()" in text
-    assert "controls: captureControlSnapshot()" in text
+    assert "controls: captureControlSnapshot()" in shell_text
     assert "applyControlSnapshot(historyState.controls || null);" in text
     assert "queueHistorySync()" in text
     assert "showAllEventColumns: Boolean(refs.showAllEventColumns?.checked)" in text
@@ -288,7 +292,9 @@ def test_app_uses_threadpool_for_builtin_loaders_and_derive_group() -> None:
 
 def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    shell_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_shell.js"
     text = app_js.read_text()
+    shell_text = shell_js.read_text()
 
     assert 'uiMode: "guided"' in text
     assert "guidedGoal: null" in text
@@ -300,10 +306,10 @@ def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     assert "function canNavigateToGuidedStep(step)" in text
     assert "function updateGuidedSurfaceVisibility()" in text
     assert "function renderGuidedChrome()" in text
-    assert "view: \"home\", uiMode: runtime.uiMode" in text
-    assert "guidedGoal: runtime.guidedGoal" in text
-    assert "guidedStep: runtime.guidedStep" in text
-    assert "predictiveFamily: runtime.predictiveFamily" in text
+    assert "view: \"home\", uiMode: runtime.uiMode" in shell_text
+    assert "guidedGoal: runtime.guidedGoal" in shell_text
+    assert "guidedStep: runtime.guidedStep" in shell_text
+    assert "predictiveFamily: runtime.predictiveFamily" in shell_text
     assert 'setUiMode(restoredUiMode, { syncHistory: false, preserveGuidedState: restoredUiMode === "guided" });' in text
     assert "function queueVisiblePlotResize()" in text
     assert "function resizeVisiblePlotsNow()" in text
@@ -343,6 +349,21 @@ def test_frontend_hides_dataset_preset_bar_in_guided_mode() -> None:
     assert 'refs.guidedConfigMount.insertBefore(refs.datasetPresetBar, guidedPresetAnchor);' not in text
     assert 'const showOutcomeConfigInRail = guidedActive && step === 2;' in text
     assert 'const guidedConfigTarget = showOutcomeConfigInRail ? refs.guidedRailPanelMount : refs.guidedConfigMount;' in text
+
+
+def test_frontend_uses_server_side_preset_metadata_and_validates_dom_refs() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "const appState = {" in text
+    assert "const state = appState;" in text
+    assert "const runtime = appState;" in text
+    assert "const DATASET_PRESETS = Object.freeze({" in text
+    assert 'const presetName = String(state.dataset?.preset_name || "").trim();' in text
+    assert 'filename.includes("gbsg2")' not in text
+    assert "const REQUIRED_REF_KEYS = Object.freeze(Object.keys(refs));" in text
+    assert "function assertRequiredRefs()" in text
+    assert "Missing required DOM references:" in text
 
 
 def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
@@ -523,13 +544,15 @@ def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repea
 
 def test_plot_config_removes_box_and_lasso_select_tools() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    helper_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_downloads.js"
     text = app_js.read_text()
+    helper_text = helper_js.read_text()
 
     assert "function plotConfig(filename)" in text
     assert 'function isReadonlyPlot(filename) {' in text
-    assert 'return ["dl_loss", "ml_importance", "shap_importance", "dl_importance"].includes(filename);' in text
+    assert 'return ["dl_loss", "ml_importance", "shap_importance", "dl_importance"].includes(filename);' in helper_text
     assert "function plotLayoutConfig(layout, filename) {" in text
-    assert "nextLayout.dragmode = false;" in text
+    assert "nextLayout.dragmode = false;" in helper_text
     assert 'const isStaticReadonlyPlot = isReadonlyPlot(filename);' in text
     assert "scrollZoom: !isStaticReadonlyPlot," in text
     assert 'doubleClick: isStaticReadonlyPlot ? false : "reset+autosize",' in text
@@ -741,14 +764,17 @@ def test_ml_dl_result_reveal_is_conditional_on_current_view() -> None:
 
 def test_frontend_exposes_shutdown_button_and_stop_flow_copy() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    shell_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_shell.js"
     text = app_js.read_text()
+    shell_text = shell_js.read_text()
 
     assert 'shutdownButton: document.getElementById("shutdownButton")' in text
     assert "async function shutdownServer() {" in text
-    assert "if (!window.confirm(warning)) return;" in text
-    assert "Stopping the local SurvStudio server. This will cancel active runs and release memory." in text
+    assert "return shellHelpers.shutdownServer({" in text
+    assert "if (!window.confirm(warning)) return;" in shell_text
+    assert "Stopping the local SurvStudio server. This will cancel active runs and release memory." in shell_text
     assert "SurvStudio server stopped" in text
-    assert 'await fetchJSON("/api/shutdown", { method: "POST" });' in text
+    assert 'await fetchJSON("/api/shutdown", { method: "POST" });' in shell_text
     assert 'refs.shutdownButton?.addEventListener("click", () => {' in text
 
 
@@ -1631,6 +1657,33 @@ def test_fail_bad_request_maps_dependency_errors_to_503() -> None:
     assert "scikit-survival" in excinfo.value.detail
 
 
+def test_fail_bad_request_exposes_typed_user_input_errors() -> None:
+    with pytest.raises(HTTPException) as excinfo:
+        fail_bad_request(UserInputError("bad user config"))
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "bad user config"
+
+
+def test_fail_bad_request_maps_typed_not_found_errors_to_404() -> None:
+    with pytest.raises(HTTPException) as excinfo:
+        fail_bad_request(ColumnNotFoundError('Column not found in dataset: "risk_split".'))
+
+    assert excinfo.value.status_code == 404
+    assert excinfo.value.detail == 'Column not found in dataset: "risk_split".'
+
+    with pytest.raises(HTTPException) as excinfo:
+        fail_bad_request(DatasetNotFoundError("Unknown dataset id: missing"))
+
+    assert excinfo.value.status_code == 404
+    assert excinfo.value.detail == "Unknown dataset id: missing"
+
+
+def test_fail_bad_request_reraises_raw_key_errors() -> None:
+    with pytest.raises(KeyError, match="internal_missing_key"):
+        fail_bad_request(KeyError("internal_missing_key"))
+
+
 def test_fail_bad_request_sanitizes_nonlocal_value_errors() -> None:
     def _raise_external_error() -> None:
         raise ValueError("parser internals leaked")
@@ -1643,6 +1696,38 @@ def test_fail_bad_request_sanitizes_nonlocal_value_errors() -> None:
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail == "The request could not be processed with the selected dataset and settings."
+
+
+def test_ml_artifact_cache_returns_deep_copied_frames() -> None:
+    cache = app_module._MlArtifactCache(max_items=2)
+    signature = {"model_type": "rsf"}
+    frame = pd.DataFrame({"risk": [1.0, 2.0]})
+
+    cache.remember(
+        dataset_id="dataset-1",
+        model_type="rsf",
+        signature=signature,
+        result={
+            "_model": {"tree": 1},
+            "_X_encoded": frame,
+            "_feature_encoder": {"levels": ["low", "high"]},
+            "_analysis_frame": frame,
+        },
+    )
+
+    first = cache.get(dataset_id="dataset-1", model_type="rsf", signature=signature)
+    assert first is not None
+    analysis_values = first["_analysis_frame"].to_numpy(copy=False)
+    encoded_values = first["_X_encoded"].to_numpy(copy=False)
+    analysis_values.flags.writeable = True
+    encoded_values.flags.writeable = True
+    analysis_values[0, 0] = 99.0
+    encoded_values[1, 0] = 77.0
+
+    second = cache.get(dataset_id="dataset-1", model_type="rsf", signature=signature)
+    assert second is not None
+    assert second["_analysis_frame"].iloc[0, 0] == 1.0
+    assert second["_X_encoded"].iloc[1, 0] == 2.0
 
 
 def test_cors_rejects_null_origin_but_allows_localhost() -> None:
@@ -3065,6 +3150,13 @@ def test_frontend_uses_dataset_aware_download_filenames() -> None:
         / "static"
         / "app.js"
     ).read_text(encoding="utf-8")
+    downloads_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app_downloads.js"
+    ).read_text(encoding="utf-8")
 
     assert "function buildDownloadFilename(stem, ext" in app_js
     assert "function currentDatasetSlug()" in app_js
@@ -3073,7 +3165,7 @@ def test_frontend_uses_dataset_aware_download_filenames() -> None:
     assert 'buildDownloadFilename("cox_results", "csv")' in app_js
     assert 'buildDownloadFilename("cox_forest", "png")' in app_js
     assert 'buildDownloadFilename("cox_forest", "svg")' in app_js
-    assert 'showToast("No rows available for export.", "warning")' in app_js
+    assert 'showToast?.("No rows available for export.", "warning")' in downloads_js
     assert 'buildDownloadFilename("ml_manuscript_table", "docx", { template: currentMlJournalTemplate() })' in app_js
     assert 'buildDownloadFilename("ml_model_comparison", "png")' in app_js
     assert 'buildDownloadFilename("ml_model_comparison", "svg")' in app_js
@@ -3084,22 +3176,22 @@ def test_frontend_uses_dataset_aware_download_filenames() -> None:
 
 
 def test_frontend_csv_download_sanitizes_formula_like_cells() -> None:
-    app_js = (
+    downloads_js = (
         Path(__file__).resolve().parents[1]
         / "src"
         / "survival_toolkit"
         / "static"
-        / "app.js"
+        / "app_downloads.js"
     ).read_text(encoding="utf-8")
 
-    assert "function downloadCsv(filename, rows, columns = null)" in app_js
-    assert "const sanitizeCsvCell = (value) => {" in app_js
-    assert 'if (/^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$/.test(trimmed)) return text;' in app_js
-    assert 'trimmed.startsWith("=")' in app_js
-    assert 'trimmed.startsWith("+")' in app_js
-    assert 'trimmed.startsWith("-")' in app_js
-    assert 'trimmed.startsWith("@")' in app_js
-    assert "return `'${text}`;" in app_js
+    assert "function downloadCsv({ filename, rows, columns = null, showToast })" in downloads_js
+    assert "const sanitizeCsvCell = (value) => {" in downloads_js
+    assert 'if (/^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$/.test(trimmed)) return text;' in downloads_js
+    assert 'trimmed.startsWith("=")' in downloads_js
+    assert 'trimmed.startsWith("+")' in downloads_js
+    assert 'trimmed.startsWith("-")' in downloads_js
+    assert 'trimmed.startsWith("@")' in downloads_js
+    assert "return `'${text}`;" in downloads_js
 
 
 def test_frontend_covariate_picker_keeps_all_unique_continuous_columns() -> None:
@@ -4117,21 +4209,22 @@ def test_load_tcga_example_endpoint_returns_real_public_cohort() -> None:
 
 
 @pytest.mark.parametrize(
-    "path",
+    ("path", "expected_preset_name"),
     [
-        "/api/load-example",
-        "/api/load-tcga-example",
-        "/api/load-tcga-upload-ready",
-        "/api/load-gbsg2-example",
+        ("/api/load-example", None),
+        ("/api/load-tcga-example", "tcga_luad"),
+        ("/api/load-tcga-upload-ready", "tcga_luad"),
+        ("/api/load-gbsg2-example", "gbsg2"),
     ],
 )
-def test_builtin_dataset_loaders_mark_preset_eligible(path: str) -> None:
+def test_builtin_dataset_loaders_mark_preset_eligible(path: str, expected_preset_name: str | None) -> None:
     response = client.post(path)
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["dataset_source"] == "builtin_demo"
     assert payload["preset_eligible"] is True
+    assert payload["preset_name"] == expected_preset_name
 
 
 def test_load_tcga_upload_ready_endpoint_returns_compact_real_cohort() -> None:
@@ -4272,6 +4365,7 @@ def test_uploaded_dataset_marks_preset_ineligible() -> None:
     body = response.json()
     assert body["dataset_source"] == "upload"
     assert body["preset_eligible"] is False
+    assert body["preset_name"] is None
 
 
 def test_upload_ready_real_tcga_file_runs_classical_and_ml_smoke() -> None:

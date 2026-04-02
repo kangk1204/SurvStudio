@@ -10,6 +10,8 @@ from uuid import uuid4
 
 import pandas as pd
 
+from survival_toolkit.errors import DatasetNotFoundError
+
 _MAX_DATASETS = 10
 _TTL_SECONDS = 3600  # 1 hour
 
@@ -25,11 +27,23 @@ class StoredDataset:
 
 
 class DatasetStore:
+    """Thread-safe dataset cache.
+
+    Expiration is enforced on every mutating read/write path, so a `get()` for one
+    dataset may evict unrelated expired entries before it returns.
+    """
+
     def __init__(self, max_datasets: int = _MAX_DATASETS, ttl_seconds: int = _TTL_SECONDS) -> None:
         self._datasets: OrderedDict[str, StoredDataset] = OrderedDict()
         self._max_datasets = max_datasets
         self._ttl_seconds = ttl_seconds
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _copy_dataframe(dataframe: pd.DataFrame, *, copy_dataframe: bool) -> pd.DataFrame:
+        if not copy_dataframe:
+            return dataframe
+        return dataframe.copy(deep=False)
 
     def _evict_expired(self) -> None:
         now = datetime.now(timezone.utc)
@@ -62,7 +76,7 @@ class DatasetStore:
                 dataset_id=dataset_id,
                 filename=filename,
                 source=source,
-                dataframe=dataframe.copy(deep=True) if copy_dataframe else dataframe,
+                dataframe=self._copy_dataframe(dataframe, copy_dataframe=copy_dataframe),
                 created_at=datetime.now(timezone.utc),
                 metadata=copy.deepcopy(metadata or {}),
             )
@@ -74,7 +88,7 @@ class DatasetStore:
             dataset_id=stored.dataset_id,
             filename=stored.filename,
             source=stored.source,
-            dataframe=stored.dataframe.copy(deep=True) if copy_dataframe else stored.dataframe,
+            dataframe=self._copy_dataframe(stored.dataframe, copy_dataframe=copy_dataframe),
             created_at=stored.created_at,
             metadata=copy.deepcopy(stored.metadata),
         )
@@ -85,7 +99,7 @@ class DatasetStore:
             try:
                 stored = self._datasets[dataset_id]
             except KeyError as exc:
-                raise KeyError(f"Unknown dataset id: {dataset_id}") from exc
+                raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}") from exc
             self._datasets.move_to_end(dataset_id)
             return self._clone_stored(stored, copy_dataframe=copy_dataframe)
 
@@ -94,7 +108,7 @@ class DatasetStore:
             try:
                 del self._datasets[dataset_id]
             except KeyError as exc:
-                raise KeyError(f"Unknown dataset id: {dataset_id}") from exc
+                raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}") from exc
 
     def update_dataframe(self, dataset_id: str, dataframe: pd.DataFrame, *, copy_dataframe: bool = True) -> StoredDataset:
         with self._lock:
@@ -102,9 +116,9 @@ class DatasetStore:
             try:
                 stored = self._datasets[dataset_id]
             except KeyError as exc:
-                raise KeyError(f"Unknown dataset id: {dataset_id}") from exc
+                raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}") from exc
             self._datasets.move_to_end(dataset_id)
-            stored.dataframe = dataframe.copy(deep=True) if copy_dataframe else dataframe
+            stored.dataframe = self._copy_dataframe(dataframe, copy_dataframe=copy_dataframe)
             return self._clone_stored(stored, copy_dataframe=copy_dataframe)
 
     def update_metadata(self, dataset_id: str, metadata: dict[str, Any]) -> StoredDataset:
@@ -113,7 +127,7 @@ class DatasetStore:
             try:
                 stored = self._datasets[dataset_id]
             except KeyError as exc:
-                raise KeyError(f"Unknown dataset id: {dataset_id}") from exc
+                raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}") from exc
             self._datasets.move_to_end(dataset_id)
             stored.metadata = copy.deepcopy(metadata)
             return self._clone_stored(stored, copy_dataframe=False)

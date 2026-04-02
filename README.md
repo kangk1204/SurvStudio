@@ -770,6 +770,7 @@ Architecture note:
 - The current Cox discrimination summary is an `Apparent C-index` on the analyzable cohort, not an externally validated performance estimate.
 - PH diagnostics currently use rank-based Spearman correlations between Schoenfeld residuals and log time.
 - That is useful for screening PH problems, but it is not the same thing as a full Grambsch-Therneau omnibus test.
+- A Cox `C-index = 0.65` means the fitted model ranks about `65%` of comparable patient pairs in the observed risk order; it is not "65% accuracy."
 
 ### Model C-index
 
@@ -812,6 +813,7 @@ If you derive a `High/Low` grouping from the same cohort with optimal cutpointin
 - treat the follow-up KM/table output as descriptive
 - do not treat the repeated group-separation p-value as an independent confirmatory test
 - use external validation if you want inferential claims for the derived grouping
+- signature stability scores are heuristic composite rankings, not independently validated statistical tests
 
 ### Calibration and Time-Dependent Importance
 
