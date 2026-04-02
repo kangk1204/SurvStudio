@@ -39,11 +39,13 @@ all = [
   "shap>=0.45.0",
   "torch>=2.0.0",
   "httpx>=0.28.1",
+  "kaleido>=0.2.1",
   "playwright>=1.52.0",
   "pytest>=8.3.5",
 ]
 dev = [
   "httpx>=0.28.1",
+  "kaleido>=0.2.1",
   "pytest>=8.3.5",
   "scikit-survival>=0.23.0",
   "shap>=0.45.0",

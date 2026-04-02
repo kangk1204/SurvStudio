@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import socket
@@ -14,7 +15,10 @@ import pytest
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
+        try:
+            sock.bind(("127.0.0.1", 0))
+        except PermissionError as exc:
+            pytest.skip(f"Localhost port binding is unavailable in this environment: {exc}")
         return int(sock.getsockname()[1])
 
 
@@ -30,11 +34,38 @@ def _wait_for_server(base_url: str, timeout_seconds: float = 30.0) -> None:
     raise RuntimeError(f"Timed out waiting for test server at {base_url}")
 
 
+def _is_playwright_environment_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    markers = (
+        "executable doesn't exist",
+        "download new browsers",
+        "host system is missing dependencies",
+        "looks like playwright was just installed",
+        "please run the following command to download new browsers",
+    )
+    return any(marker in message for marker in markers)
+
+
 def _switch_to_expert(page) -> None:
     page.locator("#workspace").wait_for(state="visible")
     if page.locator("#guidedShell").is_visible():
-        page.locator("#expertModeButton").click()
+        page.evaluate("() => document.getElementById('expertModeButton')?.click()")
         page.wait_for_function("document.body.dataset.uiMode === 'expert'")
+
+
+def _assert_tab_active(page, tab_name: str) -> None:
+    page.wait_for_function(
+        """
+        (name) => {
+          const tab = document.querySelector(`[data-tab="${name}"]`);
+          const panel = document.querySelector(`#panel-${name}`);
+          return tab && panel
+            && tab.getAttribute('aria-selected') === 'true'
+            && panel.classList.contains('active');
+        }
+        """,
+        arg=tab_name,
+    )
 
 
 @pytest.fixture
@@ -109,7 +140,9 @@ def test_browser_downloads_km_summary_csv_and_png(browser_server: str, tmp_path:
             context.close()
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_preset_application_shows_visible_feedback(browser_server: str) -> None:
@@ -124,10 +157,8 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
             page.locator("#loadGbsg2Button").click()
             _switch_to_expert(page)
             page.locator("#datasetPresetBar").wait_for(state="visible")
-            page.locator('[data-tab="dl"]').click()
-            page.wait_for_function(
-                "document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'"
-            )
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
 
             assert page.locator("#datasetPresetStatusTitle").inner_text() == "No preset applied yet."
             assert "does not run an analysis" in page.locator("#datasetPresetStatusText").inner_text()
@@ -153,7 +184,7 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
                 "#dlModelCategoricalChecklist input",
                 "els => els.filter(e => e.checked).length",
             )
-            assert page.locator('[data-tab="dl"]').get_attribute("aria-selected") == "true"
+            assert page.locator('[data-tab="benchmark"]').get_attribute("aria-selected") == "true"
             assert "feature checklists used by ML and DL" in page.locator("#datasetPresetStatusText").inner_text()
             assert f"Model features: {selected_feature_count}" in page.locator("#datasetPresetChips").inner_text()
             assert f"Model features: {selected_feature_count}" in page.locator("#dlFeatureSummaryChips").inner_text()
@@ -162,7 +193,328 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    def _mock_ml_compare(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "analysis": {
+                    "comparison_table": [
+                        {"model": "Random Survival Forest", "c_index": 0.714, "evaluation_mode": "holdout", "n_features": 6, "training_time_ms": 121.5, "rank": 1},
+                        {"model": "LASSO-Cox", "c_index": 0.681, "evaluation_mode": "holdout", "n_features": 4, "training_time_ms": 39.4, "rank": 2},
+                    ],
+                    "evaluation_mode": "holdout",
+                    "scientific_summary": {
+                        "status": "review",
+                        "headline": "ML comparison complete.",
+                        "strengths": [],
+                        "cautions": [],
+                        "next_steps": [],
+                    },
+                    "manuscript_tables": {"model_performance_table": []},
+                },
+                "request_config": body,
+            }),
+        )
+
+    def _mock_dl_compare(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "analysis": {
+                    "comparison_table": [
+                        {"model": "DeepHit", "c_index": 0.731, "evaluation_mode": "holdout", "epochs_trained": 40, "n_features": 6, "training_time_ms": 442.7, "rank": 1},
+                        {"model": "DeepSurv", "c_index": 0.703, "evaluation_mode": "holdout", "epochs_trained": 40, "n_features": 6, "training_time_ms": 388.1, "rank": 2},
+                    ],
+                    "evaluation_mode": "holdout",
+                    "scientific_summary": {
+                        "status": "review",
+                        "headline": "DL comparison complete.",
+                        "strengths": [],
+                        "cautions": [],
+                        "next_steps": [],
+                    },
+                    "manuscript_tables": {"model_performance_table": []},
+                },
+                "request_config": body,
+            }),
+        )
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.route("**/api/ml-model", _mock_ml_compare)
+            page.route("**/api/deep-model", _mock_dl_compare)
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _switch_to_expert(page)
+
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
+            page.locator("#runPredictiveCompareAllButton").click()
+            page.wait_for_function(
+                "document.getElementById('mlMetaBanner').textContent.includes('Screening top model=')"
+            )
+            page.wait_for_function(
+                "document.getElementById('dlMetaBanner').textContent.includes('Screening top model=')"
+            )
+
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
+
+            assert "Predictive Overview" in page.locator("#benchmarkSummaryGrid").inner_text()
+            assert "BOARD READY" in page.locator("#benchmarkSummaryGrid").inner_text()
+            page.wait_for_function(
+                "() => { const plot = document.getElementById('benchmarkComparisonPlot'); return plot && !plot.classList.contains('hidden') && Array.isArray(plot.data) && plot.data.length === 1 && plot.data[0].x.length >= 4; }"
+            )
+            families = page.eval_on_selector(
+                "#benchmarkComparisonPlot",
+                "el => Array.from(new Set((el.data?.[0]?.customdata || []).map(row => row[1]))).sort()"
+            )
+            assert families == ["Classical ML", "Deep Learning"]
+            assert not page.locator("#mlComparisonPlot").is_visible()
+            assert not page.locator("#dlComparisonPlot").is_visible()
+            assert "Random Survival Forest" in page.locator("#benchmarkComparisonShell").inner_text()
+            assert "DeepHit" in page.locator("#benchmarkComparisonShell").inner_text()
+            assert "current screening rows from the latest ML and DL comparison outputs" in page.locator("#benchmarkTableNote").inner_text()
+
+            first_row_text = page.locator("#benchmarkComparisonShell tbody tr").nth(0).inner_text()
+            assert "DeepHit" in first_row_text
+            assert "Deep Learning" in first_row_text
+
+            page.locator('#benchmarkComparisonShell tbody tr').nth(0).locator('[data-benchmark-model]').click()
+            _assert_tab_active(page, "benchmark")
+            page.wait_for_function(
+                "document.getElementById('predictiveModelSelector').value === 'deephit'"
+            )
+            assert not page.locator("#benchmarkMlMount").is_visible()
+            assert page.locator("#benchmarkDlMount").is_visible()
+            assert "Deep Learning Survival Models" in page.locator("#benchmarkDlMount").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    def _mock_ml_compare(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "analysis": {
+                    "comparison_table": [
+                        {"model": "Random Survival Forest", "c_index": 0.714, "evaluation_mode": "holdout", "n_features": 6, "training_time_ms": 121.5, "rank": 1},
+                    ],
+                    "evaluation_mode": "holdout",
+                    "scientific_summary": {"status": "review", "headline": "ML comparison complete.", "strengths": [], "cautions": [], "next_steps": []},
+                    "manuscript_tables": {"model_performance_table": []},
+                },
+                "request_config": body,
+            }),
+        )
+
+    def _mock_dl_compare(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        time.sleep(2.5)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "analysis": {
+                    "comparison_table": [
+                        {"model": "DeepHit", "c_index": 0.731, "evaluation_mode": "holdout", "epochs_trained": 40, "n_features": 6, "training_time_ms": 442.7, "rank": 1},
+                    ],
+                    "evaluation_mode": "holdout",
+                    "scientific_summary": {"status": "review", "headline": "DL comparison complete.", "strengths": [], "cautions": [], "next_steps": []},
+                    "manuscript_tables": {"model_performance_table": []},
+                },
+                "request_config": body,
+            }),
+        )
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.route("**/api/ml-model", _mock_ml_compare)
+            page.route("**/api/deep-model", _mock_dl_compare)
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _switch_to_expert(page)
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
+
+            page.locator("#runPredictiveCompareAllButton").click()
+            page.wait_for_function(
+                "document.getElementById('benchmarkComparisonShell').textContent.includes('Partial leaderboard rows are hidden until both model families finish.')"
+            )
+            assert "RUNNING" in page.locator("#benchmarkSummaryGrid").inner_text()
+
+            page.wait_for_function(
+                "document.getElementById('mlMetaBanner').textContent.includes('Screening top model=')"
+            )
+            page.wait_for_function(
+                "document.getElementById('dlMetaBanner').textContent.includes('Screening top model=')"
+            )
+            page.wait_for_function(
+                "() => { const plot = document.getElementById('benchmarkComparisonPlot'); return plot && !plot.classList.contains('hidden') && Array.isArray(plot.data) && plot.data[0].x.length === 2; }"
+            )
+            assert "RUNNING" not in page.locator("#benchmarkSummaryGrid").inner_text()
+            assert "Random Survival Forest" in page.locator("#benchmarkComparisonShell").inner_text()
+            assert "DeepHit" in page.locator("#benchmarkComparisonShell").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1400})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#guidedShell").wait_for(state="visible")
+            page.wait_for_function("document.body.dataset.guidedStep === '2'")
+            page.locator('[data-guided-action="next-step"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            page.locator('[data-guided-action="choose-goal"][data-goal="predictive"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+            assert page.locator("#panel-benchmark .benchmark-action-card").is_hidden()
+
+            page.locator("#mlNEstimators").fill("10")
+
+            page.locator('[data-guided-action="run-predictive-compare-all"]').click()
+            page.wait_for_function("document.getElementById('runPredictiveCompareAllButton').disabled === true")
+            page.wait_for_function("document.body.dataset.guidedStep === '5'")
+            page.wait_for_function(
+                "document.getElementById('benchmarkSummaryGrid').textContent.includes('ML compare rows:')"
+            )
+            page.wait_for_function(
+                "() => document.getElementById('benchmarkSummaryGrid').textContent.includes('ML compare rows: 4') || document.getElementById('benchmarkSummaryGrid').textContent.includes('ML compare rows: 1')"
+            )
+            page.wait_for_function(
+                "() => { const text = document.getElementById('benchmarkSummaryGrid').textContent; const ml = /ML compare rows:\\s*(\\d+)/.exec(text); const dl = /DL compare rows:\\s*(\\d+)/.exec(text); return ml && dl && Number(ml[1]) > 0 && Number(dl[1]) > 0; }"
+            )
+
+            benchmark_text = page.locator("#benchmarkComparisonShell").inner_text()
+            assert "Random Survival Forest" in benchmark_text
+            assert "DeepHit" in benchmark_text
+            assert "current screening rows from the latest ML and DL comparison outputs" in page.locator("#benchmarkTableNote").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_guided_change_analysis_returns_to_step3_with_valid_tab(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.wait_for_function("document.body.dataset.guidedStep === '2'")
+            page.locator('[data-guided-action="next-step"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            page.locator('[data-guided-action="choose-goal"][data-goal="predictive"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+
+            page.locator('[data-guided-action="choose-another-analysis"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            assert page.locator('[data-tab="km"]').get_attribute("aria-selected") == "true"
+            assert page.locator("#panel-km").evaluate("(el) => el.classList.contains('active')") is True
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_guided_predictive_compare_partial_failure_stays_on_step4(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1400})
+
+            def fail_deep_compare(route) -> None:
+                post_data = route.request.post_data or ""
+                if route.request.method == "POST" and '"model_type":"compare"' in post_data:
+                    time.sleep(0.6)
+                    route.fulfill(
+                        status=500,
+                        content_type="application/json",
+                        body=json.dumps({"detail": "forced deep compare failure"}),
+                    )
+                    return
+                route.continue_()
+
+            page.route("**/api/deep-model", fail_deep_compare)
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.wait_for_function("document.body.dataset.guidedStep === '2'")
+            page.locator('[data-guided-action="next-step"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            page.locator('[data-guided-action="choose-goal"][data-goal="predictive"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+
+            page.locator("#mlNEstimators").fill("10")
+            page.locator("[data-guided-predictive-model-selector]").select_option("deepsurv")
+            page.locator("#dlEpochs").fill("10")
+            page.locator("#dlHiddenLayers").fill("8")
+            page.locator("[data-guided-predictive-model-selector]").select_option("rsf")
+
+            page.locator('[data-guided-action="run-predictive-compare-all"]').click()
+            page.wait_for_function("document.querySelector('[data-guided-predictive-model-selector]').disabled === true")
+            page.wait_for_function("document.querySelector('[data-guided-predictive-model-selector]').disabled === false")
+
+            assert page.locator("body").get_attribute("data-guided-step") == "4"
+            summary_text = page.locator("#benchmarkSummaryGrid").inner_text()
+            assert "Classical ML is currently represented." in summary_text or "Needs review" in summary_text
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_cox_results_table_stays_within_card(browser_server: str) -> None:
@@ -195,7 +547,9 @@ def test_browser_cox_results_table_stays_within_card(browser_server: str) -> Non
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> None:
@@ -212,16 +566,22 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
             page.locator("#timeUnitLabel").fill("Days")
             page.locator("#maxTime").fill("24")
             page.locator("#groupColumn").select_option("stage")
+            page.locator("#tab-cox").click()
+            page.locator("#covariateChecklist").wait_for(state="visible")
             page.locator("#covariateChecklist input[value='immune_index']").check()
             page.locator("#covariateChecklist input[value='age']").uncheck()
+            page.locator("#tab-km").click()
+            page.locator("#runKmButton").wait_for(state="visible")
             page.locator("#runKmButton").click()
             page.wait_for_function(
                 "!document.getElementById('downloadKmSummaryButton').disabled"
             )
-            page.locator('[data-tab="ml"]').click()
-            page.wait_for_function(
-                "document.querySelector('[data-tab=\"ml\"]').getAttribute('aria-selected') === 'true'"
-            )
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
+
+            page.go_back(wait_until="networkidle")
+            page.locator("#workspace").wait_for(state="visible")
+            page.wait_for_function("document.body.dataset.uiMode === 'guided'")
 
             page.go_back(wait_until="networkidle")
             page.locator("#landing").wait_for(state="visible")
@@ -230,9 +590,13 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
 
             page.go_forward(wait_until="networkidle")
             page.locator("#workspace").wait_for(state="visible")
+            page.wait_for_function("document.body.dataset.uiMode === 'guided'")
+
+            page.go_forward(wait_until="networkidle")
+            page.locator("#workspace").wait_for(state="visible")
             page.locator("#configStrip").wait_for(state="visible")
-            assert not page.locator("#downloadKmSummaryButton").is_disabled()
-            assert page.locator('[data-tab="ml"]').get_attribute("aria-selected") == "true"
+            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
+            assert page.locator('[data-tab="benchmark"]').get_attribute("aria-selected") == "true"
             assert page.locator("#timeUnitLabel").input_value() == "Days"
             assert page.locator("#maxTime").input_value() == "24"
             assert page.locator("#groupColumn").input_value() == "stage"
@@ -241,7 +605,9 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_study_design_collapses_grouping_controls_outside_km(browser_server: str) -> None:
@@ -261,12 +627,10 @@ def test_browser_study_design_collapses_grouping_controls_outside_km(browser_ser
             )
 
             assert page.locator("#groupingDetails").evaluate("(el) => el.open") is True
-            assert "Current Group by: overall only" in page.locator("#groupingSummaryText").inner_text().lower()
+            assert "current group by: overall only" in page.locator("#groupingSummaryText").inner_text().lower()
 
-            page.locator('[data-tab="dl"]').click()
-            page.wait_for_function(
-                "document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'"
-            )
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
             assert page.locator("#groupingDetails").evaluate("(el) => el.open") is False
             assert "Grouping only:" in page.locator("#dlFeatureSummaryChips").inner_text()
             assert "Training inputs come only from the shared ML/DL model feature selections" in page.locator("#dlFeatureSummaryText").inner_text()
@@ -279,7 +643,9 @@ def test_browser_study_design_collapses_grouping_controls_outside_km(browser_ser
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_guided_mode_goal_cards_and_mode_toggle(browser_server: str) -> None:
@@ -297,28 +663,29 @@ def test_browser_guided_mode_goal_cards_and_mode_toggle(browser_server: str) -> 
 
             assert "Confirm outcome" in page.locator("#guidedSummaryTitle").inner_text()
             assert page.locator("#configStrip").is_visible()
+            assert page.locator("#configStrip").evaluate("(el) => el.parentElement && el.parentElement.id") == "guidedRailPanelMount"
             assert page.locator("#tabStrip").is_hidden()
             page.locator('[data-guided-action="next-step"]').click()
             page.wait_for_function(
                 "document.getElementById('guidedSummaryTitle').textContent.includes('Choose analysis')"
             )
             assert "Choose analysis" in page.locator("#guidedSummaryTitle").inner_text()
-            assert "Event:" in page.locator("#guidedSummaryChips").inner_text()
-            assert "Group by: Overall only" in page.locator("#guidedSummaryChips").inner_text()
+            assert "Outcome: os_months / os_event = 1" in page.locator("#guidedSummaryChips").inner_text()
             assert page.locator("#configStrip").is_hidden()
+            assert page.locator("#configStrip").evaluate("(el) => el.parentElement && el.parentElement.id") == "guidedConfigMount"
 
             page.locator('[data-guided-action="choose-goal"][data-goal="cox"]').click()
             page.wait_for_function(
                 "document.querySelector('[data-tab=\"cox\"]').getAttribute('aria-selected') === 'true'"
             )
-            assert "Configure Cox PH" in page.locator("#guidedPanel").inner_text()
-            assert "Goal: Cox PH" in page.locator("#guidedSummaryChips").inner_text()
+            assert "Run Cox PH" in page.locator("#guidedPanel").inner_text()
+            assert "Analysis: Cox PH" in page.locator("#guidedSummaryChips").inner_text()
             assert page.locator("#tabStrip").is_hidden()
             assert page.locator("#configStrip").is_hidden()
             assert page.locator('#panel-cox').is_visible()
             assert page.locator('#panel-km').is_hidden()
 
-            page.locator("#expertModeButton").click()
+            page.evaluate("() => document.getElementById('expertModeButton')?.click()")
             page.wait_for_function(
                 "document.body.dataset.uiMode === 'expert' && document.getElementById('guidedShell').classList.contains('hidden')"
             )
@@ -327,13 +694,15 @@ def test_browser_guided_mode_goal_cards_and_mode_toggle(browser_server: str) -> 
             page.wait_for_function(
                 "document.body.dataset.uiMode === 'guided' && !document.getElementById('guidedShell').classList.contains('hidden')"
             )
-            assert "Configure Cox PH" in page.locator("#guidedPanel").inner_text()
+            assert "Run Cox PH" in page.locator("#guidedPanel").inner_text()
             assert page.locator("#tabStrip").is_hidden()
             assert page.locator('#panel-cox').is_visible()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_model_features_stay_separate_from_cox_and_keep_non_endpoint_inputs(browser_server: str) -> None:
@@ -377,13 +746,12 @@ def test_browser_model_features_stay_separate_from_cox_and_keep_non_endpoint_inp
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("age")
             page.locator("#deriveMethod").select_option("optimal_cutpoint")
-            page.locator("#deriveButton").click()
+            page.locator("#deriveButton").click(force=True)
             page.wait_for_function(
-                "document.getElementById('deriveStatus').textContent.includes('Created')"
+                "document.getElementById('groupColumn').value === 'age__optimal_cutpoint'"
             )
-            assert page.locator("#groupColumn").input_value() == "sex"
-            assert "Group by stayed as sex" in page.locator("#deriveStatus").inner_text()
-            assert "Set as Group by" in page.locator("#deriveSummary").inner_text()
+            assert page.locator("#groupColumn").input_value() == "age__optimal_cutpoint"
+            assert "Current grouping now uses age__optimal_cutpoint." in page.locator("#deriveSummary").inner_text()
 
             updated_model_features = page.eval_on_selector_all(
                 "#modelFeatureChecklist input",
@@ -391,23 +759,16 @@ def test_browser_model_features_stay_separate_from_cox_and_keep_non_endpoint_inp
             )
             assert updated_model_features == model_features
 
-            page.locator('[data-tab="dl"]').click()
-            page.wait_for_function(
-                "document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'"
-            )
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
             assert "Model features: 7" in page.locator("#dlFeatureSummaryChips").inner_text()
-            assert "Grouping only: sex" in page.locator("#dlFeatureSummaryChips").inner_text()
-
-            page.locator("#deriveSummary #applyDerivedGroupButton").click()
-            page.wait_for_function(
-                "document.getElementById('groupColumn').value === 'age__optimal_cutpoint'"
-            )
-            assert page.locator("#groupColumn").input_value() == "age__optimal_cutpoint"
             assert "Grouping only: age__optimal_cutpoint" in page.locator("#dlFeatureSummaryChips").inner_text()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_event_column_defaults_to_event_like_fields_and_advanced_toggle_reveals_all(browser_server: str) -> None:
@@ -428,7 +789,7 @@ def test_browser_event_column_defaults_to_event_like_fields_and_advanced_toggle_
             assert "os_event" in default_options
             assert "egfr_status" not in default_options
             assert "kras_status" not in default_options
-            assert "Showing event-like binary columns only" in page.locator("#eventColumnHelp").inner_text()
+            assert "Showing likely event columns only" in page.locator("#eventColumnHelp").inner_text()
 
             page.locator("#showAllEventColumns").check()
             page.wait_for_function(
@@ -438,21 +799,74 @@ def test_browser_event_column_defaults_to_event_like_fields_and_advanced_toggle_
                 "(options) => options.map((option) => option.value)"
             )
             assert "egfr_status" in advanced_options
-            assert "Advanced mode is on" in page.locator("#eventColumnHelp").inner_text()
+            assert "Showing all columns." in page.locator("#eventColumnHelp").inner_text()
 
             page.locator("#eventColumn").select_option("egfr_status")
             page.wait_for_function(
                 "document.getElementById('eventColumnWarning').textContent.includes('baseline characteristic')"
             )
-            assert "Use it as Group by or as a model feature" in page.locator("#eventColumnWarning").inner_text()
+            assert "Use it as Group by or as a model feature instead." in page.locator("#eventColumnWarning").inner_text()
             assert page.locator("#eventPositiveValue").input_value() == ""
+            assert page.locator("#eventValueWarning").is_hidden()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
-def test_browser_event_value_requires_explicit_choice_for_ambiguous_binary_codes(browser_server: str) -> None:
+def test_browser_event_value_requires_explicit_choice_for_ambiguous_binary_codes(browser_server: str, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+            upload_path = tmp_path / "ambiguous_event.csv"
+            upload_path.write_text(
+                "\n".join(
+                    [
+                        "os_months,os_status,age",
+                        "10,1,61",
+                        "12,2,63",
+                        "18,1,67",
+                        "20,2,70",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#datasetFile").set_input_files(str(upload_path))
+            page.locator("#workspace").wait_for(state="visible")
+            page.wait_for_function(
+                "document.getElementById('eventColumn').value === 'os_status'"
+            )
+            page.wait_for_function(
+                "document.getElementById('eventValueWarning').textContent.includes('TCGA-style 1/2 coding')"
+            )
+            assert page.locator("#eventColumn").input_value() == "os_status"
+            assert page.locator("#eventColumnWarning").is_hidden()
+            assert page.locator("#eventValueWarning").is_hidden()
+            assert page.locator("#eventPositiveValue").input_value() == ""
+            assert "Choose which value means event" in page.locator("#guidedPanel").inner_text()
+            assert page.locator('[data-guided-action="next-step"]').is_disabled()
+
+            page.locator("#eventPositiveValue").select_option("1")
+            page.wait_for_function(
+                "() => !document.querySelector('[data-guided-action=\"next-step\"]').disabled"
+            )
+            assert page.locator('[data-guided-action="next-step"]').is_enabled()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_event_column_blocks_binary_baseline_covariates_in_guided_step_two(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
     try:
@@ -461,19 +875,23 @@ def test_browser_event_value_requires_explicit_choice_for_ambiguous_binary_codes
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
-            page.locator("#loadTcgaButton").click()
-            _switch_to_expert(page)
-
+            page.locator("#loadGbsg2Button").click()
+            page.locator("#workspace").wait_for(state="visible")
             page.locator("#showAllEventColumns").check()
-            page.locator("#eventColumn").select_option("egfr_status")
+            page.locator("#eventColumn").select_option("menostat")
             page.wait_for_function(
-                "document.getElementById('eventValueWarning').textContent.includes('Choose which value means the event happened') || document.getElementById('eventValueWarning').textContent.includes('could not safely guess')"
+                "document.getElementById('guidedPanel').textContent.includes('does not look like a survival event column')"
             )
-            assert page.locator("#eventPositiveValue").input_value() == ""
+
+            assert page.locator("#eventColumnWarning").is_hidden()
+            assert "does not look like a survival event column" in page.locator("#guidedPanel").inner_text()
+            assert page.locator('[data-guided-action="next-step"]').is_disabled()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_km_derive_defaults_to_group_when_current_group_is_overall_only(browser_server: str) -> None:
@@ -500,23 +918,135 @@ def test_browser_km_derive_defaults_to_group_when_current_group_is_overall_only(
             page.locator("#deriveSource").select_option("age")
             page.locator("#deriveMethod").select_option("median_split")
             page.locator("#deriveColumnName").fill("age_guided_split")
-            page.locator("#deriveApplyButton").click()
+            page.locator("#deriveButton").click(force=True)
             page.wait_for_function(
                 "document.getElementById('groupColumn').value === 'age_guided_split'"
             )
             page.wait_for_function(
                 "(previousText) => document.getElementById('kmMetaBanner').textContent !== previousText",
-                initial_banner,
+                arg=initial_banner,
             )
 
             assert page.locator("#groupColumn").input_value() == "age_guided_split"
-            assert "Refreshing Kaplan-Meier with the new grouping" in page.locator("#deriveStatus").inner_text()
             assert "Current grouping now uses age_guided_split" in page.locator("#deriveSummary").inner_text()
             assert page.locator("#kmMetaBanner").inner_text() != initial_banner
 
+            page.locator("#groupColumn").select_option("sex")
+            page.wait_for_function(
+                "document.getElementById('deriveSummary').textContent.includes('Current grouping remains sex')"
+            )
+            assert "Derived column age_guided_split is available." in page.locator("#deriveSummary").inner_text()
+
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_km_derive_preserves_existing_group_until_user_reruns(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadTcgaButton").click()
+            _switch_to_expert(page)
+
+            page.locator("#groupColumn").select_option("stage_group")
+            page.locator("#runKmButton").click()
+            page.wait_for_function(
+                "!document.getElementById('downloadKmSummaryButton').disabled"
+            )
+            initial_banner = page.locator("#kmMetaBanner").inner_text()
+
+            page.locator("#deriveToggle").click()
+            page.locator("#deriveSource").select_option("age")
+            page.locator("#deriveMethod").select_option("median_split")
+            page.locator("#deriveColumnName").fill("age_keep_stage")
+            page.locator("#deriveButton").click(force=True)
+            page.wait_for_function(
+                "document.getElementById('deriveSummary').textContent.includes('Current grouping remains stage_group')"
+            )
+
+            assert page.locator("#groupColumn").input_value() == "stage_group"
+            assert "Derived column age_keep_stage is available." in page.locator("#deriveSummary").inner_text()
+            assert page.locator("#kmMetaBanner").inner_text() == initial_banner
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_guided_km_run_creates_pending_derived_group_without_separate_create_button(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadTcgaButton").click()
+            page.locator('[data-guided-action="next-step"]').click()
+            page.locator('[data-guided-action="choose-goal"][data-goal="km"]').click()
+            page.wait_for_function("document.body.dataset.guidedGoal === 'km'")
+
+            assert page.locator("#deriveToggle").is_hidden()
+            assert page.locator("#deriveButton").is_hidden()
+
+            page.locator("#deriveColumnName").fill("age_guided_run")
+            page.locator('#guidedPanel [data-guided-action="run-km"]').click()
+            page.wait_for_function(
+                "document.body.dataset.guidedStep === '5' && document.getElementById('groupColumn').value === 'age_guided_run'"
+            )
+
+            assert page.locator("#groupColumn").input_value() == "age_guided_run"
+            assert "Current grouping now uses age_guided_run" in page.locator("#deriveSummary").inner_text()
+            assert "N=" in page.locator("#kmMetaBanner").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_guided_km_run_keeps_existing_group_when_derive_draft_is_pending(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = api.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadTcgaButton").click()
+            page.locator('[data-guided-action="next-step"]').click()
+            page.locator('[data-guided-action="choose-goal"][data-goal="km"]').click()
+            page.wait_for_function("document.body.dataset.guidedGoal === 'km'")
+
+            page.locator("#groupColumn").select_option("stage_group")
+            page.locator("#deriveColumnName").fill("age_should_not_apply")
+            page.locator('#guidedPanel [data-guided-action="run-km"]').click()
+            page.wait_for_function(
+                "document.body.dataset.guidedStep === '5' && document.getElementById('groupColumn').value === 'stage_group'"
+            )
+
+            assert page.locator("#groupColumn").input_value() == "stage_group"
+            assert "Derived column" not in page.locator("#deriveSummary").inner_text()
+            assert "N=" in page.locator("#kmMetaBanner").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_dataset_entry_resets_scroll_to_top(browser_server: str) -> None:
@@ -536,11 +1066,13 @@ def test_browser_dataset_entry_resets_scroll_to_top(browser_server: str) -> None
 
             config_box = page.locator("#configStrip").bounding_box()
             assert config_box is not None
-            assert config_box["y"] < 220
+            assert config_box["y"] < 340
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_guided_mode_back_button_walks_previous_steps(browser_server: str) -> None:
@@ -564,15 +1096,19 @@ def test_browser_guided_mode_back_button_walks_previous_steps(browser_server: st
 
             page.go_back(wait_until="networkidle")
             page.wait_for_function("document.body.dataset.guidedStep === '3'")
-            assert "Choose one analysis path" in page.locator("#guidedPanel").inner_text()
+            assert "Choose what you want to do next" in page.locator("#guidedPanel").inner_text()
+            assert "ML/DL Models" in page.locator("#guidedPanel").inner_text()
+            assert "Deep Learning" not in page.locator("#guidedPanel").inner_text()
 
             page.go_back(wait_until="networkidle")
             page.wait_for_function("document.body.dataset.guidedStep === '2'")
-            assert "Confirm outcome" in page.locator("#guidedPanel").inner_text()
+            assert "Tell SurvStudio what counts as survival time and event" in page.locator("#guidedPanel").inner_text()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_guided_step_rail_allows_navigation_to_reached_steps(browser_server: str) -> None:
@@ -596,15 +1132,17 @@ def test_browser_guided_step_rail_allows_navigation_to_reached_steps(browser_ser
 
             page.locator('#stepIndicator .step[data-step="3"]').click()
             page.wait_for_function("document.body.dataset.guidedStep === '3'")
-            assert "Choose one analysis path" in page.locator("#guidedPanel").inner_text()
+            assert "Choose what you want to do next" in page.locator("#guidedPanel").inner_text()
 
             page.locator('#stepIndicator .step[data-step="2"]').click()
             page.wait_for_function("document.body.dataset.guidedStep === '2'")
-            assert "Confirm outcome" in page.locator("#guidedPanel").inner_text()
+            assert "Tell SurvStudio what counts as survival time and event" in page.locator("#guidedPanel").inner_text()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_guided_and_expert_mode_back_forward_restores_mode_and_step(browser_server: str) -> None:
@@ -623,25 +1161,28 @@ def test_browser_guided_and_expert_mode_back_forward_restores_mode_and_step(brow
             page.wait_for_function("document.body.dataset.guidedStep === '2'")
             page.locator('[data-guided-action="next-step"]').click()
             page.wait_for_function("document.body.dataset.guidedStep === '3'")
-            page.locator('[data-guided-action="choose-goal"][data-goal="ml"]').click()
+            page.locator('[data-guided-action="choose-goal"][data-goal="predictive"]').click()
             page.wait_for_function("document.body.dataset.guidedStep === '4'")
 
-            page.locator("#expertModeButton").click()
+            page.evaluate("() => document.getElementById('expertModeButton')?.click()")
             page.wait_for_function("document.body.dataset.uiMode === 'expert'")
-            page.locator('[data-tab="dl"]').click()
-            page.wait_for_function("document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'")
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
 
             page.go_back(wait_until="networkidle")
             page.wait_for_function("document.body.dataset.uiMode === 'guided' && document.body.dataset.guidedStep === '4'")
-            assert "Configure ML models" in page.locator("#guidedPanel").inner_text()
+            assert "Run ML/DL Models" in page.locator("#guidedPanel").inner_text()
+            assert "Test selected model" in page.locator("#guidedPanel").inner_text()
 
             page.go_forward(wait_until="networkidle")
             page.wait_for_function("document.body.dataset.uiMode === 'expert'")
-            assert page.locator('[data-tab="dl"]').get_attribute("aria-selected") == "true"
+            assert page.locator('[data-tab="benchmark"]').get_attribute("aria-selected") == "true"
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: str) -> None:
@@ -663,7 +1204,7 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("age")
             page.locator("#deriveMethod").select_option("optimal_cutpoint")
-            page.locator("#deriveButton").click()
+            page.locator("#deriveButton").click(force=True)
             page.wait_for_function(
                 "document.getElementById('deriveSummary').textContent.includes('Assignment rule')"
             )
@@ -672,13 +1213,13 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
             assert "High/Low indicate risk direction" in derive_text
             assert "Assignment rule" in derive_text
             assert ("Selection-adjusted p-value" in derive_text) or ("Raw p-value" in derive_text)
-            assert "ML and DL feature selections did not change automatically" in derive_text
-            assert "not as an ML/DL training feature" in derive_text
-            assert "Set as Group by" in derive_text
+            assert "Current grouping now uses age__optimal_cutpoint" in derive_text
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_optimal_cutpoint_summary_wraps_long_derived_column(browser_server: str) -> None:
@@ -700,7 +1241,7 @@ def test_browser_optimal_cutpoint_summary_wraps_long_derived_column(browser_serv
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("pack_years_smoked")
             page.locator("#deriveMethod").select_option("optimal_cutpoint")
-            page.locator("#deriveButton").click()
+            page.locator("#deriveButton").click(force=True)
             page.wait_for_function(
                 "document.getElementById('deriveSummary').textContent.includes('Derived column')"
             )
@@ -718,7 +1259,9 @@ def test_browser_optimal_cutpoint_summary_wraps_long_derived_column(browser_serv
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_ml_importance_plot_stays_inside_its_section(browser_server: str) -> None:
@@ -732,7 +1275,7 @@ def test_browser_ml_importance_plot_stays_inside_its_section(browser_server: str
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _switch_to_expert(page)
-            page.locator('[data-tab="ml"]').click()
+            page.locator('[data-tab="benchmark"]').click()
             page.locator("#mlModelType").select_option("rsf")
             page.locator("#mlNEstimators").fill("10")
             page.locator("#runMlButton").click()
@@ -751,7 +1294,9 @@ def test_browser_ml_importance_plot_stays_inside_its_section(browser_server: str
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_risk_table_ticks_change_columns_and_flash_table(browser_server: str) -> None:
@@ -784,7 +1329,9 @@ def test_browser_risk_table_ticks_change_columns_and_flash_table(browser_server:
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_browser_dl_epoch_validation_message_is_human_readable(browser_server: str) -> None:
@@ -798,10 +1345,9 @@ def test_browser_dl_epoch_validation_message_is_human_readable(browser_server: s
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _switch_to_expert(page)
-            page.locator('[data-tab="dl"]').click()
-            page.wait_for_function(
-                "document.querySelector('[data-tab=\"dl\"]').getAttribute('aria-selected') === 'true'"
-            )
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
+            page.locator("#predictiveModelSelector").select_option("deepsurv")
             page.locator("#dlEpochs").fill("1001")
             page.locator("#runDlButton").click()
             page.wait_for_function(
@@ -811,4 +1357,6 @@ def test_browser_dl_epoch_validation_message_is_human_readable(browser_server: s
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise

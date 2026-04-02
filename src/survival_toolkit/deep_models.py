@@ -23,6 +23,8 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
+from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
+
 try:
     import torch
     import torch.nn as nn
@@ -305,6 +307,7 @@ def _fit_deep_encoder(
     categorical_unknown_columns: dict[str, str] = {}
     categorical_missing_columns: dict[str, str] = {}
     feature_names: list[str] = []
+    categorical_feature_indices: list[int] = []
     for col in categorical_features:
         levels = [str(level) for level in pd.Index(frame[col].dropna().astype("string").unique()).tolist()]
         levels = sorted(levels)
@@ -313,11 +316,14 @@ def _fit_deep_encoder(
         categorical_all_levels[col] = levels
         categorical_unknown_columns[col] = f"{col}__unknown"
         categorical_missing_columns[col] = f"{col}__missing"
+        start_idx = len(feature_names)
         feature_names.extend([f"{col}_{level}" for level in retained_levels])
         feature_names.append(categorical_unknown_columns[col])
         feature_names.append(categorical_missing_columns[col])
+        categorical_feature_indices.extend(range(start_idx, len(feature_names)))
 
     scaler_params: dict[str, dict[str, float]] = {}
+    numeric_feature_indices: list[int] = []
     if numeric_features:
         numeric_frame = frame[numeric_features].apply(pd.to_numeric, errors="coerce")
         medians = numeric_frame.median(skipna=True).fillna(0.0)
@@ -331,7 +337,9 @@ def _fit_deep_encoder(
                 "std": float(stds[idx]),
                 "impute_value": float(medians[col]),
             }
+        start_idx = len(feature_names)
         feature_names.extend(numeric_features)
+        numeric_feature_indices.extend(range(start_idx, len(feature_names)))
 
     if not feature_names:
         raise ValueError(
@@ -348,6 +356,8 @@ def _fit_deep_encoder(
         "categorical_missing_columns": categorical_missing_columns,
         "scaler_params": scaler_params,
         "feature_names": feature_names,
+        "categorical_feature_indices": categorical_feature_indices,
+        "numeric_feature_indices": numeric_feature_indices,
     }
 
 
@@ -409,6 +419,8 @@ def _transform_deep_frame(
         "event_tensor": torch.tensor(frame[event_column].values.astype(np.float64), dtype=torch.float32),
         "feature_names": list(feature_names),
         "scaler_params": dict(encoder["scaler_params"]),
+        "categorical_feature_indices": list(encoder.get("categorical_feature_indices", [])),
+        "numeric_feature_indices": list(encoder.get("numeric_feature_indices", [])),
         "n_samples": int(x_array.shape[0]),
         "n_features": int(x_array.shape[1]),
     }
@@ -505,6 +517,8 @@ def _prepare_deep_split_data(
             "event_tensor": combined_e,
             "feature_names": list(train_data["feature_names"]),
             "scaler_params": dict(train_data["scaler_params"]),
+            "categorical_feature_indices": list(train_data.get("categorical_feature_indices", [])),
+            "numeric_feature_indices": list(train_data.get("numeric_feature_indices", [])),
             "n_samples": train_n + eval_n,
             "n_features": int(combined_x.shape[1]),
         },
@@ -635,18 +649,6 @@ def _compute_c_index_torch(
     if comparable == 0:
         return None
     return float(concordant / comparable)
-
-
-def _metric_name_for_evaluation(evaluation_mode: str) -> str:
-    if evaluation_mode == "holdout":
-        return "Holdout C-index"
-    if evaluation_mode == "holdout_fallback_apparent":
-        return "Apparent fallback C-index"
-    if evaluation_mode == "repeated_cv":
-        return "Repeated-CV mean C-index"
-    if evaluation_mode == "repeated_cv_incomplete":
-        return "Repeated-CV mean C-index (incomplete)"
-    return "Apparent C-index"
 
 
 def _logsumexp_numpy(values: np.ndarray) -> float:
@@ -863,14 +865,19 @@ def _discrete_survival_from_pmf(
     if pmf.shape[1] < 2:
         raise ValueError("Discrete survival outputs require at least one observed bin and one tail bin.")
 
-    cdf = torch.cumsum(pmf, dim=1)
-    survival_at_edges = torch.cat(
+    log_pmf = torch.log(torch.clamp(pmf, min=1e-12))
+    raw_log_survival = torch.flip(
+        torch.logcumsumexp(torch.flip(log_pmf, dims=[1]), dim=1),
+        dims=[1],
+    )
+    log_survival_at_edges = torch.cat(
         [
-            torch.ones((pmf.shape[0], 1), device=pmf.device, dtype=pmf.dtype),
-            1.0 - cdf[:, :-1],
+            torch.zeros((pmf.shape[0], 1), device=pmf.device, dtype=pmf.dtype),
+            raw_log_survival[:, 1:],
         ],
         dim=1,
     )
+    survival_at_edges = torch.exp(log_survival_at_edges)
     rmst = torch.sum(survival_at_edges[:, :-1] * bin_widths.view(1, -1), dim=1)
     return survival_at_edges, -rmst
 
@@ -1394,8 +1401,8 @@ def compare_deep_survival_models(
                 tasks.append({
                     "repeat": repeat_idx + 1,
                     "fold": fold_idx,
-                    "seed_base": random_seed + repeat_idx,
-                    "split_seed": random_seed + repeat_idx,
+                    "seed_base": random_seed + repeat_idx * cv_folds + fold_idx,
+                    "split_seed": random_seed + repeat_idx * cv_folds + fold_idx,
                     "time_column": time_column,
                     "event_column": event_column,
                     "features": list(features),
@@ -1418,27 +1425,9 @@ def compare_deep_survival_models(
                     "require_holdout_evaluation": True,
                 })
 
-        if parallel_jobs > 1 and len(tasks) > 1:
-            with ProcessPoolExecutor(
-                max_workers=max(1, parallel_jobs),
-                mp_context=mp.get_context("spawn"),
-            ) as executor:
-                future_map = {executor.submit(_run_deep_compare_fold_task, task): task for task in tasks}
-                for future in as_completed(future_map):
-                    task = future_map[future]
-                    try:
-                        task_result = future.result()
-                        fold_results.extend(task_result["fold_results"])
-                        errors.extend(task_result["errors"])
-                    except Exception as exc:
-                        for model_spec in task["model_specs"]:
-                            errors.append({
-                                "model": model_spec["model_name"],
-                                "repeat": task["repeat"],
-                                "fold": task["fold"],
-                                "error": str(exc),
-                            })
-        else:
+        parallel_execution_note: str | None = None
+
+        def _run_tasks_sequentially() -> None:
             for task in tasks:
                 try:
                     task_result = _run_deep_compare_fold_task(task)
@@ -1449,9 +1438,39 @@ def compare_deep_survival_models(
                         errors.append({
                             "model": model_spec["model_name"],
                             "repeat": task["repeat"],
-                            "fold": task["fold"],
-                            "error": str(exc),
-                        })
+                                "fold": task["fold"],
+                                "error": str(exc),
+                            })
+
+        if parallel_jobs > 1 and len(tasks) > 1:
+            try:
+                with ProcessPoolExecutor(
+                    max_workers=max(1, parallel_jobs),
+                    mp_context=mp.get_context("spawn"),
+                ) as executor:
+                    future_map = {executor.submit(_run_deep_compare_fold_task, task): task for task in tasks}
+                    for future in as_completed(future_map):
+                        task = future_map[future]
+                        try:
+                            task_result = future.result()
+                            fold_results.extend(task_result["fold_results"])
+                            errors.extend(task_result["errors"])
+                        except Exception as exc:
+                            for model_spec in task["model_specs"]:
+                                errors.append({
+                                    "model": model_spec["model_name"],
+                                    "repeat": task["repeat"],
+                                    "fold": task["fold"],
+                                    "error": str(exc),
+                                })
+            except (NotImplementedError, PermissionError, OSError) as exc:
+                parallel_execution_note = (
+                    "Parallel repeated-CV execution was unavailable in this runtime; "
+                    f"SurvStudio fell back to sequential folds ({type(exc).__name__})."
+                )
+                _run_tasks_sequentially()
+        else:
+            _run_tasks_sequentially()
 
         comparison: list[dict[str, Any]] = []
         from survival_toolkit.ml_models import _summarize_repeated_cv_rows
@@ -1508,7 +1527,11 @@ def compare_deep_survival_models(
                 "test_events": None if summary is None else summary["test_events"],
                 "repeat_results": [] if summary is None else summary["repeat_results"],
             })
-        return _finalize_result(comparison, errors, evaluation_mode="repeated_cv", fold_results=fold_results)
+        result = _finalize_result(comparison, errors, evaluation_mode="repeated_cv", fold_results=fold_results)
+        if parallel_execution_note:
+            result["parallel_execution_note"] = parallel_execution_note
+            result["scientific_summary"]["cautions"].append(parallel_execution_note)
+        return result
 
     shared_data, shared_eval_split = _prepare_deep_training_inputs(
         df,
@@ -1662,6 +1685,8 @@ def evaluate_single_deep_survival_model(
         summary["cautions"].append(
             "This result is an aggregate repeated-CV estimate. Feature-importance and loss-curve outputs require a separate single-fit run."
         )
+        if compare_result.get("parallel_execution_note"):
+            summary["cautions"].append(str(compare_result["parallel_execution_note"]))
         if aggregate_mode == "repeated_cv_incomplete":
             summary["cautions"].append(
                 "Repeated-CV incomplete means one or more folds were excluded because they failed or fell back to apparent evaluation."
@@ -1685,6 +1710,7 @@ def evaluate_single_deep_survival_model(
             "split_seeds": row.get("split_seeds", []),
             "monitor_seeds": row.get("monitor_seeds", []),
             "repeat_results": row.get("repeat_results", []),
+            "parallel_execution_note": compare_result.get("parallel_execution_note"),
             "comparison_table": [dict(row)],
             "fold_results": [
                 fold_row for fold_row in compare_result.get("fold_results", [])
@@ -1818,20 +1844,32 @@ def _cox_partial_likelihood_loss(
     log_cumsum_exp = torch.logcumsumexp(r_sorted, dim=0)
     _, counts = torch.unique_consecutive(t_sorted, return_counts=True)
     end_idx = torch.cumsum(counts, dim=0) - 1  # inclusive indices
+    start_idx = end_idx - counts + 1
 
-    loss = torch.tensor(0.0, device=r_sorted.device)
-    total_events = 0.0
-    start = 0
-    for ui, cnt in enumerate(counts):
-        end = start + int(cnt.item())
-        d = int(torch.sum(e_sorted[start:end]).item())
-        if d > 0:
-            event_sum = torch.sum(r_sorted[start:end][e_sorted[start:end]])
-            rs_logsum = log_cumsum_exp[int(end_idx[ui].item())]
-            loss = loss - (event_sum - float(d) * rs_logsum)
-            total_events += float(d)
-        start = end
-    return loss / max(total_events, 1.0)
+    event_values = r_sorted * e_sorted.to(dtype=r_sorted.dtype)
+    cumulative_event_values = torch.cumsum(event_values, dim=0)
+    cumulative_event_counts = torch.cumsum(e_sorted.to(dtype=r_sorted.dtype), dim=0)
+
+    start_prev = start_idx - 1
+    start_prev_valid = start_prev >= 0
+
+    event_sum = cumulative_event_values[end_idx]
+    event_sum = event_sum - torch.where(
+        start_prev_valid,
+        cumulative_event_values[start_prev.clamp(min=0)],
+        torch.zeros_like(event_sum),
+    )
+    event_count = cumulative_event_counts[end_idx]
+    event_count = event_count - torch.where(
+        start_prev_valid,
+        cumulative_event_counts[start_prev.clamp(min=0)],
+        torch.zeros_like(event_count),
+    )
+
+    active_groups = event_count > 0
+    total_events = torch.sum(event_count[active_groups])
+    contributions = event_sum[active_groups] - event_count[active_groups] * log_cumsum_exp[end_idx[active_groups]]
+    return -torch.sum(contributions) / torch.clamp(total_events, min=1.0)
 
 
 class DeepSurvNet(_TorchModuleBase):
@@ -2117,26 +2155,31 @@ def _deephit_loss(
     event_mask = (events == 1)
     censor_mask = ~event_mask
 
-    # Survival at each observed bin edge. The final edge carries tail mass
-    # beyond the observed horizon instead of being forced to zero.
-    cdf = torch.cumsum(pmf, dim=1)
-    survival_at_edges = torch.cat(
+    log_pmf = torch.log(torch.clamp(pmf, min=1e-12))
+    # Survival at each observed bin edge, computed in log-space so censored
+    # terms do not lose precision when the tail probability is tiny.
+    raw_log_survival = torch.flip(
+        torch.logcumsumexp(torch.flip(log_pmf, dims=[1]), dim=1),
+        dims=[1],
+    )
+    log_survival_at_edges = torch.cat(
         [
-            torch.ones((n, 1), device=pmf.device, dtype=pmf.dtype),
-            1.0 - cdf[:, :-1],
+            torch.zeros((n, 1), device=pmf.device, dtype=pmf.dtype),
+            raw_log_survival[:, 1:],
         ],
         dim=1,
     )
+    survival_at_edges = torch.exp(log_survival_at_edges)
     # Likelihood:
     # - event in bin k: -log pmf[k]
     # - censored in bin k: -log S_start[k]
     terms: list[torch.Tensor] = []
     if torch.any(event_mask):
-        selected_pmf = pmf[torch.arange(n, device=pmf.device), bin_idx]
-        terms.append(-torch.log(selected_pmf[event_mask] + 1e-12))
+        selected_log_pmf = log_pmf[torch.arange(n, device=pmf.device), bin_idx]
+        terms.append(-selected_log_pmf[event_mask])
     if torch.any(censor_mask):
-        cens_surv = survival_at_edges[torch.arange(n, device=pmf.device), bin_idx]
-        terms.append(-torch.log(cens_surv[censor_mask] + 1e-12))
+        cens_log_surv = log_survival_at_edges[torch.arange(n, device=pmf.device), bin_idx]
+        terms.append(-cens_log_surv[censor_mask])
     log_likelihood = torch.cat(terms).mean() if terms else torch.tensor(0.0, device=pmf.device)
 
     # Ranking loss component (pairwise)
@@ -2423,9 +2466,13 @@ class NeuralMTLRNet(_TorchModuleBase):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         hidden = self.encoder(x)
         logits = self.output_layer(hidden)
-        # MTLR: cumulative softmax to ensure monotone decreasing survival
-        # phi_k = logit for bin k; survival = softmax over cumulative sums
-        cumsum_logits = torch.cumsum(logits, dim=1)
+        # Canonical MTLR uses a right-cumulative parameterization so earlier
+        # bins aggregate logits from later bins, matching the original model's
+        # inductive bias toward early events.
+        cumsum_logits = torch.flip(
+            torch.cumsum(torch.flip(logits, dims=[1]), dim=1),
+            dims=[1],
+        )
         return cumsum_logits
 
 
@@ -3071,7 +3118,9 @@ class SurvivalVAENet(_TorchModuleBase):
         mu, log_var = self.encode(x)
         z = self.reparameterize(mu, log_var)
         x_recon = self.decode(z)
-        risk = self.survival_head(z)
+        # Use the deterministic posterior mean for the Cox head so ranking
+        # comparisons are stable across stochastic VAE samples.
+        risk = self.survival_head(mu)
         return x_recon, mu, log_var, risk
 
     def get_latent(self, x: torch.Tensor) -> torch.Tensor:
@@ -3090,10 +3139,47 @@ def _vae_combined_loss(
     recon_weight: float = 1.0,
     kl_weight: float = 0.1,
     cox_weight: float = 1.0,
+    categorical_feature_indices: Sequence[int] | None = None,
+    numeric_feature_indices: Sequence[int] | None = None,
 ) -> torch.Tensor:
     """Combined VAE loss: reconstruction + KL divergence + Cox loss."""
-    # Reconstruction loss (MSE)
-    recon_loss = F.mse_loss(x_recon, x, reduction="mean")
+    categorical_indices = [
+        int(index)
+        for index in (list(categorical_feature_indices) if categorical_feature_indices is not None else [])
+    ]
+    numeric_indices = [
+        int(index)
+        for index in (list(numeric_feature_indices) if numeric_feature_indices is not None else [])
+    ]
+    total_recon_loss = x_recon.new_tensor(0.0)
+    total_recon_elements = 0
+
+    if categorical_indices:
+        categorical_index_tensor = torch.as_tensor(categorical_indices, dtype=torch.long, device=x.device)
+        categorical_targets = x.index_select(1, categorical_index_tensor)
+        categorical_logits = x_recon.index_select(1, categorical_index_tensor)
+        total_recon_loss = total_recon_loss + F.binary_cross_entropy_with_logits(
+            categorical_logits,
+            categorical_targets,
+            reduction="sum",
+        )
+        total_recon_elements += int(categorical_targets.numel())
+
+    if numeric_indices:
+        numeric_index_tensor = torch.as_tensor(numeric_indices, dtype=torch.long, device=x.device)
+        numeric_targets = x.index_select(1, numeric_index_tensor)
+        numeric_reconstruction = x_recon.index_select(1, numeric_index_tensor)
+        total_recon_loss = total_recon_loss + F.mse_loss(
+            numeric_reconstruction,
+            numeric_targets,
+            reduction="sum",
+        )
+        total_recon_elements += int(numeric_targets.numel())
+
+    if total_recon_elements > 0:
+        recon_loss = total_recon_loss / total_recon_elements
+    else:
+        recon_loss = F.mse_loss(x_recon, x, reduction="mean")
 
     # KL divergence: -0.5 * sum(1 + log_var - mu^2 - exp(log_var))
     log_var_clamped = torch.clamp(log_var, min=-10.0, max=10.0)
@@ -3211,6 +3297,8 @@ def train_survival_vae(
     evaluation_mode = str(eval_split["evaluation_mode"])
     evaluation_note = str(eval_split["evaluation_note"])
     x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
+    categorical_feature_indices = list(data.get("categorical_feature_indices", []))
+    numeric_feature_indices = list(data.get("numeric_feature_indices", []))
 
     model = SurvivalVAENet(data["n_features"], hidden_layers=hidden_layers, latent_dim=latent_dim, dropout=dropout)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
@@ -3224,7 +3312,17 @@ def train_survival_vae(
         model.train()
         optimizer.zero_grad()
         x_recon, mu, log_var, risk = model(x_train)
-        loss = _vae_combined_loss(x_train, x_recon, mu, log_var, risk, t_train, e_train)
+        loss = _vae_combined_loss(
+            x_train,
+            x_recon,
+            mu,
+            log_var,
+            risk,
+            t_train,
+            e_train,
+            categorical_feature_indices=categorical_feature_indices,
+            numeric_feature_indices=numeric_feature_indices,
+        )
         _require_finite_loss(loss, context="Survival VAE loss")
         loss.backward()
         _clip_gradients(model)
@@ -3237,7 +3335,19 @@ def train_survival_vae(
                 t_monitor = t_all[monitor_idx]
                 e_monitor = e_all[monitor_idx]
                 x_recon_monitor, mu_monitor, log_var_monitor, risk_monitor = model(x_monitor)
-                monitor_loss = float(_vae_combined_loss(x_monitor, x_recon_monitor, mu_monitor, log_var_monitor, risk_monitor, t_monitor, e_monitor).item())
+                monitor_loss = float(
+                    _vae_combined_loss(
+                        x_monitor,
+                        x_recon_monitor,
+                        mu_monitor,
+                        log_var_monitor,
+                        risk_monitor,
+                        t_monitor,
+                        e_monitor,
+                        categorical_feature_indices=categorical_feature_indices,
+                        numeric_feature_indices=numeric_feature_indices,
+                    ).item()
+                )
             monitor_loss_history.append(monitor_loss)
             best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
                 monitor_loss,
@@ -3258,7 +3368,7 @@ def train_survival_vae(
     model.eval()
     with torch.no_grad():
         x_recon_all, mu_all, log_var_all, risk_all = model(x_all)
-        latent_all = model.get_latent(x_all)
+        latent_all = mu_all  # get_latent returns mu; reuse from the forward pass above
 
     apparent_c_index = _compute_c_index_torch(risk_all, t_all, e_all)
     holdout_c_index = _compute_c_index_torch(risk_all[eval_idx], t_all[eval_idx], e_all[eval_idx])

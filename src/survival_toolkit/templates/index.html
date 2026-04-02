@@ -13,20 +13,20 @@
   <body>
     <header class="shell-header">
       <a class="brand-line" id="brandHome" href="#" style="text-decoration:none;color:inherit;">
-        <div class="brand-mark">SA</div>
+        <div class="brand-mark">S</div>
         <h1>SurvStudio</h1>
       </a>
       <div class="header-right">
         <span class="dataset-badge hidden" id="datasetBadge"></span>
-        <div class="mode-toggle" id="analysisModeToggle" role="tablist" aria-label="Analysis mode">
+        <div class="mode-toggle mode-toggle-guided-only" id="analysisModeToggle" role="tablist" aria-label="Analysis mode">
           <button class="mode-toggle-button active" id="guidedModeButton" type="button" role="tab" aria-selected="true">Guided</button>
-          <button class="mode-toggle-button" id="expertModeButton" type="button" role="tab" aria-selected="false">Expert</button>
+          <button class="mode-toggle-button" id="expertModeButton" type="button" role="tab" aria-selected="false" hidden aria-hidden="true" tabindex="-1">Expert</button>
         </div>
         <div class="upload-inline">
           <input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" />
           <button class="button ghost compact-btn" id="uploadButton" type="button">Upload</button>
         </div>
-        <button class="button ghost compact-btn" id="shutdownButton" type="button" title="Stop the local SurvStudio server and release its memory">Shutdown</button>
+        <button class="button ghost compact-btn shutdown-button" id="shutdownButton" type="button" title="Stop the local SurvStudio server and release its memory">Shutdown</button>
       </div>
     </header>
 
@@ -186,7 +186,7 @@
         <div class="guided-main">
           <div class="guided-summary-bar" id="guidedSummaryBar">
             <div class="guided-summary-copy">
-              <strong id="guidedSummaryTitle">Guided Mode</strong>
+              <strong id="guidedSummaryTitle">Study workflow</strong>
               <span id="guidedSummaryText">Confirm the survival endpoint first, then choose one analysis path.</span>
             </div>
             <div class="guided-summary-chips" id="guidedSummaryChips"></div>
@@ -197,12 +197,6 @@
         </div>
       </section>
       <div id="configStripHome" class="hidden"></div>
-
-      <div class="expert-surface-label hidden" id="expertSurfaceLabel" aria-live="polite">
-        <strong>Expert</strong>
-        <span>Expert workspace</span>
-        <p>The full Study Design and analysis tabs remain available below.</p>
-      </div>
 
       <!-- Smart Detection Banner -->
       <div class="smart-banner hidden" id="smartBanner">
@@ -236,16 +230,6 @@
           <span class="config-hint" id="configHint">Define the outcome once, then adjust grouping only where it matters.</span>
         </div>
         <div class="config-block" id="outcomeConfigBlock">
-        <div class="study-design-board">
-          <div class="study-design-card">
-            <strong>Used everywhere</strong>
-            <span>Time column, event column, and event value define the endpoint for KM, Cox, ML, and DL.</span>
-          </div>
-          <div class="study-design-card study-design-card-muted">
-            <strong>Used mainly for grouping and display</strong>
-            <span>Group by, derived groups, time unit, max time, and CI level mostly affect KM and grouped tables.</span>
-          </div>
-        </div>
         <div class="config-row config-row-primary">
           <label class="config-field">
             <span>Time Column <span class="scope-tag scope-global">Global</span> <button class="help-dot" type="button" data-tooltip="How long each patient was observed (e.g., months until death or last follow-up)">?</button></span>
@@ -269,7 +253,7 @@
             <input id="showAllEventColumns" type="checkbox" />
             <span>Show all columns for Event</span>
           </label>
-          <span class="event-guard-note" id="eventColumnHelp">Showing event-like binary columns only. Turn on Show all columns if your event indicator uses a non-standard name.</span>
+          <span class="event-guard-note" id="eventColumnHelp">Showing likely event columns only. Turn on Show all columns only if yours is missing.</span>
         </div>
         <div class="event-warning hidden" id="eventColumnWarning"></div>
         <div class="event-warning hidden" id="eventValueWarning"></div>
@@ -332,8 +316,7 @@
               <input id="deriveColumnName" type="text" placeholder="biomarker_group" />
             </label>
             <div class="derive-action-buttons">
-              <button class="button ghost compact-btn" id="deriveButton" type="button">Create only</button>
-              <button class="button primary compact-btn" id="deriveApplyButton" type="button">Create and apply</button>
+              <button class="button primary compact-btn" id="deriveButton" type="button">Create</button>
             </div>
             <div class="derive-status" id="deriveStatus" aria-live="polite"></div>
           </div>
@@ -344,7 +327,7 @@
             </label>
             <label class="toolbar-field">
               <span>Permutation iter</span>
-              <input id="derivePermutationIterations" type="number" min="0" max="500" step="10" value="100" />
+              <input id="derivePermutationIterations" type="number" min="0" max="500" step="10" value="500" />
             </label>
             <label class="toolbar-field">
               <span>Seed</span>
@@ -378,6 +361,11 @@
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v5M7.5 17.5l3-4.5M16.5 17.5l-3-4.5"/><circle cx="12" cy="12" r="1.5"/></svg></span>
           Deep Learning
           <span class="tab-desc">5 survival architectures</span>
+        </button>
+        <button class="tab-button" type="button" data-tab="benchmark" role="tab" id="tab-benchmark" aria-selected="false" aria-controls="panel-benchmark" tabindex="-1">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10"/><path d="M17 4v3a5 5 0 0 1-10 0V4"/><path d="M5 6H3a2 2 0 0 0 2 2"/><path d="M19 6h2a2 2 0 0 1-2 2"/></svg></span>
+          Predictive Models
+          <span class="tab-desc">ML + DL in one workspace</span>
         </button>
         <button class="tab-button" type="button" data-tab="tables" role="tab" id="tab-tables" aria-selected="false" aria-controls="panel-tables" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/></svg></span>
@@ -431,7 +419,7 @@
               <span>CI bands</span>
             </label>
             <label class="toolbar-field">
-              <span>Risk table ticks <button class="help-dot" type="button" data-tooltip="Controls how many time points are shown in the Number at risk table below. It does not change the Kaplan-Meier curve itself.">?</button></span>
+              <span>Risk table ticks <button class="help-dot" type="button" data-tooltip="Controls how many time points are shown in the Number at risk table. It does not change the Kaplan-Meier curve itself.">?</button></span>
               <input id="riskTablePoints" type="number" min="4" max="12" step="1" value="6" />
             </label>
             <label class="toolbar-field">
@@ -522,7 +510,7 @@
           <div class="dependency-card" id="coxDependencyCard">
             <div class="dependency-copy">
               <strong>What this tab uses</strong>
-              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected below. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, and PH diagnostics below are approximate rank-based checks rather than a full cox.zph test.</span>
+              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected in this tab. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here are approximate rank-based checks rather than a full cox.zph test.</span>
               <div class="dataset-preset-chips hidden" id="coxDependencyChips"></div>
             </div>
           </div>
@@ -577,7 +565,7 @@
             <div class="button-row compact">
               <button class="button primary" id="runMlButton">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                Train a model
+                Run Analysis
               </button>
               <button class="button ghost" id="runCompareButton">Compare All</button>
               <button class="button ghost" id="downloadMlComparisonButton" disabled>Comparison CSV</button>
@@ -593,7 +581,7 @@
             <section class="control-section">
               <div class="control-section-head">
                 <strong>Run setup</strong>
-                <span>Train one RSF, GBS, or LASSO-Cox model here. Compare All below is a separate screening run.</span>
+                <span>Run one RSF, GBS, or LASSO-Cox model here. Compare All is a separate screening run.</span>
               </div>
               <div class="button-row run-setup-quick-actions">
                 <button class="button ghost compact-btn" id="runCompareInlineButton" type="button">Compare All Models</button>
@@ -626,7 +614,7 @@
             <section class="control-section">
               <div class="control-section-head">
                 <strong>Evaluation</strong>
-                <span>These settings apply to Compare All screening only. Train a model uses its own holdout/apparent path.</span>
+                <span>These settings apply to Compare All screening only. Run Analysis uses its own holdout/apparent path.</span>
               </div>
               <div class="toolbar-grid expert-parameter-grid">
                 <label class="toolbar-field">
@@ -647,13 +635,13 @@
               </div>
             </section>
           </div>
-          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH, LASSO-Cox, RSF, and GBS on one shared evaluation path. <strong>Train a model</strong> fits one RSF, GBS, or LASSO-Cox model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF and GBS return faster on larger cohorts. If TreeExplainer is unavailable, SHAP falls back to an approximate screening view rather than a manuscript-ready attribution.</div>
+          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH and, when available, LASSO-Cox, RSF, and GBS on one shared evaluation path. <strong>Run Analysis</strong> fits one RSF, GBS, or LASSO-Cox model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF and GBS return faster on larger cohorts. If TreeExplainer is unavailable, SHAP falls back to an approximate screening view rather than a manuscript-ready attribution.</div>
           <div class="toolbar-note">As a rough interpretation guide, a C-index near <strong>0.50</strong> is chance-level ranking. Values above about <strong>0.70</strong> can be useful for screening, but external validation matters more than thresholds.</div>
           <div class="toolbar-note">Partial dependence and counterfactual analysis are available for tree-model runs only (<strong>RSF</strong> or <strong>GBS</strong>). They reuse the latest matching trained tree model when available; otherwise they refit the same requested tree settings.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>What this tab uses</strong>
-              <span id="mlFeatureSummaryText">ML uses the Study Design outcome definition and the shared ML/DL model features selected below.</span>
+              <span id="mlFeatureSummaryText">ML uses the Study Design outcome definition and the shared ML/DL model features selected here.</span>
               <div class="dataset-preset-chips hidden" id="mlFeatureSummaryChips"></div>
             </div>
             <div class="button-row">
@@ -681,7 +669,7 @@
             <div class="plot-shell" id="mlImportancePlot">
               <div class="empty-state plot-empty">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                <span>Train a model to see feature importance</span>
+                <span>Run Analysis to see feature importance</span>
               </div>
             </div>
             <div class="plot-shell" id="mlShapPlot">
@@ -692,7 +680,7 @@
             </div>
           </div>
           <div class="plot-shell hidden" id="mlComparisonPlot"></div>
-          <div class="analysis-banner" id="mlMetaBanner">Select model features below, then train a model.</div>
+          <div class="analysis-banner" id="mlMetaBanner" aria-live="polite">Select model features here, then run analysis.</div>
           <div class="insight-board" id="mlInsightBoard"><div class="empty-state">ML model interpretation will appear here after training.</div></div>
           <div class="table-grid stacked">
             <div class="table-card full-width"><h3 id="mlComparisonTitle">Model Comparison</h3><div class="table-shell" id="mlComparisonShell"><div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div></div></div>
@@ -726,7 +714,7 @@
             <div class="button-row compact">
               <button class="button primary" id="runDlButton">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                Train a model
+                Run Analysis
               </button>
               <button class="button ghost" id="runDlCompareButton">Compare All</button>
               <button class="button ghost" id="downloadDlComparisonButton" disabled>Comparison CSV</button>
@@ -861,12 +849,11 @@
               </div>
             </section>
           </div>
-          <div class="toolbar-note">Evaluation Mode applies to both <strong>Train a model</strong> and <strong>Compare All</strong>. <strong>Holdout</strong> is the fastest default and returns one fitted model with plots. <strong>Repeated CV</strong> is slower, returns aggregate performance, and skips single-fit plots such as one loss curve or one feature-importance chart.</div>
-          <div class="toolbar-note">Allowed ranges: <strong>Epochs 10-1000</strong>, <strong>Learning rate 0-0.1</strong>, <strong>Dropout 0-0.5</strong>, <strong>Batch size 8-512</strong>, <strong>CV folds 2-10</strong>, <strong>CV repeats 1-20</strong>, <strong>Patience 1-100</strong>, <strong>Min delta 0-0.1</strong>, and <strong>Parallel jobs 1-16</strong>. Hidden layers use the full comma-separated stack such as <strong>64,64</strong>.</div>
+          <div class="toolbar-note">Evaluation Mode applies to both <strong>Run Analysis</strong> and <strong>Compare All</strong>. <strong>Holdout</strong> is the fastest default and returns one fitted model with plots. <strong>Repeated CV</strong> is slower, returns aggregate performance, and skips single-fit plots such as one loss curve or one feature-importance chart.</div>
           <div class="shared-feature-card" id="dlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>What this tab uses</strong>
-              <span id="dlFeatureSummaryText">DL uses the Study Design outcome definition and the model features selected below. The same feature list stays synced with the ML tab.</span>
+              <span id="dlFeatureSummaryText">DL uses the Study Design outcome definition and the shared model features selected in this workspace.</span>
               <div class="dataset-preset-chips hidden" id="dlFeatureSummaryChips"></div>
             </div>
             <div class="button-row">
@@ -876,17 +863,17 @@
           <div class="checklist-grid">
             <div class="selection-card">
               <div class="selection-card-head">
-                <h3>DL Model Features <button class="help-dot" type="button" data-tooltip="These inputs are shared with the ML tab. Changes made here stay synced with the ML feature list.">?</button></h3>
+                <h3>DL Model Features <button class="help-dot" type="button" data-tooltip="These inputs are shared across the Predictive Models workspace. Changes made here stay synced with the common ML/DL feature list.">?</button></h3>
                 <div class="selection-card-actions">
                   <button class="button ghost compact-btn" id="selectAllDlModelFeaturesButton" type="button">Select all eligible</button>
                   <button class="button ghost compact-btn" id="clearDlModelFeaturesButton" type="button">Clear all</button>
                 </div>
               </div>
-              <p class="selection-card-note">This list stays synced with the ML tab.</p>
+              <p class="selection-card-note">This list stays synced with the shared predictive feature list.</p>
               <div class="checklist tall" id="dlModelFeatureChecklist"></div>
             </div>
             <div class="selection-card">
-              <h3>DL Categorical Inputs <button class="help-dot" type="button" data-tooltip="Mark shared ML/DL input variables that should be treated as categorical. Changes stay synced with the ML tab.">?</button></h3>
+              <h3>DL Categorical Inputs <button class="help-dot" type="button" data-tooltip="Mark shared ML/DL input variables that should be treated as categorical. Changes stay synced with the shared predictive feature list.">?</button></h3>
               <div class="checklist tall" id="dlModelCategoricalChecklist"></div>
             </div>
           </div>
@@ -894,7 +881,7 @@
             <div class="plot-shell" id="dlImportancePlot">
               <div class="empty-state plot-empty">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/></svg>
-                <span>Train a deep learning model to see results</span>
+                <span>Run Analysis to see deep learning results</span>
                 <small>Requires PyTorch: pip install torch</small>
               </div>
             </div>
@@ -905,7 +892,7 @@
               </div>
             </div>
           </div>
-          <div class="analysis-banner" id="dlMetaBanner">Select model features below, configure hyperparameters, then train.</div>
+          <div class="analysis-banner" id="dlMetaBanner" aria-live="polite">Select model features here, configure hyperparameters, then run analysis.</div>
           <div class="insight-board" id="dlInsightBoard"><div class="empty-state">Deep learning model interpretation will appear here after training.</div></div>
           <div class="plot-shell hidden" id="dlComparisonPlot"></div>
           <div class="table-grid stacked">
@@ -924,6 +911,81 @@
                 </label>
               </div>
               <div class="table-shell" id="dlManuscriptShell"><div class="empty-state">Comparison-ready manuscript rows appear after running a deep comparison.</div></div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="tab-panel" data-panel="benchmark" id="panel-benchmark" role="tabpanel" aria-labelledby="tab-benchmark">
+        <article class="workspace-card">
+          <div class="card-head">
+            <div class="card-head-left">
+              <h2>Predictive Models</h2>
+              <p class="card-subtitle">See ML and DL together, compare all results first, then test individual models without leaving this workspace</p>
+            </div>
+          </div>
+          <div class="dependency-card" id="benchmarkDependencyCard">
+            <div class="dependency-copy">
+              <strong>What this workspace does</strong>
+              <span id="benchmarkDependencyText">Predictive Models combines the latest ML and DL results in one scoreboard. Shared feature selection stays synced, and both model families can be reviewed and rerun from this single workspace.</span>
+              <div class="dataset-preset-chips hidden" id="benchmarkDependencyChips"></div>
+            </div>
+          </div>
+          <div class="benchmark-action-card">
+            <div class="benchmark-action-copy">
+              <strong>Start here</strong>
+              <span id="predictiveActionStatusText">Compare every supported ML and DL model once, or pick one model below and test it with the shared feature set.</span>
+            </div>
+            <div class="button-row benchmark-action-row">
+              <button class="button primary" id="runPredictiveCompareAllButton" type="button">Compare All Models</button>
+              <label class="toolbar-field compact-inline predictive-model-picker">
+                <span>Test one model</span>
+                <select id="predictiveModelSelector">
+                  <optgroup label="Classical ML">
+                    <option value="rsf">Random Survival Forest</option>
+                    <option value="gbs">Gradient Boosted Survival</option>
+                    <option value="lasso_cox">LASSO-Cox</option>
+                  </optgroup>
+                  <optgroup label="Deep Learning">
+                    <option value="deepsurv">DeepSurv</option>
+                    <option value="deephit">DeepHit</option>
+                    <option value="mtlr">Neural MTLR</option>
+                    <option value="transformer">Survival Transformer</option>
+                    <option value="vae">Survival VAE</option>
+                  </optgroup>
+                </select>
+              </label>
+              <button class="button ghost" id="runPredictiveSelectedButton" type="button">Test Selected Model</button>
+            </div>
+          </div>
+          <div class="benchmark-summary-grid" id="benchmarkSummaryGrid">
+            <div class="empty-state">Run ML or DL to see the latest predictive summary here.</div>
+          </div>
+          <div class="table-card full-width">
+            <div class="table-card-head">
+              <h3>Unified C-index Chart</h3>
+              <span class="benchmark-table-note" id="benchmarkPlotNote">Run Compare All Models to chart ML and DL together on one board.</span>
+            </div>
+            <div class="plot-shell hidden" id="benchmarkComparisonPlot"></div>
+          </div>
+          <div class="table-card full-width">
+            <div class="table-card-head">
+              <h3>Unified Leaderboard</h3>
+              <span class="benchmark-table-note" id="benchmarkTableNote">Run Compare All on ML or DL to build a shared leaderboard.</span>
+            </div>
+            <div class="table-shell" id="benchmarkComparisonShell"><div class="empty-state">Run Compare All on ML or DL to build a shared leaderboard.</div></div>
+          </div>
+          <div class="benchmark-workspace-shell" id="benchmarkWorkbench">
+            <div class="table-card-head benchmark-workspace-head">
+              <div>
+                <h3>Model Workbench</h3>
+                <span class="benchmark-table-note" id="benchmarkWorkbenchNote">The controls below automatically follow the selected model. Shared features, outcome definition, and leaderboard stay in one place.</span>
+              </div>
+            </div>
+            <div class="benchmark-workspace-frame">
+              <div class="benchmark-workspace-caption" id="benchmarkWorkbenchCaption">Random Survival Forest is selected. The workbench below shows the exact controls for that model family.</div>
+              <div class="benchmark-workspace-family" data-benchmark-family="ml" id="benchmarkMlMount"></div>
+              <div class="benchmark-workspace-family hidden" data-benchmark-family="dl" id="benchmarkDlMount"></div>
             </div>
           </div>
         </article>
@@ -948,7 +1010,7 @@
           <div class="dependency-card" id="tableDependencyCard">
             <div class="dependency-copy">
               <strong>What this tab uses</strong>
-              <span id="tableDependencyText">The cohort table uses the selected variables below and applies Group by only when grouping is set. When Group by is active, Overall summarizes the grouped non-missing subset.</span>
+              <span id="tableDependencyText">The cohort table uses the selected variables in this tab and applies Group by only when grouping is set. When Group by is active, Overall summarizes the grouped non-missing subset.</span>
               <div class="dataset-preset-chips hidden" id="tableDependencyChips"></div>
               <span class="dependency-status hidden" id="tableOutputStatusText"></span>
             </div>

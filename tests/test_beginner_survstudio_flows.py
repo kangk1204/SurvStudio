@@ -14,7 +14,10 @@ import pytest
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
+        try:
+            sock.bind(("127.0.0.1", 0))
+        except PermissionError as exc:
+            pytest.skip(f"Localhost port binding is unavailable in this environment: {exc}")
         return int(sock.getsockname()[1])
 
 
@@ -28,6 +31,18 @@ def _wait_for_server(base_url: str, timeout_seconds: float = 30.0) -> None:
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             time.sleep(0.25)
     raise RuntimeError(f"Timed out waiting for test server at {base_url}")
+
+
+def _is_playwright_environment_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    markers = (
+        "executable doesn't exist",
+        "download new browsers",
+        "host system is missing dependencies",
+        "looks like playwright was just installed",
+        "please run the following command to download new browsers",
+    )
+    return any(marker in message for marker in markers)
 
 
 @pytest.fixture
@@ -75,10 +90,17 @@ def _assert_tab_active(page, tab_name: str) -> None:
           return tab.getAttribute('aria-selected') === 'true' && panel.classList.contains('active');
         }
         """,
-        tab_name,
+        arg=tab_name,
     )
     assert page.locator(f'[data-tab="{tab_name}"]').get_attribute("aria-selected") == "true"
     assert page.locator(f"#panel-{tab_name}").evaluate("(node) => node.classList.contains('active')")
+
+
+def _switch_to_expert(page) -> None:
+    page.locator("#workspace").wait_for(state="visible")
+    if page.locator("#guidedShell").is_visible():
+        page.evaluate("() => document.getElementById('expertModeButton')?.click()")
+        page.wait_for_function("document.body.dataset.uiMode === 'expert'")
 
 
 def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_server: str) -> None:
@@ -93,14 +115,13 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
             page.locator("#loadExampleButton").click()
             page.locator("#workspace").wait_for(state="visible")
             page.locator("#guidedShell").wait_for(state="visible")
-            page.locator("#expertModeButton").click()
-            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
+            _switch_to_expert(page)
 
-            assert "Group by does not change Cox, ML, or DL inputs." in page.locator("#groupingSummaryText").inner_text()
-            assert "current Group by setting" in page.locator("#kmDependencyText").inner_text()
-            assert "covariates selected below" in page.locator("#coxDependencyText").inner_text()
-            assert "model features selected below" in page.locator("#mlFeatureSummaryText").inner_text()
-            assert "model features selected below" in page.locator("#dlFeatureSummaryText").inner_text()
+            assert "Current Group by: overall only." in page.locator("#groupingSummaryText").inner_text()
+            assert "current Group by field" in page.locator("#kmDependencyText").inner_text()
+            assert "covariates selected in this tab" in page.locator("#coxDependencyText").inner_text()
+            assert "ML and DL share this model feature list" in page.locator("#mlFeatureSummaryText").inner_text()
+            assert "shared ML/DL model feature selections" in page.locator("#dlFeatureSummaryText").inner_text()
 
             _assert_tab_active(page, "km")
             page.locator("#runKmButton").click()
@@ -121,8 +142,8 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
             )
             assert "C-index" in page.locator("#coxMetaBanner").inner_text()
 
-            page.locator('[data-tab="ml"]').click()
-            _assert_tab_active(page, "ml")
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
             page.locator("#mlModelType").select_option("rsf")
             page.locator("#mlNEstimators").fill("10")
             page.locator("#runMlButton").click()
@@ -130,10 +151,9 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
                 "document.getElementById('mlMetaBanner').textContent.includes('eval=')"
             )
             assert "eval=" in page.locator("#mlMetaBanner").inner_text()
-            assert "model features selected below" in page.locator("#mlFeatureSummaryText").inner_text()
+            assert "ML and DL share this model feature list" in page.locator("#mlFeatureSummaryText").inner_text()
 
-            page.locator('[data-tab="dl"]').click()
-            _assert_tab_active(page, "dl")
+            page.locator("#predictiveModelSelector").select_option("deepsurv")
             page.locator("#dlModelType").select_option("deepsurv")
             page.locator("#dlEpochs").fill("10")
             page.locator("#dlHiddenLayers").fill("8")
@@ -146,7 +166,9 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(browser_server: str) -> None:
@@ -162,8 +184,7 @@ def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(b
             page.locator("#workspace").wait_for(state="visible")
             page.locator("#guidedShell").wait_for(state="visible")
             assert page.locator("#datasetPresetBar").is_hidden()
-            page.locator("#expertModeButton").click()
-            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
+            _switch_to_expert(page)
             page.locator("#datasetPresetBar").wait_for(state="visible")
 
             assert "No preset applied yet." in page.locator("#datasetPresetStatusTitle").inner_text()
@@ -176,9 +197,11 @@ def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(b
             assert page.locator("#timeColumn").input_value() == "rfs_days"
             assert page.locator("#eventColumn").input_value() == "rfs_event"
             assert page.locator("#groupColumn").input_value() == "horTh"
-            assert "Group by does not change Cox, ML, or DL inputs." in page.locator("#groupingSummaryText").inner_text()
-            assert "KM uses the Study Design outcome definition and the current Group by setting." in page.locator("#kmDependencyText").inner_text()
-            assert "Cox uses the Study Design outcome definition and the covariates selected below." in page.locator("#coxDependencyText").inner_text()
+            assert "Current Group by: horTh." in page.locator("#groupingSummaryText").inner_text()
+            assert "Study Design outcome definition" in page.locator("#kmDependencyText").inner_text()
+            assert "current Group by" in page.locator("#kmDependencyText").inner_text()
+            assert "Study Design outcome definition" in page.locator("#coxDependencyText").inner_text()
+            assert "covariates selected in this tab" in page.locator("#coxDependencyText").inner_text()
 
             page.locator("#applyModelPresetButton").click()
             page.wait_for_function(
@@ -192,18 +215,31 @@ def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(b
                 "#modelCategoricalChecklist input",
                 "els => els.filter(e => e.checked).length",
             )
-            assert "model features selected below" in page.locator("#mlFeatureSummaryText").inner_text()
+            assert "ML and DL share this model feature list" in page.locator("#mlFeatureSummaryText").inner_text()
             assert "shared ML/DL model feature selections" in page.locator("#datasetPresetStatusText").inner_text() or "feature checklists used by ML and DL" in page.locator("#datasetPresetStatusText").inner_text()
             assert f"Model features: {selected_feature_count}" in page.locator("#datasetPresetChips").inner_text()
             assert f"Categorical: {selected_categorical_count}" in page.locator("#datasetPresetChips").inner_text()
 
-            for tab_name in ("km", "cox", "ml", "dl"):
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
+            assert "Machine Learning Survival Models" in page.locator("#benchmarkMlMount").inner_text()
+            assert page.locator("#benchmarkMlMount").is_visible()
+            assert not page.locator("#benchmarkDlMount").is_visible()
+
+            page.locator("#predictiveModelSelector").select_option("deepsurv")
+            assert not page.locator("#benchmarkMlMount").is_visible()
+            assert page.locator("#benchmarkDlMount").is_visible()
+            assert "Deep Learning Survival Models" in page.locator("#benchmarkDlMount").inner_text()
+
+            for tab_name in ("km", "cox", "benchmark"):
                 page.locator(f'[data-tab="{tab_name}"]').click()
                 _assert_tab_active(page, tab_name)
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_beginner_ml_compare_options_toggle_cv_inputs_and_finish_with_visible_feedback(browser_server: str) -> None:
@@ -217,11 +253,10 @@ def test_beginner_ml_compare_options_toggle_cv_inputs_and_finish_with_visible_fe
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             page.locator("#workspace").wait_for(state="visible")
-            page.locator("#expertModeButton").click()
-            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
+            _switch_to_expert(page)
 
-            page.locator('[data-tab="ml"]').click()
-            _assert_tab_active(page, "ml")
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
 
             assert page.locator("#mlCvFoldsWrap").evaluate("(node) => node.classList.contains('hidden')")
             assert page.locator("#mlCvRepeatsWrap").evaluate("(node) => node.classList.contains('hidden')")
@@ -250,7 +285,9 @@ def test_beginner_ml_compare_options_toggle_cv_inputs_and_finish_with_visible_fe
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
 
 
 def test_beginner_dl_single_run_keeps_feedback_visible_and_hides_cv_controls(browser_server: str) -> None:
@@ -264,11 +301,11 @@ def test_beginner_dl_single_run_keeps_feedback_visible_and_hides_cv_controls(bro
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             page.locator("#workspace").wait_for(state="visible")
-            page.locator("#expertModeButton").click()
-            page.wait_for_function("document.body.dataset.uiMode === 'expert'")
+            _switch_to_expert(page)
 
-            page.locator('[data-tab="dl"]').click()
-            _assert_tab_active(page, "dl")
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
+            page.locator("#predictiveModelSelector").select_option("deepsurv")
 
             assert page.locator("#dlCvFoldsWrap").evaluate("(node) => node.classList.contains('hidden')")
             assert page.locator("#dlCvRepeatsWrap").evaluate("(node) => node.classList.contains('hidden')")
@@ -292,4 +329,6 @@ def test_beginner_dl_single_run_keeps_feedback_visible_and_hides_cv_controls(bro
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
-        pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise

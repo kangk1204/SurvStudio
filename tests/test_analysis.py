@@ -11,10 +11,13 @@ from survival_toolkit.__main__ import main as cli_main
 from survival_toolkit.analysis import (
     MAX_MODEL_FEATURE_CANDIDATES,
     _cohort_frame,
+    _harrell_c_index,
     _ordered_reference_categories,
     _prepare_cox_frame,
     _reference_levels,
     _pointwise_km_ci,
+    _stability_score,
+    _survival_outcome_like_columns,
     _signature_scientific_summary,
     _safe_float,
     compute_cohort_table,
@@ -24,6 +27,7 @@ from survival_toolkit.analysis import (
     discover_feature_signature,
     derive_group_column,
     ensure_model_feature_candidate_limit,
+    find_event_equivalent_columns,
     load_dataframe_from_path,
     make_unique_columns,
     looks_binary,
@@ -31,6 +35,7 @@ from survival_toolkit.analysis import (
     suggest_columns,
 )
 from survival_toolkit.sample_data import load_tcga_luad_example_dataset
+from survival_toolkit.sample_data import load_gbsg2_upload_ready_dataset
 from survival_toolkit.sample_data import make_example_dataset
 
 
@@ -98,7 +103,7 @@ def test_percentile_split_50_matches_median_split_with_ties() -> None:
     )
 
     median_is_high = median_updated[median_column].astype(str) == "High"
-    percentile_is_top = percentile_updated[percentile_column].astype(str) == "Top 50%"
+    percentile_is_top = percentile_updated[percentile_column].astype(str) == "Above 50th percentile threshold"
     assert median_is_high.tolist() == percentile_is_top.tolist()
 
 
@@ -316,6 +321,69 @@ def test_coerce_event_rejects_mixed_recognized_multistate_tokens() -> None:
         coerce_event(series, event_positive_value="death")
 
 
+def test_coerce_event_handles_living_deceased_tokens_without_explicit_mapping() -> None:
+    series = pd.Series(["LIVING", "DECEASED", "living", "deceased"], dtype="string")
+
+    coerced = coerce_event(series)
+
+    assert coerced.tolist() == [0.0, 1.0, 0.0, 1.0]
+
+
+def test_coerce_event_handles_tcga_style_composite_status_tokens() -> None:
+    series = pd.Series(["0:LIVING", "1:DECEASED", "0:Living", "1:Deceased"], dtype="string")
+
+    coerced = coerce_event(series)
+
+    assert coerced.tolist() == [0.0, 1.0, 0.0, 1.0]
+
+
+def test_coerce_event_accepts_explicit_deceased_for_tcga_style_composite_status_tokens() -> None:
+    series = pd.Series(["0:LIVING", "1:DECEASED", "0:Living", "1:Deceased"], dtype="string")
+
+    coerced = coerce_event(series, event_positive_value="deceased")
+
+    assert coerced.tolist() == [0.0, 1.0, 0.0, 1.0]
+
+
+def test_coerce_event_accepts_explicit_numeric_one_for_tcga_style_composite_status_tokens() -> None:
+    series = pd.Series(["0:LIVING", "1:DECEASED", "0:Living", "1:Deceased"], dtype="string")
+
+    coerced = coerce_event(series, event_positive_value=1)
+
+    assert coerced.tolist() == [0.0, 1.0, 0.0, 1.0]
+
+
+def test_survival_outcome_like_columns_do_not_flag_generic_duration_covariates() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [12, 18, 24, 30],
+            "os_event": [1, 0, 1, 0],
+            "treatment_duration_months": [6, 8, 10, 12],
+        }
+    )
+
+    detected = _survival_outcome_like_columns(df)
+
+    assert "os_months" in detected
+    assert "os_event" in detected
+    assert "treatment_duration_months" not in detected
+
+
+def test_find_event_equivalent_columns_detects_binary_duplicate_of_selected_event() -> None:
+    df = pd.DataFrame(
+        {
+            "custom_event": ["0:LIVING", "1:DECEASED", "0:LIVING", "1:DECEASED"],
+            "delta": [0, 1, 0, 1],
+            "sex_binary": [0, 1, 1, 0],
+        }
+    )
+
+    equivalents = find_event_equivalent_columns(df, "custom_event", event_positive_value="deceased")
+
+    assert "delta" in equivalents
+    assert "sex_binary" not in equivalents
+
+
 def test_cohort_frame_rejects_identical_time_and_event_columns() -> None:
     df = pd.DataFrame({"status": [1, 0, 1], "age": [60, 55, 70]})
 
@@ -403,6 +471,167 @@ def test_suggest_columns_detects_concatenated_survival_naming_patterns() -> None
     assert "deathstatus" in suggestions["event_columns"]
     assert "riskgroup" in suggestions["group_columns"]
     assert "treatmentarm" in suggestions["group_columns"]
+
+
+def test_suggest_columns_detects_common_survival_time_aliases() -> None:
+    df = pd.DataFrame(
+        {
+            "fu_time": [12, 24, 36],
+            "surv_time": [10, 20, 30],
+            "time_in_months": [8, 18, 28],
+            "mfs_days": [120, 180, 365],
+            "dmfs_months": [6, 12, 18],
+            "os_event": [1, 0, 1],
+        }
+    )
+
+    suggestions = suggest_columns(df)
+
+    assert "fu_time" in suggestions["time_columns"]
+    assert "surv_time" in suggestions["time_columns"]
+    assert "time_in_months" in suggestions["time_columns"]
+    assert "mfs_days" in suggestions["time_columns"]
+    assert "dmfs_months" in suggestions["time_columns"]
+
+
+def test_suggest_columns_and_outcome_guard_do_not_treat_age_years_as_survival_endpoint() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [12, 24, 36],
+            "os_event": [1, 0, 1],
+            "age_years": [51, 62, 73],
+            "smoking_years": [0, 20, 35],
+        }
+    )
+
+    suggestions = suggest_columns(df)
+    outcome_like = _survival_outcome_like_columns(df)
+
+    assert "os_months" in suggestions["time_columns"]
+    assert "age_years" not in suggestions["time_columns"]
+    assert "smoking_years" not in suggestions["time_columns"]
+    assert "age_years" not in outcome_like
+    assert "smoking_years" not in outcome_like
+
+
+def test_harrell_c_index_matches_naive_pairwise_result() -> None:
+    time_values = np.array([5.0, 8.0, 10.0, 12.0, 14.0, 20.0], dtype=float)
+    event_values = np.array([1, 0, 1, 1, 0, 1], dtype=int)
+    risk_score = np.array([0.9, 0.2, 0.7, 0.6, 0.3, 0.1], dtype=float)
+
+    naive_concordant = 0.0
+    naive_comparable = 0.0
+    for i, (time_i, event_i, risk_i) in enumerate(zip(time_values, event_values, risk_score, strict=False)):
+        if event_i != 1:
+            continue
+        for j, (time_j, risk_j) in enumerate(zip(time_values, risk_score, strict=False)):
+            if i == j or time_j <= time_i:
+                continue
+            naive_comparable += 1.0
+            if risk_i > risk_j:
+                naive_concordant += 1.0
+            elif risk_i == risk_j:
+                naive_concordant += 0.5
+
+    assert _harrell_c_index(time_values, event_values, risk_score) == pytest.approx(
+        naive_concordant / naive_comparable
+    )
+
+
+def test_cohort_frame_rejects_non_event_like_binary_column_when_likely_event_exists() -> None:
+    df = pd.DataFrame(
+        {
+            "rfs_days": [120, 180, 240, 300],
+            "rfs_event": [1, 0, 1, 0],
+            "menostat": ["Post", "Pre", "Post", "Pre"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="does not look like a survival event column"):
+        _cohort_frame(
+            df,
+            time_column="rfs_days",
+            event_column="menostat",
+            event_positive_value="Post",
+        )
+
+
+def test_cohort_frame_allows_nonstandard_binary_event_column_when_coding_is_explicit() -> None:
+    df = pd.DataFrame(
+        {
+            "fu_time": [12, 18, 24, 30],
+            "delta": [1, 0, 1, 1],
+            "age": [53, 61, 49, 72],
+        }
+    )
+
+    frame = _cohort_frame(
+        df,
+        time_column="fu_time",
+        event_column="delta",
+        event_positive_value=1,
+        extra_columns=["age"],
+    )
+
+    assert frame.shape[0] == 4
+    assert frame["delta"].astype(int).tolist() == [1, 0, 1, 1]
+
+
+def test_survival_outcome_like_columns_flag_multistate_status_surrogates() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [8, 12, 16, 20],
+            "os_event": [1, 0, 1, 0],
+            "vital_status": ["alive", "dead", "unknown", "dead"],
+            "status": ["NED", "AWD", "DOD", "AWD"],
+            "egfr_status": ["mut", "wt", "mut", "wt"],
+        }
+    )
+
+    outcome_like = _survival_outcome_like_columns(df)
+
+    assert "vital_status" in outcome_like
+    assert "status" in outcome_like
+    assert "egfr_status" not in outcome_like
+
+
+def test_survival_outcome_like_columns_flag_css_and_dss_endpoints() -> None:
+    df = pd.DataFrame(
+        {
+            "css_time": [10, 12, 14, 16],
+            "css_status": [1, 0, 1, 0],
+            "dss_months": [9, 11, 13, 15],
+            "dss_status": ["alive", "dead", "alive", "dead"],
+            "age": [51, 63, 58, 70],
+        }
+    )
+
+    outcome_like = _survival_outcome_like_columns(df)
+
+    assert "css_time" in outcome_like
+    assert "css_status" in outcome_like
+    assert "dss_months" in outcome_like
+    assert "dss_status" in outcome_like
+    assert "age" not in outcome_like
+
+
+def test_cohort_frame_rejects_mismatched_endpoint_family_pair() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [10, 20, 30, 40],
+            "pfs_event": [1, 0, 1, 0],
+            "age": [50, 60, 70, 80],
+        }
+    )
+
+    with pytest.raises(ValueError, match="different survival endpoints"):
+        _cohort_frame(
+            df,
+            time_column="os_months",
+            event_column="pfs_event",
+            event_positive_value=1,
+            extra_columns=["age"],
+        )
 
 
 def test_km_analysis_returns_grouped_results() -> None:
@@ -582,6 +811,25 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert any("spearman" in strength.lower() and "schoenfeld" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("external-cohort apply workflow" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("changing the covariate set" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
+def test_cox_analysis_reports_missing_covariate_exclusions() -> None:
+    df = make_example_dataset(seed=211, n_patients=180)
+    df.loc[df.index[:24], "biomarker_score"] = np.nan
+
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age", "biomarker_score"],
+        categorical_covariates=[],
+    )
+
+    assert result["model_stats"]["dropped_rows"] == 24
+    assert result["model_stats"]["outcome_rows"] == result["model_stats"]["n"] + result["model_stats"]["dropped_rows"]
+    assert any(metric["label"] == "Dropped for missing covariates" and metric["value"] == 24 for metric in result["scientific_summary"]["metrics"])
+    assert any("were excluded" in caution.lower() and "missing" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 
 def test_compute_cohort_table_discloses_grouped_subset_overall_scope() -> None:
@@ -837,9 +1085,19 @@ def test_cox_analysis_rejects_non_finite_model_fit(monkeypatch) -> None:
     df = make_example_dataset(seed=23, n_patients=40)
     frame = pd.DataFrame(
         {
-            "os_months": np.linspace(1.0, 40.0, 40),
-            "os_event": [1] * 20 + [0] * 20,
-            "age": np.linspace(50.0, 80.0, 40),
+            "os_months": [1, 2, 3, 4, 5, 6],
+            "os_event": [1, 1, 0, 0, 0, 0],
+            "age": [50.0, 54.0, 58.0, 62.0, 66.0, 70.0],
+            "pathologic_stage": pd.Categorical(
+                ["Stage I", "Stage I", "Stage II", "Stage II", "Stage III", "Stage III"],
+                categories=["Stage I", "Stage II", "Stage III"],
+                ordered=True,
+            ),
+            "histology": pd.Categorical(
+                ["RareType", "CommonType", "CommonType", "CommonType", "CommonType", "CommonType"],
+                categories=["RareType", "CommonType"],
+                ordered=True,
+            ),
         }
     )
 
@@ -848,9 +1106,9 @@ def test_cox_analysis_rejects_non_finite_model_fit(monkeypatch) -> None:
         bse = np.asarray([np.nan], dtype=float)
         tvalues = np.asarray([np.nan], dtype=float)
         pvalues = np.asarray([np.nan], dtype=float)
-        schoenfeld_residuals = np.ones((40, 1), dtype=float)
+        schoenfeld_residuals = np.ones((6, 1), dtype=float)
         llf = np.nan
-        model = type("_FakeModelMeta", (), {"exog_names": ["Q(\"age\")"], "exog": np.ones((40, 1), dtype=float)})()
+        model = type("_FakeModelMeta", (), {"exog_names": ["Q(\"age\")"], "exog": np.ones((6, 1), dtype=float)})()
 
         def conf_int(self):
             return np.asarray([[np.nan, np.nan]], dtype=float)
@@ -868,14 +1126,63 @@ def test_cox_analysis_rejects_non_finite_model_fit(monkeypatch) -> None:
     monkeypatch.setattr(analysis, "_prepare_cox_frame", lambda *args, **kwargs: frame.copy())
     monkeypatch.setattr(analysis, "PHReg", _FakePHReg)
 
-    with pytest.raises(ValueError, match="non-finite estimates"):
+    with pytest.raises(ValueError, match="non-finite estimates") as exc_info:
         compute_cox_analysis(
             df,
             time_column="os_months",
             event_column="os_event",
             event_positive_value=1,
-            covariates=["age"],
+            covariates=["age", "pathologic_stage", "histology"],
+            categorical_covariates=["pathologic_stage", "histology"],
         )
+
+    message = str(exc_info.value)
+    assert "EPV=0.50" in message
+    assert 'pathologic_stage="Stage I" (n=2)' in message
+    assert 'histology="RareType" (n=1)' in message
+
+
+def test_cox_analysis_translates_singular_matrix_into_user_facing_message(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    df = pd.DataFrame(
+        {
+            "rfs_days": [100, 120, 140, 160, 180, 200],
+            "rfs_event": [1, 0, 1, 0, 1, 0],
+            "estrec": [10.0, 12.0, 11.0, 9.0, 13.0, 8.0],
+            "estrec_median_split": pd.Categorical(
+                ["High", "High", "High", "Low", "High", "Low"],
+                categories=["Low", "High"],
+                ordered=True,
+            ),
+        }
+    )
+
+    class _FakePHReg:
+        @staticmethod
+        def from_formula(*args, **kwargs):
+            class _FakeFit:
+                @staticmethod
+                def fit(disp=False):
+                    raise np.linalg.LinAlgError("Singular matrix")
+
+            return _FakeFit()
+
+    monkeypatch.setattr(analysis, "PHReg", _FakePHReg)
+
+    with pytest.raises(ValueError, match="design matrix is singular") as exc_info:
+        compute_cox_analysis(
+            df,
+            time_column="rfs_days",
+            event_column="rfs_event",
+            event_positive_value=1,
+            covariates=["estrec", "estrec_median_split"],
+            categorical_covariates=["estrec_median_split"],
+        )
+
+    message = str(exc_info.value)
+    assert "overlapping encodings of the same signal" in message
+    assert "Remove one of the overlapping variables" in message
 
 
 def test_cox_analysis_lists_all_ph_alert_terms_and_sparse_category_warnings() -> None:
@@ -920,6 +1227,23 @@ def test_cox_analysis_warns_when_reference_levels_are_too_small() -> None:
 
     cautions = result["scientific_summary"]["cautions"]
     assert any('pathologic_stage reference "Stage I" (n=2)' in caution for caution in cautions)
+    assert "appear unstable" in result["scientific_summary"]["headline"]
+
+
+def test_cox_analysis_uses_ph_review_headline_when_fit_is_not_structurally_unstable() -> None:
+    df = load_gbsg2_upload_ready_dataset()
+    result = compute_cox_analysis(
+        df,
+        time_column="rfs_days",
+        event_column="rfs_event",
+        event_positive_value=1,
+        covariates=["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"],
+        categorical_covariates=["horTh", "menostat", "tgrade"],
+    )
+
+    headline = result["scientific_summary"]["headline"]
+    assert "closer proportional-hazards review" in headline
+    assert "appear unstable" not in headline
 
 
 def test_cohort_table_includes_overall_column() -> None:
@@ -1061,6 +1385,22 @@ def test_discover_feature_signature_ranks_and_persists_best_group() -> None:
         assert payload["best_split"]["Statistically significant"] is True
     observed_groups = set(updated[column_name].dropna().astype(str).unique().tolist())
     assert observed_groups.issubset({"Signature+", "Signature-"})
+
+
+def test_stability_score_caps_extreme_significance_term() -> None:
+    base_row = {
+        "Hazard ratio (signature+ vs -)": 2.0,
+        "Bootstrap support (p<alpha)": 0.65,
+        "Bootstrap HR direction consistency": 0.8,
+        "Validation support (p<alpha)": 0.55,
+        "Permutation p": 0.02,
+        "Rule count": 2,
+    }
+
+    moderately_extreme = _stability_score({**base_row, "BH adjusted p": 1e-10})
+    absurdly_extreme = _stability_score({**base_row, "BH adjusted p": 1e-50})
+
+    assert absurdly_extreme == pytest.approx(moderately_extreme)
 
 
 def test_signature_rules_do_not_repeat_same_feature_within_combo() -> None:

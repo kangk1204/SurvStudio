@@ -71,6 +71,23 @@ def test_optimal_cutpoint_derive_method() -> None:
     assert groups.issubset({"Low", "High"})
 
 
+def test_scientific_summary_ml_filters_empty_extra_cautions() -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    summary = ml_models._scientific_summary_ml(
+        model_name="RSF",
+        c_index=0.61,
+        n_patients=80,
+        n_events=40,
+        n_features=2,
+        extra_cautions=["screening only", None, ""],
+    )
+
+    assert "screening only" in summary["cautions"]
+    assert None not in summary["cautions"]
+    assert "" not in summary["cautions"]
+
+
 @pytest.mark.skipif(
     not _sksurv_available(),
     reason="scikit-survival not installed",
@@ -140,6 +157,61 @@ def test_lasso_cox_reports_holdout_evaluation_on_large_cohort() -> None:
     assert result["model_stats"]["alpha"] is not None
     assert result["model_stats"]["n_active_features"] >= 1
     assert "LASSO-Cox" in result["scientific_summary"]["headline"]
+
+
+def test_select_lasso_alpha_prefers_sparser_model_within_one_se(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    class _FakeCoxnet:
+        def __init__(self) -> None:
+            self.alphas_ = np.asarray([0.1, 1.0], dtype=float)
+            self.coef_ = np.asarray(
+                [
+                    [1.0, 1.0],
+                    [0.5, 0.0],
+                ],
+                dtype=float,
+            )
+
+        def fit(self, X, y) -> "_FakeCoxnet":
+            return self
+
+        def predict(self, X, alpha: float) -> np.ndarray:
+            return np.full(X.shape[0], 0.70 if float(alpha) < 0.5 else 0.69, dtype=float)
+
+    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
+    monkeypatch.setattr(ml_models, "_make_lasso_coxnet_model", lambda alpha=None: _FakeCoxnet())
+    monkeypatch.setattr(
+        ml_models,
+        "_estimate_c_index_standard_error",
+        lambda y_eval, risk_scores, random_state, n_bootstrap=30: 0.02,
+    )
+    monkeypatch.setattr(ml_models, "_sksurv_c_index", lambda y_eval, risk_scores: float(risk_scores[0]))
+
+    df = pd.DataFrame(
+        {
+            "os_months": np.linspace(1.0, 40.0, 40),
+            "os_event": [0, 1] * 20,
+        }
+    )
+    encoded = pd.DataFrame(
+        {
+            "f1": np.linspace(-1.0, 1.0, 40),
+            "f2": np.linspace(1.0, -1.0, 40),
+        }
+    )
+
+    result = ml_models._select_lasso_alpha(
+        df,
+        encoded,
+        time_column="os_months",
+        event_column="os_event",
+        random_state=11,
+    )
+
+    assert result["alpha"] == pytest.approx(1.0)
+    assert result["selection_rule"] == "one_se_bootstrap"
+    assert result["n_nonzero_features"] == 1
 
 
 @pytest.mark.skipif(
@@ -411,6 +483,45 @@ def test_build_manuscript_result_tables_handles_incomplete_repeated_cv() -> None
     assert first_row["Events, n"] == 58
     assert first_row["Mean Evaluation Patients, n"] == 24
     assert first_row["Mean Evaluation Events, n"] == 12
+
+
+def test_build_manuscript_result_tables_humanizes_holdout_fallback_validation_strategy() -> None:
+    from survival_toolkit.ml_models import build_manuscript_result_tables
+
+    manuscript = build_manuscript_result_tables(
+        {
+            "evaluation_mode": "mixed_holdout_apparent",
+            "n_patients": 150,
+            "n_events": 63,
+            "comparison_table": [
+                {
+                    "model": "Random Survival Forest",
+                    "rank": 1,
+                    "c_index": 0.68,
+                    "evaluation_mode": "holdout",
+                    "n_features": 8,
+                    "evaluation_samples": 30,
+                    "test_events": 13,
+                    "training_time_ms": 52.4,
+                },
+                {
+                    "model": "Gradient Boosted Survival",
+                    "rank": None,
+                    "c_index": 0.61,
+                    "evaluation_mode": "holdout_fallback_apparent",
+                    "n_features": 8,
+                    "evaluation_samples": 150,
+                    "test_events": 63,
+                    "training_time_ms": 61.7,
+                },
+            ],
+        }
+    )
+
+    rows = manuscript["model_performance_table"]
+    assert rows[0]["Validation Strategy"] == "Deterministic holdout"
+    assert rows[1]["Validation Strategy"] == "Apparent fallback after holdout failure"
+    assert "mixed holdout/apparent" in manuscript["caption"].lower()
 
 
 def test_prepare_model_evaluation_split_keeps_outcome_valid_rows_with_missing_features() -> None:
@@ -1177,6 +1288,42 @@ def test_tree_model_training_keeps_encoded_matrices_and_targets_aligned(
 
     assert result["_X_encoded"].shape[0] == result["_y"].shape[0] == full_frame.shape[0]
     assert result["_X_eval_encoded"].shape[0] == result["_y_eval"].shape[0] == eval_frame.shape[0]
+
+
+def test_random_survival_forest_uses_parallel_tree_jobs(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    captured: dict[str, int | None] = {}
+
+    class _DummyRSF:
+        def __init__(self, **kwargs) -> None:
+            captured["n_jobs"] = kwargs.get("n_jobs")
+
+        @property
+        def feature_importances_(self):
+            return np.asarray([1.0], dtype=float)
+
+        def fit(self, X, y):
+            return self
+
+        def predict(self, X):
+            return np.linspace(0.1, 0.9, X.shape[0], dtype=float)
+
+    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
+    monkeypatch.setattr(ml_models, "RandomSurvivalForest", _DummyRSF)
+
+    df = make_example_dataset(seed=41, n_patients=80)
+    result = ml_models.train_random_survival_forest(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age"],
+        n_estimators=8,
+        random_state=13,
+    )
+
+    assert captured["n_jobs"] == -1
+    assert result["model_stats"]["c_index"] is not None
 
 
 def test_sksurv_c_index_reraises_memory_error(monkeypatch) -> None:

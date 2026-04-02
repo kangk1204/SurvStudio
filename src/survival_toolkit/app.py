@@ -7,11 +7,13 @@ import json
 import os
 import re
 from collections import OrderedDict
+from functools import lru_cache
 from pathlib import Path
 import signal
 import tempfile
 import threading
 import time
+import traceback
 import zipfile
 from typing import Any, Callable, Literal, NoReturn, Sequence
 from xml.sax.saxutils import escape as xml_escape
@@ -32,6 +34,7 @@ from survival_toolkit.analysis import (
     discover_feature_signature,
     derive_group_column,
     ensure_model_feature_candidate_limit,
+    find_event_equivalent_columns,
     load_dataframe_from_path,
     preview_cox_analysis_inputs,
     profile_dataframe,
@@ -46,16 +49,23 @@ from survival_toolkit.sample_data import (
 from survival_toolkit.store import DatasetStore
 
 BASE_DIR = Path(__file__).resolve().parent
-STATIC_ASSET_VERSION = str(
-    int(
-        max(
-            (BASE_DIR / "templates" / "index.html").stat().st_mtime,
-            (BASE_DIR / "static" / "styles.css").stat().st_mtime,
-            (BASE_DIR / "static" / "app.js").stat().st_mtime,
-            (BASE_DIR / "static" / "vendor" / "plotly-3.4.0.min.js").stat().st_mtime,
-        )
+
+
+@lru_cache(maxsize=1)
+def _static_asset_version() -> str:
+    asset_paths = (
+        BASE_DIR / "templates" / "index.html",
+        BASE_DIR / "static" / "styles.css",
+        BASE_DIR / "static" / "app.js",
+        BASE_DIR / "static" / "vendor" / "plotly-3.4.0.min.js",
     )
-)
+    mtimes: list[float] = []
+    for asset_path in asset_paths:
+        try:
+            mtimes.append(asset_path.stat().st_mtime)
+        except OSError:
+            continue
+    return str(int(max(mtimes))) if mtimes else "0"
 
 app = FastAPI(
     title="SurvStudio",
@@ -72,14 +82,59 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 store = DatasetStore()
-_MAX_ML_ARTIFACT_CACHE = 32
-_ML_ARTIFACT_CACHE: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
-_ML_ARTIFACT_CACHE_LOCK = threading.RLock()
 _MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
 _MAX_UPLOAD_ROWS = 100_000
 _MAX_UPLOAD_COLUMNS = 5_000
 _MAX_UPLOAD_CELLS = 5_000_000
 _SIGNED_NUMERIC_CSV_LITERAL = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+
+
+class _MlArtifactCache:
+    def __init__(self, *, max_items: int) -> None:
+        self._max_items = int(max_items)
+        self._items: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+        self._lock = threading.RLock()
+
+    def remember(
+        self,
+        *,
+        dataset_id: str,
+        model_type: str,
+        signature: dict[str, Any],
+        result: dict[str, Any],
+    ) -> None:
+        artifact = {
+            "signature": signature,
+            "result": copy.deepcopy(result),
+        }
+        with self._lock:
+            cache_key = (dataset_id, model_type)
+            self._items[cache_key] = artifact
+            self._items.move_to_end(cache_key)
+            while len(self._items) > self._max_items:
+                self._items.popitem(last=False)
+
+    def get(
+        self,
+        *,
+        dataset_id: str,
+        model_type: str,
+        signature: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            cache_key = (dataset_id, model_type)
+            cached = self._items.get(cache_key)
+            if cached is not None:
+                self._items.move_to_end(cache_key)
+            if not cached or cached.get("signature") != signature:
+                return None
+            result = cached.get("result")
+            if not isinstance(result, dict):
+                return None
+            return copy.deepcopy(result)
+
+
+_ml_artifact_cache = _MlArtifactCache(max_items=8)
 
 
 # ── Request models ──────────────────────────────────────────────
@@ -104,7 +159,7 @@ class DeriveGroupRequest(BaseModel):
     event_column: str | None = None
     event_positive_value: Any = None
     min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
-    permutation_iterations: int = Field(default=100, ge=0, le=500)
+    permutation_iterations: int = Field(default=500, ge=0, le=500)
     random_seed: int = 20260311
 
 
@@ -229,7 +284,7 @@ class OptimalCutpointRequest(BaseModel):
     event_positive_value: Any = 1
     variable: str
     min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
-    permutation_iterations: int = Field(default=100, ge=0, le=500)
+    permutation_iterations: int = Field(default=500, ge=0, le=500)
 
 
 class TableExportRequest(BaseModel):
@@ -246,7 +301,7 @@ class TableExportRequest(BaseModel):
 
 
 def dataset_response(dataset_id: str) -> dict[str, Any]:
-    stored = store.get(dataset_id)
+    stored = store.get(dataset_id, copy_dataframe=False)
     payload = profile_dataframe(stored.dataframe, dataset_id=stored.dataset_id, filename=stored.filename)
     payload["dataset_source"] = stored.source
     payload["preset_eligible"] = stored.source == "builtin_demo"
@@ -276,6 +331,10 @@ def _outcome_informed_columns(stored: Any) -> set[str]:
     }
 
 
+def _get_stored_dataset(dataset_id: str):
+    return store.get(dataset_id, copy_dataframe=False)
+
+
 def _reject_outcome_informed_columns(
     stored: Any,
     columns: Sequence[str],
@@ -298,10 +357,18 @@ def _reject_survival_outcome_feature_columns(
     *,
     time_column: str,
     event_column: str,
+    event_positive_value: Any = None,
     context: str,
 ) -> None:
     forbidden = {str(time_column), str(event_column)}
     forbidden.update(str(column) for column in _survival_outcome_like_columns(stored.dataframe))
+    forbidden.update(
+        find_event_equivalent_columns(
+            stored.dataframe,
+            event_column=str(event_column),
+            event_positive_value=event_positive_value,
+        )
+    )
     offenders = sorted({str(column) for column in columns if str(column) in forbidden})
     if offenders:
         raise ValueError(
@@ -343,34 +410,23 @@ def _remember_ml_artifact(dataset_id: str, request_config: dict[str, Any], resul
         "_feature_encoder": result.get("_feature_encoder"),
         "_analysis_frame": result.get("_analysis_frame"),
     }
-    artifact = {
-        "signature": _ml_artifact_signature(request_config),
-        "result": copy.deepcopy(artifact_result),
-    }
-    with _ML_ARTIFACT_CACHE_LOCK:
-        cache_key = (dataset_id, model_type)
-        _ML_ARTIFACT_CACHE[cache_key] = artifact
-        _ML_ARTIFACT_CACHE.move_to_end(cache_key)
-        while len(_ML_ARTIFACT_CACHE) > _MAX_ML_ARTIFACT_CACHE:
-            _ML_ARTIFACT_CACHE.popitem(last=False)
+    _ml_artifact_cache.remember(
+        dataset_id=dataset_id,
+        model_type=model_type,
+        signature=_ml_artifact_signature(request_config),
+        result=artifact_result,
+    )
 
 
 def _get_ml_artifact(dataset_id: str, request_config: dict[str, Any]) -> dict[str, Any] | None:
     model_type = str(request_config.get("model_type", ""))
     if model_type not in {"rsf", "gbs"}:
         return None
-    expected = _ml_artifact_signature(request_config)
-    with _ML_ARTIFACT_CACHE_LOCK:
-        cache_key = (dataset_id, model_type)
-        cached = _ML_ARTIFACT_CACHE.get(cache_key)
-        if cached is not None:
-            _ML_ARTIFACT_CACHE.move_to_end(cache_key)
-        if not cached or cached.get("signature") != expected:
-            return None
-        result = cached.get("result")
-        if not isinstance(result, dict):
-            return None
-        return copy.deepcopy(result)
+    return _ml_artifact_cache.get(
+        dataset_id=dataset_id,
+        model_type=model_type,
+        signature=_ml_artifact_signature(request_config),
+    )
 
 
 def _enforce_upload_shape_limits(dataframe: Any) -> None:
@@ -541,7 +597,12 @@ def fail_bad_request(exc: Exception) -> NoReturn:
             detail = f"Not found: {raw}"
         raise HTTPException(status_code=404, detail=detail) from exc
     if isinstance(exc, (ValueError, TypeError)):
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        detail = str(exc)
+        frames = traceback.extract_tb(exc.__traceback__) if exc.__traceback__ is not None else []
+        origin_path = Path(frames[-1].filename).resolve() if frames else None
+        if origin_path is None or BASE_DIR not in origin_path.parents:
+            detail = "The request could not be processed with the selected dataset and settings."
+        raise HTTPException(status_code=400, detail=detail) from exc
     raise exc
 
 
@@ -631,6 +692,9 @@ def _export_columns(rows: list[dict[str, Any]]) -> list[str]:
 def _sanitize_csv_cell(value: Any) -> str:
     text = "" if value is None else str(value)
     stripped = text.lstrip()
+    if stripped.startswith("'") and _SIGNED_NUMERIC_CSV_LITERAL.fullmatch(stripped[1:]):
+        prefix_len = len(text) - len(stripped)
+        return text[:prefix_len] + stripped[1:]
     if _SIGNED_NUMERIC_CSV_LITERAL.fullmatch(stripped):
         return text
     if stripped.startswith(("=", "+", "-", "@")):
@@ -882,7 +946,9 @@ def _export_rows_to_docx(
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "index.html", {"static_version": STATIC_ASSET_VERSION})
+    response = templates.TemplateResponse(request, "index.html", {"static_version": _static_asset_version()})
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return response
 
 
 @app.get("/api/health")
@@ -898,7 +964,10 @@ def _schedule_process_shutdown(delay_seconds: float = 0.35) -> None:
         try:
             os.kill(pid, signal.SIGTERM)
         except Exception:
-            os._exit(0)
+            try:
+                signal.raise_signal(signal.SIGTERM)
+            except Exception:
+                return
 
     threading.Thread(target=_shutdown, daemon=True).start()
 
@@ -1045,7 +1114,7 @@ async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
     try:
         from survival_toolkit.plots import build_cutpoint_scan_figure
 
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
 
         def _run() -> dict[str, Any]:
             updated, column_name, summary = derive_group_column(
@@ -1087,7 +1156,7 @@ async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
 @app.post("/api/kaplan-meier")
 async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
     try:
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
         outcome_informed_group = (
             request_model.group_column is not None
@@ -1124,8 +1193,16 @@ async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
 @app.post("/api/cox")
 async def cox(request_model: CoxRequest) -> dict[str, Any]:
     try:
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
+        _reject_survival_outcome_feature_columns(
+            stored,
+            [*request_model.covariates, *request_model.categorical_covariates],
+            time_column=request_model.time_column,
+            event_column=request_model.event_column,
+            event_positive_value=request_model.event_positive_value,
+            context="Cox covariates",
+        )
         _reject_outcome_informed_columns(
             stored,
             [*request_model.covariates, *request_model.categorical_covariates],
@@ -1152,8 +1229,16 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
 @app.post("/api/cox-preview")
 async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
     try:
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
+        _reject_survival_outcome_feature_columns(
+            stored,
+            [*request_model.covariates, *request_model.categorical_covariates],
+            time_column=request_model.time_column,
+            event_column=request_model.event_column,
+            event_positive_value=request_model.event_positive_value,
+            context="Cox covariates",
+        )
         _reject_outcome_informed_columns(
             stored,
             [*request_model.covariates, *request_model.categorical_covariates],
@@ -1179,7 +1264,7 @@ async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
 @app.post("/api/cohort-table")
 async def cohort_table(request_model: CohortTableRequest) -> dict[str, Any]:
     try:
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
         if request_model.group_column:
             _reject_outcome_informed_columns(
@@ -1203,8 +1288,16 @@ async def cohort_table(request_model: CohortTableRequest) -> dict[str, Any]:
 @app.post("/api/discover-signature")
 async def discover_signature(request_model: SignatureSearchRequest) -> dict[str, Any]:
     try:
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
+        _reject_survival_outcome_feature_columns(
+            stored,
+            request_model.candidate_columns,
+            time_column=request_model.time_column,
+            event_column=request_model.event_column,
+            event_positive_value=request_model.event_positive_value,
+            context="signature discovery candidates",
+        )
         _reject_outcome_informed_columns(
             stored,
             request_model.candidate_columns,
@@ -1234,7 +1327,15 @@ async def discover_signature(request_model: SignatureSearchRequest) -> dict[str,
 
         updated, column_name, analysis = await run_in_threadpool(_run)
         provenance = dict(stored.metadata.get("derived_column_provenance", {}))
-        provenance[column_name] = {"outcome_informed": True}
+        signature_recipe = copy.deepcopy(
+            analysis.get("derived_group", {}).get("recipe")
+            or analysis.get("signature_recipe", {})
+        )
+        provenance[column_name] = {
+            "outcome_informed": True,
+            "recipe": signature_recipe,
+            "statistically_significant": bool(analysis.get("best_split", {}).get("Statistically significant")),
+        }
         payload = _create_dataset_snapshot(stored, updated, metadata={
             **stored.metadata,
             "derived_column_provenance": provenance,
@@ -1256,7 +1357,7 @@ async def optimal_cutpoint(request_model: OptimalCutpointRequest) -> dict[str, A
         from survival_toolkit.ml_models import find_optimal_cutpoint
         from survival_toolkit.plots import build_cutpoint_scan_figure
 
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
 
         def _run() -> dict[str, Any]:
             result = find_optimal_cutpoint(
@@ -1289,7 +1390,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
         )
         from survival_toolkit.plots import build_feature_importance_figure, build_model_comparison_figure
 
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
         df = stored.dataframe
         request_config = request_model.model_dump()
         _reject_survival_outcome_feature_columns(
@@ -1297,6 +1398,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
             [*request_model.features, *request_model.categorical_features],
             time_column=request_model.time_column,
             event_column=request_model.event_column,
+            event_positive_value=request_model.event_positive_value,
             context="machine-learning model inputs",
         )
         _reject_outcome_informed_columns(
@@ -1424,7 +1526,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
             build_model_comparison_figure,
         )
 
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
         df = stored.dataframe
         request_config = request_model.model_dump()
         _reject_survival_outcome_feature_columns(
@@ -1432,6 +1534,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
             [*request_model.features, *request_model.categorical_features],
             time_column=request_model.time_column,
             event_column=request_model.event_column,
+            event_positive_value=request_model.event_positive_value,
             context="deep-learning model inputs",
         )
         _reject_outcome_informed_columns(
@@ -1581,12 +1684,13 @@ async def time_dependent_importance(request_model: TimeDependentImportanceReques
         from survival_toolkit.ml_models import compute_time_dependent_importance
         from survival_toolkit.plots import build_time_dependent_importance_figure
 
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
         _reject_survival_outcome_feature_columns(
             stored,
             [*request_model.features, *request_model.categorical_features],
             time_column=request_model.time_column,
             event_column=request_model.event_column,
+            event_positive_value=request_model.event_positive_value,
             context="time-dependent importance inputs",
         )
         _reject_outcome_informed_columns(
@@ -1618,12 +1722,13 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
     try:
         from survival_toolkit.ml_models import counterfactual_survival
 
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
         _reject_survival_outcome_feature_columns(
             stored,
             [*request_model.features, *request_model.categorical_features, request_model.target_feature],
             time_column=request_model.time_column,
             event_column=request_model.event_column,
+            event_positive_value=request_model.event_positive_value,
             context="counterfactual analysis",
         )
         _reject_outcome_informed_columns(
@@ -1634,25 +1739,24 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
         request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
-            with _ML_ARTIFACT_CACHE_LOCK:
-                artifact = _get_ml_artifact(request_model.dataset_id, request_config)
-                analysis = counterfactual_survival(
-                    stored.dataframe,
-                    time_column=request_model.time_column,
-                    event_column=request_model.event_column,
-                    event_positive_value=request_model.event_positive_value,
-                    features=request_model.features,
-                    categorical_features=request_model.categorical_features,
-                    target_feature=request_model.target_feature,
-                    original_value=request_model.original_value,
-                    counterfactual_value=request_model.counterfactual_value,
-                    model_type=request_model.model_type,
-                    n_estimators=request_model.n_estimators,
-                    max_depth=request_model.max_depth,
-                    learning_rate=request_model.learning_rate,
-                    random_state=request_model.random_state,
-                    trained_result=artifact,
-                )
+            artifact = _get_ml_artifact(request_model.dataset_id, request_config)
+            analysis = counterfactual_survival(
+                stored.dataframe,
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                features=request_model.features,
+                categorical_features=request_model.categorical_features,
+                target_feature=request_model.target_feature,
+                original_value=request_model.original_value,
+                counterfactual_value=request_model.counterfactual_value,
+                model_type=request_model.model_type,
+                n_estimators=request_model.n_estimators,
+                max_depth=request_model.max_depth,
+                learning_rate=request_model.learning_rate,
+                random_state=request_model.random_state,
+                trained_result=artifact,
+            )
             analysis["artifact_reused"] = artifact is not None
             analysis["explanation_scope"] = (
                 "trained_tree_model" if artifact is not None else "refit_tree_model"
@@ -1679,13 +1783,14 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
         )
         from survival_toolkit.plots import build_pdp_figure
 
-        stored = store.get(request_model.dataset_id)
+        stored = _get_stored_dataset(request_model.dataset_id)
         df = stored.dataframe
         _reject_survival_outcome_feature_columns(
             stored,
             [*request_model.features, *request_model.categorical_features, request_model.target_feature],
             time_column=request_model.time_column,
             event_column=request_model.event_column,
+            event_positive_value=request_model.event_positive_value,
             context="partial dependence analysis",
         )
         _reject_outcome_informed_columns(
@@ -1696,28 +1801,27 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
         request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
-            with _ML_ARTIFACT_CACHE_LOCK:
-                trained = _get_ml_artifact(request_model.dataset_id, request_config)
-                artifact_reused = trained is not None
-                if trained is None:
-                    common_kwargs = dict(
-                        df=df,
-                        time_column=request_model.time_column,
-                        event_column=request_model.event_column,
-                        event_positive_value=request_model.event_positive_value,
-                        features=request_model.features,
-                        categorical_features=request_model.categorical_features,
-                        n_estimators=request_model.n_estimators,
-                        max_depth=request_model.max_depth,
-                        random_state=request_model.random_state,
+            trained = _get_ml_artifact(request_model.dataset_id, request_config)
+            artifact_reused = trained is not None
+            if trained is None:
+                common_kwargs = dict(
+                    df=df,
+                    time_column=request_model.time_column,
+                    event_column=request_model.event_column,
+                    event_positive_value=request_model.event_positive_value,
+                    features=request_model.features,
+                    categorical_features=request_model.categorical_features,
+                    n_estimators=request_model.n_estimators,
+                    max_depth=request_model.max_depth,
+                    random_state=request_model.random_state,
+                )
+                if request_model.model_type == "gbs":
+                    trained = train_gradient_boosted_survival(
+                        **common_kwargs,
+                        learning_rate=request_model.learning_rate,
                     )
-                    if request_model.model_type == "gbs":
-                        trained = train_gradient_boosted_survival(
-                            **common_kwargs,
-                            learning_rate=request_model.learning_rate,
-                        )
-                    else:
-                        trained = train_random_survival_forest(**common_kwargs)
+                else:
+                    trained = train_random_survival_forest(**common_kwargs)
             model = trained["_model"]
             X_encoded = trained["_X_encoded"]
             feature_encoder = trained.get("_feature_encoder")

@@ -255,7 +255,7 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         bgcolor="rgba(255,255,255,0.85)", borderpad=4,
     )
     fig.add_annotation(
-        text="Red: term p &lt; 0.05. Blue: term p ≥ 0.05. PH diagnostics are reviewed separately below.",
+        text="Red: term p &lt; 0.05. Blue: term p ≥ 0.05. PH diagnostics are reviewed separately in the diagnostics table.",
         xref="paper",
         yref="paper",
         x=0.02,
