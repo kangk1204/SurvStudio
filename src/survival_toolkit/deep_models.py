@@ -557,6 +557,14 @@ def _compute_c_index_torch(
             pass
 
     # Fallback: pure-NumPy O(n²) implementation
+    if len(time_np) > 2000:
+        warnings.warn(
+            f"sksurv is not installed; falling back to an O(n\u00b2) concordance computation "
+            f"for n={len(time_np)} samples. This may be slow. "
+            "Install scikit-survival for O(n log n) performance: pip install scikit-survival",
+            RuntimeWarning,
+            stacklevel=3,
+        )
     concordant = 0.0
     comparable = 0.0
     for idx in range(len(time_np)):
@@ -1937,7 +1945,9 @@ def train_deepsurv(
         if monitor_idx is not None:
             model.eval()
             monitor_c_index = _monitor_c_index(model, x_all, t_all, e_all, monitor_idx)
-            if monitor_c_index is not None:
+            if monitor_c_index is None:
+                monitor_idx = None  # monitor subset has no events; disable for this run
+            else:
                 monitor_loss_history.append(float(monitor_c_index))
                 best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
                     float(monitor_c_index),
@@ -2008,14 +2018,25 @@ def train_deepsurv(
         unique_times = np.sort(np.unique(train_time_np))
 
     # Breslow baseline hazard estimation
+    # Sort training samples once; use searchsorted to avoid O(N) boolean mask per time point.
+    train_risk_np = risk_np[train_idx_np]
+    sort_order = np.argsort(train_time_np, kind="stable")
+    sorted_times_train = train_time_np[sort_order]
+    sorted_risk_train = train_risk_np[sort_order]
+    sorted_events_train = train_event_np[sort_order]
+    # Precompute event counts at each unique time (O(N) via np.unique).
+    event_times_train = sorted_times_train[sorted_events_train == 1]
+    event_uniq, event_counts_arr = np.unique(event_times_train, return_counts=True)
+    event_count_map: dict[float, float] = dict(zip(event_uniq.tolist(), event_counts_arr.tolist()))
     baseline_cumhaz = np.zeros(len(unique_times))
     for k, t_k in enumerate(unique_times):
-        at_risk = train_time_np >= t_k
-        if at_risk.sum() == 0:
+        first_at_risk = int(np.searchsorted(sorted_times_train, t_k, side="left"))
+        at_risk_risk = sorted_risk_train[first_at_risk:]
+        if at_risk_risk.size == 0:
             baseline_cumhaz[k] = baseline_cumhaz[k - 1] if k > 0 else 0.0
             continue
-        d_k = float(((train_time_np == t_k) & (train_event_np == 1)).sum())
-        log_risk_sum = _logsumexp_numpy(risk_np[train_idx_np][at_risk])
+        d_k = event_count_map.get(float(t_k), 0.0)
+        log_risk_sum = _logsumexp_numpy(at_risk_risk)
         risk_sum = 0.0 if not np.isfinite(log_risk_sum) else float(np.exp(min(log_risk_sum, 700.0)))
         h0_k = d_k / max(risk_sum, 1e-12)
         baseline_cumhaz[k] = (baseline_cumhaz[k - 1] if k > 0 else 0.0) + h0_k
@@ -2072,7 +2093,6 @@ def train_deepsurv(
         "monitor_seed": random_seed,
         "loss_history": loss_history,
         "monitor_history": monitor_loss_history,
-        "monitor_loss_history": monitor_loss_history,
         "monitor_metric_label": "Monitor C-index",
         "monitor_metric_goal": "max",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
@@ -2404,7 +2424,6 @@ def train_deephit(
         "monitor_seed": random_seed,
         "loss_history": loss_history,
         "monitor_history": monitor_loss_history,
-        "monitor_loss_history": monitor_loss_history,
         "monitor_metric_label": "Monitor loss",
         "monitor_metric_goal": "min",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
@@ -2728,7 +2747,6 @@ def train_neural_mtlr(
         "monitor_seed": random_seed,
         "loss_history": loss_history,
         "monitor_history": monitor_loss_history,
-        "monitor_loss_history": monitor_loss_history,
         "monitor_metric_label": "Monitor loss",
         "monitor_metric_goal": "min",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
@@ -2792,7 +2810,6 @@ class SurvivalTransformerNet(_TorchModuleBase):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         self.output_layer = nn.Linear(d_model, 1)
-        self._attention_weights: list[torch.Tensor] = []
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (batch, in_features) -> treat each feature as a token
@@ -2946,7 +2963,9 @@ def train_survival_transformer(
         if monitor_idx is not None:
             model.eval()
             monitor_c_index = _monitor_c_index(model, x_all, t_all, e_all, monitor_idx)
-            if monitor_c_index is not None:
+            if monitor_c_index is None:
+                monitor_idx = None  # monitor subset has no events; disable for this run
+            else:
                 monitor_loss_history.append(float(monitor_c_index))
                 best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
                     float(monitor_c_index),
@@ -3055,7 +3074,6 @@ def train_survival_transformer(
         "monitor_seed": random_seed,
         "loss_history": loss_history,
         "monitor_history": monitor_loss_history,
-        "monitor_loss_history": monitor_loss_history,
         "monitor_metric_label": "Monitor C-index",
         "monitor_metric_goal": "max",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
@@ -3370,7 +3388,9 @@ def train_survival_vae(
             with torch.no_grad():
                 _, _, _, risk_monitor = model(x_all[monitor_idx])
             monitor_c_index = _compute_c_index_torch(risk_monitor, t_all[monitor_idx], e_all[monitor_idx])
-            if monitor_c_index is not None:
+            if monitor_c_index is None:
+                monitor_idx = None  # monitor subset has no events; disable for this run
+            else:
                 monitor_loss_history.append(float(monitor_c_index))
                 best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
                     float(monitor_c_index),
@@ -3498,7 +3518,6 @@ def train_survival_vae(
         "monitor_seed": random_seed,
         "loss_history": loss_history,
         "monitor_history": monitor_loss_history,
-        "monitor_loss_history": monitor_loss_history,
         "monitor_metric_label": "Monitor C-index",
         "monitor_metric_goal": "max",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
