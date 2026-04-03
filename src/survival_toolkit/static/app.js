@@ -4027,7 +4027,7 @@ function benchmarkBoardState() {
   ];
   const missingMetricCount = currentRows.filter((row) => row.numericCIndex === null).length;
   const nonComparableCount = currentRows.filter((row) => !row.comparableForRanking).length;
-  const predictiveBusy = isScopeBusy("predictive");
+  const predictiveBusy = isScopeBusy("predictive") || isScopeBusy("ml") || isScopeBusy("dl");
   const pendingFamilies = ["ml", "dl"].filter((goal) => !currentFamilies.includes(goal));
   return {
     currentRows,

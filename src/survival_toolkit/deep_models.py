@@ -329,12 +329,12 @@ def _transform_deep_frame(
 ) -> dict[str, Any]:
     """Transform a cleaned frame with a previously fitted encoder."""
     encoded = _transform_shared_feature_encoder(frame, encoder, output="dataframe")
-    x_array = encoded.to_numpy(dtype=np.float64, copy=False)
+    x_array = encoded.to_numpy(dtype=np.float32, copy=False)
 
     return {
-        "X_tensor": torch.tensor(x_array, dtype=torch.float32),
-        "time_tensor": torch.tensor(frame[time_column].values.astype(np.float64), dtype=torch.float32),
-        "event_tensor": torch.tensor(frame[event_column].values.astype(np.float64), dtype=torch.float32),
+        "X_tensor": torch.from_numpy(np.ascontiguousarray(x_array)),
+        "time_tensor": torch.from_numpy(frame[time_column].values.astype(np.float32)),
+        "event_tensor": torch.from_numpy(frame[event_column].values.astype(np.float32)),
         "feature_names": list(encoder["feature_names"]),
         "scaler_params": dict(encoder["scaler_params"]),
         "categorical_feature_indices": list(encoder.get("categorical_feature_indices", [])),
@@ -419,6 +419,13 @@ def _prepare_deep_split_data(
     combined_e = torch.cat([train_data["event_tensor"], eval_data["event_tensor"]], dim=0)
     train_n = int(train_data["n_samples"])
     eval_n = int(eval_data["n_samples"])
+    feature_meta = {
+        "feature_names": list(train_data["feature_names"]),
+        "scaler_params": dict(train_data["scaler_params"]),
+        "categorical_feature_indices": list(train_data.get("categorical_feature_indices", [])),
+        "numeric_feature_indices": list(train_data.get("numeric_feature_indices", [])),
+    }
+    del train_data, eval_data  # free per-split tensors now that combined tensors are built
     evaluation_split = {
         "train_idx": np.arange(train_n, dtype=int),
         "eval_idx": np.arange(train_n, train_n + eval_n, dtype=int),
@@ -433,10 +440,7 @@ def _prepare_deep_split_data(
             "X_tensor": combined_x,
             "time_tensor": combined_t,
             "event_tensor": combined_e,
-            "feature_names": list(train_data["feature_names"]),
-            "scaler_params": dict(train_data["scaler_params"]),
-            "categorical_feature_indices": list(train_data.get("categorical_feature_indices", [])),
-            "numeric_feature_indices": list(train_data.get("numeric_feature_indices", [])),
+            **feature_meta,
             "n_samples": train_n + eval_n,
             "n_features": int(combined_x.shape[1]),
         },
@@ -1310,66 +1314,82 @@ def compare_deep_survival_models(
             }
             for model_name, _trainer, extra_kwargs in trainer_specs
         ]
-        tasks: list[dict[str, Any]] = []
+        # Collect only split indices (cheap numpy arrays — no tensors).
+        fold_splits: list[dict[str, Any]] = []
         for repeat_idx in range(cv_repeats):
             splitter = StratifiedKFold(
                 n_splits=cv_folds,
                 shuffle=True,
                 random_state=random_seed + repeat_idx,
             )
-            for fold_idx, (train_idx, eval_idx) in enumerate(splitter.split(clean_frame, events), start=1):
-                train_frame = clean_frame.iloc[train_idx].reset_index(drop=True)
-                eval_frame = clean_frame.iloc[eval_idx].reset_index(drop=True)
-                try:
-                    prepared_data, fold_split = _prepare_deep_split_data(
-                        train_frame,
-                        eval_frame,
-                        time_column=time_column,
-                        event_column=event_column,
-                        features=features,
-                        categorical_features=categorical_features,
-                        event_positive_value=event_positive_value,
-                    )
-                except Exception as exc:
-                    for model_name, _, _ in trainer_specs:
-                        errors.append({
-                            "model": model_name,
-                            "repeat": repeat_idx + 1,
-                            "fold": fold_idx,
-                            "error": str(exc),
-                        })
-                    continue
-                tasks.append({
+            for fold_idx, (train_rows, eval_rows) in enumerate(splitter.split(clean_frame, events), start=1):
+                fold_splits.append({
                     "repeat": repeat_idx + 1,
                     "fold": fold_idx,
                     "seed_base": random_seed + repeat_idx * cv_folds + fold_idx,
                     "split_seed": random_seed + repeat_idx * cv_folds + fold_idx,
-                    "time_column": time_column,
-                    "event_column": event_column,
-                    "features": list(features),
-                    "categorical_features": list(categorical_features or []),
-                    "event_positive_value": event_positive_value,
-                    "learning_rate": learning_rate,
-                    "epochs": epochs,
-                    "batch_size": batch_size,
-                    "early_stopping_patience": early_stopping_patience,
-                    "early_stopping_min_delta": early_stopping_min_delta,
-                    "prepared_data": prepared_data,
-                    "evaluation_split": fold_split,
-                    "monitor_indices": _build_monitor_indices(
-                        fold_split["train_idx"],
-                        prepared_data["event_tensor"],
-                        random_seed + repeat_idx,
-                    ),
                     "monitor_seed": random_seed + repeat_idx,
-                    "model_specs": model_specs,
-                    "require_holdout_evaluation": True,
+                    "train_rows": train_rows,
+                    "eval_rows": eval_rows,
                 })
+
+        def _build_fold_task(split: dict[str, Any]) -> dict[str, Any] | None:
+            """Build a single fold task (with tensors). Logs prep errors; returns None on failure."""
+            train_frame = clean_frame.iloc[split["train_rows"]].reset_index(drop=True)
+            eval_frame = clean_frame.iloc[split["eval_rows"]].reset_index(drop=True)
+            try:
+                prepared_data, fold_split = _prepare_deep_split_data(
+                    train_frame,
+                    eval_frame,
+                    time_column=time_column,
+                    event_column=event_column,
+                    features=features,
+                    categorical_features=categorical_features,
+                    event_positive_value=event_positive_value,
+                )
+            except Exception as exc:
+                for model_name, _, _ in trainer_specs:
+                    errors.append({
+                        "model": model_name,
+                        "repeat": split["repeat"],
+                        "fold": split["fold"],
+                        "error": str(exc),
+                    })
+                return None
+            return {
+                "repeat": split["repeat"],
+                "fold": split["fold"],
+                "seed_base": split["seed_base"],
+                "split_seed": split["split_seed"],
+                "time_column": time_column,
+                "event_column": event_column,
+                "features": list(features),
+                "categorical_features": list(categorical_features or []),
+                "event_positive_value": event_positive_value,
+                "learning_rate": learning_rate,
+                "epochs": epochs,
+                "batch_size": batch_size,
+                "early_stopping_patience": early_stopping_patience,
+                "early_stopping_min_delta": early_stopping_min_delta,
+                "prepared_data": prepared_data,
+                "evaluation_split": fold_split,
+                "monitor_indices": _build_monitor_indices(
+                    fold_split["train_idx"],
+                    prepared_data["event_tensor"],
+                    split["monitor_seed"],
+                ),
+                "monitor_seed": split["monitor_seed"],
+                "model_specs": model_specs,
+                "require_holdout_evaluation": True,
+            }
 
         parallel_execution_note: str | None = None
 
-        def _run_tasks_sequentially() -> None:
-            for task in tasks:
+        def _run_folds_sequentially() -> None:
+            for split in fold_splits:
+                task = _build_fold_task(split)
+                if task is None:
+                    continue
                 try:
                     task_result = _run_deep_compare_fold_task(task)
                     fold_results.extend(task_result["fold_results"])
@@ -1379,29 +1399,38 @@ def compare_deep_survival_models(
                         errors.append({
                             "model": model_spec["model_name"],
                             "repeat": task["repeat"],
-                                "fold": task["fold"],
-                                "error": str(exc),
-                            })
+                            "fold": task["fold"],
+                            "error": str(exc),
+                        })
+                # task goes out of scope here: tensors freed immediately
 
-        if parallel_jobs > 1 and len(tasks) > 1:
+        if parallel_jobs > 1 and len(fold_splits) > 1:
             try:
                 with ProcessPoolExecutor(
                     max_workers=max(1, parallel_jobs),
                     mp_context=mp.get_context("spawn"),
                 ) as executor:
-                    future_map = {executor.submit(_run_deep_compare_fold_task, task): task for task in tasks}
-                    for future in as_completed(future_map):
-                        task = future_map[future]
+                    future_meta: dict[Any, dict[str, int]] = {}
+                    for split in fold_splits:
+                        task = _build_fold_task(split)
+                        if task is None:
+                            continue
+                        future = executor.submit(_run_deep_compare_fold_task, task)
+                        # Store only lightweight fold metadata, not the task with tensors.
+                        future_meta[future] = {"repeat": split["repeat"], "fold": split["fold"]}
+                        # task goes out of scope: tensors freed after pickling for subprocess
+                    for future in as_completed(future_meta):
+                        meta = future_meta.pop(future)
                         try:
                             task_result = future.result()
                             fold_results.extend(task_result["fold_results"])
                             errors.extend(task_result["errors"])
                         except Exception as exc:
-                            for model_spec in task["model_specs"]:
+                            for model_spec in model_specs:
                                 errors.append({
                                     "model": model_spec["model_name"],
-                                    "repeat": task["repeat"],
-                                    "fold": task["fold"],
+                                    "repeat": meta["repeat"],
+                                    "fold": meta["fold"],
                                     "error": str(exc),
                                 })
             except (NotImplementedError, PermissionError, OSError) as exc:
@@ -1409,9 +1438,9 @@ def compare_deep_survival_models(
                     "Parallel repeated-CV execution was unavailable in this runtime; "
                     f"SurvStudio fell back to sequential folds ({type(exc).__name__})."
                 )
-                _run_tasks_sequentially()
+                _run_folds_sequentially()
         else:
-            _run_tasks_sequentially()
+            _run_folds_sequentially()
 
         comparison: list[dict[str, Any]] = []
         from survival_toolkit.ml_models import _summarize_repeated_cv_rows
@@ -3408,7 +3437,7 @@ def train_survival_vae(
     cluster_survival_curves: list[dict[str, Any]] = []
     for c in range(n_clusters):
         mask = cluster_labels_np == c
-        if mask.sum() < 10:
+        if mask.sum() < 2:
             continue
         c_times = time_np[mask]
         c_events = event_np[mask]

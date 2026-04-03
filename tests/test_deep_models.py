@@ -661,8 +661,8 @@ def test_survival_transformer_and_vae_train_without_batch_splitting() -> None:
     assert vae["requested_batch_size"] == 1
     assert vae["effective_batch_size"] == vae["training_samples"]
     assert vae["optimization_mode"] == "full_batch_vae"
-    assert vae["monitor_metric_label"] == "Monitor loss"
-    assert vae["monitor_metric_goal"] == "min"
+    assert vae["monitor_metric_label"] == "Monitor C-index"
+    assert vae["monitor_metric_goal"] == "max"
     assert "requested batch size" in vae["batching_note"]
 
 
