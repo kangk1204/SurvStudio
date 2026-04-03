@@ -1503,6 +1503,49 @@ def test_discover_feature_signature_generates_unique_default_name_on_repeat() ->
     assert second_name in updated_second.columns
 
 
+def test_discover_feature_signature_limits_cox_estimation_to_ranked_candidates(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    rng = np.random.default_rng(17)
+    df = make_example_dataset(seed=17, n_patients=220)
+    for idx in range(10):
+        df[f"signal_{idx}"] = rng.normal(size=len(df))
+
+    calls = {"count": 0}
+
+    def _flat_survdiff(times, events, groups):
+        return 1.0, 0.9
+
+    def _fake_cox(times, events, mask):
+        calls["count"] += 1
+        return {
+            "Hazard ratio (signature+ vs -)": 1.2,
+            "HR CI lower": 1.01,
+            "HR CI upper": 1.5,
+        }
+
+    monkeypatch.setattr(analysis, "survdiff", _flat_survdiff)
+    monkeypatch.setattr(analysis, "_signature_cox_metrics", _fake_cox)
+
+    _, _, payload = analysis.discover_feature_signature(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        candidate_columns=[f"signal_{idx}" for idx in range(10)],
+        max_combination_size=2,
+        top_k=5,
+        bootstrap_iterations=0,
+        permutation_iterations=0,
+        validation_iterations=0,
+        combination_operator="mixed",
+        random_seed=99,
+    )
+
+    assert payload["search_space"]["tested_combinations"] > 80
+    assert calls["count"] == 80
+
+
 def test_signature_summary_stays_exploratory_without_permutation_or_holdout_confirmation() -> None:
     summary = _signature_scientific_summary(
         best_split={
@@ -1552,3 +1595,27 @@ def test_signature_summary_keeps_internal_confirmation_language_conservative() -
 
     assert "passes the current internal significance" not in summary["headline"].lower()
     assert "external validation" in summary["headline"].lower()
+
+
+def test_signature_summary_warns_that_truncation_depends_on_candidate_order() -> None:
+    summary = _signature_scientific_summary(
+        best_split={
+            "N signature+": 42,
+            "Statistically significant": False,
+            "Bootstrap support (p<alpha)": None,
+            "Bootstrap HR direction consistency": None,
+            "Validation support (p<alpha)": None,
+            "Permutation p": None,
+        },
+        search_space={
+            "truncated": True,
+            "permutation_iterations": 0,
+            "validation_iterations": 0,
+            "significance_level": 0.05,
+            "min_group_size": 10,
+            "tested_combinations": 5000,
+            "significant_signatures": 0,
+        },
+    )
+
+    assert any("candidate order" in caution.lower() for caution in summary["cautions"])

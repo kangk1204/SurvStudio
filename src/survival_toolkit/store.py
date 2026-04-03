@@ -43,7 +43,7 @@ class DatasetStore:
     def _copy_dataframe(dataframe: pd.DataFrame, *, copy_dataframe: bool) -> pd.DataFrame:
         if not copy_dataframe:
             return dataframe
-        return dataframe.copy(deep=False)
+        return dataframe.copy(deep=True)
 
     def _evict_expired(self) -> None:
         now = datetime.now(timezone.utc)
@@ -94,6 +94,12 @@ class DatasetStore:
         )
 
     def get(self, dataset_id: str, *, copy_dataframe: bool = True) -> StoredDataset:
+        """Return a stored dataset.
+
+        `copy_dataframe=False` exposes the shared in-store DataFrame for read-only
+        use. Callers must treat that frame as immutable and snapshot before any
+        mutation.
+        """
         with self._lock:
             self._evict_expired()
             try:

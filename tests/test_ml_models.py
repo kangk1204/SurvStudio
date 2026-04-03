@@ -1046,6 +1046,20 @@ def test_store_create_and_get_are_defensive_against_shared_mutation() -> None:
     assert "flag" not in refetched.metadata
 
 
+def test_store_create_and_get_are_defensive_against_scalar_cell_mutation() -> None:
+    from survival_toolkit.store import DatasetStore
+
+    original = make_example_dataset(seed=5, n_patients=30)
+    original_age = float(original.iloc[0]["age"])
+    store = DatasetStore()
+    stored = store.create(original, filename="shared_scalar.csv")
+
+    original.iat[0, original.columns.get_loc("age")] = -999.0
+
+    refetched = store.get(stored.dataset_id)
+    assert float(refetched.dataframe.iloc[0]["age"]) == pytest.approx(original_age)
+
+
 def test_store_delete() -> None:
     from survival_toolkit.store import DatasetStore
     from survival_toolkit.errors import DatasetNotFoundError

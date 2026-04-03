@@ -1908,21 +1908,20 @@ def train_deepsurv(
         if monitor_idx is not None:
             model.eval()
             monitor_c_index = _monitor_c_index(model, x_all, t_all, e_all, monitor_idx)
-            if monitor_c_index is None:
-                continue
-            monitor_loss_history.append(float(monitor_c_index))
-            best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
-                float(monitor_c_index),
-                best_value=best_monitor,
-                wait_count=early_wait,
-                patience=early_stopping_patience,
-                min_delta=early_stopping_min_delta,
-                goal="max",
-                model=model,
-                best_state=best_state,
-            )
-            if should_stop:
-                break
+            if monitor_c_index is not None:
+                monitor_loss_history.append(float(monitor_c_index))
+                best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
+                    float(monitor_c_index),
+                    best_value=best_monitor,
+                    wait_count=early_wait,
+                    patience=early_stopping_patience,
+                    min_delta=early_stopping_min_delta,
+                    goal="max",
+                    model=model,
+                    best_state=best_state,
+                )
+                if should_stop:
+                    break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -2918,21 +2917,20 @@ def train_survival_transformer(
         if monitor_idx is not None:
             model.eval()
             monitor_c_index = _monitor_c_index(model, x_all, t_all, e_all, monitor_idx)
-            if monitor_c_index is None:
-                continue
-            monitor_loss_history.append(float(monitor_c_index))
-            best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
-                float(monitor_c_index),
-                best_value=best_monitor,
-                wait_count=early_wait,
-                patience=early_stopping_patience,
-                min_delta=early_stopping_min_delta,
-                goal="max",
-                model=model,
-                best_state=best_state,
-            )
-            if should_stop:
-                break
+            if monitor_c_index is not None:
+                monitor_loss_history.append(float(monitor_c_index))
+                best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
+                    float(monitor_c_index),
+                    best_value=best_monitor,
+                    wait_count=early_wait,
+                    patience=early_stopping_patience,
+                    min_delta=early_stopping_min_delta,
+                    goal="max",
+                    model=model,
+                    best_state=best_state,
+                )
+                if should_stop:
+                    break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -3341,35 +3339,22 @@ def train_survival_vae(
         if monitor_idx is not None:
             model.eval()
             with torch.no_grad():
-                x_monitor = x_all[monitor_idx]
-                t_monitor = t_all[monitor_idx]
-                e_monitor = e_all[monitor_idx]
-                x_recon_monitor, mu_monitor, log_var_monitor, risk_monitor = model(x_monitor)
-                monitor_loss = float(
-                    _vae_combined_loss(
-                        x_monitor,
-                        x_recon_monitor,
-                        mu_monitor,
-                        log_var_monitor,
-                        risk_monitor,
-                        t_monitor,
-                        e_monitor,
-                        categorical_feature_indices=categorical_feature_indices,
-                        numeric_feature_indices=numeric_feature_indices,
-                    ).item()
+                _, _, _, risk_monitor = model(x_all[monitor_idx])
+            monitor_c_index = _compute_c_index_torch(risk_monitor, t_all[monitor_idx], e_all[monitor_idx])
+            if monitor_c_index is not None:
+                monitor_loss_history.append(float(monitor_c_index))
+                best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
+                    float(monitor_c_index),
+                    best_value=best_monitor,
+                    wait_count=early_wait,
+                    patience=early_stopping_patience,
+                    min_delta=early_stopping_min_delta,
+                    goal="max",
+                    model=model,
+                    best_state=best_state,
                 )
-            monitor_loss_history.append(monitor_loss)
-            best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
-                monitor_loss,
-                best_value=best_monitor,
-                wait_count=early_wait,
-                patience=early_stopping_patience,
-                min_delta=early_stopping_min_delta,
-                model=model,
-                best_state=best_state,
-            )
-            if should_stop:
-                break
+                if should_stop:
+                    break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -3423,7 +3408,7 @@ def train_survival_vae(
     cluster_survival_curves: list[dict[str, Any]] = []
     for c in range(n_clusters):
         mask = cluster_labels_np == c
-        if mask.sum() < 2:
+        if mask.sum() < 10:
             continue
         c_times = time_np[mask]
         c_events = event_np[mask]
@@ -3449,7 +3434,7 @@ def train_survival_vae(
             "curve": _make_survival_curve(timeline, surv_values),
         })
 
-    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs)
+    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs, monitor_goal="max")
     insight = _scientific_summary_dl(
         "Survival VAE",
         c_index,
@@ -3485,8 +3470,8 @@ def train_survival_vae(
         "loss_history": loss_history,
         "monitor_history": monitor_loss_history,
         "monitor_loss_history": monitor_loss_history,
-        "monitor_metric_label": "Monitor loss",
-        "monitor_metric_goal": "min",
+        "monitor_metric_label": "Monitor C-index",
+        "monitor_metric_goal": "max",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
         "stopped_early": training_meta["stopped_early"],
         "max_epochs_requested": training_meta["max_epochs_requested"],

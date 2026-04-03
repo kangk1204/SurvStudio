@@ -1888,6 +1888,33 @@ def test_discover_signature_returns_new_dataset_snapshot_and_preserves_original_
     assert all(column["name"] != "sig_age_stage" for column in original.json()["columns"])
 
 
+def test_derive_group_snapshot_reuses_cached_profile_template(monkeypatch) -> None:
+    import survival_toolkit.app as app_module
+
+    load_response = client.post("/api/load-example")
+    assert load_response.status_code == 200
+    dataset = load_response.json()
+
+    def _unexpected_profile(*args, **kwargs):
+        raise AssertionError("profile_dataframe should not run for appended-column snapshots with a warm cache.")
+
+    monkeypatch.setattr(app_module, "profile_dataframe", _unexpected_profile)
+
+    response = client.post(
+        "/api/derive-group",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "source_column": "age",
+            "method": "median_split",
+            "new_column_name": "age_group_cached",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert any(column["name"] == "age_group_cached" for column in payload["columns"])
+
+
 @pytest.mark.parametrize("operator", ["and", "or", "mixed"])
 def test_discover_signature_endpoint_supports_all_combination_operators(operator: str) -> None:
     stored = store.create(
