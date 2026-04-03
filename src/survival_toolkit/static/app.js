@@ -5120,7 +5120,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   clearPlotShell(refs.mlImportancePlot, '<div class="empty-state plot-empty"><span>Run Analysis to see feature importance</span></div>');
   clearPlotShell(refs.mlShapPlot, '<div class="empty-state plot-empty"><span>SHAP values will appear after training</span></div>');
   clearPlotShell(refs.dlImportancePlot, '<div class="empty-state plot-empty"><span>Run Analysis to see deep learning results</span></div>');
-  clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Training and monitor loss curves will appear here</span></div>');
+  clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Training and monitor metric curves will appear here</span></div>');
   purgePlot(refs.kmPlot);
   purgePlot(refs.coxPlot);
   refs.kmPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Click <strong>Run Analysis</strong> to generate your survival curve</span><small>Tip: Press Ctrl+Enter as a shortcut</small></div>';
@@ -5201,16 +5201,44 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   }
 }
 
+function hasCompletedResults() {
+  return Boolean(state.km || state.cox || state.cohort || state.signature || state.ml || state.dl);
+}
+
+function uploadFeedbackMessages(payload, { previousDatasetName = "", clearedResults = false } = {}) {
+  const datasetName = payload?.filename || "dataset";
+  const rowCount = Number(payload?.n_rows || 0).toLocaleString();
+  const columnCount = Number(payload?.n_columns || 0).toLocaleString();
+  const summary = `${datasetName} loaded (${rowCount} rows, ${columnCount} columns).`;
+  if (previousDatasetName) {
+    return {
+      banner: `${summary} Replaced ${previousDatasetName}${clearedResults ? " and cleared the previous analysis results" : ""}. Confirm the new outcome fields before running again.`,
+      toast: `Loaded ${datasetName}.${clearedResults ? " Previous results were cleared." : " Previous dataset was replaced."}`,
+    };
+  }
+  return {
+    banner: `${summary} Confirm the suggested outcome fields and continue.`,
+    toast: `Loaded ${datasetName}.`,
+  };
+}
+
 async function uploadDataset() {
   if (!refs.datasetFile.files?.length) throw new Error("Choose a dataset file first.");
+  const selectedFile = refs.datasetFile.files[0];
+  const previousDatasetName = state.dataset?.filename || "";
+  const clearedResults = Boolean(state.dataset) && hasCompletedResults();
+  setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info");
   const formData = new FormData();
-  formData.append("file", refs.datasetFile.files[0]);
+  formData.append("file", selectedFile);
   const payload = await fetchJSON("/api/upload", { method: "POST", body: formData });
   updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
   activateTab("km", { setGuidedGoal: false });
   runtime.historySyncPaused = false;
   syncHistoryState("push");
+  const feedback = uploadFeedbackMessages(payload, { previousDatasetName, clearedResults });
+  setRuntimeBanner(feedback.banner, "success");
+  showToast(feedback.toast, "success", 3400);
 }
 
 async function loadExampleDataset() {
@@ -6046,7 +6074,7 @@ async function runDlCompareModels({ suppressCompletionToast = false } = {}) {
       stabilizePlotShellHeight(refs.dlComparisonPlot);
     }
     refs.dlImportancePlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model feature importance appears when you train one deep model.</span></div>';
-    refs.dlLossPlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model training and monitor loss curves appear when you train one deep model.</span></div>';
+    refs.dlLossPlot.innerHTML = '<div class="empty-state plot-empty"><span>Single-model training and monitor metric curves appear when you train one deep model.</span></div>';
     const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
     renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning comparison results.");
     const bestRow = payload.analysis?.comparison_table?.[0] || {};
@@ -6880,6 +6908,9 @@ function initListeners() {
   });
   window.addEventListener("resize", () => {
     scheduleVisiblePlotResize(80);
+  });
+  refs.datasetFile.addEventListener("click", () => {
+    refs.datasetFile.value = "";
   });
   refs.datasetFile.addEventListener("change", () => {
     if (refs.datasetFile.files?.length) withLoading(refs.uploadButton, uploadDataset);

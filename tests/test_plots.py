@@ -370,10 +370,33 @@ def test_build_loss_curve_figure_includes_monitor_trace_when_available() -> None
     assert len(figure["data"]) == 2
     assert figure["data"][0]["name"] == "Training loss"
     assert figure["data"][1]["name"] == "Monitor loss"
-    assert figure["layout"]["title"]["text"] == "Transformer Training and Monitor Loss"
+    assert figure["layout"]["title"]["text"] == "Transformer Training Loss and Monitor loss"
     annotations = figure["layout"].get("annotations", [])
     annotation_text = " ".join(str(annotation.get("text", "")) for annotation in annotations)
     assert "Best monitor epoch: 3" in annotation_text
     assert "Stopped early at epoch 3" in annotation_text
     shapes = figure["layout"].get("shapes", [])
     assert any(shape.get("type") == "line" and shape.get("x0") == 3 and shape.get("x1") == 3 for shape in shapes)
+
+
+def test_build_loss_curve_figure_supports_maximized_monitor_metric() -> None:
+    loss_history = [1.2, 1.0, 0.9]
+    monitor_history = [0.54, 0.62, 0.59]
+
+    figure = build_loss_curve_figure(
+        loss_history,
+        model_name="Transformer",
+        monitor_loss_history=monitor_history,
+        epochs_trained=3,
+        max_epochs_requested=6,
+        stopped_early=True,
+        monitor_label="Monitor C-index",
+        monitor_goal="max",
+    )
+
+    assert len(figure["data"]) == 2
+    assert figure["data"][1]["name"] == "Monitor C-index"
+    assert figure["layout"]["title"]["text"] == "Transformer Training Loss and Monitor C-index"
+    annotations = figure["layout"].get("annotations", [])
+    annotation_text = " ".join(str(annotation.get("text", "")) for annotation in annotations)
+    assert "Best monitor epoch: 2" in annotation_text

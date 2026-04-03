@@ -100,14 +100,6 @@ def _clip_gradients(model: nn.Module, max_norm: float = 1.0) -> None:
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
 
 
-def _transformer_feed_forward(layer: nn.TransformerEncoderLayer, x: torch.Tensor) -> torch.Tensor:
-    hidden = layer.linear1(x)
-    hidden = layer.activation(hidden)
-    hidden = layer.dropout(hidden)
-    hidden = layer.linear2(hidden)
-    return layer.dropout2(hidden)
-
-
 def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
     trainer_name = str(task["model_name"])
     trainer_map = {
@@ -754,6 +746,33 @@ def _artifact_scope_label(evaluation_mode: str) -> str:
     return "evaluation_subset" if evaluation_mode == "holdout" else "analyzable_cohort"
 
 
+def _batching_metadata(
+    *,
+    requested_batch_size: int,
+    effective_batch_size: int,
+    optimization_mode: str,
+    note: str,
+) -> dict[str, Any]:
+    return {
+        "requested_batch_size": int(requested_batch_size),
+        "effective_batch_size": int(effective_batch_size),
+        "optimization_mode": optimization_mode,
+        "batching_note": note,
+    }
+
+
+def _monitor_c_index(
+    model: nn.Module,
+    x_all: torch.Tensor,
+    t_all: torch.Tensor,
+    e_all: torch.Tensor,
+    monitor_idx: torch.Tensor,
+) -> float | None:
+    with torch.no_grad():
+        monitor_risk = model(x_all[monitor_idx])
+    return _compute_c_index_torch(monitor_risk, t_all[monitor_idx], e_all[monitor_idx])
+
+
 def _discrete_survival_from_pmf(
     pmf: torch.Tensor,
     bin_widths: torch.Tensor,
@@ -908,11 +927,11 @@ def _scientific_summary_dl(
             cautions.append("Loss plateaued in the final epochs; model may benefit from more epochs or a learning rate change.")
     if model_name == "DeepSurv":
         cautions.append(
-            "This DeepSurv path uses full-batch Cox optimization; overfitting risk rises with wide feature sets relative to cohort size."
+            "This DeepSurv path uses full-batch Cox optimization; the batch-size control is recorded for reproducibility but does not change optimization."
         )
     if model_name == "Survival Transformer":
         cautions.append(
-            "This Survival Transformer path uses full-batch Cox optimization; larger cohorts or wide feature sets can strain memory on local machines."
+            "This Survival Transformer path uses full-batch Cox optimization; the batch-size control is recorded for reproducibility but does not change optimization."
         )
         cautions.append(
             "The transformer treats each feature as a token with a learned feature-identity embedding. Interpret it as an exploratory tabular attention model and validate against simpler baselines."
@@ -932,6 +951,9 @@ def _scientific_summary_dl(
         cautions.append(
             "This path should be interpreted as a VAE-inspired latent representation model for clustering and risk screening, not as a validated generative simulator or uncertainty estimator."
         )
+    cautions.append(
+        "Deep-model summaries currently report discrimination (C-index) only; SurvStudio does not yet compute IBS for these paths, so calibration/error comparisons are not symmetric with the ML module."
+    )
 
     if not next_steps:
         next_steps.append("Validate with external data or cross-validation to confirm generalizability.")
@@ -970,14 +992,21 @@ def _update_early_stopping(
     wait_count: int,
     patience: int | None,
     min_delta: float,
+    goal: str = "min",
     model: Any,
     best_state: dict[str, torch.Tensor] | None,
 ) -> tuple[float | None, int, dict[str, torch.Tensor] | None, bool]:
-    """Track best monitored loss and decide whether to stop."""
+    """Track the best monitored metric and decide whether to stop."""
     if patience is None or patience <= 0:
         return best_value, wait_count, best_state, False
+    if goal not in {"min", "max"}:
+        raise ValueError("Early-stopping goal must be 'min' or 'max'.")
 
-    improved = best_value is None or monitor_value < (best_value - min_delta)
+    improved = best_value is None or (
+        monitor_value < (best_value - min_delta)
+        if goal == "min"
+        else monitor_value > (best_value + min_delta)
+    )
     if improved:
         state = {name: tensor.detach().cpu().clone() for name, tensor in model.state_dict().items()}
         return float(monitor_value), 0, state, False
@@ -990,11 +1019,19 @@ def _training_run_metadata(
     loss_history: list[float],
     monitor_loss_history: list[float] | None,
     requested_epochs: int,
+    *,
+    monitor_goal: str = "min",
 ) -> dict[str, int | bool | None]:
     monitor_loss_history = list(monitor_loss_history or [])
+    if monitor_goal not in {"min", "max"}:
+        raise ValueError("Monitor goal must be 'min' or 'max'.")
     epochs_trained = int(len(loss_history))
     best_monitor_epoch = (
-        int(np.argmin(np.asarray(monitor_loss_history, dtype=float))) + 1
+        (
+            int(np.argmin(np.asarray(monitor_loss_history, dtype=float))) + 1
+            if monitor_goal == "min"
+            else int(np.argmax(np.asarray(monitor_loss_history, dtype=float))) + 1
+        )
         if monitor_loss_history
         else None
     )
@@ -1870,16 +1907,17 @@ def train_deepsurv(
         loss_history.append(float(loss.item()))
         if monitor_idx is not None:
             model.eval()
-            with torch.no_grad():
-                monitor_risk = model(x_all[monitor_idx])
-                monitor_loss = float(_cox_partial_likelihood_loss(monitor_risk, t_all[monitor_idx], e_all[monitor_idx]).item())
-            monitor_loss_history.append(monitor_loss)
+            monitor_c_index = _monitor_c_index(model, x_all, t_all, e_all, monitor_idx)
+            if monitor_c_index is None:
+                continue
+            monitor_loss_history.append(float(monitor_c_index))
             best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
-                monitor_loss,
+                float(monitor_c_index),
                 best_value=best_monitor,
                 wait_count=early_wait,
                 patience=early_stopping_patience,
                 min_delta=early_stopping_min_delta,
+                goal="max",
                 model=model,
                 best_state=best_state,
             )
@@ -1971,7 +2009,7 @@ def train_deepsurv(
             "curve": _make_survival_curve(timeline, survival),
         })
 
-    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs)
+    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs, monitor_goal="max")
     insight = _scientific_summary_dl(
         "DeepSurv",
         c_index,
@@ -1983,6 +2021,15 @@ def train_deepsurv(
         loss_history,
         evaluation_mode,
         evaluation_note,
+    )
+    batching_meta = _batching_metadata(
+        requested_batch_size=batch_size,
+        effective_batch_size=int(train_idx.numel()),
+        optimization_mode="full_batch_cox",
+        note=(
+            "DeepSurv uses the full training partition each epoch because the Cox risk set must be evaluated "
+            "in full; the requested batch size is recorded but not applied."
+        ),
     )
 
     return {
@@ -1996,7 +2043,10 @@ def train_deepsurv(
         "split_seed": random_seed,
         "monitor_seed": random_seed,
         "loss_history": loss_history,
+        "monitor_history": monitor_loss_history,
         "monitor_loss_history": monitor_loss_history,
+        "monitor_metric_label": "Monitor C-index",
+        "monitor_metric_goal": "max",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
         "stopped_early": training_meta["stopped_early"],
         "max_epochs_requested": training_meta["max_epochs_requested"],
@@ -2012,6 +2062,7 @@ def train_deepsurv(
         "training_samples": int(train_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
         "n_features": data["n_features"],
+        **batching_meta,
     }
 
 
@@ -2324,7 +2375,10 @@ def train_deephit(
         "split_seed": random_seed,
         "monitor_seed": random_seed,
         "loss_history": loss_history,
+        "monitor_history": monitor_loss_history,
         "monitor_loss_history": monitor_loss_history,
+        "monitor_metric_label": "Monitor loss",
+        "monitor_metric_goal": "min",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
         "stopped_early": training_meta["stopped_early"],
         "max_epochs_requested": training_meta["max_epochs_requested"],
@@ -2645,7 +2699,10 @@ def train_neural_mtlr(
         "split_seed": random_seed,
         "monitor_seed": random_seed,
         "loss_history": loss_history,
+        "monitor_history": monitor_loss_history,
         "monitor_loss_history": monitor_loss_history,
+        "monitor_metric_label": "Monitor loss",
+        "monitor_metric_goal": "min",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
         "stopped_early": training_meta["stopped_early"],
         "max_epochs_requested": training_meta["max_epochs_requested"],
@@ -2719,32 +2776,62 @@ class SurvivalTransformerNet(_TorchModuleBase):
         return self.output_layer(pooled)  # (batch, 1)
 
     def get_attention_weights(self, x: torch.Tensor) -> list[list[list[float]]]:
-        """Extract attention weights from the encoder without a duplicate attention pass."""
+        """Extract attention weights while reusing the normal encoder forward path."""
+        was_training = self.training
         self.eval()
         tokens = x.unsqueeze(-1)
         embedded = self.feature_embed(tokens)
         embedded = self.feature_identity(embedded)
 
-        output = embedded
+        captured: dict[int, torch.Tensor] = {}
+        original_forwards: list[Callable[..., Any]] = []
+        fastpath_enabled = (
+            bool(torch.backends.mha.get_fastpath_enabled())
+            if hasattr(torch.backends, "mha") and hasattr(torch.backends.mha, "get_fastpath_enabled")
+            else None
+        )
+        for layer_index, layer in enumerate(self.transformer.layers):
+            original_forward = layer.self_attn.forward
+            original_forwards.append(original_forward)
+
+            def _capturing_forward(
+                *args: Any,
+                _layer_index: int = layer_index,
+                _original_forward: Callable[..., Any] = original_forward,
+                **kwargs: Any,
+            ) -> Any:
+                kwargs["need_weights"] = True
+                kwargs["average_attn_weights"] = False
+                attn_output, attn_weights = _original_forward(*args, **kwargs)
+                if attn_weights is not None:
+                    captured[_layer_index] = attn_weights.detach().cpu()
+                return attn_output, attn_weights
+
+            layer.self_attn.forward = _capturing_forward
+
+        try:
+            if fastpath_enabled is not None:
+                torch.backends.mha.set_fastpath_enabled(False)
+            with torch.no_grad():
+                output = embedded
+                for layer in self.transformer.layers:
+                    output = layer(output)
+                if self.transformer.norm is not None:
+                    _ = self.transformer.norm(output)
+        finally:
+            if fastpath_enabled is not None:
+                torch.backends.mha.set_fastpath_enabled(fastpath_enabled)
+            for layer, original_forward in zip(self.transformer.layers, original_forwards, strict=True):
+                layer.self_attn.forward = original_forward
+            if was_training:
+                self.train()
+
         attention_maps: list[list[list[float]]] = []
-        for layer in self.transformer.layers:
-            attn_input = layer.norm1(output) if getattr(layer, "norm_first", False) else output
-            attn_output, attn_weights = layer.self_attn(
-                attn_input,
-                attn_input,
-                attn_input,
-                need_weights=True,
-                average_attn_weights=False,
-            )
-            if getattr(layer, "norm_first", False):
-                output = output + layer.dropout1(attn_output)
-                output = output + _transformer_feed_forward(layer, layer.norm2(output))
-            else:
-                output = layer.norm1(output + layer.dropout1(attn_output))
-                output = layer.norm2(output + _transformer_feed_forward(layer, output))
-            # attn_weights shape: (batch, n_heads, seq, seq) or (batch, seq, seq)
-            attn_np = attn_weights.detach().cpu().numpy()
-            # Average over batch and heads (if present)
+        for layer_index in range(len(self.transformer.layers)):
+            attn_weights = captured.get(layer_index)
+            if attn_weights is None:
+                continue
+            attn_np = attn_weights.numpy()
             while attn_np.ndim > 2:
                 attn_np = attn_np.mean(axis=0)
             attention_maps.append([[float(v) for v in row] for row in attn_np])
@@ -2830,16 +2917,17 @@ def train_survival_transformer(
         loss_history.append(float(loss.item()))
         if monitor_idx is not None:
             model.eval()
-            with torch.no_grad():
-                monitor_risk = model(x_all[monitor_idx])
-                monitor_loss = float(_cox_partial_likelihood_loss(monitor_risk, t_all[monitor_idx], e_all[monitor_idx]).item())
-            monitor_loss_history.append(monitor_loss)
+            monitor_c_index = _monitor_c_index(model, x_all, t_all, e_all, monitor_idx)
+            if monitor_c_index is None:
+                continue
+            monitor_loss_history.append(float(monitor_c_index))
             best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
-                monitor_loss,
+                float(monitor_c_index),
                 best_value=best_monitor,
                 wait_count=early_wait,
                 patience=early_stopping_patience,
                 min_delta=early_stopping_min_delta,
+                goal="max",
                 model=model,
                 best_state=best_state,
             )
@@ -2905,7 +2993,7 @@ def train_survival_transformer(
             })
         feature_attention.sort(key=lambda d: d["attention_score"], reverse=True)
 
-    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs)
+    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs, monitor_goal="max")
     insight = _scientific_summary_dl(
         "Survival Transformer",
         c_index,
@@ -2917,6 +3005,15 @@ def train_survival_transformer(
         loss_history,
         evaluation_mode,
         evaluation_note,
+    )
+    batching_meta = _batching_metadata(
+        requested_batch_size=batch_size,
+        effective_batch_size=int(train_idx.numel()),
+        optimization_mode="full_batch_cox",
+        note=(
+            "Survival Transformer uses the full training partition each epoch because the Cox risk set must "
+            "be evaluated in full; the requested batch size is recorded but not applied."
+        ),
     )
 
     return {
@@ -2930,7 +3027,10 @@ def train_survival_transformer(
         "split_seed": random_seed,
         "monitor_seed": random_seed,
         "loss_history": loss_history,
+        "monitor_history": monitor_loss_history,
         "monitor_loss_history": monitor_loss_history,
+        "monitor_metric_label": "Monitor C-index",
+        "monitor_metric_goal": "max",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
         "stopped_early": training_meta["stopped_early"],
         "max_epochs_requested": training_meta["max_epochs_requested"],
@@ -2947,6 +3047,7 @@ def train_survival_transformer(
         "training_samples": int(train_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
         "n_features": data["n_features"],
+        **batching_meta,
     }
 
 
@@ -3361,6 +3462,15 @@ def train_survival_vae(
         evaluation_mode,
         evaluation_note,
     )
+    batching_meta = _batching_metadata(
+        requested_batch_size=batch_size,
+        effective_batch_size=int(train_idx.numel()),
+        optimization_mode="full_batch_vae",
+        note=(
+            "Survival VAE currently uses the full training partition each epoch; the requested batch size is "
+            "recorded for reproducibility but not applied."
+        ),
+    )
 
     return {
         "model": "Survival VAE",
@@ -3373,7 +3483,10 @@ def train_survival_vae(
         "split_seed": random_seed,
         "monitor_seed": random_seed,
         "loss_history": loss_history,
+        "monitor_history": monitor_loss_history,
         "monitor_loss_history": monitor_loss_history,
+        "monitor_metric_label": "Monitor loss",
+        "monitor_metric_goal": "min",
         "best_monitor_epoch": training_meta["best_monitor_epoch"],
         "stopped_early": training_meta["stopped_early"],
         "max_epochs_requested": training_meta["max_epochs_requested"],
@@ -3392,4 +3505,5 @@ def train_survival_vae(
         "n_features": data["n_features"],
         "n_clusters": n_clusters,
         "latent_dim": latent_dim,
+        **batching_meta,
     }

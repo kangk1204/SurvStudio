@@ -639,6 +639,12 @@ def test_survival_transformer_and_vae_train_without_batch_splitting() -> None:
         random_seed=11,
     )
     assert transformer["c_index"] is not None
+    assert transformer["requested_batch_size"] == 1
+    assert transformer["effective_batch_size"] == transformer["training_samples"]
+    assert transformer["optimization_mode"] == "full_batch_cox"
+    assert transformer["monitor_metric_label"] == "Monitor C-index"
+    assert transformer["monitor_metric_goal"] == "max"
+    assert "full training partition" in transformer["batching_note"]
 
     vae = train_survival_vae(
         df,
@@ -652,6 +658,37 @@ def test_survival_transformer_and_vae_train_without_batch_splitting() -> None:
         random_seed=11,
     )
     assert vae["c_index"] is not None
+    assert vae["requested_batch_size"] == 1
+    assert vae["effective_batch_size"] == vae["training_samples"]
+    assert vae["optimization_mode"] == "full_batch_vae"
+    assert vae["monitor_metric_label"] == "Monitor loss"
+    assert vae["monitor_metric_goal"] == "min"
+    assert "requested batch size" in vae["batching_note"]
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_deepsurv_reports_full_batch_metadata_and_monitor_c_index() -> None:
+    from survival_toolkit.deep_models import train_deepsurv
+
+    df = make_example_dataset(seed=17, n_patients=36)
+    result = train_deepsurv(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+        hidden_layers=[8],
+        epochs=2,
+        batch_size=3,
+        random_seed=7,
+    )
+
+    assert result["c_index"] is not None
+    assert result["requested_batch_size"] == 3
+    assert result["effective_batch_size"] == result["training_samples"]
+    assert result["optimization_mode"] == "full_batch_cox"
+    assert result["monitor_metric_label"] == "Monitor C-index"
+    assert result["monitor_metric_goal"] == "max"
+    assert "IBS" in " ".join(result["scientific_summary"]["cautions"])
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -944,13 +981,14 @@ def test_deepsurv_uses_internal_monitor_subset_not_eval_fold(monkeypatch) -> Non
     }
     monitor_indices = np.array([2, 3, 4, 5], dtype=int)
     seen_times: list[tuple[float, ...]] = []
-    original_loss = deep_models._cox_partial_likelihood_loss
 
-    def _recording_loss(risk_scores, times, events):
-        seen_times.append(tuple(float(v) for v in times.detach().cpu().numpy().ravel().tolist()))
-        return original_loss(risk_scores, times, events)
+    def _recording_monitor(model, x_all, times, events, monitor_idx):
+        seen_times.append(
+            tuple(float(v) for v in times[monitor_idx].detach().cpu().numpy().ravel().tolist())
+        )
+        return 0.61
 
-    monkeypatch.setattr(deep_models, "_cox_partial_likelihood_loss", _recording_loss)
+    monkeypatch.setattr(deep_models, "_monitor_c_index", _recording_monitor)
 
     deep_models.train_deepsurv(
         pd.DataFrame(),
@@ -967,10 +1005,10 @@ def test_deepsurv_uses_internal_monitor_subset_not_eval_fold(monkeypatch) -> Non
         early_stopping_patience=2,
     )
 
-    monitor_times = tuple(float(v) for v in prepared["time_tensor"][torch.as_tensor(monitor_indices)].detach().cpu().numpy().tolist())
-    eval_times = tuple(float(v) for v in prepared["time_tensor"][torch.as_tensor(evaluation_split["eval_idx"])].detach().cpu().numpy().tolist())
-    assert monitor_times in seen_times
-    assert eval_times not in seen_times
+    monitor_times = tuple(
+        float(v) for v in prepared["time_tensor"][torch.as_tensor(monitor_indices)].detach().cpu().numpy().tolist()
+    )
+    assert seen_times == [monitor_times]
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")

@@ -567,6 +567,8 @@ def build_loss_curve_figure(
     epochs_trained: int | None = None,
     max_epochs_requested: int | None = None,
     stopped_early: bool | None = None,
+    monitor_label: str = "Monitor loss",
+    monitor_goal: str = "min",
 ) -> dict[str, Any]:
     if not loss_history:
         return figure_to_json(go.Figure())
@@ -584,15 +586,19 @@ def build_loss_curve_figure(
     )
     if monitor_loss_history:
         if best_monitor_epoch is None and monitor_loss_history:
-            best_monitor_epoch = int(np.argmin(np.asarray(monitor_loss_history, dtype=float))) + 1
+            best_monitor_epoch = (
+                int(np.argmin(np.asarray(monitor_loss_history, dtype=float))) + 1
+                if monitor_goal == "min"
+                else int(np.argmax(np.asarray(monitor_loss_history, dtype=float))) + 1
+            )
         fig.add_trace(
             go.Scatter(
                 x=list(range(1, len(monitor_loss_history) + 1)),
                 y=monitor_loss_history,
                 mode="lines",
                 line={"width": 2, "color": ACCENT},
-                hovertemplate="Epoch %{x}: Monitor loss = %{y:.4f}<extra></extra>",
-                name="Monitor loss",
+                hovertemplate=f"Epoch %{{x}}: {monitor_label} = %{{y:.4f}}<extra></extra>",
+                name=monitor_label,
             )
         )
         if best_monitor_epoch is not None and best_monitor_epoch >= 1:
@@ -627,7 +633,7 @@ def build_loss_curve_figure(
         margin={"l": 60, "r": 30, "t": 80, "b": 60},
         title={
             "text": (
-                f"{model_name} Training and Monitor Loss"
+                f"{model_name} Training Loss and {monitor_label}"
                 if monitor_loss_history
                 else f"{model_name} Training Loss"
             ),
