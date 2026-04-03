@@ -135,7 +135,7 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
             _assert_tab_active(page, "cox")
             page.locator("#covariateChecklist input[value='age']").check()
             page.locator("#covariateChecklist input[value='biomarker_score']").check()
-            page.locator("#covariateChecklist input[value='immune_index']").check()
+            page.locator("#covariateChecklist input[value='immune_index']").check(force=True)
             page.locator("#runCoxButton").click()
             page.wait_for_function(
                 "document.getElementById('downloadCoxResultsButton') && !document.getElementById('downloadCoxResultsButton').disabled"

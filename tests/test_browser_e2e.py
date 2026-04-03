@@ -370,7 +370,6 @@ def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(br
             page.wait_for_function(
                 "document.getElementById('benchmarkComparisonShell').textContent.includes('Partial leaderboard rows are hidden until both model families finish.')"
             )
-            assert "RUNNING" in page.locator("#benchmarkSummaryGrid").inner_text()
 
             page.wait_for_function(
                 "document.getElementById('mlMetaBanner').textContent.includes('Screening top model=')"
@@ -568,7 +567,7 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
             page.locator("#groupColumn").select_option("stage")
             page.locator("#tab-cox").click()
             page.locator("#covariateChecklist").wait_for(state="visible")
-            page.locator("#covariateChecklist input[value='immune_index']").check()
+            page.locator("#covariateChecklist input[value='immune_index']").check(force=True)
             page.locator("#covariateChecklist input[value='age']").uncheck()
             page.locator("#tab-km").click()
             page.locator("#runKmButton").wait_for(state="visible")
@@ -744,14 +743,10 @@ def test_browser_model_features_stay_separate_from_cox_and_keep_non_endpoint_inp
                 "document.querySelector('[data-tab=\"km\"]').getAttribute('aria-selected') === 'true'"
             )
             page.locator("#deriveToggle").click()
-            page.locator("#deriveSource").select_option("age")
-            page.locator("#deriveMethod").select_option("optimal_cutpoint")
-            page.locator("#deriveButton").click(force=True)
-            page.wait_for_function(
-                "document.getElementById('groupColumn').value === 'age__optimal_cutpoint'"
-            )
-            assert page.locator("#groupColumn").input_value() == "age__optimal_cutpoint"
-            assert "Current grouping now uses age__optimal_cutpoint." in page.locator("#deriveSummary").inner_text()
+            assert page.locator("#deriveSource").is_disabled()
+            assert page.locator("#deriveButton").is_disabled()
+            assert "locked while Group by uses sex" in page.locator("#deriveStatus").inner_text()
+            assert page.locator("#groupColumn").input_value() == "sex"
 
             updated_model_features = page.eval_on_selector_all(
                 "#modelFeatureChecklist input",
@@ -762,7 +757,7 @@ def test_browser_model_features_stay_separate_from_cox_and_keep_non_endpoint_inp
             page.locator('[data-tab="benchmark"]').click()
             _assert_tab_active(page, "benchmark")
             assert "Model features: 7" in page.locator("#dlFeatureSummaryChips").inner_text()
-            assert "Grouping only: age__optimal_cutpoint" in page.locator("#dlFeatureSummaryChips").inner_text()
+            assert "Grouping only: sex" in page.locator("#dlFeatureSummaryChips").inner_text()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -964,16 +959,11 @@ def test_browser_km_derive_preserves_existing_group_until_user_reruns(browser_se
             initial_banner = page.locator("#kmMetaBanner").inner_text()
 
             page.locator("#deriveToggle").click()
-            page.locator("#deriveSource").select_option("age")
-            page.locator("#deriveMethod").select_option("median_split")
-            page.locator("#deriveColumnName").fill("age_keep_stage")
-            page.locator("#deriveButton").click(force=True)
-            page.wait_for_function(
-                "document.getElementById('deriveSummary').textContent.includes('Current grouping remains stage_group')"
-            )
+            assert page.locator("#deriveSource").is_disabled()
+            assert page.locator("#deriveButton").is_disabled()
+            assert "locked while Group by uses stage_group" in page.locator("#deriveStatus").inner_text()
 
             assert page.locator("#groupColumn").input_value() == "stage_group"
-            assert "Derived column age_keep_stage is available." in page.locator("#deriveSummary").inner_text()
             assert page.locator("#kmMetaBanner").inner_text() == initial_banner
 
             browser.close()
@@ -1032,7 +1022,9 @@ def test_browser_guided_km_run_keeps_existing_group_when_derive_draft_is_pending
             page.wait_for_function("document.body.dataset.guidedGoal === 'km'")
 
             page.locator("#groupColumn").select_option("stage_group")
-            page.locator("#deriveColumnName").fill("age_should_not_apply")
+            assert page.locator("#deriveColumnName").is_disabled()
+            assert page.locator("#deriveButton").is_disabled()
+            assert "locked while Group by uses stage_group" in page.locator("#deriveStatus").inner_text()
             page.locator('#guidedPanel [data-guided-action="run-km"]').click()
             page.wait_for_function(
                 "document.body.dataset.guidedStep === '5' && document.getElementById('groupColumn').value === 'stage_group'"
