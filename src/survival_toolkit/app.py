@@ -1651,11 +1651,13 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                 figures["loss"] = build_loss_curve_figure(
                     result["loss_history"],
                     model_name=request_model.model_type.upper(),
-                    monitor_loss_history=result.get("monitor_loss_history"),
+                    monitor_loss_history=result.get("monitor_history", result.get("monitor_loss_history")),
                     best_monitor_epoch=result.get("best_monitor_epoch"),
                     epochs_trained=result.get("epochs_trained"),
                     max_epochs_requested=result.get("max_epochs_requested"),
                     stopped_early=result.get("stopped_early"),
+                    monitor_label=str(result.get("monitor_metric_label", "Monitor loss")),
+                    monitor_goal=str(result.get("monitor_metric_goal", "min")),
                 )
 
             clean_result = {k: v for k, v in result.items() if not k.startswith("_")}

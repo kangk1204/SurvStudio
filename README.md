@@ -747,12 +747,13 @@ Model-specific advanced controls are shown only when relevant:
 Architecture note:
 - `Hidden Layers` uses the full comma-separated stack for DeepSurv, DeepHit, Neural MTLR, and Survival VAE
 - `Dropout` is applied to all current deep model paths, including Neural MTLR
-- `Batch Size` currently affects DeepHit and Neural MTLR only. DeepSurv, Survival Transformer, and Survival VAE use full-batch optimization in the current implementation.
+- `Batch Size` currently affects DeepHit and Neural MTLR only. DeepSurv, Survival Transformer, and Survival VAE use full-batch optimization in the current implementation, and the run metadata reports the effective full-batch size for those paths.
 - Adam-based DL optimizers use light L2 regularization (`weight_decay=1e-4`) and gradient clipping for stability on wider feature sets.
 - DeepHit uses a stabilized ranking-loss scale (`sigma=1.0`) rather than the earlier sharper default.
 - `Neural MTLR` is implemented as an MTLR-inspired discrete-time neural variant for workflow comparison, not as a literal reference reproduction of the original formulation.
 - `Survival VAE` should be interpreted as a VAE-inspired latent representation model for clustering and risk screening. SurvStudio does not claim validated generative simulation or uncertainty estimation from this path.
-- DL loss plots show both `Training loss` and `Monitor loss`. `Monitor loss` is a validation-like internal checkpoint signal drawn from the training partition for early stopping; it is not the final holdout or external validation metric.
+- Cox-style DL paths (`DeepSurv`, `Survival Transformer`) use monitor C-index on an internal training-partition subset for early stopping. Discrete-time/VAE paths continue to use monitor loss. Neither monitor curve is the final holdout or external validation metric.
+- Deep-model summaries currently report discrimination (`C-index`) only. SurvStudio does not yet compute IBS for deep-model outputs, so calibration/error comparisons are not directly symmetric with the ML module.
 
 ## How To Read Results
 

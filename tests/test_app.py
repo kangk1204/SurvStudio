@@ -244,6 +244,18 @@ def test_guided_step_indicator_exposes_navigation_a11y_labels() -> None:
     assert "updateAfterDataset(payload, { scrollToTop: true });" in text
 
 
+def test_frontend_surfaces_upload_success_feedback_and_allows_reselecting_same_file() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function hasCompletedResults()" in text
+    assert "function uploadFeedbackMessages(payload" in text
+    assert 'setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info");' in text
+    assert 'showToast(feedback.toast, "success", 3400);' in text
+    assert 'refs.datasetFile.addEventListener("click", () => {' in text
+    assert 'refs.datasetFile.value = "";' in text
+
+
 def test_frontend_disables_expert_run_buttons_until_endpoint_is_ready() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
@@ -4028,7 +4040,7 @@ def test_deep_single_model_endpoint_supports_repeated_cv(monkeypatch) -> None:
     assert payload["analysis"]["comparison_table"][0]["model"] == "Neural MTLR"
 
 
-def test_deep_single_model_endpoint_builds_monitor_loss_curve_when_history_is_available(monkeypatch) -> None:
+def test_deep_single_model_endpoint_builds_monitor_metric_curve_when_history_is_available(monkeypatch) -> None:
     import survival_toolkit.deep_models as deep_models
 
     dataset = client.post("/api/load-example").json()
@@ -4043,7 +4055,9 @@ def test_deep_single_model_endpoint_builds_monitor_loss_curve_when_history_is_av
             "best_monitor_epoch": 2,
             "stopped_early": True,
             "loss_history": [1.2, 0.9, 0.7],
-            "monitor_loss_history": [1.3, 1.0, 0.8],
+            "monitor_history": [0.58, 0.64, 0.61],
+            "monitor_metric_label": "Monitor C-index",
+            "monitor_metric_goal": "max",
             "feature_importance": [{"feature": "age", "importance": 0.4}],
             "scientific_summary": {"headline": "stub"},
             "insight_board": {"headline": "stub"},
@@ -4078,10 +4092,10 @@ def test_deep_single_model_endpoint_builds_monitor_loss_curve_when_history_is_av
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["figures"]["loss"]["layout"]["title"]["text"] == "TRANSFORMER Training and Monitor Loss"
+    assert payload["figures"]["loss"]["layout"]["title"]["text"] == "TRANSFORMER Training Loss and Monitor C-index"
     assert len(payload["figures"]["loss"]["data"]) == 2
     assert payload["figures"]["loss"]["data"][0]["name"] == "Training loss"
-    assert payload["figures"]["loss"]["data"][1]["name"] == "Monitor loss"
+    assert payload["figures"]["loss"]["data"][1]["name"] == "Monitor C-index"
     annotation_text = " ".join(
         str(annotation.get("text", ""))
         for annotation in payload["figures"]["loss"]["layout"].get("annotations", [])
