@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from survival_toolkit.analysis import (
+    _model_feature_candidate_columns_from_metadata,
+    _profile_dataframe_column,
     _survival_outcome_like_columns,
     compute_cohort_table,
     compute_cox_analysis,
@@ -36,8 +38,10 @@ from survival_toolkit.analysis import (
     ensure_model_feature_candidate_limit,
     find_event_equivalent_columns,
     load_dataframe_from_path,
+    preview_rows,
     preview_cox_analysis_inputs,
     profile_dataframe,
+    suggest_columns,
 )
 from survival_toolkit.errors import NotFoundError, UserInputError
 from survival_toolkit.sample_data import (
@@ -90,6 +94,21 @@ _MAX_UPLOAD_ROWS = 100_000
 _MAX_UPLOAD_COLUMNS = 5_000
 _MAX_UPLOAD_CELLS = 5_000_000
 _SIGNED_NUMERIC_CSV_LITERAL = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+_DATASET_PROFILE_CACHE_KEY = "_dataset_profile_cache"
+_LATEX_ESCAPE_TABLE = str.maketrans(
+    {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+)
 
 
 class _MlArtifactCache:
@@ -325,9 +344,130 @@ class TableExportRequest(BaseModel):
 # ── Helpers ─────────────────────────────────────────────────────
 
 
+def _profile_template_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return copy.deepcopy(
+        {
+            key: value
+            for key, value in payload.items()
+            if key not in {"dataset_id", "filename"}
+        }
+    )
+
+
+def _profile_template_column_names(template: dict[str, Any] | None) -> list[str] | None:
+    if not isinstance(template, dict):
+        return None
+    columns = template.get("columns")
+    if not isinstance(columns, list):
+        return None
+    names: list[str] = []
+    for column in columns:
+        if not isinstance(column, dict) or "name" not in column:
+            return None
+        names.append(str(column["name"]))
+    return names
+
+
+def _profile_template_matches_dataframe(template: dict[str, Any] | None, dataframe: pd.DataFrame) -> bool:
+    column_names = _profile_template_column_names(template)
+    if column_names is None:
+        return False
+    if int(template.get("n_rows", -1)) != int(dataframe.shape[0]):
+        return False
+    if int(template.get("n_columns", -1)) != int(dataframe.shape[1]):
+        return False
+    return column_names == [str(column) for column in dataframe.columns]
+
+
+def _payload_from_profile_template(
+    template: dict[str, Any],
+    *,
+    dataset_id: str,
+    filename: str,
+) -> dict[str, Any]:
+    payload = copy.deepcopy(template)
+    payload["dataset_id"] = dataset_id
+    payload["filename"] = filename
+    return payload
+
+
+def _extend_profile_template_for_appended_columns(
+    template: dict[str, Any] | None,
+    dataframe: pd.DataFrame,
+) -> dict[str, Any] | None:
+    previous_column_names = _profile_template_column_names(template)
+    if previous_column_names is None:
+        return None
+    current_column_names = [str(column) for column in dataframe.columns]
+    if int(template.get("n_rows", -1)) != int(dataframe.shape[0]):
+        return None
+    if len(current_column_names) <= len(previous_column_names):
+        return None
+    if current_column_names[: len(previous_column_names)] != previous_column_names:
+        return None
+
+    next_template = copy.deepcopy(template)
+    columns = list(next_template.get("columns", []))
+    numeric_columns = [str(column) for column in next_template.get("numeric_columns", [])]
+    categorical_columns = [str(column) for column in next_template.get("categorical_columns", [])]
+    binary_candidate_columns = [str(column) for column in next_template.get("binary_candidate_columns", [])]
+
+    for column in current_column_names[len(previous_column_names) :]:
+        profile, is_numeric, is_binary = _profile_dataframe_column(column, dataframe[column])
+        columns.append(profile)
+        if is_numeric:
+            if column not in numeric_columns:
+                numeric_columns.append(column)
+        elif column not in categorical_columns:
+            categorical_columns.append(column)
+        if is_binary and column not in binary_candidate_columns:
+            binary_candidate_columns.append(column)
+        if profile["kind"] == "binary" and column not in categorical_columns and column not in numeric_columns:
+            categorical_columns.append(column)
+
+    suggestions = suggest_columns(dataframe)
+    model_feature_candidates = _model_feature_candidate_columns_from_metadata(
+        current_column_names,
+        suggested_time_columns=suggestions.get("time_columns", []),
+        binary_candidate_columns=binary_candidate_columns,
+    )
+    next_template.update(
+        {
+            "n_rows": int(dataframe.shape[0]),
+            "n_columns": int(dataframe.shape[1]),
+            "columns": columns,
+            "preview": preview_rows(dataframe),
+            "numeric_columns": numeric_columns,
+            "categorical_columns": categorical_columns,
+            "binary_candidate_columns": binary_candidate_columns,
+            "model_feature_candidate_count": len(model_feature_candidates),
+            "suggestions": suggestions,
+        }
+    )
+    return next_template
+
+
+def _resolved_dataset_profile_payload(stored: Any) -> dict[str, Any]:
+    cached_template = stored.metadata.get(_DATASET_PROFILE_CACHE_KEY)
+    if _profile_template_matches_dataframe(cached_template, stored.dataframe):
+        return _payload_from_profile_template(
+            cached_template,
+            dataset_id=stored.dataset_id,
+            filename=stored.filename,
+        )
+
+    payload = profile_dataframe(stored.dataframe, dataset_id=stored.dataset_id, filename=stored.filename)
+    cached_metadata = {
+        **stored.metadata,
+        _DATASET_PROFILE_CACHE_KEY: _profile_template_from_payload(payload),
+    }
+    store.update_metadata(stored.dataset_id, cached_metadata)
+    return payload
+
+
 def dataset_response(dataset_id: str) -> dict[str, Any]:
     stored = store.get(dataset_id, copy_dataframe=False)
-    payload = profile_dataframe(stored.dataframe, dataset_id=stored.dataset_id, filename=stored.filename)
+    payload = _resolved_dataset_profile_payload(stored)
     payload["dataset_source"] = stored.source
     payload["preset_eligible"] = stored.source == "builtin_demo"
     payload["preset_name"] = str(stored.metadata.get("preset_name")) if stored.metadata.get("preset_name") else None
@@ -336,11 +476,19 @@ def dataset_response(dataset_id: str) -> dict[str, Any]:
 
 
 def _create_dataset_snapshot(stored, dataframe, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    snapshot_metadata = dict(metadata if metadata is not None else stored.metadata)
+    snapshot_metadata.pop(_DATASET_PROFILE_CACHE_KEY, None)
+    profile_template = _extend_profile_template_for_appended_columns(
+        stored.metadata.get(_DATASET_PROFILE_CACHE_KEY),
+        dataframe,
+    )
+    if profile_template is not None:
+        snapshot_metadata[_DATASET_PROFILE_CACHE_KEY] = profile_template
     snapshot = store.create(
         dataframe,
         filename=stored.filename,
         source=stored.source,
-        metadata=metadata if metadata is not None else stored.metadata,
+        metadata=snapshot_metadata,
         copy_dataframe=False,
     )
     return dataset_response(snapshot.dataset_id)
@@ -358,6 +506,11 @@ def _outcome_informed_columns(stored: Any) -> set[str]:
 
 
 def _get_stored_dataset(dataset_id: str):
+    """Return the shared dataset object for read-only request handling.
+
+    The underlying DataFrame is not copied here. Callers must snapshot before
+    any mutation and treat the returned frame as immutable.
+    """
     return store.get(dataset_id, copy_dataframe=False)
 
 
@@ -779,19 +932,7 @@ def _export_rows_to_markdown(
 
 
 def _latex_escape(value: str) -> str:
-    replacements = {
-        "\\": r"\textbackslash{}",
-        "&": r"\&",
-        "%": r"\%",
-        "$": r"\$",
-        "#": r"\#",
-        "_": r"\_",
-        "{": r"\{",
-        "}": r"\}",
-        "~": r"\textasciitilde{}",
-        "^": r"\textasciicircum{}",
-    }
-    return "".join(replacements.get(char, char) for char in value)
+    return value.translate(_LATEX_ESCAPE_TABLE)
 
 
 def _export_rows_to_latex(

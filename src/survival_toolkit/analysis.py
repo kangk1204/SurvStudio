@@ -778,6 +778,24 @@ def suggest_columns(df: pd.DataFrame) -> dict[str, list[str]]:
     return suggestions
 
 
+def _profile_dataframe_column(column: str, series: pd.Series) -> tuple[dict[str, Any], bool, bool]:
+    kind = _column_kind(series)
+    profile = {
+        "name": str(column),
+        "kind": kind,
+        "missing": int(series.isna().sum()),
+        "non_missing": int(series.notna().sum()),
+        "n_unique": int(series.nunique(dropna=True)),
+        "unique_preview": [serialize_value(value) for value in series.dropna().unique()[:8]],
+    }
+    is_numeric = bool(is_numeric_dtype(series))
+    if is_numeric:
+        profile["min"] = serialize_value(series.min())
+        profile["max"] = serialize_value(series.max())
+    is_binary = looks_binary(series)
+    return profile, is_numeric, is_binary
+
+
 def _require_dataframe_columns(df: pd.DataFrame, columns: Sequence[str | None]) -> None:
     requested: list[str] = []
     seen: set[str] = set()
@@ -807,25 +825,14 @@ def profile_dataframe(df: pd.DataFrame, dataset_id: str, filename: str) -> dict[
 
     for column in df.columns:
         series = df[column]
-        kind = _column_kind(series)
-        unique_preview = [serialize_value(value) for value in series.dropna().unique()[:8]]
-        profile = {
-            "name": column,
-            "kind": kind,
-            "missing": int(series.isna().sum()),
-            "non_missing": int(series.notna().sum()),
-            "n_unique": int(series.nunique(dropna=True)),
-            "unique_preview": unique_preview,
-        }
-        if is_numeric_dtype(series):
+        profile, is_numeric, is_binary = _profile_dataframe_column(column, series)
+        if is_numeric:
             numeric_columns.append(column)
-            profile["min"] = serialize_value(series.min())
-            profile["max"] = serialize_value(series.max())
         else:
             categorical_columns.append(column)
-        if looks_binary(series):
+        if is_binary:
             binary_candidate_columns.append(column)
-        if kind == "binary" and column not in categorical_columns and column not in numeric_columns:
+        if profile["kind"] == "binary" and column not in categorical_columns and column not in numeric_columns:
             categorical_columns.append(column)
         column_profiles.append(profile)
 
@@ -1631,6 +1638,9 @@ def _signature_scientific_summary(
     if search_space["truncated"]:
         cautions.append("Search space hit the internal combination cap, so discovery was not exhaustive.")
         cautions.append("Adjusted p-values only account for the tested subset of combinations under the cap.")
+        cautions.append(
+            "When the cap is hit, the retained rules depend on deterministic candidate order, so earlier input columns can be overrepresented."
+        )
     analyzable_n = search_space.get("n_rows_analyzed")
     if analyzable_n is not None:
         cautions.append(
@@ -2144,6 +2154,33 @@ def _signature_mask(
     return np.asarray(mask, dtype=bool)
 
 
+def _signature_cox_metrics(
+    times: np.ndarray,
+    events: np.ndarray,
+    mask: np.ndarray,
+) -> dict[str, float | None]:
+    cox_frame = pd.DataFrame(
+        {
+            "__time": np.asarray(times, dtype=float),
+            "__event": np.asarray(events, dtype=int),
+            "__signature": np.asarray(mask, dtype=bool).astype(float),
+        }
+    )
+    cox_model = PHReg.from_formula(
+        'Q("__time") ~ Q("__signature")',
+        data=cox_frame,
+        status=cox_frame["__event"],
+        ties="efron",
+    )
+    cox_results = cox_model.fit(disp=False)
+    conf_int = np.asarray(cox_results.conf_int(), dtype=float)
+    return {
+        "Hazard ratio (signature+ vs -)": _safe_exp_or_none(cox_results.params[0]),
+        "HR CI lower": _safe_exp_or_none(conf_int[0, 0]),
+        "HR CI upper": _safe_exp_or_none(conf_int[0, 1]),
+    }
+
+
 def _stability_score(row: dict[str, Any]) -> float:
     # Composite score balancing significance, robustness, effect size, and parsimony.
     bh_p = max(float(row["BH adjusted p"]), 1e-12)
@@ -2543,28 +2580,6 @@ def discover_feature_signature(
                 except Exception:
                     continue
 
-                cox_frame = pd.DataFrame(
-                    {
-                        "__time": times,
-                        "__event": events,
-                        "__signature": mask.astype(float),
-                    }
-                )
-                cox_model = PHReg.from_formula(
-                    'Q("__time") ~ Q("__signature")',
-                    data=cox_frame,
-                    status=cox_frame["__event"],
-                    ties="efron",
-                )
-                try:
-                    cox_results = cox_model.fit(disp=False)
-                except Exception:
-                    continue
-                conf_int = cox_results.conf_int()
-                hr = _safe_exp_or_none(cox_results.params[0])
-                ci_low = _safe_exp_or_none(conf_int[0, 0])
-                ci_high = _safe_exp_or_none(conf_int[0, 1])
-
                 sf_high = SurvfuncRight(times[mask], events[mask])
                 sf_low = SurvfuncRight(times[~mask], events[~mask])
                 median_high = _safe_float(sf_high.quantile(0.5))
@@ -2583,9 +2598,9 @@ def discover_feature_signature(
                         "Events signature-": int(events[~mask].sum()),
                         "Chi-square": float(chisq),
                         "P value": float(p_value),
-                        "Hazard ratio (signature+ vs -)": hr,
-                        "HR CI lower": ci_low,
-                        "HR CI upper": ci_high,
+                        "Hazard ratio (signature+ vs -)": None,
+                        "HR CI lower": None,
+                        "HR CI upper": None,
                         "Median signature+": median_high,
                         "Median signature-": median_low,
                         "Bootstrap support (p<alpha)": None,
@@ -2620,7 +2635,7 @@ def discover_feature_signature(
         key=lambda idx: (
             rows[idx]["BH adjusted p"],
             rows[idx]["P value"],
-            -_hazard_ratio_effect_size(rows[idx].get("Hazard ratio (signature+ vs -)")),
+            -float(rows[idx]["Chi-square"]),
         ),
     )
     # Compute expensive robustness metrics for (a) output candidates and (b)
@@ -2631,6 +2646,16 @@ def discover_feature_signature(
         if float(row.get("BH adjusted p", 1.0)) <= float(significance_level)
         or float(row.get("P value", 1.0)) <= float(significance_level)
     )
+    times = frame[time_column].to_numpy(dtype=float)
+    events = frame[event_column].to_numpy(dtype=int)
+
+    for idx in sorted(metric_candidate_idx):
+        combo = valid_combinations[idx]
+        mask = _signature_mask(frame, combo["combo"], operator=combo["operator"])
+        try:
+            rows[idx].update(_signature_cox_metrics(times, events, mask))
+        except Exception:
+            continue
 
     if bootstrap_iterations > 0:
         for idx in sorted(metric_candidate_idx):
@@ -2648,8 +2673,6 @@ def discover_feature_signature(
             )
             rows[idx].update(bootstrap_metrics)
 
-    times = frame[time_column].to_numpy(dtype=float)
-    events = frame[event_column].to_numpy(dtype=int)
     if permutation_iterations > 0:
         for idx in sorted(metric_candidate_idx):
             combo = valid_combinations[idx]
