@@ -19,6 +19,25 @@ def _torch_available() -> bool:
         return False
 
 
+def test_deep_model_source_uses_type_checked_bases_adamw_and_inference_mode() -> None:
+    text = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "deep_models.py"
+    ).read_text(encoding="utf-8")
+
+    assert "if TYPE_CHECKING:" in text
+    assert "_TorchModuleBase = _torch_nn.Module" in text
+    assert "torch.optim.AdamW(" in text
+    assert "torch.optim.Adam(" not in text
+    assert "with torch.inference_mode():" in text
+    assert "for layer_dim in hidden_layers:" in text
+    assert "for layer_dim in reversed(hidden_layers):" in text
+    assert "np.random.default_rng(seed)" in text
+    assert "np.random.RandomState(seed)" not in text
+
+
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 @pytest.mark.parametrize(
     "trainer_name, trainer_kwargs, result_key",
@@ -642,6 +661,7 @@ def test_survival_transformer_and_vae_train_without_batch_splitting() -> None:
     assert transformer["requested_batch_size"] == 1
     assert transformer["effective_batch_size"] == transformer["training_samples"]
     assert transformer["optimization_mode"] == "full_batch_cox"
+    assert transformer["tie_method"] == "breslow"
     assert transformer["monitor_metric_label"] == "Monitor C-index"
     assert transformer["monitor_metric_goal"] == "max"
     assert "full training partition" in transformer["batching_note"]
@@ -661,6 +681,7 @@ def test_survival_transformer_and_vae_train_without_batch_splitting() -> None:
     assert vae["requested_batch_size"] == 1
     assert vae["effective_batch_size"] == vae["training_samples"]
     assert vae["optimization_mode"] == "full_batch_vae"
+    assert vae["tie_method"] == "breslow"
     assert vae["monitor_metric_label"] == "Monitor C-index"
     assert vae["monitor_metric_goal"] == "max"
     assert "requested batch size" in vae["batching_note"]
@@ -686,6 +707,7 @@ def test_deepsurv_reports_full_batch_metadata_and_monitor_c_index() -> None:
     assert result["requested_batch_size"] == 3
     assert result["effective_batch_size"] == result["training_samples"]
     assert result["optimization_mode"] == "full_batch_cox"
+    assert result["tie_method"] == "breslow"
     assert result["monitor_metric_label"] == "Monitor C-index"
     assert result["monitor_metric_goal"] == "max"
     assert "IBS" in " ".join(result["scientific_summary"]["cautions"])

@@ -917,7 +917,6 @@ def find_optimal_cutpoint(
         rng = np.random.default_rng(int(random_seed))
         extreme = 0
         for _ in range(int(permutation_iterations)):
-            perm_valid += 1
             permuted_var = rng.permutation(var_values)
             perm_best = -1.0
             for cutpoint in candidates:
@@ -934,8 +933,10 @@ def find_optimal_cutpoint(
                     continue
                 if float(chisq_perm) > perm_best:
                     perm_best = float(chisq_perm)
-            if perm_best >= float(best_stat):
-                extreme += 1
+            if perm_best >= 0.0:
+                perm_valid += 1
+                if perm_best >= float(best_stat):
+                    extreme += 1
         selection_adjusted_p_value = float((extreme + 1) / (perm_valid + 1)) if perm_valid else None
 
     raw_p_value = best_record["p_value"]

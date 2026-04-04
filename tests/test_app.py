@@ -157,11 +157,11 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="tableDependencyText"' in response.text
     assert 'id="tableOutputStatusText"' in response.text
     assert 'id="runCohortTableButtonLabel"' in response.text
-    assert "The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here are approximate rank-based checks rather than a full cox.zph test." in response.text
+    assert "The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test." in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
     assert 'id="deriveButton" type="button">Create</button>' in response.text
-    assert "Approximate rank-based Spearman screening of Schoenfeld residuals against log time appears here." in response.text
+    assert "Scaled Schoenfeld residual screening with rank-based Spearman correlation versus log time appears here." in response.text
     assert "Allowed ranges:" not in response.text
 
 
@@ -700,7 +700,17 @@ def test_cox_ui_wires_graphical_diagnostics_plot() -> None:
     assert 'coxDiagnosticsPlot: document.getElementById("coxDiagnosticsPlot"),' in text
     assert 'if (payload.diagnostics_figure?.data?.length) {' in text
     assert 'plotLayoutConfig(payload.diagnostics_figure.layout, "cox_diagnostics")' in text
-    assert "clearPlotShell(refs.coxDiagnosticsPlot, '<div class=\"empty-state plot-empty\"><span>Graphical PH diagnostics were unavailable for this fit.</span></div>');" in text
+    assert "clearPlotShell(refs.coxDiagnosticsPlot, '<div class=\"empty-state plot-empty\"><span>Scaled Schoenfeld residual screening was unavailable for this fit.</span></div>');" in text
+    assert 'refs.coxDiagnosticsShell.innerHTML = \'<div class="empty-state">Scaled Schoenfeld residual screening details will appear here.</div>\';' in text
+
+
+def test_cox_ui_banner_includes_c_index_ci_when_available() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "const hasCoxMetricCi = stats.c_index_ci_lower != null && stats.c_index_ci_upper != null;" in text
+    assert 'const coxMetricCi = hasCoxMetricCi' in text
+    assert '% CI ${formatValue(stats.c_index_ci_lower)} to ${formatValue(stats.c_index_ci_upper)}' in text
 
 
 def test_guided_ml_inline_compare_uses_clicked_button_as_loading_target() -> None:

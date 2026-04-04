@@ -13,7 +13,10 @@ from survival_toolkit.analysis import (
     _bh_adjust,
     _cohort_frame,
     _harrell_c_index,
+    _harrell_c_index_bootstrap_ci,
+    _has_ambiguous_competing_event_tokens,
     _ordered_reference_categories,
+    _permutation_p_value,
     _prepare_cox_frame,
     _reference_levels,
     _pointwise_km_ci,
@@ -109,9 +112,13 @@ def test_percentile_split_50_matches_median_split_with_ties() -> None:
 
 
 def test_bh_adjust_matches_standard_monotone_fdr() -> None:
-    adjusted = _bh_adjust([0.04, 0.002, 0.03, 0.01])
+    from scipy.stats import false_discovery_control
 
-    assert adjusted == pytest.approx([0.04, 0.008, 0.04, 0.02])
+    p_values = [0.04, 0.002, 0.03, 0.01]
+    adjusted = _bh_adjust(p_values)
+    expected = false_discovery_control(p_values, method="bh").tolist()
+
+    assert adjusted == pytest.approx(expected)
 
 
 def test_permutation_p_value_compares_logrank_statistics(monkeypatch) -> None:
@@ -356,6 +363,11 @@ def test_coerce_event_rejects_competing_risk_style_compound_death_labels() -> No
 
     with pytest.raises(ValueError, match="more than one recognized event state|binary event indicator"):
         coerce_event(series, event_positive_value="death")
+
+
+def test_competing_event_token_detection_flags_exact_multifamily_tokens() -> None:
+    assert _has_ambiguous_competing_event_tokens(["death", "progression", "censored"]) is True
+    assert _has_ambiguous_competing_event_tokens(["death", "deceased", "alive"]) is False
 
 
 def test_coerce_event_handles_living_deceased_tokens_without_explicit_mapping() -> None:
@@ -692,6 +704,9 @@ def test_km_analysis_returns_grouped_results() -> None:
     assert result["scientific_summary"]["headline"]
     assert result["scientific_summary"]["status"] in {"robust", "review", "caution"}
     assert result["scientific_summary"]["metrics"]
+    assert any("independent" in caution.lower() and "censoring" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("competing risks" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("left truncation" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 
 def test_km_analysis_marks_outcome_informed_group_results_as_descriptive() -> None:
@@ -822,6 +837,33 @@ def test_pointwise_km_ci_keeps_exact_one_bounded_at_one() -> None:
     assert upper[0] == pytest.approx(1.0)
 
 
+def test_km_analysis_log_log_ci_matches_r_survfit_reference() -> None:
+    df = pd.DataFrame(
+        {
+            "time": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "event": [1, 1, 0, 1, 1],
+        }
+    )
+
+    result = compute_km_analysis(
+        df,
+        time_column="time",
+        event_column="event",
+        event_positive_value=1,
+    )
+
+    curve = result["curves"][0]
+    timeline = curve["timeline"]
+    ci_lookup = {
+        float(time): (float(lower), float(upper))
+        for time, lower, upper in zip(timeline, curve["ci_lower"], curve["ci_upper"], strict=True)
+    }
+
+    assert ci_lookup[1.0] == pytest.approx((0.20380926, 0.96917979), abs=1e-6)
+    assert ci_lookup[2.0] == pytest.approx((0.12573018, 0.88175641), abs=1e-6)
+    assert ci_lookup[4.0] == pytest.approx((0.01230153, 0.71921802), abs=1e-6)
+
+
 def test_safe_float_returns_none_on_overflowing_float_conversion() -> None:
     class _OverflowingValue:
         def __float__(self) -> float:
@@ -850,13 +892,26 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert result["model_stats"]["evaluation_mode"] == "apparent"
     assert result["model_stats"]["c_index_label"] == "Apparent C-index (training cohort)"
     assert result["model_stats"]["apparent_c_index"] == result["model_stats"]["c_index"]
+    assert result["model_stats"]["c_index_ci_method"] == "bootstrap_percentile"
+    assert result["model_stats"]["c_index_ci_level"] == pytest.approx(0.95)
+    assert result["model_stats"]["c_index_ci_lower"] is not None
+    assert result["model_stats"]["c_index_ci_upper"] is not None
+    assert result["model_stats"]["c_index_ci_lower"] <= result["model_stats"]["c_index"] <= result["model_stats"]["c_index_ci_upper"]
+    assert result["model_stats"]["lr_statistic"] is not None
+    assert result["model_stats"]["lr_pvalue"] is not None
     assert result["scientific_summary"]["headline"]
     assert result["scientific_summary"]["status"] in {"robust", "review", "caution"}
     assert result["scientific_summary"]["metrics"]
     assert any(metric["label"] == "Apparent C-index (training cohort)" for metric in result["scientific_summary"]["metrics"])
+    assert any(metric["label"] == "Apparent C-index 95% CI" for metric in result["scientific_summary"]["metrics"])
+    assert any(metric["label"] == "LR chi-square" for metric in result["scientific_summary"]["metrics"])
     assert any("apparent" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("independent" in caution.lower() and "censoring" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("competing risks" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("left truncation" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("analyzable cohort" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("spearman" in strength.lower() and "schoenfeld" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+    assert any("likelihood-ratio test" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("comparable patient pairs" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("external-cohort apply workflow" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("changing the covariate set" in caution.lower() for caution in result["scientific_summary"]["cautions"])
@@ -865,6 +920,71 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert {"term", "log_time", "residual", "trend_log_time", "trend_residual"} <= set(first_trace)
     assert len(first_trace["log_time"]) == len(first_trace["residual"])
     assert len(first_trace["trend_log_time"]) == len(first_trace["trend_residual"])
+
+
+def test_cox_analysis_scales_schoenfeld_diagnostics_and_reports_ci(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    df = make_example_dataset(seed=31, n_patients=4)
+    frame = pd.DataFrame(
+        {
+            "os_months": [1.0, 2.0, 3.0, 4.0],
+            "os_event": [1, 1, 0, 0],
+            "age": [50.0, 55.0, 60.0, 65.0],
+        }
+    )
+
+    class _FakeResults:
+        params = np.asarray([0.2], dtype=float)
+        bse = np.asarray([0.1], dtype=float)
+        tvalues = np.asarray([2.0], dtype=float)
+        pvalues = np.asarray([0.04], dtype=float)
+        schoenfeld_residuals = np.asarray([[1.0], [2.0], [3.0], [4.0]], dtype=float)
+        llf = -4.0
+        llnull = -7.0
+        model = type("_FakeModelMeta", (), {"exog_names": ["Q(\"age\")"], "exog": np.ones((4, 1), dtype=float)})()
+
+        def conf_int(self):
+            return np.asarray([[0.1, 0.3]], dtype=float)
+
+        def cov_params(self):
+            return np.asarray([[2.0]], dtype=float)
+
+    class _FakePHReg:
+        @staticmethod
+        def from_formula(*args, **kwargs):
+            class _FakeFit:
+                @staticmethod
+                def fit(disp=False):
+                    return _FakeResults()
+
+            return _FakeFit()
+
+    monkeypatch.setattr(analysis, "_prepare_cox_frame", lambda *args, **kwargs: frame.copy())
+    monkeypatch.setattr(analysis, "PHReg", _FakePHReg)
+    monkeypatch.setattr(analysis, "_reference_levels", lambda *args, **kwargs: {})
+    monkeypatch.setattr(analysis, "_harrell_c_index", lambda *args, **kwargs: 0.62)
+    monkeypatch.setattr(
+        analysis,
+        "_harrell_c_index_bootstrap_ci",
+        lambda *args, **kwargs: {"c_index_std": 0.03, "c_index_ci_lower": 0.57, "c_index_ci_upper": 0.67},
+    )
+
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age"],
+    )
+
+    first_trace = result["diagnostics_plot_data"][0]
+    assert first_trace["residual"] == pytest.approx([4.0, 8.0, 12.0, 16.0])
+    assert len(first_trace["trend_log_time"]) == len(first_trace["trend_residual"])
+    assert result["model_stats"]["c_index_ci_lower"] == pytest.approx(0.57)
+    assert result["model_stats"]["c_index_ci_upper"] == pytest.approx(0.67)
+    assert result["model_stats"]["lr_statistic"] == pytest.approx(6.0)
+    assert result["model_stats"]["lr_pvalue"] is not None
 
 
 def test_cox_analysis_reports_missing_covariate_exclusions() -> None:
@@ -884,6 +1004,24 @@ def test_cox_analysis_reports_missing_covariate_exclusions() -> None:
     assert result["model_stats"]["outcome_rows"] == result["model_stats"]["n"] + result["model_stats"]["dropped_rows"]
     assert any(metric["label"] == "Dropped for missing covariates" and metric["value"] == 24 for metric in result["scientific_summary"]["metrics"])
     assert any("were excluded" in caution.lower() and "missing" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
+def test_cox_analysis_gbsg2_pnodes_hr_matches_r_coxph_reference() -> None:
+    df = load_gbsg2_upload_ready_dataset()
+
+    result = compute_cox_analysis(
+        df,
+        time_column="rfs_days",
+        event_column="rfs_event",
+        event_positive_value=1,
+        covariates=["pnodes"],
+    )
+
+    pnodes_row = result["results_table"][0]
+    assert pnodes_row["Label"] == "pnodes"
+    assert pnodes_row["Hazard ratio"] == pytest.approx(1.060354, rel=1e-6)
+    assert pnodes_row["Beta"] == pytest.approx(0.05860287, rel=1e-6)
+    assert pnodes_row["P value"] == pytest.approx(3.488721e-18, rel=1e-6)
 
 
 def test_compute_cohort_table_discloses_grouped_subset_overall_scope() -> None:
@@ -1100,6 +1238,9 @@ def test_cox_analysis_marks_extreme_hazard_ratios_as_non_estimable(monkeypatch) 
         def conf_int(self):
             return np.asarray([[9_000.0, 11_000.0]], dtype=float)
 
+        def cov_params(self):
+            return np.asarray([[1.0]], dtype=float)
+
     class _FakePHReg:
         @staticmethod
         def from_formula(*args, **kwargs):
@@ -1166,6 +1307,9 @@ def test_cox_analysis_rejects_non_finite_model_fit(monkeypatch) -> None:
 
         def conf_int(self):
             return np.asarray([[np.nan, np.nan]], dtype=float)
+
+        def cov_params(self):
+            return np.asarray([[1.0]], dtype=float)
 
     class _FakePHReg:
         @staticmethod
@@ -1239,7 +1383,7 @@ def test_cox_analysis_translates_singular_matrix_into_user_facing_message(monkey
     assert "Remove one of the overlapping variables" in message
 
 
-def test_cox_analysis_lists_all_ph_alert_terms_and_sparse_category_warnings() -> None:
+def test_cox_analysis_lists_all_current_ph_alert_terms_in_summary_caution() -> None:
     df = load_tcga_luad_example_dataset()
     result = compute_cox_analysis(
         df,
@@ -1250,14 +1394,21 @@ def test_cox_analysis_lists_all_ph_alert_terms_and_sparse_category_warnings() ->
         categorical_covariates=["sex", "stage_group", "kras_status", "egfr_status"],
     )
 
+    significant_terms = [
+        str(row["Term"])
+        for row in result["diagnostics_table"]
+        if row["P value"] is not None and float(row["P value"]) < 0.05
+    ]
     cautions = result["scientific_summary"]["cautions"]
-    assert any(
-        "sex: Male vs Female" in caution
-        and "stage_group: Stage II vs Stage I" in caution
-        and "stage_group: Stage III vs Stage I" in caution
-        and "kras_status: Mutated vs Wildtype" in caution
+    ph_caution = next(
+        caution
         for caution in cautions
+        if "Possible proportional-hazards violations detected for:" in caution
     )
+
+    assert significant_terms
+    for term in significant_terms:
+        assert term in ph_caution
 
 
 def test_cox_analysis_warns_when_reference_levels_are_too_small() -> None:
@@ -1586,6 +1737,95 @@ def test_discover_feature_signature_limits_cox_estimation_to_ranked_candidates(m
 
     assert payload["search_space"]["tested_combinations"] > 80
     assert calls["count"] == 80
+
+
+def test_discover_feature_signature_warns_when_cox_estimation_fails(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    df = make_example_dataset(seed=23, n_patients=80)
+
+    monkeypatch.setattr(analysis, "survdiff", lambda times, events, groups: (4.5, 0.03))
+    monkeypatch.setattr(
+        analysis,
+        "_signature_cox_metrics",
+        lambda times, events, mask: (_ for _ in ()).throw(ValueError("unstable fit")),
+    )
+
+    with pytest.warns(RuntimeWarning, match="Skipping Cox robustness metrics"):
+        _, _, payload = analysis.discover_feature_signature(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            event_positive_value=1,
+            candidate_columns=["age", "biomarker_score", "immune_index"],
+            max_combination_size=1,
+            top_k=3,
+            bootstrap_iterations=0,
+            permutation_iterations=0,
+            validation_iterations=0,
+            combination_operator="mixed",
+            random_seed=99,
+        )
+
+    assert payload["results_table"]
+
+
+def test_discover_feature_signature_reraises_memory_error_from_cox_metrics(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    df = make_example_dataset(seed=41, n_patients=80)
+
+    monkeypatch.setattr(analysis, "survdiff", lambda times, events, groups: (4.5, 0.03))
+    monkeypatch.setattr(
+        analysis,
+        "_signature_cox_metrics",
+        lambda times, events, mask: (_ for _ in ()).throw(MemoryError("out of memory")),
+    )
+
+    with pytest.raises(MemoryError, match="out of memory"):
+        analysis.discover_feature_signature(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            event_positive_value=1,
+            candidate_columns=["age", "biomarker_score", "immune_index"],
+            max_combination_size=1,
+            top_k=3,
+            bootstrap_iterations=0,
+            permutation_iterations=0,
+            validation_iterations=0,
+            combination_operator="mixed",
+            random_seed=99,
+        )
+
+
+def test_permutation_p_value_reraises_memory_error(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    times = np.asarray([1.0, 2.0, 3.0, 4.0], dtype=float)
+    events = np.asarray([1, 1, 0, 0], dtype=int)
+    mask = np.asarray([True, False, True, False], dtype=bool)
+
+    monkeypatch.setattr(
+        analysis,
+        "survdiff",
+        lambda times, events, groups: (_ for _ in ()).throw(MemoryError("oom in permutation")),
+    )
+
+    with pytest.raises(MemoryError, match="oom in permutation"):
+        _permutation_p_value(times, events, mask, observed_stat=3.5, n_iterations=3, random_seed=7)
+
+
+def test_harrell_c_index_bootstrap_ci_warns_when_internal_bootstrap_is_skipped() -> None:
+    times = np.asarray([1.0, 2.0, 3.0, 4.0], dtype=float)
+    events = np.asarray([1, 0, 1, 0], dtype=int)
+    risk = np.asarray([0.4, 0.3, 0.2, 0.1], dtype=float)
+
+    with pytest.warns(RuntimeWarning, match="bootstrap CI skipped"):
+        result = _harrell_c_index_bootstrap_ci(times, events, risk, n_bootstrap=20)
+
+    assert result["c_index_ci_lower"] is None
+    assert result["c_index_ci_upper"] is None
 
 
 def test_signature_summary_stays_exploratory_without_permutation_or_holdout_confirmation() -> None:

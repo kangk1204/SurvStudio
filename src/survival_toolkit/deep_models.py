@@ -16,7 +16,7 @@ import multiprocessing as mp
 import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -53,7 +53,14 @@ try:
 except ImportError:
     _SKSURV_METRICS_AVAILABLE = False
 
-_TorchModuleBase = nn.Module if TORCH_AVAILABLE else object
+if TYPE_CHECKING:
+    import torch.nn as _torch_nn
+
+    _TorchModuleBase = _torch_nn.Module
+elif TORCH_AVAILABLE:
+    _TorchModuleBase = nn.Module
+else:
+    _TorchModuleBase = object
 
 _TORCH_INSTALL_MSG = (
     "PyTorch is required for deep learning models. "
@@ -779,7 +786,7 @@ def _monitor_c_index(
     e_all: torch.Tensor,
     monitor_idx: torch.Tensor,
 ) -> float | None:
-    with torch.no_grad():
+    with torch.inference_mode():
         monitor_risk = model(x_all[monitor_idx])
     return _compute_c_index_torch(monitor_risk, t_all[monitor_idx], e_all[monitor_idx])
 
@@ -1894,6 +1901,10 @@ def train_deepsurv(
 
     Returns a JSON-serializable dict with c_index, loss_history,
     feature_importance, risk_scores, predicted_survival_function, and insight_board.
+
+    Notes:
+    - ``batch_size`` is accepted for API consistency, but Cox partial likelihood
+      is optimized on the full training risk set each epoch.
     """
     _require_torch()
     _seed_torch(random_seed)
@@ -1924,7 +1935,7 @@ def train_deepsurv(
     x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
 
     model = DeepSurvNet(data["n_features"], hidden_layers, dropout)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
 
     loss_history: list[float] = []
     monitor_loss_history: list[float] = []
@@ -1966,7 +1977,7 @@ def train_deepsurv(
 
     # Evaluation
     model.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         risk_scores_tensor = model(x_all)
     apparent_c_index = _compute_c_index_torch(risk_scores_tensor, t_all, e_all)
     holdout_c_index = _compute_c_index_torch(risk_scores_tensor[eval_idx], t_all[eval_idx], e_all[eval_idx])
@@ -2087,6 +2098,7 @@ def train_deepsurv(
         "holdout_c_index": holdout_c_index,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
+        "tie_method": "breslow",
         "training_seed": random_seed,
         "split_seed": random_seed,
         "monitor_seed": random_seed,
@@ -2295,7 +2307,7 @@ def train_deephit(
         monitor_bin_tensor = torch.tensor(monitor_bin_indices, dtype=torch.long)
 
     model = DeepHitNet(data["n_features"], hidden_layers, num_time_bins, dropout)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
     dataset = TensorDataset(x_train, bin_tensor, e_train)
     loader_generator = torch.Generator().manual_seed(random_seed)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=loader_generator)
@@ -2320,7 +2332,7 @@ def train_deephit(
         loss_history.append(float(np.mean(epoch_losses)))
         if monitor_idx is not None and monitor_bin_tensor is not None:
             model.eval()
-            with torch.no_grad():
+            with torch.inference_mode():
                 monitor_pmf = model(x_all[monitor_idx])
                 monitor_loss = float(_deephit_loss(monitor_pmf, monitor_bin_tensor, e_all[monitor_idx], alpha).item())
             monitor_loss_history.append(monitor_loss)
@@ -2341,7 +2353,7 @@ def train_deephit(
 
     # Evaluation
     model.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         pmf_all = model(x_all)
     survival_all, rmst_risk_all = _discrete_survival_from_pmf(pmf_all, bin_widths)
     risk_scores_tensor = rmst_risk_all
@@ -2605,7 +2617,7 @@ def train_neural_mtlr(
         monitor_bin_tensor = torch.tensor(monitor_bin_indices, dtype=torch.long)
 
     model = NeuralMTLRNet(data["n_features"], hidden_layers, num_time_bins, dropout=dropout)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
     dataset = TensorDataset(x_train, bin_tensor, e_train)
     loader_generator = torch.Generator().manual_seed(random_seed)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=loader_generator)
@@ -2630,7 +2642,7 @@ def train_neural_mtlr(
         loss_history.append(float(np.mean(epoch_losses)))
         if monitor_idx is not None and monitor_bin_tensor is not None:
             model.eval()
-            with torch.no_grad():
+            with torch.inference_mode():
                 cumsum_logits_monitor = model(x_all[monitor_idx])
                 monitor_loss = float(_mtlr_loss(cumsum_logits_monitor, monitor_bin_tensor, e_all[monitor_idx], num_time_bins).item())
             monitor_loss_history.append(monitor_loss)
@@ -2651,7 +2663,7 @@ def train_neural_mtlr(
 
     # Evaluation
     model.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         cumsum_logits_all = model(x_all)
     # Convert to survival probabilities
     log_pmf = torch.log_softmax(cumsum_logits_all, dim=1)
@@ -2837,35 +2849,44 @@ class SurvivalTransformerNet(_TorchModuleBase):
         embedded = self.feature_identity(embedded)
 
         captured: dict[int, torch.Tensor] = {}
-        original_forwards: list[Callable[..., Any]] = []
+        pre_handles: list[Any] = []
+        hook_handles: list[Any] = []
         fastpath_enabled = (
             bool(torch.backends.mha.get_fastpath_enabled())
             if hasattr(torch.backends, "mha") and hasattr(torch.backends.mha, "get_fastpath_enabled")
             else None
         )
         for layer_index, layer in enumerate(self.transformer.layers):
-            original_forward = layer.self_attn.forward
-            original_forwards.append(original_forward)
+            def _capturing_pre_hook(
+                _module: Any,
+                args: tuple[Any, ...],
+                kwargs: dict[str, Any],
+            ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+                next_kwargs = dict(kwargs)
+                next_kwargs["need_weights"] = True
+                next_kwargs["average_attn_weights"] = False
+                return args, next_kwargs
 
-            def _capturing_forward(
-                *args: Any,
+            def _capturing_hook(
+                _module: Any,
+                _args: tuple[Any, ...],
+                _kwargs: dict[str, Any],
+                output: Any,
+                *,
                 _layer_index: int = layer_index,
-                _original_forward: Callable[..., Any] = original_forward,
-                **kwargs: Any,
             ) -> Any:
-                kwargs["need_weights"] = True
-                kwargs["average_attn_weights"] = False
-                attn_output, attn_weights = _original_forward(*args, **kwargs)
+                attn_output, attn_weights = output
                 if attn_weights is not None:
                     captured[_layer_index] = attn_weights.detach().cpu()
-                return attn_output, attn_weights
+                return output
 
-            layer.self_attn.forward = _capturing_forward
+            pre_handles.append(layer.self_attn.register_forward_pre_hook(_capturing_pre_hook, with_kwargs=True))
+            hook_handles.append(layer.self_attn.register_forward_hook(_capturing_hook, with_kwargs=True))
 
         try:
             if fastpath_enabled is not None:
                 torch.backends.mha.set_fastpath_enabled(False)
-            with torch.no_grad():
+            with torch.inference_mode():
                 output = embedded
                 for layer in self.transformer.layers:
                     output = layer(output)
@@ -2874,8 +2895,10 @@ class SurvivalTransformerNet(_TorchModuleBase):
         finally:
             if fastpath_enabled is not None:
                 torch.backends.mha.set_fastpath_enabled(fastpath_enabled)
-            for layer, original_forward in zip(self.transformer.layers, original_forwards, strict=True):
-                layer.self_attn.forward = original_forward
+            for handle in pre_handles:
+                handle.remove()
+            for handle in hook_handles:
+                handle.remove()
             if was_training:
                 self.train()
 
@@ -2917,6 +2940,10 @@ def train_survival_transformer(
 
     Returns a JSON-serializable dict with c_index, loss_history,
     attention_weights, feature_importance, and risk_scores.
+
+    Notes:
+    - ``batch_size`` is accepted for API consistency, but Cox partial likelihood
+      is optimized on the full training risk set each epoch.
     """
     _require_torch()
     _seed_torch(random_seed)
@@ -2951,7 +2978,7 @@ def train_survival_transformer(
     model = SurvivalTransformerNet(
         data["n_features"], d_model=d_model, n_heads=n_heads, n_layers=n_layers, dropout=dropout
     )
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
 
     loss_history: list[float] = []
     monitor_loss_history: list[float] = []
@@ -2993,7 +3020,7 @@ def train_survival_transformer(
 
     # Evaluation
     model.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         risk_scores_tensor = model(x_all)
     apparent_c_index = _compute_c_index_torch(risk_scores_tensor, t_all, e_all)
     holdout_c_index = _compute_c_index_torch(risk_scores_tensor[eval_idx], t_all[eval_idx], e_all[eval_idx])
@@ -3031,7 +3058,7 @@ def train_survival_transformer(
         np.linspace(0, int(artifact_idx.numel()) - 1, sample_size, dtype=int)
     ]
     x_sample = x_all[sample_indices]
-    with torch.no_grad():
+    with torch.inference_mode():
         attention_weights = model.get_attention_weights(x_sample)
 
     # Per-feature attention score: average attention received by each feature across layers
@@ -3077,6 +3104,7 @@ def train_survival_transformer(
         "holdout_c_index": holdout_c_index,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
+        "tie_method": "breslow",
         "training_seed": random_seed,
         "split_seed": random_seed,
         "monitor_seed": random_seed,
@@ -3129,26 +3157,26 @@ class SurvivalVAENet(_TorchModuleBase):
         hidden_layers = list(hidden_layers or ([hidden_dim] if hidden_dim is not None else [64]))
         encoder_layers: list[nn.Module] = []
         prev_dim = in_features
-        for hidden_dim in hidden_layers:
+        for layer_dim in hidden_layers:
             encoder_layers.extend([
-                nn.Linear(prev_dim, hidden_dim),
+                nn.Linear(prev_dim, layer_dim),
                 nn.ReLU(),
                 nn.Dropout(dropout),
             ])
-            prev_dim = hidden_dim
+            prev_dim = layer_dim
         self.encoder = nn.Sequential(*encoder_layers)
         self.fc_mu = nn.Linear(prev_dim, latent_dim)
         self.fc_log_var = nn.Linear(prev_dim, latent_dim)
 
         decoder_layers: list[nn.Module] = []
         prev_decoder_dim = latent_dim
-        for hidden_dim in reversed(hidden_layers):
+        for layer_dim in reversed(hidden_layers):
             decoder_layers.extend([
-                nn.Linear(prev_decoder_dim, hidden_dim),
+                nn.Linear(prev_decoder_dim, layer_dim),
                 nn.ReLU(),
                 nn.Dropout(dropout),
             ])
-            prev_decoder_dim = hidden_dim
+            prev_decoder_dim = layer_dim
         decoder_layers.append(nn.Linear(prev_decoder_dim, in_features))
         self.decoder = nn.Sequential(*decoder_layers)
 
@@ -3271,14 +3299,14 @@ def _simple_pca_2d(data: np.ndarray) -> np.ndarray:
 
 def _simple_kmeans(data: np.ndarray, n_clusters: int, max_iter: int = 100, seed: int = 42) -> np.ndarray:
     """Simple K-means clustering (no sklearn dependency)."""
-    rng = np.random.RandomState(seed)
+    rng = np.random.default_rng(seed)
     n = data.shape[0]
     if n <= n_clusters:
         return np.arange(n, dtype=int) % n_clusters
 
     # K-means++ initialization
     centers = np.empty((n_clusters, data.shape[1]))
-    idx = rng.randint(0, n)
+    idx = int(rng.integers(0, n))
     centers[0] = data[idx]
     for c in range(1, n_clusters):
         dists = np.min(
@@ -3332,6 +3360,10 @@ def train_survival_vae(
 
     Returns a JSON-serializable dict with c_index, loss_history,
     latent_embeddings, cluster_labels, cluster_survival_curves, and risk_scores.
+
+    Notes:
+    - ``batch_size`` is accepted for API consistency, but the current VAE survival
+      objective is optimized on the full training partition each epoch.
     """
     _require_torch()
     _seed_torch(random_seed)
@@ -3364,7 +3396,7 @@ def train_survival_vae(
     numeric_feature_indices = list(data.get("numeric_feature_indices", []))
 
     model = SurvivalVAENet(data["n_features"], hidden_layers=hidden_layers, latent_dim=latent_dim, dropout=dropout)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
 
     loss_history: list[float] = []
     monitor_loss_history: list[float] = []
@@ -3393,7 +3425,7 @@ def train_survival_vae(
         loss_history.append(float(loss.item()))
         if monitor_idx is not None:
             model.eval()
-            with torch.no_grad():
+            with torch.inference_mode():
                 _, _, _, risk_monitor = model(x_all[monitor_idx])
             monitor_c_index = _compute_c_index_torch(risk_monitor, t_all[monitor_idx], e_all[monitor_idx])
             if monitor_c_index is None:
@@ -3418,7 +3450,7 @@ def train_survival_vae(
 
     # Evaluation
     model.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         x_recon_all, mu_all, log_var_all, risk_all = model(x_all)
         latent_all = mu_all  # get_latent returns mu; reuse from the forward pass above
 
@@ -3521,6 +3553,7 @@ def train_survival_vae(
         "holdout_c_index": holdout_c_index,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
+        "tie_method": "breslow",
         "training_seed": random_seed,
         "split_seed": random_seed,
         "monitor_seed": random_seed,

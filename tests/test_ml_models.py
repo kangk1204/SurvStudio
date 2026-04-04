@@ -71,6 +71,83 @@ def test_optimal_cutpoint_derive_method() -> None:
     assert groups.issubset({"Low", "High"})
 
 
+def test_find_optimal_cutpoint_excludes_invalid_permutation_resamples_from_denominator(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    df = pd.DataFrame(
+        {
+            "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "event": [1, 0, 1, 0, 1, 0],
+            "marker": [0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
+        }
+    )
+
+    class _FixedRng:
+        def permutation(self, values):
+            return np.asarray(values, dtype=float)
+
+    call_count = 0
+
+    def _fake_survdiff(times, events, groups):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return 5.0, 0.01
+        if call_count == 2:
+            return 4.0, 0.02
+        if call_count in {3, 4}:
+            return 4.0, 0.20
+        raise ValueError("invalid permutation split")
+
+    monkeypatch.setattr(ml_models, "survdiff", _fake_survdiff)
+    monkeypatch.setattr(ml_models.np.random, "default_rng", lambda seed: _FixedRng())
+
+    result = ml_models.find_optimal_cutpoint(
+        df,
+        time_column="time",
+        event_column="event",
+        variable="marker",
+        event_positive_value=1,
+        min_group_fraction=0.2,
+        permutation_iterations=2,
+        random_seed=7,
+    )
+
+    assert result["selection_adjustment"]["permutation_valid_resamples"] == 1
+    assert result["selection_adjusted_p_value"] == pytest.approx(0.5)
+
+
+def test_find_optimal_cutpoint_counts_only_valid_permutation_resamples(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    df = make_example_dataset(seed=19, n_patients=120)
+    observed_calls = {"count": 0}
+
+    def _fake_survdiff(times, events, groups):
+        observed_calls["count"] += 1
+        if observed_calls["count"] == 1:
+            return 5.0, 0.01
+        raise ValueError("permutation split failed")
+
+    monkeypatch.setattr(ml_models, "survdiff", _fake_survdiff)
+    monkeypatch.setattr(ml_models, "_EXPECTED_CUTPOINT_SCAN_ERRORS", (ValueError,))
+
+    result = ml_models.find_optimal_cutpoint(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        variable="biomarker_score",
+        event_positive_value=1,
+        min_group_fraction=0.1,
+        permutation_iterations=3,
+        random_seed=7,
+    )
+
+    assert result["selection_adjustment"]["permutation_valid_resamples"] == 0
+    assert result["selection_adjusted_p_value"] is None
+    assert result["p_value"] == result["raw_p_value"]
+
+
 def test_scientific_summary_ml_filters_empty_extra_cautions() -> None:
     import survival_toolkit.ml_models as ml_models
 
