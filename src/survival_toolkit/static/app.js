@@ -450,6 +450,12 @@ function extractErrorMessage(payload, fallbackText = "") {
   return "Request failed.";
 }
 
+function errorMessageText(error, fallbackText = "Request failed.") {
+  if (typeof error === "string" && error.trim()) return error.trim();
+  if (typeof error?.message === "string" && error.message.trim()) return error.message.trim();
+  return fallbackText;
+}
+
 function setRuntimeBanner(text = "", tone = "info") {
   if (!refs.runtimeBanner) return;
   if (!text) {
@@ -5943,7 +5949,7 @@ function wireDownloads() {
       rows,
       format: "csv",
       style: "plain",
-    }, "text/csv;charset=utf-8;").catch((error) => showError(error.message));
+    }, "text/csv;charset=utf-8;").catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.addEventListener("click", () => {
     const payload = currentGoalResult("ml");
@@ -5965,7 +5971,7 @@ function wireDownloads() {
       buildDownloadFilename("ml_manuscript_table", "csv", { template: currentMlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "csv", currentMlJournalTemplate(), "Model discrimination summary", payload),
       "text/csv;charset=utf-8;",
-    ).catch((error) => showError(error.message));
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadMlManuscriptMarkdownButton.addEventListener("click", () => {
     const payload = currentGoalResult("ml");
@@ -5977,7 +5983,7 @@ function wireDownloads() {
       buildDownloadFilename("ml_manuscript_table", "md", { template: currentMlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "markdown", currentMlJournalTemplate(), "Model discrimination summary", payload),
       "text/markdown;charset=utf-8;",
-    ).catch((error) => showError(error.message));
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadMlManuscriptLatexButton.addEventListener("click", () => {
     const payload = currentGoalResult("ml");
@@ -5989,7 +5995,7 @@ function wireDownloads() {
       buildDownloadFilename("ml_manuscript_table", "tex", { template: currentMlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "latex", currentMlJournalTemplate(), "Model discrimination summary", payload),
       "text/x-tex;charset=utf-8;",
-    ).catch((error) => showError(error.message));
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadMlManuscriptDocxButton.addEventListener("click", () => {
     const payload = currentGoalResult("ml");
@@ -6001,7 +6007,7 @@ function wireDownloads() {
       buildDownloadFilename("ml_manuscript_table", "docx", { template: currentMlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "docx", currentMlJournalTemplate(), "Model discrimination summary", payload),
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ).catch((error) => showError(error.message));
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadDlComparisonButton.addEventListener("click", () => {
     const payload = currentGoalResult("dl");
@@ -6011,7 +6017,7 @@ function wireDownloads() {
       rows,
       format: "csv",
       style: "plain",
-    }, "text/csv;charset=utf-8;").catch((error) => showError(error.message));
+    }, "text/csv;charset=utf-8;").catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.addEventListener("click", () => {
     const payload = currentGoalResult("dl");
@@ -6033,7 +6039,7 @@ function wireDownloads() {
       buildDownloadFilename("dl_manuscript_table", "csv", { template: currentDlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "csv", currentDlJournalTemplate(), "Deep model discrimination summary", payload),
       "text/csv;charset=utf-8;",
-    ).catch((error) => showError(error.message));
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadDlManuscriptMarkdownButton.addEventListener("click", () => {
     const payload = currentGoalResult("dl");
@@ -6045,7 +6051,7 @@ function wireDownloads() {
       buildDownloadFilename("dl_manuscript_table", "md", { template: currentDlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "markdown", currentDlJournalTemplate(), "Deep model discrimination summary", payload),
       "text/markdown;charset=utf-8;",
-    ).catch((error) => showError(error.message));
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadDlManuscriptLatexButton.addEventListener("click", () => {
     const payload = currentGoalResult("dl");
@@ -6057,7 +6063,7 @@ function wireDownloads() {
       buildDownloadFilename("dl_manuscript_table", "tex", { template: currentDlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "latex", currentDlJournalTemplate(), "Deep model discrimination summary", payload),
       "text/x-tex;charset=utf-8;",
-    ).catch((error) => showError(error.message));
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadDlManuscriptDocxButton.addEventListener("click", () => {
     const payload = currentGoalResult("dl");
@@ -6069,7 +6075,7 @@ function wireDownloads() {
       buildDownloadFilename("dl_manuscript_table", "docx", { template: currentDlJournalTemplate() }),
       manuscriptExportPayload(manuscript, "docx", currentDlJournalTemplate(), "Deep model discrimination summary", payload),
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ).catch((error) => showError(error.message));
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   if (refs.downloadKmPngButton) refs.downloadKmPngButton.addEventListener("click", () => {
     const payload = currentGoalResult("km");
@@ -6105,7 +6111,7 @@ async function withLoading(button, action, scopeOverride = null, { swallowErrors
     const value = await action();
     return { ok: true, value };
   } catch (error) {
-    showError(error.message);
+    showError(errorMessageText(error));
     if (!swallowErrors) throw error;
     return { ok: false, error };
   } finally {

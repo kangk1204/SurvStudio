@@ -121,6 +121,11 @@
       });
     }
 
+    function pendingFamilyText(board) {
+      const pending = board.pendingFamilies.map((goal) => benchmarkGoalMeta(goal).label);
+      return pending.length ? pending.join(" and ") : "the remaining compare runs";
+    }
+
     function benchmarkBoardState() {
       const rawCurrentRows = unifiedBenchmarkRows({ currentOnly: true });
       const latestRows = unifiedBenchmarkRows({ currentOnly: false });
@@ -156,9 +161,9 @@
     async function renderUnifiedBenchmarkPlot(board) {
       if (!refs.benchmarkComparisonPlot || !refs.benchmarkPlotNote) return;
       if (board.predictiveBusy) {
-        refs.benchmarkPlotNote.textContent = `Unified comparison is still running. Completed families: ${board.currentFamilies.length ? board.currentFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ") : "none yet"}. Waiting on ${board.pendingFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} before charting the final board.`;
+        refs.benchmarkPlotNote.textContent = `Waiting on ${pendingFamilyText(board)} before charting the shared C-index board.`;
         refs.benchmarkComparisonPlot.classList.add("hidden");
-        clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>Compare All Models is still running. Partial rows are withheld until both model families finish.</span></div>');
+        clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>The chart will publish after both model families finish.</span></div>');
         return;
       }
       if (!board.currentRows.length) {
@@ -357,8 +362,8 @@
     function renderUnifiedBenchmarkTable(board) {
       if (!refs.benchmarkComparisonShell || !refs.benchmarkTableNote) return;
       if (board.predictiveBusy) {
-        refs.benchmarkTableNote.textContent = `Unified comparison is still running. Partial rows are withheld until ${board.pendingFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} finish.`;
-        refs.benchmarkComparisonShell.innerHTML = '<div class="empty-state">Compare All Models is still running. Partial leaderboard rows are hidden until both model families finish.</div>';
+        refs.benchmarkTableNote.textContent = `Waiting on ${pendingFamilyText(board)} before publishing the leaderboard.`;
+        refs.benchmarkComparisonShell.innerHTML = '<div class="empty-state">Partial leaderboard rows stay hidden until both model families finish.</div>';
         return;
       }
       if (!board.currentRows.length) {

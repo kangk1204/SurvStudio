@@ -505,7 +505,8 @@ def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
 
-    assert "function extractErrorMessage(payload)" in text
+    assert 'function extractErrorMessage(payload, fallbackText = "") {' in text
+    assert 'function errorMessageText(error, fallbackText = "Request failed.") {' in text
     assert 'item.loc.filter((part) => part !== "body").join(" > ")' in text
     assert "Epochs must be between 10 and 1000." in text
     assert "Hidden layers must be a comma-separated list of positive integers." in text
@@ -583,6 +584,7 @@ def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repea
     assert 'if (response.status === 404 && /Unknown dataset id:/i.test(message) && state.dataset) {' in text
     assert 'goHome({ syncHistory: true, historyMode: "replace" });' in text
     assert 'The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.' in text
+    assert 'showError(errorMessageText(error));' in text
     assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");' in text
     assert 'setActionDisabledState(refs.runMlButton, mlSingleDisabled, mlSingleTitle);' in text
     assert 'Run Analysis uses deterministic holdout only. Use Compare All for repeated CV screening.' in text
@@ -678,6 +680,11 @@ def test_benchmark_module_hides_unified_board_when_evaluation_modes_do_not_match
     benchmark_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_benchmark.js"
     text = benchmark_js.read_text()
 
+    assert "function pendingFamilyText(board) {" in text
+    assert "Waiting on ${pendingFamilyText(board)} before charting the shared C-index board." in text
+    assert "Waiting on ${pendingFamilyText(board)} before publishing the leaderboard." in text
+    assert "The chart will publish after both model families finish." in text
+    assert "Partial leaderboard rows stay hidden until both model families finish." in text
     assert "Unified chart hidden because current ML and DL compare rows use mixed evaluation paths" in text
     assert "Unified chart is hidden until ML and DL compare rows use the same evaluation mode." in text
     assert 'Visible compare rows are grouped by family because evaluation modes differ. No cross-family ranking is published.' in text
@@ -3640,9 +3647,12 @@ def test_frontend_download_helpers_accept_fallback_mime_type() -> None:
 
     assert 'function triggerBlobDownload(filename, blob, fallbackMimeType = "") {' in downloads_js
     assert 'const safeBlob = fallbackMimeType && !blob.type' in downloads_js
+    assert 'function extractErrorMessage(payload, fallbackText = "") {' in downloads_js
+    assert 'throw new Error(extractErrorMessage(errorPayload, rawText || "Export failed."));' in downloads_js
     assert "} finally {" in downloads_js
     assert 'function triggerBlobDownload(filename, blob, fallbackMimeType = "") {' in app_js
     assert "return downloadHelpers.triggerBlobDownload(filename, blob, fallbackMimeType);" in app_js
+    assert 'showError(errorMessageText(error, "Download failed."))' in app_js
 
 
 def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:

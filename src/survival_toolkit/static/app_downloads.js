@@ -1,4 +1,20 @@
 (function registerSurvStudioDownloads() {
+  function extractErrorMessage(payload, fallbackText = "") {
+    const detail = payload?.detail;
+    if (typeof detail === "string" && detail.trim()) return detail.trim();
+    if (Array.isArray(detail) && detail.length) {
+      return detail.map((item) => {
+        const path = Array.isArray(item?.loc)
+          ? item.loc.filter((part) => part !== "body").join(" > ")
+          : "";
+        const message = item?.msg || "Invalid input.";
+        return path ? `${path}: ${message}` : message;
+      }).join(" | ");
+    }
+    if (typeof fallbackText === "string" && fallbackText.trim()) return fallbackText.trim();
+    return "Request failed.";
+  }
+
   function slugifyDownloadToken(value, fallback = "na") {
     const text = String(value ?? "").trim().toLowerCase();
     if (!text) return fallback;
@@ -95,8 +111,16 @@
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || "Export failed.");
+      const rawText = await response.text();
+      let errorPayload = {};
+      if (rawText.trim()) {
+        try {
+          errorPayload = JSON.parse(rawText);
+        } catch {
+          errorPayload = {};
+        }
+      }
+      throw new Error(extractErrorMessage(errorPayload, rawText || "Export failed."));
     }
     const blob = await response.blob();
     triggerBlobDownload(filename, blob, fallbackMimeType);
