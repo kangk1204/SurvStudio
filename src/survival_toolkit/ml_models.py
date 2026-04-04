@@ -2655,9 +2655,7 @@ def compute_integrated_brier_score(
         if trapezoid is not None:
             area = float(trapezoid(bs_arr, eval_times_arr))
         else:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                area = float(np.trapz(bs_arr, eval_times_arr))
+            area = float(np.sum(np.diff(eval_times_arr) * (bs_arr[:-1] + bs_arr[1:]) * 0.5))
         ibs = area / (eval_times_arr[-1] - eval_times_arr[0])
     else:
         ibs = float(bs_arr[0])

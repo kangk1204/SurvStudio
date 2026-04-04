@@ -429,11 +429,12 @@ def test_frontend_persists_predictive_workbench_visibility_in_history_state() ->
     assert "workbenchRevealed: runtime.workbenchRevealed" in shell_text
     assert "runtime.workbenchRevealed = Boolean(historyState?.workbenchRevealed);" in text
     assert 'benchmarkActionCard: document.getElementById("benchmarkActionCard")' in text
+    assert 'runPredictiveCompareAllButton: document.getElementById("runPredictiveCompareAllButton")' in text
     assert 'closePredictiveWorkbenchButton: document.getElementById("closePredictiveWorkbenchButton")' in text
     assert "function syncBenchmarkWorkbenchVisibility()" in text
     assert "function closePredictiveWorkbench()" in text
-    assert 'refs.benchmarkActionCard?.classList.toggle("hidden", workbenchOpen);' in text
     assert 'refs.benchmarkWorkbench?.classList.toggle("hidden", !workbenchOpen);' in text
+    assert 'refs.runPredictiveCompareAllButton?.classList.toggle("hidden", workbenchOpen);' in text
     assert 'refs.mlModelType?.closest(".model-choice-field")?.classList.toggle("hidden", workbenchOpen);' in text
     assert 'refs.runCompareButton?.classList.toggle("hidden", workbenchOpen);' in text
     assert 'refs.runDlCompareButton?.classList.toggle("hidden", workbenchOpen);' in text
@@ -1322,6 +1323,8 @@ def test_readme_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -
     assert "This synthetic dataset does **not** use `stage_group` or `treatment_group`." in text
     assert "survival-toolkit inspect path/to/data.csv" in text
     assert "This is the fastest way to catch file-format problems before uploading a cohort in the browser." in text
+    assert 'pip install -e ".[formats]"' in text
+    assert 'requires `pip install -e ".[formats]"`: `xlsx`, `xls`, `parquet`' in text
     assert "## DL Runtime Note" in text
     assert "Batch Size` currently affects DeepHit and Neural MTLR only." in text
     assert "weight_decay=1e-4" in text
@@ -4894,14 +4897,18 @@ def test_upload_ready_real_tcga_file_runs_deep_smoke() -> None:
     assert deep_response.json()["analysis"]["n_samples"] > 0
 
 
-def test_dev_extra_includes_ml_dl_and_export_dependencies() -> None:
+def test_optional_extras_include_format_ml_dl_and_export_dependencies() -> None:
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    format_dependencies = set(pyproject["project"]["optional-dependencies"]["formats"])
     dev_dependencies = set(pyproject["project"]["optional-dependencies"]["dev"])
     all_dependencies = set(pyproject["project"]["optional-dependencies"]["all"])
 
+    assert {"openpyxl>=3.1.5", "pyarrow>=17.0.0", "xlrd>=2.0.1"}.issubset(format_dependencies)
+    assert {"openpyxl>=3.1.5", "pyarrow>=17.0.0", "xlrd>=2.0.1"}.issubset(dev_dependencies)
     assert {"scikit-survival>=0.23.0", "shap>=0.45.0", "torch>=2.0.0"}.issubset(dev_dependencies)
     assert {"httpx>=0.28.1", "pytest>=8.3.5", "kaleido>=0.2.1"}.issubset(dev_dependencies)
+    assert {"openpyxl>=3.1.5", "pyarrow>=17.0.0", "xlrd>=2.0.1"}.issubset(all_dependencies)
     assert {"kaleido>=0.2.1", "playwright>=1.52.0"}.issubset(all_dependencies)
 
 

@@ -45,6 +45,27 @@ def _is_playwright_environment_error(exc: Exception) -> bool:
     return any(marker in message for marker in markers)
 
 
+def _launch_browser(api):
+    try:
+        return api.chromium.launch(headless=True)
+    except Exception as exc:
+        if not _is_playwright_environment_error(exc):
+            raise
+        last_exc = exc
+        for candidate in (
+            os.environ.get("CHROME_BIN"),
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+        ):
+            if not candidate or not Path(candidate).exists():
+                continue
+            try:
+                return api.chromium.launch(headless=True, executable_path=candidate)
+            except Exception as chrome_exc:
+                last_exc = chrome_exc
+        raise last_exc
+
+
 @pytest.fixture
 def browser_server() -> str:
     project_root = Path(__file__).resolve().parents[1]
@@ -103,12 +124,29 @@ def _switch_to_expert(page) -> None:
         page.wait_for_function("document.body.dataset.uiMode === 'expert'")
 
 
+def _open_predictive_workbench(page, model_key: str | None = None) -> None:
+    page.locator('[data-tab="benchmark"]').click()
+    _assert_tab_active(page, "benchmark")
+    if page.locator("#benchmarkWorkbench").is_hidden():
+        page.locator("#benchmarkSummaryGrid [data-benchmark-model]").wait_for(state="visible")
+        page.locator("#benchmarkSummaryGrid [data-benchmark-model]").click()
+        page.wait_for_function(
+            "() => document.getElementById('benchmarkWorkbench') && !document.getElementById('benchmarkWorkbench').classList.contains('hidden')"
+        )
+    if model_key is not None:
+        page.locator("#predictiveModelSelector").select_option(model_key)
+        page.wait_for_function(
+            "(value) => document.getElementById('predictiveModelSelector')?.value === value",
+            arg=model_key,
+        )
+
+
 def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1400})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -142,9 +180,7 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
             )
             assert "C-index" in page.locator("#coxMetaBanner").inner_text()
 
-            page.locator('[data-tab="benchmark"]').click()
-            _assert_tab_active(page, "benchmark")
-            page.locator("#mlModelType").select_option("rsf")
+            _open_predictive_workbench(page)
             page.locator("#mlNEstimators").fill("10")
             page.locator("#runMlButton").click()
             page.wait_for_function(
@@ -153,8 +189,7 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
             assert "eval=" in page.locator("#mlMetaBanner").inner_text()
             assert "ML and DL share this model feature list" in page.locator("#mlFeatureSummaryText").inner_text()
 
-            page.locator("#predictiveModelSelector").select_option("deepsurv")
-            page.locator("#dlModelType").select_option("deepsurv")
+            _open_predictive_workbench(page, "deepsurv")
             page.locator("#dlEpochs").fill("10")
             page.locator("#dlHiddenLayers").fill("8")
             page.locator("#runDlButton").click()
@@ -176,7 +211,7 @@ def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(b
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1400})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -220,8 +255,7 @@ def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(b
             assert f"Model features: {selected_feature_count}" in page.locator("#datasetPresetChips").inner_text()
             assert f"Categorical: {selected_categorical_count}" in page.locator("#datasetPresetChips").inner_text()
 
-            page.locator('[data-tab="benchmark"]').click()
-            _assert_tab_active(page, "benchmark")
+            _open_predictive_workbench(page)
             assert "Machine Learning Survival Models" in page.locator("#benchmarkMlMount").inner_text()
             assert page.locator("#benchmarkMlMount").is_visible()
             assert not page.locator("#benchmarkDlMount").is_visible()
@@ -247,7 +281,7 @@ def test_beginner_ml_compare_options_toggle_cv_inputs_and_finish_with_visible_fe
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1400})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -255,8 +289,7 @@ def test_beginner_ml_compare_options_toggle_cv_inputs_and_finish_with_visible_fe
             page.locator("#workspace").wait_for(state="visible")
             _switch_to_expert(page)
 
-            page.locator('[data-tab="benchmark"]').click()
-            _assert_tab_active(page, "benchmark")
+            _open_predictive_workbench(page)
 
             assert page.locator("#mlCvFoldsWrap").evaluate("(node) => node.classList.contains('hidden')")
             assert page.locator("#mlCvRepeatsWrap").evaluate("(node) => node.classList.contains('hidden')")
@@ -295,7 +328,7 @@ def test_beginner_dl_single_run_keeps_feedback_visible_and_hides_cv_controls(bro
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1400})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -303,9 +336,7 @@ def test_beginner_dl_single_run_keeps_feedback_visible_and_hides_cv_controls(bro
             page.locator("#workspace").wait_for(state="visible")
             _switch_to_expert(page)
 
-            page.locator('[data-tab="benchmark"]').click()
-            _assert_tab_active(page, "benchmark")
-            page.locator("#predictiveModelSelector").select_option("deepsurv")
+            _open_predictive_workbench(page, "deepsurv")
 
             assert page.locator("#dlCvFoldsWrap").evaluate("(node) => node.classList.contains('hidden')")
             assert page.locator("#dlCvRepeatsWrap").evaluate("(node) => node.classList.contains('hidden')")

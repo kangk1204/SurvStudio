@@ -46,6 +46,27 @@ def _is_playwright_environment_error(exc: Exception) -> bool:
     return any(marker in message for marker in markers)
 
 
+def _launch_browser(api):
+    try:
+        return api.chromium.launch(headless=True)
+    except Exception as exc:
+        if not _is_playwright_environment_error(exc):
+            raise
+        last_exc = exc
+        for candidate in (
+            os.environ.get("CHROME_BIN"),
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+        ):
+            if not candidate or not Path(candidate).exists():
+                continue
+            try:
+                return api.chromium.launch(headless=True, executable_path=candidate)
+            except Exception as chrome_exc:
+                last_exc = chrome_exc
+        raise last_exc
+
+
 def _switch_to_expert(page) -> None:
     page.locator("#workspace").wait_for(state="visible")
     if page.locator("#guidedShell").is_visible():
@@ -66,6 +87,23 @@ def _assert_tab_active(page, tab_name: str) -> None:
         """,
         arg=tab_name,
     )
+
+
+def _open_predictive_workbench(page, model_key: str | None = None) -> None:
+    page.locator('[data-tab="benchmark"]').click()
+    _assert_tab_active(page, "benchmark")
+    if page.locator("#benchmarkWorkbench").is_hidden():
+        page.locator("#benchmarkSummaryGrid [data-benchmark-model]").wait_for(state="visible")
+        page.locator("#benchmarkSummaryGrid [data-benchmark-model]").click()
+        page.wait_for_function(
+            "() => document.getElementById('benchmarkWorkbench') && !document.getElementById('benchmarkWorkbench').classList.contains('hidden')"
+        )
+    if model_key is not None:
+        page.locator("#predictiveModelSelector").select_option(model_key)
+        page.wait_for_function(
+            "(value) => document.getElementById('predictiveModelSelector')?.value === value",
+            arg=model_key,
+        )
 
 
 @pytest.fixture
@@ -108,7 +146,7 @@ def test_browser_downloads_km_summary_csv_and_png(browser_server: str, tmp_path:
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             context = browser.new_context(accept_downloads=True)
             page = context.new_page()
 
@@ -150,7 +188,7 @@ def test_browser_preset_application_shows_visible_feedback(browser_server: str) 
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page()
 
             page.goto(browser_server, wait_until="networkidle")
@@ -253,7 +291,7 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.route("**/api/ml-model", _mock_ml_compare)
@@ -369,7 +407,7 @@ def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(br
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.route("**/api/ml-model", _mock_ml_compare)
@@ -411,7 +449,7 @@ def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: st
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1400})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -470,7 +508,7 @@ def test_browser_guided_change_analysis_returns_to_step3_with_valid_tab(browser_
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -481,10 +519,12 @@ def test_browser_guided_change_analysis_returns_to_step3_with_valid_tab(browser_
             page.locator('[data-guided-action="choose-goal"][data-goal="predictive"]').click()
             page.wait_for_function("document.body.dataset.guidedStep === '4'")
 
-            page.locator('[data-guided-action="choose-another-analysis"]').click()
+            page.locator('[data-guided-action="previous-step"]').click()
             page.wait_for_function("document.body.dataset.guidedStep === '3'")
-            assert page.locator('[data-tab="km"]').get_attribute("aria-selected") == "true"
-            assert page.locator("#panel-km").evaluate("(el) => el.classList.contains('active')") is True
+            active_tab = page.locator('[data-tab][aria-selected="true"]')
+            active_tab_name = active_tab.get_attribute("data-tab")
+            assert active_tab_name in {"benchmark", "km", "cox", "ml", "dl", "tables"}
+            assert page.locator(f"#panel-{active_tab_name}").evaluate("(el) => el.classList.contains('active')") is True
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -498,7 +538,7 @@ def test_browser_guided_predictive_compare_partial_failure_stays_on_step4(browse
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1400})
 
             def fail_deep_compare(route) -> None:
@@ -524,8 +564,7 @@ def test_browser_guided_predictive_compare_partial_failure_stays_on_step4(browse
             page.wait_for_function("document.body.dataset.guidedStep === '4'")
             page.locator('[data-guided-action="run-predictive-compare-all"]').click()
             page.wait_for_function(
-                "'Classical ML is currently represented.' in (document.querySelector('#benchmarkSummaryGrid')?.innerText ?? '') || "
-                "'Needs review' in (document.querySelector('#benchmarkSummaryGrid')?.innerText ?? '')",
+                "() => { const text = document.querySelector('#benchmarkSummaryGrid')?.innerText ?? ''; return text.includes('Classical ML is currently represented.') || text.includes('Needs review'); }",
                 timeout=60000,
             )
 
@@ -545,7 +584,7 @@ def test_browser_cox_results_table_stays_within_card(browser_server: str) -> Non
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1280, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -580,7 +619,7 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page()
 
             page.goto(browser_server, wait_until="networkidle")
@@ -638,7 +677,7 @@ def test_browser_study_design_collapses_grouping_controls_outside_km(browser_ser
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -676,7 +715,7 @@ def test_browser_guided_mode_goal_cards_and_mode_toggle(browser_server: str) -> 
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -733,7 +772,7 @@ def test_browser_model_features_stay_separate_from_cox_and_keep_non_endpoint_inp
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1400})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -795,7 +834,7 @@ def test_browser_event_column_defaults_to_event_like_fields_and_advanced_toggle_
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -840,7 +879,7 @@ def test_browser_event_value_requires_explicit_choice_for_ambiguous_binary_codes
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
             upload_path = tmp_path / "ambiguous_event.csv"
             upload_path.write_text(
@@ -890,7 +929,7 @@ def test_browser_event_column_blocks_binary_baseline_covariates_in_guided_step_t
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -918,7 +957,7 @@ def test_browser_km_derive_defaults_to_group_when_current_group_is_overall_only(
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -968,7 +1007,7 @@ def test_browser_km_derive_preserves_existing_group_until_user_reruns(browser_se
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -1002,7 +1041,7 @@ def test_browser_guided_km_run_creates_pending_derived_group_without_separate_cr
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -1036,7 +1075,7 @@ def test_browser_guided_km_run_keeps_existing_group_when_derive_draft_is_pending
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -1070,7 +1109,7 @@ def test_browser_dataset_entry_resets_scroll_to_top(browser_server: str) -> None
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1280, "height": 720})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -1096,7 +1135,7 @@ def test_browser_guided_mode_back_button_walks_previous_steps(browser_server: st
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1280, "height": 900})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -1132,7 +1171,7 @@ def test_browser_guided_step_rail_allows_navigation_to_reached_steps(browser_ser
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1280, "height": 900})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -1166,7 +1205,7 @@ def test_browser_guided_and_expert_mode_back_forward_restores_mode_and_step(brow
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1280, "height": 900})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -1188,7 +1227,7 @@ def test_browser_guided_and_expert_mode_back_forward_restores_mode_and_step(brow
             page.go_back(wait_until="networkidle")
             page.wait_for_function("document.body.dataset.uiMode === 'guided' && document.body.dataset.guidedStep === '4'")
             assert "Run ML/DL Models" in page.locator("#guidedPanel").inner_text()
-            assert "Test selected model" in page.locator("#guidedPanel").inner_text()
+            assert "Compare all models" in page.locator("#guidedPanel").inner_text()
 
             page.go_forward(wait_until="networkidle")
             page.wait_for_function("document.body.dataset.uiMode === 'expert'")
@@ -1206,7 +1245,7 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1400})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -1243,7 +1282,7 @@ def test_browser_optimal_cutpoint_summary_wraps_long_derived_column(browser_serv
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1400})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -1285,14 +1324,13 @@ def test_browser_ml_importance_plot_stays_inside_its_section(browser_server: str
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1400})
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _switch_to_expert(page)
-            page.locator('[data-tab="benchmark"]').click()
-            page.locator("#mlModelType").select_option("rsf")
+            _open_predictive_workbench(page)
             page.locator("#mlNEstimators").fill("10")
             page.locator("#runMlButton").click()
             page.wait_for_function(
@@ -1320,7 +1358,7 @@ def test_browser_risk_table_ticks_change_columns_and_flash_table(browser_server:
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
@@ -1355,15 +1393,13 @@ def test_browser_dl_epoch_validation_message_is_human_readable(browser_server: s
 
     try:
         with playwright.sync_playwright() as api:
-            browser = api.chromium.launch(headless=True)
+            browser = _launch_browser(api)
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _switch_to_expert(page)
-            page.locator('[data-tab="benchmark"]').click()
-            _assert_tab_active(page, "benchmark")
-            page.locator("#predictiveModelSelector").select_option("deepsurv")
+            _open_predictive_workbench(page, "deepsurv")
             page.locator("#dlEpochs").fill("1001")
             page.locator("#runDlButton").click()
             page.wait_for_function(

@@ -127,7 +127,7 @@ Before you start:
 - if Conda is active, run `conda deactivate`
 - the commands below create a project-local `.venv` and do not overwrite your system Python
 - this install path is for running the app itself
-- ML, DL, pytest, and Playwright can be added later only if you need them
+- optional format readers, ML, DL, pytest, and Playwright can be added later only if you need them
 
 ```bash
 brew install python@3.11
@@ -161,7 +161,7 @@ Before you start:
 - if Conda is active, run `conda deactivate`
 - the commands below create a project-local `.venv` and do not overwrite your system Python
 - this install path is for running the app itself
-- ML, DL, pytest, and Playwright can be added later only if you need them
+- optional format readers, ML, DL, pytest, and Playwright can be added later only if you need them
 - on Ubuntu `22.04`, `python3` is often still `3.10`; if you cannot install `python3.11` system-wide, use the `Project-local Conda fallback` section below
 
 ```bash
@@ -186,7 +186,7 @@ http://127.0.0.1:8000
 
 ### Standard install
 
-This is the easiest path once Python `3.11+` is already available. It installs the dashboard and the classical analysis stack first. ML, DL, and development tools can be added later.
+This is the easiest path once Python `3.11+` is already available. It installs the dashboard and the classical analysis stack first. Format readers, ML, DL, and development tools can be added later.
 
 Before you start:
 - if another virtual environment is active, run `deactivate`
@@ -203,7 +203,7 @@ python -m pip install --upgrade pip
 pip install -e .
 ```
 
-This path is for running the app. It does **not** install the optional ML stack, DL stack, pytest extras, or Playwright.
+This path is for running the app. It does **not** install the optional format readers for Excel or Parquet, the ML stack, the DL stack, pytest extras, or Playwright.
 
 ### Easiest Path For A New Windows 11 Machine
 
@@ -218,7 +218,7 @@ Before you start:
 - confirm `py -3.11 --version` works before continuing
 - the commands below avoid PowerShell activation-policy issues by calling the venv Python directly
 - this install path is for running the app itself
-- ML, DL, pytest, and Playwright can be added later only if you need them
+- optional format readers, ML, DL, pytest, and Playwright can be added later only if you need them
 
 ```powershell
 git clone https://github.com/kangk1204/SurvStudio.git
@@ -280,6 +280,12 @@ conda run -p ./.conda python -m survival_toolkit
 
 Start with the app-only install above, then add extras only if you need them:
 
+- Add Excel and Parquet import support:
+
+```bash
+pip install -e ".[formats]"
+```
+
 - Add ML models:
 
 ```bash
@@ -305,12 +311,13 @@ pip install -e ".[all]"
 ```
 
 Notes:
+- `.[formats]` adds `openpyxl`, `pyarrow`, and `xlrd` for `.xlsx`, `.xls`, and `.parquet` input support
 - `.[ml]` adds `scikit-survival` and `shap`
 - `.[dl]` adds `torch`
-- `.[dev]` includes pytest, httpx, and `kaleido` plus the ML and DL extras
-- `.[all]` includes the ML, DL, export, and browser-test extras
+- `.[dev]` includes pytest, httpx, `kaleido`, the format readers, and the ML and DL extras
+- `.[all]` includes the format readers, ML, DL, export, and browser-test extras
 - on Linux, `.[dl]`, `.[dev]`, and `.[all]` can download a large PyTorch wheel and, depending on platform resolution, additional CUDA runtime packages
-- if you only want to run the dashboard or classical survival workflows, stay with `pip install -e .`
+- if you only want to run the dashboard or classical survival workflows with CSV or TSV input, stay with `pip install -e .`
 
 ### Optional Browser E2E Test Install
 
@@ -351,9 +358,10 @@ If `python -m survival_toolkit` does not start the server, check:
 ## Installation Notes
 
 - The fastest first run is `pip install -e .`.
+- Add `.[formats]` when you need Excel (`.xlsx`, `.xls`) or Parquet input support.
 - Add `.[ml]` only when you need the optional machine-learning models.
 - Add `.[dl]` only when you need the optional deep-learning models.
-- Add `.[dev]` when you want the full local development stack and normal pytest suite.
+- Add `.[dev]` when you want the full local development stack, normal pytest suite, and the optional format readers.
 - On Linux, `.[dl]` and `.[dev]` may be large because PyTorch can pull platform-specific runtime packages.
 - If your machine only has Python `3.10`, bootstrap Python `3.11` first with the `Project-local Conda fallback` section.
 - Browser E2E testing is optional and uses the separate `e2e` extra.
@@ -472,11 +480,10 @@ The actual column names are `stage` and `treatment`.
 ## Input Data Format
 
 Supported file types:
-- `csv`
-- `tsv`
-- `xlsx`
-- `xls`
-- `parquet`
+- included in the base `pip install -e .`: `csv`, `tsv`
+- requires `pip install -e ".[formats]"`: `xlsx`, `xls`, `parquet`
+
+If you are choosing a spreadsheet format, prefer `.xlsx` over legacy `.xls`.
 
 Expected structure:
 - one row per patient or subject
