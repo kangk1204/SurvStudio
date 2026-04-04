@@ -620,6 +620,10 @@
                   <input id="mlSkipShap" type="checkbox" checked />
                   <span>Fast mode (skip SHAP)</span>
                 </label>
+                <label class="toggle control-inline-toggle ml-fast-toggle" title="If SHAP fails on a very wide encoded matrix, SurvStudio will refit a reduced companion tree model for explanation only and label it clearly in the result banner.">
+                  <input id="mlShapSafeMode" type="checkbox" checked />
+                  <span>SHAP safe mode (auto-reduce)</span>
+                </label>
               </div>
             </section>
             <section class="control-section">
@@ -646,7 +650,7 @@
               </div>
             </section>
           </div>
-          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH and, when available, LASSO-Cox, RSF, and GBS on one shared evaluation path. <strong>Run Analysis</strong> fits one RSF, GBS, or LASSO-Cox model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF and GBS return faster on larger cohorts. If TreeExplainer is unavailable, SHAP falls back to an approximate screening view rather than a manuscript-ready attribution.</div>
+          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH and, when available, LASSO-Cox, RSF, and GBS on one shared evaluation path. <strong>Run Analysis</strong> fits one RSF, GBS, or LASSO-Cox model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF and GBS return faster on larger cohorts. If TreeExplainer is unavailable, SHAP falls back to an approximate screening view rather than a manuscript-ready attribution. <strong>SHAP safe mode</strong> can refit a reduced companion tree model when the encoded feature matrix is too wide, and that companion run is labeled explicitly.</div>
           <div class="toolbar-note">As a rough interpretation guide, a C-index near <strong>0.50</strong> is chance-level ranking. Values above about <strong>0.70</strong> can be useful for screening, but external validation matters more than thresholds.</div>
           <div class="toolbar-note">Partial dependence and counterfactual analysis are available for tree-model runs only (<strong>RSF</strong> or <strong>GBS</strong>). They reuse the latest matching trained tree model when available; otherwise they refit the same requested tree settings.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">

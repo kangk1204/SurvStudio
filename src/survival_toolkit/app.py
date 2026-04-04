@@ -93,6 +93,8 @@ _MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
 _MAX_UPLOAD_ROWS = 100_000
 _MAX_UPLOAD_COLUMNS = 5_000
 _MAX_UPLOAD_CELLS = 5_000_000
+_SHAP_SAFE_MODE_MAX_ENCODED_FEATURES = 80
+_SHAP_SAFE_MODE_MAX_RAW_FEATURES = 30
 _SIGNED_NUMERIC_CSV_LITERAL = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 _CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 _DATASET_PROFILE_CACHE_KEY = "_dataset_profile_cache"
@@ -293,6 +295,7 @@ class MLModelRequest(BaseModel):
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = 42
     compute_shap: bool = False
+    shap_safe_mode: bool = True
     evaluation_strategy: Literal["holdout", "repeated_cv"] = "holdout"
     cv_folds: int = Field(default=5, ge=2, le=10)
     cv_repeats: int = Field(default=3, ge=1, le=20)
@@ -640,6 +643,117 @@ def _get_ml_artifact(dataset_id: str, request_config: dict[str, Any]) -> dict[st
         model_type=model_type,
         signature=_ml_artifact_signature(request_config),
     )
+
+
+def _encoded_to_raw_feature_map(feature_encoder: dict[str, Any], requested_features: Sequence[str]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    requested = {str(feature) for feature in requested_features}
+    for column in feature_encoder.get("numeric_features", []):
+        column_name = str(column)
+        if column_name in requested:
+            mapping[column_name] = column_name
+    categorical_mappings = feature_encoder.get("categorical_mappings", {})
+    for column in feature_encoder.get("categorical_features", []):
+        column_name = str(column)
+        if column_name not in requested:
+            continue
+        meta = categorical_mappings.get(column_name, {})
+        for level in meta.get("retained_levels", []):
+            mapping[f"{column_name}_{level}"] = column_name
+        unknown_column = meta.get("unknown_column")
+        missing_column = meta.get("missing_column")
+        if unknown_column:
+            mapping[str(unknown_column)] = column_name
+        if missing_column:
+            mapping[str(missing_column)] = column_name
+    return mapping
+
+
+def _raw_feature_encoded_widths(feature_encoder: dict[str, Any], requested_features: Sequence[str]) -> dict[str, int]:
+    widths: dict[str, int] = {}
+    requested = {str(feature) for feature in requested_features}
+    for column in feature_encoder.get("numeric_features", []):
+        column_name = str(column)
+        if column_name in requested:
+            widths[column_name] = 1
+    categorical_mappings = feature_encoder.get("categorical_mappings", {})
+    for column in feature_encoder.get("categorical_features", []):
+        column_name = str(column)
+        if column_name not in requested:
+            continue
+        meta = categorical_mappings.get(column_name, {})
+        widths[column_name] = (
+            len(meta.get("retained_levels", []))
+            + int(bool(meta.get("unknown_column")))
+            + int(bool(meta.get("missing_column")))
+        )
+    return widths
+
+
+def _coerce_score(value: Any) -> float | None:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if pd.isna(score) else score
+
+
+def _select_shap_safe_mode_subset(
+    result: dict[str, Any],
+    requested_features: Sequence[str],
+) -> dict[str, Any] | None:
+    feature_encoder = result.get("_feature_encoder")
+    if not isinstance(feature_encoder, dict):
+        return None
+    requested = [str(feature) for feature in requested_features]
+    if len(requested) <= 1:
+        return None
+
+    encoded_to_raw = _encoded_to_raw_feature_map(feature_encoder, requested)
+    feature_widths = _raw_feature_encoded_widths(feature_encoder, requested)
+    raw_scores = {feature: 0.0 for feature in requested}
+    for row in result.get("feature_importance", []) or []:
+        if not isinstance(row, dict):
+            continue
+        encoded_feature = str(row.get("feature") or "")
+        raw_feature = encoded_to_raw.get(encoded_feature, encoded_feature if encoded_feature in raw_scores else None)
+        if raw_feature is None:
+            continue
+        score = _coerce_score(row.get("importance"))
+        if score is None:
+            continue
+        raw_scores[raw_feature] += score
+
+    ranked_features = sorted(
+        requested,
+        key=lambda feature: (-raw_scores.get(feature, 0.0), requested.index(feature)),
+    )
+    selected_ranked: list[str] = []
+    encoded_total = 0
+    for feature in ranked_features:
+        encoded_width = max(1, int(feature_widths.get(feature, 1)))
+        if encoded_width > _SHAP_SAFE_MODE_MAX_ENCODED_FEATURES:
+            continue
+        if selected_ranked and encoded_total + encoded_width > _SHAP_SAFE_MODE_MAX_ENCODED_FEATURES:
+            continue
+        selected_ranked.append(feature)
+        encoded_total += encoded_width
+        if len(selected_ranked) >= min(_SHAP_SAFE_MODE_MAX_RAW_FEATURES, len(requested)):
+            break
+
+    if not selected_ranked or len(selected_ranked) >= len(requested):
+        return None
+
+    selected_set = set(selected_ranked)
+    ordered_selected = [feature for feature in requested if feature in selected_set]
+    omitted_features = [feature for feature in requested if feature not in selected_set]
+    return {
+        "selected_features": ordered_selected,
+        "omitted_features": omitted_features,
+        "selected_feature_count_raw": len(ordered_selected),
+        "selected_feature_count_encoded": encoded_total,
+        "requested_feature_count_raw": len(requested),
+    }
 
 
 def _enforce_upload_shape_limits(dataframe: Any) -> None:
@@ -1625,7 +1739,11 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
             cross_validate_survival_models,
             compute_shap_values,
         )
-        from survival_toolkit.plots import build_feature_importance_figure, build_model_comparison_figure
+        from survival_toolkit.plots import (
+            build_feature_importance_figure,
+            build_model_comparison_figure,
+            build_shap_figure,
+        )
 
         stored = _get_stored_dataset(request_model.dataset_id)
         df = stored.dataframe
@@ -1687,26 +1805,35 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                     "Use Compare All for repeated cross-validation screening."
                 )
 
-            common_ml = dict(
-                df=df,
-                time_column=request_model.time_column,
-                event_column=request_model.event_column,
+            def _train_single_ml_model(
+                *,
+                features: Sequence[str],
+                categorical_features: Sequence[str],
+            ) -> dict[str, Any]:
+                common_ml = dict(
+                    df=df,
+                    time_column=request_model.time_column,
+                    event_column=request_model.event_column,
+                    features=list(features),
+                    categorical_features=list(categorical_features),
+                    event_positive_value=request_model.event_positive_value,
+                    random_state=request_model.random_state,
+                )
+                if request_model.model_type == "gbs":
+                    common_ml["n_estimators"] = request_model.n_estimators
+                    common_ml["max_depth"] = request_model.max_depth
+                    common_ml["learning_rate"] = request_model.learning_rate
+                    return train_gradient_boosted_survival(**common_ml)
+                if request_model.model_type == "lasso_cox":
+                    return train_lasso_cox(**common_ml)
+                common_ml["n_estimators"] = request_model.n_estimators
+                common_ml["max_depth"] = request_model.max_depth
+                return train_random_survival_forest(**common_ml)
+
+            result = _train_single_ml_model(
                 features=request_model.features,
                 categorical_features=request_model.categorical_features,
-                event_positive_value=request_model.event_positive_value,
-                random_state=request_model.random_state,
             )
-            if request_model.model_type == "gbs":
-                common_ml["n_estimators"] = request_model.n_estimators
-                common_ml["max_depth"] = request_model.max_depth
-                common_ml["learning_rate"] = request_model.learning_rate
-                result = train_gradient_boosted_survival(**common_ml)
-            elif request_model.model_type == "lasso_cox":
-                result = train_lasso_cox(**common_ml)
-            else:
-                common_ml["n_estimators"] = request_model.n_estimators
-                common_ml["max_depth"] = request_model.max_depth
-                result = train_random_survival_forest(**common_ml)
             _remember_ml_artifact(request_model.dataset_id, request_config, result)
             model_label = {
                 "rsf": "Random Survival Forest",
@@ -1721,6 +1848,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
             shap_result = None
             shap_figure = None
             shap_error = None
+            shap_companion = None
             model_obj = result.get("_model")
             x_encoded = result.get("_X_eval_encoded")
             if x_encoded is None:
@@ -1731,12 +1859,64 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
             elif request_model.compute_shap and model_obj is not None and x_encoded is not None:
                 try:
                     shap_result = compute_shap_values(model_obj, x_encoded, result["feature_names"])
-                    from survival_toolkit.plots import build_shap_figure
                     shap_figure = build_shap_figure(shap_result)
                 except (MemoryError, KeyboardInterrupt):
                     raise
                 except Exception as exc:
                     shap_error = f"{type(exc).__name__}: {exc}"
+                    if request_model.shap_safe_mode and "high-dimensional inputs" in str(exc).lower():
+                        subset = _select_shap_safe_mode_subset(result, request_model.features)
+                        if subset is not None:
+                            try:
+                                companion_features = list(subset["selected_features"])
+                                companion_categoricals = [
+                                    feature for feature in request_model.categorical_features
+                                    if feature in companion_features
+                                ]
+                                companion_result = _train_single_ml_model(
+                                    features=companion_features,
+                                    categorical_features=companion_categoricals,
+                                )
+                                companion_model = companion_result.get("_model")
+                                companion_x = companion_result.get("_X_eval_encoded")
+                                if companion_x is None:
+                                    companion_x = companion_result.get("_X_encoded")
+                                if companion_model is None or companion_x is None:
+                                    raise ValueError("SHAP safe mode companion model did not return an encoded evaluation matrix.")
+                                shap_result = compute_shap_values(
+                                    companion_model,
+                                    companion_x,
+                                    companion_result["feature_names"],
+                                )
+                                companion_note = (
+                                    f"SHAP safe mode refit a reduced companion {model_label} model on "
+                                    f"{subset['selected_feature_count_raw']} raw features "
+                                    f"({subset['selected_feature_count_encoded']} encoded) selected from the full fit's "
+                                    "built-in importance ranking."
+                                )
+                                usage_note = str(shap_result.get("usage_note") or "").strip()
+                                shap_result["usage_note"] = f"{usage_note} {companion_note}".strip()
+                                shap_result["safe_mode"] = True
+                                shap_result["safe_mode_reason"] = "high_dimensional_encoded_matrix"
+                                shap_result["companion_model"] = {
+                                    "selection_basis": "full_model_importance",
+                                    "requested_feature_count_raw": int(subset["requested_feature_count_raw"]),
+                                    "selected_feature_count_raw": int(subset["selected_feature_count_raw"]),
+                                    "selected_feature_count_encoded": int(subset["selected_feature_count_encoded"]),
+                                    "selected_features": companion_features,
+                                    "omitted_features": list(subset["omitted_features"]),
+                                    "encoded_feature_limit": int(_SHAP_SAFE_MODE_MAX_ENCODED_FEATURES),
+                                }
+                                shap_companion = shap_result["companion_model"]
+                                shap_figure = build_shap_figure(shap_result)
+                                shap_error = None
+                            except (MemoryError, KeyboardInterrupt):
+                                raise
+                            except Exception as safe_mode_exc:
+                                shap_error = (
+                                    f"{type(exc).__name__}: {exc} "
+                                    f"SHAP safe mode also failed: {type(safe_mode_exc).__name__}: {safe_mode_exc}"
+                                )
 
             clean_result = {k: v for k, v in result.items() if not k.startswith("_")}
             return {
@@ -1745,6 +1925,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                 "shap_result": shap_result,
                 "shap_figure": shap_figure,
                 "shap_error": shap_error,
+                "shap_companion": shap_companion,
                 "request_config": request_config,
             }
 

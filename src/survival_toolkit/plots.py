@@ -616,9 +616,25 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
     if not importance:
         return figure_to_json(go.Figure())
     method = str(shap_result.get("method", "tree"))
+    safe_mode = bool(shap_result.get("safe_mode"))
     title_text = "SHAP Feature Importance"
     if method == "kernel":
         title_text = "Approximate SHAP Screening Importance"
+    if safe_mode:
+        title_text = "Reduced-Feature SHAP Screening Importance"
+
+    subtitle_text = ""
+    subtitle_lines = 0
+    if safe_mode:
+        companion = shap_result.get("companion_model") or {}
+        subtitle_text, subtitle_lines = _wrap_annotation_text(
+            "SHAP safe mode refit a reduced companion model for explanation only: "
+            f"{companion.get('selected_feature_count_raw', 'NA')} raw features / "
+            f"{companion.get('selected_feature_count_encoded', 'NA')} encoded features. "
+            "Performance metrics above still belong to the original full model fit.",
+            width=88,
+            max_lines=3,
+        )
 
     top = importance[:15]
     top = list(reversed(top))
@@ -639,7 +655,10 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
     )
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={k: v for k, v in axis_layout.items() if k != "height"},
+        margin={
+            **{k: v for k, v in axis_layout.items() if k != "height"},
+            "t": int(axis_layout.get("t", 32)) + ((subtitle_lines - 1) * 16 if subtitle_lines else 0),
+        },
         title={
             "text": title_text,
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
@@ -647,6 +666,19 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
         },
         height=axis_layout["height"],
     )
+    if subtitle_text:
+        fig.add_annotation(
+            text=subtitle_text,
+            xref="paper",
+            yref="paper",
+            x=0.02,
+            y=1.08 + ((subtitle_lines - 1) * 0.02),
+            showarrow=False,
+            font={"size": 12, "color": INK},
+            align="left",
+            xanchor="left",
+            yanchor="bottom",
+        )
     fig.update_xaxes(title="Mean |SHAP value|", **_COMMON_AXES)
     fig.update_yaxes(
         automargin=True,

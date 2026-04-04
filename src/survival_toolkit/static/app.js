@@ -220,6 +220,7 @@ const refs = {
   mlNEstimators: document.getElementById("mlNEstimators"),
   mlLearningRate: document.getElementById("mlLearningRate"),
   mlSkipShap: document.getElementById("mlSkipShap"),
+  mlShapSafeMode: document.getElementById("mlShapSafeMode"),
   mlEvaluationStrategy: document.getElementById("mlEvaluationStrategy"),
   mlCvFoldsWrap: document.getElementById("mlCvFoldsWrap"),
   mlCvRepeatsWrap: document.getElementById("mlCvRepeatsWrap"),
@@ -971,6 +972,7 @@ function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) 
       n_estimators: refs.mlNEstimators?.value,
       max_depth: "",
       learning_rate: refs.mlLearningRate?.value,
+      shap_safe_mode: Boolean(refs.mlShapSafeMode?.checked),
       evaluation_strategy: refs.mlEvaluationStrategy?.value || "holdout",
       cv_folds: refs.mlCvFolds?.value || 5,
       cv_repeats: refs.mlCvRepeats?.value || 3,
@@ -1732,6 +1734,7 @@ function captureControlSnapshot() {
     mlNEstimators: refs.mlNEstimators?.value || "",
     mlLearningRate: refs.mlLearningRate?.value || "",
     mlSkipShap: Boolean(refs.mlSkipShap?.checked),
+    mlShapSafeMode: Boolean(refs.mlShapSafeMode?.checked),
     mlEvaluationStrategy: refs.mlEvaluationStrategy?.value || "",
     mlCvFolds: refs.mlCvFolds?.value || "",
     mlCvRepeats: refs.mlCvRepeats?.value || "",
@@ -1850,6 +1853,7 @@ function applyControlSnapshot(snapshot) {
   setSelectValueIfPresent(refs.dlEvaluationStrategy, snapshot.dlEvaluationStrategy);
   setSelectValueIfPresent(refs.dlJournalTemplate, snapshot.dlJournalTemplate);
   if (refs.mlSkipShap) refs.mlSkipShap.checked = snapshot.mlSkipShap !== false;
+  if (refs.mlShapSafeMode) refs.mlShapSafeMode.checked = snapshot.mlShapSafeMode !== false;
   if (refs.showConfidenceBands) refs.showConfidenceBands.checked = snapshot.showConfidenceBands !== false;
   updateMethodVisibility();
   updateWeightVisibility();
@@ -3270,9 +3274,15 @@ function purgePlot(el) {
   if (el && el.data) { try { Plotly.purge(el); } catch { /* ignore */ } }
 }
 
-function clearPlotShell(el, emptyHtml) {
+function setPlotShellState(el, state) {
+  if (!el) return;
+  el.dataset.plotState = state || "";
+}
+
+function clearPlotShell(el, emptyHtml, { state = "message" } = {}) {
   purgePlot(el);
   if (el) el.innerHTML = emptyHtml || '';
+  setPlotShellState(el, state);
 }
 
 function setShimmer(shell) {
@@ -3599,6 +3609,9 @@ function mlPendingBannerText({ modelType, nEstimators, rowCount, computeShap }) 
     : (mlModelSupportsShap(modelType)
       ? " Fast mode is on, so SHAP will be skipped for a faster result."
       : " SHAP is currently available for tree models only.");
+  if (mlModelSupportsShap(modelType) && computeShap && refs.mlShapSafeMode?.checked) {
+    message += " If the encoded matrix is too wide, SHAP safe mode will refit a reduced companion model for explanation only.";
+  }
   return message;
 }
 
@@ -4873,7 +4886,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.signatureShell.innerHTML = '<div class="empty-state">Use auto-discovery to find the best feature combinations.</div>';
   refs.coxResultsShell.innerHTML = '<div class="empty-state">Hazard ratios will appear after running Cox analysis.</div>';
   refs.coxDiagnosticsShell.innerHTML = '<div class="empty-state">Scaled Schoenfeld residual screening details will appear here.</div>';
-  clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Scaled Schoenfeld residual screening appears here after fitting the model.</span></div>');
+  clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Scaled Schoenfeld residual screening appears here after fitting the model.</span></div>', { state: "placeholder" });
   refs.cohortTableShell.innerHTML = COHORT_TABLE_EMPTY_STATE_HTML;
   refs.mlComparisonShell.innerHTML = '<div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div>';
   if (refs.mlComparisonTitle) refs.mlComparisonTitle.textContent = "Model Comparison";
@@ -4887,10 +4900,10 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.dlComparisonPlot.classList.add("hidden");
   setPanelResultMode(refs.mlPanel, "idle");
   setPanelResultMode(refs.dlPanel, "idle");
-  clearPlotShell(refs.mlImportancePlot, '<div class="empty-state plot-empty"><span>Run Analysis to see feature importance</span></div>');
-  clearPlotShell(refs.mlShapPlot, '<div class="empty-state plot-empty"><span>SHAP values will appear after training</span></div>');
-  clearPlotShell(refs.dlImportancePlot, '<div class="empty-state plot-empty"><span>Run Analysis to see deep learning results</span></div>');
-  clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Training and monitor metric curves will appear here</span></div>');
+  clearPlotShell(refs.mlImportancePlot, '<div class="empty-state plot-empty"><span>Run Analysis to see feature importance</span></div>', { state: "placeholder" });
+  clearPlotShell(refs.mlShapPlot, '<div class="empty-state plot-empty"><span>SHAP values will appear after training</span></div>', { state: "placeholder" });
+  clearPlotShell(refs.dlImportancePlot, '<div class="empty-state plot-empty"><span>Run Analysis to see deep learning results</span></div>', { state: "placeholder" });
+  clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Training and monitor metric curves will appear here</span></div>', { state: "placeholder" });
   purgePlot(refs.kmPlot);
   purgePlot(refs.coxPlot);
   refs.kmPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Click <strong>Run Analysis</strong> to generate your survival curve</span><small>Tip: Press Ctrl+Enter as a shortcut</small></div>';
@@ -5235,6 +5248,16 @@ function updateMlModelControlVisibility() {
       ? ""
       : "SHAP is currently available for Random Survival Forest and Gradient Boosted Survival only.";
   }
+  if (refs.mlShapSafeMode) {
+    const safeModeAvailable = shapApplies && !refs.mlSkipShap?.checked;
+    refs.mlShapSafeMode.disabled = !safeModeAvailable;
+    refs.mlShapSafeMode.setAttribute("aria-disabled", String(!safeModeAvailable));
+    refs.mlShapSafeMode.title = safeModeAvailable
+      ? ""
+      : (!shapApplies
+        ? "SHAP safe mode is only available for Random Survival Forest and Gradient Boosted Survival."
+        : "Turn off Fast mode to let SHAP safe mode run when needed.");
+  }
 }
 
 async function runKaplanMeier() {
@@ -5455,6 +5478,7 @@ async function runMlModel() {
   const selectedModelType = refs.mlModelType.value;
   const modelLabel = mlModelLabel(selectedModelType);
   const computeShap = mlModelSupportsShap(selectedModelType) && !refs.mlSkipShap?.checked;
+  const shapSafeMode = mlModelSupportsShap(selectedModelType) && !refs.mlSkipShap?.checked && Boolean(refs.mlShapSafeMode?.checked);
   const startedAt = performance.now();
   setShimmer(refs.mlImportancePlot);
   refs.mlMetaBanner.textContent = mlPendingBannerText({
@@ -5474,6 +5498,7 @@ async function runMlModel() {
       n_estimators: Number(refs.mlNEstimators.value),
       learning_rate: Number(refs.mlLearningRate.value),
       compute_shap: computeShap,
+      shap_safe_mode: shapSafeMode,
     }),
   });
   const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
@@ -5494,6 +5519,7 @@ async function runMlModel() {
     refs.mlImportancePlot.innerHTML = "";
     await Plotly.newPlot(refs.mlImportancePlot, payload.importance_figure.data, plotLayoutConfig(payload.importance_figure.layout, "ml_importance"), plotConfig("ml_importance"));
     stabilizePlotShellHeight(refs.mlImportancePlot);
+    setPlotShellState(refs.mlImportancePlot, "plot");
   } else {
     clearPlotShell(refs.mlImportancePlot, '<div class="empty-state plot-empty"><span>No feature importance available</span></div>');
   }
@@ -5502,6 +5528,7 @@ async function runMlModel() {
     refs.mlShapPlot.innerHTML = "";
     await Plotly.newPlot(refs.mlShapPlot, payload.shap_figure.data, plotLayoutConfig(payload.shap_figure.layout, "shap_importance"), plotConfig("shap_importance"));
     stabilizePlotShellHeight(refs.mlShapPlot);
+    setPlotShellState(refs.mlShapPlot, "plot");
   } else {
     clearPlotShell(
       refs.mlShapPlot,
@@ -5513,6 +5540,12 @@ async function runMlModel() {
             : (computeShap ? "SHAP not available for this model" : "SHAP skipped in Fast mode"))
       }</span></div>`,
     );
+    if (payload.shap_error) {
+      const shapToast = payload.shap_error.includes("high-dimensional inputs")
+        ? "SHAP could not be generated because the encoded feature matrix is too wide for the safe fallback path. Reduce the ML feature set to inspect SHAP."
+        : `SHAP failed: ${payload.shap_error}`;
+      showToast(shapToast, "warning", 5200);
+    }
   }
   renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "ML model results.");
   const stats = payload.analysis?.model_stats || {};
@@ -5520,13 +5553,24 @@ async function runMlModel() {
   const mlEvaluationMode = stats.evaluation_mode || "unknown";
   const shapStatus = !mlModelSupportsShap(selectedModelType)
     ? "tree-only"
-    : (payload.shap_result?.method === "kernel"
+    : (payload.shap_result?.safe_mode
+      ? "safe-mode"
+      : (payload.shap_result?.method === "kernel"
       ? "approx-screening"
-      : (payload.shap_figure ? "computed" : (payload.shap_error ? "failed" : (computeShap ? "unavailable" : "skipped"))));
-  const shapApproximationNote = payload.shap_result?.method === "kernel"
+      : (payload.shap_figure ? "computed" : (payload.shap_error ? "failed" : (computeShap ? "unavailable" : "skipped")))));
+  const shapApproximationNote = payload.shap_result?.safe_mode
+    ? ` (${formatValue(payload.shap_result?.companion_model?.selected_feature_count_raw)} raw / ${formatValue(payload.shap_result?.companion_model?.selected_feature_count_encoded)} encoded companion)`
+    : (payload.shap_result?.method === "kernel"
     ? ` (${formatValue(payload.shap_result.n_samples)} eval / ${formatValue(payload.shap_result.background_samples)} bg)`
-    : "";
+    : "");
   refs.mlMetaBanner.textContent = `${modelLabel}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s`;
+  if (payload.shap_result?.safe_mode) {
+    showToast(
+      `SHAP was computed on a reduced companion model (${formatValue(payload.shap_result?.companion_model?.selected_feature_count_raw)} raw features) because the full encoded matrix was too wide.`,
+      "info",
+      5200,
+    );
+  }
   renderBenchmarkBoard();
   updateStepIndicator(3);
   revealCompletedResultIfCurrent("ml", {
@@ -5726,6 +5770,7 @@ async function runDlModel() {
       refs.dlImportancePlot.innerHTML = "";
       await Plotly.newPlot(refs.dlImportancePlot, payload.figures.importance.data, plotLayoutConfig(payload.figures.importance.layout, "dl_importance"), plotConfig("dl_importance"));
       stabilizePlotShellHeight(refs.dlImportancePlot);
+      setPlotShellState(refs.dlImportancePlot, "plot");
     } else {
       const importanceEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
         ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit single-fit gradient salience.</span></div>'
@@ -5737,6 +5782,7 @@ async function runDlModel() {
       refs.dlLossPlot.innerHTML = "";
       await Plotly.newPlot(refs.dlLossPlot, payload.figures.loss.data, plotLayoutConfig(payload.figures.loss.layout, "dl_loss"), plotConfig("dl_loss"));
       stabilizePlotShellHeight(refs.dlLossPlot);
+      setPlotShellState(refs.dlLossPlot, "plot");
     } else {
       const lossEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
         ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit a single training loss curve.</span></div>'
@@ -6250,6 +6296,15 @@ function hasRenderedPlot(plot) {
   return Boolean(plot.querySelector(".js-plotly-plot, .plotly, .main-svg"));
 }
 
+function hasPlotMessage(plot) {
+  return Boolean(
+    plot
+    && !plot.classList?.contains("hidden")
+    && plot.dataset?.plotState === "message"
+    && plot.querySelector(".empty-state"),
+  );
+}
+
 function setGuidedResultNodeVisible(node, visible) {
   if (!node) return;
   node.classList.toggle("guided-result-hidden", !visible);
@@ -6340,8 +6395,8 @@ function updateGuidedResultVisibility() {
 
   if (goal === "ml") {
     const resultMode = runtime.resultPreference?.ml || "single";
-    const hasSingleImportance = resultMode === "single" && hasRenderedPlot(refs.mlImportancePlot);
-    const hasSingleShap = resultMode === "single" && hasRenderedPlot(refs.mlShapPlot);
+    const hasSingleImportance = resultMode === "single" && (hasRenderedPlot(refs.mlImportancePlot) || hasPlotMessage(refs.mlImportancePlot));
+    const hasSingleShap = resultMode === "single" && (hasRenderedPlot(refs.mlShapPlot) || hasPlotMessage(refs.mlShapPlot));
     const hasSingleGrid = hasSingleImportance || hasSingleShap;
     const hasComparePlot = resultMode === "compare" && hasRenderedPlot(refs.mlComparisonPlot);
     const hasCompareTable = resultMode === "compare" && hasRenderedTable(refs.mlComparisonShell);
@@ -6361,8 +6416,8 @@ function updateGuidedResultVisibility() {
 
   if (goal === "dl") {
     const resultMode = runtime.resultPreference?.dl || "single";
-    const hasSingleImportance = resultMode === "single" && hasRenderedPlot(refs.dlImportancePlot);
-    const hasSingleLoss = resultMode === "single" && hasRenderedPlot(refs.dlLossPlot);
+    const hasSingleImportance = resultMode === "single" && (hasRenderedPlot(refs.dlImportancePlot) || hasPlotMessage(refs.dlImportancePlot));
+    const hasSingleLoss = resultMode === "single" && (hasRenderedPlot(refs.dlLossPlot) || hasPlotMessage(refs.dlLossPlot));
     const hasSingleGrid = hasSingleImportance || hasSingleLoss;
     const hasComparePlot = resultMode === "compare" && hasRenderedPlot(refs.dlComparisonPlot);
     const hasCompareTable = resultMode === "compare" && hasRenderedTable(refs.dlComparisonShell);
@@ -6917,6 +6972,10 @@ function initListeners() {
     renderPredictiveWorkbench();
     queueHistorySync();
   });
+  refs.mlSkipShap?.addEventListener("change", () => {
+    updateMlModelControlVisibility();
+    queueHistorySync();
+  });
   refs.mlEvaluationStrategy.addEventListener("change", () => { updateMlEvaluationControls(); queueHistorySync(); });
   refs.dlModelType.addEventListener("change", () => {
     updateDlModelControlVisibility();
@@ -7033,6 +7092,7 @@ function initListeners() {
     refs.mlNEstimators,
     refs.mlLearningRate,
     refs.mlSkipShap,
+    refs.mlShapSafeMode,
     refs.mlCvFolds,
     refs.mlCvRepeats,
     refs.mlJournalTemplate,
