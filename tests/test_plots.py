@@ -191,8 +191,14 @@ def test_build_cox_diagnostics_figure_wraps_long_term_titles_and_adds_top_spacin
 
     annotations = figure["layout"].get("annotations", [])
     subplot_titles = [annotation["text"] for annotation in annotations if "Screening view only" not in annotation.get("text", "")]
+    subtitle = next(
+        annotation["text"]
+        for annotation in annotations
+        if "Screening view only" in annotation.get("text", "")
+    )
     assert any("<br>" in title or title.endswith("…") for title in subplot_titles)
-    assert figure["layout"]["margin"]["t"] >= 132
+    assert "<br>" in subtitle
+    assert figure["layout"]["margin"]["t"] >= 148
     assert figure["layout"]["height"] >= 420
     assert figure["layout"]["title"]["text"] == "Scaled Schoenfeld Residual Trend Check"
     assert any("LOWESS-smoothed scaled Schoenfeld residual trends" in annotation.get("text", "") for annotation in annotations)

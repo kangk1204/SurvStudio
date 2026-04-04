@@ -587,6 +587,14 @@ def test_harrell_c_index_matches_naive_pairwise_result() -> None:
     )
 
 
+def test_harrell_c_index_returns_none_when_no_comparable_pairs_exist() -> None:
+    time_values = np.array([1.0, 2.0, 3.0, 4.0], dtype=float)
+    event_values = np.array([0, 0, 0, 0], dtype=int)
+    risk_score = np.array([0.1, 0.1, 0.1, 0.1], dtype=float)
+
+    assert _harrell_c_index(time_values, event_values, risk_score) is None
+
+
 def test_cohort_frame_rejects_non_event_like_binary_column_when_likely_event_exists() -> None:
     df = pd.DataFrame(
         {
@@ -757,6 +765,29 @@ def test_km_analysis_extends_curve_to_followup_horizon_when_last_observation_is_
     assert curve["ci_lower"][-1] == pytest.approx(curve["ci_lower"][-2])
     assert curve["ci_upper"][-1] == pytest.approx(curve["ci_upper"][-2])
     assert curve["censor_times"] == [8.0, 12.0]
+
+
+def test_km_analysis_all_event_group_keeps_final_ci_finite() -> None:
+    df = pd.DataFrame(
+        {
+            "time": [1.0, 2.0, 3.0, 4.0],
+            "event": [1, 1, 1, 1],
+        }
+    )
+
+    result = compute_km_analysis(
+        df,
+        time_column="time",
+        event_column="event",
+        event_positive_value=1,
+    )
+
+    curve = result["curves"][0]
+    assert np.isfinite(curve["ci_lower"][-1])
+    assert np.isfinite(curve["ci_upper"][-1])
+    assert curve["ci_lower"][-1] == pytest.approx(0.0)
+    assert curve["ci_upper"][-1] == pytest.approx(0.0)
+    assert result["summary_table"][0]["Censored"] == 0
 
 
 def test_derive_group_column_tracks_optimal_cutpoint_reproducibility_settings() -> None:
@@ -1381,6 +1412,53 @@ def test_cox_analysis_translates_singular_matrix_into_user_facing_message(monkey
     message = str(exc_info.value)
     assert "overlapping encodings of the same signal" in message
     assert "Remove one of the overlapping variables" in message
+
+
+def test_cox_analysis_rejects_constant_numeric_covariates_before_fit() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [10, 12, 14, 16, 18, 20],
+            "os_event": [1, 0, 1, 0, 1, 0],
+            "age": [60.0, 60.0, 60.0, 60.0, 60.0, 60.0],
+            "biomarker": [0.3, 0.4, 0.8, 0.9, 1.1, 1.2],
+        }
+    )
+
+    with pytest.raises(ValueError, match="constant value") as exc_info:
+        compute_cox_analysis(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            event_positive_value=1,
+            covariates=["age", "biomarker"],
+        )
+
+    assert "age (constant value)" in str(exc_info.value)
+
+
+def test_preview_cox_analysis_inputs_warns_on_single_level_categorical_covariates() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [10, 12, 14, 16, 18, 20],
+            "os_event": [1, 0, 1, 0, 1, 0],
+            "stage_group": ["Stage I", "Stage I", "Stage I", "Stage I", "Stage I", "Stage I"],
+            "biomarker": [0.3, 0.4, 0.8, 0.9, 1.1, 1.2],
+        }
+    )
+
+    preview = preview_cox_analysis_inputs(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["stage_group", "biomarker"],
+        categorical_covariates=["stage_group"],
+    )
+
+    assert any(
+        "stage_group has only one observed level" in warning
+        for warning in preview["stability_warnings"]
+    )
 
 
 def test_cox_analysis_lists_all_current_ph_alert_terms_in_summary_caution() -> None:

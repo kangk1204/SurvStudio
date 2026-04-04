@@ -83,6 +83,31 @@ def _wrap_feature_axis_label(label: Any, *, width: int = 26, max_lines: int = 2)
     return "<br>".join(lines), len(lines)
 
 
+def _wrap_annotation_text(text: Any, *, width: int = 84, max_lines: int = 3) -> tuple[str, int]:
+    raw = " ".join(str(text).split())
+    if len(raw) <= width:
+        return raw, 1
+
+    words = raw.split(" ")
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if current and len(candidate) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+
+    if len(lines) > max_lines:
+        remainder = " ".join(lines[max_lines - 1 :])
+        lines = lines[: max_lines - 1] + [_truncate_label_fragment(remainder, width)]
+
+    return "<br>".join(lines), len(lines)
+
+
 def _feature_plot_axis_layout(
     labels: list[Any],
     *,
@@ -347,6 +372,13 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         wrapped_label, line_count = _wrap_feature_axis_label(panel.get("term") or "Term", width=28, max_lines=2)
         wrapped_titles.append(wrapped_label)
         max_title_lines = max(max_title_lines, line_count)
+    subtitle_text, subtitle_lines = _wrap_annotation_text(
+        "Screening view only: LOWESS-smoothed scaled Schoenfeld residual trends versus log time. "
+        "Use alongside the PH table, not as a full Grambsch-Therneau test. "
+        "Extreme residual outliers may be clipped for readability.",
+        width=92,
+        max_lines=3,
+    )
     fig = make_subplots(
       rows=rows,
       cols=cols,
@@ -413,7 +445,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
 
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": 60, "r": 30, "t": 132 + ((max_title_lines - 1) * 16), "b": 68},
+        margin={"l": 60, "r": 30, "t": 132 + ((max_title_lines - 1) * 16) + ((subtitle_lines - 1) * 16), "b": 68},
         title={
             "text": "Scaled Schoenfeld Residual Trend Check",
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
@@ -422,11 +454,11 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         height=max(420, rows * 310 + ((max_title_lines - 1) * 24)),
     )
     fig.add_annotation(
-        text="Screening view only: LOWESS-smoothed scaled Schoenfeld residual trends versus log time. Use alongside the PH table, not as a full Grambsch-Therneau test. Extreme residual outliers may be clipped for readability.",
+        text=subtitle_text,
         xref="paper",
         yref="paper",
         x=0.02,
-        y=1.10,
+        y=1.08 + ((subtitle_lines - 1) * 0.02),
         showarrow=False,
         font={"size": 12, "color": INK},
         align="left",
