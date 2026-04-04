@@ -187,7 +187,9 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'id="reviewDlFeaturesButton"' in response.text
     assert "Review shared features" in response.text
     assert 'id="mlSkipShap"' in response.text
+    assert 'id="mlShapSafeMode"' in response.text
     assert "Fast mode (skip SHAP)" in response.text
+    assert "SHAP safe mode (auto-reduce)" in response.text
     assert "ML uses the Study Design outcome definition and the shared ML/DL model features selected here." in response.text
     assert "DL uses the Study Design outcome definition and the shared model features selected in this workspace." in response.text
     assert "No preset applied yet." in response.text
@@ -545,14 +547,17 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert "function mlPendingBannerText(" in text
     assert "This can take longer on a local CPU for real cohorts." in text
     assert "SHAP is computed after fitting and can add a short delay." in text
+    assert "SHAP safe mode will refit a reduced companion model for explanation only." in text
     assert "Fast mode is on, so SHAP will be skipped for a faster result." in text
     assert "SHAP is currently available for tree models only." in text
     assert "refs.mlMetaBanner.textContent = mlPendingBannerText(" in text
     assert "compute_shap: computeShap" in text
+    assert "shap_safe_mode: shapSafeMode" in text
     assert "SHAP skipped in Fast mode" in text
     assert "SHAP failed:" in text
     assert "SHAP is currently available for tree models only" in text
     assert 'const shapStatus = !mlModelSupportsShap(selectedModelType)' in text
+    assert '? \"safe-mode\"' in text
     assert '? "approx-screening"' in text
     assert "SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s" in text
     assert "Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival" in text
@@ -671,6 +676,19 @@ def test_analysis_banners_surface_competing_risk_cautions() -> None:
     assert 'Competing risks not modeled; 1-KM is not cumulative incidence when competing events can preclude the endpoint.' in text
     assert 'const coxCompetingRiskPrefix = summaryHasCaution(coxSummary, "competing risk")' in text
     assert 'Competing risks not modeled; cause-specific questions need dedicated competing-risk methods.' in text
+
+
+def test_guided_ml_results_keep_shap_message_cards_visible() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function setPlotShellState(el, state) {" in text
+    assert 'function clearPlotShell(el, emptyHtml, { state = "message" } = {}) {' in text
+    assert 'function hasPlotMessage(plot) {' in text
+    assert 'clearPlotShell(refs.mlShapPlot, \'<div class="empty-state plot-empty"><span>SHAP values will appear after training</span></div>\', { state: "placeholder" });' in text
+    assert 'setPlotShellState(refs.mlShapPlot, "plot");' in text
+    assert 'const hasSingleShap = resultMode === "single" && (hasRenderedPlot(refs.mlShapPlot) || hasPlotMessage(refs.mlShapPlot));' in text
+    assert 'SHAP could not be generated because the encoded feature matrix is too wide for the safe fallback path. Reduce the ML feature set to inspect SHAP.' in text
 
 
 def test_cox_plot_reset_axes_restores_initial_layout() -> None:
@@ -1223,6 +1241,137 @@ def test_ml_model_surfaces_shap_failures_without_failing_entire_request(monkeypa
     assert body["shap_result"] is None
     assert body["shap_figure"] is None
     assert body["shap_error"] == "RuntimeError: kernel failed"
+
+
+def test_ml_model_shap_safe_mode_refits_reduced_companion_model(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+    import survival_toolkit.plots as plots
+
+    stored = store.create(
+        make_example_dataset(seed=199, n_patients=64).assign(
+            wide_cat=["L0", "L1", "L2", "L0"] * 16,
+            age=[50 + (idx % 8) for idx in range(64)],
+            score=[0.1 * (idx % 10) for idx in range(64)],
+        ),
+        filename="ml_shap_safe_mode.csv",
+        copy_dataframe=False,
+    )
+
+    wide_levels = [f"L{idx}" for idx in range(90)]
+    wide_columns = [f"wide_cat_{level}" for level in wide_levels[1:]] + ["wide_cat__unknown", "wide_cat__missing"]
+    full_feature_names = [*wide_columns, "age", "score"]
+    full_eval = pd.DataFrame(np.ones((4, len(full_feature_names))), columns=full_feature_names)
+    reduced_eval = pd.DataFrame({"age": [51.0, 63.0, 72.0], "score": [0.2, 0.4, 0.8]})
+    shap_calls: list[list[str]] = []
+
+    def _fake_train(*args, **kwargs):
+        features = list(kwargs["features"])
+        if features == ["wide_cat", "age", "score"]:
+            return {
+                "feature_importance": [
+                    {"feature": name, "importance": 0.01}
+                    for name in wide_columns
+                ] + [
+                    {"feature": "age", "importance": 0.7},
+                    {"feature": "score", "importance": 0.6},
+                ],
+                "feature_names": full_feature_names,
+                "model_stats": {
+                    "c_index": 0.71,
+                    "evaluation_mode": "holdout",
+                    "n_patients": 64,
+                    "n_features": len(full_feature_names),
+                },
+                "_model": object(),
+                "_X_eval_encoded": full_eval,
+                "_feature_encoder": {
+                    "features": ["wide_cat", "age", "score"],
+                    "categorical_features": ["wide_cat"],
+                    "numeric_features": ["age", "score"],
+                    "categorical_mappings": {
+                        "wide_cat": {
+                            "retained_levels": wide_levels[1:],
+                            "unknown_column": "wide_cat__unknown",
+                            "missing_column": "wide_cat__missing",
+                        }
+                    },
+                },
+            }
+        assert features == ["age", "score"]
+        return {
+            "feature_importance": [
+                {"feature": "age", "importance": 0.7},
+                {"feature": "score", "importance": 0.6},
+            ],
+            "feature_names": ["age", "score"],
+            "model_stats": {
+                "c_index": 0.69,
+                "evaluation_mode": "holdout",
+                "n_patients": 64,
+                "n_features": 2,
+            },
+            "_model": object(),
+            "_X_eval_encoded": reduced_eval,
+            "_feature_encoder": {
+                "features": ["age", "score"],
+                "categorical_features": [],
+                "numeric_features": ["age", "score"],
+                "categorical_mappings": {},
+            },
+        }
+
+    def _fake_compute_shap_values(model, X_encoded, feature_names):
+        shap_calls.append(list(feature_names))
+        if len(feature_names) > 80:
+            raise ValueError(
+                "TreeExplainer is unavailable for this fitted model, and approximate Kernel SHAP "
+                "is disabled for high-dimensional inputs (93 encoded features). "
+                "Reduce the ML feature set or rely on the model's built-in importance ranking instead."
+            )
+        return {
+            "method": "kernel",
+            "usage_note": "Kernel SHAP was approximated on representative subsamples.",
+            "feature_importance": [
+                {"feature": "age", "mean_abs_shap": 0.4},
+                {"feature": "score", "mean_abs_shap": 0.2},
+            ],
+            "shap_summary": [],
+            "n_samples": int(X_encoded.shape[0]),
+            "background_samples": 3,
+            "n_features": int(X_encoded.shape[1]),
+        }
+
+    monkeypatch.setattr(ml_models, "train_random_survival_forest", _fake_train)
+    monkeypatch.setattr(ml_models, "compute_shap_values", _fake_compute_shap_values)
+    monkeypatch.setattr(plots, "build_shap_figure", lambda payload: {"data": [{"x": [1], "y": [1]}], "layout": {"title": {"text": "ok"}}})
+
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "features": ["wide_cat", "age", "score"],
+            "categorical_features": ["wide_cat"],
+            "model_type": "rsf",
+            "n_estimators": 20,
+            "compute_shap": True,
+            "shap_safe_mode": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["shap_error"] is None
+    assert body["shap_result"]["safe_mode"] is True
+    assert body["shap_result"]["companion_model"]["selected_features"] == ["age", "score"]
+    assert body["shap_companion"]["selected_feature_count_raw"] == 2
+    assert body["shap_companion"]["selected_feature_count_encoded"] == 2
+    assert body["shap_figure"]["data"]
+    assert "companion" in body["shap_result"]["usage_note"].lower()
+    assert len(shap_calls[0]) > 80
+    assert shap_calls[1] == ["age", "score"]
 
 
 def test_ml_model_supports_lasso_cox_without_tree_shap(monkeypatch) -> None:
