@@ -277,6 +277,11 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
     if stats.get("c_index") is not None:
         c_index_label = str(stats.get("c_index_label", "C-index"))
         stat_parts.append(f"{c_index_label} = {stats['c_index']:.3f}")
+        ci_low = stats.get("c_index_ci_lower")
+        ci_high = stats.get("c_index_ci_upper")
+        if ci_low is not None and ci_high is not None:
+            level_pct = int(round(float(stats.get("c_index_ci_level", 0.95)) * 100.0))
+            stat_parts.append(f"{level_pct}% CI = {float(ci_low):.3f} to {float(ci_high):.3f}")
     fig.add_annotation(
         text=", ".join(stat_parts),
         xref="paper", yref="paper", x=0.98, y=0.98,
@@ -372,7 +377,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
                 name=str(panel.get("term") or "Residuals"),
                 marker={"size": 6, "color": marker_color, "opacity": 0.55},
                 hovertemplate=(
-                    f"{panel.get('term') or 'Term'}<br>log(time): %{{x:.3f}}<br>Schoenfeld residual: %{{y:.3f}}"
+                    f"{panel.get('term') or 'Term'}<br>log(time): %{{x:.3f}}<br>Scaled Schoenfeld residual: %{{y:.3f}}"
                     + (f"<br>rho={float(rho):.3f}" if isinstance(rho, (int, float)) and np.isfinite(float(rho)) else "")
                     + (f"<br>p={float(p_value):.3g}" if isinstance(p_value, (int, float)) and np.isfinite(float(p_value)) else "")
                     + "<extra></extra>"
@@ -399,7 +404,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         robust_range = _diagnostic_residual_axis_range(y_values, trend_y)
         fig.update_xaxes(title="log(time)", row=row, col=col, **_COMMON_AXES)
         fig.update_yaxes(
-            title="Residual",
+            title="Scaled residual",
             row=row,
             col=col,
             range=robust_range,
@@ -410,14 +415,14 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": 132 + ((max_title_lines - 1) * 16), "b": 68},
         title={
-            "text": "Schoenfeld Residual Trend Check",
+            "text": "Scaled Schoenfeld Residual Trend Check",
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
             "x": 0.02,
         },
         height=max(420, rows * 310 + ((max_title_lines - 1) * 24)),
     )
     fig.add_annotation(
-        text="Screening view only: smoothed Schoenfeld residual trends versus log time. Use alongside the PH table, not as a full Grambsch-Therneau test. Extreme residual outliers may be clipped for readability.",
+        text="Screening view only: LOWESS-smoothed scaled Schoenfeld residual trends versus log time. Use alongside the PH table, not as a full Grambsch-Therneau test. Extreme residual outliers may be clipped for readability.",
         xref="paper",
         yref="paper",
         x=0.02,

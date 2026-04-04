@@ -513,7 +513,7 @@
           <div class="dependency-card" id="coxDependencyCard">
             <div class="dependency-copy">
               <strong>What this tab uses</strong>
-              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected in this tab. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here are approximate rank-based checks rather than a full cox.zph test.</span>
+              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected in this tab. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test.</span>
               <div class="dataset-preset-chips hidden" id="coxDependencyChips"></div>
             </div>
           </div>
@@ -556,10 +556,10 @@
               <h3>PH Diagnostics</h3>
               <div class="plot-shell" id="coxDiagnosticsPlot">
                 <div class="empty-state plot-empty">
-                  <span>Graphical PH diagnostics appear here after fitting the model.</span>
+                  <span>Scaled Schoenfeld residual screening appears here after fitting the model.</span>
                 </div>
               </div>
-              <div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Approximate rank-based Spearman screening of Schoenfeld residuals against log time appears here. This is useful for screening PH problems, not a full cox.zph test.</div></div>
+              <div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Scaled Schoenfeld residual screening with rank-based Spearman correlation versus log time appears here. The plot overlay uses LOWESS smoothing for screening only, not a full cox.zph test.</div></div>
             </div>
           </div>
         </article>

@@ -17,6 +17,7 @@ from scipy.special import ndtri
 from scipy import stats
 from statsmodels.duration.hazard_regression import PHReg
 from statsmodels.duration.survfunc import SurvfuncRight, survdiff
+from statsmodels.nonparametric.smoothers_lowess import lowess
 
 from survival_toolkit.errors import ColumnNotFoundError, user_input_boundary
 
@@ -219,11 +220,15 @@ def _load_dataframe_source(source: io.BytesIO | str | Path, filename: str) -> pd
     elif suffix in {".xlsx", ".xls"}:
         try:
             df = pd.read_excel(source)
+        except MemoryError:
+            raise
         except Exception as exc:
             raise ValueError(f"Failed to read Excel file: {exc}") from exc
     elif suffix == ".parquet":
         try:
             df = pd.read_parquet(source)
+        except MemoryError:
+            raise
         except Exception as exc:
             raise ValueError(f"Failed to read Parquet file: {exc}") from exc
     else:
@@ -452,6 +457,16 @@ def _has_ambiguous_competing_event_tokens(tokens: Sequence[str]) -> bool:
         token: _outcome_status_family_match(token)
         for token in tokens
     }
+    recognized_non_censor_families = {
+        family
+        for family, _exact_match in token_details.values()
+        if family is not None and family != "censor"
+    }
+    specific_non_censor_families = {
+        family
+        for family in recognized_non_censor_families
+        if family != "event_generic"
+    }
     recognized_non_censor = [
         token
         for token, (family, _exact_match) in token_details.items()
@@ -462,7 +477,7 @@ def _has_ambiguous_competing_event_tokens(tokens: Sequence[str]) -> bool:
         for token, (family, exact_match) in token_details.items()
         if family is not None and family != "censor" and not exact_match
     ]
-    return bool(inferred_non_censor) and len(recognized_non_censor) > 1
+    return len(specific_non_censor_families) > 1 or (bool(inferred_non_censor) and len(recognized_non_censor) > 1)
 
 
 def _looks_like_event_outcome_column(name: str, series: pd.Series) -> bool:
@@ -1425,6 +1440,13 @@ def _km_scientific_summary(
     ]
     cautions: list[str] = []
     next_steps: list[str] = []
+    cautions.append("All KM outputs assume non-informative (independent) censoring.")
+    cautions.append(
+        "Competing risks are not modeled here, so 1-KM should not be interpreted as cumulative incidence when other event types can preclude the event of interest."
+    )
+    cautions.append(
+        "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, survival estimates can be biased."
+    )
 
     if group_column and not outcome_informed_group:
         test_name = _weighted_test_label(test_payload["test"], fh_p=fh_p) if test_payload else "weighted"
@@ -1534,7 +1556,7 @@ def _cox_scientific_summary(
     strengths = [
         "Cox regression was fit with the Efron tie method.",
         cohort_statement,
-        "Proportional-hazards screening used rank-based Spearman correlations between Schoenfeld residuals and log time; this is approximate and not a formal Grambsch-Therneau test.",
+        "Proportional-hazards screening used scaled Schoenfeld residuals with rank-based Spearman correlations versus log time, and the plot overlay uses LOWESS smoothing for visual screening only; this is not a formal Grambsch-Therneau test.",
         "The reported discrimination metric is an apparent C-index on the fitted cohort, so it reflects training-cohort ranking only.",
     ]
     cautions: list[str] = []
@@ -1542,10 +1564,19 @@ def _cox_scientific_summary(
 
     epv = _safe_float(model_stats.get("events_per_parameter"))
     c_index = _safe_float(model_stats.get("c_index"))
+    lr_statistic = _safe_float(model_stats.get("lr_statistic"))
+    lr_pvalue = _safe_float(model_stats.get("lr_pvalue"))
     if epv is not None and epv < 10:
         cautions.append("Events per parameter is below 10, so coefficients may be unstable or overfit.")
         next_steps.append("Reduce model complexity or increase the event count before treating estimates as final.")
     cautions.append("Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.")
+    cautions.append("All Cox outputs assume non-informative (independent) censoring.")
+    cautions.append(
+        "Competing risks are not modeled in this Cox workflow, so cause-specific questions need dedicated competing-risk methods rather than treating other event types as ordinary censoring."
+    )
+    cautions.append(
+        "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, coefficient estimates and survival summaries can be biased."
+    )
     if dropped_rows:
         drop_message = f"{int(dropped_rows)} outcome-valid rows were excluded because at least one selected covariate was missing."
         if dropped_fraction is not None:
@@ -1586,6 +1617,21 @@ def _cox_scientific_summary(
     if c_index is not None:
         strengths.append(
             f"A C-index of {c_index:.3f} means the fitted model ranks about {c_index * 100:.1f}% of comparable patient pairs in the observed risk order."
+        )
+    if lr_statistic is not None and lr_pvalue is not None:
+        strengths.append(
+            f"The overall likelihood-ratio test compares the fitted Cox model with a null model (LR chi-square {lr_statistic:.2f}, p={lr_pvalue:.3g})."
+        )
+    ci_low = _safe_float(model_stats.get("c_index_ci_lower"))
+    ci_high = _safe_float(model_stats.get("c_index_ci_upper"))
+    ci_level = _safe_float(model_stats.get("c_index_ci_level"))
+    if ci_low is not None and ci_high is not None:
+        level_pct = int(round((ci_level or 0.95) * 100.0))
+        strengths.append(
+            f"The apparent C-index includes an internal bootstrap percentile {level_pct}% CI ({ci_low:.3f} to {ci_high:.3f}) to show fitted-cohort uncertainty."
+        )
+        cautions.append(
+            "The reported C-index confidence interval is an internal bootstrap interval on the same cohort, so it still does not replace external validation."
         )
     cautions.append(
         "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; validate the final specification on a separate cohort outside this run."
@@ -1637,20 +1683,34 @@ def _cox_scientific_summary(
     if (epv is not None and epv < 5) or len(ph_alert_terms) >= 2 or reference_alerts or sparse_level_alerts:
         status = "caution"
 
+    metrics = [
+        {"label": "Outcome-valid rows", "value": outcome_rows},
+        {"label": "Dropped for missing covariates", "value": dropped_rows},
+        {"label": "Events", "value": int(model_stats["events"])},
+        {"label": "Parameters", "value": int(model_stats["parameters"])},
+        {"label": "EPV", "value": epv},
+        {"label": "Apparent C-index (training cohort)", "value": c_index},
+    ]
+    if lr_statistic is not None:
+        metrics.append({"label": "LR chi-square", "value": lr_statistic})
+    if lr_pvalue is not None:
+        metrics.append({"label": "LR test p-value", "value": lr_pvalue})
+    if ci_low is not None and ci_high is not None:
+        level_pct = int(round(float(ci_level or 0.95) * 100.0))
+        metrics.append(
+            {
+                "label": f"Apparent C-index {level_pct}% CI",
+                "value": f"{float(ci_low):.3f} to {float(ci_high):.3f}",
+            }
+        )
+
     return {
         "status": status,
         "headline": headline,
         "strengths": strengths,
         "cautions": cautions,
         "next_steps": next_steps,
-        "metrics": [
-            {"label": "Outcome-valid rows", "value": outcome_rows},
-            {"label": "Dropped for missing covariates", "value": dropped_rows},
-            {"label": "Events", "value": int(model_stats["events"])},
-            {"label": "Parameters", "value": int(model_stats["parameters"])},
-            {"label": "EPV", "value": epv},
-            {"label": "Apparent C-index (training cohort)", "value": c_index},
-        ],
+        "metrics": metrics,
     }
 
 
@@ -1768,7 +1828,7 @@ def _bh_adjust(p_values: Sequence[float]) -> list[float]:
         return []
     order = np.argsort(p_array)
     sorted_p = p_array[order]
-    n_tests = float(p_array.size)
+    n_tests = p_array.size
     candidate = np.minimum(1.0, sorted_p * n_tests / np.arange(1, p_array.size + 1, dtype=float))
     monotone = np.minimum.accumulate(candidate[::-1])[::-1]
     adjusted = np.empty_like(p_array)
@@ -2356,6 +2416,8 @@ def _bootstrap_signature_metrics(
                 ties="efron",
             )
             cox_results = cox_model.fit(disp=False)
+        except MemoryError:
+            raise
         except Exception:
             continue
 
@@ -2417,6 +2479,8 @@ def _permutation_p_value(
             continue
         try:
             perm_stat, _ = survdiff(times, events, np.where(perm_mask, "Signature+", "Signature-"))
+        except MemoryError:
+            raise
         except Exception:
             continue
         if not math.isfinite(float(perm_stat)):
@@ -2501,6 +2565,8 @@ def _validation_signature_metrics(
             )
             cox_results = cox_model.fit(disp=False)
             conf_int = cox_results.conf_int()
+        except MemoryError:
+            raise
         except Exception:
             continue
 
@@ -2625,6 +2691,8 @@ def discover_feature_signature(
                     continue
                 try:
                     chisq, p_value = survdiff(times, events, np.where(mask, "Signature+", "Signature-"))
+                except MemoryError:
+                    raise
                 except Exception:
                     continue
 
@@ -2702,7 +2770,13 @@ def discover_feature_signature(
         mask = _signature_mask(frame, combo["combo"], operator=combo["operator"])
         try:
             rows[idx].update(_signature_cox_metrics(times, events, mask))
-        except Exception:
+        except MemoryError:
+            raise
+        except Exception as exc:
+            warnings.warn(
+                f"Skipping Cox robustness metrics for signature row {idx} due to: {exc}",
+                RuntimeWarning,
+            )
             continue
 
     if bootstrap_iterations > 0:
@@ -3300,6 +3374,60 @@ def _harrell_c_index(time_values: np.ndarray, event_values: np.ndarray, risk_sco
     return concordant / comparable
 
 
+def _harrell_c_index_bootstrap_ci(
+    time_values: np.ndarray,
+    event_values: np.ndarray,
+    risk_score: np.ndarray,
+    *,
+    n_bootstrap: int = 60,
+    confidence_level: float = 0.95,
+    random_seed: int = 20260311,
+) -> dict[str, float | None]:
+    if n_bootstrap <= 1:
+        return {"c_index_std": None, "c_index_ci_lower": None, "c_index_ci_upper": None}
+
+    time_array = np.asarray(time_values, dtype=float)
+    event_array = np.asarray(event_values, dtype=int)
+    risk_array = np.asarray(risk_score, dtype=float)
+    n_obs = int(time_array.shape[0])
+    if n_obs < 10 or int(event_array.sum()) < 5:
+        warnings.warn(
+            "C-index bootstrap CI skipped because the analyzable cohort is too small for stable internal resampling.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return {"c_index_std": None, "c_index_ci_lower": None, "c_index_ci_upper": None}
+
+    rng = np.random.default_rng(int(random_seed))
+    boot_scores: list[float] = []
+    for _ in range(int(n_bootstrap)):
+        sample_idx = rng.integers(0, n_obs, size=n_obs)
+        sample_events = event_array[sample_idx]
+        if int(sample_events.sum()) == 0:
+            continue
+        score = _harrell_c_index(time_array[sample_idx], sample_events, risk_array[sample_idx])
+        if score is not None and math.isfinite(score):
+            boot_scores.append(float(score))
+
+    min_valid_boot = max(10, int(n_bootstrap * 0.3))
+    if len(boot_scores) < min_valid_boot:
+        warnings.warn(
+            f"C-index bootstrap CI skipped: only {len(boot_scores)} valid bootstrap samples out of {n_bootstrap} requested (threshold: {min_valid_boot}).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return {"c_index_std": None, "c_index_ci_lower": None, "c_index_ci_upper": None}
+
+    alpha = 1.0 - float(confidence_level)
+    lower, upper = np.quantile(np.asarray(boot_scores, dtype=float), [alpha / 2.0, 1.0 - alpha / 2.0])
+    std = float(np.std(np.asarray(boot_scores, dtype=float), ddof=1)) if len(boot_scores) > 1 else None
+    return {
+        "c_index_std": std,
+        "c_index_ci_lower": float(lower),
+        "c_index_ci_upper": float(upper),
+    }
+
+
 @user_input_boundary
 def compute_cox_analysis(
     df: pd.DataFrame,
@@ -3333,6 +3461,8 @@ def compute_cox_analysis(
     model = PHReg.from_formula(formula, data=frame, status=status, ties="efron")
     try:
         results = model.fit(disp=False)
+    except MemoryError:
+        raise
     except Exception as exc:
         raise ValueError(_cox_fit_failure_message(exc, stability_snapshot)) from exc
 
@@ -3371,17 +3501,30 @@ def compute_cox_analysis(
             }
         )
 
-    schoenfeld = results.schoenfeld_residuals
+    schoenfeld = np.asarray(results.schoenfeld_residuals, dtype=float)
+    if schoenfeld.ndim == 1:
+        schoenfeld = schoenfeld.reshape(-1, 1)
+    cov_matrix = np.atleast_2d(np.asarray(results.cov_params(), dtype=float))
+    if schoenfeld.shape[1] != cov_matrix.shape[0] or not np.isfinite(cov_matrix).all():
+        raise ValueError(_cox_nonfinite_estimate_message(stability_snapshot))
     log_time = np.log(frame[time_column].to_numpy(dtype=float))
+    scaled_schoenfeld = schoenfeld @ cov_matrix
+    scaled_schoenfeld *= float(max(int(frame[event_column].sum()), 1))
     diagnostic_rows: list[dict[str, Any]] = []
     diagnostic_plot_data: list[dict[str, Any]] = []
     for idx, term in enumerate(results.model.exog_names):
-        valid = np.isfinite(schoenfeld[:, idx]) & np.isfinite(log_time)
+        valid = np.isfinite(scaled_schoenfeld[:, idx]) & np.isfinite(log_time)
         if valid.sum() < 4:
             rho = np.nan
             p_value = np.nan
         else:
-            rho, p_value = stats.spearmanr(log_time[valid], schoenfeld[valid, idx])
+            x_valid = log_time[valid]
+            residual_valid = scaled_schoenfeld[valid, idx]
+            if np.allclose(np.nanstd(x_valid), 0.0) or np.allclose(np.nanstd(residual_valid), 0.0):
+                rho = np.nan
+                p_value = np.nan
+            else:
+                rho, p_value = stats.spearmanr(x_valid, residual_valid)
         _, label, _ = _clean_term(term, reference_levels)
         diagnostic_rows.append(
             {
@@ -3392,19 +3535,14 @@ def compute_cox_analysis(
         )
         if int(valid.sum()) >= 4:
             x_values = log_time[valid].astype(float)
-            y_values = schoenfeld[valid, idx].astype(float)
+            y_values = scaled_schoenfeld[valid, idx].astype(float)
             order = np.argsort(x_values, kind="mergesort")
             x_sorted = x_values[order]
             y_sorted = y_values[order]
-            window = max(5, min(25, int(math.ceil(x_sorted.shape[0] / 5))))
-            if window % 2 == 0:
-                window += 1
-            if window > x_sorted.shape[0]:
-                window = x_sorted.shape[0] if x_sorted.shape[0] % 2 == 1 else max(1, x_sorted.shape[0] - 1)
             trend_y = y_sorted
-            if window >= 3 and x_sorted.shape[0] >= window:
-                kernel = np.ones(window, dtype=float) / float(window)
-                trend_y = np.convolve(y_sorted, kernel, mode="same")
+            if x_sorted.shape[0] >= 4:
+                frac = min(0.8, max(0.35, 6.0 / float(x_sorted.shape[0])))
+                trend_y = np.asarray(lowess(y_sorted, x_sorted, frac=frac, it=0, return_sorted=False), dtype=float)
             diagnostic_plot_data.append(
                 {
                     "term": label,
@@ -3422,7 +3560,28 @@ def compute_cox_analysis(
     dropped_rows = int(outcome_rows - n_obs)
     n_events = int(frame[event_column].sum())
     k_params = len(results.params)
+    llnull_raw = getattr(results, "llnull", None)
+    if llnull_raw is None:
+        try:
+            llnull_raw = results.model.loglike(np.zeros(k_params, dtype=float))
+        except MemoryError:
+            raise
+        except Exception:
+            llnull_raw = None
+    llnull_value = _safe_float(llnull_raw)
+    lr_statistic = None
+    lr_pvalue = None
+    if llnull_value is not None and math.isfinite(llf_value) and k_params > 0:
+        lr_candidate = -2.0 * (llnull_value - llf_value)
+        if math.isfinite(lr_candidate) and lr_candidate >= 0.0:
+            lr_statistic = float(lr_candidate)
+            lr_pvalue = float(stats.chi2.sf(lr_statistic, df=k_params))
     c_index = _harrell_c_index(
+        frame[time_column].to_numpy(dtype=float),
+        frame[event_column].to_numpy(dtype=int),
+        risk_score.astype(float),
+    )
+    c_index_ci = _harrell_c_index_bootstrap_ci(
         frame[time_column].to_numpy(dtype=float),
         frame[event_column].to_numpy(dtype=int),
         risk_score.astype(float),
@@ -3439,9 +3598,17 @@ def compute_cox_analysis(
             "parameters": k_params,
             "events_per_parameter": float(n_events / k_params) if k_params else None,
             "partial_log_likelihood": _safe_float(llf_value),
+            "null_log_likelihood": llnull_value,
+            "lr_statistic": _safe_float(lr_statistic),
+            "lr_pvalue": _safe_float(lr_pvalue),
             "aic": _safe_float(-2 * llf_value + 2 * k_params),
             "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),
+            "c_index_std": _safe_float(c_index_ci["c_index_std"]),
+            "c_index_ci_lower": _safe_float(c_index_ci["c_index_ci_lower"]),
+            "c_index_ci_upper": _safe_float(c_index_ci["c_index_ci_upper"]),
+            "c_index_ci_level": 0.95,
+            "c_index_ci_method": "bootstrap_percentile",
             "tie_method": "efron",
         },
         categorical_alerts=_cox_categorical_stability_alerts(frame, categorical_covariates),
@@ -3460,10 +3627,18 @@ def compute_cox_analysis(
             "parameters": k_params,
             "events_per_parameter": float(n_events / k_params) if k_params else None,
             "partial_log_likelihood": _safe_float(llf_value),
+            "null_log_likelihood": llnull_value,
+            "lr_statistic": _safe_float(lr_statistic),
+            "lr_pvalue": _safe_float(lr_pvalue),
             "aic": _safe_float(-2 * llf_value + 2 * k_params),
             "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),
             "apparent_c_index": _safe_float(c_index),
+            "c_index_std": _safe_float(c_index_ci["c_index_std"]),
+            "c_index_ci_lower": _safe_float(c_index_ci["c_index_ci_lower"]),
+            "c_index_ci_upper": _safe_float(c_index_ci["c_index_ci_upper"]),
+            "c_index_ci_level": 0.95,
+            "c_index_ci_method": "bootstrap_percentile",
             "c_index_label": "Apparent C-index (training cohort)",
             "evaluation_mode": "apparent",
             "tie_method": "efron",

@@ -122,6 +122,28 @@ def test_build_cox_forest_figure_returns_json() -> None:
     assert "Red: term p &lt; 0.05" in annotation_text
 
 
+def test_build_cox_forest_figure_includes_c_index_ci_when_available() -> None:
+    cox_result = {
+        "results_table": [
+            {"Label": "age", "Hazard ratio": 1.05, "CI lower": 1.01, "CI upper": 1.10, "P value": 0.02},
+        ],
+        "model_stats": {
+            "n": 100,
+            "events": 50,
+            "c_index": 0.65,
+            "c_index_label": "Apparent C-index",
+            "c_index_ci_lower": 0.61,
+            "c_index_ci_upper": 0.69,
+            "c_index_ci_level": 0.95,
+        },
+    }
+
+    figure = build_cox_forest_figure(cox_result)
+
+    annotation_text = " ".join(str(annotation.get("text", "")) for annotation in figure["layout"].get("annotations", []))
+    assert "95% CI = 0.610 to 0.690" in annotation_text
+
+
 def test_build_cox_forest_figure_wraps_long_labels() -> None:
     cox_result = {
         "results_table": [
@@ -172,6 +194,30 @@ def test_build_cox_diagnostics_figure_wraps_long_term_titles_and_adds_top_spacin
     assert any("<br>" in title or title.endswith("…") for title in subplot_titles)
     assert figure["layout"]["margin"]["t"] >= 132
     assert figure["layout"]["height"] >= 420
+    assert figure["layout"]["title"]["text"] == "Scaled Schoenfeld Residual Trend Check"
+    assert any("LOWESS-smoothed scaled Schoenfeld residual trends" in annotation.get("text", "") for annotation in annotations)
+    assert figure["layout"]["yaxis"]["title"]["text"] == "Scaled residual"
+
+
+def test_build_cox_diagnostics_figure_uses_scaled_residual_hover_text() -> None:
+    cox_result = {
+        "diagnostics_plot_data": [
+            {
+                "term": "age",
+                "log_time": [0.0, 1.0, 2.0, 3.0],
+                "residual": [0.2, -0.1, 0.15, 0.05],
+                "trend_log_time": [0.0, 1.0, 2.0, 3.0],
+                "trend_residual": [0.12, 0.08, 0.03, 0.01],
+                "schoenfeld_rho": 0.31,
+                "p_value": 0.021,
+            },
+        ],
+    }
+
+    figure = build_cox_diagnostics_figure(cox_result)
+
+    marker_trace = next(trace for trace in figure["data"] if trace.get("mode") == "markers")
+    assert "Scaled Schoenfeld residual" in marker_trace["hovertemplate"]
 
 
 def test_build_cox_diagnostics_figure_uses_robust_y_scale_when_outliers_flatten_panel() -> None:
