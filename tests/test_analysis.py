@@ -823,6 +823,11 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert any("comparable patient pairs" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("external-cohort apply workflow" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("changing the covariate set" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert result["diagnostics_plot_data"]
+    first_trace = result["diagnostics_plot_data"][0]
+    assert {"term", "log_time", "residual", "trend_log_time", "trend_residual"} <= set(first_trace)
+    assert len(first_trace["log_time"]) == len(first_trace["residual"])
+    assert len(first_trace["trend_log_time"]) == len(first_trace["trend_residual"])
 
 
 def test_cox_analysis_reports_missing_covariate_exclusions() -> None:

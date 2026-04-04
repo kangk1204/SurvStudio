@@ -56,8 +56,12 @@ def test_index_uses_relative_static_assets() -> None:
     assert response.status_code == 200
     assert '../static/styles.css?v=' in response.text
     assert '<script src="../static/vendor/plotly-3.4.0.min.js?v=' in response.text
+    assert '<script src="../static/app_benchmark.js?v=' in response.text
     assert '<script src="../static/app.js?v=' in response.text
     assert "cdn.plot.ly" not in response.text
+    assert 'id="expertModeButton"' in response.text
+    assert 'id="expertModeButton" type="button" role="tab" aria-selected="false">Expert</button>' in response.text
+    assert 'id="coxDiagnosticsPlot"' in response.text
     assert 'id="mlEvaluationStrategy"' in response.text
     assert 'id="downloadMlManuscriptMarkdownButton"' in response.text
     assert 'id="downloadMlManuscriptLatexButton"' in response.text
@@ -112,8 +116,9 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="uploadButton" type="button"' in response.text
     assert 'id="guidedModeButton"' in response.text
     assert 'id="expertModeButton"' in response.text
-    assert 'id="expertModeButton" type="button" role="tab" aria-selected="false" hidden aria-hidden="true" tabindex="-1"' in response.text
-    assert 'class="mode-toggle mode-toggle-guided-only"' in response.text
+    assert 'id="expertModeButton" type="button" role="tab" aria-selected="false">Expert</button>' in response.text
+    assert 'class="mode-toggle"' in response.text
+    assert 'mode-toggle-guided-only' not in response.text
     assert 'id="expertSurfaceLabel"' not in response.text
     assert 'id="guidedShell"' in response.text
     assert 'id="guidedSummaryBar"' in response.text
@@ -381,8 +386,10 @@ def test_frontend_uses_server_side_preset_metadata_and_validates_dom_refs() -> N
 def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
     index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    benchmark_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_benchmark.js"
     html = index_html.read_text()
     text = app_js.read_text()
+    benchmark_text = benchmark_js.read_text()
 
     assert 'data-tab="benchmark"' in html
     assert 'id="panel-benchmark"' in html
@@ -403,15 +410,17 @@ def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
     assert 'benchmarkPlotNote: document.getElementById("benchmarkPlotNote")' in text
     assert 'benchmarkMlMount: document.getElementById("benchmarkMlMount")' in text
     assert 'benchmarkDlMount: document.getElementById("benchmarkDlMount")' in text
-    assert "function renderBenchmarkBoard()" in text
-    assert "async function renderUnifiedBenchmarkPlot(board)" in text
+    assert "createBenchmarkBoardApi" in benchmark_text
+    assert "function renderBenchmarkBoard()" in benchmark_text
+    assert "async function renderUnifiedBenchmarkPlot(board)" in benchmark_text
     assert "function renderPredictiveWorkbench()" in text
     assert "function runPredictiveSelectedModel()" in text
     assert "function runUnifiedPredictiveComparison()" in text
     assert "function setPredictiveWorkbenchFamily(family" in text
     assert "function setPredictiveModel(modelKey" in text
-    assert "function unifiedBenchmarkRows({ currentOnly = true } = {})" in text
-    assert "function benchmarkBoardState()" in text
+    assert "function unifiedBenchmarkRows({ currentOnly = true } = {})" in benchmark_text
+    assert "function benchmarkBoardState()" in benchmark_text
+    assert "const benchmarkBoardApi = window.SurvStudioBenchmark.createBenchmarkBoardApi({" in text
     assert "function syncPredictiveWorkbenchCompareVisibility()" in text
     assert "function reviewBenchmarkSourceTab(tabName, mode = null)" in text
     assert 'if (runtime.uiMode === "expert" && (resolvedTabName === "ml" || resolvedTabName === "dl")) {' in text
@@ -445,8 +454,8 @@ def test_frontend_persists_predictive_workbench_visibility_in_history_state() ->
 
 
 def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text(encoding="utf-8")
+    benchmark_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_benchmark.js"
+    text = benchmark_js.read_text(encoding="utf-8")
 
     assert '`ML compare rows: ${benchmarkCompareRows("ml", { currentOnly: true }).length}`' in text
     assert '`DL compare rows: ${benchmarkCompareRows("dl", { currentOnly: true }).length}`' in text
@@ -632,15 +641,37 @@ def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() 
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
 
-    assert 'const expectsCompare = preferredResultMode("ml") === "compare";' in text
+    assert 'const expectsCompare = expectsCompareOverride == null' in text
+    assert '? preferredResultMode("ml") === "compare"' in text
     assert 'const compareRun = String(requestConfig.model_type || "") === "compare";' in text
     assert 'const effectiveModelType = expectsCompare ? "compare" : String(requestConfig.model_type || "");' in text
     assert 'const learningRateApplies = expectsCompare || effectiveModelType === "gbs";' in text
     assert 'evaluation_strategy: expectsCompare ? String(requestConfig.evaluation_strategy || "holdout") : null,' in text
     assert 'cv_folds: expectsCompare ? Number(requestConfig.cv_folds || 5) : null,' in text
     assert 'cv_repeats: expectsCompare ? Number(requestConfig.cv_repeats || 3) : null,' in text
-    assert 'model_type: expectsCompare ? "compare" : String(refs.mlModelType?.value || ""),'
+    assert 'model_type: expectsCompare ? "compare" : String(refs.mlModelType?.value || ""),' in text
     assert '&& (compareRun || Boolean(requestConfig.compute_shap) === !Boolean(refs.mlSkipShap?.checked))' not in text
+
+
+def test_benchmark_module_hides_unified_board_when_evaluation_modes_do_not_match() -> None:
+    benchmark_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_benchmark.js"
+    text = benchmark_js.read_text()
+
+    assert "Unified chart hidden because current ML and DL compare rows use mixed evaluation paths" in text
+    assert "Unified chart is hidden until ML and DL compare rows use the same evaluation mode." in text
+    assert 'Visible compare rows are grouped by family because evaluation modes differ. No cross-family ranking is published.' in text
+    assert 'const rankLabel = board.hasMixedEvaluation ? "Family rank" : "Rank";' in text
+    assert 'throw new Error("SurvStudio benchmark module failed to load.");' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js").read_text()
+
+
+def test_cox_ui_wires_graphical_diagnostics_plot() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'coxDiagnosticsPlot: document.getElementById("coxDiagnosticsPlot"),' in text
+    assert 'if (payload.diagnostics_figure?.data?.length) {' in text
+    assert 'plotLayoutConfig(payload.diagnostics_figure.layout, "cox_diagnostics")' in text
+    assert "clearPlotShell(refs.coxDiagnosticsPlot, '<div class=\"empty-state plot-empty\"><span>Graphical PH diagnostics were unavailable for this fit.</span></div>');" in text
 
 
 def test_guided_ml_inline_compare_uses_clicked_button_as_loading_target() -> None:
@@ -1426,9 +1457,12 @@ def test_cox_response_includes_request_config() -> None:
     )
 
     assert response.status_code == 200
-    request_config = response.json()["request_config"]
+    payload = response.json()
+    request_config = payload["request_config"]
     assert request_config["covariates"] == ["age", "sex", "stage"]
     assert request_config["categorical_covariates"] == ["sex", "stage"]
+    assert "diagnostics_figure" in payload
+    assert "data" in payload["diagnostics_figure"]
 
 
 def test_cohort_table_response_includes_request_config() -> None:

@@ -10,6 +10,7 @@
     <script src="../static/vendor/plotly-3.4.0.min.js?v={{ static_version }}" defer></script>
     <script src="../static/app_shell.js?v={{ static_version }}" defer></script>
     <script src="../static/app_downloads.js?v={{ static_version }}" defer></script>
+    <script src="../static/app_benchmark.js?v={{ static_version }}" defer></script>
     <script src="../static/app.js?v={{ static_version }}" defer></script>
   </head>
   <body>
@@ -20,9 +21,9 @@
       </a>
       <div class="header-right">
         <span class="dataset-badge hidden" id="datasetBadge"></span>
-        <div class="mode-toggle mode-toggle-guided-only" id="analysisModeToggle" role="tablist" aria-label="Analysis mode">
+        <div class="mode-toggle" id="analysisModeToggle" role="tablist" aria-label="Analysis mode">
           <button class="mode-toggle-button active" id="guidedModeButton" type="button" role="tab" aria-selected="true">Guided</button>
-          <button class="mode-toggle-button" id="expertModeButton" type="button" role="tab" aria-selected="false" hidden aria-hidden="true" tabindex="-1">Expert</button>
+          <button class="mode-toggle-button" id="expertModeButton" type="button" role="tab" aria-selected="false">Expert</button>
         </div>
         <div class="upload-inline">
           <input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" />
@@ -551,7 +552,15 @@
           <div class="insight-board" id="coxInsightBoard"><div class="empty-state">Model interpretation and diagnostic notes will appear here after analysis.</div></div>
           <div class="table-grid stacked">
             <div class="table-card full-width"><h3>Hazard Ratios</h3><div class="table-shell" id="coxResultsShell"><div class="empty-state">Fit a Cox model.</div></div></div>
-            <div class="table-card full-width"><h3>PH Diagnostics</h3><div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Approximate rank-based Spearman screening of Schoenfeld residuals against log time appears here. This is useful for screening PH problems, not a full cox.zph test.</div></div></div>
+            <div class="table-card full-width">
+              <h3>PH Diagnostics</h3>
+              <div class="plot-shell" id="coxDiagnosticsPlot">
+                <div class="empty-state plot-empty">
+                  <span>Graphical PH diagnostics appear here after fitting the model.</span>
+                </div>
+              </div>
+              <div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Approximate rank-based Spearman screening of Schoenfeld residuals against log time appears here. This is useful for screening PH problems, not a full cox.zph test.</div></div>
+            </div>
           </div>
         </article>
       </section>

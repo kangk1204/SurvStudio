@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 import plotly.graph_objects as go
 import plotly.io as pio
+from plotly.subplots import make_subplots
 
 PAPER = "#ffffff"
 INK = "#1a2332"
@@ -286,6 +287,104 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         tickvals=labels,
         ticktext=display_labels,
         **_COMMON_AXES,
+    )
+    return figure_to_json(fig)
+
+
+def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
+    diagnostic_series = list(cox_result.get("diagnostics_plot_data") or [])
+    if not diagnostic_series:
+        return figure_to_json(go.Figure())
+
+    def _sort_key(item: dict[str, Any]) -> tuple[float, float, str]:
+        raw_p = item.get("p_value")
+        raw_rho = item.get("schoenfeld_rho")
+        safe_p = float(raw_p) if isinstance(raw_p, (int, float)) and np.isfinite(float(raw_p)) else float("inf")
+        safe_rho = abs(float(raw_rho)) if isinstance(raw_rho, (int, float)) and np.isfinite(float(raw_rho)) else -1.0
+        return (safe_p, -safe_rho, str(item.get("term") or ""))
+
+    panels = sorted(diagnostic_series, key=_sort_key)[:4]
+    panel_count = max(1, len(panels))
+    cols = 2 if panel_count > 1 else 1
+    rows = int(np.ceil(panel_count / cols))
+    subplot_titles = [str(panel.get("term") or "Term") for panel in panels]
+    fig = make_subplots(
+      rows=rows,
+      cols=cols,
+      subplot_titles=subplot_titles,
+      horizontal_spacing=0.12,
+      vertical_spacing=0.18,
+    )
+
+    for panel_index, panel in enumerate(panels):
+        row = (panel_index // cols) + 1
+        col = (panel_index % cols) + 1
+        x_values = [float(value) for value in panel.get("log_time") or [] if value is not None]
+        y_values = [float(value) for value in panel.get("residual") or [] if value is not None]
+        trend_x = [float(value) for value in panel.get("trend_log_time") or [] if value is not None]
+        trend_y = [float(value) for value in panel.get("trend_residual") or [] if value is not None]
+        rho = panel.get("schoenfeld_rho")
+        p_value = panel.get("p_value")
+        marker_color = ACCENT if isinstance(p_value, (int, float)) and np.isfinite(float(p_value)) and float(p_value) < 0.05 else SLATE
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=y_values,
+                mode="markers",
+                name=str(panel.get("term") or "Residuals"),
+                marker={"size": 6, "color": marker_color, "opacity": 0.55},
+                hovertemplate=(
+                    f"{panel.get('term') or 'Term'}<br>log(time): %{{x:.3f}}<br>Schoenfeld residual: %{{y:.3f}}"
+                    + (f"<br>rho={float(rho):.3f}" if isinstance(rho, (int, float)) and np.isfinite(float(rho)) else "")
+                    + (f"<br>p={float(p_value):.3g}" if isinstance(p_value, (int, float)) and np.isfinite(float(p_value)) else "")
+                    + "<extra></extra>"
+                ),
+                showlegend=False,
+            ),
+            row=row,
+            col=col,
+        )
+        if trend_x and trend_y:
+            fig.add_trace(
+                go.Scatter(
+                    x=trend_x,
+                    y=trend_y,
+                    mode="lines",
+                    line={"width": 2.5, "color": marker_color},
+                    hoverinfo="skip",
+                    showlegend=False,
+                ),
+                row=row,
+                col=col,
+            )
+        fig.add_hline(y=0.0, line_width=1, line_dash="dot", line_color="rgba(90, 103, 118, 0.7)", row=row, col=col)
+        fig.update_xaxes(title="log(time)", row=row, col=col, **_COMMON_AXES)
+        fig.update_yaxes(title="Residual", row=row, col=col, **_COMMON_AXES)
+
+    fig.update_layout(
+        **_COMMON_LAYOUT,
+        margin={"l": 60, "r": 30, "t": 110, "b": 60},
+        title={
+            "text": "Schoenfeld Residual Trend Check",
+            "font": {"family": "Source Serif 4, serif", "size": 24, "color": INK},
+            "x": 0.02,
+        },
+        height=max(380, rows * 280),
+    )
+    fig.add_annotation(
+        text="Screening view only: smoothed Schoenfeld residual trends versus log time. Use alongside the PH table, not as a full Grambsch-Therneau test.",
+        xref="paper",
+        yref="paper",
+        x=0.02,
+        y=1.08,
+        showarrow=False,
+        font={"size": 10, "color": INK},
+        align="left",
+        xanchor="left",
+        yanchor="bottom",
+        bgcolor="rgba(255,255,255,0.85)",
+        borderpad=4,
     )
     return figure_to_json(fig)
 

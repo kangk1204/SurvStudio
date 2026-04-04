@@ -186,6 +186,7 @@ const refs = {
   coxDependencyText: document.getElementById("coxDependencyText"),
   coxDependencyChips: document.getElementById("coxDependencyChips"),
   coxResultsShell: document.getElementById("coxResultsShell"),
+  coxDiagnosticsPlot: document.getElementById("coxDiagnosticsPlot"),
   coxDiagnosticsShell: document.getElementById("coxDiagnosticsShell"),
   downloadCoxResultsButton: document.getElementById("downloadCoxResultsButton"),
   downloadCoxDiagnosticsButton: document.getElementById("downloadCoxDiagnosticsButton"),
@@ -1588,6 +1589,7 @@ function resizeVisiblePlotsNow() {
   const plots = [
     refs.kmPlot,
     refs.coxPlot,
+    refs.coxDiagnosticsPlot,
     refs.cutpointPlot,
     refs.mlImportancePlot,
     refs.mlShapPlot,
@@ -3969,414 +3971,46 @@ function syncPredictiveWorkbenchCompareVisibility() {
   dlComparisonCard?.classList.toggle("hidden", suppressCompare);
   dlManuscriptCard?.classList.toggle("hidden", suppressCompare);
 }
-
-function benchmarkCompareRows(goal, { currentOnly = false } = {}) {
-  const payload = currentOnly ? currentCompareGoalPayload(goal) : compareGoalPayload(goal);
-  if (panelModeForPayload(payload) !== "compare") return [];
-  return Array.isArray(payload?.analysis?.comparison_table) ? payload.analysis.comparison_table : [];
+if (!window.SurvStudioBenchmark?.createBenchmarkBoardApi) {
+  throw new Error("SurvStudio benchmark module failed to load.");
 }
 
-function benchmarkSingleRunSummary(goal, payload) {
-  const requestConfig = payload?.request_config || payload?.analysis?.request_config || {};
-  if (goal === "ml") {
-    const stats = payload?.analysis?.model_stats || {};
-    const label = mlModelLabel(requestConfig.model_type || refs.mlModelType?.value || "ML model");
-    return {
-      title: "Latest single run",
-      text: `${label} ${stats.metric_name || "C-index"}=${formatValue(stats.c_index)} on ${benchmarkEvaluationLabel(stats.evaluation_mode)} evaluation. Use Compare All if you want this family to appear in the unified leaderboard.`,
-      chips: [
-        `Eval: ${benchmarkEvaluationLabel(stats.evaluation_mode)}`,
-        `Features: ${formatValue(stats.n_features)}`,
-        `N: ${formatValue(stats.n_patients)}`,
-      ],
-    };
-  }
-  const stats = payload?.analysis || {};
-  const label = dlModelLabel(requestConfig.model_type || refs.dlModelType?.value || "deep model");
-  return {
-    title: "Latest single run",
-    text: `${label} C-index=${formatValue(stats.c_index)} on ${benchmarkEvaluationLabel(stats.evaluation_mode)} evaluation. Use Compare All if you want this family to appear in the unified leaderboard.`,
-    chips: [
-      `Eval: ${benchmarkEvaluationLabel(stats.evaluation_mode)}`,
-      `Epochs: ${formatValue(stats.epochs_trained || stats.epochs)}`,
-      `Features: ${formatValue(stats.n_features)}`,
-    ],
-  };
-}
+const benchmarkBoardApi = window.SurvStudioBenchmark.createBenchmarkBoardApi({
+  refs,
+  state,
+  runtime,
+  Plotly,
+  currentCompareGoalPayload,
+  compareGoalPayload,
+  goalPayload,
+  panelModeForPayload,
+  benchmarkGoalMeta,
+  benchmarkResultLabel,
+  benchmarkMetricNumber,
+  benchmarkEvaluationLabel,
+  benchmarkReviewAction,
+  mlModelLabel,
+  dlModelLabel,
+  currentPredictiveModelKey,
+  predictiveModelMeta,
+  formatValue,
+  escapeHtml,
+  isScopeBusy,
+  clearPlotShell,
+  purgePlot,
+  plotLayoutConfig,
+  plotConfig,
+  stabilizePlotShellHeight,
+  renderPredictiveWorkbench,
+  syncPredictiveWorkbenchCompareVisibility,
+});
 
-function benchmarkFamilySummary(goal) {
-  const meta = benchmarkGoalMeta(goal);
-  const payload = goalPayload(goal);
-  const tone = benchmarkResultTone(goal);
-  const compareRows = benchmarkCompareRows(goal);
-  if (!payload) {
-    return {
-      tone,
-      status: benchmarkResultLabel(goal),
-      title: `${meta.label} not run yet`,
-      text: `Run a single model or Compare All in the Predictive Models workspace to populate this family.`,
-      chips: ["Leaderboard rows: 0"],
-      tab: meta.tab,
-      reviewLabel: meta.reviewLabel,
-    };
-  }
-
-  if (compareRows.length) {
-    const bestRow = compareRows[0] || {};
-    const evaluationMode = payload.analysis?.evaluation_mode || bestRow.evaluation_mode;
-    return {
-      tone,
-      status: benchmarkResultLabel(goal),
-      title: "Latest compare run",
-      text: `${meta.label} compared ${compareRows.length} model(s). Top row: ${formatValue(bestRow.model)} with C-index ${formatValue(bestRow.c_index)} on ${benchmarkEvaluationLabel(evaluationMode)} evaluation.${tone === "stale" ? " Current controls changed since this run." : ""}`,
-      chips: [
-        `Top: ${formatValue(bestRow.model)}`,
-        `Rows: ${compareRows.length}`,
-        `Eval: ${benchmarkEvaluationLabel(evaluationMode)}`,
-      ],
-      tab: meta.tab,
-      reviewLabel: meta.reviewLabel,
-    };
-  }
-
-  const singleSummary = benchmarkSingleRunSummary(goal, payload);
-  return {
-    tone,
-    status: benchmarkResultLabel(goal),
-    title: singleSummary.title,
-    text: `${singleSummary.text}${tone === "stale" ? " Current controls changed since this run." : ""}`,
-    chips: singleSummary.chips,
-    tab: meta.tab,
-    reviewLabel: meta.reviewLabel,
-  };
-}
-
-function unifiedBenchmarkRows({ currentOnly = true } = {}) {
-  const families = ["ml", "dl"];
-  const rows = families.flatMap((goal) => {
-    const meta = benchmarkGoalMeta(goal);
-    const status = benchmarkResultLabel(goal);
-    const sourceMode = benchmarkPanelMode(goal);
-    return benchmarkCompareRows(goal, { currentOnly }).map((row, index) => ({
-      family: meta.label,
-      familyTab: meta.tab,
-      model: row.model,
-      c_index: row.c_index,
-      numericCIndex: benchmarkMetricNumber(row.c_index),
-      evaluation_mode: row.evaluation_mode || goalPayload(goal)?.analysis?.evaluation_mode || "",
-      sourceRank: Number.isFinite(Number(row.rank)) ? Number(row.rank) : index + 1,
-      comparableForRanking: row.comparable_for_ranking !== false && benchmarkMetricNumber(row.c_index) !== null,
-      status,
-      sourceMode,
-    }));
-  });
-  return rows.sort((left, right) => {
-    const comparableDelta = Number(Boolean(right.comparableForRanking)) - Number(Boolean(left.comparableForRanking));
-    if (comparableDelta !== 0) return comparableDelta;
-    const safeLeft = left.numericCIndex ?? -Infinity;
-    const safeRight = right.numericCIndex ?? -Infinity;
-    if (safeRight !== safeLeft) return safeRight - safeLeft;
-    return left.family.localeCompare(right.family) || left.model.localeCompare(right.model);
-  });
-}
-
-function benchmarkBoardState() {
-  const currentRows = unifiedBenchmarkRows({ currentOnly: true });
-  const latestRows = unifiedBenchmarkRows({ currentOnly: false });
-  const currentFamilies = ["ml", "dl"].filter((goal) => benchmarkCompareRows(goal, { currentOnly: true }).length > 0);
-  const staleFamilies = ["ml", "dl"].filter((goal) => benchmarkCompareRows(goal).length > 0 && benchmarkCompareRows(goal, { currentOnly: true }).length === 0);
-  const plottableRows = currentRows.filter((row) => row.numericCIndex !== null);
-  const evaluationModes = [
-    ...new Set(plottableRows.map((row) => String(row.evaluation_mode || "").trim().toLowerCase()).filter(Boolean)),
-  ];
-  const missingMetricCount = currentRows.filter((row) => row.numericCIndex === null).length;
-  const nonComparableCount = currentRows.filter((row) => !row.comparableForRanking).length;
-  const predictiveBusy = isScopeBusy("predictive") || isScopeBusy("ml") || isScopeBusy("dl");
-  const pendingFamilies = ["ml", "dl"].filter((goal) => !currentFamilies.includes(goal));
-  return {
-    currentRows,
-    latestRows,
-    currentFamilies,
-    staleFamilies,
-    plottableRows,
-    evaluationModes,
-    hasMixedEvaluation: evaluationModes.length > 1,
-    missingMetricCount,
-    nonComparableCount,
-    predictiveBusy,
-    pendingFamilies,
-  };
-}
-
-async function renderUnifiedBenchmarkPlot(board) {
-  if (!refs.benchmarkComparisonPlot || !refs.benchmarkPlotNote) return;
-  if (board.predictiveBusy) {
-    refs.benchmarkPlotNote.textContent = `Unified comparison is still running. Completed families: ${board.currentFamilies.length ? board.currentFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ") : "none yet"}. Waiting on ${board.pendingFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} before charting the final board.`;
-    refs.benchmarkComparisonPlot.classList.add("hidden");
-    clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>Compare All Models is still running. Partial rows are withheld until both model families finish.</span></div>');
-    return;
-  }
-  if (!board.currentRows.length) {
-    refs.benchmarkPlotNote.textContent = board.staleFamilies.length
-      ? "Current settings no longer match the last compare run. Rerun Compare All Models to rebuild the cross-family board."
-      : "Run Compare All Models to chart ML and DL together on one board.";
-    refs.benchmarkComparisonPlot.classList.add("hidden");
-    clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>Run Compare All Models to compare ML and DL C-index values on one chart.</span></div>');
-    return;
-  }
-  if (!board.plottableRows.length) {
-    refs.benchmarkPlotNote.textContent = "Current comparison rows exist, but none reported a numeric C-index that can be charted. Review the table below.";
-    refs.benchmarkComparisonPlot.classList.add("hidden");
-    clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>No numeric C-index values are available to chart for the current board.</span></div>');
-    return;
-  }
-
-  const noteParts = [];
-  noteParts.push(
-    board.hasMixedEvaluation
-      ? `Showing ${board.plottableRows.length} current screening rows with mixed evaluation paths (${board.evaluationModes.map((mode) => benchmarkEvaluationLabel(mode)).join(", ")}).`
-      : `Showing ${board.plottableRows.length} current screening rows on one C-index axis${board.evaluationModes[0] ? ` using ${benchmarkEvaluationLabel(board.evaluationModes[0])} evaluation.` : "."}`,
-  );
-  if (board.staleFamilies.length) {
-    noteParts.push(`Stale compare rows from ${board.staleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
-  }
-  if (board.missingMetricCount) {
-    noteParts.push(`Omitted ${board.missingMetricCount} row(s) without a numeric C-index.`);
-  }
-  refs.benchmarkPlotNote.textContent = noteParts.join(" ");
-
-  const x = board.plottableRows.map((row) => `${row.model}<br>${row.family === "Classical ML" ? "ML" : "DL"}`);
-  const y = board.plottableRows.map((row) => row.numericCIndex);
-  const colors = board.plottableRows.map((row) => (row.familyTab === "ml" ? "rgba(47, 101, 217, 0.92)" : "rgba(219, 126, 21, 0.92)"));
-  const borderColors = board.plottableRows.map((row) => (row.familyTab === "ml" ? "rgba(34, 72, 156, 1)" : "rgba(156, 86, 15, 1)"));
-  const customdata = board.plottableRows.map((row, index) => ([
-    index + 1,
-    row.family,
-    benchmarkEvaluationLabel(row.evaluation_mode),
-    row.status,
-  ]));
-  const referenceMax = Math.max(0.72, ...y.filter((value) => Number.isFinite(value)).map((value) => value + 0.04));
-  const layout = {
-    title: { text: "Unified C-index Screening Board", x: 0.02, xanchor: "left" },
-    height: 420,
-    margin: { l: 72, r: 24, t: 54, b: 92 },
-    paper_bgcolor: "#ffffff",
-    plot_bgcolor: "#ffffff",
-    xaxis: {
-      title: { text: "Model" },
-      tickfont: { size: 12 },
-      automargin: true,
-    },
-    yaxis: {
-      title: { text: "Concordance index" },
-      range: [0, referenceMax],
-      gridcolor: "rgba(27, 39, 51, 0.08)",
-      zeroline: false,
-    },
-    shapes: [
-      {
-        type: "line",
-        xref: "paper",
-        x0: 0,
-        x1: 1,
-        yref: "y",
-        y0: 0.5,
-        y1: 0.5,
-        line: { color: "rgba(90, 103, 118, 0.75)", width: 1.5, dash: "dot" },
-      },
-    ],
-    annotations: [
-      {
-        xref: "paper",
-        x: 0.02,
-        yref: "y",
-        y: 0.5,
-        yanchor: "bottom",
-        text: "Reference 0.5",
-        showarrow: false,
-        font: { size: 11, color: "rgba(90, 103, 118, 0.95)" },
-        bgcolor: "rgba(255,255,255,0.85)",
-      },
-    ],
-    showlegend: false,
-  };
-  const trace = {
-    type: "bar",
-    x,
-    y,
-    text: board.plottableRows.map((row) => formatValue(row.c_index)),
-    textposition: "outside",
-    cliponaxis: false,
-    marker: {
-      color: colors,
-      line: {
-        color: borderColors,
-        width: 1.2,
-      },
-    },
-    customdata,
-    hovertemplate: [
-      "<b>%{x}</b>",
-      "Rank: %{customdata[0]}",
-      "Family: %{customdata[1]}",
-      "C-index: %{y:.3f}",
-      "Evaluation: %{customdata[2]}",
-      "Status: %{customdata[3]}",
-      "<extra></extra>",
-    ].join("<br>"),
-  };
-
-  refs.benchmarkComparisonPlot.classList.remove("hidden");
-  purgePlot(refs.benchmarkComparisonPlot);
-  refs.benchmarkComparisonPlot.innerHTML = "";
-  await Plotly.newPlot(
-    refs.benchmarkComparisonPlot,
-    [trace],
-    plotLayoutConfig(layout, "benchmark_comparison"),
-    plotConfig("benchmark_comparison"),
-  );
-  stabilizePlotShellHeight(refs.benchmarkComparisonPlot);
-}
-
-function renderUnifiedBenchmarkSummary(board) {
-  if (!refs.benchmarkSummaryGrid) return;
-  const selectedModel = predictiveModelMeta(currentPredictiveModelKey());
-  const hasAnyResult = Boolean(goalPayload("ml") || goalPayload("dl"));
-  const chips = [
-    `Selected model: ${selectedModel.label}`,
-    `ML compare rows: ${benchmarkCompareRows("ml", { currentOnly: true }).length}`,
-    `DL compare rows: ${benchmarkCompareRows("dl", { currentOnly: true }).length}`,
-  ];
-  const status = board.predictiveBusy
-    ? "Running"
-    : !hasAnyResult
-    ? "Not run"
-    : (!board.currentRows.length
-      ? "Needs rerun"
-      : (board.hasMixedEvaluation || board.staleFamilies.length || board.currentFamilies.length < 2 || board.missingMetricCount || board.nonComparableCount
-        ? "Needs review"
-        : "Board ready"));
-  const title = board.predictiveBusy
-    ? "Unified predictive comparison in progress"
-    : !hasAnyResult
-    ? "Predictive workspace not run yet"
-    : "Predictive screening board";
-  const coverageText = board.currentFamilies.length === 2
-    ? "Both model families are currently represented."
-    : (board.currentFamilies.length === 1
-      ? `${benchmarkGoalMeta(board.currentFamilies[0]).label} is currently represented.`
-      : "No current compare rows are available.");
-  const cautionParts = [];
-  if (board.staleFamilies.length) {
-    cautionParts.push(`Stale compare rows from ${board.staleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
-  }
-  if (board.hasMixedEvaluation) {
-    cautionParts.push("Evaluation modes differ across the visible rows.");
-  }
-  if (board.missingMetricCount) {
-    cautionParts.push(`${board.missingMetricCount} row(s) have no numeric C-index.`);
-  }
-  const text = board.predictiveBusy
-    ? `Compare All Models is still running. Completed families: ${board.currentFamilies.length ? board.currentFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ") : "none yet"}. Waiting on ${board.pendingFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} before publishing the final unified board.`
-    : !hasAnyResult
-    ? "Use Compare All Models once to benchmark the full predictive stack, or test one selected model directly."
-    : (!board.currentRows.length
-      ? "Stored predictive results exist, but they no longer match the current outcome, feature, or evaluation settings. Rerun Compare All Models to rebuild the board."
-      : `Showing ${board.currentRows.length} current screening row(s) across the predictive workspace. ${coverageText} The ordering is a convenience screen, not a strict head-to-head benchmark, because ML and DL still run through family-specific evaluation pipelines.${cautionParts.length ? ` ${cautionParts.join(" ")}` : ""}`);
-  refs.benchmarkSummaryGrid.innerHTML = `
-    <article class="benchmark-family-card tone-${escapeHtml(board.predictiveBusy ? "running" : (!hasAnyResult ? "idle" : (status === "Board ready" ? "current" : "warning")))} benchmark-family-card-wide">
-      <div class="benchmark-family-head">
-        <div>
-          <span class="benchmark-family-badge">${escapeHtml(status)}</span>
-          <h3>Predictive Overview</h3>
-        </div>
-        <button class="button ghost compact-btn" type="button" data-benchmark-model="${escapeHtml(selectedModel.key)}">Show selected controls</button>
-      </div>
-      <strong class="benchmark-family-title">${escapeHtml(title)}</strong>
-      <p class="benchmark-family-copy">${escapeHtml(text)}</p>
-      <div class="dataset-preset-chips">${chips.map((label) => `<span class="dataset-preset-chip">${escapeHtml(label)}</span>`).join("")}</div>
-    </article>
-  `;
-}
-
-function renderUnifiedBenchmarkTable(board) {
-  if (!refs.benchmarkComparisonShell || !refs.benchmarkTableNote) return;
-  if (board.predictiveBusy) {
-    refs.benchmarkTableNote.textContent = `Unified comparison is still running. Partial rows are withheld until ${board.pendingFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} finish.`;
-    refs.benchmarkComparisonShell.innerHTML = '<div class="empty-state">Compare All Models is still running. Partial leaderboard rows are hidden until both model families finish.</div>';
-    return;
-  }
-  if (!board.currentRows.length) {
-    refs.benchmarkTableNote.textContent = board.staleFamilies.length
-      ? "Stored compare rows are stale and hidden. Rerun Compare All Models to rebuild the shared board with the current settings."
-      : "Run Compare All Models to build a shared leaderboard across classical ML and deep learning.";
-    refs.benchmarkComparisonShell.innerHTML = '<div class="empty-state">Run Compare All Models to build a shared leaderboard across classical ML and deep learning.</div>';
-    return;
-  }
-
-  const presentFamilies = [...new Set(board.currentRows.map((row) => row.family))];
-  const noteParts = [
-    presentFamilies.length === 2
-      ? `Showing ${board.currentRows.length} current screening rows from the latest ML and DL comparison outputs.`
-      : `Showing ${board.currentRows.length} current screening row(s) from ${presentFamilies[0]} only.`,
-  ];
-  if (board.staleFamilies.length) {
-    noteParts.push(`Stale compare rows from ${board.staleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden.`);
-  }
-  if (board.hasMixedEvaluation) {
-    noteParts.push("Evaluation modes differ across visible rows.");
-  }
-  refs.benchmarkTableNote.textContent = noteParts.join(" ");
-
-  refs.benchmarkComparisonShell.innerHTML = `
-    <table class="benchmark-table">
-      <thead>
-        <tr>
-          <th>Rank</th>
-          <th>Family</th>
-          <th>Model</th>
-          <th>C-index</th>
-          <th>Evaluation</th>
-          <th>Status</th>
-          <th>Review</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${board.currentRows.map((row, index) => `
-          <tr>
-            <td>${index + 1}</td>
-            <td><span class="benchmark-family-pill family-${escapeHtml(row.familyTab)}">${escapeHtml(row.family)}</span></td>
-            <td>${escapeHtml(formatValue(row.model))}</td>
-            <td>${escapeHtml(formatValue(row.c_index))}</td>
-            <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
-            <td>${escapeHtml(row.status)}</td>
-            <td>${(() => {
-              const action = benchmarkReviewAction(row);
-              return `<button class="button ghost compact-btn" type="button" ${action.attrs}>${escapeHtml(action.label)}</button>`;
-            })()}</td>
-          </tr>
-        `).join("")}
-      </tbody>
-    </table>
-  `;
-}
-
-function renderBenchmarkBoard() {
-  if (!refs.benchmarkSummaryGrid || !refs.benchmarkComparisonShell) return;
-  renderPredictiveWorkbench();
-  const hasDataset = Boolean(state.dataset);
-  if (!hasDataset) {
-    refs.benchmarkSummaryGrid.innerHTML = '<div class="empty-state">Load a dataset first, then compare all predictive models or test one selected model here.</div>';
-    void renderUnifiedBenchmarkPlot(benchmarkBoardState());
-    renderUnifiedBenchmarkTable(benchmarkBoardState());
-    return;
-  }
-  const board = benchmarkBoardState();
-  renderUnifiedBenchmarkSummary(board);
-  void renderUnifiedBenchmarkPlot(board);
-  renderUnifiedBenchmarkTable(board);
-  syncPredictiveWorkbenchCompareVisibility();
-}
+const benchmarkCompareRows = benchmarkBoardApi.benchmarkCompareRows;
+const benchmarkBoardState = benchmarkBoardApi.benchmarkBoardState;
+const renderUnifiedBenchmarkPlot = benchmarkBoardApi.renderUnifiedBenchmarkPlot;
+const renderUnifiedBenchmarkSummary = benchmarkBoardApi.renderUnifiedBenchmarkSummary;
+const renderUnifiedBenchmarkTable = benchmarkBoardApi.renderUnifiedBenchmarkTable;
+const renderBenchmarkBoard = benchmarkBoardApi.renderBenchmarkBoard;
 
 function renderGuidedSummaryChips(items) {
   if (!refs.guidedSummaryChips) return;
@@ -5065,7 +4699,10 @@ function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", his
   renderGuidedChrome();
   requestAnimationFrame(() => {
     if (resolvedTabName === "km" && state.km) Plotly.Plots.resize(refs.kmPlot);
-    if (resolvedTabName === "cox" && state.cox) Plotly.Plots.resize(refs.coxPlot);
+    if (resolvedTabName === "cox" && state.cox) {
+      if (refs.coxPlot?.data) Plotly.Plots.resize(refs.coxPlot);
+      if (refs.coxDiagnosticsPlot?.data) Plotly.Plots.resize(refs.coxDiagnosticsPlot);
+    }
     if ((resolvedTabName === "ml" || resolvedTabName === "benchmark") && state.ml) {
       if (refs.mlImportancePlot?.data) Plotly.Plots.resize(refs.mlImportancePlot);
       if (refs.mlShapPlot?.data) Plotly.Plots.resize(refs.mlShapPlot);
@@ -5146,6 +4783,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.signatureShell.innerHTML = '<div class="empty-state">Use auto-discovery to find the best feature combinations.</div>';
   refs.coxResultsShell.innerHTML = '<div class="empty-state">Hazard ratios will appear after running Cox analysis.</div>';
   refs.coxDiagnosticsShell.innerHTML = '<div class="empty-state">Model assumption checks will appear here.</div>';
+  clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Graphical PH diagnostics appear here after fitting the model.</span></div>');
   refs.cohortTableShell.innerHTML = COHORT_TABLE_EMPTY_STATE_HTML;
   refs.mlComparisonShell.innerHTML = '<div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div>';
   if (refs.mlComparisonTitle) refs.mlComparisonTitle.textContent = "Model Comparison";
@@ -5653,6 +5291,19 @@ async function runCox() {
   await Plotly.newPlot(refs.coxPlot, payload.figure.data, payload.figure.layout, plotConfig("cox_forest"));
   stabilizePlotShellHeight(refs.coxPlot);
   stabilizeCoxPlotResetAxes(refs.coxPlot);
+  if (payload.diagnostics_figure?.data?.length) {
+    purgePlot(refs.coxDiagnosticsPlot);
+    refs.coxDiagnosticsPlot.innerHTML = "";
+    await Plotly.newPlot(
+      refs.coxDiagnosticsPlot,
+      payload.diagnostics_figure.data,
+      plotLayoutConfig(payload.diagnostics_figure.layout, "cox_diagnostics"),
+      plotConfig("cox_diagnostics"),
+    );
+    stabilizePlotShellHeight(refs.coxDiagnosticsPlot);
+  } else {
+    clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Graphical PH diagnostics were unavailable for this fit.</span></div>');
+  }
   updateStepIndicator(3);
   renderTable(refs.coxResultsShell, payload.analysis.results_table);
   renderTable(refs.coxDiagnosticsShell, payload.analysis.diagnostics_table);
@@ -6515,6 +6166,7 @@ function updateGuidedResultVisibility() {
     refs.coxMetaBanner,
     refs.coxInsightBoard,
     refs.coxResultsShell?.closest(".table-card"),
+    refs.coxDiagnosticsPlot,
     refs.coxDiagnosticsShell?.closest(".table-card"),
     refs.mlImportancePlot,
     refs.mlShapPlot,
@@ -6564,16 +6216,19 @@ function updateGuidedResultVisibility() {
 
   if (goal === "cox") {
     const hasPlot = hasRenderedPlot(refs.coxPlot);
+    const hasDiagnosticsPlot = hasRenderedPlot(refs.coxDiagnosticsPlot);
     const hasInsight = hasRenderedInsight(refs.coxInsightBoard);
     const hasResults = hasRenderedTable(refs.coxResultsShell);
     const hasDiagnostics = hasRenderedTable(refs.coxDiagnosticsShell);
-    const hasAny = hasPlot || hasInsight || hasResults || hasDiagnostics;
+    const hasDiagnosticsCard = hasDiagnosticsPlot || hasDiagnostics;
+    const hasAny = hasPlot || hasDiagnosticsCard || hasInsight || hasResults;
 
     reveal(refs.coxPlot, hasPlot);
+    reveal(refs.coxDiagnosticsPlot, hasDiagnosticsPlot);
     reveal(refs.coxMetaBanner, hasAny);
     reveal(refs.coxInsightBoard, hasInsight);
     reveal(refs.coxResultsShell?.closest(".table-card"), hasResults);
-    reveal(refs.coxDiagnosticsShell?.closest(".table-card"), hasDiagnostics);
+    reveal(refs.coxDiagnosticsShell?.closest(".table-card"), hasDiagnosticsCard);
   }
 
   if (goal === "tables") {
@@ -6628,7 +6283,7 @@ function updateGuidedResultVisibility() {
 function resultAnchorFor(tabName, { mode = "single" } = {}) {
   const candidates = {
     km: [refs.kmPlot, refs.kmSummaryShell],
-    cox: [refs.coxPlot, refs.coxResultsShell],
+    cox: [refs.coxPlot, refs.coxDiagnosticsPlot, refs.coxResultsShell],
     predictive: [refs.benchmarkSummaryGrid, refs.benchmarkComparisonPlot, refs.benchmarkComparisonShell, refs.benchmarkWorkbench],
     tables: [refs.cohortTableShell],
     ml: mode === "compare"

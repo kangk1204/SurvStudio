@@ -494,6 +494,84 @@ def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(br
         raise
 
 
+def test_browser_benchmark_hides_unified_chart_for_mixed_evaluation_modes(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    def _mock_ml_compare(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "analysis": {
+                    "comparison_table": [
+                        {"model": "Random Survival Forest", "c_index": 0.714, "evaluation_mode": "holdout", "n_features": 6, "training_time_ms": 121.5, "rank": 1},
+                        {"model": "LASSO-Cox", "c_index": 0.681, "evaluation_mode": "holdout", "n_features": 4, "training_time_ms": 39.4, "rank": 2},
+                    ],
+                    "evaluation_mode": "holdout",
+                    "scientific_summary": {"status": "review", "headline": "ML comparison complete.", "strengths": [], "cautions": [], "next_steps": []},
+                    "manuscript_tables": {"model_performance_table": []},
+                },
+                "request_config": body,
+            }),
+        )
+
+    def _mock_dl_compare(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "analysis": {
+                    "comparison_table": [
+                        {"model": "DeepHit", "c_index": 0.731, "evaluation_mode": "repeated_cv", "epochs_trained": 40, "n_features": 6, "training_time_ms": 442.7, "rank": 1},
+                        {"model": "DeepSurv", "c_index": 0.703, "evaluation_mode": "repeated_cv", "epochs_trained": 40, "n_features": 6, "training_time_ms": 388.1, "rank": 2},
+                    ],
+                    "evaluation_mode": "repeated_cv",
+                    "scientific_summary": {"status": "review", "headline": "DL comparison complete.", "strengths": [], "cautions": [], "next_steps": []},
+                    "manuscript_tables": {"model_performance_table": []},
+                },
+                "request_config": body,
+            }),
+        )
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.route("**/api/ml-model", _mock_ml_compare)
+            page.route("**/api/deep-model", _mock_dl_compare)
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _switch_to_expert(page)
+
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
+            page.locator("#runPredictiveCompareAllButton").click()
+            page.wait_for_function(
+                "() => document.getElementById('benchmarkSummaryGrid').textContent.includes('Needs alignment') || document.getElementById('benchmarkSummaryGrid').textContent.includes('NEEDS ALIGNMENT')"
+            )
+            page.wait_for_function(
+                "() => document.getElementById('benchmarkComparisonPlot').classList.contains('hidden')"
+            )
+
+            assert "same evaluation mode" in page.locator("#benchmarkSummaryGrid").inner_text().lower()
+            assert "mixed evaluation paths" in page.locator("#benchmarkPlotNote").inner_text().lower()
+            assert "no cross-family ranking is published" in page.locator("#benchmarkTableNote").inner_text().lower()
+            assert "family rank" in page.locator("#benchmarkComparisonShell").inner_text().lower()
+            rows_text = page.locator("#benchmarkComparisonShell").inner_text()
+            assert "Random Survival Forest" in rows_text
+            assert "DeepHit" in rows_text
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
 def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
