@@ -1386,7 +1386,7 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
         )
 
         def _run() -> dict[str, Any]:
-            from survival_toolkit.plots import build_cox_forest_figure
+            from survival_toolkit.plots import build_cox_diagnostics_figure, build_cox_forest_figure
 
             analysis = compute_cox_analysis(
                 stored.dataframe,
@@ -1397,7 +1397,13 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
                 categorical_covariates=request_model.categorical_covariates,
             )
             figure = build_cox_forest_figure(analysis)
-            return {"analysis": analysis, "figure": figure, "request_config": request_config}
+            diagnostics_figure = build_cox_diagnostics_figure(analysis)
+            return {
+                "analysis": analysis,
+                "figure": figure,
+                "diagnostics_figure": diagnostics_figure,
+                "request_config": request_config,
+            }
 
         return await run_in_threadpool(_run)
     except Exception as exc:

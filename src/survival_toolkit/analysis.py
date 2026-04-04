@@ -3326,6 +3326,7 @@ def compute_cox_analysis(
     schoenfeld = results.schoenfeld_residuals
     log_time = np.log(frame[time_column].to_numpy(dtype=float))
     diagnostic_rows: list[dict[str, Any]] = []
+    diagnostic_plot_data: list[dict[str, Any]] = []
     for idx, term in enumerate(results.model.exog_names):
         valid = np.isfinite(schoenfeld[:, idx]) & np.isfinite(log_time)
         if valid.sum() < 4:
@@ -3341,6 +3342,32 @@ def compute_cox_analysis(
                 "P value": _safe_float(p_value),
             }
         )
+        if int(valid.sum()) >= 4:
+            x_values = log_time[valid].astype(float)
+            y_values = schoenfeld[valid, idx].astype(float)
+            order = np.argsort(x_values, kind="mergesort")
+            x_sorted = x_values[order]
+            y_sorted = y_values[order]
+            window = max(5, min(25, int(math.ceil(x_sorted.shape[0] / 5))))
+            if window % 2 == 0:
+                window += 1
+            if window > x_sorted.shape[0]:
+                window = x_sorted.shape[0] if x_sorted.shape[0] % 2 == 1 else max(1, x_sorted.shape[0] - 1)
+            trend_y = y_sorted
+            if window >= 3 and x_sorted.shape[0] >= window:
+                kernel = np.ones(window, dtype=float) / float(window)
+                trend_y = np.convolve(y_sorted, kernel, mode="same")
+            diagnostic_plot_data.append(
+                {
+                    "term": label,
+                    "schoenfeld_rho": _safe_float(rho),
+                    "p_value": _safe_float(p_value),
+                    "log_time": [_safe_float(value) for value in x_sorted.tolist()],
+                    "residual": [_safe_float(value) for value in y_sorted.tolist()],
+                    "trend_log_time": [_safe_float(value) for value in x_sorted.tolist()],
+                    "trend_residual": [_safe_float(value) for value in np.asarray(trend_y, dtype=float).tolist()],
+                }
+            )
 
     n_obs = int(frame.shape[0])
     outcome_rows = int(preview_frame.shape[0])
@@ -3376,6 +3403,7 @@ def compute_cox_analysis(
         "formula": formula,
         "results_table": model_rows,
         "diagnostics_table": diagnostic_rows,
+        "diagnostics_plot_data": diagnostic_plot_data,
         "model_stats": {
             "n": n_obs,
             "outcome_rows": outcome_rows,
