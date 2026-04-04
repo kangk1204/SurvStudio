@@ -1,5 +1,5 @@
 (function registerSurvStudioDownloads() {
-  function extractErrorMessage(payload, fallbackText = "") {
+  function parseExportErrorResponse(payload, fallbackText = "") {
     const detail = payload?.detail;
     if (typeof detail === "string" && detail.trim()) return detail.trim();
     if (Array.isArray(detail) && detail.length) {
@@ -117,10 +117,11 @@
         try {
           errorPayload = JSON.parse(rawText);
         } catch {
+          // Export errors can be plain text from the backend or an upstream proxy.
           errorPayload = {};
         }
       }
-      throw new Error(extractErrorMessage(errorPayload, rawText || "Export failed."));
+      throw new Error(parseExportErrorResponse(errorPayload, rawText || "Export failed."));
     }
     const blob = await response.blob();
     triggerBlobDownload(filename, blob, fallbackMimeType);
