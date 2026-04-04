@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import numpy as np
+
 from survival_toolkit.plots import (
+    build_cox_diagnostics_figure,
     build_km_figure,
     build_cox_forest_figure,
     build_cutpoint_scan_figure,
@@ -136,6 +139,71 @@ def test_build_cox_forest_figure_wraps_long_labels() -> None:
     figure = build_cox_forest_figure(cox_result)
 
     assert "<br>" in figure["layout"]["yaxis"]["ticktext"][0] or figure["layout"]["yaxis"]["ticktext"][0].endswith("…")
+
+
+def test_build_cox_diagnostics_figure_wraps_long_term_titles_and_adds_top_spacing() -> None:
+    cox_result = {
+        "diagnostics_plot_data": [
+            {
+                "term": "expression_subtype: Squamoid vs Bronchioid molecular program",
+                "log_time": [0.0, 1.0, 2.0],
+                "residual": [0.2, -0.1, 0.15],
+                "trend_log_time": [0.0, 2.0],
+                "trend_residual": [0.05, 0.12],
+                "schoenfeld_rho": 0.31,
+                "p_value": 0.021,
+            },
+            {
+                "term": "smoking_status: Current smoker vs Former smoker >15 pack-years",
+                "log_time": [0.2, 1.4, 2.6],
+                "residual": [0.1, -0.08, -0.02],
+                "trend_log_time": [0.2, 2.6],
+                "trend_residual": [0.03, -0.04],
+                "schoenfeld_rho": -0.22,
+                "p_value": 0.044,
+            },
+        ],
+    }
+
+    figure = build_cox_diagnostics_figure(cox_result)
+
+    annotations = figure["layout"].get("annotations", [])
+    subplot_titles = [annotation["text"] for annotation in annotations if "Screening view only" not in annotation.get("text", "")]
+    assert any("<br>" in title or title.endswith("…") for title in subplot_titles)
+    assert figure["layout"]["margin"]["t"] >= 132
+    assert figure["layout"]["height"] >= 420
+
+
+def test_build_cox_diagnostics_figure_uses_robust_y_scale_when_outliers_flatten_panel() -> None:
+    cox_result = {
+        "diagnostics_plot_data": [
+            {
+                "term": "estrec",
+                "log_time": [float(value) for value in np.linspace(4.5, 8.0, 20)],
+                "residual": [
+                    -0.08, -0.05, -0.03, -0.02, 0.0, 0.03, 0.01, -0.01, 0.04, 0.02,
+                    -0.04, 0.05, 0.08, -0.06, 0.02, 0.01, -0.03, 0.07, 0.06, 950.0,
+                ],
+                "trend_log_time": [float(value) for value in np.linspace(4.5, 8.0, 20)],
+                "trend_residual": [
+                    -0.02, -0.01, -0.01, 0.0, 0.01, 0.01, 0.0, -0.01, 0.0, 0.02,
+                    0.01, 0.01, 0.02, 0.01, 0.0, -0.01, 0.0, 0.01, 0.02, 0.03,
+                ],
+                "schoenfeld_rho": 0.12,
+                "p_value": 0.09,
+            },
+        ],
+    }
+
+    figure = build_cox_diagnostics_figure(cox_result)
+
+    subtitle = next(
+        annotation["text"]
+        for annotation in figure["layout"]["annotations"]
+        if "Screening view only" in annotation.get("text", "")
+    )
+    assert "clipped for readability" in subtitle
+    assert figure["layout"]["yaxis"]["range"][1] < 950.0
 
 
 def test_build_cutpoint_scan_figure_with_data() -> None:

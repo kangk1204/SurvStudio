@@ -80,7 +80,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["null"],
+    allow_origins=[],
     allow_origin_regex=r"https?://(127\.0\.0\.1|localhost)(:\d+)?",
     allow_credentials=False,
     allow_methods=["*"],
@@ -94,6 +94,7 @@ _MAX_UPLOAD_ROWS = 100_000
 _MAX_UPLOAD_COLUMNS = 5_000
 _MAX_UPLOAD_CELLS = 5_000_000
 _SIGNED_NUMERIC_CSV_LITERAL = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+_CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 _DATASET_PROFILE_CACHE_KEY = "_dataset_profile_cache"
 _LATEX_ESCAPE_TABLE = str.maketrans(
     {
@@ -194,16 +195,38 @@ class DeriveGroupRequest(BaseModel):
         "extreme_split",
         "optimal_cutpoint",
     ]
-    new_column_name: str | None = None
+    new_column_name: str | None = Field(default=None, max_length=200)
     cutoff: str | float | None = None
-    lower_label: str = "Low"
-    upper_label: str = "High"
+    lower_label: str = Field(default="Low", max_length=100)
+    upper_label: str = Field(default="High", max_length=100)
     time_column: str | None = None
     event_column: str | None = None
     event_positive_value: Any = None
     min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
     permutation_iterations: int = Field(default=500, ge=0, le=500)
     random_seed: int = 20260311
+
+    @field_validator("new_column_name", mode="before")
+    @classmethod
+    def validate_new_column_name(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        if _CONTROL_CHAR_PATTERN.search(text):
+            raise ValueError("Derived column names must not contain control characters.")
+        return text
+
+    @field_validator("lower_label", "upper_label", mode="before")
+    @classmethod
+    def validate_group_label(cls, value: Any) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("Group labels must not be empty.")
+        if _CONTROL_CHAR_PATTERN.search(text):
+            raise ValueError("Group labels must not contain control characters.")
+        return text
 
 
 class KaplanMeierRequest(BaseModel):
@@ -227,13 +250,13 @@ class CoxRequest(BaseModel):
     time_column: str
     event_column: str
     event_positive_value: Any = 1
-    covariates: list[str]
-    categorical_covariates: list[str] = Field(default_factory=list)
+    covariates: list[str] = Field(max_length=200)
+    categorical_covariates: list[str] = Field(default_factory=list, max_length=200)
 
 
 class CohortTableRequest(BaseModel):
     dataset_id: str
-    variables: list[str]
+    variables: list[str] = Field(max_length=200)
     group_column: str | None = None
 
 
@@ -262,8 +285,8 @@ class MLModelRequest(BaseModel):
     time_column: str
     event_column: str
     event_positive_value: Any = 1
-    features: list[str]
-    categorical_features: list[str] = Field(default_factory=list)
+    features: list[str] = Field(max_length=1000)
+    categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     model_type: Literal["rsf", "gbs", "lasso_cox", "compare"]
     n_estimators: int = Field(default=100, ge=10, le=1000)
     max_depth: int | None = None
@@ -280,10 +303,10 @@ class DeepModelRequest(BaseModel):
     time_column: str
     event_column: str
     event_positive_value: Any = 1
-    features: list[str]
-    categorical_features: list[str] = Field(default_factory=list)
+    features: list[str] = Field(max_length=1000)
+    categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     model_type: Literal["deepsurv", "deephit", "mtlr", "transformer", "vae", "compare"]
-    hidden_layers: list[int] = Field(default=[64, 64])
+    hidden_layers: list[int] = Field(default=[64, 64], max_length=20)
     dropout: float = Field(default=0.1, ge=0.0, le=0.5)
     learning_rate: float = Field(default=0.001, gt=0.0, le=0.1)
     epochs: int = Field(default=100, ge=10, le=1000)
@@ -337,8 +360,19 @@ class TableExportRequest(BaseModel):
     style: Literal["plain", "journal"] = "journal"
     template: Literal["default", "nejm", "lancet", "jco"] = "default"
     caption: str | None = None
-    notes: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list, max_length=50)
     provenance: dict[str, Any] | None = None
+
+    @field_validator("notes")
+    @classmethod
+    def validate_notes(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for note in value:
+            text = str(note)
+            if len(text) > 4000:
+                raise ValueError("Each table note must be 4000 characters or fewer.")
+            cleaned.append(text)
+        return cleaned
 
 
 # ── Helpers ─────────────────────────────────────────────────────
@@ -876,6 +910,14 @@ def _sanitize_csv_cell(value: Any) -> str:
     return text
 
 
+def _sanitize_markdown_cell(value: Any, style: str) -> str:
+    return _sanitize_csv_cell(_normalize_export_text(value, style)).replace("|", "\\|")
+
+
+def _sanitize_export_note(note: Any) -> str:
+    return _sanitize_csv_cell(_normalize_export_text(note, "plain"))
+
+
 def _export_rows_to_csv(
     rows: list[dict[str, Any]],
     style: str,
@@ -913,11 +955,16 @@ def _export_rows_to_markdown(
     columns = _export_columns(rows)
     template_profile = _export_template_profile(template)
     resolved_caption = _resolve_export_caption(caption, template)
-    header = f"| {' | '.join(columns)} |"
+    clean_notes: list[str] = []
+    for note in notes:
+        sanitized_note = _sanitize_export_note(note)
+        if sanitized_note:
+            clean_notes.append(sanitized_note)
+    header = f"| {' | '.join(_sanitize_markdown_cell(column, 'plain') for column in columns)} |"
     divider = f"| {' | '.join(['---'] * len(columns))} |"
     body = [
         "| "
-        + " | ".join(_normalize_export_text(row.get(column), style).replace("|", "\\|") for column in columns)
+        + " | ".join(_sanitize_markdown_cell(row.get(column), style) for column in columns)
         + " |"
         for row in rows
     ]
@@ -927,9 +974,9 @@ def _export_rows_to_markdown(
         close_marker = template_profile["markdown_close"]
         sections.append(f"{open_marker}{resolved_caption}{close_marker}" if open_marker or close_marker else resolved_caption)
     sections.append("\n".join([header, divider, *body]))
-    if notes:
+    if clean_notes:
         sections.append(f"{template_profile['notes_heading']}:")
-        sections.append("\n".join(f"- {note}" for note in notes))
+        sections.append("\n".join(f"- {note}" for note in clean_notes))
     return "\n\n".join(sections) + "\n"
 
 
@@ -1056,7 +1103,11 @@ def _export_rows_to_docx(
         _docx_paragraph(resolved_caption, bold=caption_bold, italic=caption_italic),
         _docx_table(rows, style=style),
     ]
-    clean_notes = [note.strip() for note in notes if note.strip()]
+    clean_notes: list[str] = []
+    for note in notes:
+        sanitized_note = _sanitize_export_note(note)
+        if sanitized_note:
+            clean_notes.append(sanitized_note)
     if clean_notes:
         body_parts.append(_docx_paragraph(f"{template_profile['notes_heading']}:", italic=True))
         for note in clean_notes:
@@ -1829,9 +1880,9 @@ class TimeDependentImportanceRequest(BaseModel):
     time_column: str
     event_column: str
     event_positive_value: Any = 1
-    features: list[str]
-    categorical_features: list[str] = Field(default_factory=list)
-    eval_times: list[float] | None = None
+    features: list[str] = Field(max_length=1000)
+    categorical_features: list[str] = Field(default_factory=list, max_length=1000)
+    eval_times: list[float] | None = Field(default=None, max_length=100)
 
 
 class CounterfactualRequest(BaseModel):
@@ -1839,8 +1890,8 @@ class CounterfactualRequest(BaseModel):
     time_column: str
     event_column: str
     event_positive_value: Any = 1
-    features: list[str]
-    categorical_features: list[str] = Field(default_factory=list)
+    features: list[str] = Field(max_length=1000)
+    categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     target_feature: str
     original_value: Any = None
     counterfactual_value: Any
@@ -1856,8 +1907,8 @@ class PDPRequest(BaseModel):
     time_column: str
     event_column: str
     event_positive_value: Any = 1
-    features: list[str]
-    categorical_features: list[str] = Field(default_factory=list)
+    features: list[str] = Field(max_length=1000)
+    categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     target_feature: str
     model_type: Literal["rsf", "gbs"] = "rsf"
     n_estimators: int = Field(default=100, ge=10, le=1000)

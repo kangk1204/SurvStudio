@@ -28,7 +28,28 @@
       stabilizePlotShellHeight,
       renderPredictiveWorkbench,
       syncPredictiveWorkbenchCompareVisibility,
+      showError,
     } = deps;
+
+    function createBenchmarkActionButton(action) {
+      const button = document.createElement("button");
+      button.className = "button ghost compact-btn";
+      button.type = "button";
+      button.textContent = String(action?.label || "Review");
+      if (action?.title) {
+        button.title = String(action.title);
+      }
+      if (action?.disabled) {
+        button.disabled = true;
+      }
+      if (action?.dataset && typeof action.dataset === "object") {
+        Object.entries(action.dataset).forEach(([key, value]) => {
+          if (value === null || value === undefined || value === "") return;
+          button.dataset[key] = String(value);
+        });
+      }
+      return button;
+    }
 
     function benchmarkCompareRows(goal, { currentOnly = false } = {}) {
       const payload = currentOnly ? currentCompareGoalPayload(goal) : compareGoalPayload(goal);
@@ -387,15 +408,18 @@
                 <td>${escapeHtml(formatValue(row.c_index))}</td>
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>
-                <td>${(() => {
-                  const action = benchmarkReviewAction(row);
-                  return `<button class="button ghost compact-btn" type="button" ${action.attrs}>${escapeHtml(action.label)}</button>`;
-                })()}</td>
+                <td><span class="benchmark-action-slot" data-benchmark-action-slot="${index}"></span></td>
               </tr>
             `).join("")}
           </tbody>
         </table>
       `;
+      refs.benchmarkComparisonShell.querySelectorAll("[data-benchmark-action-slot]").forEach((slot) => {
+        const index = Number(slot.getAttribute("data-benchmark-action-slot"));
+        const row = board.currentRows[index];
+        if (!row) return;
+        slot.replaceWith(createBenchmarkActionButton(benchmarkReviewAction(row)));
+      });
     }
 
     function renderBenchmarkBoard() {
@@ -405,13 +429,13 @@
       if (!hasDataset) {
         refs.benchmarkSummaryGrid.innerHTML = '<div class="empty-state">Load a dataset first, then compare all predictive models or test one selected model here.</div>';
         const board = benchmarkBoardState();
-        void renderUnifiedBenchmarkPlot(board);
+        renderUnifiedBenchmarkPlot(board).catch((error) => showError(error?.message || "Failed to render unified benchmark plot."));
         renderUnifiedBenchmarkTable(board);
         return;
       }
       const board = benchmarkBoardState();
       renderUnifiedBenchmarkSummary(board);
-      void renderUnifiedBenchmarkPlot(board);
+      renderUnifiedBenchmarkPlot(board).catch((error) => showError(error?.message || "Failed to render unified benchmark plot."));
       renderUnifiedBenchmarkTable(board);
       syncPredictiveWorkbenchCompareVisibility();
     }

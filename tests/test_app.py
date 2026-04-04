@@ -865,6 +865,8 @@ def test_frontend_exposes_shutdown_button_and_stop_flow_copy() -> None:
     assert "SurvStudio server stopped" in text
     assert 'await fetchJSON("/api/shutdown", { method: "POST" });' in shell_text
     assert 'refs.shutdownButton?.addEventListener("click", () => {' in text
+    assert "document.body.innerHTML =" not in text
+    assert "document.body.replaceChildren(landing);" in text
 
 
 def test_frontend_deemphasizes_shutdown_button_and_disabled_exports() -> None:
@@ -1236,11 +1238,11 @@ def test_deep_model_request_accepts_1000_epochs() -> None:
     assert request_model.epochs == 1000
 
 
-def test_health_allows_null_origin_for_file_preview() -> None:
+def test_health_rejects_null_origin_for_file_preview() -> None:
     response = client.get("/api/health", headers={"Origin": "null"})
 
     assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == "null"
+    assert response.headers.get("access-control-allow-origin") is None
 
 
 def test_upload_dataset_preserves_too_large_status(monkeypatch) -> None:
@@ -1843,7 +1845,7 @@ def test_ml_artifact_cache_returns_deep_copied_frames() -> None:
 def test_cors_rejects_null_origin_but_allows_localhost() -> None:
     null_origin = client.get("/api/health", headers={"Origin": "null"})
     assert null_origin.status_code == 200
-    assert null_origin.headers.get("access-control-allow-origin") == "null"
+    assert null_origin.headers.get("access-control-allow-origin") is None
 
     localhost_origin = client.get("/api/health", headers={"Origin": "http://127.0.0.1:8765"})
     assert localhost_origin.status_code == 200
@@ -2011,6 +2013,25 @@ def test_derive_group_snapshot_reuses_cached_profile_template(monkeypatch) -> No
     assert response.status_code == 200
     payload = response.json()
     assert any(column["name"] == "age_group_cached" for column in payload["columns"])
+
+
+def test_derive_group_rejects_control_characters_in_labels() -> None:
+    dataset = client.post("/api/load-example").json()
+
+    response = client.post(
+        "/api/derive-group",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "source_column": "age",
+            "method": "median_split",
+            "new_column_name": "age_group",
+            "lower_label": "Low\nrisk",
+            "upper_label": "High",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "control characters" in json.dumps(response.json())
 
 
 @pytest.mark.parametrize("operator", ["and", "or", "mixed"])
@@ -3664,6 +3685,17 @@ def test_frontend_predictive_compare_uses_unified_scope_and_honest_review_action
     assert 'label: "Screening only"' in app_js
     assert 'if (action === "close-predictive-workbench")' in app_js
 
+    benchmark_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app_benchmark.js"
+    ).read_text(encoding="utf-8")
+    assert "${action.attrs}" not in benchmark_js
+    assert 'document.createElement("button")' in benchmark_js
+    assert "renderUnifiedBenchmarkPlot(board).catch" in benchmark_js
+
 
 def test_frontend_locks_predictive_picker_during_busy_runs_and_hides_guided_action_card() -> None:
     app_js = (
@@ -3851,6 +3883,22 @@ def test_frontend_caps_importance_plot_container_height() -> None:
     assert "overflow: auto;" in styles
 
 
+def test_predictive_plot_panels_stack_vertically_by_default() -> None:
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    grid_start = styles.rindex(".ml-plots-grid {")
+    grid_end = styles.index("}", grid_start)
+    grid_css = styles[grid_start:grid_end]
+    assert "grid-template-columns: 1fr;" in grid_css
+    assert "grid-template-columns: 1fr 1fr;" not in grid_css
+
+
 def test_export_table_endpoint_returns_journal_markdown() -> None:
     response = client.post(
         "/api/export-table",
@@ -3872,6 +3920,38 @@ def test_export_table_endpoint_returns_journal_markdown() -> None:
     assert "*Table 1. Model discrimination summary.*" in response.text
     assert "| Rank | Model | Mean C-index | 95% CI |" in response.text
     assert "Notes:" in response.text
+
+
+def test_export_table_markdown_sanitizes_formula_like_headers_cells_and_notes() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [{"@Rank": "=1+1"}],
+            "format": "markdown",
+            "style": "journal",
+            "template": "default",
+            "notes": ["@sum\nsecond line"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert "| '@Rank |" in response.text
+    assert "| '=1+1 |" in response.text
+    assert "- '@sum second line" in response.text
+
+
+def test_export_table_rejects_excessively_long_notes() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [{"Rank": 1}],
+            "format": "markdown",
+            "notes": ["x" * 4001],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "4000 characters or fewer" in json.dumps(response.json())
 
 
 def test_export_table_endpoint_appends_provenance_notes() -> None:
