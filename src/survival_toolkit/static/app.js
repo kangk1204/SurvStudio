@@ -3801,11 +3801,11 @@ function benchmarkGoalMeta(goal) {
 
 function syncBenchmarkWorkbenchVisibility() {
   const workbenchOpen = Boolean(runtime.workbenchRevealed);
-  refs.benchmarkActionCard?.classList.toggle("hidden", workbenchOpen);
   refs.benchmarkSummaryGrid?.classList.toggle("hidden", workbenchOpen);
   refs.benchmarkComparisonPlot?.closest(".table-card")?.classList.toggle("hidden", workbenchOpen);
   refs.benchmarkComparisonShell?.closest(".table-card")?.classList.toggle("hidden", workbenchOpen);
   refs.benchmarkWorkbench?.classList.toggle("hidden", !workbenchOpen);
+  refs.runPredictiveCompareAllButton?.classList.toggle("hidden", workbenchOpen);
   refs.mlModelType?.closest(".model-choice-field")?.classList.toggle("hidden", workbenchOpen);
   refs.dlModelType?.closest(".model-choice-field")?.classList.toggle("hidden", workbenchOpen);
   refs.runCompareButton?.classList.toggle("hidden", workbenchOpen);
