@@ -2203,7 +2203,7 @@ def _deephit_loss(
             event_survival = survival_at_edges[chunk, event_times]
             diff = event_survival.unsqueeze(0) - subject_survival
             scaled_diff = torch.clamp(diff / _DEEPHIT_RANKING_SIGMA, min=-20.0, max=20.0)
-            ranking_terms.append(torch.exp(scaled_diff)[later_mask])
+            ranking_terms.append(F.softplus(scaled_diff)[later_mask])
         ranking_loss = (
             torch.cat(ranking_terms).mean()
             if ranking_terms
@@ -2277,7 +2277,12 @@ def train_deephit(
         t_max = t_min + 1e-6
     bin_edges = np.linspace(t_min, t_max, num_time_bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-    bin_indices = _digitize_time_bins(time_np, bin_edges, num_time_bins)
+    bin_indices = _digitize_time_bins(
+        time_np,
+        bin_edges,
+        num_time_bins,
+        preserve_tail_overflow=True,
+    )
     bin_tensor = torch.tensor(bin_indices, dtype=torch.long)
     bin_widths = torch.tensor(np.diff(bin_edges), dtype=torch.float32)
     monitor_bin_tensor: torch.Tensor | None = None
@@ -2473,9 +2478,8 @@ class NeuralMTLRNet(_TorchModuleBase):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         hidden = self.encoder(x)
         logits = self.output_layer(hidden)
-        # Canonical MTLR uses a right-cumulative parameterization so earlier
-        # bins aggregate logits from later bins, matching the original model's
-        # inductive bias toward early events.
+        # Canonical MTLR normalizes right-cumulative interval scores rather
+        # than the raw per-bin logits.
         cumsum_logits = torch.flip(
             torch.cumsum(torch.flip(logits, dims=[1]), dim=1),
             dims=[1],
@@ -2583,7 +2587,12 @@ def train_neural_mtlr(
         t_max = t_min + 1e-6
     bin_edges = np.linspace(t_min, t_max, num_time_bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-    bin_indices = _digitize_time_bins(time_np, bin_edges, num_time_bins)
+    bin_indices = _digitize_time_bins(
+        time_np,
+        bin_edges,
+        num_time_bins,
+        preserve_tail_overflow=True,
+    )
     bin_tensor = torch.tensor(bin_indices, dtype=torch.long)
     bin_widths = torch.tensor(np.diff(bin_edges), dtype=torch.float32)
     monitor_bin_tensor: torch.Tensor | None = None

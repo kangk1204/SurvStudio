@@ -578,6 +578,8 @@ def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repea
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
 
+    assert 'const rawText = await response.text();' in text
+    assert 'The server returned an invalid JSON response.' in text
     assert 'if (response.status === 404 && /Unknown dataset id:/i.test(message) && state.dataset) {' in text
     assert 'goHome({ syncHistory: true, historyMode: "replace" });' in text
     assert 'The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.' in text
@@ -612,10 +614,29 @@ def test_frontend_guards_identical_outcome_columns_and_preserves_boundary_precis
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
 
-    assert 'if (timeColumn === eventColumn) {' in text
-    assert 'throw new Error("The survival time column and event column must be different.");' in text
+    assert "function identicalOutcomeColumnMessage()" in text
+    assert 'if (!state.dataset || !timeColumn || !eventColumn || timeColumn !== eventColumn) return null;' in text
+    assert 'return "The survival time column and event column must be different."; '[:-1] in text
+    assert 'if (matchingOutcomeWarning) throw new Error(matchingOutcomeWarning);' in text
     assert 'if (absValue > 0 && absValue < 0.1) return value.toFixed(4).replace(/\\.?0+$/, "");' in text
     assert 'AIC=${formatValue(stats.aic, { scientificLarge: false })}' in text
+
+
+def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'const matchingOutcomeWarning = identicalOutcomeColumnMessage();' in text
+    assert 'refs.eventColumn.addEventListener("change", () => {' in text
+    assert 'updateTimeColumnGuidance();' in text
+    assert 'const coxCovariateCount = goalFeatureCount("cox");' in text
+    assert 'const tableVariableCount = goalFeatureCount("tables");' in text
+    assert 'Select at least one covariate to search for signatures.' in text
+    assert 'Select at least one covariate for the Cox model.' in text
+    assert 'Select at least one variable for the cohort table.' in text
+    assert '!endpointReady || !hasCoxCovariates || isScopeBusy("km")' in text
+    assert '!endpointReady || !hasCoxCovariates || isScopeBusy("cox")' in text
+    assert '!endpointReady || !hasTableVariables || isScopeBusy("tables")' in text
 
 
 def test_cox_plot_reset_axes_restores_initial_layout() -> None:
@@ -1273,6 +1294,16 @@ def test_upload_dataset_accepts_tsv_files() -> None:
     assert {column["name"] for column in body["columns"]} >= {"os_months", "os_event", "age"}
 
 
+def test_upload_dataset_rejects_empty_csv_with_user_facing_400() -> None:
+    response = client.post(
+        "/api/upload",
+        files={"file": ("empty.csv", b"", "text/csv")},
+    )
+
+    assert response.status_code == 400
+    assert "empty" in response.json()["detail"].lower()
+
+
 def test_upload_dataset_accepts_exactly_1000_model_feature_candidates() -> None:
     feature_names = [f"gene_{idx}" for idx in range(1000)]
     header = ",".join(["os_months", "os_event", *feature_names])
@@ -1576,6 +1607,7 @@ def test_deep_model_response_includes_request_config_and_seed_metadata() -> None
     assert body["analysis"]["monitor_seed"] == 77
 
 
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 def test_endpoints_accept_boundary_configuration_values() -> None:
     load_response = client.post("/api/load-example")
     assert load_response.status_code == 200
@@ -1720,6 +1752,11 @@ def test_missing_dataset_returns_404() -> None:
 def test_fail_bad_request_reraises_server_errors() -> None:
     with pytest.raises(RuntimeError, match="boom"):
         fail_bad_request(RuntimeError("boom"))
+
+
+def test_fail_bad_request_reraises_memory_errors() -> None:
+    with pytest.raises(MemoryError, match="oom"):
+        fail_bad_request(MemoryError("oom"))
 
 
 def test_fail_bad_request_maps_dependency_errors_to_503() -> None:
@@ -3415,12 +3452,12 @@ def test_frontend_request_matching_uses_normalized_stable_config_comparison() ->
 
     assert "function stableStringify(value) {" in app_js
     assert "function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false } = {}) {" in app_js
-    assert "function currentGoalRequestConfig(goal) {" in app_js
-    match_start = app_js.index("function matchesRequestConfig(goal, requestConfig) {")
+    assert 'function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) {' in app_js
+    match_start = app_js.index("function matchesRequestConfig(goal, requestConfig, { expectsCompareOverride = null } = {}) {")
     match_end = app_js.index("function currentGoalResult(goal) {", match_start)
     match_body = app_js[match_start:match_end]
     assert "const normalizedStored = normalizedRequestConfig(goal, requestConfig, { expectsCompare });" in match_body
-    assert "const normalizedCurrent = currentGoalRequestConfig(goal);" in match_body
+    assert "const normalizedCurrent = currentGoalRequestConfig(goal, { expectsCompareOverride });" in match_body
     assert "return stableStringify(normalizedStored) === stableStringify(normalizedCurrent);" in match_body
 
 
@@ -3530,8 +3567,8 @@ def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
     assert 'secondaryAction: "run-dl-compare"' in app_js
     assert 'secondaryLabel: "Compare all ML models"' in app_js
     assert 'secondaryLabel: "Compare all DL models"' in app_js
-    assert 'runAction: "run-predictive-compare-all"' in app_js
-    assert 'runLabel: "Compare all models"' in app_js
+    assert 'runAction: runtime.workbenchRevealed ? "run-predictive-selected" : "run-predictive-compare-all"' in app_js
+    assert 'runLabel: runtime.workbenchRevealed ? "Train a model" : "Compare all models"' in app_js
     assert '"Compare all models to build the leaderboard, then click any result to open its controls."' in app_js
     assert '"Run Compare All once to see every model ranked. Then click a result to tune that model."' in app_js
     assert 'guided-actions guided-actions-priority' in app_js
@@ -3560,8 +3597,31 @@ def test_guided_choose_analysis_uses_single_predictive_card() -> None:
     assert 'const GUIDED_GOALS = ["km", "cox", "predictive", "tables", "ml", "dl"];' in app_js
     assert 'predictive: "ML/DL Models"' in app_js
     assert '["km", "cox", "tables", "predictive"].map((entry) => {' in app_js
-    assert 'title: "Run ML/DL Models"' in app_js
+    assert 'title: runtime.workbenchRevealed ? "Train a model" : "Run ML/DL Models"' in app_js
     assert 'data-guided-action="choose-goal" data-goal="${entry}"' in app_js
+
+
+def test_frontend_download_helpers_accept_fallback_mime_type() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+    downloads_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app_downloads.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'function triggerBlobDownload(filename, blob, fallbackMimeType = "") {' in downloads_js
+    assert 'const safeBlob = fallbackMimeType && !blob.type' in downloads_js
+    assert "} finally {" in downloads_js
+    assert 'function triggerBlobDownload(filename, blob, fallbackMimeType = "") {' in app_js
+    assert "return downloadHelpers.triggerBlobDownload(filename, blob, fallbackMimeType);" in app_js
 
 
 def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:

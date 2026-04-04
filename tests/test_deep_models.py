@@ -1579,3 +1579,75 @@ def test_deephit_feature_importance_uses_expected_time_risk_target() -> None:
     ).read_text(encoding="utf-8")
 
     assert "output_to_score=lambda pmf: _expected_time_risk(pmf, time_grid)" in source
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_deephit_ranking_loss_penalizes_inverted_survival_order_more_than_correct_order() -> None:
+    import torch
+    from survival_toolkit.deep_models import _deephit_loss
+
+    time_bin_indices = torch.tensor([1, 2], dtype=torch.long)
+    events = torch.tensor([1, 1], dtype=torch.long)
+    correctly_ranked = torch.tensor(
+        [
+            [0.70, 0.20, 0.05, 0.05],
+            [0.10, 0.20, 0.40, 0.30],
+        ],
+        dtype=torch.float32,
+    )
+    inverted = torch.tensor(
+        [
+            [0.10, 0.20, 0.40, 0.30],
+            [0.70, 0.20, 0.05, 0.05],
+        ],
+        dtype=torch.float32,
+    )
+
+    correctly_ranked_loss = _deephit_loss(correctly_ranked, time_bin_indices, events, alpha=0.0)
+    inverted_loss = _deephit_loss(inverted, time_bin_indices, events, alpha=0.0)
+
+    assert correctly_ranked_loss.item() < inverted_loss.item()
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+@pytest.mark.parametrize("trainer_name", ["train_deephit", "train_neural_mtlr"])
+def test_discrete_time_models_use_same_tail_bucket_setting_for_train_and_monitor(
+    monkeypatch,
+    trainer_name: str,
+) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    original_digitize = deep_models._digitize_time_bins
+    preserve_flags: list[bool] = []
+
+    def _spy_digitize(time_values, bin_edges, num_time_bins, *, preserve_tail_overflow=False):
+        preserve_flags.append(bool(preserve_tail_overflow))
+        return original_digitize(
+            time_values,
+            bin_edges,
+            num_time_bins,
+            preserve_tail_overflow=preserve_tail_overflow,
+        )
+
+    monkeypatch.setattr(deep_models, "_digitize_time_bins", _spy_digitize)
+    monkeypatch.setattr(
+        deep_models,
+        "_resolve_monitor_indices",
+        lambda monitor_indices, train_idx, events, random_seed: train_idx[: min(8, int(train_idx.numel()))],
+    )
+
+    trainer = getattr(deep_models, trainer_name)
+    df = make_example_dataset(seed=23, n_patients=48)
+    trainer(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+        hidden_layers=[8],
+        num_time_bins=6,
+        epochs=1,
+        batch_size=8,
+        random_seed=23,
+    )
+
+    assert preserve_flags[:2] == [True, True]

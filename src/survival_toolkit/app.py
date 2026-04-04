@@ -764,6 +764,8 @@ def _export_provenance_notes(provenance: dict[str, Any] | None) -> list[str]:
 def fail_bad_request(exc: Exception) -> NoReturn:
     if isinstance(exc, HTTPException):
         raise exc
+    if isinstance(exc, MemoryError):
+        raise exc
     if isinstance(exc, ImportError):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if isinstance(exc, NotFoundError):
