@@ -105,6 +105,35 @@ def _feature_plot_axis_layout(
     return wrapped, {"l": left_margin, "r": 30, "t": 80, "b": 60, "height": height}
 
 
+def _diagnostic_residual_axis_range(
+    residual_values: list[float],
+    trend_values: list[float],
+) -> list[float] | None:
+    residual_array = np.asarray([value for value in residual_values if np.isfinite(value)], dtype=float)
+    if residual_array.size < 12:
+        return None
+    trend_array = np.asarray([value for value in trend_values if np.isfinite(value)], dtype=float)
+    full_min = float(np.min(residual_array))
+    full_max = float(np.max(residual_array))
+    full_span = full_max - full_min
+    if full_span <= 0:
+        return None
+
+    q_low, q_high = np.quantile(residual_array, [0.05, 0.95])
+    core_min = min(float(q_low), 0.0, float(np.min(trend_array)) if trend_array.size else 0.0)
+    core_max = max(float(q_high), 0.0, float(np.max(trend_array)) if trend_array.size else 0.0)
+    core_span = core_max - core_min
+    if core_span <= 0 or full_span < core_span * 3.0:
+        return None
+
+    padding = max(0.06, core_span * 0.12)
+    candidate_range = [core_min - padding, core_max + padding]
+    outlier_count = int(np.sum((residual_array < candidate_range[0]) | (residual_array > candidate_range[1])))
+    if outlier_count == 0:
+        return None
+    return candidate_range
+
+
 def _km_group_color(label: Any, fallback_index: int) -> str:
     normalized = str(label or "").strip().lower()
     if normalized in {"high", "high risk"}:
@@ -307,14 +336,22 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
     panel_count = max(1, len(panels))
     cols = 2 if panel_count > 1 else 1
     rows = int(np.ceil(panel_count / cols))
-    subplot_titles = [str(panel.get("term") or "Term") for panel in panels]
+    wrapped_titles: list[str] = []
+    max_title_lines = 1
+    for panel in panels:
+        wrapped_label, line_count = _wrap_feature_axis_label(panel.get("term") or "Term", width=28, max_lines=2)
+        wrapped_titles.append(wrapped_label)
+        max_title_lines = max(max_title_lines, line_count)
     fig = make_subplots(
       rows=rows,
       cols=cols,
-      subplot_titles=subplot_titles,
-      horizontal_spacing=0.12,
-      vertical_spacing=0.18,
+      subplot_titles=wrapped_titles,
+      horizontal_spacing=0.14,
+      vertical_spacing=0.22,
     )
+    for annotation in fig.layout.annotations:
+        annotation.font = {"size": 13, "color": INK, "family": "Sora, sans-serif"}
+        annotation.yshift = 4
 
     for panel_index, panel in enumerate(panels):
         row = (panel_index // cols) + 1
@@ -359,32 +396,39 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
                 col=col,
             )
         fig.add_hline(y=0.0, line_width=1, line_dash="dot", line_color="rgba(90, 103, 118, 0.7)", row=row, col=col)
+        robust_range = _diagnostic_residual_axis_range(y_values, trend_y)
         fig.update_xaxes(title="log(time)", row=row, col=col, **_COMMON_AXES)
-        fig.update_yaxes(title="Residual", row=row, col=col, **_COMMON_AXES)
+        fig.update_yaxes(
+            title="Residual",
+            row=row,
+            col=col,
+            range=robust_range,
+            **_COMMON_AXES,
+        )
 
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": 60, "r": 30, "t": 110, "b": 60},
+        margin={"l": 60, "r": 30, "t": 132 + ((max_title_lines - 1) * 16), "b": 68},
         title={
             "text": "Schoenfeld Residual Trend Check",
-            "font": {"family": "Source Serif 4, serif", "size": 24, "color": INK},
+            "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
             "x": 0.02,
         },
-        height=max(380, rows * 280),
+        height=max(420, rows * 310 + ((max_title_lines - 1) * 24)),
     )
     fig.add_annotation(
-        text="Screening view only: smoothed Schoenfeld residual trends versus log time. Use alongside the PH table, not as a full Grambsch-Therneau test.",
+        text="Screening view only: smoothed Schoenfeld residual trends versus log time. Use alongside the PH table, not as a full Grambsch-Therneau test. Extreme residual outliers may be clipped for readability.",
         xref="paper",
         yref="paper",
         x=0.02,
-        y=1.08,
+        y=1.10,
         showarrow=False,
-        font={"size": 10, "color": INK},
+        font={"size": 12, "color": INK},
         align="left",
         xanchor="left",
         yanchor="bottom",
         bgcolor="rgba(255,255,255,0.85)",
-        borderpad=4,
+        borderpad=5,
     )
     return figure_to_json(fig)
 

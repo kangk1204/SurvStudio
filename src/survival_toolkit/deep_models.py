@@ -12,7 +12,6 @@ All functions return plain dicts (JSON-serializable) suitable for FastAPI respon
 
 from __future__ import annotations
 
-import math
 import multiprocessing as mp
 import time
 import warnings
@@ -92,8 +91,8 @@ def _seed_torch(random_seed: int) -> None:
             torch.backends.cudnn.benchmark = False
     try:
         torch.use_deterministic_algorithms(True, warn_only=True)
-    except Exception:
-        pass
+    except RuntimeError as exc:
+        warnings.warn(f"Could not enable deterministic algorithms: {exc}", RuntimeWarning)
 
 
 def _clip_gradients(model: nn.Module, max_norm: float = 1.0) -> None:

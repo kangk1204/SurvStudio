@@ -462,20 +462,44 @@ function setRuntimeBanner(text = "", tone = "info") {
 }
 
 function renderServerStoppedState(message) {
-  const safeMessage = escapeHtml(
-    message || "SurvStudio is stopping. You can close this tab or restart the server with `python -m survival_toolkit`."
-  );
-  document.body.innerHTML = `
-    <div class="landing" style="display:grid;min-height:100vh;place-items:center;padding:24px;">
-      <div class="landing-card" style="max-width:720px;width:min(100%,720px);">
-        <div class="landing-hero-copy" style="padding:12px 8px;">
-          <h2>SurvStudio server stopped</h2>
-          <p>${safeMessage}</p>
-          <p>Restart with <code>python -m survival_toolkit</code>, then reopen <code>http://127.0.0.1:8000</code>.</p>
-        </div>
-      </div>
-    </div>
-  `;
+  const resolvedMessage = message || "SurvStudio is stopping. You can close this tab or restart the server with `python -m survival_toolkit`.";
+  const landing = document.createElement("div");
+  landing.className = "landing";
+  landing.style.display = "grid";
+  landing.style.minHeight = "100vh";
+  landing.style.placeItems = "center";
+  landing.style.padding = "24px";
+
+  const card = document.createElement("div");
+  card.className = "landing-card";
+  card.style.maxWidth = "720px";
+  card.style.width = "min(100%, 720px)";
+
+  const copy = document.createElement("div");
+  copy.className = "landing-hero-copy";
+  copy.style.padding = "12px 8px";
+
+  const heading = document.createElement("h2");
+  heading.textContent = "SurvStudio server stopped";
+
+  const messageParagraph = document.createElement("p");
+  messageParagraph.textContent = resolvedMessage;
+
+  const restartParagraph = document.createElement("p");
+  restartParagraph.append("Restart with ");
+  const commandCode = document.createElement("code");
+  commandCode.textContent = "python -m survival_toolkit";
+  restartParagraph.append(commandCode);
+  restartParagraph.append(", then reopen ");
+  const urlCode = document.createElement("code");
+  urlCode.textContent = "http://127.0.0.1:8000";
+  restartParagraph.append(urlCode);
+  restartParagraph.append(".");
+
+  copy.append(heading, messageParagraph, restartParagraph);
+  card.append(copy);
+  landing.append(card);
+  document.body.replaceChildren(landing);
 }
 
 function activeTabName() {
@@ -3509,21 +3533,28 @@ function benchmarkReviewAction(row) {
   const modelKey = predictiveModelKeyFromComparisonLabel(row.model);
   if (modelKey) {
     return {
-      attrs: `data-benchmark-model="${escapeHtml(modelKey)}" data-benchmark-mode="${escapeHtml(row.sourceMode)}"`,
+      dataset: {
+        benchmarkModel: modelKey,
+        benchmarkMode: row.sourceMode || "",
+      },
       label: "Train a model",
       disabled: false,
     };
   }
   if (String(row.model || "").trim().toLowerCase() === "cox ph") {
     return {
-      attrs: 'disabled title="Cox PH appears here as a screening baseline only. Use the dedicated Cox workspace if you want an inferential Cox run."',
+      dataset: {},
+      title: "Cox PH appears here as a screening baseline only. Use the dedicated Cox workspace if you want an inferential Cox run.",
       label: "Screening only",
       disabled: true,
     };
   }
   return {
-    attrs: `data-benchmark-tab="${escapeHtml(row.familyTab)}" data-benchmark-mode="${escapeHtml(row.sourceMode)}"`,
-    label: `Open ${escapeHtml(row.familyTab.toUpperCase())} controls`,
+    dataset: {
+      benchmarkTab: row.familyTab,
+      benchmarkMode: row.sourceMode || "",
+    },
+    label: `Open ${row.familyTab.toUpperCase()} controls`,
     disabled: false,
   };
 }
@@ -4044,6 +4075,7 @@ const benchmarkBoardApi = window.SurvStudioBenchmark.createBenchmarkBoardApi({
   stabilizePlotShellHeight,
   renderPredictiveWorkbench,
   syncPredictiveWorkbenchCompareVisibility,
+  showError,
 });
 
 const benchmarkCompareRows = benchmarkBoardApi.benchmarkCompareRows;
