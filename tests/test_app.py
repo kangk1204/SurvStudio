@@ -207,10 +207,10 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'id="benchmarkWorkbench"' in response.text
     assert 'id="benchmarkWorkbenchCaption"' in response.text
     assert "Predictive Models" in response.text
-    assert "See ML and DL together, compare all results first" in response.text
+    assert "Runs all 8 models" in response.text
     assert "Compare All Models" in response.text
     assert "Test one model" in response.text
-    assert "The controls below automatically follow the selected model" in response.text
+    assert "Unified C-index Chart" in response.text
 
 
 def test_frontend_tracks_workspace_controls_in_history_state() -> None:
@@ -386,18 +386,19 @@ def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
 
     assert 'data-tab="benchmark"' in html
     assert 'id="panel-benchmark"' in html
-    assert 'id="benchmarkDependencyText"' in html
     assert 'id="benchmarkSummaryGrid"' in html
     assert 'id="benchmarkComparisonPlot"' in html
     assert 'id="benchmarkPlotNote"' in html
     assert 'id="benchmarkComparisonShell"' in html
     assert 'id="benchmarkWorkbench"' in html
     assert 'id="benchmarkWorkbenchCaption"' in html
+    assert 'id="closePredictiveWorkbenchButton"' in html
     assert 'runPredictiveCompareAllButton: document.getElementById("runPredictiveCompareAllButton")' in text
     assert 'predictiveModelSelector: document.getElementById("predictiveModelSelector")' in text
     assert 'runPredictiveSelectedButton: document.getElementById("runPredictiveSelectedButton")' in text
     assert 'benchmarkWorkbench: document.getElementById("benchmarkWorkbench")' in text
     assert 'benchmarkWorkbenchCaption: document.getElementById("benchmarkWorkbenchCaption")' in text
+    assert 'closePredictiveWorkbenchButton: document.getElementById("closePredictiveWorkbenchButton")' in text
     assert 'benchmarkComparisonPlot: document.getElementById("benchmarkComparisonPlot")' in text
     assert 'benchmarkPlotNote: document.getElementById("benchmarkPlotNote")' in text
     assert 'benchmarkMlMount: document.getElementById("benchmarkMlMount")' in text
@@ -417,6 +418,29 @@ def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
     assert 'body[data-ui-mode="expert"] #tab-ml,' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text()
     assert 'runtime.guidedGoal = runtime.guidedGoal || "km";' in text
     assert 'activateTab(runtime.guidedGoal, { setGuidedGoal: false, historyMode: "replace", syncHistory: false });' in text
+
+
+def test_frontend_persists_predictive_workbench_visibility_in_history_state() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    shell_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_shell.js"
+    text = app_js.read_text()
+    shell_text = shell_js.read_text()
+
+    assert "workbenchRevealed: runtime.workbenchRevealed" in shell_text
+    assert "runtime.workbenchRevealed = Boolean(historyState?.workbenchRevealed);" in text
+    assert 'benchmarkActionCard: document.getElementById("benchmarkActionCard")' in text
+    assert 'closePredictiveWorkbenchButton: document.getElementById("closePredictiveWorkbenchButton")' in text
+    assert "function syncBenchmarkWorkbenchVisibility()" in text
+    assert "function closePredictiveWorkbench()" in text
+    assert 'refs.benchmarkActionCard?.classList.toggle("hidden", workbenchOpen);' in text
+    assert 'refs.benchmarkWorkbench?.classList.toggle("hidden", !workbenchOpen);' in text
+    assert 'refs.mlModelType?.closest(".model-choice-field")?.classList.toggle("hidden", workbenchOpen);' in text
+    assert 'refs.runCompareButton?.classList.toggle("hidden", workbenchOpen);' in text
+    assert 'refs.runDlCompareButton?.classList.toggle("hidden", workbenchOpen);' in text
+    assert 'refs.predictiveModelSelector?.closest(".predictive-model-picker")?.classList.toggle("hidden", !workbenchOpen);' in text
+    assert "runtime.workbenchRevealed = false;" in text
+    assert 'title: runtime.workbenchRevealed ? "Train a model" : "Run ML/DL Models"' in text
+    assert 'runAction: runtime.workbenchRevealed ? "run-predictive-selected" : "run-predictive-compare-all"' in text
 
 
 def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None:
@@ -464,7 +488,7 @@ def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
     assert "Learning rate applies to Gradient Boosted Survival only." in text
     assert "Tree count applies to Random Survival Forest and Gradient Boosted Survival only." in text
     assert "SHAP is currently available for Random Survival Forest and Gradient Boosted Survival only." in text
-    assert 'refs.mlModelType.addEventListener("change", () => { runtime.resultPreference.ml = "single"; updateMlModelControlVisibility(); renderPredictiveWorkbench(); queueHistorySync(); });' in text
+    assert 'refs.mlModelType.addEventListener("change", () => {' in text
 
 
 def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
@@ -3467,10 +3491,12 @@ def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
 
     assert 'secondaryAction: "run-ml-compare"' in app_js
     assert 'secondaryAction: "run-dl-compare"' in app_js
-    assert 'secondaryAction: "run-predictive-compare-all"' in app_js
     assert 'secondaryLabel: "Compare all ML models"' in app_js
     assert 'secondaryLabel: "Compare all DL models"' in app_js
-    assert 'secondaryLabel: "Compare all models"' in app_js
+    assert 'runAction: "run-predictive-compare-all"' in app_js
+    assert 'runLabel: "Compare all models"' in app_js
+    assert '"Compare all models to build the leaderboard, then click any result to open its controls."' in app_js
+    assert '"Run Compare All once to see every model ranked. Then click a result to tune that model."' in app_js
     assert 'guided-actions guided-actions-priority' in app_js
     assert 'guided-actions guided-actions-secondary' in app_js
     assert 'guided-run-choice' in app_js
@@ -3537,8 +3563,9 @@ def test_frontend_predictive_compare_uses_unified_scope_and_honest_review_action
     assert 'void runGuidedGoal("predictive", target, runUnifiedPredictiveComparison, {' in app_js
     assert '() => runCompareModels({ suppressCompletionToast: true })' in app_js
     assert '() => runDlCompareModels({ suppressCompletionToast: true })' in app_js
-    assert 'label: "Select model"' in app_js
+    assert 'label: "Train a model"' in app_js
     assert 'label: "Screening only"' in app_js
+    assert 'if (action === "close-predictive-workbench")' in app_js
 
 
 def test_frontend_locks_predictive_picker_during_busy_runs_and_hides_guided_action_card() -> None:
@@ -3563,6 +3590,7 @@ def test_frontend_locks_predictive_picker_during_busy_runs_and_hides_guided_acti
     assert "function guidedPredictiveModelPickerMarkup({ disabled = false } = {})" in app_js
     assert 'data-guided-predictive-model-selector' in app_js
     assert 'body[data-ui-mode="guided"][data-guided-goal="predictive"] #panel-benchmark .benchmark-action-card' in styles
+    assert "function syncBenchmarkWorkbenchVisibility()" in app_js
 
 
 def test_frontend_scrolls_to_results_after_runs_finish() -> None:
@@ -4975,7 +5003,7 @@ def test_guided_run_tips_use_polished_analysis_specific_copy() -> None:
     assert 'text: "Review the settings here, then build the table once."' in app_js
     assert 'tip: "Use this after the classical analyses look right."' in app_js
     assert 'tip: "Start with one model. This is the slowest and most advanced path."' in app_js
-    assert 'If the result looks odd, go back and change one setting before running again.' in app_js
+    assert '"Run Compare All once to see every model ranked. Then click a result to tune that model."' in app_js
 
 
 def test_guided_tables_configure_panel_uses_stacked_layout() -> None:

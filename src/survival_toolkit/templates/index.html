@@ -923,24 +923,16 @@
           <div class="card-head">
             <div class="card-head-left">
               <h2>Predictive Models</h2>
-              <p class="card-subtitle">See ML and DL together, compare all results first, then test individual models without leaving this workspace</p>
             </div>
           </div>
-          <div class="dependency-card" id="benchmarkDependencyCard">
-            <div class="dependency-copy">
-              <strong>What this workspace does</strong>
-              <span id="benchmarkDependencyText">Predictive Models combines the latest ML and DL results in one scoreboard. Shared feature selection stays synced, and both model families can be reviewed and rerun from this single workspace.</span>
-              <div class="dataset-preset-chips hidden" id="benchmarkDependencyChips"></div>
-            </div>
-          </div>
-          <div class="benchmark-action-card">
+          <div class="benchmark-action-card" id="benchmarkActionCard">
             <div class="benchmark-action-copy">
-              <strong>Start here</strong>
-              <span id="predictiveActionStatusText">Compare every supported ML and DL model once, or pick one model below and test it with the shared feature set.</span>
+              <strong>Compare All Models</strong>
+              <span id="predictiveActionStatusText">Runs all 8 models (RSF, GBS, LASSO-Cox, DeepSurv, DeepHit, MTLR, Transformer, VAE) and ranks them by C-index. Results appear in the Unified Leaderboard below. Click any result to open that model's controls.</span>
             </div>
             <div class="button-row benchmark-action-row">
               <button class="button primary" id="runPredictiveCompareAllButton" type="button">Compare All Models</button>
-              <label class="toolbar-field compact-inline predictive-model-picker">
+              <label class="toolbar-field compact-inline predictive-model-picker hidden">
                 <span>Test one model</span>
                 <select id="predictiveModelSelector">
                   <optgroup label="Classical ML">
@@ -957,7 +949,7 @@
                   </optgroup>
                 </select>
               </label>
-              <button class="button ghost" id="runPredictiveSelectedButton" type="button">Test Selected Model</button>
+              <button class="button ghost hidden" id="runPredictiveSelectedButton" type="button">Test Selected Model</button>
             </div>
           </div>
           <div class="benchmark-summary-grid" id="benchmarkSummaryGrid">
@@ -977,12 +969,12 @@
             </div>
             <div class="table-shell" id="benchmarkComparisonShell"><div class="empty-state">Run Compare All on ML or DL to build a shared leaderboard.</div></div>
           </div>
-          <div class="benchmark-workspace-shell" id="benchmarkWorkbench">
+          <div class="benchmark-workspace-shell hidden" id="benchmarkWorkbench">
             <div class="table-card-head benchmark-workspace-head">
               <div>
                 <h3>Model Workbench</h3>
-                <span class="benchmark-table-note" id="benchmarkWorkbenchNote">The controls below automatically follow the selected model. Shared features, outcome definition, and leaderboard stay in one place.</span>
               </div>
+              <button class="button ghost compact-btn" id="closePredictiveWorkbenchButton" type="button">Back to leaderboard</button>
             </div>
             <div class="benchmark-workspace-frame">
               <div class="benchmark-workspace-caption" id="benchmarkWorkbenchCaption">Random Survival Forest is selected. The workbench below shows the exact controls for that model family.</div>
