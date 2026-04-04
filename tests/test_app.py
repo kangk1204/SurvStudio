@@ -681,6 +681,7 @@ def test_benchmark_module_hides_unified_board_when_evaluation_modes_do_not_match
     text = benchmark_js.read_text()
 
     assert "function pendingFamilyText(board) {" in text
+    assert "const pending = (board?.pendingFamilies ?? []).map((goal) => benchmarkGoalMeta(goal).label);" in text
     assert "Waiting on ${pendingFamilyText(board)} before charting the shared C-index board." in text
     assert "Waiting on ${pendingFamilyText(board)} before publishing the leaderboard." in text
     assert "The chart will publish after both model families finish." in text
@@ -3647,8 +3648,9 @@ def test_frontend_download_helpers_accept_fallback_mime_type() -> None:
 
     assert 'function triggerBlobDownload(filename, blob, fallbackMimeType = "") {' in downloads_js
     assert 'const safeBlob = fallbackMimeType && !blob.type' in downloads_js
-    assert 'function extractErrorMessage(payload, fallbackText = "") {' in downloads_js
-    assert 'throw new Error(extractErrorMessage(errorPayload, rawText || "Export failed."));' in downloads_js
+    assert 'function parseExportErrorResponse(payload, fallbackText = "") {' in downloads_js
+    assert "Export errors can be plain text from the backend or an upstream proxy." in downloads_js
+    assert 'throw new Error(parseExportErrorResponse(errorPayload, rawText || "Export failed."));' in downloads_js
     assert "} finally {" in downloads_js
     assert 'function triggerBlobDownload(filename, blob, fallbackMimeType = "") {' in app_js
     assert "return downloadHelpers.triggerBlobDownload(filename, blob, fallbackMimeType);" in app_js

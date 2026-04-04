@@ -122,7 +122,7 @@
     }
 
     function pendingFamilyText(board) {
-      const pending = board.pendingFamilies.map((goal) => benchmarkGoalMeta(goal).label);
+      const pending = (board?.pendingFamilies ?? []).map((goal) => benchmarkGoalMeta(goal).label);
       return pending.length ? pending.join(" and ") : "the remaining compare runs";
     }
 
