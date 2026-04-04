@@ -34,6 +34,7 @@ def test_deep_model_source_uses_type_checked_bases_adamw_and_inference_mode() ->
     assert "with torch.inference_mode():" in text
     assert "for layer_dim in hidden_layers:" in text
     assert "for layer_dim in reversed(hidden_layers):" in text
+    assert "for hidden_dim in hidden_layers:" not in text
     assert "np.random.default_rng(seed)" in text
     assert "np.random.RandomState(seed)" not in text
 

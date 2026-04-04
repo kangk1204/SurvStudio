@@ -1863,13 +1863,13 @@ class DeepSurvNet(_TorchModuleBase):
         super().__init__()
         layers: list[nn.Module] = []
         prev_dim = in_features
-        for hidden_dim in hidden_layers:
+        for layer_dim in hidden_layers:
             layers.extend([
-                nn.Linear(prev_dim, hidden_dim),
+                nn.Linear(prev_dim, layer_dim),
                 nn.ReLU(),
                 nn.Dropout(dropout),
             ])
-            prev_dim = hidden_dim
+            prev_dim = layer_dim
         layers.append(nn.Linear(prev_dim, 1))
         self.network = nn.Sequential(*layers)
 
@@ -2139,13 +2139,13 @@ class DeepHitNet(_TorchModuleBase):
         super().__init__()
         layers: list[nn.Module] = []
         prev_dim = in_features
-        for hidden_dim in hidden_layers:
+        for layer_dim in hidden_layers:
             layers.extend([
-                nn.Linear(prev_dim, hidden_dim),
+                nn.Linear(prev_dim, layer_dim),
                 nn.ReLU(),
                 nn.Dropout(dropout),
             ])
-            prev_dim = hidden_dim
+            prev_dim = layer_dim
         self.shared = nn.Sequential(*layers)
         # Add a tail bucket beyond the last observed horizon bin.
         self.output_layer = nn.Linear(prev_dim, num_time_bins + 1)
@@ -2475,13 +2475,13 @@ class NeuralMTLRNet(_TorchModuleBase):
         super().__init__()
         layers: list[nn.Module] = []
         prev_dim = in_features
-        for hidden_dim in hidden_layers:
+        for layer_dim in hidden_layers:
             layers.extend([
-                nn.Linear(prev_dim, hidden_dim),
+                nn.Linear(prev_dim, layer_dim),
                 nn.ReLU(),
                 nn.Dropout(dropout),
             ])
-            prev_dim = hidden_dim
+            prev_dim = layer_dim
         self.encoder = nn.Sequential(*layers)
         # Add a tail bucket beyond the observed horizon.
         self.output_layer = nn.Linear(prev_dim, num_time_bins + 1)

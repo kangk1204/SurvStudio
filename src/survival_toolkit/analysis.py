@@ -1230,6 +1230,29 @@ def _cox_stability_snapshot(
     )
     stability_warnings: list[str] = []
     risky_levels: list[dict[str, Any]] = []
+    constant_design_columns: list[dict[str, str]] = []
+    categorical_set = {str(column) for column in categorical_covariates}
+    for column in covariates:
+        if column not in frame.columns:
+            continue
+        series = frame[column].dropna()
+        if series.empty:
+            continue
+        if str(column) in categorical_set:
+            observed_levels = series.astype("string").dropna().nunique()
+            if int(observed_levels) < 2:
+                constant_design_columns.append({"column": str(column), "kind": "categorical"})
+                stability_warnings.append(
+                    f'{column} has only one observed level after missing-value filtering, so Cox PH cannot estimate a contrast for it.'
+                )
+            continue
+        numeric = pd.to_numeric(series, errors="coerce")
+        finite = numeric[np.isfinite(numeric)]
+        if finite.size and np.allclose(np.nanmax(finite), np.nanmin(finite), atol=1e-12, rtol=0.0):
+            constant_design_columns.append({"column": str(column), "kind": "numeric"})
+            stability_warnings.append(
+                f"{column} is constant after missing-value filtering, so Cox PH cannot estimate a coefficient for it."
+            )
     for column in categorical_covariates:
         if column not in frame.columns:
             continue
@@ -1295,7 +1318,25 @@ def _cox_stability_snapshot(
         "events_per_parameter": events_per_parameter,
         "stability_warnings": stability_warnings,
         "risky_levels": risky_levels,
+        "constant_design_columns": constant_design_columns,
     }
+
+
+def _cox_constant_design_message(stability_snapshot: dict[str, Any]) -> str | None:
+    constant_columns = list(stability_snapshot.get("constant_design_columns") or [])
+    if not constant_columns:
+        return None
+    labels = [
+        f'{item["column"]} ({"single observed level" if item.get("kind") == "categorical" else "constant value"})'
+        for item in constant_columns
+        if item.get("column")
+    ]
+    if not labels:
+        return None
+    return (
+        "Cox PH requires variation in every selected covariate after missing-value filtering. "
+        f"Remove or recode {_summarize_labels(labels, max_items=4)} before fitting the model."
+    )
 
 
 def _cox_nonfinite_estimate_message(stability_snapshot: dict[str, Any]) -> str:
@@ -3029,7 +3070,7 @@ def compute_km_analysis(
                 "Group": label,
                 "N": int(group_frame.shape[0]),
                 "Events": int(group_frame[event_column].sum()),
-                "Censored": int((1 - group_frame[event_column]).sum()),
+                "Censored": int((group_frame[event_column] == 0).sum()),
                 "Median survival": median_survival,
                 "Median CI lower": median_ci_low,
                 "Median CI upper": median_ci_high,
@@ -3458,6 +3499,9 @@ def compute_cox_analysis(
     formula = _build_cox_formula(time_column, covariates, categorical_covariates)
     status = frame[event_column].astype(int).to_numpy()
     stability_snapshot = _cox_stability_snapshot(frame, event_column, covariates, categorical_covariates)
+    constant_design_message = _cox_constant_design_message(stability_snapshot)
+    if constant_design_message:
+        raise ValueError(constant_design_message)
     model = PHReg.from_formula(formula, data=frame, status=status, ties="efron")
     try:
         results = model.fit(disp=False)

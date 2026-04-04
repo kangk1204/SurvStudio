@@ -193,6 +193,9 @@ const refs = {
   downloadCoxPngButton: document.getElementById("downloadCoxPngButton"),
   downloadCoxSvgButton: document.getElementById("downloadCoxSvgButton"),
   cohortVariableChecklist: document.getElementById("cohortVariableChecklist"),
+  cohortVariableSearchInput: document.getElementById("cohortVariableSearchInput"),
+  selectAllCohortVariablesButton: document.getElementById("selectAllCohortVariablesButton"),
+  clearCohortVariablesButton: document.getElementById("clearCohortVariablesButton"),
   runCohortTableButton: document.getElementById("runCohortTableButton"),
   runCohortTableButtonLabel: document.getElementById("runCohortTableButtonLabel"),
   cohortTableShell: document.getElementById("cohortTableShell"),
@@ -2699,6 +2702,7 @@ function searchControlForChecklist(container) {
   if (!container) return null;
   if (container === refs.covariateChecklist) return refs.covariateSearchInput;
   if (container === refs.categoricalChecklist) return refs.categoricalSearchInput;
+  if (container === refs.cohortVariableChecklist) return refs.cohortVariableSearchInput;
   return null;
 }
 
@@ -2871,6 +2875,13 @@ function renderInsightBoard(container, summary, emptyMessage) {
       ${metricsMarkup}
       <div class="insight-sections">${sections}</div>
     </article>`;
+}
+
+function summaryHasCaution(summary, phrase) {
+  if (!summary || !phrase) return false;
+  const needle = String(phrase).trim().toLowerCase();
+  if (!needle) return false;
+  return (summary.cautions || []).some((item) => String(item || "").toLowerCase().includes(needle));
 }
 
 function deriveGroupCountLabel(group) {
@@ -4802,6 +4813,7 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   if (refs.showAllEventColumns) refs.showAllEventColumns.checked = false;
   if (refs.covariateSearchInput) refs.covariateSearchInput.value = "";
   if (refs.categoricalSearchInput) refs.categoricalSearchInput.value = "";
+  if (refs.cohortVariableSearchInput) refs.cohortVariableSearchInput.value = "";
   renderTimeColumnOptions({ preferred: inferDefault(columnNames, suggestions.time_columns, 0), silent: true });
   renderEventColumnOptions({
     preferred: inferDefault(columnNames, suggestions.event_columns, 1),
@@ -5252,10 +5264,14 @@ async function runKaplanMeier() {
   renderTable(refs.kmRiskShell, payload.analysis.risk_table.rows, payload.analysis.risk_table.columns);
   flashPresetTargets([refs.kmRiskShell]);
   renderTable(refs.kmPairwiseShell, payload.analysis.pairwise_table);
-  renderInsightBoard(refs.kmInsightBoard, payload.analysis.scientific_summary, "Run KM to generate an interpretation panel.");
+  const kmSummary = payload.analysis.scientific_summary;
+  renderInsightBoard(refs.kmInsightBoard, kmSummary, "Run KM to generate an interpretation panel.");
   const cohort = payload.analysis.cohort;
   const test = payload.analysis.test;
-  refs.kmMetaBanner.textContent = `N=${cohort.n}, events=${cohort.events}, censored=${cohort.censored}, median follow-up=${formatValue(cohort.median_follow_up)} ${base.time_unit_label}${test ? `, ${test.test} p=${formatValue(test.p_value)}` : ""}`;
+  const kmCompetingRiskPrefix = summaryHasCaution(kmSummary, "competing risk")
+    ? "Competing risks not modeled; 1-KM is not cumulative incidence when competing events can preclude the endpoint. "
+    : "";
+  refs.kmMetaBanner.textContent = `${kmCompetingRiskPrefix}N=${cohort.n}, events=${cohort.events}, censored=${cohort.censored}, median follow-up=${formatValue(cohort.median_follow_up)} ${base.time_unit_label}${test ? `, ${test.test} p=${formatValue(test.p_value)}` : ""}`;
   syncDownloadButtonAvailability();
   revealCompletedResultIfCurrent("km", {
     successMessage: `Kaplan-Meier analysis complete. Risk table updated to ${requestedRiskTicks} time points.`,
@@ -5385,7 +5401,8 @@ async function runCox() {
   updateStepIndicator(3);
   renderTable(refs.coxResultsShell, payload.analysis.results_table);
   renderTable(refs.coxDiagnosticsShell, payload.analysis.diagnostics_table);
-  renderInsightBoard(refs.coxInsightBoard, payload.analysis.scientific_summary, "Run Cox PH to review diagnostics.");
+  const coxSummary = payload.analysis.scientific_summary;
+  renderInsightBoard(refs.coxInsightBoard, coxSummary, "Run Cox PH to review diagnostics.");
   const stats = payload.analysis.model_stats;
   const coxMetricLabel = stats.c_index_label || ((stats.evaluation_mode === "apparent") ? "Apparent C-index" : "C-index");
   const coxMetricCore = `${coxMetricLabel}=${formatValue(stats.c_index)}`;
@@ -5393,7 +5410,10 @@ async function runCox() {
   const coxMetricCi = hasCoxMetricCi
     ? ` (${Math.round((Number(stats.c_index_ci_level) || 0.95) * 100)}% CI ${formatValue(stats.c_index_ci_lower)} to ${formatValue(stats.c_index_ci_upper)})`
     : "";
-  refs.coxMetaBanner.textContent = `N=${stats.n}, events=${stats.events}, parameters=${stats.parameters}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricCore}${coxMetricCi}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
+  const coxCompetingRiskPrefix = summaryHasCaution(coxSummary, "competing risk")
+    ? "Competing risks not modeled; cause-specific questions need dedicated competing-risk methods. "
+    : "";
+  refs.coxMetaBanner.textContent = `${coxCompetingRiskPrefix}N=${stats.n}, events=${stats.events}, parameters=${stats.parameters}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricCore}${coxMetricCi}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
   syncDownloadButtonAvailability();
   revealCompletedResultIfCurrent("cox", {
     successMessage: "Cox PH model fitted.",
@@ -6849,6 +6869,22 @@ function initListeners() {
   refs.dlModelFeatureChecklist?.addEventListener("change", () => { syncModelFeatureMirrors(refs.dlModelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.dlModelCategoricalChecklist?.addEventListener("change", () => { syncModelCategoricalMirrors(refs.dlModelCategoricalChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.cohortVariableChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.cohortVariableSearchInput?.addEventListener("input", () => {
+    applyChecklistSearch(refs.cohortVariableChecklist);
+  });
+  refs.selectAllCohortVariablesButton?.addEventListener("click", () => {
+    const variables = allCheckboxValues(refs.cohortVariableChecklist, { visibleOnly: true });
+    setCheckedValues(refs.cohortVariableChecklist, variables);
+    renderSharedFeatureSummary();
+    queueHistorySync();
+    showToast("Selected all visible cohort table variables.", "success", 2200);
+  });
+  refs.clearCohortVariablesButton?.addEventListener("click", () => {
+    setCheckedValues(refs.cohortVariableChecklist, []);
+    renderSharedFeatureSummary();
+    queueHistorySync();
+    showToast("Cleared the cohort table variable list.", "success", 2200);
+  });
   refs.reviewMlFeaturesButton?.addEventListener("click", () => focusModelFeatureEditor("ml"));
   refs.reviewDlFeaturesButton?.addEventListener("click", () => focusModelFeatureEditor("dl"));
   refs.selectAllModelFeaturesButton?.addEventListener("click", () => {

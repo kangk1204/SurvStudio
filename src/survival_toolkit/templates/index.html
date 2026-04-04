@@ -1020,7 +1020,14 @@
           </div>
           <div class="table-builder-grid">
             <div class="selection-card">
-              <h3>Variables <button class="help-dot" type="button" data-tooltip="Select the variables you want to summarize in your cohort table (e.g., age, gender, stage).">?</button></h3>
+              <div class="selection-card-head">
+                <h3>Variables <button class="help-dot" type="button" data-tooltip="Select the variables you want to summarize in your cohort table (e.g., age, gender, stage).">?</button></h3>
+                <div class="selection-card-actions">
+                  <button class="button ghost compact-btn" id="selectAllCohortVariablesButton" type="button">Select all</button>
+                  <button class="button ghost compact-btn" id="clearCohortVariablesButton" type="button">Clear</button>
+                </div>
+              </div>
+              <input class="selection-search" id="cohortVariableSearchInput" type="search" placeholder="Search variables" aria-label="Search cohort table variables" />
               <div class="checklist tall" id="cohortVariableChecklist"></div>
             </div>
             <div class="table-card">

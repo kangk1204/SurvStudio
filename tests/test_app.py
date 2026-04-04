@@ -157,6 +157,9 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="tableDependencyText"' in response.text
     assert 'id="tableOutputStatusText"' in response.text
     assert 'id="runCohortTableButtonLabel"' in response.text
+    assert 'id="cohortVariableSearchInput"' in response.text
+    assert 'id="selectAllCohortVariablesButton"' in response.text
+    assert 'id="clearCohortVariablesButton"' in response.text
     assert "The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test." in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
@@ -639,6 +642,35 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
     assert '!endpointReady || !hasCoxCovariates || isScopeBusy("km")' in text
     assert '!endpointReady || !hasCoxCovariates || isScopeBusy("cox")' in text
     assert '!endpointReady || !hasTableVariables || isScopeBusy("tables")' in text
+    assert 'cohortVariableSearchInput: document.getElementById("cohortVariableSearchInput"),' in text
+    assert 'selectAllCohortVariablesButton: document.getElementById("selectAllCohortVariablesButton"),' in text
+    assert 'clearCohortVariablesButton: document.getElementById("clearCohortVariablesButton"),' in text
+    assert 'if (refs.cohortVariableSearchInput) refs.cohortVariableSearchInput.value = "";' in text
+
+
+def test_cohort_table_variable_picker_supports_search_and_bulk_actions() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "if (container === refs.cohortVariableChecklist) return refs.cohortVariableSearchInput;" in text
+    assert 'refs.cohortVariableSearchInput?.addEventListener("input", () => {' in text
+    assert 'applyChecklistSearch(refs.cohortVariableChecklist);' in text
+    assert 'refs.selectAllCohortVariablesButton?.addEventListener("click", () => {' in text
+    assert 'allCheckboxValues(refs.cohortVariableChecklist, { visibleOnly: true })' in text
+    assert 'refs.clearCohortVariablesButton?.addEventListener("click", () => {' in text
+    assert 'showToast("Selected all visible cohort table variables.", "success", 2200);' in text
+    assert 'showToast("Cleared the cohort table variable list.", "success", 2200);' in text
+
+
+def test_analysis_banners_surface_competing_risk_cautions() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert "function summaryHasCaution(summary, phrase) {" in text
+    assert 'const kmCompetingRiskPrefix = summaryHasCaution(kmSummary, "competing risk")' in text
+    assert 'Competing risks not modeled; 1-KM is not cumulative incidence when competing events can preclude the endpoint.' in text
+    assert 'const coxCompetingRiskPrefix = summaryHasCaution(coxSummary, "competing risk")' in text
+    assert 'Competing risks not modeled; cause-specific questions need dedicated competing-risk methods.' in text
 
 
 def test_cox_plot_reset_axes_restores_initial_layout() -> None:
