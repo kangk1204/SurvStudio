@@ -332,7 +332,7 @@ class OptimalCutpointRequest(BaseModel):
 
 
 class TableExportRequest(BaseModel):
-    rows: list[dict[str, Any]]
+    rows: list[dict[str, Any]] = Field(default_factory=list, max_length=2000)
     format: Literal["csv", "markdown", "latex", "docx"]
     style: Literal["plain", "journal"] = "journal"
     template: Literal["default", "nejm", "lancet", "jco"] = "default"
