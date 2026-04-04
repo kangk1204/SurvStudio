@@ -471,7 +471,7 @@ def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(br
 
             page.locator("#runPredictiveCompareAllButton").click()
             page.wait_for_function(
-                "document.getElementById('benchmarkComparisonShell').textContent.includes('Partial leaderboard rows are hidden until both model families finish.')"
+                "document.getElementById('benchmarkComparisonShell').textContent.includes('Partial leaderboard rows stay hidden until both model families finish.')"
             )
 
             page.wait_for_function(
