@@ -265,6 +265,7 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
 
             page.locator('[data-tab="benchmark"]').click()
             _assert_tab_active(page, "benchmark")
+            assert page.locator("#benchmarkWorkbench").is_hidden()
             page.locator("#runPredictiveCompareAllButton").click()
             page.wait_for_function(
                 "document.getElementById('mlMetaBanner').textContent.includes('Screening top model=')"
@@ -301,8 +302,22 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
             page.wait_for_function(
                 "document.getElementById('predictiveModelSelector').value === 'deephit'"
             )
+            assert page.locator("#benchmarkWorkbench").is_visible()
             assert not page.locator("#benchmarkMlMount").is_visible()
             assert page.locator("#benchmarkDlMount").is_visible()
+            assert page.locator("#benchmarkDlMount .model-choice-field").is_hidden()
+            assert page.locator("#benchmarkDlMount #runDlCompareButton").is_hidden()
+            assert page.locator("#benchmarkDlMount #runDlCompareInlineButton").is_hidden()
+            page.eval_on_selector(
+                "#benchmarkDlMount #dlModelType",
+                "el => { el.value = 'vae'; el.dispatchEvent(new Event('change', { bubbles: true })); }",
+            )
+            page.locator("#closePredictiveWorkbenchButton").click()
+            page.wait_for_function(
+                "() => document.getElementById('benchmarkWorkbench').classList.contains('hidden')"
+            )
+            assert "Both model families are currently represented." in page.locator("#benchmarkSummaryGrid").inner_text()
+            assert "current screening rows from the latest ML and DL comparison outputs" in page.locator("#benchmarkTableNote").inner_text()
             assert "Deep Learning Survival Models" in page.locator("#benchmarkDlMount").inner_text()
 
             browser.close()
@@ -409,8 +424,7 @@ def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: st
             page.locator('[data-guided-action="choose-goal"][data-goal="predictive"]').click()
             page.wait_for_function("document.body.dataset.guidedStep === '4'")
             assert page.locator("#panel-benchmark .benchmark-action-card").is_hidden()
-
-            page.locator("#mlNEstimators").fill("10")
+            assert page.locator("#benchmarkWorkbench").is_hidden()
 
             page.locator('[data-guided-action="run-predictive-compare-all"]').click()
             page.wait_for_function("document.getElementById('runPredictiveCompareAllButton').disabled === true")
@@ -429,6 +443,20 @@ def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: st
             assert "Random Survival Forest" in benchmark_text
             assert "DeepHit" in benchmark_text
             assert "current screening rows from the latest ML and DL comparison outputs" in page.locator("#benchmarkTableNote").inner_text()
+
+            page.wait_for_function("document.querySelectorAll('#benchmarkComparisonShell [data-benchmark-model]').length > 0")
+            page.locator("#benchmarkComparisonShell [data-benchmark-model]").first.click()
+            page.wait_for_function("document.getElementById('benchmarkWorkbench').classList.contains('hidden') === false")
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+            assert "Train a model" in page.locator("#guidedPanel").inner_text()
+            if page.locator("#benchmarkMlMount").is_visible():
+                assert page.locator("#benchmarkMlMount .model-choice-field").is_hidden()
+                assert page.locator("#benchmarkMlMount #runCompareButton").is_hidden()
+                assert page.locator("#benchmarkMlMount #runCompareInlineButton").is_hidden()
+            else:
+                assert page.locator("#benchmarkDlMount .model-choice-field").is_hidden()
+                assert page.locator("#benchmarkDlMount #runDlCompareButton").is_hidden()
+                assert page.locator("#benchmarkDlMount #runDlCompareInlineButton").is_hidden()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -494,16 +522,12 @@ def test_browser_guided_predictive_compare_partial_failure_stays_on_step4(browse
             page.wait_for_function("document.body.dataset.guidedStep === '3'")
             page.locator('[data-guided-action="choose-goal"][data-goal="predictive"]').click()
             page.wait_for_function("document.body.dataset.guidedStep === '4'")
-
-            page.locator("#mlNEstimators").fill("10")
-            page.locator("[data-guided-predictive-model-selector]").select_option("deepsurv")
-            page.locator("#dlEpochs").fill("10")
-            page.locator("#dlHiddenLayers").fill("8")
-            page.locator("[data-guided-predictive-model-selector]").select_option("rsf")
-
             page.locator('[data-guided-action="run-predictive-compare-all"]').click()
-            page.wait_for_function("document.querySelector('[data-guided-predictive-model-selector]').disabled === true")
-            page.wait_for_function("document.querySelector('[data-guided-predictive-model-selector]').disabled === false")
+            page.wait_for_function(
+                "'Classical ML is currently represented.' in (document.querySelector('#benchmarkSummaryGrid')?.innerText ?? '') || "
+                "'Needs review' in (document.querySelector('#benchmarkSummaryGrid')?.innerText ?? '')",
+                timeout=60000,
+            )
 
             assert page.locator("body").get_attribute("data-guided-step") == "4"
             summary_text = page.locator("#benchmarkSummaryGrid").inner_text()
