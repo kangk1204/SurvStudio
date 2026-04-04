@@ -31,6 +31,10 @@ const appState = {
     ml: "single",
     dl: "single",
   },
+  compareCache: {
+    ml: null,
+    dl: null,
+  },
   predictiveFamily: "ml",
   workbenchRevealed: false,
 };
@@ -876,7 +880,7 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
   return base;
 }
 
-function currentGoalRequestConfig(goal) {
+function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) {
   if (!state.dataset) return null;
   let base;
   try {
@@ -910,7 +914,9 @@ function currentGoalRequestConfig(goal) {
 
   if (goal === "ml") {
     const { features, categoricalFeatures } = currentSharedModelSelections();
-    const expectsCompare = preferredResultMode("ml") === "compare";
+    const expectsCompare = expectsCompareOverride == null
+      ? preferredResultMode("ml") === "compare"
+      : Boolean(expectsCompareOverride);
     return normalizedRequestConfig(goal, {
       ...base,
       model_type: expectsCompare ? "compare" : String(refs.mlModelType?.value || ""),
@@ -927,7 +933,9 @@ function currentGoalRequestConfig(goal) {
 
   if (goal === "dl") {
     const { features, categoricalFeatures } = currentSharedModelSelections();
-    const expectsCompare = preferredResultMode("dl") === "compare";
+    const expectsCompare = expectsCompareOverride == null
+      ? preferredResultMode("dl") === "compare"
+      : Boolean(expectsCompareOverride);
     return normalizedRequestConfig(goal, {
       ...base,
       model_type: expectsCompare ? "compare" : String(refs.dlModelType?.value || ""),
@@ -965,13 +973,13 @@ function currentGoalRequestConfig(goal) {
   return normalizedRequestConfig(goal, base);
 }
 
-function matchesRequestConfig(goal, requestConfig) {
+function matchesRequestConfig(goal, requestConfig, { expectsCompareOverride = null } = {}) {
   if (!requestConfig || !state.dataset) return false;
   const expectsCompare = goal === "ml" || goal === "dl"
-    ? preferredResultMode(goal) === "compare"
+    ? (expectsCompareOverride == null ? preferredResultMode(goal) === "compare" : Boolean(expectsCompareOverride))
     : false;
   const normalizedStored = normalizedRequestConfig(goal, requestConfig, { expectsCompare });
-  const normalizedCurrent = currentGoalRequestConfig(goal);
+  const normalizedCurrent = currentGoalRequestConfig(goal, { expectsCompareOverride });
   if (!normalizedStored || !normalizedCurrent) return false;
   return stableStringify(normalizedStored) === stableStringify(normalizedCurrent);
 }
@@ -993,6 +1001,21 @@ function currentGoalResult(goal) {
   const requestConfig = payload.request_config || payload.analysis?.request_config || null;
   if (!requestConfig) return payload;
   return matchesRequestConfig(goal, requestConfig) ? payload : null;
+}
+
+function compareGoalPayload(goal) {
+  if (!["ml", "dl"].includes(goal)) return null;
+  const latestPayload = goalPayload(goal);
+  if (payloadRepresentsCompareRun(latestPayload)) return latestPayload;
+  return runtime.compareCache?.[goal] || null;
+}
+
+function currentCompareGoalPayload(goal) {
+  const payload = compareGoalPayload(goal);
+  if (!payload) return null;
+  const requestConfig = payload.request_config || payload.analysis?.request_config || null;
+  if (!requestConfig) return payload;
+  return matchesRequestConfig(goal, requestConfig, { expectsCompareOverride: true }) ? payload : null;
 }
 
 function goalPayload(goal) {
@@ -3888,6 +3911,8 @@ function setPredictiveModel(modelKey, { syncHistory = true, historyMode = "repla
 }
 
 function benchmarkResultTone(goal) {
+  const comparePayload = compareGoalPayload(goal);
+  if (comparePayload) return currentCompareGoalPayload(goal) ? "current" : "stale";
   const payload = goalPayload(goal);
   if (!payload) return "idle";
   return currentGoalResult(goal) ? "current" : "stale";
@@ -3946,7 +3971,7 @@ function syncPredictiveWorkbenchCompareVisibility() {
 }
 
 function benchmarkCompareRows(goal, { currentOnly = false } = {}) {
-  const payload = currentOnly ? currentGoalResult(goal) : goalPayload(goal);
+  const payload = currentOnly ? currentCompareGoalPayload(goal) : compareGoalPayload(goal);
   if (panelModeForPayload(payload) !== "compare") return [];
   return Array.isArray(payload?.analysis?.comparison_table) ? payload.analysis.comparison_table : [];
 }
@@ -5094,6 +5119,8 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   state.signature = null;
   state.ml = null;
   state.dl = null;
+  runtime.compareCache.ml = null;
+  runtime.compareCache.dl = null;
   runtime.guidedGoal = null;
   runtime.guidedStep = runtime.uiMode === "guided" ? 2 : 1;
   runtime.workbenchRevealed = false;
@@ -5170,6 +5197,8 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
     signature: state.signature,
     ml: state.ml,
     dl: state.dl,
+    compareMl: runtime.compareCache.ml,
+    compareDl: runtime.compareCache.dl,
   };
   const preservedGuidedGoal = runtime.guidedGoal;
   const preservedGuidedStep = runtime.guidedStep;
@@ -5209,6 +5238,8 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   state.signature = preservedStates.signature;
   state.ml = preservedStates.ml;
   state.dl = preservedStates.dl;
+  runtime.compareCache.ml = preservedStates.compareMl;
+  runtime.compareCache.dl = preservedStates.compareDl;
 
   if (!deferChrome) {
     renderGuidedChrome();
@@ -5783,6 +5814,7 @@ async function runCompareModels({ suppressCompletionToast = false } = {}) {
       }),
     });
     state.ml = payload;
+    runtime.compareCache.ml = payload;
     setPanelResultMode(refs.mlPanel, "compare");
 
     if (payload.analysis?.comparison_table) {
@@ -6072,6 +6104,7 @@ async function runDlCompareModels({ suppressCompletionToast = false } = {}) {
       }),
     });
     state.dl = payload;
+    runtime.compareCache.dl = payload;
     setPanelResultMode(refs.dlPanel, "compare");
 
     if (payload.analysis?.comparison_table?.length) {

@@ -264,8 +264,50 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
             }),
         )
 
-    def _mock_dl_compare(route) -> None:
+    def _mock_dl_requests(route) -> None:
         body = json.loads(route.request.post_data or "{}")
+        if body.get("model_type") != "compare":
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({
+                    "analysis": {
+                        "model": "DeepHit",
+                        "c_index": 0.726,
+                        "evaluation_mode": "holdout",
+                        "epochs_trained": 3,
+                        "best_monitor_epoch": 3,
+                        "stopped_early": False,
+                        "max_epochs_requested": 40,
+                        "n_features": 6,
+                        "loss_history": [1.12, 0.94, 0.81],
+                        "monitor_history": [1.08, 0.91, 0.79],
+                        "scientific_summary": {
+                            "status": "review",
+                            "headline": "DeepHit single-model training complete.",
+                            "strengths": ["Loss decreased over epochs."],
+                            "cautions": [],
+                            "next_steps": [],
+                        },
+                    },
+                    "figures": {
+                        "loss": {
+                            "data": [
+                                {
+                                    "type": "scatter",
+                                    "mode": "lines+markers",
+                                    "x": [1, 2, 3],
+                                    "y": [1.12, 0.94, 0.81],
+                                    "name": "Training loss",
+                                },
+                            ],
+                            "layout": {"title": {"text": "DeepHit loss"}},
+                        },
+                    },
+                    "request_config": body,
+                }),
+            )
+            return
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -295,7 +337,7 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
 
             page.route("**/api/ml-model", _mock_ml_compare)
-            page.route("**/api/deep-model", _mock_dl_compare)
+            page.route("**/api/deep-model", _mock_dl_requests)
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
@@ -346,16 +388,24 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
             assert page.locator("#benchmarkDlMount .model-choice-field").is_hidden()
             assert page.locator("#benchmarkDlMount #runDlCompareButton").is_hidden()
             assert page.locator("#benchmarkDlMount #runDlCompareInlineButton").is_hidden()
-            page.eval_on_selector(
-                "#benchmarkDlMount #dlModelType",
-                "el => { el.value = 'vae'; el.dispatchEvent(new Event('change', { bubbles: true })); }",
+            page.locator("#runPredictiveSelectedButton").click()
+            page.wait_for_function(
+                "document.getElementById('dlMetaBanner').textContent.includes('DEEPHIT: Holdout C-index=0.726')"
+            )
+            page.wait_for_function(
+                "() => { const plot = document.getElementById('dlLossPlot'); return plot && Array.isArray(plot.data) && plot.data.length === 1; }"
             )
             page.locator("#closePredictiveWorkbenchButton").click()
             page.wait_for_function(
                 "() => document.getElementById('benchmarkWorkbench').classList.contains('hidden')"
             )
+            page.wait_for_function(
+                "() => document.querySelectorAll('#benchmarkComparisonShell tbody tr').length === 4"
+            )
             assert "Both model families are currently represented." in page.locator("#benchmarkSummaryGrid").inner_text()
             assert "current screening rows from the latest ML and DL comparison outputs" in page.locator("#benchmarkTableNote").inner_text()
+            assert "Random Survival Forest" in page.locator("#benchmarkComparisonShell").inner_text()
+            assert "DeepHit" in page.locator("#benchmarkComparisonShell").inner_text()
             assert "Deep Learning Survival Models" in page.locator("#benchmarkDlMount").inner_text()
 
             browser.close()
