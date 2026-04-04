@@ -10,6 +10,7 @@ import pandas as pd
 from survival_toolkit.__main__ import main as cli_main
 from survival_toolkit.analysis import (
     MAX_MODEL_FEATURE_CANDIDATES,
+    _bh_adjust,
     _cohort_frame,
     _harrell_c_index,
     _ordered_reference_categories,
@@ -105,6 +106,35 @@ def test_percentile_split_50_matches_median_split_with_ties() -> None:
     median_is_high = median_updated[median_column].astype(str) == "High"
     percentile_is_top = percentile_updated[percentile_column].astype(str) == "Above 50th percentile threshold"
     assert median_is_high.tolist() == percentile_is_top.tolist()
+
+
+def test_bh_adjust_matches_standard_monotone_fdr() -> None:
+    adjusted = _bh_adjust([0.04, 0.002, 0.03, 0.01])
+
+    assert adjusted == pytest.approx([0.04, 0.008, 0.04, 0.02])
+
+
+def test_permutation_p_value_compares_logrank_statistics(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    results = iter([(6.0, 0.20), (4.0, 1e-6), (3.0, 1e-9)])
+
+    def _fake_survdiff(times, events, groups):
+        return next(results)
+
+    monkeypatch.setattr(analysis, "survdiff", _fake_survdiff)
+
+    empirical_p, valid = analysis._permutation_p_value(
+        times=np.asarray([1.0, 2.0, 3.0, 4.0]),
+        events=np.asarray([1, 1, 1, 1]),
+        mask=np.asarray([True, True, False, False]),
+        observed_stat=5.0,
+        n_iterations=3,
+        random_seed=42,
+    )
+
+    assert valid == 3
+    assert empirical_p == pytest.approx(0.5)
 
 
 def test_cox_preview_warns_when_events_per_parameter_is_extremely_low() -> None:
@@ -316,6 +346,13 @@ def test_coerce_event_rejects_multistate_numeric_status_columns() -> None:
 
 def test_coerce_event_rejects_mixed_recognized_multistate_tokens() -> None:
     series = pd.Series(["alive", "death", "relapse", "alive"], dtype="string")
+
+    with pytest.raises(ValueError, match="more than one recognized event state|binary event indicator"):
+        coerce_event(series, event_positive_value="death")
+
+
+def test_coerce_event_rejects_competing_risk_style_compound_death_labels() -> None:
+    series = pd.Series(["alive", "cancer_death", "other_death", "alive"], dtype="string")
 
     with pytest.raises(ValueError, match="more than one recognized event state|binary event indicator"):
         coerce_event(series, event_positive_value="death")

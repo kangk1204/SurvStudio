@@ -32,15 +32,21 @@
     return `${parts.filter(Boolean).join("_")}.${ext}`;
   }
 
-  function triggerBlobDownload(filename, blob) {
-    const url = URL.createObjectURL(blob);
+  function triggerBlobDownload(filename, blob, fallbackMimeType = "") {
+    const safeBlob = fallbackMimeType && !blob.type
+      ? new Blob([blob], { type: fallbackMimeType })
+      : blob;
+    const url = URL.createObjectURL(safeBlob);
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = filename;
     document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    try {
+      anchor.click();
+    } finally {
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
   }
 
   function downloadCsv({ filename, rows, columns = null, showToast }) {

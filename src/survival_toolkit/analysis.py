@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import io
 import itertools
 import math
@@ -202,6 +203,12 @@ def _read_csv_with_fallback(source: io.BytesIO | str | Path) -> pd.DataFrame:
             return pd.read_csv(source, sep=None, engine="python", encoding=encoding)
         except UnicodeDecodeError:
             continue
+        except pd.errors.EmptyDataError as exc:
+            raise ValueError("The uploaded file is empty. Add a header row and at least one data row.") from exc
+        except csv.Error as exc:
+            raise ValueError(
+                "The uploaded text file is empty or malformed. Add a header row and at least one data row."
+            ) from exc
     raise ValueError("Could not decode the file. Supported encodings: UTF-8, Latin-1.")
 
 
@@ -422,17 +429,40 @@ def _looks_like_baseline_status_column(name: str) -> bool:
 
 
 def _outcome_status_value_family(value: Any) -> str | None:
+    family, _exact_match = _outcome_status_family_match(value)
+    return family
+
+
+def _outcome_status_family_match(value: Any) -> tuple[str | None, bool]:
     normalized = _normalize_token(value)
     if normalized is None:
-        return None
+        return None, False
     for candidate in _token_variants(normalized):
         family = _OUTCOME_STATUS_VALUE_FAMILIES.get(candidate)
         if family is not None:
-            return family
+            return family, candidate == normalized
     for candidate in _token_variants(normalized):
         if candidate in _EVENT_TOKEN_FAMILIES:
-            return _EVENT_TOKEN_FAMILIES[candidate]
-    return None
+            return _EVENT_TOKEN_FAMILIES[candidate], candidate == normalized
+    return None, False
+
+
+def _has_ambiguous_competing_event_tokens(tokens: Sequence[str]) -> bool:
+    token_details = {
+        token: _outcome_status_family_match(token)
+        for token in tokens
+    }
+    recognized_non_censor = [
+        token
+        for token, (family, _exact_match) in token_details.items()
+        if family is not None and family != "censor"
+    ]
+    inferred_non_censor = [
+        token
+        for token, (family, exact_match) in token_details.items()
+        if family is not None and family != "censor" and not exact_match
+    ]
+    return bool(inferred_non_censor) and len(recognized_non_censor) > 1
 
 
 def _looks_like_event_outcome_column(name: str, series: pd.Series) -> bool:
@@ -578,9 +608,18 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
             )
 
         observed_tokens = sorted(set(value_tokens.loc[valid].astype(str).tolist()))
-        observed_family_map = {
-            token: _outcome_status_value_family(token)
+        observed_family_details = {
+            token: _outcome_status_family_match(token)
             for token in observed_tokens
+        }
+        if _has_ambiguous_competing_event_tokens(observed_tokens):
+            raise ValueError(
+                "The event column contains more than one recognized event state. "
+                "Recode it to a binary event indicator before survival analysis."
+            )
+        observed_family_map = {
+            token: family
+            for token, (family, _exact_match) in observed_family_details.items()
         }
         observed_families = {family for family in observed_family_map.values() if family is not None}
 
@@ -712,6 +751,12 @@ def _try_coerce_binary_event(series: pd.Series) -> tuple[pd.Series | None, str |
     mapped.loc[normalized_families.eq("censor")] = 0.0
     mapped.loc[normalized_families.notna() & normalized_families.ne("censor")] = 1.0
     if mapped.loc[valid].notna().sum() == int(valid.sum()):
+        observed_tokens = sorted({
+            token
+            for token in series.loc[valid].map(_normalize_token).dropna().astype(str).tolist()
+        })
+        if _has_ambiguous_competing_event_tokens(observed_tokens):
+            return None, "multistate"
         observed_families = {
             family
             for family in normalized_families.loc[valid].dropna().astype(str).tolist()
@@ -1722,15 +1767,13 @@ def _bh_adjust(p_values: Sequence[float]) -> list[float]:
     if p_array.size == 0:
         return []
     order = np.argsort(p_array)
+    sorted_p = p_array[order]
+    n_tests = float(p_array.size)
+    candidate = np.minimum(1.0, sorted_p * n_tests / np.arange(1, p_array.size + 1, dtype=float))
+    monotone = np.minimum.accumulate(candidate[::-1])[::-1]
     adjusted = np.empty_like(p_array)
-    n_tests = len(p_array)
-    running = 1.0
-    for rank, idx in enumerate(order[::-1], start=1):
-        original_rank = n_tests - rank + 1
-        candidate = min(running, p_array[idx] * n_tests / original_rank)
-        running = candidate
-        adjusted[idx] = candidate
-    return [float(min(1.0, value)) for value in adjusted]
+    adjusted[order] = monotone
+    return [float(value) for value in adjusted]
 
 
 def _coerce_numeric_if_needed(series: pd.Series) -> pd.Series:
@@ -2354,11 +2397,14 @@ def _permutation_p_value(
     times: np.ndarray,
     events: np.ndarray,
     mask: np.ndarray,
-    observed_p: float,
+    observed_stat: float,
     n_iterations: int,
     random_seed: int,
 ) -> tuple[float | None, int]:
     if n_iterations <= 0:
+        return None, 0
+    observed = float(observed_stat)
+    if not math.isfinite(observed):
         return None, 0
 
     rng = np.random.default_rng(random_seed)
@@ -2370,11 +2416,13 @@ def _permutation_p_value(
         if events[perm_mask].sum() == 0 or events[~perm_mask].sum() == 0:
             continue
         try:
-            _, perm_p = survdiff(times, events, np.where(perm_mask, "Signature+", "Signature-"))
+            perm_stat, _ = survdiff(times, events, np.where(perm_mask, "Signature+", "Signature-"))
         except Exception:
             continue
+        if not math.isfinite(float(perm_stat)):
+            continue
         valid += 1
-        if float(perm_p) <= observed_p:
+        if float(perm_stat) >= observed:
             extreme += 1
 
     if valid == 0:
@@ -2681,7 +2729,7 @@ def discover_feature_signature(
                 times=times,
                 events=events,
                 mask=mask,
-                observed_p=float(rows[idx]["P value"]),
+                observed_stat=float(rows[idx]["Chi-square"]),
                 n_iterations=permutation_iterations,
                 random_seed=random_seed + 2000 + idx,
             )

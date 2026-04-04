@@ -409,9 +409,20 @@ async function fetchJSON(url, options = {}) {
     },
     ...options,
   });
-  const payload = await response.json().catch(() => ({}));
+  const rawText = await response.text();
+  let payload = {};
+  if (rawText.trim()) {
+    try {
+      payload = JSON.parse(rawText);
+    } catch (error) {
+      const genericMessage = response.ok
+        ? "The server returned an invalid JSON response."
+        : (rawText.trim() || "Request failed.");
+      throw new Error(genericMessage);
+    }
+  }
   if (!response.ok) {
-    const message = extractErrorMessage(payload);
+    const message = extractErrorMessage(payload, rawText);
     if (response.status === 404 && /Unknown dataset id:/i.test(message) && state.dataset) {
       const datasetName = state.dataset?.filename || state.dataset?.dataset_id || "current cohort";
       goHome({ syncHistory: true, historyMode: "replace" });
@@ -423,7 +434,7 @@ async function fetchJSON(url, options = {}) {
   return payload;
 }
 
-function extractErrorMessage(payload) {
+function extractErrorMessage(payload, fallbackText = "") {
   const detail = payload?.detail;
   if (typeof detail === "string" && detail.trim()) return detail;
   if (Array.isArray(detail) && detail.length) {
@@ -435,6 +446,7 @@ function extractErrorMessage(payload) {
       return path ? `${path}: ${message}` : message;
     }).join(" | ");
   }
+  if (typeof fallbackText === "string" && fallbackText.trim()) return fallbackText.trim();
   return "Request failed.";
 }
 
@@ -2239,9 +2251,23 @@ function allowedTimeColumns() {
   return (state.dataset?.numeric_columns || []).filter((column) => names.has(column));
 }
 
+function identicalOutcomeColumnMessage() {
+  const timeColumn = refs.timeColumn?.value || "";
+  const eventColumn = refs.eventColumn?.value || "";
+  if (!state.dataset || !timeColumn || !eventColumn || timeColumn !== eventColumn) return null;
+  return "The survival time column and event column must be different.";
+}
+
 function currentTimeColumnWarning() {
   const timeColumn = refs.timeColumn?.value || "";
   if (!state.dataset || !timeColumn) return null;
+  const matchingOutcomeWarning = identicalOutcomeColumnMessage();
+  if (matchingOutcomeWarning) {
+    return {
+      tone: "error",
+      message: matchingOutcomeWarning,
+    };
+  }
 
   const numericSet = new Set(state.dataset.numeric_columns || []);
   if (!numericSet.has(timeColumn)) {
@@ -2439,6 +2465,14 @@ function recommendedEventColumns() {
 function currentEventColumnWarning() {
   const eventColumn = refs.eventColumn?.value || "";
   if (!state.dataset || !eventColumn) return null;
+  const matchingOutcomeWarning = identicalOutcomeColumnMessage();
+  if (matchingOutcomeWarning) {
+    return {
+      tone: "error",
+      blocking: true,
+      message: matchingOutcomeWarning,
+    };
+  }
 
   const binarySet = new Set(state.dataset.binary_candidate_columns || []);
   const suggestionSet = new Set(state.dataset?.suggestions?.event_columns || []);
@@ -2968,8 +3002,8 @@ function buildDownloadFilename(stem, ext, { includeGroup = false, template = nul
   });
 }
 
-function triggerBlobDownload(filename, blob) {
-  return downloadHelpers.triggerBlobDownload(filename, blob);
+function triggerBlobDownload(filename, blob, fallbackMimeType = "") {
+  return downloadHelpers.triggerBlobDownload(filename, blob, fallbackMimeType);
 }
 
 async function downloadServerTable(filename, payload, fallbackMimeType = "text/plain;charset=utf-8;") {
@@ -3687,9 +3721,16 @@ function setActionDisabledState(button, disabled, title = "") {
 function syncAnalysisRunButtonAvailability() {
   const endpointReady = endpointIsReady();
   const readyMessage = endpointReadinessMessage();
+  const coxCovariateCount = goalFeatureCount("cox");
+  const tableVariableCount = goalFeatureCount("tables");
   const sharedFeatureCount = selectedCheckboxValues(refs.modelFeatureChecklist).length;
+  const hasCoxCovariates = coxCovariateCount > 0;
   const hasSharedFeatures = sharedFeatureCount > 0;
+  const hasTableVariables = tableVariableCount > 0;
+  const signatureFeatureMessage = "Select at least one covariate to search for signatures.";
+  const coxFeatureMessage = "Select at least one covariate for the Cox model.";
   const sharedFeatureMessage = "Select at least one shared ML/DL model feature.";
+  const tableVariableMessage = "Select at least one variable for the cohort table.";
   const mlRepeatedCv = refs.mlEvaluationStrategy?.value === "repeated_cv";
   const mlSingleMessage = mlRepeatedCv
     ? "Run Analysis uses deterministic holdout only. Use Compare All for repeated CV screening."
@@ -3702,18 +3743,18 @@ function syncAnalysisRunButtonAvailability() {
   );
   setActionDisabledState(
     refs.runSignatureSearchButton,
-    !endpointReady || isScopeBusy("km"),
-    endpointReady ? "" : readyMessage,
+    !endpointReady || !hasCoxCovariates || isScopeBusy("km"),
+    !endpointReady ? readyMessage : (!hasCoxCovariates ? signatureFeatureMessage : ""),
   );
   setActionDisabledState(
     refs.runCoxButton,
-    !endpointReady || isScopeBusy("cox"),
-    endpointReady ? "" : readyMessage,
+    !endpointReady || !hasCoxCovariates || isScopeBusy("cox"),
+    !endpointReady ? readyMessage : (!hasCoxCovariates ? coxFeatureMessage : ""),
   );
   setActionDisabledState(
     refs.runCohortTableButton,
-    !endpointReady || isScopeBusy("tables"),
-    endpointReady ? "" : readyMessage,
+    !endpointReady || !hasTableVariables || isScopeBusy("tables"),
+    !endpointReady ? readyMessage : (!hasTableVariables ? tableVariableMessage : ""),
   );
 
   const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");
@@ -4517,9 +4558,8 @@ function currentBaseConfig() {
   const timeColumn = refs.timeColumn.value;
   const eventColumn = refs.eventColumn.value;
   if (!timeColumn || !eventColumn) throw new Error("Select both a time column and an event column.");
-  if (timeColumn === eventColumn) {
-    throw new Error("The survival time column and event column must be different.");
-  }
+  const matchingOutcomeWarning = identicalOutcomeColumnMessage();
+  if (matchingOutcomeWarning) throw new Error(matchingOutcomeWarning);
   const timeWarning = currentTimeColumnWarning();
   if (timeWarning?.tone === "error") throw new Error(timeWarning.message);
   const eventWarning = currentEventColumnWarning();
@@ -6663,6 +6703,7 @@ function initListeners() {
     scheduleCoxPreview({ delay: 0 });
   });
   refs.eventColumn.addEventListener("change", () => {
+    updateTimeColumnGuidance();
     updateEventPositiveOptions();
     refreshVariableSelections();
     updateDatasetBadge();
