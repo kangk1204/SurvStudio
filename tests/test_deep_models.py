@@ -1605,6 +1605,59 @@ def test_deephit_feature_importance_uses_expected_time_risk_target() -> None:
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_neural_mtlr_feature_importance_uses_expected_time_risk_target(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    df = make_example_dataset(seed=47, n_patients=64)
+    prepared = deep_models._prepare_deep_data(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+    )
+    n_samples = int(prepared["n_samples"])
+    eval_idx = np.arange(n_samples - 5, n_samples, dtype=int)
+    evaluation_split = {
+        "train_idx": np.arange(0, n_samples - 5, dtype=int),
+        "eval_idx": eval_idx,
+        "evaluation_mode": "holdout",
+        "evaluation_note": "test split",
+    }
+    seen = {
+        "artifact_rows": None,
+        "used_output_to_score": False,
+    }
+
+    def _fake_importance(model, x_tensor, *, output_to_score=None):
+        seen["artifact_rows"] = int(x_tensor.shape[0])
+        seen["used_output_to_score"] = output_to_score is not None
+        return [0.2] * int(x_tensor.shape[1])
+
+    monkeypatch.setattr(deep_models, "_gradient_feature_importance", _fake_importance)
+
+    result = deep_models.train_neural_mtlr(
+        pd.DataFrame(),
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+        hidden_layers=[8],
+        num_time_bins=6,
+        epochs=1,
+        batch_size=8,
+        random_seed=17,
+        prepared_data=prepared,
+        evaluation_split=evaluation_split,
+        early_stopping_patience=None,
+    )
+
+    assert result["artifact_scope"] == "evaluation_subset"
+    assert result["artifact_samples"] == len(eval_idx)
+    assert seen["artifact_rows"] == len(eval_idx)
+    assert seen["used_output_to_score"] is True
+    assert result["feature_importance"]
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 def test_deephit_ranking_loss_penalizes_inverted_survival_order_more_than_correct_order() -> None:
     import torch
     from survival_toolkit.deep_models import _deephit_loss

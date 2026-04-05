@@ -2561,7 +2561,7 @@ def train_neural_mtlr(
     """Train a Neural MTLR model.
 
     Returns a JSON-serializable dict with c_index, loss_history,
-    predicted_survival_curves, and calibration_data.
+    predicted_survival_curves, calibration_data, and feature_importance.
     """
     _require_torch()
     _seed_torch(random_seed)
@@ -2686,6 +2686,28 @@ def train_neural_mtlr(
     )
     artifact_scope = _artifact_scope_label(evaluation_mode)
 
+    # Feature importance (gradient-based salience on expected-time risk)
+    time_grid = torch.cat(
+        [
+            torch.as_tensor(bin_centers, dtype=torch.float32),
+            torch.as_tensor([float(bin_edges[-1])], dtype=torch.float32),
+        ]
+    )
+    importance = _gradient_feature_importance(
+        model,
+        x_all[artifact_idx],
+        output_to_score=lambda cumsum_logits: _expected_time_risk(
+            torch.exp(torch.log_softmax(cumsum_logits, dim=1)),
+            time_grid,
+        ),
+    )
+    feature_importance = [
+        {"feature": name, "importance": imp}
+        for name, imp in sorted(
+            zip(data["feature_names"], importance), key=lambda p: p[1], reverse=True
+        )
+    ]
+
     # Predicted survival curves
     survival_np = survival_all.detach().cpu().numpy()
     risk_np = rmst_risk_all.detach().cpu().numpy().ravel()
@@ -2773,6 +2795,7 @@ def train_neural_mtlr(
         "stopped_early": training_meta["stopped_early"],
         "max_epochs_requested": training_meta["max_epochs_requested"],
         "predicted_survival_curves": predicted_survival_curves,
+        "feature_importance": feature_importance,
         "calibration_data": calibration_data,
         "artifact_scope": artifact_scope,
         "artifact_samples": int(artifact_idx.numel()),
