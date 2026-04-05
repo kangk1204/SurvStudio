@@ -360,11 +360,19 @@ def _summarize_repeated_cv_rows(
         if not c_values:
             continue
         train_times = [float(item["training_time_ms"]) for item in rows if item.get("training_time_ms") is not None]
+        ibs_values = [float(item["ibs"]) for item in rows if item.get("ibs") is not None]
+        null_ibs_values = [float(item["null_ibs"]) for item in rows if item.get("null_ibs") is not None]
+        brier_skill_values = [
+            float(item["brier_skill_score"]) for item in rows if item.get("brier_skill_score") is not None
+        ]
         repeat_results.append({
             "repeat": repeat,
             "c_index": float(np.mean(c_values)),
             "c_index_std": float(np.std(c_values, ddof=1)) if len(c_values) > 1 else 0.0,
             "c_index_median": float(np.median(c_values)),
+            "ibs": float(np.mean(ibs_values)) if ibs_values else None,
+            "null_ibs": float(np.mean(null_ibs_values)) if null_ibs_values else None,
+            "brier_skill_score": float(np.mean(brier_skill_values)) if brier_skill_values else None,
             "training_time_ms": float(np.mean(train_times)) if train_times else None,
             "n_folds": len(c_values),
             "n_features": int(round(np.mean([float(item[n_features_key]) for item in rows if item.get(n_features_key) is not None]))),
@@ -392,6 +400,12 @@ def _summarize_repeated_cv_rows(
             return None
         return int(round(float(np.mean(values))))
 
+    def _mean_repeat_metric(field: str) -> float | None:
+        values = [float(item[field]) for item in repeat_results if item.get(field) is not None]
+        if not values:
+            return None
+        return _safe_float(float(np.mean(values)))
+
     return {
         "repeat_results": repeat_results,
         "c_index": mean_c,
@@ -400,6 +414,9 @@ def _summarize_repeated_cv_rows(
         "c_index_interval_lower": _safe_float(interval_lower),
         "c_index_interval_upper": _safe_float(interval_upper),
         "c_index_interval_label": "Empirical repeat interval (repeat means)",
+        "ibs": _mean_repeat_metric("ibs"),
+        "null_ibs": _mean_repeat_metric("null_ibs"),
+        "brier_skill_score": _mean_repeat_metric("brier_skill_score"),
         "n_repeats": int(len(repeat_results)),
         "n_evaluations": int(sum(item["n_folds"] for item in repeat_results)),
         "training_time_ms": float(
@@ -411,6 +428,153 @@ def _summarize_repeated_cv_rows(
         "train_events": _mean_repeat_field("train_events"),
         "test_events": _mean_repeat_field("test_events"),
     }
+
+
+def _time_integral_mean(values: np.ndarray, times: np.ndarray) -> float:
+    values_arr = np.asarray(values, dtype=float)
+    times_arr = np.asarray(times, dtype=float)
+    if values_arr.size == 0 or times_arr.size == 0:
+        return 0.0
+    if values_arr.size == 1:
+        return float(values_arr[0])
+    trapezoid = getattr(np, "trapezoid", None)
+    if trapezoid is not None:
+        area = float(trapezoid(values_arr, times_arr))
+    else:
+        area = float(np.sum(np.diff(times_arr) * (values_arr[:-1] + values_arr[1:]) * 0.5))
+    return area / float(times_arr[-1] - times_arr[0])
+
+
+def _step_survival_lookup(event_times: np.ndarray, survival: np.ndarray, query_times: np.ndarray) -> np.ndarray:
+    event_times_arr = np.asarray(event_times, dtype=float).reshape(-1)
+    survival_arr = np.asarray(survival, dtype=float).reshape(-1)
+    query_arr = np.asarray(query_times, dtype=float).reshape(-1)
+    output = np.ones_like(query_arr, dtype=float)
+    if event_times_arr.size == 0:
+        return output
+    indices = np.searchsorted(event_times_arr, query_arr, side="right") - 1
+    valid = indices >= 0
+    output[valid] = survival_arr[indices[valid]]
+    return np.clip(output, 0.0, 1.0)
+
+
+def _step_function_matrix(step_functions: Any, eval_times: np.ndarray) -> np.ndarray:
+    eval_times_arr = np.asarray(eval_times, dtype=float).reshape(-1)
+    functions_arr = np.asarray(step_functions, dtype=object).reshape(-1)
+    matrix = np.empty((functions_arr.shape[0], eval_times_arr.shape[0]), dtype=float)
+    for row_idx, fn in enumerate(functions_arr):
+        values = np.asarray(fn(eval_times_arr), dtype=float).reshape(-1)
+        if values.shape[0] != eval_times_arr.shape[0]:
+            raise ValueError("Survival step function returned an unexpected number of evaluation points.")
+        matrix[row_idx, :] = np.clip(values, 0.0, 1.0)
+    return matrix
+
+
+def _sksurv_survival_predictor(model: Any, X: pd.DataFrame, *, alpha: float | None = None) -> Any:
+    X_array = X.to_numpy()
+    predict_kwargs = {"return_array": False}
+    if alpha is not None:
+        predict_kwargs["alpha"] = alpha
+    step_functions = model.predict_survival_function(X_array, **predict_kwargs)
+
+    def _predict(eval_times: np.ndarray) -> np.ndarray:
+        return _step_function_matrix(step_functions, np.asarray(eval_times, dtype=float))
+
+    return _predict
+
+
+def _cox_ph_survival_predictor(results: Any, exog: pd.DataFrame | np.ndarray) -> Any:
+    baseline_hazard = getattr(results, "baseline_cumulative_hazard", None)
+    if not baseline_hazard or len(baseline_hazard) != 1:
+        raise ValueError("Cox PH Brier-score support currently requires a single-stratum baseline hazard.")
+    baseline_times = np.asarray(baseline_hazard[0][0], dtype=float).reshape(-1)
+    baseline_survival = np.asarray(baseline_hazard[0][2], dtype=float).reshape(-1)
+    linear_predictor = np.asarray(exog, dtype=float) @ np.asarray(results.params, dtype=float)
+    hazard_ratio = np.exp(np.clip(linear_predictor, -50.0, 50.0))
+
+    def _predict(eval_times: np.ndarray) -> np.ndarray:
+        eval_times_arr = np.asarray(eval_times, dtype=float).reshape(-1)
+        baseline_values = _step_survival_lookup(baseline_times, baseline_survival, eval_times_arr)
+        return np.power(baseline_values[np.newaxis, :], hazard_ratio[:, np.newaxis], dtype=float)
+
+    return _predict
+
+
+def _maybe_compute_brier_metrics(
+    times: np.ndarray,
+    events: np.ndarray,
+    predicted_survival_fn: Any,
+    *,
+    support_times: np.ndarray | None = None,
+    support_events: np.ndarray | None = None,
+) -> dict[str, Any] | None:
+    try:
+        return compute_integrated_brier_score(
+            times,
+            events,
+            predicted_survival_fn,
+            support_times=support_times,
+            support_events=support_events,
+        )
+    except Exception as exc:
+        warnings.warn(
+            f"Integrated Brier Score / Brier Skill Score could not be computed: {exc}",
+            RuntimeWarning,
+        )
+        return None
+
+
+def _augment_scientific_summary_with_brier(
+    scientific_summary: dict[str, Any],
+    brier_result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not brier_result:
+        scientific_summary["cautions"].append(
+            "IBS / Brier Skill Score could not be computed for this run, so calibration-error interpretation remains incomplete."
+        )
+        if scientific_summary.get("status") == "robust":
+            scientific_summary["status"] = "review"
+        return scientific_summary
+
+    ibs = _safe_float(brier_result.get("ibs"))
+    null_ibs = _safe_float(brier_result.get("null_ibs"))
+    brier_skill_score = _safe_float(brier_result.get("brier_skill_score"))
+    metrics = list(scientific_summary.get("metrics", []))
+    existing_labels = {str(item.get("label")) for item in metrics}
+    brier_metrics = [
+        ("IBS", ibs),
+        ("Null-model IBS", null_ibs),
+        ("Brier Skill Score", brier_skill_score),
+    ]
+    for label, value in brier_metrics:
+        if label not in existing_labels:
+            metrics.append({"label": label, "value": value})
+    scientific_summary["metrics"] = metrics
+
+    if ibs is not None and null_ibs is not None and brier_skill_score is not None:
+        if brier_skill_score > 0.0:
+            scientific_summary["strengths"].append(
+                f"IBS = {ibs:.4f} versus a Kaplan-Meier null-model IBS of {null_ibs:.4f}, giving a Brier Skill Score of {brier_skill_score:.3f}."
+            )
+        else:
+            scientific_summary["cautions"].append(
+                f"IBS = {ibs:.4f} versus a Kaplan-Meier null-model IBS of {null_ibs:.4f}, yielding a Brier Skill Score of {brier_skill_score:.3f}; this run did not improve on the null benchmark."
+            )
+            if scientific_summary.get("status") == "robust":
+                scientific_summary["status"] = "review"
+            if brier_skill_score < -0.05:
+                scientific_summary["status"] = "caution"
+    elif ibs is not None:
+        scientific_summary["cautions"].append(
+            f"IBS = {ibs:.4f}, but the Kaplan-Meier null benchmark was not stable enough to compute a Brier Skill Score."
+        )
+        if scientific_summary.get("status") == "robust":
+            scientific_summary["status"] = "review"
+
+    scientific_summary["next_steps"].append(
+        "Use Brier Skill Score versus the Kaplan-Meier null benchmark, not raw IBS alone, when arguing that a model meaningfully improves survival prediction error."
+    )
+    return scientific_summary
 
 
 def _split_train_test(
@@ -510,6 +674,7 @@ def _make_lasso_coxnet_model(*, alpha: float | None = None) -> CoxnetSurvivalAna
         "normalize": False,
         "tol": 1e-7,
         "max_iter": 100000,
+        "fit_baseline_model": True,
     }
     if alpha is None:
         kwargs.update({"n_alphas": 40, "alpha_min_ratio": "auto"})
@@ -1107,6 +1272,14 @@ def train_random_survival_forest(
     n_events = int(full_frame[event_column].sum())
     n_eval_patients = int(eval_frame.shape[0])
     n_eval_events = int(eval_frame[event_column].sum())
+    support_frame = train_frame if evaluation_mode == "holdout" else full_frame
+    brier_result = _maybe_compute_brier_metrics(
+        eval_frame[time_column].to_numpy(dtype=float),
+        eval_frame[event_column].to_numpy(dtype=int),
+        _sksurv_survival_predictor(model, eval_encoded),
+        support_times=support_frame[time_column].to_numpy(dtype=float),
+        support_events=support_frame[event_column].to_numpy(dtype=int),
+    )
 
     scientific_summary = _scientific_summary_ml(
         model_name="Random Survival Forest",
@@ -1124,11 +1297,15 @@ def train_random_survival_forest(
             "Non-parametric model; no proportional-hazards assumption required.",
         ],
     )
+    scientific_summary = _augment_scientific_summary_with_brier(scientific_summary, brier_result)
 
     return {
         "model_type": "RandomSurvivalForest",
         "model_stats": {
             "c_index": _safe_float(c_index),
+            "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
+            "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
+            "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
             "metric_name": metric_name,
             "evaluation_mode": evaluation_mode,
             "n_estimators": n_estimators,
@@ -1144,6 +1321,7 @@ def train_random_survival_forest(
         "feature_importance": importance_records,
         "predicted_risk_scores": [_safe_float(v) for v in risk_scores],
         "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
+        "calibration_metrics": brier_result,
         "feature_names": feature_names,
         "scientific_summary": scientific_summary,
         "_model": model,
@@ -1260,6 +1438,14 @@ def train_gradient_boosted_survival(
     n_events = int(full_frame[event_column].sum())
     n_eval_patients = int(eval_frame.shape[0])
     n_eval_events = int(eval_frame[event_column].sum())
+    support_frame = train_frame if evaluation_mode == "holdout" else full_frame
+    brier_result = _maybe_compute_brier_metrics(
+        eval_frame[time_column].to_numpy(dtype=float),
+        eval_frame[event_column].to_numpy(dtype=int),
+        _sksurv_survival_predictor(model, eval_encoded),
+        support_times=support_frame[time_column].to_numpy(dtype=float),
+        support_events=support_frame[event_column].to_numpy(dtype=int),
+    )
 
     scientific_summary = _scientific_summary_ml(
         model_name="Gradient Boosted Survival",
@@ -1277,11 +1463,15 @@ def train_gradient_boosted_survival(
             "Non-parametric model; no proportional-hazards assumption required.",
         ],
     )
+    scientific_summary = _augment_scientific_summary_with_brier(scientific_summary, brier_result)
 
     return {
         "model_type": "GradientBoostingSurvivalAnalysis",
         "model_stats": {
             "c_index": _safe_float(c_index),
+            "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
+            "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
+            "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
             "metric_name": metric_name,
             "evaluation_mode": evaluation_mode,
             "n_estimators": n_estimators,
@@ -1298,6 +1488,7 @@ def train_gradient_boosted_survival(
         "feature_importance": importance_records,
         "predicted_risk_scores": [_safe_float(v) for v in risk_scores],
         "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
+        "calibration_metrics": brier_result,
         "feature_names": feature_names,
         "scientific_summary": scientific_summary,
         "_model": model,
@@ -1420,6 +1611,14 @@ def train_lasso_cox(
     n_events = int(full_frame[event_column].sum())
     n_eval_patients = int(eval_frame.shape[0])
     n_eval_events = int(eval_frame[event_column].sum())
+    support_frame = train_frame if evaluation_mode == "holdout" else full_frame
+    brier_result = _maybe_compute_brier_metrics(
+        eval_frame[time_column].to_numpy(dtype=float),
+        eval_frame[event_column].to_numpy(dtype=int),
+        _sksurv_survival_predictor(model, eval_encoded, alpha=float(alpha_meta["alpha"])),
+        support_times=support_frame[time_column].to_numpy(dtype=float),
+        support_events=support_frame[event_column].to_numpy(dtype=int),
+    )
 
     scientific_summary = _scientific_summary_ml(
         model_name="LASSO-Cox",
@@ -1456,11 +1655,15 @@ def train_lasso_cox(
             ),
         ],
     )
+    scientific_summary = _augment_scientific_summary_with_brier(scientific_summary, brier_result)
 
     return {
         "model_type": "LassoCox",
         "model_stats": {
             "c_index": _safe_float(c_index),
+            "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
+            "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
+            "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
             "metric_name": metric_name,
             "evaluation_mode": evaluation_mode,
             "alpha": _safe_float(alpha_meta["alpha"]),
@@ -1481,6 +1684,7 @@ def train_lasso_cox(
         "feature_importance": importance_records,
         "predicted_risk_scores": [_safe_float(v) for v in risk_scores],
         "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
+        "calibration_metrics": brier_result,
         "feature_names": feature_names,
         "scientific_summary": scientific_summary,
         "_model": model,
@@ -1515,7 +1719,7 @@ def compare_survival_models(
 ) -> dict[str, Any]:
     """Train Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival
     on a deterministic train/test split and return a comparison table with
-    holdout C-index, feature count, and training time for each model.
+    holdout discrimination/error metrics, feature count, and training time for each model.
     """
     categorical_features = list(categorical_features or [])
     _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
@@ -1585,6 +1789,9 @@ def compare_survival_models(
             comparison.append({
                 "model": model_name,
                 "c_index": _safe_float(result["c_index"]),
+                "ibs": _safe_float(result.get("ibs")),
+                "null_ibs": _safe_float(result.get("null_ibs")),
+                "brier_skill_score": _safe_float(result.get("brier_skill_score")),
                 "n_features": result["n_features"],
                 "training_time_ms": result["training_time_ms"],
                 "evaluation_mode": evaluation_mode,
@@ -1627,6 +1834,14 @@ def compare_survival_models(
             "The top-ranked model was selected and scored on the same evaluation split; treat this as screening rather than final external validation.",
             f"{len(errors)} model(s) failed to train." if errors else None,
         ],
+    )
+    scientific_summary = _augment_scientific_summary_with_brier(
+        scientific_summary,
+        {
+            "ibs": best.get("ibs"),
+            "null_ibs": best.get("null_ibs"),
+            "brier_skill_score": best.get("brier_skill_score"),
+        },
     )
 
     result = {
@@ -1691,9 +1906,19 @@ def _fit_evaluate_cox_split(
         )
 
     y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
+    brier_result = _maybe_compute_brier_metrics(
+        test_times,
+        test_status,
+        _cox_ph_survival_predictor(results, test_encoded.to_numpy(dtype=float)),
+        support_times=train_times,
+        support_events=train_status,
+    )
     return {
         "model": "Cox PH",
         "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
+        "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
+        "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
+        "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
         "n_features": len(param_vector),
         "training_time_ms": training_time_ms,
         "train_n": int(train_eval.shape[0]),
@@ -1746,9 +1971,19 @@ def _fit_evaluate_lasso_cox_split(
     coef_vector = _coerce_coxnet_coef_vector(model)
 
     y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
+    brier_result = _maybe_compute_brier_metrics(
+        test_eval[time_column].to_numpy(dtype=float),
+        test_eval[event_column].to_numpy(dtype=int),
+        _sksurv_survival_predictor(model, test_encoded, alpha=float(alpha_meta["alpha"])),
+        support_times=train_eval[time_column].to_numpy(dtype=float),
+        support_events=train_eval[event_column].to_numpy(dtype=int),
+    )
     return {
         "model": "LASSO-Cox",
         "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
+        "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
+        "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
+        "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
         "n_features": int(train_encoded.shape[1]),
         "n_active_features": int(np.count_nonzero(np.abs(coef_vector) > 1e-10)),
         "alpha_selection_rule": alpha_meta.get("selection_rule"),
@@ -1803,9 +2038,19 @@ def _fit_evaluate_rsf_split(
     risk_score = model.predict(test_encoded.to_numpy())
 
     y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
+    brier_result = _maybe_compute_brier_metrics(
+        test_eval[time_column].to_numpy(dtype=float),
+        test_eval[event_column].to_numpy(dtype=int),
+        _sksurv_survival_predictor(model, test_encoded),
+        support_times=train_eval[time_column].to_numpy(dtype=float),
+        support_events=train_eval[event_column].to_numpy(dtype=int),
+    )
     return {
         "model": "Random Survival Forest",
         "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
+        "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
+        "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
+        "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
         "n_features": int(train_encoded.shape[1]),
         "training_time_ms": training_time_ms,
         "train_n": int(train_eval.shape[0]),
@@ -1859,9 +2104,19 @@ def _fit_evaluate_gbs_split(
     risk_score = model.predict(test_encoded.to_numpy())
 
     y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
+    brier_result = _maybe_compute_brier_metrics(
+        test_eval[time_column].to_numpy(dtype=float),
+        test_eval[event_column].to_numpy(dtype=int),
+        _sksurv_survival_predictor(model, test_encoded),
+        support_times=train_eval[time_column].to_numpy(dtype=float),
+        support_events=train_eval[event_column].to_numpy(dtype=int),
+    )
     return {
         "model": "Gradient Boosted Survival",
         "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
+        "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
+        "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
+        "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
         "n_features": int(train_encoded.shape[1]),
         "training_time_ms": training_time_ms,
         "train_n": int(train_eval.shape[0]),
@@ -1877,6 +2132,10 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     comparison_table = list(result.get("comparison_table", []))
     repeated_cv_mode = evaluation_mode in {"repeated_cv", "repeated_cv_incomplete"}
+    include_brier_metrics = any(
+        row.get("ibs") is not None or row.get("null_ibs") is not None or row.get("brier_skill_score") is not None
+        for row in comparison_table
+    )
 
     def _format_seed_values(values: Any) -> str | None:
         if not values:
@@ -1925,6 +2184,10 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
                 "Mean Evaluation Events, n": row.get("test_events"),
                 "Mean Training Time, ms": _safe_float(row.get("training_time_ms")),
             }
+            if include_brier_metrics:
+                manuscript_row["Mean IBS"] = _safe_float(row.get("ibs"))
+                manuscript_row["Mean Null IBS"] = _safe_float(row.get("null_ibs"))
+                manuscript_row["Mean Brier Skill Score"] = _safe_float(row.get("brier_skill_score"))
             if include_fallback_counts:
                 manuscript_row["Apparent fallback folds, n"] = int(row.get("n_apparent_fallbacks", 0) or 0)
             if include_provenance:
@@ -1950,11 +2213,15 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             table_notes.append(
                 "Apparent fallback fold counts report folds that were excluded from the repeated-CV aggregate because a clean holdout concordance estimate could not be retained."
             )
+        if include_brier_metrics:
+            table_notes.append(
+                "IBS columns summarize IPCW integrated Brier error, and Brier Skill Score is reported relative to a Kaplan-Meier null model fit on each training partition."
+            )
     else:
         row_modes = {str(row.get("evaluation_mode", evaluation_mode)) for row in comparison_table}
         for rank, row in enumerate(comparison_table, start=1):
             rank_value = row.get("rank", rank)
-            rows.append({
+            manuscript_row = {
                 "Rank": rank_value if rank_value is not None else "Not ranked",
                 "Model": row["model"],
                 "Validation Strategy": _manuscript_validation_strategy_label(str(row.get("evaluation_mode", evaluation_mode))),
@@ -1965,11 +2232,20 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
                 "Evaluation Patients, n": row.get("evaluation_samples", result.get("n_evaluation_patients")),
                 "Evaluation Events, n": row.get("test_events", result.get("n_evaluation_events")),
                 "Training Time, ms": _safe_float(row.get("training_time_ms")),
-            })
+            }
+            if include_brier_metrics:
+                manuscript_row["IBS"] = _safe_float(row.get("ibs"))
+                manuscript_row["Null IBS"] = _safe_float(row.get("null_ibs"))
+                manuscript_row["Brier Skill Score"] = _safe_float(row.get("brier_skill_score"))
+            rows.append(manuscript_row)
         table_notes = [
             "C-index values come from a single deterministic holdout split unless evaluation_mode is apparent.",
             "Apparent evaluation indicates resubstitution on the analyzable cohort and should not be interpreted as external validation.",
         ]
+        if include_brier_metrics:
+            table_notes.append(
+                "IBS and Brier Skill Score use IPCW error on the evaluation cohort, with Brier Skill Score defined relative to a Kaplan-Meier null model from the training cohort."
+            )
         if len(row_modes) > 1:
             table_notes.append(
                 "Rows mix deterministic holdout and apparent fallback evaluation; apparent-fallback rows are shown for transparency but should not be ranked against holdout rows."
@@ -1983,18 +2259,18 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
         "model_performance_table": rows,
         "table_notes": table_notes,
         "caption": (
-            "Table 1. Discrimination performance of survival models under repeated stratified cross-validation."
+            "Table 1. Performance of survival models under repeated stratified cross-validation."
             if evaluation_mode == "repeated_cv"
             else (
-                "Table 1. Discrimination performance of survival models under incomplete repeated stratified cross-validation."
+                "Table 1. Performance of survival models under incomplete repeated stratified cross-validation."
                 if evaluation_mode == "repeated_cv_incomplete"
                 else (
-                    "Table 1. Discrimination performance of survival models under apparent evaluation."
+                    "Table 1. Performance of survival models under apparent evaluation."
                     if comparison_table and all(str(row.get("evaluation_mode", evaluation_mode)) in {"apparent", "holdout_fallback_apparent"} for row in comparison_table)
                     else (
-                        "Table 1. Discrimination performance of survival models under mixed holdout/apparent evaluation."
+                        "Table 1. Performance of survival models under mixed holdout/apparent evaluation."
                         if any(str(row.get("evaluation_mode", evaluation_mode)) != "holdout" for row in comparison_table)
-                        else "Table 1. Discrimination performance of survival models under deterministic holdout evaluation."
+                        else "Table 1. Performance of survival models under deterministic holdout evaluation."
                     )
                 )
             )
@@ -2100,6 +2376,9 @@ def cross_validate_survival_models(
                         "repeat": repeat_idx + 1,
                         "fold": fold_idx,
                         "c_index": result["c_index"],
+                        "ibs": result.get("ibs"),
+                        "null_ibs": result.get("null_ibs"),
+                        "brier_skill_score": result.get("brier_skill_score"),
                         "n_features": result["n_features"],
                         "training_time_ms": result["training_time_ms"],
                         "train_n": result["train_n"],
@@ -2132,6 +2411,9 @@ def cross_validate_survival_models(
             "c_index_interval_lower": None if incomplete or summary is None else _safe_float(summary["c_index_interval_lower"]),
             "c_index_interval_upper": None if incomplete or summary is None else _safe_float(summary["c_index_interval_upper"]),
             "c_index_interval_label": None if summary is None else summary["c_index_interval_label"],
+            "ibs": None if incomplete or summary is None else _safe_float(summary.get("ibs")),
+            "null_ibs": None if incomplete or summary is None else _safe_float(summary.get("null_ibs")),
+            "brier_skill_score": None if incomplete or summary is None else _safe_float(summary.get("brier_skill_score")),
             "n_features": None if summary is None else int(summary["n_features"]),
             "training_time_ms": None if summary is None else _safe_float(summary["training_time_ms"]),
             "n_evaluations": len(model_rows),
@@ -2179,6 +2461,14 @@ def cross_validate_survival_models(
             f"{len(comparison)} model(s) evaluated across {cv_repeats} repeat(s) of {cv_folds}-fold stratified CV.",
         ],
         extra_cautions=[f"{len(errors)} fold-level fit(s) failed."] if errors else None,
+    )
+    scientific_summary = _augment_scientific_summary_with_brier(
+        scientific_summary,
+        {
+            "ibs": best.get("ibs"),
+            "null_ibs": best.get("null_ibs"),
+            "brier_skill_score": best.get("brier_skill_score"),
+        },
     )
     scientific_summary["cautions"].insert(
         0,
@@ -2531,12 +2821,13 @@ def compute_integrated_brier_score(
     support_times: np.ndarray | Sequence[float] | None = None,
     support_events: np.ndarray | Sequence[int] | None = None,
 ) -> dict[str, Any]:
-    """Compute Integrated Brier Score (IBS) for model calibration assessment.
+    """Compute IBS and Brier Skill Score for survival-prediction error assessment.
 
-    IBS is often used as a descriptive survival-prediction error score.
-    It reflects time-integrated prediction error and is influenced by both
-    discrimination and calibration, but it should not be over-interpreted
-    as a stand-alone manuscript-grade validation result.
+    IBS reflects time-integrated survival-prediction error and is influenced
+    by both discrimination and calibration.  This helper also computes a
+    Kaplan-Meier null-model IBS and the corresponding Brier Skill Score
+    ``1 - IBS_model / IBS_null`` so that absolute error can be contextualized
+    against a no-covariate reference model.
 
     Parameters
     ----------
@@ -2560,8 +2851,9 @@ def compute_integrated_brier_score(
     Returns
     -------
     dict
-        ``ibs`` (float), ``brier_scores`` (list of per-time-point records),
-        ``eval_times`` (list), and ``scientific_summary``.
+        ``ibs`` (float), ``null_ibs`` (float), ``brier_skill_score`` (float),
+        ``brier_scores`` / ``null_brier_scores`` (lists of per-time-point
+        records), ``eval_times`` (list), and ``scientific_summary``.
     """
     times_arr = np.asarray(times, dtype=float)
     events_arr = np.asarray(events, dtype=float)
@@ -2626,8 +2918,15 @@ def compute_integrated_brier_score(
         return out
 
     eps = 1e-12
+    event_sf = SurvfuncRight(support_times_arr, support_events_arr)
+    event_times = event_sf.surv_times.astype(float)
+    event_surv = event_sf.surv_prob.astype(float)
+    null_survival = _step_survival_lookup(event_times, event_surv, eval_times_arr)
+
     brier_scores: list[dict[str, Any]] = []
+    null_brier_scores: list[dict[str, Any]] = []
     bs_values: list[float] = []
+    null_bs_values: list[float] = []
 
     for j, t in enumerate(eval_times_arr):
         # Indicator: patient experienced event before or at time t
@@ -2643,29 +2942,32 @@ def compute_integrated_brier_score(
         weights[event_mask] = 1.0 / g_ti[event_mask]
 
         bs = float(np.mean(weights * (s_hat - alive_indicator) ** 2))
+        null_bs = float(np.mean(weights * (float(null_survival[j]) - alive_indicator) ** 2))
         bs_values.append(bs)
+        null_bs_values.append(null_bs)
         brier_scores.append({
             "time": _safe_float(float(t)),
             "score": _safe_float(bs),
         })
+        null_brier_scores.append({
+            "time": _safe_float(float(t)),
+            "score": _safe_float(null_bs),
+        })
 
     # Integrated Brier Score via trapezoidal rule
     bs_arr = np.array(bs_values, dtype=float)
-    if len(eval_times_arr) >= 2:
-        trapezoid = getattr(np, "trapezoid", None)
-        if trapezoid is not None:
-            area = float(trapezoid(bs_arr, eval_times_arr))
-        else:
-            area = float(np.sum(np.diff(eval_times_arr) * (bs_arr[:-1] + bs_arr[1:]) * 0.5))
-        ibs = area / (eval_times_arr[-1] - eval_times_arr[0])
-    else:
-        ibs = float(bs_arr[0])
+    null_bs_arr = np.array(null_bs_values, dtype=float)
+    ibs = _time_integral_mean(bs_arr, eval_times_arr)
+    null_ibs = _time_integral_mean(null_bs_arr, eval_times_arr)
+    brier_skill_score: float | None = None
+    if np.isfinite(null_ibs) and float(null_ibs) > eps:
+        brier_skill_score = float(1.0 - ibs / float(null_ibs))
 
     # Scientific summary
     n_events = int(np.sum(events_arr))
     strengths: list[str] = [
         f"IBS computed over {len(eval_times_arr)} time points for {n_samples} patients ({n_events} events).",
-        "IBS is a descriptive score that summarizes predicted-vs-observed survival error across time.",
+        "IBS summarizes predicted-vs-observed survival error across time, and Brier Skill Score contextualizes that error versus a Kaplan-Meier null model.",
         f"Evaluation times were restricted to the IPCW support window [0, {support_time_upper:.4g}] to avoid late-time extrapolation beyond the last support event.",
     ]
     cautions: list[str] = []
@@ -2680,6 +2982,23 @@ def compute_integrated_brier_score(
     else:
         cautions.append(f"IBS = {ibs:.4f}; the prediction error is large, so the model needs review.")
 
+    if brier_skill_score is None:
+        cautions.append(
+            "Brier Skill Score could not be computed because the Kaplan-Meier null-model IBS was not stably positive over the evaluation window."
+        )
+    elif brier_skill_score > 0.10:
+        strengths.append(
+            f"Brier Skill Score = {brier_skill_score:.3f} versus a Kaplan-Meier null-model IBS of {null_ibs:.4f}, indicating clear improvement over the no-covariate reference."
+        )
+    elif brier_skill_score > 0.0:
+        strengths.append(
+            f"Brier Skill Score = {brier_skill_score:.3f} versus a Kaplan-Meier null-model IBS of {null_ibs:.4f}, indicating modest improvement over the no-covariate reference."
+        )
+    else:
+        cautions.append(
+            f"Brier Skill Score = {brier_skill_score:.3f} versus a Kaplan-Meier null-model IBS of {null_ibs:.4f}; this model did not improve on the no-covariate reference."
+        )
+
     cautions.append(
         "This implementation uses IPCW Brier scores; if the censoring survival "
         "probability approaches 0 at late times, estimates can become unstable."
@@ -2687,7 +3006,7 @@ def compute_integrated_brier_score(
     if support_times is not None or support_events is not None:
         strengths.append("IPCW censoring weights were estimated from the supplied support cohort rather than the evaluation cohort.")
     next_steps.append(
-        "Compare IBS across models to select the best-calibrated predictor (lower is better)."
+        "Compare both IBS and Brier Skill Score across models; Brier Skill Score should stay above 0 to justify improvement over the Kaplan-Meier null reference."
     )
     next_steps.append(
         "Use compute_calibration_data() for a descriptive visual check of calibration agreement."
@@ -2696,17 +3015,28 @@ def compute_integrated_brier_score(
     status = "robust"
     if any("moderate" in c for c in cautions):
         status = "review"
-    if ibs >= 0.25 or n_events < 10:
+    if ibs >= 0.25 or n_events < 10 or (brier_skill_score is not None and brier_skill_score <= 0.0):
         status = "caution"
+    elif brier_skill_score is None:
+        status = "review"
 
     scientific_summary = {
         "status": status,
-        "headline": f"Integrated Brier Score = {ibs:.4f} over [{_safe_float(eval_times_arr[0])}, {_safe_float(eval_times_arr[-1])}] as a descriptive summary.",
+        "headline": (
+            f"Integrated Brier Score = {ibs:.4f} over [{_safe_float(eval_times_arr[0])}, {_safe_float(eval_times_arr[-1])}]"
+            + (
+                f"; Brier Skill Score = {brier_skill_score:.3f} versus the Kaplan-Meier null model."
+                if brier_skill_score is not None
+                else "; Kaplan-Meier null-model Brier Skill Score was unavailable."
+            )
+        ),
         "strengths": strengths,
         "cautions": cautions,
         "next_steps": next_steps,
         "metrics": [
             {"label": "IBS", "value": _safe_float(ibs)},
+            {"label": "Null-model IBS", "value": _safe_float(null_ibs)},
+            {"label": "Brier Skill Score", "value": _safe_float(brier_skill_score)},
             {"label": "Patients", "value": n_samples},
             {"label": "Events", "value": n_events},
             {"label": "Eval time points", "value": len(eval_times_arr)},
@@ -2715,7 +3045,10 @@ def compute_integrated_brier_score(
 
     return {
         "ibs": _safe_float(ibs),
+        "null_ibs": _safe_float(null_ibs),
+        "brier_skill_score": _safe_float(brier_skill_score),
         "brier_scores": brier_scores,
+        "null_brier_scores": null_brier_scores,
         "eval_times": [_safe_float(float(t)) for t in eval_times_arr],
         "scientific_summary": scientific_summary,
     }

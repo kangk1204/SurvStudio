@@ -1556,6 +1556,7 @@ function updateGuidedSurfaceVisibility() {
       didMove = true;
     }
   }
+  refs.mlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);
   if (refs.dlWorkspaceCard && refs.benchmarkDlMount && refs.dlPanel) {
     if (useMergedPredictiveWorkspace) {
       if (refs.dlWorkspaceCard.parentElement !== refs.benchmarkDlMount) {
@@ -1567,6 +1568,7 @@ function updateGuidedSurfaceVisibility() {
       didMove = true;
     }
   }
+  refs.dlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);
 
   if (refs.guidedPanel) {
     if (showGuidedRailPanel && refs.guidedRailPanelMount) {
