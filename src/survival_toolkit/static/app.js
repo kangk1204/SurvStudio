@@ -3416,22 +3416,6 @@ function buildCoxMartingaleFigure(panel) {
     .filter(([xValue, yValue]) => Number.isFinite(xValue) && Number.isFinite(yValue));
   const trendX = trendPairs.map(([xValue]) => xValue);
   const trendY = trendPairs.map(([, yValue]) => yValue);
-  const annotations = [
-    {
-      text: "Martingale residual screening: LOWESS-smoothed martingale residuals versus continuous covariate value.<br>Strong curvature suggests a nonlinear functional form, so consider splines or transformed terms before locking the model.",
-      xref: "paper",
-      yref: "paper",
-      x: 0.02,
-      y: 1.08,
-      showarrow: false,
-      font: { size: 12, color: "#1a2332" },
-      align: "left",
-      xanchor: "left",
-      yanchor: "bottom",
-      bgcolor: "rgba(255,255,255,0.85)",
-      borderpad: 5,
-    },
-  ];
   return {
     data: [
       {
@@ -3459,9 +3443,8 @@ function buildCoxMartingaleFigure(panel) {
       paper_bgcolor: "#ffffff",
       plot_bgcolor: "white",
       font: { family: "Sora, sans-serif", size: 13, color: "#1a2332" },
-      margin: { l: 60, r: 30, t: 156, b: 68 },
-      height: 400,
-      annotations,
+      margin: { l: 60, r: 30, t: 72, b: 68 },
+      height: 360,
       xaxis: {
         title: term,
         linecolor: "rgba(0,0,0,0.15)",
