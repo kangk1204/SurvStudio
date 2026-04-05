@@ -1121,6 +1121,14 @@ function goalResultStatusState(goal, { currentLabel = "Ready", noResultLabel = "
     };
   }
   if (goalHasAnyOutput(goal)) {
+    if (goal === "tables") {
+      return {
+        tone: "warning",
+        label: "Needs rerun",
+        title: `${goalLabel(goal)} settings changed`,
+        text: "Visible settings changed after this table was built. You can still export the visible table, or rebuild it to refresh the output.",
+      };
+    }
     return {
       tone: "warning",
       label: "Needs rerun",
@@ -3166,8 +3174,8 @@ function requireCurrentResultForExport(goal, { payload = null } = {}) {
   }
   if (goal === "tables") {
     const tableState = currentCohortTableOutputState();
-    if (!tableState.hasOutput || !tableState.isCurrent || !payload) {
-      showToast("Visible settings no longer match the current cohort table. Rebuild the table before exporting.", "warning", 3600);
+    if (!tableState.hasOutput || !payload) {
+      showToast("Build the cohort table before exporting.", "warning", 3200);
       return false;
     }
     return true;
@@ -4051,7 +4059,7 @@ function renderContextCards({
       refs.tableOutputStatusText.textContent = "";
       refs.tableOutputStatusText.classList.add("hidden");
     } else {
-      refs.tableOutputStatusText.textContent = `Current output still reflects the last built table: Variables ${tableState.outputVariables.length}, Group ${tableState.outputGroupLabel}. Click Rebuild Table to apply the current settings.`;
+      refs.tableOutputStatusText.textContent = `Current output still reflects the last built table: Variables ${tableState.outputVariables.length}, Group ${tableState.outputGroupLabel}. You can still export this visible table, or click Rebuild Table to refresh it.`;
       refs.tableOutputStatusText.classList.remove("hidden");
     }
   }
@@ -4075,8 +4083,8 @@ function syncDownloadButtonAvailability() {
   refs.downloadCoxDiagnosticsButton.disabled = !currentCox;
   if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.disabled = !currentCox;
   if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.disabled = !currentCox;
-  refs.downloadCohortTableButton.disabled = !currentTable.hasOutput || !currentTable.isCurrent;
-  if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.disabled = !currentTable.hasOutput || !currentTable.isCurrent;
+  refs.downloadCohortTableButton.disabled = !currentTable.hasOutput;
+  if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.disabled = !currentTable.hasOutput;
   refs.downloadMlComparisonButton.disabled = !currentMl || !(currentMl.analysis?.comparison_table?.length);
   if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !currentMl || !refs.mlComparisonPlot?.data?.length;
   if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !currentMl || !refs.mlComparisonPlot?.data?.length;
