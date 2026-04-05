@@ -51,6 +51,22 @@
       return button;
     }
 
+    function createBenchmarkActionGroup(row) {
+      const actionGroup = document.createElement("div");
+      actionGroup.className = "button-row compact benchmark-row-actions";
+      actionGroup.appendChild(createBenchmarkActionButton(benchmarkReviewAction(row)));
+      actionGroup.appendChild(createBenchmarkActionButton({
+        dataset: {
+          benchmarkParamsGoal: row.familyTab,
+          benchmarkParamsModel: row.model,
+        },
+        label: "Params",
+        disabled: false,
+        title: "Show the exact compare-run settings used for this leaderboard row.",
+      }));
+      return actionGroup;
+    }
+
     function benchmarkCompareRows(goal, { currentOnly = false } = {}) {
       const payload = currentOnly ? currentCompareGoalPayload(goal) : compareGoalPayload(goal);
       if (panelModeForPayload(payload) !== "compare") return [];
@@ -401,7 +417,7 @@
               <th>C-index</th>
               <th>Evaluation</th>
               <th>Status</th>
-              <th>Review</th>
+              <th class="benchmark-review-column">Review</th>
             </tr>
           </thead>
           <tbody>
@@ -413,7 +429,7 @@
                 <td>${escapeHtml(formatValue(row.c_index))}</td>
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>
-                <td><span class="benchmark-action-slot" data-benchmark-action-slot="${index}"></span></td>
+                <td class="benchmark-review-column"><span class="benchmark-action-slot" data-benchmark-action-slot="${index}"></span></td>
               </tr>
             `).join("")}
           </tbody>
@@ -423,7 +439,7 @@
         const index = Number(slot.getAttribute("data-benchmark-action-slot"));
         const row = board.currentRows[index];
         if (!row) return;
-        slot.replaceWith(createBenchmarkActionButton(benchmarkReviewAction(row)));
+        slot.replaceWith(createBenchmarkActionGroup(row));
       });
     }
 
