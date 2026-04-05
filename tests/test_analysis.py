@@ -715,6 +715,14 @@ def test_km_analysis_returns_grouped_results() -> None:
     assert any("independent" in caution.lower() and "censoring" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("competing risks" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("left truncation" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert result["rmst_contrast"] is not None
+    assert any(metric["label"] == "RMST difference" for metric in result["scientific_summary"]["metrics"])
+    for row in result["summary_table"]:
+        assert row["RMST CI lower"] is not None
+        assert row["RMST CI upper"] is not None
+        assert row["RMST SE"] is not None
+        assert row["RMST CI lower"] <= row["RMST"] <= row["RMST CI upper"]
+    assert result["rmst_contrast"]["ci_lower"] <= result["rmst_contrast"]["estimate"] <= result["rmst_contrast"]["ci_upper"]
 
 
 def test_km_analysis_marks_outcome_informed_group_results_as_descriptive() -> None:

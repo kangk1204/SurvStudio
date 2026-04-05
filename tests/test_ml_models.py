@@ -182,11 +182,15 @@ def test_rsf_reports_holdout_evaluation_on_large_cohort() -> None:
         random_state=42,
     )
     assert result["model_stats"]["c_index"] is not None
+    assert result["model_stats"]["ibs"] is not None
+    assert result["model_stats"]["null_ibs"] is not None
+    assert result["model_stats"]["brier_skill_score"] is not None
     assert result["model_stats"]["evaluation_mode"] == "holdout"
     assert result["model_stats"]["n_evaluation_patients"] < result["model_stats"]["n_patients"]
     assert "holdout" in result["scientific_summary"]["headline"].lower()
     assert len(result["feature_importance"]) == 3
     assert result["feature_importance"][0]["importance"] >= result["feature_importance"][-1]["importance"]
+    assert any(metric["label"] == "Brier Skill Score" for metric in result["scientific_summary"]["metrics"])
 
 
 @pytest.mark.skipif(
@@ -207,10 +211,14 @@ def test_gbs_reports_holdout_evaluation_on_large_cohort() -> None:
         random_state=42,
     )
     assert result["model_stats"]["c_index"] is not None
+    assert result["model_stats"]["ibs"] is not None
+    assert result["model_stats"]["null_ibs"] is not None
+    assert result["model_stats"]["brier_skill_score"] is not None
     assert result["model_stats"]["evaluation_mode"] == "holdout"
     assert result["model_stats"]["n_evaluation_patients"] < result["model_stats"]["n_patients"]
     assert "holdout" in result["scientific_summary"]["headline"].lower()
     assert len(result["feature_importance"]) == 3
+    assert any(metric["label"] == "Brier Skill Score" for metric in result["scientific_summary"]["metrics"])
 
 
 @pytest.mark.skipif(
@@ -229,11 +237,15 @@ def test_lasso_cox_reports_holdout_evaluation_on_large_cohort() -> None:
         random_state=42,
     )
     assert result["model_stats"]["c_index"] is not None
+    assert result["model_stats"]["ibs"] is not None
+    assert result["model_stats"]["null_ibs"] is not None
+    assert result["model_stats"]["brier_skill_score"] is not None
     assert result["model_stats"]["evaluation_mode"] == "holdout"
     assert result["model_stats"]["n_evaluation_patients"] < result["model_stats"]["n_patients"]
     assert result["model_stats"]["alpha"] is not None
     assert result["model_stats"]["n_active_features"] >= 1
     assert "LASSO-Cox" in result["scientific_summary"]["headline"]
+    assert any(metric["label"] == "Brier Skill Score" for metric in result["scientific_summary"]["metrics"])
 
 
 def test_select_lasso_alpha_prefers_sparser_model_within_one_se(monkeypatch) -> None:
@@ -346,8 +358,10 @@ def test_compare_models_returns_table() -> None:
     assert "LASSO-Cox" in models
     assert len(result["comparison_table"]) >= 1
     assert all("evaluation_mode" in row for row in result["comparison_table"])
+    assert all("brier_skill_score" in row for row in result["comparison_table"])
     assert "manuscript_tables" in result
     assert result["manuscript_tables"]["model_performance_table"]
+    assert "Brier Skill Score" in result["manuscript_tables"]["model_performance_table"][0]
 
 
 @pytest.mark.skipif(
@@ -1630,6 +1644,9 @@ def test_integrated_brier_score_restricts_eval_times_to_support_event_window() -
 
     assert result["eval_times"] == [2.0, 6.0]
     assert any("support window" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+    assert result["null_ibs"] is not None
+    assert result["brier_skill_score"] == pytest.approx(1.0 - result["ibs"] / result["null_ibs"])
+    assert any(metric["label"] == "Brier Skill Score" for metric in result["scientific_summary"]["metrics"])
 
 
 def test_integrated_brier_score_falls_back_when_numpy_has_no_trapezoid(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1651,4 +1668,28 @@ def test_integrated_brier_score_falls_back_when_numpy_has_no_trapezoid(monkeypat
     )
 
     assert result["ibs"] is not None
+    assert result["null_ibs"] is not None
     assert result["eval_times"] == [2.0, 6.0, 12.0]
+
+
+def test_integrated_brier_score_prefers_patient_informed_predictions_over_flat_baseline() -> None:
+    from survival_toolkit.ml_models import compute_integrated_brier_score
+
+    times = np.array([4.0, 6.0, 9.0, 14.0, 18.0, 24.0], dtype=float)
+    events = np.array([1, 1, 0, 1, 0, 1], dtype=int)
+
+    def _better(eval_times: np.ndarray) -> np.ndarray:
+        eval_times_arr = np.asarray(eval_times, dtype=float)
+        patient_scales = np.array([0.18, 0.14, 0.11, 0.08, 0.06, 0.04], dtype=float)
+        return np.exp(-patient_scales[:, None] * eval_times_arr[None, :])
+
+    def _flat(eval_times: np.ndarray) -> np.ndarray:
+        eval_times_arr = np.asarray(eval_times, dtype=float)
+        return np.full((len(times), len(eval_times_arr)), 0.5, dtype=float)
+
+    better = compute_integrated_brier_score(times, events, _better, eval_times=np.linspace(2.0, 18.0, 7))
+    flat = compute_integrated_brier_score(times, events, _flat, eval_times=np.linspace(2.0, 18.0, 7))
+
+    assert better["brier_skill_score"] is not None
+    assert flat["brier_skill_score"] is not None
+    assert better["brier_skill_score"] > flat["brier_skill_score"]

@@ -1150,6 +1150,107 @@ def _restricted_mean_survival_time(timeline: np.ndarray, survival: np.ndarray, h
     return float(area)
 
 
+def _restricted_mean_survival_time_delta_stats(
+    event_times: np.ndarray,
+    survival_after_event: np.ndarray,
+    n_risk: np.ndarray,
+    n_events: np.ndarray,
+    horizon: float,
+    *,
+    alpha: float = 0.05,
+) -> dict[str, float]:
+    """Estimate RMST uncertainty using a Greenwood/delta-method approximation.
+
+    Parameters
+    ----------
+    event_times, survival_after_event, n_risk, n_events
+        Per-event Kaplan-Meier quantities from ``SurvfuncRight``.
+    horizon
+        Truncation time for RMST.
+    alpha
+        Two-sided error rate for the confidence interval.
+    """
+    event_times_arr = np.asarray(event_times, dtype=float).reshape(-1)
+    survival_arr = np.asarray(survival_after_event, dtype=float).reshape(-1)
+    n_risk_arr = np.asarray(n_risk, dtype=float).reshape(-1)
+    n_events_arr = np.asarray(n_events, dtype=float).reshape(-1)
+    if not (
+        event_times_arr.size == survival_arr.size == n_risk_arr.size == n_events_arr.size
+    ):
+        raise ValueError("RMST delta-method inputs must have matching lengths.")
+
+    tau = float(max(horizon, 0.0))
+    if tau <= 0.0:
+        return {
+            "rmst": 0.0,
+            "variance": 0.0,
+            "se": 0.0,
+            "ci_lower": 0.0,
+            "ci_upper": 0.0,
+        }
+
+    if event_times_arr.size == 0:
+        return {
+            "rmst": tau,
+            "variance": 0.0,
+            "se": 0.0,
+            "ci_lower": tau,
+            "ci_upper": tau,
+        }
+
+    within_horizon = event_times_arr <= tau + 1e-12
+    event_times_arr = event_times_arr[within_horizon]
+    survival_arr = survival_arr[within_horizon]
+    n_risk_arr = n_risk_arr[within_horizon]
+    n_events_arr = n_events_arr[within_horizon]
+
+    if event_times_arr.size == 0:
+        return {
+            "rmst": tau,
+            "variance": 0.0,
+            "se": 0.0,
+            "ci_lower": tau,
+            "ci_upper": tau,
+        }
+
+    clipped_times = np.clip(event_times_arr, 0.0, tau)
+    interval_grid = np.concatenate(([0.0], clipped_times, [tau]))
+    interval_widths = np.maximum(np.diff(interval_grid), 0.0)
+    interval_survival = np.concatenate(([1.0], survival_arr))
+    rmst = float(np.dot(interval_survival, interval_widths))
+
+    # Delta-method variance:
+    # Var(RMST) ~= sum_k A_k^2 * d_k / (n_k (n_k - d_k)),
+    # where A_k is the post-event tail area carried by the KM estimate from
+    # event k onward and d_k / (n_k (n_k - d_k)) is the Greenwood increment.
+    post_event_area_terms = interval_widths[1:] * survival_arr
+    tail_areas = np.cumsum(post_event_area_terms[::-1])[::-1]
+    greenwood_increments = np.zeros_like(tail_areas, dtype=float)
+    valid = (
+        np.isfinite(n_risk_arr)
+        & np.isfinite(n_events_arr)
+        & (n_risk_arr > 0.0)
+        & (n_events_arr > 0.0)
+        & (n_risk_arr > n_events_arr)
+    )
+    greenwood_increments[valid] = (
+        n_events_arr[valid] / (n_risk_arr[valid] * (n_risk_arr[valid] - n_events_arr[valid]))
+    )
+    variance = float(np.sum((tail_areas ** 2) * greenwood_increments))
+    variance = max(variance, 0.0)
+    se = math.sqrt(variance)
+    z_value = float(ndtri(1.0 - alpha / 2.0))
+    ci_lower = max(rmst - z_value * se, 0.0)
+    ci_upper = min(rmst + z_value * se, tau)
+    return {
+        "rmst": float(rmst),
+        "variance": float(variance),
+        "se": float(se),
+        "ci_lower": float(ci_lower),
+        "ci_upper": float(ci_upper),
+    }
+
+
 def _safe_float(value: Any) -> float | None:
     try:
         float_value = float(value)
@@ -1470,6 +1571,7 @@ def _km_scientific_summary(
     *,
     fh_p: float | None = None,
     outcome_informed_group: bool = False,
+    rmst_contrast: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     group_count = len(summary_rows)
     min_group_n = min(int(row["N"]) for row in summary_rows)
@@ -1478,6 +1580,7 @@ def _km_scientific_summary(
 
     strengths = [
         "Kaplan-Meier estimation uses Greenwood standard errors with log-log confidence intervals.",
+        "Groupwise RMST summaries include Greenwood/delta-method confidence intervals at the display horizon.",
     ]
     cautions: list[str] = []
     next_steps: list[str] = []
@@ -1515,7 +1618,7 @@ def _km_scientific_summary(
     elif group_column and test_payload:
         if float(test_payload["p_value"]) < 0.05:
             headline = f"Global {_weighted_test_label(test_payload['test'], fh_p=fh_p)} testing suggests survival differs across groups."
-            next_steps.append("Inspect groupwise medians, RMST, and adjusted pairwise comparisons before making a manuscript claim.")
+            next_steps.append("Inspect groupwise medians, RMST with delta-method confidence intervals, and adjusted pairwise comparisons before making a manuscript claim.")
         else:
             headline = f"Global {_weighted_test_label(test_payload['test'], fh_p=fh_p)} testing does not show clear survival separation across groups."
             next_steps.append("Do not treat visual curve separation alone as evidence if the global test is not significant.")
@@ -1525,6 +1628,10 @@ def _km_scientific_summary(
 
     if min_group_events < 5 or min_group_n < 15:
         next_steps.append("Avoid anchoring on median survival in sparse groups; emphasize confidence intervals and follow-up maturity.")
+    if rmst_contrast is not None and rmst_contrast.get("estimate") is not None:
+        strengths.append(
+            f"Two-group RMST contrast ({rmst_contrast['comparison']}) was summarized with a delta-method confidence interval."
+        )
 
     status = "robust"
     if cautions:
@@ -1543,6 +1650,11 @@ def _km_scientific_summary(
             {"label": "Events", "value": total_events},
             {"label": "Groups", "value": group_count},
             {"label": "Median follow-up", "value": _safe_float(cohort_summary["median_follow_up"])},
+            *(
+                [{"label": "RMST difference", "value": _safe_float(rmst_contrast["estimate"])}]
+                if rmst_contrast is not None and rmst_contrast.get("estimate") is not None
+                else []
+            ),
         ],
     }
 
@@ -3035,6 +3147,7 @@ def compute_km_analysis(
     summary_rows: list[dict[str, Any]] = []
     risk_rows: list[dict[str, Any]] = []
     curve_payloads: list[dict[str, Any]] = []
+    rmst_stats_by_group: list[dict[str, float]] = []
 
     for label in group_labels:
         group_frame = frame if label == "Overall" and not group_column else frame.loc[frame[group_column] == label].copy()
@@ -3063,7 +3176,15 @@ def compute_km_analysis(
             median_ci = sf.quantile_ci(0.5)
         median_ci_low = _safe_float(median_ci[0]) if isinstance(median_ci, tuple) else None
         median_ci_high = _safe_float(median_ci[1]) if isinstance(median_ci, tuple) else None
-        rmst = _restricted_mean_survival_time(step_timeline, step_survival, display_horizon)
+        rmst_stats = _restricted_mean_survival_time_delta_stats(
+            event_times,
+            sf.surv_prob.astype(float),
+            sf.n_risk.astype(float),
+            sf.n_events.astype(float),
+            display_horizon,
+            alpha=alpha,
+        )
+        rmst_stats_by_group.append(rmst_stats)
 
         summary_rows.append(
             {
@@ -3074,7 +3195,10 @@ def compute_km_analysis(
                 "Median survival": median_survival,
                 "Median CI lower": median_ci_low,
                 "Median CI upper": median_ci_high,
-                "RMST": rmst,
+                "RMST": _safe_float(rmst_stats["rmst"]),
+                "RMST SE": _safe_float(rmst_stats["se"]),
+                "RMST CI lower": _safe_float(rmst_stats["ci_lower"]),
+                "RMST CI upper": _safe_float(rmst_stats["ci_upper"]),
             }
         )
         risk_row = OrderedDict({"Group": label})
@@ -3137,6 +3261,22 @@ def compute_km_analysis(
         "median_follow_up": _median_follow_up(frame[time_column], frame[event_column]),
         "time_max": float(np.nanmax(frame[time_column])),
     }
+    rmst_contrast: dict[str, Any] | None = None
+    if len(summary_rows) == 2 and len(rmst_stats_by_group) == 2:
+        left_row, right_row = summary_rows
+        left_stats, right_stats = rmst_stats_by_group
+        estimate = float(left_stats["rmst"] - right_stats["rmst"])
+        variance = float(left_stats["variance"] + right_stats["variance"])
+        se = math.sqrt(max(variance, 0.0))
+        z_value = float(ndtri(1.0 - alpha / 2.0))
+        rmst_contrast = {
+            "comparison": f"{left_row['Group']} minus {right_row['Group']}",
+            "estimate": _safe_float(estimate),
+            "se": _safe_float(se),
+            "ci_lower": _safe_float(estimate - z_value * se),
+            "ci_upper": _safe_float(estimate + z_value * se),
+            "horizon": _safe_float(display_horizon),
+        }
 
     scientific_summary = _km_scientific_summary(
         summary_rows=summary_rows,
@@ -3146,6 +3286,7 @@ def compute_km_analysis(
         pairwise_rows=pairwise_rows,
         fh_p=fh_p,
         outcome_informed_group=outcome_informed_group,
+        rmst_contrast=rmst_contrast,
     )
 
     test_label = (
@@ -3175,6 +3316,7 @@ def compute_km_analysis(
         "display_horizon": display_horizon,
         "group_column": group_column,
         "outcome_informed_group": bool(outcome_informed_group),
+        "rmst_contrast": rmst_contrast,
         "scientific_summary": scientific_summary,
     }
 

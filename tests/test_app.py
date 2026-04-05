@@ -4119,6 +4119,42 @@ def test_predictive_plot_panels_stack_vertically_by_default() -> None:
     assert "grid-template-columns: 1fr 1fr;" not in grid_css
 
 
+def test_predictive_workbench_keeps_model_action_row_left_aligned() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static"
+    styles = (
+        root
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+    app_js = (
+        root
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'refs.mlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);' in app_js
+    assert 'refs.dlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);' in app_js
+    assert ".predictive-workbench-card > .card-head {" in styles
+    assert "flex-direction: column;" in styles
+    assert ".predictive-workbench-card > .card-head > .button-row.compact {" in styles
+    assert "width: 100%;" in styles
+    assert "justify-content: flex-start;" in styles
+
+
+def test_predictive_workbench_card_head_remains_stacked() -> None:
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    block_start = styles.index(".predictive-workbench-card > .card-head {")
+    block_end = styles.index("}", block_start)
+    block_css = styles[block_start:block_end]
+    assert "display: flex;" in block_css
+    assert "align-items: stretch;" in block_css
+
+
 def test_export_table_endpoint_returns_journal_markdown() -> None:
     response = client.post(
         "/api/export-table",

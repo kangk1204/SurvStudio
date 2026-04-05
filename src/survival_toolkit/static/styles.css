@@ -3181,6 +3181,22 @@ h3 {
   gap: 16px;
 }
 
+.predictive-workbench-card > .card-head {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.predictive-workbench-card > .card-head .card-head-left {
+  width: 100%;
+}
+
+.predictive-workbench-card > .card-head > .button-row.compact {
+  width: 100%;
+  justify-content: flex-start;
+  align-self: stretch;
+}
+
 body[data-ui-mode="guided"][data-guided-goal="predictive"] #panel-benchmark .benchmark-action-card {
   display: none;
 }

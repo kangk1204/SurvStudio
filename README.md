@@ -673,7 +673,7 @@ If upload or analysis fails:
 Use this when you want:
 - survival curves by group
 - median survival
-- RMST
+- RMST with delta-method confidence intervals at the display horizon
 - weighted log-rank tests
 - risk tables
 
@@ -712,6 +712,7 @@ Practical note:
 - `Compare All` is usually faster than single-model `Train a model`
 - `Compare All` focuses on cross-model scoring
 - single-model `Train a model` may do extra post-fit work such as feature importance and optional SHAP computation
+- ML result payloads now include IPCW `IBS`, a Kaplan-Meier null-model `IBS`, and `Brier Skill Score = 1 - IBS_model / IBS_null` so raw error can be interpreted relative to a no-covariate reference
 - for quick RSF checks on larger cohorts, leave `Fast mode` enabled
 - if `TreeExplainer` is unsupported, SHAP falls back to a tightly capped `KernelExplainer` approximation using a small background/evaluation sample, so treat the ranking as approximate rather than publication-grade
 
