@@ -373,7 +373,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         wrapped_titles.append(wrapped_label)
         max_title_lines = max(max_title_lines, line_count)
     subtitle_text, subtitle_lines = _wrap_annotation_text(
-        "Screening view only: LOWESS-smoothed scaled Schoenfeld residual trends versus log time. "
+        "Scaled Schoenfeld residual screening: LOWESS-smoothed scaled Schoenfeld residual trends versus log time. "
         "Use alongside the PH table, not as a full Grambsch-Therneau test. "
         "Extreme residual outliers may be clipped for readability.",
         width=92,
@@ -443,7 +443,9 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             **_COMMON_AXES,
         )
 
-    top_margin = 196 + ((max_title_lines - 1) * 18) + ((subtitle_lines - 1) * 20)
+    subtitle_y = 1.11 + ((subtitle_lines - 1) * 0.02)
+    color_note_y = 1.01
+    top_margin = 172 + ((max_title_lines - 1) * 20) + ((subtitle_lines - 1) * 24)
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": top_margin, "b": 68},
@@ -451,23 +453,11 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         height=max(420, rows * 310 + ((max_title_lines - 1) * 24)),
     )
     fig.add_annotation(
-        text="Scaled Schoenfeld Residual Trend Check",
-        xref="paper",
-        yref="paper",
-        x=0.02,
-        y=1.26 + ((subtitle_lines - 1) * 0.03),
-        showarrow=False,
-        font={"family": "Source Serif 4, serif", "size": 22, "color": INK},
-        align="left",
-        xanchor="left",
-        yanchor="bottom",
-    )
-    fig.add_annotation(
         text=subtitle_text,
         xref="paper",
         yref="paper",
         x=0.02,
-        y=1.15 + ((subtitle_lines - 1) * 0.02),
+        y=subtitle_y,
         showarrow=False,
         font={"size": 12, "color": INK},
         align="left",
@@ -481,7 +471,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         xref="paper",
         yref="paper",
         x=0.02,
-        y=1.05,
+        y=color_note_y,
         showarrow=False,
         font={"size": 11, "color": INK},
         align="left",
@@ -509,7 +499,7 @@ def build_cox_martingale_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         wrapped_titles.append(wrapped_label)
         max_title_lines = max(max_title_lines, line_count)
     subtitle_text, subtitle_lines = _wrap_annotation_text(
-        "Screening view only: LOWESS-smoothed martingale residuals versus continuous covariate value. "
+        "Martingale residual screening: LOWESS-smoothed martingale residuals versus continuous covariate value. "
         "Strong curvature suggests a nonlinear functional form, so consider splines or transformed terms before locking the model.",
         width=92,
         max_lines=3,
@@ -572,7 +562,8 @@ def build_cox_martingale_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             **_COMMON_AXES,
         )
 
-    top_margin = 180 + ((max_title_lines - 1) * 18) + ((subtitle_lines - 1) * 20)
+    subtitle_y = 1.08 + ((subtitle_lines - 1) * 0.02)
+    top_margin = 156 + ((max_title_lines - 1) * 20) + ((subtitle_lines - 1) * 24)
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": top_margin, "b": 68},
@@ -580,23 +571,11 @@ def build_cox_martingale_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         height=max(400, rows * 300 + ((max_title_lines - 1) * 24)),
     )
     fig.add_annotation(
-        text="Martingale Residual Trend Check",
-        xref="paper",
-        yref="paper",
-        x=0.02,
-        y=1.22 + ((subtitle_lines - 1) * 0.03),
-        showarrow=False,
-        font={"family": "Source Serif 4, serif", "size": 22, "color": INK},
-        align="left",
-        xanchor="left",
-        yanchor="bottom",
-    )
-    fig.add_annotation(
         text=subtitle_text,
         xref="paper",
         yref="paper",
         x=0.02,
-        y=1.11 + ((subtitle_lines - 1) * 0.02),
+        y=subtitle_y,
         showarrow=False,
         font={"size": 12, "color": INK},
         align="left",

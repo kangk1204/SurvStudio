@@ -27,6 +27,7 @@ const appState = {
   },
   coxPreviewTimer: null,
   coxPreviewToken: 0,
+  coxMartingaleTerm: "",
   resultPreference: {
     ml: "single",
     dl: "single",
@@ -188,6 +189,8 @@ const refs = {
   coxResultsShell: document.getElementById("coxResultsShell"),
   coxDiagnosticsPlot: document.getElementById("coxDiagnosticsPlot"),
   coxDiagnosticsShell: document.getElementById("coxDiagnosticsShell"),
+  coxMartingaleVariableField: document.getElementById("coxMartingaleVariableField"),
+  coxMartingaleVariableSelect: document.getElementById("coxMartingaleVariableSelect"),
   coxMartingalePlot: document.getElementById("coxMartingalePlot"),
   downloadCoxResultsButton: document.getElementById("downloadCoxResultsButton"),
   downloadCoxDiagnosticsButton: document.getElementById("downloadCoxDiagnosticsButton"),
@@ -3324,6 +3327,189 @@ function clearPlotShell(el, emptyHtml, { state = "message" } = {}) {
   setPlotShellState(el, state);
 }
 
+function coxMartingalePanels() {
+  return Array.isArray(state.cox?.analysis?.martingale_plot_data)
+    ? state.cox.analysis.martingale_plot_data.filter((panel) => panel && panel.term)
+    : [];
+}
+
+function resetCoxMartingaleSelector(emptyLabel = "Run Cox first") {
+  runtime.coxMartingaleTerm = "";
+  if (!refs.coxMartingaleVariableSelect) return;
+  refs.coxMartingaleVariableSelect.innerHTML = "";
+  const option = document.createElement("option");
+  option.value = "";
+  option.textContent = emptyLabel;
+  refs.coxMartingaleVariableSelect.appendChild(option);
+  refs.coxMartingaleVariableSelect.disabled = true;
+  refs.coxMartingaleVariableField?.classList.add("is-disabled");
+}
+
+function syncCoxMartingaleSelector(panels, preferredTerm = runtime.coxMartingaleTerm) {
+  if (!refs.coxMartingaleVariableSelect) return "";
+  const terms = panels
+    .map((panel) => String(panel?.term || "").trim())
+    .filter(Boolean);
+  refs.coxMartingaleVariableSelect.innerHTML = "";
+  if (!terms.length) {
+    resetCoxMartingaleSelector("No continuous covariates");
+    return "";
+  }
+  const normalizedPreferred = terms.includes(preferredTerm) ? preferredTerm : terms[0];
+  terms.forEach((term) => {
+    const option = document.createElement("option");
+    option.value = term;
+    option.textContent = term;
+    option.selected = term === normalizedPreferred;
+    refs.coxMartingaleVariableSelect.appendChild(option);
+  });
+  refs.coxMartingaleVariableSelect.disabled = terms.length <= 1;
+  refs.coxMartingaleVariableField?.classList.toggle("is-disabled", terms.length <= 1);
+  runtime.coxMartingaleTerm = normalizedPreferred;
+  return normalizedPreferred;
+}
+
+function martingaleResidualAxisRange(residualValues, trendValues) {
+  const residuals = residualValues.filter((value) => Number.isFinite(value));
+  if (residuals.length < 12) return null;
+  const trends = trendValues.filter((value) => Number.isFinite(value));
+  const sortedResiduals = [...residuals].sort((a, b) => a - b);
+  const fullMin = sortedResiduals[0];
+  const fullMax = sortedResiduals[sortedResiduals.length - 1];
+  const fullSpan = fullMax - fullMin;
+  if (!(fullSpan > 0)) return null;
+  const quantile = (q) => {
+    const index = (sortedResiduals.length - 1) * q;
+    const lower = Math.floor(index);
+    const upper = Math.ceil(index);
+    if (lower === upper) return sortedResiduals[lower];
+    const fraction = index - lower;
+    return sortedResiduals[lower] + (sortedResiduals[upper] - sortedResiduals[lower]) * fraction;
+  };
+  const qLow = quantile(0.05);
+  const qHigh = quantile(0.95);
+  const trendMin = trends.length ? Math.min(...trends) : 0;
+  const trendMax = trends.length ? Math.max(...trends) : 0;
+  const coreMin = Math.min(qLow, 0, trendMin);
+  const coreMax = Math.max(qHigh, 0, trendMax);
+  const coreSpan = coreMax - coreMin;
+  if (!(coreSpan > 0) || fullSpan < coreSpan * 3) return null;
+  const padding = Math.max(0.06, coreSpan * 0.12);
+  const candidate = [coreMin - padding, coreMax + padding];
+  const outlierCount = residuals.filter((value) => value < candidate[0] || value > candidate[1]).length;
+  return outlierCount ? candidate : null;
+}
+
+function buildCoxMartingaleFigure(panel) {
+  const term = String(panel?.term || "Covariate");
+  const values = Array.isArray(panel?.value) ? panel.value : [];
+  const residuals = Array.isArray(panel?.residual) ? panel.residual : [];
+  const pointPairs = values
+    .map((value, index) => [Number(value), Number(residuals[index])])
+    .filter(([xValue, yValue]) => Number.isFinite(xValue) && Number.isFinite(yValue));
+  const x = pointPairs.map(([xValue]) => xValue);
+  const y = pointPairs.map(([, yValue]) => yValue);
+  const trendValues = Array.isArray(panel?.trend_value) ? panel.trend_value : [];
+  const trendResiduals = Array.isArray(panel?.trend_residual) ? panel.trend_residual : [];
+  const trendPairs = trendValues
+    .map((value, index) => [Number(value), Number(trendResiduals[index])])
+    .filter(([xValue, yValue]) => Number.isFinite(xValue) && Number.isFinite(yValue));
+  const trendX = trendPairs.map(([xValue]) => xValue);
+  const trendY = trendPairs.map(([, yValue]) => yValue);
+  const annotations = [
+    {
+      text: "Martingale residual screening: LOWESS-smoothed martingale residuals versus continuous covariate value.<br>Strong curvature suggests a nonlinear functional form, so consider splines or transformed terms before locking the model.",
+      xref: "paper",
+      yref: "paper",
+      x: 0.02,
+      y: 1.08,
+      showarrow: false,
+      font: { size: 12, color: "#1a2332" },
+      align: "left",
+      xanchor: "left",
+      yanchor: "bottom",
+      bgcolor: "rgba(255,255,255,0.85)",
+      borderpad: 5,
+    },
+  ];
+  return {
+    data: [
+      {
+        type: "scatter",
+        x,
+        y,
+        mode: "markers",
+        name: term,
+        marker: { size: 6, color: "#0891b2", opacity: 0.55 },
+        hovertemplate: `${term}<br>Value: %{x:.3f}<br>Martingale residual: %{y:.3f}<extra></extra>`,
+        showlegend: false,
+      },
+      ...(trendX.length && trendY.length ? [{
+        type: "scatter",
+        x: trendX,
+        y: trendY,
+        mode: "lines",
+        line: { width: 2.5, color: "rgba(13, 148, 136, 0.95)" },
+        hoverinfo: "skip",
+        showlegend: false,
+      }] : []),
+    ],
+    layout: {
+      template: "simple_white",
+      paper_bgcolor: "#ffffff",
+      plot_bgcolor: "white",
+      font: { family: "Sora, sans-serif", size: 13, color: "#1a2332" },
+      margin: { l: 60, r: 30, t: 156, b: 68 },
+      height: 400,
+      annotations,
+      xaxis: {
+        title: term,
+        linecolor: "rgba(0,0,0,0.15)",
+        gridcolor: "rgba(0,0,0,0.04)",
+      },
+      yaxis: {
+        title: "Martingale residual",
+        linecolor: "rgba(0,0,0,0.15)",
+        gridcolor: "rgba(0,0,0,0.04)",
+        range: martingaleResidualAxisRange(y, trendY) || undefined,
+      },
+      shapes: [
+        {
+          type: "line",
+          xref: "paper",
+          yref: "y",
+          x0: 0,
+          x1: 1,
+          y0: 0,
+          y1: 0,
+          line: { width: 1, dash: "dot", color: "rgba(90, 103, 118, 0.7)" },
+        },
+      ],
+    },
+  };
+}
+
+async function renderCoxMartingalePlot(selectedTerm = runtime.coxMartingaleTerm) {
+  const panels = coxMartingalePanels();
+  if (!panels.length) {
+    resetCoxMartingaleSelector("No continuous covariates");
+    clearPlotShell(refs.coxMartingalePlot, '<div class="empty-state plot-empty"><span>Martingale residual screening was unavailable for this fit.</span></div>');
+    return;
+  }
+  const term = syncCoxMartingaleSelector(panels, selectedTerm);
+  const panel = panels.find((item) => String(item.term) === term) || panels[0];
+  const figure = buildCoxMartingaleFigure(panel);
+  purgePlot(refs.coxMartingalePlot);
+  refs.coxMartingalePlot.innerHTML = "";
+  await Plotly.newPlot(
+    refs.coxMartingalePlot,
+    figure.data,
+    plotLayoutConfig(figure.layout, `cox_martingale_${term}`),
+    plotConfig(`cox_martingale_${term}`),
+  );
+  stabilizePlotShellHeight(refs.coxMartingalePlot);
+}
+
 function setShimmer(shell) {
   shell.innerHTML = '<div class="shimmer"><div class="shimmer-bar"></div><div class="shimmer-bar short"></div><div class="shimmer-bar"></div></div>';
 }
@@ -5066,6 +5252,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.coxResultsShell.innerHTML = '<div class="empty-state">Hazard ratios will appear after running Cox analysis.</div>';
   refs.coxDiagnosticsShell.innerHTML = '<div class="empty-state">Scaled Schoenfeld residual screening details will appear here.</div>';
   clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Scaled Schoenfeld residual screening appears here after fitting the model.</span></div>', { state: "placeholder" });
+  resetCoxMartingaleSelector();
   clearPlotShell(refs.coxMartingalePlot, '<div class="empty-state plot-empty"><span>Martingale residual screening for continuous covariates appears here after fitting the model.</span></div>', { state: "placeholder" });
   refs.cohortTableShell.innerHTML = COHORT_TABLE_EMPTY_STATE_HTML;
   refs.mlComparisonShell.innerHTML = '<div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div>';
@@ -5601,19 +5788,7 @@ async function runCox() {
   } else {
     clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Scaled Schoenfeld residual screening was unavailable for this fit.</span></div>');
   }
-  if (payload.martingale_figure?.data?.length) {
-    purgePlot(refs.coxMartingalePlot);
-    refs.coxMartingalePlot.innerHTML = "";
-    await Plotly.newPlot(
-      refs.coxMartingalePlot,
-      payload.martingale_figure.data,
-      plotLayoutConfig(payload.martingale_figure.layout, "cox_martingale"),
-      plotConfig("cox_martingale"),
-    );
-    stabilizePlotShellHeight(refs.coxMartingalePlot);
-  } else {
-    clearPlotShell(refs.coxMartingalePlot, '<div class="empty-state plot-empty"><span>Martingale residual screening was unavailable for this fit.</span></div>');
-  }
+  await renderCoxMartingalePlot(runtime.coxMartingaleTerm);
   updateStepIndicator(3);
   renderTable(refs.coxResultsShell, payload.analysis.results_table);
   renderTable(refs.coxDiagnosticsShell, payload.analysis.diagnostics_table);
@@ -7188,6 +7363,10 @@ function initListeners() {
     updateDlModelControlVisibility();
     renderPredictiveWorkbench();
     queueHistorySync();
+  });
+  refs.coxMartingaleVariableSelect?.addEventListener("change", () => {
+    runtime.coxMartingaleTerm = refs.coxMartingaleVariableSelect.value || "";
+    void renderCoxMartingalePlot(runtime.coxMartingaleTerm);
   });
   refs.dlEvaluationStrategy.addEventListener("change", () => { updateDlEvaluationControls(); queueHistorySync(); });
   refs.deriveToggle.addEventListener("click", () => {

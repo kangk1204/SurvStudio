@@ -186,6 +186,7 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="cohortVariableSearchInput"' in response.text
     assert 'id="selectAllCohortVariablesButton"' in response.text
     assert 'id="clearCohortVariablesButton"' in response.text
+    assert 'id="coxMartingaleVariableSelect"' in response.text
     assert "The reported C-index is apparent on the analyzable cohort, PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots." in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
@@ -847,14 +848,17 @@ def test_cox_ui_wires_graphical_diagnostics_plot() -> None:
     text = app_js.read_text()
 
     assert 'coxDiagnosticsPlot: document.getElementById("coxDiagnosticsPlot"),' in text
+    assert 'coxMartingaleVariableSelect: document.getElementById("coxMartingaleVariableSelect"),' in text
     assert 'coxMartingalePlot: document.getElementById("coxMartingalePlot"),' in text
     assert 'if (payload.diagnostics_figure?.data?.length) {' in text
-    assert 'if (payload.martingale_figure?.data?.length) {' in text
+    assert "function syncCoxMartingaleSelector(panels, preferredTerm = runtime.coxMartingaleTerm)" in text
+    assert "async function renderCoxMartingalePlot(selectedTerm = runtime.coxMartingaleTerm)" in text
     assert 'plotLayoutConfig(payload.diagnostics_figure.layout, "cox_diagnostics")' in text
-    assert 'plotLayoutConfig(payload.martingale_figure.layout, "cox_martingale")' in text
+    assert 'plotLayoutConfig(figure.layout, `cox_martingale_${term}`)' in text
     assert "clearPlotShell(refs.coxDiagnosticsPlot, '<div class=\"empty-state plot-empty\"><span>Scaled Schoenfeld residual screening was unavailable for this fit.</span></div>');" in text
     assert "clearPlotShell(refs.coxMartingalePlot, '<div class=\"empty-state plot-empty\"><span>Martingale residual screening was unavailable for this fit.</span></div>');" in text
     assert 'refs.coxDiagnosticsShell.innerHTML = \'<div class="empty-state">Scaled Schoenfeld residual screening details will appear here.</div>\';' in text
+    assert 'refs.coxMartingaleVariableSelect?.addEventListener("change", () => {' in text
 
 
 def test_cox_ui_banner_includes_c_index_ci_when_available() -> None:
