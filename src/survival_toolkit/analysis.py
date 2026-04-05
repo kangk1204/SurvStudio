@@ -1251,6 +1251,48 @@ def _restricted_mean_survival_time_delta_stats(
     }
 
 
+def _cox_martingale_plot_data(
+    frame: pd.DataFrame,
+    martingale_residuals: np.ndarray,
+    covariates: Sequence[str],
+    categorical_covariates: Sequence[str],
+) -> list[dict[str, Any]]:
+    categorical_set = {str(value) for value in categorical_covariates}
+    residual_array = np.asarray(martingale_residuals, dtype=float).reshape(-1)
+    panels: list[dict[str, Any]] = []
+    for covariate in covariates:
+        if covariate in categorical_set or covariate not in frame.columns:
+            continue
+        series = frame[covariate]
+        if not pd.api.types.is_numeric_dtype(series):
+            continue
+        x_values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+        valid = np.isfinite(x_values) & np.isfinite(residual_array)
+        if int(valid.sum()) < 4:
+            continue
+        x_valid = x_values[valid]
+        y_valid = residual_array[valid]
+        if np.allclose(np.nanstd(x_valid), 0.0):
+            continue
+        order = np.argsort(x_valid, kind="mergesort")
+        x_sorted = x_valid[order]
+        y_sorted = y_valid[order]
+        trend_y = y_sorted
+        if x_sorted.shape[0] >= 4:
+            frac = min(0.8, max(0.35, 6.0 / float(x_sorted.shape[0])))
+            trend_y = np.asarray(lowess(y_sorted, x_sorted, frac=frac, it=0, return_sorted=False), dtype=float)
+        panels.append(
+            {
+                "term": covariate,
+                "value": [_safe_float(value) for value in x_sorted.tolist()],
+                "residual": [_safe_float(value) for value in y_sorted.tolist()],
+                "trend_value": [_safe_float(value) for value in x_sorted.tolist()],
+                "trend_residual": [_safe_float(value) for value in np.asarray(trend_y, dtype=float).tolist()],
+            }
+        )
+    return panels
+
+
 def _safe_float(value: Any) -> float | None:
     try:
         float_value = float(value)
@@ -1720,6 +1762,7 @@ def _cox_scientific_summary(
     lr_statistic = _safe_float(model_stats.get("lr_statistic"))
     lr_pvalue = _safe_float(model_stats.get("lr_pvalue"))
     lr_note = str(model_stats.get("lr_note") or "").strip()
+    martingale_terms = [str(term) for term in model_stats.get("martingale_terms") or [] if term]
     if epv is not None and epv < 10:
         cautions.append("Events per parameter is below 10, so coefficients may be unstable or overfit.")
         next_steps.append("Reduce model complexity or increase the event count before treating estimates as final.")
@@ -1778,6 +1821,13 @@ def _cox_scientific_summary(
         )
     elif lr_note:
         cautions.append(lr_note)
+    if martingale_terms:
+        strengths.append(
+            f"Martingale residual screening is available for continuous covariates not marked categorical: {_summarize_labels(martingale_terms, max_items=4)}."
+        )
+        next_steps.append(
+            "If martingale LOWESS trends curve strongly away from zero, consider splines, nonlinear transforms, or recoding the continuous covariate."
+        )
     ci_low = _safe_float(model_stats.get("c_index_ci_lower"))
     ci_high = _safe_float(model_stats.get("c_index_ci_upper"))
     ci_level = _safe_float(model_stats.get("c_index_ci_level"))
@@ -3565,7 +3615,7 @@ def _harrell_c_index_bootstrap_ci(
     event_values: np.ndarray,
     risk_score: np.ndarray,
     *,
-    n_bootstrap: int = 60,
+    n_bootstrap: int = 200,
     confidence_level: float = 0.95,
     random_seed: int = 20260311,
 ) -> dict[str, float | None]:
@@ -3743,6 +3793,12 @@ def compute_cox_analysis(
                     "trend_residual": [_safe_float(value) for value in np.asarray(trend_y, dtype=float).tolist()],
                 }
             )
+    martingale_plot_data = _cox_martingale_plot_data(
+        frame,
+        np.asarray(getattr(results, "martingale_residuals", np.array([])), dtype=float),
+        covariates,
+        categorical_covariates,
+    )
 
     n_obs = int(frame.shape[0])
     outcome_rows = int(preview_frame.shape[0])
@@ -3799,6 +3855,7 @@ def compute_cox_analysis(
             "lr_statistic": _safe_float(lr_statistic),
             "lr_pvalue": _safe_float(lr_pvalue),
             "lr_note": lr_note,
+            "martingale_terms": [panel["term"] for panel in martingale_plot_data],
             "aic": _safe_float(-2 * llf_value + 2 * k_params),
             "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),
@@ -3817,6 +3874,7 @@ def compute_cox_analysis(
         "results_table": model_rows,
         "diagnostics_table": diagnostic_rows,
         "diagnostics_plot_data": diagnostic_plot_data,
+        "martingale_plot_data": martingale_plot_data,
         "model_stats": {
             "n": n_obs,
             "outcome_rows": outcome_rows,
@@ -3829,6 +3887,7 @@ def compute_cox_analysis(
             "lr_statistic": _safe_float(lr_statistic),
             "lr_pvalue": _safe_float(lr_pvalue),
             "lr_note": lr_note,
+            "martingale_terms": [panel["term"] for panel in martingale_plot_data],
             "aic": _safe_float(-2 * llf_value + 2 * k_params),
             "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),

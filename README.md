@@ -51,6 +51,13 @@ The app includes four built-in example datasets:
 - a real public breast-cancer recurrence dataset
 - useful for a fast end-to-end Kaplan-Meier, Cox, and ML smoke test with no missing values
 
+Real-data provenance:
+- `TCGA LUAD (Real)` is a bundled public LUAD cohort curated from UCSC Xena / TCGA for survival-workflow demonstration
+- `Upload-Ready TCGA` and the RNA top-100/top-500 upload files are compact derivatives of that same public TCGA LUAD workflow dataset
+- `GBSG2 (Real)` is a bundled public breast-cancer recurrence cohort aligned to the classic GBSG2 study workflow
+- study citations and file-level provenance notes are listed in [examples/README.md](examples/README.md)
+- users remain responsible for following the original data-source citation and reuse terms when redistributing derived outputs
+
 If you want a file that you can upload manually instead of clicking a built-in loader, use:
 - [examples/tcga_luad_nature2014_upload_ready.csv](examples/tcga_luad_nature2014_upload_ready.csv)
 - [examples/tcga_luad_rnaseq_top100_upload.csv](examples/tcga_luad_rnaseq_top100_upload.csv)
@@ -77,7 +84,6 @@ git clone https://github.com/kangk1204/SurvStudio.git
 cd SurvStudio
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
 pip install -e .
 python -m survival_toolkit
 ```
@@ -88,7 +94,6 @@ On Windows 11 PowerShell:
 git clone https://github.com/kangk1204/SurvStudio.git
 cd SurvStudio
 py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e .
 .\.venv\Scripts\python.exe -m survival_toolkit
 ```
@@ -101,7 +106,6 @@ cd SurvStudio
 conda create -y -p .conda python=3.11 pip
 ./.conda/bin/python -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
 pip install -e .
 python -m survival_toolkit
 ```
@@ -113,6 +117,14 @@ http://127.0.0.1:8000
 ```
 
 Click `Synthetic Example` first.
+
+Use the `pip` bundled with the fresh virtual environment for the first install. If you upgraded `pip` separately and the editable install failed, recreate `.venv` and retry without the `pip` upgrade step.
+
+If you want the optional ML and DL workflows available on first launch, replace `pip install -e .` with:
+
+```bash
+pip install -e ".[all]"
+```
 
 ## Install
 
@@ -137,7 +149,6 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 which python
 python --version
-python -m pip install --upgrade pip
 pip install -e .
 python -m survival_toolkit
 ```
@@ -173,7 +184,6 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 which python
 python --version
-python -m pip install --upgrade pip
 pip install -e .
 python -m survival_toolkit
 ```
@@ -199,7 +209,6 @@ python3 -m venv .venv
 source .venv/bin/activate
 which python
 python --version
-python -m pip install --upgrade pip
 pip install -e .
 ```
 
@@ -224,7 +233,6 @@ Before you start:
 git clone https://github.com/kangk1204/SurvStudio.git
 cd SurvStudio
 py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e .
 .\.venv\Scripts\python.exe -m survival_toolkit
 ```
@@ -262,7 +270,6 @@ conda create -y -p .conda python=3.11 pip
 source .venv/bin/activate
 which python
 python --version
-python -m pip install --upgrade pip
 pip install -e .
 python -m survival_toolkit
 ```
@@ -271,7 +278,6 @@ If you prefer to run directly from the Conda environment without creating `.venv
 
 ```bash
 conda create -y -p .conda python=3.11 pip
-conda run -p ./.conda python -m pip install --upgrade pip
 conda run -p ./.conda python -m pip install -e .
 conda run -p ./.conda python -m survival_toolkit
 ```
@@ -762,6 +768,7 @@ Architecture note:
 - `Survival VAE` should be interpreted as a VAE-inspired latent representation model for clustering and risk screening. SurvStudio does not claim validated generative simulation or uncertainty estimation from this path.
 - Cox-style DL paths (`DeepSurv`, `Survival Transformer`) use monitor C-index on an internal training-partition subset for early stopping. Discrete-time/VAE paths continue to use monitor loss. Neither monitor curve is the final holdout or external validation metric.
 - Deep-model summaries currently report discrimination (`C-index`) only. SurvStudio does not yet compute IBS for deep-model outputs, so calibration/error comparisons are not directly symmetric with the ML module.
+- Cox-style DL paths (`DeepSurv`, `Survival Transformer`) optimize a Breslow-ties partial-likelihood objective, while the classical Cox PH workflow reports Efron-ties estimates; this difference is intentional and should be documented in manuscript Methods if you compare those paths directly.
 
 ## How To Read Results
 
@@ -779,6 +786,7 @@ Architecture note:
 - The current Cox discrimination summary is an `Apparent C-index` on the analyzable cohort, not an externally validated performance estimate.
 - PH diagnostics currently use rank-based Spearman correlations between Schoenfeld residuals and log time.
 - That is useful for screening PH problems, but it is not the same thing as a full Grambsch-Therneau omnibus test.
+- Continuous covariates also expose Martingale residual trend plots as a visual linearity screen; strong curvature suggests splines, transforms, or recoding before locking the Cox specification.
 - A Cox `C-index = 0.65` means the fitted model ranks about `65%` of comparable patient pairs in the observed risk order; it is not "65% accuracy."
 
 ### Model C-index
@@ -962,6 +970,7 @@ Then increase epochs or switch to repeated CV only after the single-run workflow
 - Standard unpenalized Cox PH is not the right tool for very wide `p >> n` settings. Use the ML-panel `LASSO-Cox` path for penalized predictive screening instead of forcing a classical Cox PH fit.
 - External-cohort validation is currently a manual workflow: load the separate cohort, reproduce the endpoint and covariate specification, and rerun the analysis.
 - Left truncation and competing risks are outside the current scope.
+- Martingale residual plots are available as a visual screening aid for continuous covariates, but SurvStudio does not yet implement richer Cox linearity tooling such as spline recommendation or automated term selection.
 
 ## Development and Testing
 

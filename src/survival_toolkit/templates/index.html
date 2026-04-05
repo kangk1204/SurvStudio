@@ -513,7 +513,7 @@
           <div class="dependency-card" id="coxDependencyCard">
             <div class="dependency-copy">
               <strong>What this tab uses</strong>
-              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected in this tab. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test.</span>
+              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected in this tab. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots.</span>
               <div class="dataset-preset-chips hidden" id="coxDependencyChips"></div>
             </div>
           </div>
@@ -560,6 +560,14 @@
                 </div>
               </div>
               <div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Scaled Schoenfeld residual screening with rank-based Spearman correlation versus log time appears here. The plot overlay uses LOWESS smoothing for screening only, not a full cox.zph test.</div></div>
+            </div>
+            <div class="table-card full-width">
+              <h3>Linearity Diagnostics</h3>
+              <div class="plot-shell" id="coxMartingalePlot">
+                <div class="empty-state plot-empty">
+                  <span>Martingale residual screening for continuous covariates appears here after fitting the model.</span>
+                </div>
+              </div>
             </div>
           </div>
         </article>

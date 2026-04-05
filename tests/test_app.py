@@ -186,7 +186,7 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="cohortVariableSearchInput"' in response.text
     assert 'id="selectAllCohortVariablesButton"' in response.text
     assert 'id="clearCohortVariablesButton"' in response.text
-    assert "The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test." in response.text
+    assert "The reported C-index is apparent on the analyzable cohort, PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots." in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
     assert 'id="deriveButton" type="button">Create</button>' in response.text
@@ -326,6 +326,8 @@ def test_readme_states_current_scope_and_validation_limitations() -> None:
     assert 'no built-in "apply the locked model directly to an external cohort" workflow yet' in readme
     assert "Apparent C-index" in readme
     assert "rank-based Spearman correlations between Schoenfeld residuals and log time" in readme
+    assert "Martingale residual trend plots" in readme
+    assert 'pip install -e ".[all]"' in readme
     assert "LASSO-Cox (penalized Cox)" in readme
     assert "0.50` is chance-level ranking" in readme
 
@@ -845,9 +847,13 @@ def test_cox_ui_wires_graphical_diagnostics_plot() -> None:
     text = app_js.read_text()
 
     assert 'coxDiagnosticsPlot: document.getElementById("coxDiagnosticsPlot"),' in text
+    assert 'coxMartingalePlot: document.getElementById("coxMartingalePlot"),' in text
     assert 'if (payload.diagnostics_figure?.data?.length) {' in text
+    assert 'if (payload.martingale_figure?.data?.length) {' in text
     assert 'plotLayoutConfig(payload.diagnostics_figure.layout, "cox_diagnostics")' in text
+    assert 'plotLayoutConfig(payload.martingale_figure.layout, "cox_martingale")' in text
     assert "clearPlotShell(refs.coxDiagnosticsPlot, '<div class=\"empty-state plot-empty\"><span>Scaled Schoenfeld residual screening was unavailable for this fit.</span></div>');" in text
+    assert "clearPlotShell(refs.coxMartingalePlot, '<div class=\"empty-state plot-empty\"><span>Martingale residual screening was unavailable for this fit.</span></div>');" in text
     assert 'refs.coxDiagnosticsShell.innerHTML = \'<div class="empty-state">Scaled Schoenfeld residual screening details will appear here.</div>\';' in text
 
 
@@ -1541,6 +1547,19 @@ def test_health_rejects_null_origin_for_file_preview() -> None:
     assert response.headers.get("access-control-allow-origin") is None
 
 
+def test_health_reports_runtime_versions() -> None:
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["python_version"]
+    assert payload["app_version"]
+    assert "dependency_versions" in payload
+    assert payload["dependency_versions"]["numpy"]
+    assert payload["dependency_versions"]["statsmodels"]
+
+
 def test_upload_dataset_preserves_too_large_status(monkeypatch) -> None:
     import survival_toolkit.app as app_module
 
@@ -1792,6 +1811,8 @@ def test_cox_response_includes_request_config() -> None:
     assert request_config["categorical_covariates"] == ["sex", "stage"]
     assert "diagnostics_figure" in payload
     assert "data" in payload["diagnostics_figure"]
+    assert "martingale_figure" in payload
+    assert "data" in payload["martingale_figure"]
 
 
 def test_cohort_table_response_includes_request_config() -> None:
