@@ -111,11 +111,9 @@ def test_static_asset_version_changes_with_subsecond_asset_update(tmp_path: Path
     os.utime(asset_path, ns=(second_ns, second_ns + 10))
 
     monkeypatch.setattr(app_module, "BASE_DIR", base_dir)
-    app_module._static_asset_version.cache_clear()
     first_version = app_module._static_asset_version()
 
     os.utime(asset_path, ns=(second_ns, second_ns + 900_000_000))
-    app_module._static_asset_version.cache_clear()
     second_version = app_module._static_asset_version()
 
     assert len(first_version) == 12
@@ -502,6 +500,8 @@ def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None
     assert '`Completed families: ${completedFamiliesLabel}`' in text
     assert '`Pending families: ${pendingFamiliesLabel}`' in text
     assert "function benchmarkExcludedModels(" in text
+    assert "const erroredModels = errors.map((entry) => String(entry?.model || \"\").trim()).filter(Boolean);" in text
+    assert "return [...new Set([...explicit, ...erroredModels])];" in text
     assert "function benchmarkExcludedRows(" in text
     assert "Excluded from current" in text
     assert "excluded model row(s) are listed below without rank or C-index" in text

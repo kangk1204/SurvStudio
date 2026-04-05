@@ -1719,6 +1719,7 @@ def _cox_scientific_summary(
     c_index = _safe_float(model_stats.get("c_index"))
     lr_statistic = _safe_float(model_stats.get("lr_statistic"))
     lr_pvalue = _safe_float(model_stats.get("lr_pvalue"))
+    lr_note = str(model_stats.get("lr_note") or "").strip()
     if epv is not None and epv < 10:
         cautions.append("Events per parameter is below 10, so coefficients may be unstable or overfit.")
         next_steps.append("Reduce model complexity or increase the event count before treating estimates as final.")
@@ -1775,6 +1776,8 @@ def _cox_scientific_summary(
         strengths.append(
             f"The overall likelihood-ratio test compares the fitted Cox model with a null model (LR chi-square {lr_statistic:.2f}, p={lr_pvalue:.3g})."
         )
+    elif lr_note:
+        cautions.append(lr_note)
     ci_low = _safe_float(model_stats.get("c_index_ci_lower"))
     ci_high = _safe_float(model_stats.get("c_index_ci_upper"))
     ci_level = _safe_float(model_stats.get("c_index_ci_level"))
@@ -3757,11 +3760,19 @@ def compute_cox_analysis(
     llnull_value = _safe_float(llnull_raw)
     lr_statistic = None
     lr_pvalue = None
+    lr_note = None
     if llnull_value is not None and math.isfinite(llf_value) and k_params > 0:
         lr_candidate = -2.0 * (llnull_value - llf_value)
         if math.isfinite(lr_candidate) and lr_candidate >= 0.0:
             lr_statistic = float(lr_candidate)
             lr_pvalue = float(stats.chi2.sf(lr_statistic, df=k_params))
+        else:
+            lr_note = (
+                "Overall likelihood-ratio test was not reportable because the null-model comparison "
+                "returned an invalid negative chi-square candidate."
+            )
+    elif llnull_value is None:
+        lr_note = "Overall likelihood-ratio test was not reportable because the null-model log-likelihood was unavailable."
     c_index = _harrell_c_index(
         frame[time_column].to_numpy(dtype=float),
         frame[event_column].to_numpy(dtype=int),
@@ -3787,6 +3798,7 @@ def compute_cox_analysis(
             "null_log_likelihood": llnull_value,
             "lr_statistic": _safe_float(lr_statistic),
             "lr_pvalue": _safe_float(lr_pvalue),
+            "lr_note": lr_note,
             "aic": _safe_float(-2 * llf_value + 2 * k_params),
             "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),
@@ -3816,6 +3828,7 @@ def compute_cox_analysis(
             "null_log_likelihood": llnull_value,
             "lr_statistic": _safe_float(lr_statistic),
             "lr_pvalue": _safe_float(lr_pvalue),
+            "lr_note": lr_note,
             "aic": _safe_float(-2 * llf_value + 2 * k_params),
             "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),
