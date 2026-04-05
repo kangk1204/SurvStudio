@@ -443,26 +443,49 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             **_COMMON_AXES,
         )
 
+    top_margin = 164 + ((max_title_lines - 1) * 16) + ((subtitle_lines - 1) * 16)
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": 60, "r": 30, "t": 132 + ((max_title_lines - 1) * 16) + ((subtitle_lines - 1) * 16), "b": 68},
-        title={
-            "text": "Scaled Schoenfeld Residual Trend Check",
-            "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
-            "x": 0.02,
-        },
+        margin={"l": 60, "r": 30, "t": top_margin, "b": 68},
+        title={"text": ""},
         height=max(420, rows * 310 + ((max_title_lines - 1) * 24)),
+    )
+    fig.add_annotation(
+        text="Scaled Schoenfeld Residual Trend Check",
+        xref="paper",
+        yref="paper",
+        x=0.02,
+        y=1.20 + ((subtitle_lines - 1) * 0.02),
+        showarrow=False,
+        font={"family": "Source Serif 4, serif", "size": 22, "color": INK},
+        align="left",
+        xanchor="left",
+        yanchor="bottom",
     )
     fig.add_annotation(
         text=subtitle_text,
         xref="paper",
         yref="paper",
         x=0.02,
-        y=1.08 + ((subtitle_lines - 1) * 0.02),
+        y=1.10 + ((subtitle_lines - 1) * 0.02),
         showarrow=False,
         font={"size": 12, "color": INK},
         align="left",
         xanchor="left",
+        yanchor="bottom",
+        bgcolor="rgba(255,255,255,0.85)",
+        borderpad=5,
+    )
+    fig.add_annotation(
+        text="Red: PH table p &lt; 0.05. Blue: PH table p ≥ 0.05.",
+        xref="paper",
+        yref="paper",
+        x=0.98,
+        y=1.10 + ((subtitle_lines - 1) * 0.02),
+        showarrow=False,
+        font={"size": 11, "color": INK},
+        align="right",
+        xanchor="right",
         yanchor="bottom",
         bgcolor="rgba(255,255,255,0.85)",
         borderpad=5,
