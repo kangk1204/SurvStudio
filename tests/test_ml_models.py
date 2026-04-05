@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import types
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -391,6 +392,56 @@ def test_compare_models_handles_common_categorical_presets_without_cox_singulari
         "Gradient Boosted Survival",
     }
     assert result["errors"] == []
+
+
+@pytest.mark.skipif(
+    not _sksurv_available(),
+    reason="scikit-survival not installed",
+)
+def test_compare_models_keeps_cox_ph_on_tcga_xena_wide_feature_screen() -> None:
+    from survival_toolkit.ml_models import compare_survival_models
+
+    dataset_path = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "data" / "tcga_luad_xena_example.csv"
+    df = pd.read_csv(dataset_path)
+    features = [
+        "age",
+        "sex",
+        "pathologic_stage",
+        "stage_group",
+        "smoking_status",
+        "pack_years_smoked",
+        "tumor_longest_dimension_cm",
+        "histology",
+        "kras_status",
+        "egfr_status",
+        "expression_subtype",
+    ]
+    categorical_features = [
+        "sex",
+        "pathologic_stage",
+        "stage_group",
+        "smoking_status",
+        "histology",
+        "kras_status",
+        "egfr_status",
+        "expression_subtype",
+    ]
+
+    result = compare_survival_models(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=features,
+        categorical_features=categorical_features,
+        event_positive_value=1,
+        n_estimators=30,
+        max_depth=4,
+        learning_rate=0.08,
+        random_state=42,
+    )
+
+    assert "Cox PH" in {row["model"] for row in result["comparison_table"]}
+    assert not any(error["model"] == "Cox PH" for error in result["errors"])
 
 
 def test_compare_models_passes_requested_hyperparameters(monkeypatch) -> None:

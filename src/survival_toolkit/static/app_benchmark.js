@@ -90,6 +90,62 @@
       return `Excluded from current ${benchmarkGoalMeta(goal).label} compare run: ${models.join(", ")}.`;
     }
 
+    function benchmarkExcludedRows(goal, { currentOnly = false } = {}) {
+      const payload = benchmarkComparePayload(goal, { currentOnly });
+      if (!payload) return [];
+      const meta = benchmarkGoalMeta(goal);
+      const status = benchmarkResultLabel(goal);
+      const comparisonRows = benchmarkCompareRows(goal, { currentOnly });
+      const seenModels = new Set(comparisonRows.map((row) => String(row?.model || "").trim().toLowerCase()).filter(Boolean));
+      const errorRows = Array.isArray(payload?.analysis?.errors) ? payload.analysis.errors : [];
+      const rows = [];
+
+      errorRows.forEach((entry, index) => {
+        const modelLabel = String(entry?.model || "").trim();
+        if (!modelLabel) return;
+        const normalized = modelLabel.toLowerCase();
+        if (seenModels.has(normalized)) return;
+        seenModels.add(normalized);
+        rows.push({
+          family: meta.label,
+          familyTab: meta.tab,
+          model: modelLabel,
+          c_index: null,
+          numericCIndex: null,
+          evaluation_mode: payload?.analysis?.evaluation_mode || "",
+          sourceRank: comparisonRows.length + index + 1,
+          comparableForRanking: false,
+          status: `${status} (Excluded)`,
+          excluded: true,
+          exclusionReason: String(entry?.error || "").trim() || "This model did not return a compare row for the current run.",
+        });
+      });
+
+      const explicit = Array.isArray(payload?.analysis?.excluded_models) ? payload.analysis.excluded_models : [];
+      explicit.forEach((value, index) => {
+        const modelLabel = String(value || "").trim();
+        if (!modelLabel) return;
+        const normalized = modelLabel.toLowerCase();
+        if (seenModels.has(normalized)) return;
+        seenModels.add(normalized);
+        rows.push({
+          family: meta.label,
+          familyTab: meta.tab,
+          model: modelLabel,
+          c_index: null,
+          numericCIndex: null,
+          evaluation_mode: payload?.analysis?.evaluation_mode || "",
+          sourceRank: comparisonRows.length + errorRows.length + index + 1,
+          comparableForRanking: false,
+          status: `${status} (Excluded)`,
+          excluded: true,
+          exclusionReason: "This model did not produce a leaderboard row for the current compare run.",
+        });
+      });
+
+      return rows;
+    }
+
     function benchmarkSingleRunSummary(goal, payload) {
       const requestConfig = payload?.request_config || payload?.analysis?.request_config || {};
       if (goal === "ml") {
@@ -159,6 +215,10 @@
       return pending.length ? pending.join(" and ") : "the remaining compare runs";
     }
 
+    function hasUnifiedCoverage(families) {
+      return Array.isArray(families) && families.length === 2;
+    }
+
     function benchmarkBoardState() {
       const rawCurrentRows = unifiedBenchmarkRows({ currentOnly: true });
       const latestRows = unifiedBenchmarkRows({ currentOnly: false });
@@ -171,6 +231,8 @@
       const latestExcludedByFamily = Object.fromEntries(
         ["ml", "dl"].map((goal) => [goal, benchmarkExcludedModels(goal)]),
       );
+      const currentExcludedRows = ["ml", "dl"].flatMap((goal) => benchmarkExcludedRows(goal, { currentOnly: true }));
+      const latestExcludedRows = ["ml", "dl"].flatMap((goal) => benchmarkExcludedRows(goal));
       const evaluationModes = [
         ...new Set(rawCurrentRows.map((row) => String(row.evaluation_mode || "").trim().toLowerCase()).filter(Boolean)),
       ];
@@ -181,13 +243,18 @@
       const latestHasMixedEvaluation = latestEvaluationModes.length > 1;
       const currentRows = hasMixedEvaluation ? familyGroupedRows(rawCurrentRows) : rawCurrentRows;
       const latestVisibleRows = latestHasMixedEvaluation ? familyGroupedRows(latestRows) : latestRows;
-      const showingStaleBoard = !rawCurrentRows.length && latestRows.length > 0 && staleFamilies.length > 0;
+      const showingStaleBoard = latestRows.length > 0 && hasUnifiedCoverage(latestFamilies) && !hasUnifiedCoverage(currentFamilies);
+      const hiddenStaleFamilies = showingStaleBoard ? [] : staleFamilies;
       const visibleRows = showingStaleBoard ? latestVisibleRows : currentRows;
+      const visibleExcludedRows = showingStaleBoard ? latestExcludedRows : currentExcludedRows;
       const visibleFamilies = showingStaleBoard ? latestFamilies : currentFamilies;
       const visibleEvaluationModes = showingStaleBoard ? latestEvaluationModes : evaluationModes;
       const visibleHasMixedEvaluation = showingStaleBoard ? latestHasMixedEvaluation : hasMixedEvaluation;
       const rankingRows = visibleHasMixedEvaluation ? [] : visibleRows.filter((row) => row.comparableForRanking);
       const plottableRows = visibleHasMixedEvaluation ? [] : visibleRows.filter((row) => row.numericCIndex !== null);
+      const tableRows = visibleHasMixedEvaluation
+        ? familyGroupedRows([...visibleRows, ...visibleExcludedRows])
+        : [...visibleRows, ...visibleExcludedRows];
       const rawVisibleRows = showingStaleBoard ? latestRows : rawCurrentRows;
       const missingMetricCount = rawVisibleRows.filter((row) => row.numericCIndex === null).length;
       const nonComparableCount = rawVisibleRows.filter((row) => !row.comparableForRanking).length;
@@ -197,9 +264,12 @@
         currentRows,
         latestRows,
         visibleRows,
+        visibleExcludedRows,
+        tableRows,
         currentFamilies,
         visibleFamilies,
         staleFamilies,
+        hiddenStaleFamilies,
         rankingRows,
         plottableRows,
         evaluationModes: visibleEvaluationModes,
@@ -250,8 +320,8 @@
       if (board.showingStaleBoard) {
         noteParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the board.");
       }
-      if (board.staleFamilies.length) {
-        noteParts.push(`Stale compare rows from ${board.staleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
+      if (board.hiddenStaleFamilies.length) {
+        noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
       }
       if (board.missingMetricCount) {
         noteParts.push(`Omitted ${board.missingMetricCount} row(s) without a numeric C-index.`);
@@ -351,80 +421,21 @@
       stabilizePlotShellHeight(refs.benchmarkComparisonPlot);
     }
 
-    function renderUnifiedBenchmarkSummary(board) {
-      if (!refs.benchmarkSummaryGrid) return;
-      const hasAnyResult = Boolean(goalPayload("ml") || goalPayload("dl"));
-      const currentMlRows = benchmarkCompareRows("ml", { currentOnly: true }).length;
-      const currentDlRows = benchmarkCompareRows("dl", { currentOnly: true }).length;
+    function buildBenchmarkSummaryContent(board, hasAnyResult, currentMlRows, currentDlRows) {
       const completedFamiliesLabel = board.currentFamilies.length
         ? board.currentFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")
         : "none yet";
       const pendingFamiliesLabel = board.pendingFamilies.length
         ? board.pendingFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")
         : "none";
-      const chips = board.predictiveBusy
-        ? [
-            `Completed families: ${completedFamiliesLabel}`,
-            `Pending families: ${pendingFamiliesLabel}`,
-            `ML rows ready: ${currentMlRows}`,
-            `DL rows ready: ${currentDlRows}`,
-          ]
-        : !hasAnyResult
-          ? [
-              "Board not built yet",
-              `ML rows ready: ${currentMlRows}`,
-              `DL rows ready: ${currentDlRows}`,
-            ]
-          : board.showingStaleBoard
-            ? [
-                "Board freshness: stale",
-                `Last board rows: ${board.visibleRows.length}`,
-                `ML rows in last run: ${benchmarkCompareRows("ml").length}`,
-                `DL rows in last run: ${benchmarkCompareRows("dl").length}`,
-              ]
-          : board.hasMixedEvaluation
-            ? [
-                `Families represented: ${board.visibleFamilies.length}`,
-                `ML rows ready: ${currentMlRows}`,
-                `DL rows ready: ${currentDlRows}`,
-                `Evaluation paths: ${board.evaluationModes.map((mode) => benchmarkEvaluationLabel(mode)).join(" / ")}`,
-              ]
-            : [
-                `Families represented: ${board.visibleFamilies.length}`,
-                `Current board rows: ${board.visibleRows.length}`,
-                `ML rows ready: ${currentMlRows}`,
-                `DL rows ready: ${currentDlRows}`,
-              ];
-      const status = board.predictiveBusy
-        ? "Running"
-        : !hasAnyResult
-        ? "Not run"
-        : board.showingStaleBoard
-        ? "Stale reference"
-        : !board.visibleRows.length
-        ? "Needs rerun"
-        : board.hasMixedEvaluation
-        ? "Needs alignment"
-        : (board.staleFamilies.length || board.visibleFamilies.length < 2 || board.missingMetricCount || board.nonComparableCount
-          ? "Needs review"
-          : "Board ready");
-      const title = board.predictiveBusy
-        ? "Unified predictive comparison in progress"
-        : !hasAnyResult
-        ? "Predictive workspace not run yet"
-        : board.showingStaleBoard
-        ? "Previous predictive screening board"
-        : board.hasMixedEvaluation
-        ? "Predictive results need alignment"
-        : "Predictive screening board";
       const coverageText = board.visibleFamilies.length === 2
         ? "Both model families are currently represented."
         : (board.visibleFamilies.length === 1
           ? `${benchmarkGoalMeta(board.visibleFamilies[0]).label} is currently represented.`
           : "No current compare rows are available.");
       const cautionParts = [];
-      if (board.staleFamilies.length) {
-        cautionParts.push(`Stale compare rows from ${board.staleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
+      if (board.hiddenStaleFamilies.length) {
+        cautionParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
       }
       if (board.hasMixedEvaluation) {
         cautionParts.push(`Current compare rows use mixed evaluation paths (${board.evaluationModes.map((mode) => benchmarkEvaluationLabel(mode)).join(", ")}).`);
@@ -436,29 +447,112 @@
         const copy = excludedModelsCopy(goal, board.excludedByFamily?.[goal]);
         if (copy) cautionParts.push(copy);
       });
-      const text = board.predictiveBusy
-        ? `Compare All Models is still running. Completed families: ${board.currentFamilies.length ? board.currentFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ") : "none yet"}. Waiting on ${board.pendingFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} before publishing the final unified board.${cautionParts.length ? ` ${cautionParts.join(" ")}` : ""}`
-        : !hasAnyResult
-        ? "Use Compare All Models once to benchmark the full predictive stack, or test one selected model directly."
-        : board.showingStaleBoard
-        ? `Current settings no longer match the last Compare All run, so this board is showing the previous results as reference only. Rerun Compare All Models to refresh it.${cautionParts.length ? ` ${cautionParts.join(" ")}` : ""}`
-        : !board.visibleRows.length
-        ? "Stored predictive results exist, but they no longer match the current outcome, feature, or evaluation settings. Rerun Compare All Models to rebuild the board."
-        : board.hasMixedEvaluation
-        ? `Current compare rows are grouped by family only. Unified ranking and charting are hidden until ML and DL are rerun with the same evaluation mode. ${coverageText}${cautionParts.length ? ` ${cautionParts.join(" ")}` : ""}`
-        : `Showing ${board.visibleRows.length} successful current screening row(s) across the predictive workspace. ${coverageText} The ordering is a convenience screen, not a strict head-to-head benchmark, because ML and DL still run through family-specific evaluation pipelines.${cautionParts.length ? ` ${cautionParts.join(" ")}` : ""}`;
-      const tone = board.predictiveBusy ? "running" : (!hasAnyResult ? "idle" : (status === "Board ready" ? "current" : "warning"));
+      const cautionSuffix = cautionParts.length ? ` ${cautionParts.join(" ")}` : "";
+
+      if (board.predictiveBusy) {
+        return {
+          chips: [
+            `Completed families: ${completedFamiliesLabel}`,
+            `Pending families: ${pendingFamiliesLabel}`,
+            `ML rows ready: ${currentMlRows}`,
+            `DL rows ready: ${currentDlRows}`,
+          ],
+          status: "Running",
+          title: "Unified predictive comparison in progress",
+          text: `Compare All Models is still running. Completed families: ${completedFamiliesLabel}. Waiting on ${pendingFamiliesLabel} before publishing the final unified board.${cautionSuffix}`,
+          tone: "running",
+        };
+      }
+
+      if (!hasAnyResult) {
+        return {
+          chips: [
+            "Board not built yet",
+            `ML rows ready: ${currentMlRows}`,
+            `DL rows ready: ${currentDlRows}`,
+          ],
+          status: "Not run",
+          title: "Predictive workspace not run yet",
+          text: "Use Compare All Models once to benchmark the full predictive stack, or test one selected model directly.",
+          tone: "idle",
+        };
+      }
+
+      if (board.showingStaleBoard) {
+        return {
+          chips: [
+            "Board freshness: stale reference",
+            `Last board rows: ${board.visibleRows.length}`,
+            `ML rows in last run: ${benchmarkCompareRows("ml").length}`,
+            `DL rows in last run: ${benchmarkCompareRows("dl").length}`,
+          ],
+          status: "Stale reference",
+          title: "Previous predictive screening board",
+          text: `Current settings no longer match at least one family from the last Compare All run, so this screen is showing the latest full cross-family board as reference only. Rerun Compare All Models to refresh it.${cautionSuffix}`,
+          tone: "warning",
+        };
+      }
+
+      if (!board.visibleRows.length) {
+        return {
+          chips: [
+            `ML rows ready: ${currentMlRows}`,
+            `DL rows ready: ${currentDlRows}`,
+          ],
+          status: "Needs rerun",
+          title: "Predictive board needs rerun",
+          text: "Stored predictive results exist, but they no longer match the current outcome, feature, or evaluation settings. Rerun Compare All Models to rebuild the board.",
+          tone: "warning",
+        };
+      }
+
+      if (board.hasMixedEvaluation) {
+        return {
+          chips: [
+            `Families represented: ${board.visibleFamilies.length}`,
+            `ML rows ready: ${currentMlRows}`,
+            `DL rows ready: ${currentDlRows}`,
+            `Evaluation paths: ${board.evaluationModes.map((mode) => benchmarkEvaluationLabel(mode)).join(" / ")}`,
+          ],
+          status: "Needs alignment",
+          title: "Predictive results need alignment",
+          text: `Current compare rows are grouped by family only. Unified ranking and charting are hidden until ML and DL are rerun with the same evaluation mode. ${coverageText}${cautionSuffix}`,
+          tone: "warning",
+        };
+      }
+
+      const needsReview = board.visibleFamilies.length < 2 || board.missingMetricCount || board.nonComparableCount;
+      return {
+        chips: [
+          `Families represented: ${board.visibleFamilies.length}`,
+          `Current board rows: ${board.visibleRows.length}`,
+          `ML rows ready: ${currentMlRows}`,
+          `DL rows ready: ${currentDlRows}`,
+        ],
+        status: needsReview ? "Needs review" : "Board ready",
+        title: "Predictive screening board",
+        text: `Showing ${board.visibleRows.length} successful current screening row(s) across the predictive workspace. ${coverageText} The ordering is a convenience screen, not a strict head-to-head benchmark, because ML and DL still run through family-specific evaluation pipelines.${cautionSuffix}`,
+        tone: needsReview ? "warning" : "current",
+      };
+    }
+
+    function renderUnifiedBenchmarkSummary(board) {
+      if (!refs.benchmarkSummaryGrid) return;
+      const hasAnyResult = Boolean(goalPayload("ml") || goalPayload("dl"));
+      const currentMlRows = benchmarkCompareRows("ml", { currentOnly: true }).length;
+      const currentDlRows = benchmarkCompareRows("dl", { currentOnly: true }).length;
+      const summary = buildBenchmarkSummaryContent(board, hasAnyResult, currentMlRows, currentDlRows);
       refs.benchmarkSummaryGrid.innerHTML = `
-        <article class="benchmark-family-card tone-${escapeHtml(tone)} benchmark-family-card-wide">
+        <article class="benchmark-family-card tone-${escapeHtml(summary.tone)} benchmark-family-card-wide">
           <div class="benchmark-family-head">
             <div>
-              <span class="benchmark-family-badge">${escapeHtml(status)}</span>
+              <span class="benchmark-family-badge">${escapeHtml(summary.status)}</span>
               <h3>Predictive Overview</h3>
             </div>
           </div>
-          <strong class="benchmark-family-title">${escapeHtml(title)}</strong>
-          <p class="benchmark-family-copy">${escapeHtml(text)}</p>
-          <div class="dataset-preset-chips">${chips.map((label) => `<span class="dataset-preset-chip">${escapeHtml(label)}</span>`).join("")}</div>
+          <strong class="benchmark-family-title">${escapeHtml(summary.title)}</strong>
+          <p class="benchmark-family-copy">${escapeHtml(summary.text)}</p>
+          <div class="dataset-preset-chips">${summary.chips.map((label) => `<span class="dataset-preset-chip">${escapeHtml(label)}</span>`).join("")}</div>
         </article>
       `;
     }
@@ -486,11 +580,14 @@
             ? `Showing ${board.visibleRows.length} ${board.showingStaleBoard ? "stale" : "current"} screening rows from the latest ML and DL comparison outputs.`
             : `Showing ${board.visibleRows.length} ${board.showingStaleBoard ? "stale" : "current"} screening row(s) from ${presentFamilies[0]} only.`),
       ];
+      if (board.visibleExcludedRows.length) {
+        noteParts.push(`${board.visibleExcludedRows.length} excluded model row(s) are listed below without rank or C-index.`);
+      }
       if (board.showingStaleBoard) {
         noteParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the leaderboard.");
       }
-      if (board.staleFamilies.length) {
-        noteParts.push(`Stale compare rows from ${board.staleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden.`);
+      if (board.hiddenStaleFamilies.length) {
+        noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden.`);
       }
       if (board.hasMixedEvaluation) {
         noteParts.push(`Current evaluation modes: ${board.evaluationModes.map((mode) => benchmarkEvaluationLabel(mode)).join(", ")}.`);
@@ -516,11 +613,11 @@
             </tr>
           </thead>
           <tbody>
-            ${board.visibleRows.map((row, index) => `
+            ${board.tableRows.map((row, index) => `
               <tr>
-                <td>${board.hasMixedEvaluation ? row.sourceRank : index + 1}</td>
+                <td>${row.excluded ? "—" : (board.hasMixedEvaluation ? row.sourceRank : index + 1)}</td>
                 <td><span class="benchmark-family-pill family-${escapeHtml(row.familyTab)}">${escapeHtml(row.family)}</span></td>
-                <td>${escapeHtml(formatValue(row.model))}</td>
+                <td>${escapeHtml(formatValue(row.model))}${row.excluded && row.exclusionReason ? `<div class="benchmark-row-subcopy">${escapeHtml(row.exclusionReason)}</div>` : ""}</td>
                 <td>${escapeHtml(formatValue(row.c_index))}</td>
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>
@@ -532,7 +629,7 @@
       `;
       refs.benchmarkComparisonShell.querySelectorAll("[data-benchmark-action-slot]").forEach((slot) => {
         const index = Number(slot.getAttribute("data-benchmark-action-slot"));
-        const row = board.visibleRows[index];
+        const row = board.tableRows[index];
         if (!row) return;
         slot.replaceWith(createBenchmarkActionGroup(row));
       });

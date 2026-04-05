@@ -494,16 +494,22 @@ def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None
     benchmark_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_benchmark.js"
     text = benchmark_js.read_text(encoding="utf-8")
 
+    assert "function hasUnifiedCoverage(families)" in text
+    assert "function buildBenchmarkSummaryContent(board, hasAnyResult, currentMlRows, currentDlRows)" in text
+    assert "const showingStaleBoard = latestRows.length > 0 && hasUnifiedCoverage(latestFamilies) && !hasUnifiedCoverage(currentFamilies);" in text
     assert '`ML rows ready: ${currentMlRows}`' in text
     assert '`DL rows ready: ${currentDlRows}`' in text
     assert '`Completed families: ${completedFamiliesLabel}`' in text
     assert '`Pending families: ${pendingFamiliesLabel}`' in text
     assert "function benchmarkExcludedModels(" in text
+    assert "function benchmarkExcludedRows(" in text
     assert "Excluded from current" in text
+    assert "excluded model row(s) are listed below without rank or C-index" in text
     assert "successful current screening row(s)" in text
-    assert "Board freshness: stale" in text
-    assert "showing the previous results as reference only" in text
+    assert "Board freshness: stale reference" in text
+    assert "showing the latest full cross-family board as reference only" in text
     assert "Showing the last Compare All board as a stale reference." in text
+    assert "benchmark-row-subcopy" in text
     assert "Show selected controls" not in text
     assert "Selected model:" not in text
 
@@ -512,7 +518,10 @@ def test_frontend_shared_model_features_auto_mark_categorical_candidates() -> No
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text(encoding="utf-8")
 
+    assert "const AUTO_CATEGORICAL_UNIQUE_THRESHOLD = 6;" in text
     assert "function sharedModelCategoricalCandidates()" in text
+    assert "column.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD" in text
+    assert "c.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD" in text
     assert "const autoCategoricalCandidates = new Set(sharedModelCategoricalCandidates());" in text
     assert 'setCheckedValues(refs.modelCategoricalChecklist, normalizedCategoricals);' in text
     assert 'setCheckedValues(refs.dlModelCategoricalChecklist, normalizedCategoricals);' in text
@@ -528,6 +537,9 @@ def test_predictive_workbench_hides_stale_single_result_panels_until_rerun() -> 
     assert 'refs.mlImportancePlot?.closest(".ml-plots-grid")?.classList.toggle("hidden", hideMlSingle);' in text
     assert 'refs.dlImportancePlot?.closest(".ml-plots-grid")?.classList.toggle("hidden", hideDlSingle);' in text
     assert "syncPredictiveWorkbenchSingleResultVisibility();" in text
+    assert "function closePredictiveWorkbench()" in text
+    assert "if (row?.excluded) {" in text
+    assert 'label: "Excluded"' in text
 
 
 def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selection() -> None:
