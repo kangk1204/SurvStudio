@@ -924,7 +924,7 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
 
   if (goal === "tables") {
     return {
-      ...base,
+      dataset_id: String(requestConfig?.dataset_id || ""),
       variables: sortedStrings(requestConfig.variables || []),
       group_column: String(requestConfig.group_column || ""),
     };
@@ -935,6 +935,13 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
 
 function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) {
   if (!state.dataset) return null;
+  if (goal === "tables") {
+    return normalizedRequestConfig(goal, {
+      dataset_id: state.dataset.dataset_id,
+      variables: selectedCheckboxValues(refs.cohortVariableChecklist),
+      group_column: refs.groupColumn?.value || "",
+    });
+  }
   let base;
   try {
     base = currentBaseConfig();
@@ -1014,14 +1021,6 @@ function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) 
       latent_dim: refs.dlLatentDim?.value || 8,
       n_clusters: refs.dlClusters?.value || 3,
     }, { expectsCompare });
-  }
-
-  if (goal === "tables") {
-    return normalizedRequestConfig(goal, {
-      ...base,
-      variables: selectedCheckboxValues(refs.cohortVariableChecklist),
-      group_column: refs.groupColumn?.value || "",
-    });
   }
 
   return normalizedRequestConfig(goal, base);
