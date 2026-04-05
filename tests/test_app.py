@@ -3513,6 +3513,9 @@ def test_single_deep_model_endpoints_handle_mixed_features(model_type: str) -> N
     assert payload["analysis"]["evaluation_mode"] in {"holdout", "apparent", "holdout_fallback_apparent"}
     assert payload["analysis"]["scientific_summary"]["headline"]
     assert payload["figures"]["loss"]["data"]
+    if model_type == "mtlr":
+        assert payload["analysis"]["feature_importance"]
+        assert payload["figures"]["importance"]["data"]
 
 
 def test_deep_model_endpoint_rejects_invalid_transformer_width() -> None:
