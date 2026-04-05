@@ -60,7 +60,7 @@ def test_index_uses_relative_static_assets() -> None:
     assert '<script src="../static/app.js?v=' in response.text
     assert "cdn.plot.ly" not in response.text
     assert 'id="expertModeButton"' in response.text
-    assert 'id="expertModeButton" type="button" role="tab" aria-selected="false">Expert</button>' in response.text
+    assert 'class="mode-toggle-button hidden" id="expertModeButton" type="button" role="tab" aria-selected="false" aria-hidden="true" tabindex="-1">Expert</button>' in response.text
     assert 'id="coxDiagnosticsPlot"' in response.text
     assert 'id="mlEvaluationStrategy"' in response.text
     assert 'id="downloadMlManuscriptMarkdownButton"' in response.text
@@ -116,9 +116,9 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="uploadButton" type="button"' in response.text
     assert 'id="guidedModeButton"' in response.text
     assert 'id="expertModeButton"' in response.text
-    assert 'id="expertModeButton" type="button" role="tab" aria-selected="false">Expert</button>' in response.text
-    assert 'class="mode-toggle"' in response.text
-    assert 'mode-toggle-guided-only' not in response.text
+    assert 'class="mode-toggle"' not in response.text
+    assert 'class="mode-toggle-button hidden" id="expertModeButton" type="button" role="tab" aria-selected="false" aria-hidden="true" tabindex="-1">Expert</button>' in response.text
+    assert 'class="mode-toggle mode-toggle-guided-only"' in response.text
     assert 'id="expertSurfaceLabel"' not in response.text
     assert 'id="guidedShell"' in response.text
     assert 'id="guidedSummaryBar"' in response.text

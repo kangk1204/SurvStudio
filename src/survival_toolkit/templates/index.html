@@ -21,9 +21,9 @@
       </a>
       <div class="header-right">
         <span class="dataset-badge hidden" id="datasetBadge"></span>
-        <div class="mode-toggle" id="analysisModeToggle" role="tablist" aria-label="Analysis mode">
+        <div class="mode-toggle mode-toggle-guided-only" id="analysisModeToggle" role="tablist" aria-label="Analysis mode">
           <button class="mode-toggle-button active" id="guidedModeButton" type="button" role="tab" aria-selected="true">Guided</button>
-          <button class="mode-toggle-button" id="expertModeButton" type="button" role="tab" aria-selected="false">Expert</button>
+          <button class="mode-toggle-button hidden" id="expertModeButton" type="button" role="tab" aria-selected="false" aria-hidden="true" tabindex="-1">Expert</button>
         </div>
         <div class="upload-inline">
           <input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" />
