@@ -554,6 +554,10 @@
             <div class="table-card full-width"><h3>Hazard Ratios</h3><div class="table-shell" id="coxResultsShell"><div class="empty-state">Fit a Cox model.</div></div></div>
             <div class="table-card full-width">
               <h3>PH Diagnostics</h3>
+              <div class="diagnostic-copy" id="coxDiagnosticsCopy">
+                <span>Scaled Schoenfeld residual screening: LOWESS-smoothed scaled Schoenfeld residual trends versus log time. Use alongside the PH table, not as a full Grambsch-Therneau test. Extreme residual outliers may be clipped for readability.</span>
+                <span class="diagnostic-copy-note">Red: PH table p &lt; 0.05. Blue: PH table p ≥ 0.05.</span>
+              </div>
               <div class="plot-shell" id="coxDiagnosticsPlot">
                 <div class="empty-state plot-empty">
                   <span>Scaled Schoenfeld residual screening appears here after fitting the model.</span>
@@ -570,6 +574,9 @@
                     <option value="">Run Cox first</option>
                   </select>
                 </label>
+              </div>
+              <div class="diagnostic-copy" id="coxMartingaleCopy">
+                <span>Martingale residual screening: LOWESS-smoothed martingale residuals versus continuous covariate value. Strong curvature suggests a nonlinear functional form, so consider splines or transformed terms before locking the model.</span>
               </div>
               <div class="plot-shell" id="coxMartingalePlot">
                 <div class="empty-state plot-empty">
