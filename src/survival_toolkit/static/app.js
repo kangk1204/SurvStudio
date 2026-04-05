@@ -3586,6 +3586,74 @@ function benchmarkReviewAction(row) {
   };
 }
 
+function benchmarkParamsPayload(goal) {
+  return currentCompareGoalPayload(goal) || compareGoalPayload(goal) || null;
+}
+
+function benchmarkParamsSummary(goal, modelLabel) {
+  const payload = benchmarkParamsPayload(goal);
+  const requestConfig = payload?.request_config || payload?.analysis?.request_config || {};
+  if (!requestConfig || !Object.keys(requestConfig).length) {
+    return `${modelLabel}: no saved compare-run settings are available for this row yet.`;
+  }
+
+  const features = Array.isArray(requestConfig.features) ? requestConfig.features : [];
+  const categoricals = Array.isArray(requestConfig.categorical_features) ? requestConfig.categorical_features : [];
+  const evaluation = String(requestConfig.evaluation_strategy || "holdout") === "repeated_cv"
+    ? `${formatValue(requestConfig.cv_repeats || 3)}x${formatValue(requestConfig.cv_folds || 5)} repeated CV`
+    : "Deterministic Holdout";
+
+  const parts = [
+    `${modelLabel} params`,
+    `shared_features=${formatValue(features.length)}`,
+    `categoricals=${formatValue(categoricals.length)}`,
+    `eval=${evaluation}`,
+  ];
+
+  if (goal === "ml") {
+    parts.push(`seed=${formatValue(requestConfig.random_state ?? 42)}`);
+    const normalizedModel = String(modelLabel || "").trim().toLowerCase();
+    if (normalizedModel === "random survival forest") {
+      parts.push(`trees=${formatValue(requestConfig.n_estimators ?? 100)}`);
+      parts.push(`max_depth=${formatValue(requestConfig.max_depth || "auto")}`);
+    } else if (normalizedModel === "gradient boosted survival") {
+      parts.push(`trees=${formatValue(requestConfig.n_estimators ?? 100)}`);
+      parts.push(`lr=${formatValue(requestConfig.learning_rate ?? 0.1)}`);
+      parts.push(`max_depth=${formatValue(requestConfig.max_depth || "auto")}`);
+    } else if (normalizedModel === "lasso-cox") {
+      parts.push("alpha=fit on the training split");
+    } else if (normalizedModel === "cox ph") {
+      parts.push("baseline screening fit");
+    }
+    return `${parts.join(" | ")}.`;
+  }
+
+  parts.push(`seed=${formatValue(requestConfig.random_seed ?? 42)}`);
+  parts.push(`hidden=${(requestConfig.hidden_layers || [64, 64]).join("/")}`);
+  parts.push(`dropout=${formatValue(requestConfig.dropout ?? 0.1)}`);
+  parts.push(`lr=${formatValue(requestConfig.learning_rate ?? 0.001)}`);
+  parts.push(`epochs=${formatValue(requestConfig.epochs ?? 100)}`);
+  parts.push(`early_stop=${formatValue(requestConfig.early_stopping_patience ?? 10)}/${formatValue(requestConfig.early_stopping_min_delta ?? 0.0001)}`);
+
+  const normalizedModel = String(modelLabel || "").trim().toLowerCase();
+  if (normalizedModel === "deephit" || normalizedModel === "neural mtlr") {
+    parts.push(`batch=${formatValue(requestConfig.batch_size ?? 64)}`);
+    parts.push(`time_bins=${formatValue(requestConfig.num_time_bins ?? 50)}`);
+  } else if (normalizedModel === "survival transformer") {
+    parts.push(`width=${formatValue(requestConfig.d_model ?? 64)}`);
+    parts.push(`heads=${formatValue(requestConfig.n_heads ?? 4)}`);
+    parts.push(`layers=${formatValue(requestConfig.n_layers ?? 2)}`);
+  } else if (normalizedModel === "survival vae") {
+    parts.push(`latent=${formatValue(requestConfig.latent_dim ?? 8)}`);
+    parts.push(`clusters=${formatValue(requestConfig.n_clusters ?? 3)}`);
+  }
+  return `${parts.join(" | ")}.`;
+}
+
+function showBenchmarkParams(goal, modelLabel) {
+  showToast(benchmarkParamsSummary(goal, modelLabel), "info", 7600);
+}
+
 function mlModelSupportsShap(modelType) {
   return ["rsf", "gbs"].includes(String(modelType || "").toLowerCase());
 }
@@ -6748,6 +6816,14 @@ function initListeners() {
     reviewBenchmarkSourceTab(button.dataset.benchmarkTab || "ml", button.dataset.benchmarkMode || null);
   });
   refs.benchmarkComparisonShell?.addEventListener("click", (event) => {
+    const paramsButton = event.target.closest("[data-benchmark-params-goal]");
+    if (paramsButton) {
+      showBenchmarkParams(
+        paramsButton.dataset.benchmarkParamsGoal || "ml",
+        paramsButton.dataset.benchmarkParamsModel || "Model",
+      );
+      return;
+    }
     const modelButton = event.target.closest("[data-benchmark-model]");
     if (modelButton) {
       reviewBenchmarkModel(modelButton.dataset.benchmarkModel || currentPredictiveModelKey(), modelButton.dataset.benchmarkMode || null);

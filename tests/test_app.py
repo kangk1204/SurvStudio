@@ -691,6 +691,23 @@ def test_guided_ml_results_keep_shap_message_cards_visible() -> None:
     assert 'SHAP could not be generated because the encoded feature matrix is too wide for the safe fallback path. Reduce the ML feature set to inspect SHAP.' in text
 
 
+def test_benchmark_leaderboard_exposes_params_actions() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static"
+    app_js = (root / "app.js").read_text()
+    benchmark_js = (root / "app_benchmark.js").read_text()
+    styles = (root / "styles.css").read_text()
+
+    assert 'function benchmarkParamsSummary(goal, modelLabel) {' in app_js
+    assert 'function showBenchmarkParams(goal, modelLabel) {' in app_js
+    assert 'const paramsButton = event.target.closest("[data-benchmark-params-goal]");' in app_js
+    assert 'showBenchmarkParams(' in app_js
+    assert 'label: "Params"' in benchmark_js
+    assert 'benchmarkParamsGoal: row.familyTab' in benchmark_js
+    assert 'benchmarkParamsModel: row.model' in benchmark_js
+    assert 'function createBenchmarkActionGroup(row) {' in benchmark_js
+    assert ".benchmark-row-actions" in styles
+
+
 def test_cox_plot_reset_axes_restores_initial_layout() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()

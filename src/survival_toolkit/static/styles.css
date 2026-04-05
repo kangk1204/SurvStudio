@@ -3135,6 +3135,20 @@ h3 {
   color: rgb(145, 101, 18);
 }
 
+.benchmark-row-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.benchmark-row-actions .button {
+  white-space: nowrap;
+}
+
+.benchmark-table th.benchmark-review-column {
+  text-align: center;
+}
+
 .benchmark-workspace-shell {
   display: grid;
   gap: 14px;
