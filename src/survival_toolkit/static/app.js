@@ -1335,6 +1335,9 @@ function renderGuidedRailStatus() {
         }[reviewGoal] || [];
   const predictiveReviewActions = reviewGoal === "predictive"
     ? [
+        ...(runtime.workbenchRevealed
+          ? [{ label: "Run again", action: "run-predictive-selected", tone: "primary" }]
+          : []),
         runtime.workbenchRevealed
           ? { label: "Back to leaderboard", action: "close-predictive-workbench", tone: "ghost" }
           : { label: "Back", action: "previous-step", tone: "ghost" },
@@ -1557,6 +1560,7 @@ function updateGuidedSurfaceVisibility() {
     }
   }
   refs.mlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);
+  syncPredictiveWorkbenchCardActions(refs.mlWorkspaceCard, useMergedPredictiveWorkspace);
   if (refs.dlWorkspaceCard && refs.benchmarkDlMount && refs.dlPanel) {
     if (useMergedPredictiveWorkspace) {
       if (refs.dlWorkspaceCard.parentElement !== refs.benchmarkDlMount) {
@@ -1569,6 +1573,7 @@ function updateGuidedSurfaceVisibility() {
     }
   }
   refs.dlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);
+  syncPredictiveWorkbenchCardActions(refs.dlWorkspaceCard, useMergedPredictiveWorkspace);
 
   if (refs.guidedPanel) {
     if (showGuidedRailPanel && refs.guidedRailPanelMount) {
@@ -2971,6 +2976,35 @@ function humanizeHeader(key) {
     .trim();
 }
 
+function syncPredictiveWorkbenchCardActions(card, workbenchActive) {
+  if (!card) return;
+  const head = card.querySelector(":scope > .card-head");
+  const primaryRow = head?.querySelector(":scope > .button-row.compact");
+  if (!head || !primaryRow) return;
+
+  let secondaryRow = head.querySelector(":scope > .predictive-workbench-secondary-actions");
+  if (workbenchActive) {
+    primaryRow.classList.add("predictive-workbench-primary-actions");
+    if (!secondaryRow) {
+      secondaryRow = document.createElement("div");
+      secondaryRow.className = "button-row compact predictive-workbench-secondary-actions";
+      primaryRow.insertAdjacentElement("afterend", secondaryRow);
+    }
+    while (primaryRow.children.length > 1) {
+      secondaryRow.appendChild(primaryRow.children[1]);
+    }
+    return;
+  }
+
+  primaryRow.classList.remove("predictive-workbench-primary-actions");
+  if (secondaryRow) {
+    while (secondaryRow.firstChild) {
+      primaryRow.appendChild(secondaryRow.firstChild);
+    }
+    secondaryRow.remove();
+  }
+}
+
 const COHORT_TABLE_EMPTY_STATE_HTML = '<div class="empty-state">Check variables on the left, then click <strong>Build Table</strong>.</div>';
 
 function renderTable(shell, rows, columns = null) {
@@ -3333,6 +3367,15 @@ function modelFeatureCandidateColumns() {
     .filter((name) => !isOutcomeDerivedGroupingColumn(name));
 }
 
+function sharedModelCategoricalCandidates() {
+  if (!state.dataset) return [];
+  const availableFeatures = new Set(modelFeatureCandidateColumns());
+  return state.dataset.columns
+    .filter((column) => availableFeatures.has(column.name))
+    .filter((column) => ["categorical", "binary"].includes(column.kind) || column.n_unique <= 6)
+    .map((column) => column.name);
+}
+
 function refreshVariableSelections() {
   if (!state.dataset) return;
   const availableCovariates = modelFeatureCandidateColumns();
@@ -3362,9 +3405,15 @@ function refreshVariableSelections() {
 function setSharedModelFeatureSelection(nextFeatures = [], { clearCategoricals = false } = {}) {
   const availableFeatures = modelFeatureCandidateColumns();
   const normalizedFeatures = nextFeatures.filter((value) => availableFeatures.includes(value));
+  const autoCategoricalCandidates = new Set(sharedModelCategoricalCandidates());
   const preservedCategoricals = clearCategoricals
     ? []
     : selectedCheckboxValues(refs.modelCategoricalChecklist).filter((value) => normalizedFeatures.includes(value));
+  normalizedFeatures.forEach((value) => {
+    if (autoCategoricalCandidates.has(value) && !preservedCategoricals.includes(value)) {
+      preservedCategoricals.push(value);
+    }
+  });
 
   setCheckedValues(refs.modelFeatureChecklist, normalizedFeatures);
   setCheckedValues(refs.dlModelFeatureChecklist, normalizedFeatures);
@@ -3384,6 +3433,17 @@ function syncModelFeatureMirrors(sourceContainer = refs.modelFeatureChecklist) {
     ? refs.modelFeatureChecklist
     : refs.dlModelFeatureChecklist;
   syncChecklistSelections(sourceContainer, counterpart);
+  const featureValues = selectedCheckboxValues(sourceContainer);
+  const autoCategoricalCandidates = new Set(sharedModelCategoricalCandidates());
+  const normalizedCategoricals = selectedCheckboxValues(refs.modelCategoricalChecklist)
+    .filter((value) => featureValues.includes(value));
+  featureValues.forEach((value) => {
+    if (autoCategoricalCandidates.has(value) && !normalizedCategoricals.includes(value)) {
+      normalizedCategoricals.push(value);
+    }
+  });
+  setCheckedValues(refs.modelCategoricalChecklist, normalizedCategoricals);
+  setCheckedValues(refs.dlModelCategoricalChecklist, normalizedCategoricals);
 }
 
 function syncModelCategoricalMirrors(sourceContainer = refs.modelCategoricalChecklist) {
@@ -3998,6 +4058,7 @@ function benchmarkGoalMeta(goal) {
 
 function syncBenchmarkWorkbenchVisibility() {
   const workbenchOpen = Boolean(runtime.workbenchRevealed);
+  const guidedPredictiveWorkbench = workbenchOpen && runtime.uiMode === "guided" && runtime.guidedGoal === "predictive";
   refs.benchmarkSummaryGrid?.classList.toggle("hidden", workbenchOpen);
   refs.benchmarkComparisonPlot?.closest(".table-card")?.classList.toggle("hidden", workbenchOpen);
   refs.benchmarkComparisonShell?.closest(".table-card")?.classList.toggle("hidden", workbenchOpen);
@@ -4009,6 +4070,8 @@ function syncBenchmarkWorkbenchVisibility() {
   refs.runCompareInlineButton?.classList.toggle("hidden", workbenchOpen);
   refs.runDlCompareButton?.classList.toggle("hidden", workbenchOpen);
   refs.runDlCompareInlineButton?.classList.toggle("hidden", workbenchOpen);
+  refs.runMlButton?.classList.toggle("hidden", guidedPredictiveWorkbench);
+  refs.runDlButton?.classList.toggle("hidden", guidedPredictiveWorkbench);
   refs.predictiveModelSelector?.closest(".predictive-model-picker")?.classList.toggle("hidden", !workbenchOpen);
   refs.runPredictiveSelectedButton?.classList.toggle("hidden", !workbenchOpen);
 }
@@ -4042,6 +4105,7 @@ function renderPredictiveWorkbench() {
     refs.runPredictiveSelectedButton.textContent = `Train ${selectedModel.label}`;
   }
   syncPredictiveWorkbenchCompareVisibility();
+  syncPredictiveWorkbenchSingleResultVisibility();
 }
 
 function setPredictiveWorkbenchFamily(family, { syncHistory = true, historyMode = "replace", scrollIntoView = false } = {}) {
@@ -4143,6 +4207,23 @@ function syncPredictiveWorkbenchCompareVisibility() {
   dlComparisonCard?.classList.toggle("hidden", suppressCompare);
   dlManuscriptCard?.classList.toggle("hidden", suppressCompare);
 }
+
+function syncPredictiveWorkbenchSingleResultVisibility() {
+  const workbenchOpen = Boolean(runtime.workbenchRevealed);
+  const selectedFamily = normalizedPredictiveFamily(runtime.predictiveFamily);
+  const mlHasCurrentSingle = Boolean(currentGoalResult("ml")) && (runtime.resultPreference?.ml || "single") === "single";
+  const dlHasCurrentSingle = Boolean(currentGoalResult("dl")) && (runtime.resultPreference?.dl || "single") === "single";
+  const hideMlSingle = workbenchOpen && (selectedFamily !== "ml" || !mlHasCurrentSingle);
+  const hideDlSingle = workbenchOpen && (selectedFamily !== "dl" || !dlHasCurrentSingle);
+
+  refs.mlImportancePlot?.closest(".ml-plots-grid")?.classList.toggle("hidden", hideMlSingle);
+  refs.mlMetaBanner?.classList.toggle("hidden", hideMlSingle);
+  refs.mlInsightBoard?.classList.toggle("hidden", hideMlSingle);
+
+  refs.dlImportancePlot?.closest(".ml-plots-grid")?.classList.toggle("hidden", hideDlSingle);
+  refs.dlMetaBanner?.classList.toggle("hidden", hideDlSingle);
+  refs.dlInsightBoard?.classList.toggle("hidden", hideDlSingle);
+}
 if (!window.SurvStudioBenchmark?.createBenchmarkBoardApi) {
   throw new Error("SurvStudio benchmark module failed to load.");
 }
@@ -4163,8 +4244,6 @@ const benchmarkBoardApi = window.SurvStudioBenchmark.createBenchmarkBoardApi({
   benchmarkReviewAction,
   mlModelLabel,
   dlModelLabel,
-  currentPredictiveModelKey,
-  predictiveModelMeta,
   formatValue,
   escapeHtml,
   isScopeBusy,
@@ -4379,6 +4458,7 @@ function guidedPanelMarkup(step) {
   if (step === 4) {
     const coxSelectionSummary = goal === "cox" ? '<div id="guidedCoxSelectionMount"></div>' : "";
     const coxPreviewSummary = goal === "cox" ? '<div id="guidedCoxPreviewMount"></div>' : "";
+    const workbenchSingleModelMode = runtime.workbenchRevealed && ["predictive", "ml", "dl"].includes(goal);
     const configureCopy = {
       km: {
         title: "Run Kaplan-Meier",
@@ -4424,7 +4504,7 @@ function guidedPanelMarkup(step) {
           ? "Train the selected model directly. The leaderboard is already built, so use the selected model controls below."
           : "Compare all models to build the leaderboard, then click any result to open its controls.",
         runAction: runtime.workbenchRevealed ? "run-predictive-selected" : "run-predictive-compare-all",
-        runLabel: runtime.workbenchRevealed ? "Train a model" : "Compare all models",
+        runLabel: runtime.workbenchRevealed ? "Run Analysis" : "Compare all models",
         runScope: "predictive",
         busyText: "A predictive model run is already in progress. Wait for it to finish before starting another one.",
         tip: runtime.workbenchRevealed
@@ -4447,6 +4527,10 @@ function guidedPanelMarkup(step) {
       runScope: null,
       tip: "",
     };
+    if (workbenchSingleModelMode) {
+      configureCopy.secondaryAction = null;
+      configureCopy.secondaryLabel = null;
+    }
     const scopeBusy = isScopeBusy(configureCopy.runScope);
     const predictivePrimaryBusy = goal === "predictive" && isScopeBusy(predictiveFamilyGoal());
     const predictiveCompareBusy = goal === "predictive" && (isScopeBusy("predictive") || isScopeBusy("ml") || isScopeBusy("dl"));
@@ -7097,6 +7181,13 @@ function initListeners() {
   });
   refs.runMlButton.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
+      if (runtime.guidedGoal === "predictive") {
+        void runGuidedGoal("ml", refs.runMlButton, runMlModel, {
+          resultMode: "single",
+          successCheck: () => Boolean(currentGoalResult("ml")),
+        });
+        return;
+      }
       runtime.guidedGoal = "ml";
       void runGuidedGoal("ml", refs.runMlButton, runMlModel);
       return;
@@ -7105,6 +7196,13 @@ function initListeners() {
   });
   refs.runCompareButton.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
+      if (runtime.guidedGoal === "predictive") {
+        void runGuidedGoal("ml", refs.runCompareButton, runCompareModels, {
+          resultMode: "compare",
+          successCheck: () => benchmarkCompareRows("ml", { currentOnly: true }).length > 0,
+        });
+        return;
+      }
       runtime.guidedGoal = "ml";
       void runGuidedGoal("ml", refs.runCompareButton, runCompareModels);
       return;
@@ -7113,6 +7211,13 @@ function initListeners() {
   });
   refs.runCompareInlineButton?.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
+      if (runtime.guidedGoal === "predictive") {
+        void runGuidedGoal("ml", refs.runCompareInlineButton, runCompareModels, {
+          resultMode: "compare",
+          successCheck: () => benchmarkCompareRows("ml", { currentOnly: true }).length > 0,
+        });
+        return;
+      }
       runtime.guidedGoal = "ml";
       void runGuidedGoal("ml", refs.runCompareInlineButton, runCompareModels);
       return;
@@ -7121,6 +7226,13 @@ function initListeners() {
   });
   refs.runDlButton.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
+      if (runtime.guidedGoal === "predictive") {
+        void runGuidedGoal("dl", refs.runDlButton, runDlModel, {
+          resultMode: "single",
+          successCheck: () => Boolean(currentGoalResult("dl")),
+        });
+        return;
+      }
       runtime.guidedGoal = "dl";
       void runGuidedGoal("dl", refs.runDlButton, runDlModel);
       return;
@@ -7129,6 +7241,13 @@ function initListeners() {
   });
   refs.runDlCompareButton.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
+      if (runtime.guidedGoal === "predictive") {
+        void runGuidedGoal("dl", refs.runDlCompareButton, runDlCompareModels, {
+          resultMode: "compare",
+          successCheck: () => benchmarkCompareRows("dl", { currentOnly: true }).length > 0,
+        });
+        return;
+      }
       runtime.guidedGoal = "dl";
       void runGuidedGoal("dl", refs.runDlCompareButton, runDlCompareModels);
       return;
@@ -7137,6 +7256,13 @@ function initListeners() {
   });
   refs.runDlCompareInlineButton?.addEventListener("click", () => {
     if (runtime.uiMode === "guided") {
+      if (runtime.guidedGoal === "predictive") {
+        void runGuidedGoal("dl", refs.runDlCompareInlineButton, runDlCompareModels, {
+          resultMode: "compare",
+          successCheck: () => benchmarkCompareRows("dl", { currentOnly: true }).length > 0,
+        });
+        return;
+      }
       runtime.guidedGoal = "dl";
       void runGuidedGoal("dl", refs.runDlCompareInlineButton, runDlCompareModels);
       return;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import hashlib
 import io
 import json
 import os
@@ -61,18 +62,23 @@ def _static_asset_version() -> str:
         BASE_DIR / "templates",
         BASE_DIR / "static",
     )
-    mtimes: list[float] = []
+    digest = hashlib.sha256()
+    saw_asset = False
     for asset_root in asset_roots:
         if not asset_root.exists():
             continue
-        for asset_path in asset_root.rglob("*"):
+        for asset_path in sorted(asset_root.rglob("*")):
             if not asset_path.is_file():
                 continue
             try:
-                mtimes.append(asset_path.stat().st_mtime)
+                stat = asset_path.stat()
             except OSError:
                 continue
-    return str(int(max(mtimes))) if mtimes else "0"
+            saw_asset = True
+            digest.update(asset_path.relative_to(BASE_DIR).as_posix().encode("utf-8"))
+            digest.update(str(stat.st_size).encode("utf-8"))
+            digest.update(str(stat.st_mtime_ns).encode("utf-8"))
+    return digest.hexdigest()[:12] if saw_asset else "0"
 
 app = FastAPI(
     title="SurvStudio",

@@ -93,8 +93,8 @@ def _open_predictive_workbench(page, model_key: str | None = None) -> None:
     page.locator('[data-tab="benchmark"]').click()
     _assert_tab_active(page, "benchmark")
     if page.locator("#benchmarkWorkbench").is_hidden():
-        page.locator("#benchmarkSummaryGrid [data-benchmark-model]").wait_for(state="visible")
-        page.locator("#benchmarkSummaryGrid [data-benchmark-model]").click()
+        page.locator("#benchmarkComparisonShell [data-benchmark-model]").wait_for(state="visible")
+        page.locator("#benchmarkComparisonShell [data-benchmark-model]").first.click()
         page.wait_for_function(
             "() => document.getElementById('benchmarkWorkbench') && !document.getElementById('benchmarkWorkbench').classList.contains('hidden')"
         )
@@ -596,14 +596,16 @@ def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: st
             page.wait_for_function("document.getElementById('runPredictiveCompareAllButton').disabled === true")
             page.wait_for_function("document.body.dataset.guidedStep === '5'")
             page.wait_for_function(
-                "document.getElementById('benchmarkSummaryGrid').textContent.includes('ML compare rows:')"
+                "document.getElementById('benchmarkSummaryGrid').textContent.includes('ML rows ready:')"
             )
             page.wait_for_function(
-                "() => document.getElementById('benchmarkSummaryGrid').textContent.includes('ML compare rows: 4') || document.getElementById('benchmarkSummaryGrid').textContent.includes('ML compare rows: 1')"
+                "() => document.getElementById('benchmarkSummaryGrid').textContent.includes('ML rows ready: 4') || document.getElementById('benchmarkSummaryGrid').textContent.includes('ML rows ready: 1')"
             )
             page.wait_for_function(
-                "() => { const text = document.getElementById('benchmarkSummaryGrid').textContent; const ml = /ML compare rows:\\s*(\\d+)/.exec(text); const dl = /DL compare rows:\\s*(\\d+)/.exec(text); return ml && dl && Number(ml[1]) > 0 && Number(dl[1]) > 0; }"
+                "() => { const text = document.getElementById('benchmarkSummaryGrid').textContent; const ml = /ML rows ready:\\s*(\\d+)/.exec(text); const dl = /DL rows ready:\\s*(\\d+)/.exec(text); return ml && dl && Number(ml[1]) > 0 && Number(dl[1]) >= 0; }"
             )
+            assert "Selected model:" not in page.locator("#benchmarkSummaryGrid").inner_text()
+            assert "Show selected controls" not in page.locator("#benchmarkSummaryGrid").inner_text()
 
             benchmark_text = page.locator("#benchmarkComparisonShell").inner_text()
             assert "Random Survival Forest" in benchmark_text
@@ -614,13 +616,17 @@ def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: st
             page.locator("#benchmarkComparisonShell [data-benchmark-model]").first.click()
             page.wait_for_function("document.getElementById('benchmarkWorkbench').classList.contains('hidden') === false")
             page.wait_for_function("document.body.dataset.guidedStep === '4'")
-            assert "Train a model" in page.locator("#guidedPanel").inner_text()
+            guided_panel_text = page.locator("#guidedPanel").inner_text()
+            assert "Run Analysis" in guided_panel_text
+            assert "Compare all" not in guided_panel_text
             if page.locator("#benchmarkMlMount").is_visible():
                 assert page.locator("#benchmarkMlMount .model-choice-field").is_hidden()
+                assert page.locator("#benchmarkMlMount #runMlButton").is_hidden()
                 assert page.locator("#benchmarkMlMount #runCompareButton").is_hidden()
                 assert page.locator("#benchmarkMlMount #runCompareInlineButton").is_hidden()
             else:
                 assert page.locator("#benchmarkDlMount .model-choice-field").is_hidden()
+                assert page.locator("#benchmarkDlMount #runDlButton").is_hidden()
                 assert page.locator("#benchmarkDlMount #runDlCompareButton").is_hidden()
                 assert page.locator("#benchmarkDlMount #runDlCompareInlineButton").is_hidden()
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 from pathlib import Path
 import tomllib
 import zipfile
@@ -93,6 +94,33 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="clearCoxCovariatesButton"' in response.text
     assert 'id="selectAllCoxCategoricalsButton"' in response.text
     assert 'id="clearCoxCategoricalsButton"' in response.text
+
+
+def test_static_asset_version_changes_with_subsecond_asset_update(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base_dir = tmp_path / "survival_toolkit"
+    templates_dir = base_dir / "templates"
+    static_dir = base_dir / "static"
+    templates_dir.mkdir(parents=True)
+    static_dir.mkdir(parents=True)
+    (templates_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+    asset_path = static_dir / "app.js"
+    asset_path.write_text("console.log('v1');", encoding="utf-8")
+
+    second_ns = 1_700_000_000 * 1_000_000_000
+    os.utime(templates_dir / "index.html", ns=(second_ns, second_ns))
+    os.utime(asset_path, ns=(second_ns, second_ns + 10))
+
+    monkeypatch.setattr(app_module, "BASE_DIR", base_dir)
+    app_module._static_asset_version.cache_clear()
+    first_version = app_module._static_asset_version()
+
+    os.utime(asset_path, ns=(second_ns, second_ns + 900_000_000))
+    app_module._static_asset_version.cache_clear()
+    second_version = app_module._static_asset_version()
+
+    assert len(first_version) == 12
+    assert len(second_version) == 12
+    assert first_version != second_version
 
 
 def test_index_mentions_fleming_harrington_p_only_label() -> None:
@@ -452,18 +480,54 @@ def test_frontend_persists_predictive_workbench_visibility_in_history_state() ->
     assert 'refs.mlModelType?.closest(".model-choice-field")?.classList.toggle("hidden", workbenchOpen);' in text
     assert 'refs.runCompareButton?.classList.toggle("hidden", workbenchOpen);' in text
     assert 'refs.runDlCompareButton?.classList.toggle("hidden", workbenchOpen);' in text
+    assert 'const guidedPredictiveWorkbench = workbenchOpen && runtime.uiMode === "guided" && runtime.guidedGoal === "predictive";' in text
+    assert 'refs.runMlButton?.classList.toggle("hidden", guidedPredictiveWorkbench);' in text
+    assert 'refs.runDlButton?.classList.toggle("hidden", guidedPredictiveWorkbench);' in text
     assert 'refs.predictiveModelSelector?.closest(".predictive-model-picker")?.classList.toggle("hidden", !workbenchOpen);' in text
     assert "runtime.workbenchRevealed = false;" in text
     assert 'title: runtime.workbenchRevealed ? "Train a model" : "Run ML/DL Models"' in text
     assert 'runAction: runtime.workbenchRevealed ? "run-predictive-selected" : "run-predictive-compare-all"' in text
+    assert '{ label: "Run again", action: "run-predictive-selected", tone: "primary" }' in text
 
 
 def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None:
     benchmark_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_benchmark.js"
     text = benchmark_js.read_text(encoding="utf-8")
 
-    assert '`ML compare rows: ${benchmarkCompareRows("ml", { currentOnly: true }).length}`' in text
-    assert '`DL compare rows: ${benchmarkCompareRows("dl", { currentOnly: true }).length}`' in text
+    assert '`ML rows ready: ${currentMlRows}`' in text
+    assert '`DL rows ready: ${currentDlRows}`' in text
+    assert '`Completed families: ${completedFamiliesLabel}`' in text
+    assert '`Pending families: ${pendingFamiliesLabel}`' in text
+    assert "function benchmarkExcludedModels(" in text
+    assert "Excluded from current" in text
+    assert "successful current screening row(s)" in text
+    assert "Board freshness: stale" in text
+    assert "showing the previous results as reference only" in text
+    assert "Showing the last Compare All board as a stale reference." in text
+    assert "Show selected controls" not in text
+    assert "Selected model:" not in text
+
+
+def test_frontend_shared_model_features_auto_mark_categorical_candidates() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text(encoding="utf-8")
+
+    assert "function sharedModelCategoricalCandidates()" in text
+    assert "const autoCategoricalCandidates = new Set(sharedModelCategoricalCandidates());" in text
+    assert 'setCheckedValues(refs.modelCategoricalChecklist, normalizedCategoricals);' in text
+    assert 'setCheckedValues(refs.dlModelCategoricalChecklist, normalizedCategoricals);' in text
+
+
+def test_predictive_workbench_hides_stale_single_result_panels_until_rerun() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text(encoding="utf-8")
+
+    assert "function syncPredictiveWorkbenchSingleResultVisibility()" in text
+    assert 'const mlHasCurrentSingle = Boolean(currentGoalResult("ml"))' in text
+    assert 'const dlHasCurrentSingle = Boolean(currentGoalResult("dl"))' in text
+    assert 'refs.mlImportancePlot?.closest(".ml-plots-grid")?.classList.toggle("hidden", hideMlSingle);' in text
+    assert 'refs.dlImportancePlot?.closest(".ml-plots-grid")?.classList.toggle("hidden", hideDlSingle);' in text
+    assert "syncPredictiveWorkbenchSingleResultVisibility();" in text
 
 
 def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selection() -> None:
@@ -3804,8 +3868,12 @@ def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
     assert 'secondaryAction: "run-dl-compare"' in app_js
     assert 'secondaryLabel: "Compare all ML models"' in app_js
     assert 'secondaryLabel: "Compare all DL models"' in app_js
+    assert 'const workbenchSingleModelMode = runtime.workbenchRevealed && ["predictive", "ml", "dl"].includes(goal);' in app_js
     assert 'runAction: runtime.workbenchRevealed ? "run-predictive-selected" : "run-predictive-compare-all"' in app_js
-    assert 'runLabel: runtime.workbenchRevealed ? "Train a model" : "Compare all models"' in app_js
+    assert 'runLabel: runtime.workbenchRevealed ? "Run Analysis" : "Compare all models"' in app_js
+    assert "if (workbenchSingleModelMode) {" in app_js
+    assert "configureCopy.secondaryAction = null;" in app_js
+    assert "configureCopy.secondaryLabel = null;" in app_js
     assert '"Compare all models to build the leaderboard, then click any result to open its controls."' in app_js
     assert '"Run Compare All once to see every model ranked. Then click a result to tune that model."' in app_js
     assert 'guided-actions guided-actions-priority' in app_js
@@ -3835,6 +3903,7 @@ def test_guided_choose_analysis_uses_single_predictive_card() -> None:
     assert 'predictive: "ML/DL Models"' in app_js
     assert '["km", "cox", "tables", "predictive"].map((entry) => {' in app_js
     assert 'title: runtime.workbenchRevealed ? "Train a model" : "Run ML/DL Models"' in app_js
+    assert 'runLabel: runtime.workbenchRevealed ? "Run Analysis" : "Compare all models"' in app_js
     assert 'data-guided-action="choose-goal" data-goal="${entry}"' in app_js
 
 
@@ -4132,11 +4201,18 @@ def test_predictive_workbench_keeps_model_action_row_left_aligned() -> None:
 
     assert 'refs.mlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);' in app_js
     assert 'refs.dlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);' in app_js
+    assert "function syncPredictiveWorkbenchCardActions(card, workbenchActive) {" in app_js
+    assert 'secondaryRow.className = "button-row compact predictive-workbench-secondary-actions";' in app_js
+    assert "while (primaryRow.children.length > 1) {" in app_js
+    assert 'syncPredictiveWorkbenchCardActions(refs.mlWorkspaceCard, useMergedPredictiveWorkspace);' in app_js
+    assert 'syncPredictiveWorkbenchCardActions(refs.dlWorkspaceCard, useMergedPredictiveWorkspace);' in app_js
     assert ".predictive-workbench-card > .card-head {" in styles
     assert "flex-direction: column;" in styles
     assert ".predictive-workbench-card > .card-head > .button-row.compact {" in styles
     assert "width: 100%;" in styles
     assert "justify-content: flex-start;" in styles
+    assert ".predictive-workbench-primary-actions {" in styles
+    assert ".predictive-workbench-secondary-actions {" in styles
 
 
 def test_predictive_workbench_card_head_remains_stacked() -> None:

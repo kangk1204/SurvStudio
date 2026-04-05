@@ -3197,6 +3197,20 @@ h3 {
   align-self: stretch;
 }
 
+.predictive-workbench-primary-actions {
+  margin-bottom: 8px;
+}
+
+.predictive-workbench-primary-actions > .button {
+  width: fit-content;
+}
+
+.predictive-workbench-secondary-actions {
+  width: 100%;
+  justify-content: flex-start;
+  align-self: stretch;
+}
+
 body[data-ui-mode="guided"][data-guided-goal="predictive"] #panel-benchmark .benchmark-action-card {
   display: none;
 }
