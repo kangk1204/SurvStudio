@@ -204,11 +204,27 @@ def test_build_cox_diagnostics_figure_wraps_long_term_titles_and_adds_top_spacin
     assert any("<br>" in title or title.endswith("…") for title in subplot_titles)
     assert "<br>" in subtitle
     assert title == "Scaled Schoenfeld Residual Trend Check"
-    assert figure["layout"]["margin"]["t"] >= 164
+    assert figure["layout"]["margin"]["t"] >= 196
     assert figure["layout"]["height"] >= 420
     assert figure["layout"]["title"]["text"] == ""
     assert any("LOWESS-smoothed scaled Schoenfeld residual trends" in annotation.get("text", "") for annotation in annotations)
     assert any("Red: PH table p" in annotation.get("text", "") for annotation in annotations)
+    title_annotation = next(
+        annotation
+        for annotation in annotations
+        if annotation.get("text", "") == "Scaled Schoenfeld Residual Trend Check"
+    )
+    subtitle_annotation = next(
+        annotation
+        for annotation in annotations
+        if "Screening view only" in annotation.get("text", "")
+    )
+    legend_annotation = next(
+        annotation
+        for annotation in annotations
+        if "Red: PH table p" in annotation.get("text", "")
+    )
+    assert float(title_annotation["y"]) > float(subtitle_annotation["y"]) > float(legend_annotation["y"])
     assert figure["layout"]["yaxis"]["title"]["text"] == "Scaled residual"
 
 

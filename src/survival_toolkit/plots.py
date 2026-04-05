@@ -443,7 +443,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             **_COMMON_AXES,
         )
 
-    top_margin = 164 + ((max_title_lines - 1) * 16) + ((subtitle_lines - 1) * 16)
+    top_margin = 196 + ((max_title_lines - 1) * 18) + ((subtitle_lines - 1) * 20)
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": top_margin, "b": 68},
@@ -455,7 +455,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         xref="paper",
         yref="paper",
         x=0.02,
-        y=1.20 + ((subtitle_lines - 1) * 0.02),
+        y=1.26 + ((subtitle_lines - 1) * 0.03),
         showarrow=False,
         font={"family": "Source Serif 4, serif", "size": 22, "color": INK},
         align="left",
@@ -467,7 +467,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         xref="paper",
         yref="paper",
         x=0.02,
-        y=1.10 + ((subtitle_lines - 1) * 0.02),
+        y=1.15 + ((subtitle_lines - 1) * 0.02),
         showarrow=False,
         font={"size": 12, "color": INK},
         align="left",
@@ -480,12 +480,12 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         text="Red: PH table p &lt; 0.05. Blue: PH table p ≥ 0.05.",
         xref="paper",
         yref="paper",
-        x=0.98,
-        y=1.10 + ((subtitle_lines - 1) * 0.02),
+        x=0.02,
+        y=1.05,
         showarrow=False,
         font={"size": 11, "color": INK},
-        align="right",
-        xanchor="right",
+        align="left",
+        xanchor="left",
         yanchor="bottom",
         bgcolor="rgba(255,255,255,0.85)",
         borderpad=5,
