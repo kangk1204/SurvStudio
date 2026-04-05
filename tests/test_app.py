@@ -5663,10 +5663,14 @@ def test_cohort_table_dependency_copy_marks_stale_output_and_rebuild_label() -> 
     assert "function currentCohortTableOutputState() {" in app_js
     assert "if (!hasDataset || !tableState.hasOutput || tableState.isCurrent) {" in app_js
     assert "Current output still reflects the last built table:" in app_js
+    assert "You can still export this visible table" in app_js
     assert 'dataset_id: String(requestConfig?.dataset_id || "")' in app_js
     assert 'dataset_id: state.dataset.dataset_id,' in app_js
     assert "function updateCohortTableButtonLabel() {" in app_js
     assert '? "Rebuild Table"' in app_js
+    assert 'refs.downloadCohortTableButton.disabled = !currentTable.hasOutput;' in app_js
+    assert 'if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.disabled = !currentTable.hasOutput;' in app_js
+    assert 'showToast("Build the cohort table before exporting.", "warning", 3200);' in app_js
     assert "renderSharedFeatureSummary();" in app_js
 
 
