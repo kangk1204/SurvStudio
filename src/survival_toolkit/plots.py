@@ -680,14 +680,21 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
         **_COMMON_LAYOUT,
         margin={
             **{k: v for k, v in axis_layout.items() if k != "height"},
-            "t": int(axis_layout.get("t", 32)) + ((subtitle_lines - 1) * 16 if subtitle_lines else 0),
-        },
-        title={
-            "text": title_text,
-            "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
-            "x": 0.02,
+            "t": max(108, int(axis_layout.get("t", 32)) + 72 + ((subtitle_lines - 1) * 18 if subtitle_lines else 0)),
         },
         height=axis_layout["height"],
+    )
+    fig.add_annotation(
+        text=title_text,
+        xref="paper",
+        yref="paper",
+        x=0.02,
+        y=1.15 + ((subtitle_lines - 1) * 0.03 if subtitle_lines else 0),
+        showarrow=False,
+        font={"family": "Source Serif 4, serif", "size": 22, "color": INK},
+        align="left",
+        xanchor="left",
+        yanchor="bottom",
     )
     if subtitle_text:
         fig.add_annotation(
@@ -695,7 +702,7 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
             xref="paper",
             yref="paper",
             x=0.02,
-            y=1.08 + ((subtitle_lines - 1) * 0.02),
+            y=1.04 + ((subtitle_lines - 1) * 0.025),
             showarrow=False,
             font={"size": 12, "color": INK},
             align="left",

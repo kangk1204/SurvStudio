@@ -21,6 +21,7 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
+from scipy.linalg import qr as scipy_qr
 from statsmodels.duration.hazard_regression import PHReg
 from statsmodels.duration.survfunc import survdiff
 
@@ -639,6 +640,40 @@ def _drop_constant_train_columns(
     return (
         train_encoded.loc[:, varying_columns].copy(),
         eval_encoded.loc[:, varying_columns].copy(),
+    )
+
+
+def _drop_rank_deficient_train_columns(
+    train_encoded: pd.DataFrame,
+    eval_encoded: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Drop encoded columns that make the Cox training design rank-deficient.
+
+    Shared predictive feature lists can legitimately contain overlapping
+    categorical representations that tree and deep models tolerate, but
+    unpenalized Cox PH on a shared holdout path cannot. Keep a full-rank
+    subset so the Cox screening baseline remains comparable instead of
+    failing with a singular matrix.
+    """
+    train_matrix = train_encoded.to_numpy(dtype=float)
+    if train_matrix.ndim != 2 or train_matrix.shape[1] <= 1:
+        return train_encoded.copy(), eval_encoded.copy()
+
+    _q, r_factor, pivots = scipy_qr(train_matrix, mode="economic", pivoting=True, check_finite=False)
+    diagonal = np.abs(np.diag(r_factor))
+    max_diagonal = float(diagonal.max()) if diagonal.size else 0.0
+    tolerance = np.finfo(float).eps * max(train_matrix.shape) * max(1.0, max_diagonal)
+    rank = int(np.sum(diagonal > tolerance))
+    if rank <= 0:
+        raise ValueError("No full-rank encoded features remain for Cox PH.")
+    if rank >= train_encoded.shape[1]:
+        return train_encoded.copy(), eval_encoded.copy()
+
+    keep_indices = sorted(int(index) for index in pivots[:rank])
+    keep_columns = [train_encoded.columns[index] for index in keep_indices]
+    return (
+        train_encoded.loc[:, keep_columns].copy(),
+        eval_encoded.loc[:, keep_columns].copy(),
     )
 
 
@@ -1880,6 +1915,7 @@ def _fit_evaluate_cox_split(
         categorical_features,
     )
     train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
+    train_encoded, test_encoded = _drop_rank_deficient_train_columns(train_encoded, test_encoded)
     train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
     test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
     if train_encoded.empty or test_encoded.empty:

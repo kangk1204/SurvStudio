@@ -330,6 +330,7 @@ function assertRequiredRefs() {
 assertRequiredRefs();
 
 const DEFAULT_MODEL_FEATURE_SELECTION_LIMIT = 20;
+const AUTO_CATEGORICAL_UNIQUE_THRESHOLD = 6;
 const COX_STAGE_VARIABLE_PREFERENCE = ["stage_group", "pathologic_stage", "stage"];
 const DATASET_PRESETS = Object.freeze({
   gbsg2: {
@@ -3372,7 +3373,7 @@ function sharedModelCategoricalCandidates() {
   const availableFeatures = new Set(modelFeatureCandidateColumns());
   return state.dataset.columns
     .filter((column) => availableFeatures.has(column.name))
-    .filter((column) => ["categorical", "binary"].includes(column.kind) || column.n_unique <= 6)
+    .filter((column) => ["categorical", "binary"].includes(column.kind) || column.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD)
     .map((column) => column.name);
 }
 
@@ -3385,7 +3386,7 @@ function refreshVariableSelections() {
   const previousModelCategoricals = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => availableCovariates.includes(v));
   const previousTableVars = selectedCheckboxValues(refs.cohortVariableChecklist).filter((v) => availableCovariates.includes(v));
   const defaultCategoricals = state.dataset.columns
-    .filter((c) => ["categorical", "binary"].includes(c.kind) || c.n_unique <= 6)
+    .filter((c) => ["categorical", "binary"].includes(c.kind) || c.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD)
     .map((c) => c.name)
     .filter((name) => availableCovariates.includes(name));
   const defaultModelFeatures = availableCovariates.slice(0, DEFAULT_MODEL_FEATURE_SELECTION_LIMIT);
@@ -3619,6 +3620,14 @@ function restorePredictiveFamilyAfterFailedCompare(goal, previousPayload) {
 }
 
 function benchmarkReviewAction(row) {
+  if (row?.excluded) {
+    return {
+      dataset: {},
+      title: row.exclusionReason || "This model was excluded from the current compare run.",
+      label: "Excluded",
+      disabled: true,
+    };
+  }
   const modelKey = predictiveModelKeyFromComparisonLabel(row.model);
   if (modelKey) {
     return {
@@ -6424,6 +6433,7 @@ function closePredictiveWorkbench() {
   if (!runtime.workbenchRevealed) return;
   runtime.workbenchRevealed = false;
   renderBenchmarkBoard();
+  syncPredictiveWorkbenchSingleResultVisibility();
   renderGuidedChrome();
   if (state.dataset) syncHistoryState("push");
   requestAnimationFrame(() => {

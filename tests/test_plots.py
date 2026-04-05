@@ -408,6 +408,35 @@ def test_build_shap_figure_keeps_distinct_bars_when_wrapped_labels_collide() -> 
     assert figure["layout"]["yaxis"]["tickvals"][0] != figure["layout"]["yaxis"]["tickvals"][1]
 
 
+def test_build_shap_figure_safe_mode_separates_title_and_subtitle() -> None:
+    shap_result = {
+        "safe_mode": True,
+        "companion_model": {
+            "selected_feature_count_raw": 30,
+            "selected_feature_count_encoded": 42,
+        },
+        "feature_importance": [
+            {"feature": "gene_a", "mean_abs_shap": 0.12},
+            {"feature": "gene_b", "mean_abs_shap": 0.08},
+        ],
+    }
+
+    figure = build_shap_figure(shap_result)
+
+    annotations = figure["layout"].get("annotations", [])
+    title_annotation = next(
+        annotation for annotation in annotations
+        if annotation.get("text", "") == "Reduced-Feature SHAP Screening Importance"
+    )
+    subtitle_annotation = next(
+        annotation for annotation in annotations
+        if "SHAP safe mode refit a reduced companion model" in annotation.get("text", "")
+    )
+
+    assert float(title_annotation["y"]) > float(subtitle_annotation["y"])
+    assert figure["layout"]["margin"]["t"] >= 108
+
+
 def test_build_model_comparison_figure() -> None:
     comparison = {
         "comparison_table": [

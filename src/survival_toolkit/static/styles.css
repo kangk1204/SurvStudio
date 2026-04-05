@@ -3145,6 +3145,13 @@ h3 {
   white-space: nowrap;
 }
 
+.benchmark-row-subcopy {
+  margin-top: 6px;
+  font-size: 0.84rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
 .benchmark-table th.benchmark-review-column {
   text-align: center;
 }
