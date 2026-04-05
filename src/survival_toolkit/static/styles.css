@@ -2398,6 +2398,13 @@ body[data-ui-mode="guided"][data-guided-step="5"] .tab-panel.guided-visible .sha
   display: none !important;
 }
 
+body[data-ui-mode="guided"][data-guided-step="4"] #panel-tables.guided-visible .card-head,
+body[data-ui-mode="guided"][data-guided-step="5"] #panel-tables.guided-visible .card-head {
+  display: flex !important;
+  align-items: flex-start;
+}
+
+body[data-ui-mode="guided"][data-guided-step="4"] #panel-tables #runCohortTableButton,
 body[data-ui-mode="guided"][data-guided-step="5"] #panel-km #runKmButton,
 body[data-ui-mode="guided"][data-guided-step="5"] #panel-cox #runCoxButton,
 body[data-ui-mode="guided"][data-guided-step="5"] #panel-tables #runCohortTableButton,

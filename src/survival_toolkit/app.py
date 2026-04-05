@@ -372,7 +372,7 @@ class OptimalCutpointRequest(BaseModel):
 
 class TableExportRequest(BaseModel):
     rows: list[dict[str, Any]] = Field(default_factory=list, max_length=2000)
-    format: Literal["csv", "markdown", "latex", "docx"]
+    format: Literal["csv", "markdown", "latex", "docx", "xlsx"]
     style: Literal["plain", "journal"] = "journal"
     template: Literal["default", "nejm", "lancet", "jco"] = "default"
     caption: str | None = None
@@ -1069,6 +1069,58 @@ def _export_rows_to_csv(
     return buffer.getvalue()
 
 
+def _export_rows_to_xlsx(
+    rows: list[dict[str, Any]],
+    style: str,
+    *,
+    caption: str | None = None,
+    notes: Sequence[str] | None = None,
+    template: str = "default",
+) -> bytes:
+    if not rows:
+        raise UserInputError("No rows available for export.")
+    try:
+        from openpyxl import Workbook
+    except ImportError as exc:
+        raise UserInputError(
+            "XLSX export requires openpyxl. Install the formats extra with `pip install -e \".[formats]\"`."
+        ) from exc
+
+    columns = _export_columns(rows)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Table"
+
+    resolved_caption = (caption or "").strip()
+    if resolved_caption:
+        worksheet.append([_sanitize_csv_cell(resolved_caption)])
+        worksheet.append([])
+
+    worksheet.append([_sanitize_csv_cell(column) for column in columns])
+    for row in rows:
+        worksheet.append(
+            [
+                _sanitize_csv_cell(_format_export_value(row.get(column), style))
+                for column in columns
+            ]
+        )
+
+    clean_notes: list[str] = []
+    for note in notes or []:
+        sanitized_note = _sanitize_export_note(note)
+        if sanitized_note:
+            clean_notes.append(sanitized_note)
+    if clean_notes:
+        worksheet.append([])
+        worksheet.append([_export_template_profile(template)["notes_heading"]])
+        for note in clean_notes:
+            worksheet.append([note])
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def _export_rows_to_markdown(
     rows: list[dict[str, Any]],
     *,
@@ -1443,6 +1495,18 @@ async def export_table(request_model: TableExportRequest) -> Response:
                 template=request_model.template,
             )
             return Response(content=content, media_type="text/csv; charset=utf-8")
+        if request_model.format == "xlsx":
+            content = _export_rows_to_xlsx(
+                request_model.rows,
+                request_model.style,
+                caption=request_model.caption,
+                notes=export_notes,
+                template=request_model.template,
+            )
+            return Response(
+                content=content,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
         if request_model.format == "markdown":
             content = _export_rows_to_markdown(
                 request_model.rows,

@@ -207,6 +207,7 @@ const refs = {
   tableDependencyChips: document.getElementById("tableDependencyChips"),
   tableOutputStatusText: document.getElementById("tableOutputStatusText"),
   downloadCohortTableButton: document.getElementById("downloadCohortTableButton"),
+  downloadCohortTableXlsxButton: document.getElementById("downloadCohortTableXlsxButton"),
   uploadZone: document.getElementById("uploadZone"),
   brandHome: document.getElementById("brandHome"),
   // ML
@@ -3048,6 +3049,7 @@ function clearCohortTableOutput({ rerenderChrome = true, syncHistory = true } = 
   state.cohort = null;
   if (refs.cohortTableShell) refs.cohortTableShell.innerHTML = COHORT_TABLE_EMPTY_STATE_HTML;
   if (refs.downloadCohortTableButton) refs.downloadCohortTableButton.disabled = true;
+  if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.disabled = true;
   renderSharedFeatureSummary();
   syncDownloadButtonAvailability();
   if (rerenderChrome) renderGuidedChrome();
@@ -4075,6 +4077,7 @@ function syncDownloadButtonAvailability() {
   if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.disabled = !currentCox;
   if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.disabled = !currentCox;
   refs.downloadCohortTableButton.disabled = !currentTable.hasOutput || !currentTable.isCurrent;
+  if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.disabled = !currentTable.hasOutput || !currentTable.isCurrent;
   refs.downloadMlComparisonButton.disabled = !currentMl || !(currentMl.analysis?.comparison_table?.length);
   if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !currentMl || !refs.mlComparisonPlot?.data?.length;
   if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !currentMl || !refs.mlComparisonPlot?.data?.length;
@@ -5268,6 +5271,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.disabled = true;
   if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.disabled = true;
   refs.downloadCohortTableButton.disabled = true;
+  if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.disabled = true;
   refs.downloadMlComparisonButton.disabled = true;
   if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = true;
   if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = true;
@@ -6362,6 +6366,15 @@ function wireDownloads() {
     const payload = state.cohort;
     if (!requireCurrentResultForExport("tables", { payload })) return;
     downloadCsv(buildDownloadFilename("cohort_summary", "csv", { includeGroup: true }), payload.analysis.rows, payload.analysis.columns);
+  });
+  if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.addEventListener("click", () => {
+    const payload = state.cohort;
+    if (!requireCurrentResultForExport("tables", { payload })) return;
+    void downloadServerTable(buildDownloadFilename("cohort_summary", "xlsx", { includeGroup: true }), {
+      rows: payload.analysis.rows,
+      format: "xlsx",
+      style: "plain",
+    }, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadMlComparisonButton.addEventListener("click", () => {
     const payload = currentGoalResult("ml");
