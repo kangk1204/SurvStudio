@@ -3541,6 +3541,19 @@ function currentPredictiveModelKey() {
     : String(refs.dlModelType?.value || "deepsurv");
 }
 
+function selectedPredictiveSingleResult(goal) {
+  if (!["ml", "dl"].includes(goal)) return null;
+  if ((runtime.resultPreference?.[goal] || "single") !== "single") return null;
+  const payload = currentGoalResult(goal);
+  if (!payload) return null;
+  const requestConfig = payload.request_config || payload.analysis?.request_config || null;
+  if (!requestConfig) return null;
+  const selectedModel = predictiveModelMeta(currentPredictiveModelKey());
+  if (selectedModel.family !== goal) return null;
+  const requestModelType = String(requestConfig.model_type || "").toLowerCase();
+  return requestModelType === selectedModel.key ? payload : null;
+}
+
 function guidedPredictiveModelPickerMarkup({ disabled = false } = {}) {
   const selectedKey = currentPredictiveModelKey();
   const optionGroups = [
@@ -4220,8 +4233,8 @@ function syncPredictiveWorkbenchCompareVisibility() {
 function syncPredictiveWorkbenchSingleResultVisibility() {
   const workbenchOpen = Boolean(runtime.workbenchRevealed);
   const selectedFamily = normalizedPredictiveFamily(runtime.predictiveFamily);
-  const mlHasCurrentSingle = Boolean(currentGoalResult("ml")) && (runtime.resultPreference?.ml || "single") === "single";
-  const dlHasCurrentSingle = Boolean(currentGoalResult("dl")) && (runtime.resultPreference?.dl || "single") === "single";
+  const mlHasCurrentSingle = Boolean(selectedPredictiveSingleResult("ml"));
+  const dlHasCurrentSingle = Boolean(selectedPredictiveSingleResult("dl"));
   const hideMlSingle = workbenchOpen && (selectedFamily !== "ml" || !mlHasCurrentSingle);
   const hideDlSingle = workbenchOpen && (selectedFamily !== "dl" || !dlHasCurrentSingle);
 

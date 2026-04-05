@@ -531,9 +531,13 @@ def test_predictive_workbench_hides_stale_single_result_panels_until_rerun() -> 
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text(encoding="utf-8")
 
+    assert "function selectedPredictiveSingleResult(goal)" in text
+    assert 'const requestConfig = payload.request_config || payload.analysis?.request_config || null;' in text
+    assert 'const requestModelType = String(requestConfig.model_type || "").toLowerCase();' in text
+    assert "return requestModelType === selectedModel.key ? payload : null;" in text
     assert "function syncPredictiveWorkbenchSingleResultVisibility()" in text
-    assert 'const mlHasCurrentSingle = Boolean(currentGoalResult("ml"))' in text
-    assert 'const dlHasCurrentSingle = Boolean(currentGoalResult("dl"))' in text
+    assert 'const mlHasCurrentSingle = Boolean(selectedPredictiveSingleResult("ml"));' in text
+    assert 'const dlHasCurrentSingle = Boolean(selectedPredictiveSingleResult("dl"));' in text
     assert 'refs.mlImportancePlot?.closest(".ml-plots-grid")?.classList.toggle("hidden", hideMlSingle);' in text
     assert 'refs.dlImportancePlot?.closest(".ml-plots-grid")?.classList.toggle("hidden", hideDlSingle);' in text
     assert "syncPredictiveWorkbenchSingleResultVisibility();" in text
