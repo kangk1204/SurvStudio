@@ -80,9 +80,9 @@
       const explicit = Array.isArray(payload?.analysis?.excluded_models)
         ? payload.analysis.excluded_models.map((value) => String(value || "").trim()).filter(Boolean)
         : [];
-      if (explicit.length) return explicit;
       const errors = Array.isArray(payload?.analysis?.errors) ? payload.analysis.errors : [];
-      return [...new Set(errors.map((entry) => String(entry?.model || "").trim()).filter(Boolean))];
+      const erroredModels = errors.map((entry) => String(entry?.model || "").trim()).filter(Boolean);
+      return [...new Set([...explicit, ...erroredModels])];
     }
 
     function excludedModelsCopy(goal, models) {

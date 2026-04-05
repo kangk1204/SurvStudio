@@ -12,6 +12,7 @@ from survival_toolkit.analysis import (
     MAX_MODEL_FEATURE_CANDIDATES,
     _bh_adjust,
     _cohort_frame,
+    _cox_scientific_summary,
     _harrell_c_index,
     _harrell_c_index_bootstrap_ci,
     _has_ambiguous_competing_event_tokens,
@@ -1043,6 +1044,30 @@ def test_cox_analysis_reports_missing_covariate_exclusions() -> None:
     assert result["model_stats"]["outcome_rows"] == result["model_stats"]["n"] + result["model_stats"]["dropped_rows"]
     assert any(metric["label"] == "Dropped for missing covariates" and metric["value"] == 24 for metric in result["scientific_summary"]["metrics"])
     assert any("were excluded" in caution.lower() and "missing" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
+def test_cox_scientific_summary_reports_when_lr_test_is_not_reportable() -> None:
+    summary = _cox_scientific_summary(
+        model_rows=[],
+        diagnostic_rows=[],
+        model_stats={
+            "n": 40,
+            "outcome_rows": 40,
+            "dropped_rows": 0,
+            "events": 12,
+            "parameters": 2,
+            "events_per_parameter": 6.0,
+            "c_index": 0.64,
+            "lr_statistic": None,
+            "lr_pvalue": None,
+            "lr_note": "Overall likelihood-ratio test was not reportable because the null-model comparison returned an invalid negative chi-square candidate.",
+        },
+    )
+
+    assert any(
+        "likelihood-ratio test was not reportable" in caution.lower()
+        for caution in summary["cautions"]
+    )
 
 
 def test_cox_analysis_gbsg2_pnodes_hr_matches_r_coxph_reference() -> None:

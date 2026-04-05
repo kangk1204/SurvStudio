@@ -8,7 +8,6 @@ import json
 import os
 import re
 from collections import OrderedDict
-from functools import lru_cache
 from pathlib import Path
 import signal
 import tempfile
@@ -56,7 +55,6 @@ from survival_toolkit.store import DatasetStore
 BASE_DIR = Path(__file__).resolve().parent
 
 
-@lru_cache(maxsize=1)
 def _static_asset_version() -> str:
     asset_roots = (
         BASE_DIR / "templates",
