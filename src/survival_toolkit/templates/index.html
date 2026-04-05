@@ -562,7 +562,15 @@
               <div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Scaled Schoenfeld residual screening with rank-based Spearman correlation versus log time appears here. The plot overlay uses LOWESS smoothing for screening only, not a full cox.zph test.</div></div>
             </div>
             <div class="table-card full-width">
-              <h3>Linearity Diagnostics</h3>
+              <div class="table-card-head">
+                <h3>Linearity Diagnostics</h3>
+                <label class="toolbar-field compact-inline" id="coxMartingaleVariableField">
+                  <span>Continuous variable</span>
+                  <select id="coxMartingaleVariableSelect" disabled>
+                    <option value="">Run Cox first</option>
+                  </select>
+                </label>
+              </div>
               <div class="plot-shell" id="coxMartingalePlot">
                 <div class="empty-state plot-empty">
                   <span>Martingale residual screening for continuous covariates appears here after fitting the model.</span>
