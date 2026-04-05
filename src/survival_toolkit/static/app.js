@@ -188,6 +188,7 @@ const refs = {
   coxResultsShell: document.getElementById("coxResultsShell"),
   coxDiagnosticsPlot: document.getElementById("coxDiagnosticsPlot"),
   coxDiagnosticsShell: document.getElementById("coxDiagnosticsShell"),
+  coxMartingalePlot: document.getElementById("coxMartingalePlot"),
   downloadCoxResultsButton: document.getElementById("downloadCoxResultsButton"),
   downloadCoxDiagnosticsButton: document.getElementById("downloadCoxDiagnosticsButton"),
   downloadCoxPngButton: document.getElementById("downloadCoxPngButton"),
@@ -1645,6 +1646,7 @@ function resizeVisiblePlotsNow() {
     refs.kmPlot,
     refs.coxPlot,
     refs.coxDiagnosticsPlot,
+    refs.coxMartingalePlot,
     refs.cutpointPlot,
     refs.mlImportancePlot,
     refs.mlShapPlot,
@@ -3854,8 +3856,8 @@ function renderContextCards({
 
   if (refs.coxDependencyText) {
     refs.coxDependencyText.textContent = !hasDataset
-      ? "Cox uses the Study Design outcome definition and the covariates selected in this tab. The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test."
-      : "Cox uses the Study Design outcome definition and the covariates selected in this tab. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, and PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test.";
+      ? "Cox uses the Study Design outcome definition and the covariates selected in this tab. The reported C-index is apparent on the analyzable cohort, PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots."
+      : "Cox uses the Study Design outcome definition and the covariates selected in this tab. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots.";
     renderChipList(refs.coxDependencyChips, hasDataset ? [
       formatOutcomeChip(timeLabel, eventLabel, eventValue),
       formatGroupChip(groupLabel),
@@ -4977,9 +4979,10 @@ function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", his
   renderGuidedChrome();
   requestAnimationFrame(() => {
     if (resolvedTabName === "km" && state.km) Plotly.Plots.resize(refs.kmPlot);
-    if (resolvedTabName === "cox" && state.cox) {
+  if (resolvedTabName === "cox" && state.cox) {
       if (refs.coxPlot?.data) Plotly.Plots.resize(refs.coxPlot);
       if (refs.coxDiagnosticsPlot?.data) Plotly.Plots.resize(refs.coxDiagnosticsPlot);
+      if (refs.coxMartingalePlot?.data) Plotly.Plots.resize(refs.coxMartingalePlot);
     }
     if ((resolvedTabName === "ml" || resolvedTabName === "benchmark") && state.ml) {
       if (refs.mlImportancePlot?.data) Plotly.Plots.resize(refs.mlImportancePlot);
@@ -5063,6 +5066,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.coxResultsShell.innerHTML = '<div class="empty-state">Hazard ratios will appear after running Cox analysis.</div>';
   refs.coxDiagnosticsShell.innerHTML = '<div class="empty-state">Scaled Schoenfeld residual screening details will appear here.</div>';
   clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Scaled Schoenfeld residual screening appears here after fitting the model.</span></div>', { state: "placeholder" });
+  clearPlotShell(refs.coxMartingalePlot, '<div class="empty-state plot-empty"><span>Martingale residual screening for continuous covariates appears here after fitting the model.</span></div>', { state: "placeholder" });
   refs.cohortTableShell.innerHTML = COHORT_TABLE_EMPTY_STATE_HTML;
   refs.mlComparisonShell.innerHTML = '<div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div>';
   if (refs.mlComparisonTitle) refs.mlComparisonTitle.textContent = "Model Comparison";
@@ -5596,6 +5600,19 @@ async function runCox() {
     stabilizePlotShellHeight(refs.coxDiagnosticsPlot);
   } else {
     clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Scaled Schoenfeld residual screening was unavailable for this fit.</span></div>');
+  }
+  if (payload.martingale_figure?.data?.length) {
+    purgePlot(refs.coxMartingalePlot);
+    refs.coxMartingalePlot.innerHTML = "";
+    await Plotly.newPlot(
+      refs.coxMartingalePlot,
+      payload.martingale_figure.data,
+      plotLayoutConfig(payload.martingale_figure.layout, "cox_martingale"),
+      plotConfig("cox_martingale"),
+    );
+    stabilizePlotShellHeight(refs.coxMartingalePlot);
+  } else {
+    clearPlotShell(refs.coxMartingalePlot, '<div class="empty-state plot-empty"><span>Martingale residual screening was unavailable for this fit.</span></div>');
   }
   updateStepIndicator(3);
   renderTable(refs.coxResultsShell, payload.analysis.results_table);
@@ -6503,6 +6520,8 @@ function updateGuidedResultVisibility() {
     refs.coxResultsShell?.closest(".table-card"),
     refs.coxDiagnosticsPlot,
     refs.coxDiagnosticsShell?.closest(".table-card"),
+    refs.coxMartingalePlot,
+    refs.coxMartingalePlot?.closest(".table-card"),
     refs.mlImportancePlot,
     refs.mlShapPlot,
     refs.mlImportancePlot?.closest(".ml-plots-grid"),
@@ -6552,18 +6571,21 @@ function updateGuidedResultVisibility() {
   if (goal === "cox") {
     const hasPlot = hasRenderedPlot(refs.coxPlot);
     const hasDiagnosticsPlot = hasRenderedPlot(refs.coxDiagnosticsPlot);
+    const hasMartingalePlot = hasRenderedPlot(refs.coxMartingalePlot);
     const hasInsight = hasRenderedInsight(refs.coxInsightBoard);
     const hasResults = hasRenderedTable(refs.coxResultsShell);
     const hasDiagnostics = hasRenderedTable(refs.coxDiagnosticsShell);
     const hasDiagnosticsCard = hasDiagnosticsPlot || hasDiagnostics;
-    const hasAny = hasPlot || hasDiagnosticsCard || hasInsight || hasResults;
+    const hasAny = hasPlot || hasDiagnosticsCard || hasMartingalePlot || hasInsight || hasResults;
 
     reveal(refs.coxPlot, hasPlot);
     reveal(refs.coxDiagnosticsPlot, hasDiagnosticsPlot);
+    reveal(refs.coxMartingalePlot, hasMartingalePlot);
     reveal(refs.coxMetaBanner, hasAny);
     reveal(refs.coxInsightBoard, hasInsight);
     reveal(refs.coxResultsShell?.closest(".table-card"), hasResults);
     reveal(refs.coxDiagnosticsShell?.closest(".table-card"), hasDiagnosticsCard);
+    reveal(refs.coxMartingalePlot?.closest(".table-card"), hasMartingalePlot);
   }
 
   if (goal === "tables") {
@@ -6618,7 +6640,7 @@ function updateGuidedResultVisibility() {
 function resultAnchorFor(tabName, { mode = "single" } = {}) {
   const candidates = {
     km: [refs.kmPlot, refs.kmSummaryShell],
-    cox: [refs.coxPlot, refs.coxDiagnosticsPlot, refs.coxResultsShell],
+    cox: [refs.coxPlot, refs.coxDiagnosticsPlot, refs.coxMartingalePlot, refs.coxResultsShell],
     predictive: [refs.benchmarkSummaryGrid, refs.benchmarkComparisonPlot, refs.benchmarkComparisonShell, refs.benchmarkWorkbench],
     tables: [refs.cohortTableShell],
     ml: mode === "compare"

@@ -493,6 +493,121 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
     return figure_to_json(fig)
 
 
+def build_cox_martingale_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
+    diagnostic_series = list(cox_result.get("martingale_plot_data") or [])
+    if not diagnostic_series:
+        return figure_to_json(go.Figure())
+
+    panels = diagnostic_series[:4]
+    panel_count = max(1, len(panels))
+    cols = 2 if panel_count > 1 else 1
+    rows = int(np.ceil(panel_count / cols))
+    wrapped_titles: list[str] = []
+    max_title_lines = 1
+    for panel in panels:
+        wrapped_label, line_count = _wrap_feature_axis_label(panel.get("term") or "Covariate", width=28, max_lines=2)
+        wrapped_titles.append(wrapped_label)
+        max_title_lines = max(max_title_lines, line_count)
+    subtitle_text, subtitle_lines = _wrap_annotation_text(
+        "Screening view only: LOWESS-smoothed martingale residuals versus continuous covariate value. "
+        "Strong curvature suggests a nonlinear functional form, so consider splines or transformed terms before locking the model.",
+        width=92,
+        max_lines=3,
+    )
+    fig = make_subplots(
+        rows=rows,
+        cols=cols,
+        subplot_titles=wrapped_titles,
+        horizontal_spacing=0.14,
+        vertical_spacing=0.22,
+    )
+    for annotation in fig.layout.annotations:
+        annotation.font = {"size": 13, "color": INK, "family": "Sora, sans-serif"}
+        annotation.yshift = 4
+
+    for panel_index, panel in enumerate(panels):
+        row = (panel_index // cols) + 1
+        col = (panel_index % cols) + 1
+        x_values = [float(value) for value in panel.get("value") or [] if value is not None]
+        y_values = [float(value) for value in panel.get("residual") or [] if value is not None]
+        trend_x = [float(value) for value in panel.get("trend_value") or [] if value is not None]
+        trend_y = [float(value) for value in panel.get("trend_residual") or [] if value is not None]
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=y_values,
+                mode="markers",
+                name=str(panel.get("term") or "Residuals"),
+                marker={"size": 6, "color": TEAL, "opacity": 0.55},
+                hovertemplate=(
+                    f"{panel.get('term') or 'Covariate'}<br>Value: %{{x:.3f}}<br>Martingale residual: %{{y:.3f}}<extra></extra>"
+                ),
+                showlegend=False,
+            ),
+            row=row,
+            col=col,
+        )
+        if trend_x and trend_y:
+            fig.add_trace(
+                go.Scatter(
+                    x=trend_x,
+                    y=trend_y,
+                    mode="lines",
+                    line={"width": 2.5, "color": "rgba(13, 148, 136, 0.95)"},
+                    hoverinfo="skip",
+                    showlegend=False,
+                ),
+                row=row,
+                col=col,
+            )
+        fig.add_hline(y=0.0, line_width=1, line_dash="dot", line_color="rgba(90, 103, 118, 0.7)", row=row, col=col)
+        robust_range = _diagnostic_residual_axis_range(y_values, trend_y)
+        fig.update_xaxes(title=str(panel.get("term") or "Covariate"), row=row, col=col, **_COMMON_AXES)
+        fig.update_yaxes(
+            title="Martingale residual",
+            row=row,
+            col=col,
+            range=robust_range,
+            **_COMMON_AXES,
+        )
+
+    top_margin = 180 + ((max_title_lines - 1) * 18) + ((subtitle_lines - 1) * 20)
+    fig.update_layout(
+        **_COMMON_LAYOUT,
+        margin={"l": 60, "r": 30, "t": top_margin, "b": 68},
+        title={"text": ""},
+        height=max(400, rows * 300 + ((max_title_lines - 1) * 24)),
+    )
+    fig.add_annotation(
+        text="Martingale Residual Trend Check",
+        xref="paper",
+        yref="paper",
+        x=0.02,
+        y=1.22 + ((subtitle_lines - 1) * 0.03),
+        showarrow=False,
+        font={"family": "Source Serif 4, serif", "size": 22, "color": INK},
+        align="left",
+        xanchor="left",
+        yanchor="bottom",
+    )
+    fig.add_annotation(
+        text=subtitle_text,
+        xref="paper",
+        yref="paper",
+        x=0.02,
+        y=1.11 + ((subtitle_lines - 1) * 0.02),
+        showarrow=False,
+        font={"size": 12, "color": INK},
+        align="left",
+        xanchor="left",
+        yanchor="bottom",
+        bgcolor="rgba(255,255,255,0.85)",
+        borderpad=5,
+    )
+    return figure_to_json(fig)
+
+
 # ── Cutpoint scan ───────────────────────────────────────────────
 
 

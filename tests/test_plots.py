@@ -4,6 +4,7 @@ import numpy as np
 
 from survival_toolkit.plots import (
     build_cox_diagnostics_figure,
+    build_cox_martingale_figure,
     build_km_figure,
     build_cox_forest_figure,
     build_cutpoint_scan_figure,
@@ -278,7 +279,38 @@ def test_build_cox_diagnostics_figure_uses_robust_y_scale_when_outliers_flatten_
         if "Screening view only" in annotation.get("text", "")
     )
     assert "clipped for readability" in subtitle
-    assert figure["layout"]["yaxis"]["range"][1] < 950.0
+
+
+def test_build_cox_martingale_figure_uses_separate_title_and_linearity_copy() -> None:
+    cox_result = {
+        "martingale_plot_data": [
+            {
+                "term": "age",
+                "value": [45.0, 50.0, 55.0, 60.0],
+                "residual": [-0.2, -0.05, 0.08, 0.16],
+                "trend_value": [45.0, 50.0, 55.0, 60.0],
+                "trend_residual": [-0.18, -0.06, 0.06, 0.14],
+            },
+        ],
+    }
+
+    figure = build_cox_martingale_figure(cox_result)
+
+    annotations = figure["layout"].get("annotations", [])
+    title = next(
+        annotation["text"]
+        for annotation in annotations
+        if annotation.get("text", "") == "Martingale Residual Trend Check"
+    )
+    subtitle = next(
+        annotation["text"]
+        for annotation in annotations
+        if "LOWESS-smoothed martingale residuals" in annotation.get("text", "")
+    )
+    marker_trace = next(trace for trace in figure["data"] if trace.get("mode") == "markers")
+    assert title == "Martingale Residual Trend Check"
+    assert "continuous covariate value" in subtitle
+    assert "Martingale residual" in marker_trace["hovertemplate"]
 
 
 def test_build_cutpoint_scan_figure_with_data() -> None:

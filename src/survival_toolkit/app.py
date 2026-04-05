@@ -6,8 +6,10 @@ import hashlib
 import io
 import json
 import os
+import platform
 import re
 from collections import OrderedDict
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 import signal
 import tempfile
@@ -53,6 +55,13 @@ from survival_toolkit.sample_data import (
 from survival_toolkit.store import DatasetStore
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+def _package_version_or_unknown(distribution_name: str) -> str:
+    try:
+        return package_version(distribution_name)
+    except PackageNotFoundError:
+        return "not_installed"
 
 
 def _static_asset_version() -> str:
@@ -1283,8 +1292,21 @@ async def index(request: Request) -> HTMLResponse:
 
 
 @app.get("/api/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "python_version": platform.python_version(),
+        "app_version": _package_version_or_unknown("survival-toolkit"),
+        "dependency_versions": {
+            "fastapi": _package_version_or_unknown("fastapi"),
+            "numpy": _package_version_or_unknown("numpy"),
+            "pandas": _package_version_or_unknown("pandas"),
+            "plotly": _package_version_or_unknown("plotly"),
+            "scipy": _package_version_or_unknown("scipy"),
+            "statsmodels": _package_version_or_unknown("statsmodels"),
+            "torch": _package_version_or_unknown("torch"),
+        },
+    }
 
 
 def _schedule_process_shutdown(delay_seconds: float = 0.35) -> None:
@@ -1557,7 +1579,11 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
         )
 
         def _run() -> dict[str, Any]:
-            from survival_toolkit.plots import build_cox_diagnostics_figure, build_cox_forest_figure
+            from survival_toolkit.plots import (
+                build_cox_diagnostics_figure,
+                build_cox_forest_figure,
+                build_cox_martingale_figure,
+            )
 
             analysis = compute_cox_analysis(
                 stored.dataframe,
@@ -1569,10 +1595,12 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
             )
             figure = build_cox_forest_figure(analysis)
             diagnostics_figure = build_cox_diagnostics_figure(analysis)
+            martingale_figure = build_cox_martingale_figure(analysis)
             return {
                 "analysis": analysis,
                 "figure": figure,
                 "diagnostics_figure": diagnostics_figure,
+                "martingale_figure": martingale_figure,
                 "request_config": request_config,
             }
 

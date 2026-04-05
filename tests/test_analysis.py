@@ -980,6 +980,7 @@ def test_cox_analysis_scales_schoenfeld_diagnostics_and_reports_ci(monkeypatch) 
         tvalues = np.asarray([2.0], dtype=float)
         pvalues = np.asarray([0.04], dtype=float)
         schoenfeld_residuals = np.asarray([[1.0], [2.0], [3.0], [4.0]], dtype=float)
+        martingale_residuals = np.asarray([-0.2, -0.1, 0.1, 0.2], dtype=float)
         llf = -4.0
         llnull = -7.0
         model = type("_FakeModelMeta", (), {"exog_names": ["Q(\"age\")"], "exog": np.ones((4, 1), dtype=float)})()
@@ -1021,6 +1022,9 @@ def test_cox_analysis_scales_schoenfeld_diagnostics_and_reports_ci(monkeypatch) 
     first_trace = result["diagnostics_plot_data"][0]
     assert first_trace["residual"] == pytest.approx([4.0, 8.0, 12.0, 16.0])
     assert len(first_trace["trend_log_time"]) == len(first_trace["trend_residual"])
+    martingale_trace = result["martingale_plot_data"][0]
+    assert martingale_trace["term"] == "age"
+    assert len(martingale_trace["value"]) == len(martingale_trace["residual"])
     assert result["model_stats"]["c_index_ci_lower"] == pytest.approx(0.57)
     assert result["model_stats"]["c_index_ci_upper"] == pytest.approx(0.67)
     assert result["model_stats"]["lr_statistic"] == pytest.approx(6.0)
