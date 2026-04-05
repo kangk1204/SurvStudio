@@ -372,13 +372,6 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         wrapped_label, line_count = _wrap_feature_axis_label(panel.get("term") or "Term", width=28, max_lines=2)
         wrapped_titles.append(wrapped_label)
         max_title_lines = max(max_title_lines, line_count)
-    subtitle_text, subtitle_lines = _wrap_annotation_text(
-        "Scaled Schoenfeld residual screening: LOWESS-smoothed scaled Schoenfeld residual trends versus log time. "
-        "Use alongside the PH table, not as a full Grambsch-Therneau test. "
-        "Extreme residual outliers may be clipped for readability.",
-        width=92,
-        max_lines=3,
-    )
     fig = make_subplots(
       rows=rows,
       cols=cols,
@@ -452,42 +445,12 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             **_COMMON_AXES,
         )
 
-    subtitle_y = 1.11 + ((subtitle_lines - 1) * 0.02)
-    color_note_y = 1.01
-    top_margin = 188 + ((max_title_lines - 1) * 22) + ((subtitle_lines - 1) * 24)
+    top_margin = 84 + ((max_title_lines - 1) * 18)
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": top_margin, "b": 68},
         title={"text": ""},
-        height=max(440, rows * 330 + ((max_title_lines - 1) * 28)),
-    )
-    fig.add_annotation(
-        text=subtitle_text,
-        xref="paper",
-        yref="paper",
-        x=0.02,
-        y=subtitle_y,
-        showarrow=False,
-        font={"size": 12, "color": INK},
-        align="left",
-        xanchor="left",
-        yanchor="bottom",
-        bgcolor="rgba(255,255,255,0.85)",
-        borderpad=5,
-    )
-    fig.add_annotation(
-        text="Red: PH table p &lt; 0.05. Blue: PH table p ≥ 0.05.",
-        xref="paper",
-        yref="paper",
-        x=0.02,
-        y=color_note_y,
-        showarrow=False,
-        font={"size": 11, "color": INK},
-        align="left",
-        xanchor="left",
-        yanchor="bottom",
-        bgcolor="rgba(255,255,255,0.85)",
-        borderpad=5,
+        height=max(400, rows * 300 + ((max_title_lines - 1) * 24)),
     )
     return figure_to_json(fig)
 
@@ -507,12 +470,6 @@ def build_cox_martingale_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         wrapped_label, line_count = _wrap_feature_axis_label(panel.get("term") or "Covariate", width=28, max_lines=2)
         wrapped_titles.append(wrapped_label)
         max_title_lines = max(max_title_lines, line_count)
-    subtitle_text, subtitle_lines = _wrap_annotation_text(
-        "Martingale residual screening: LOWESS-smoothed martingale residuals versus continuous covariate value. "
-        "Strong curvature suggests a nonlinear functional form, so consider splines or transformed terms before locking the model.",
-        width=92,
-        max_lines=3,
-    )
     fig = make_subplots(
         rows=rows,
         cols=cols,
@@ -571,27 +528,12 @@ def build_cox_martingale_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             **_COMMON_AXES,
         )
 
-    subtitle_y = 1.08 + ((subtitle_lines - 1) * 0.02)
-    top_margin = 156 + ((max_title_lines - 1) * 20) + ((subtitle_lines - 1) * 24)
+    top_margin = 72 + ((max_title_lines - 1) * 18)
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": top_margin, "b": 68},
         title={"text": ""},
-        height=max(400, rows * 300 + ((max_title_lines - 1) * 24)),
-    )
-    fig.add_annotation(
-        text=subtitle_text,
-        xref="paper",
-        yref="paper",
-        x=0.02,
-        y=subtitle_y,
-        showarrow=False,
-        font={"size": 12, "color": INK},
-        align="left",
-        xanchor="left",
-        yanchor="bottom",
-        bgcolor="rgba(255,255,255,0.85)",
-        borderpad=5,
+        height=max(360, rows * 280 + ((max_title_lines - 1) * 24)),
     )
     return figure_to_json(fig)
 

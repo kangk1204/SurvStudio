@@ -2718,6 +2718,21 @@ h3 {
   margin: 0;
 }
 
+.diagnostic-copy {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 12px;
+  color: var(--ink);
+  font-size: 0.94rem;
+  line-height: 1.45;
+}
+
+.diagnostic-copy-note {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 .toolbar-field.compact-inline {
   min-width: 180px;
 }

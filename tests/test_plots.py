@@ -191,31 +191,11 @@ def test_build_cox_diagnostics_figure_wraps_long_term_titles_and_adds_top_spacin
     figure = build_cox_diagnostics_figure(cox_result)
 
     annotations = figure["layout"].get("annotations", [])
-    subplot_titles = [annotation["text"] for annotation in annotations if "Screening view only" not in annotation.get("text", "")]
-    subtitle = next(
-        annotation["text"]
-        for annotation in annotations
-        if "Scaled Schoenfeld residual screening" in annotation.get("text", "")
-    )
+    subplot_titles = [annotation["text"] for annotation in annotations]
     assert any("<br>" in title or title.endswith("…") for title in subplot_titles)
-    assert "<br>" in subtitle
-    assert "LOWESS-smoothed scaled Schoenfeld residual trends" in subtitle
-    assert figure["layout"]["margin"]["t"] >= 172
-    assert figure["layout"]["height"] >= 420
+    assert figure["layout"]["margin"]["t"] >= 84
+    assert figure["layout"]["height"] >= 400
     assert figure["layout"]["title"]["text"] == ""
-    assert not any(annotation.get("text", "") == "Scaled Schoenfeld Residual Trend Check" for annotation in annotations)
-    assert any("Red: PH table p" in annotation.get("text", "") for annotation in annotations)
-    subtitle_annotation = next(
-        annotation
-        for annotation in annotations
-        if "Scaled Schoenfeld residual screening" in annotation.get("text", "")
-    )
-    legend_annotation = next(
-        annotation
-        for annotation in annotations
-        if "Red: PH table p" in annotation.get("text", "")
-    )
-    assert float(subtitle_annotation["y"]) > float(legend_annotation["y"])
     assert figure["layout"]["yaxis"]["title"]["text"] == "Scaled residual"
 
 
@@ -337,23 +317,11 @@ def test_build_cox_martingale_figure_uses_separate_title_and_linearity_copy() ->
     figure = build_cox_martingale_figure(cox_result)
 
     annotations = figure["layout"].get("annotations", [])
-    subtitle = next(
-        annotation["text"]
-        for annotation in annotations
-        if "Martingale residual screening" in annotation.get("text", "")
-    )
-    subtitle_annotation = next(
-        annotation
-        for annotation in annotations
-        if "Martingale residual screening" in annotation.get("text", "")
-    )
+    subplot_titles = [annotation["text"] for annotation in annotations]
     marker_trace = next(trace for trace in figure["data"] if trace.get("mode") == "markers")
-    assert "LOWESS-smoothed martingale residuals" in subtitle
-    assert "continuous" in subtitle and "covariate value" in subtitle
+    assert "age" in subplot_titles
     assert "Martingale residual" in marker_trace["hovertemplate"]
-    assert not any(annotation.get("text", "") == "Martingale Residual Trend Check" for annotation in annotations)
-    assert float(subtitle_annotation["y"]) > 1.0
-    assert figure["layout"]["margin"]["t"] >= 156
+    assert figure["layout"]["margin"]["t"] >= 72
 
 
 def test_build_cutpoint_scan_figure_with_data() -> None:
