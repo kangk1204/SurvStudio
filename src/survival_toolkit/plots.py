@@ -384,11 +384,13 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
       cols=cols,
       subplot_titles=wrapped_titles,
       horizontal_spacing=0.14,
-      vertical_spacing=0.22,
+      vertical_spacing=0.3 if rows > 1 else 0.2,
     )
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 13, "color": INK, "family": "Sora, sans-serif"}
-        annotation.yshift = 4
+        annotation.yshift = 12
+        annotation.bgcolor = "rgba(255,255,255,0.96)"
+        annotation.borderpad = 3
 
     for panel_index, panel in enumerate(panels):
         row = (panel_index // cols) + 1
@@ -434,9 +436,16 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             )
         fig.add_hline(y=0.0, line_width=1, line_dash="dot", line_color="rgba(90, 103, 118, 0.7)", row=row, col=col)
         robust_range = _diagnostic_residual_axis_range(y_values, trend_y)
-        fig.update_xaxes(title="log(time)", row=row, col=col, **_COMMON_AXES)
+        fig.update_xaxes(
+            title="log(time)" if row == rows else "",
+            title_standoff=14,
+            row=row,
+            col=col,
+            **_COMMON_AXES,
+        )
         fig.update_yaxes(
-            title="Scaled residual",
+            title="Scaled residual" if col == 1 else "",
+            title_standoff=12,
             row=row,
             col=col,
             range=robust_range,
@@ -445,12 +454,12 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
 
     subtitle_y = 1.11 + ((subtitle_lines - 1) * 0.02)
     color_note_y = 1.01
-    top_margin = 172 + ((max_title_lines - 1) * 20) + ((subtitle_lines - 1) * 24)
+    top_margin = 188 + ((max_title_lines - 1) * 22) + ((subtitle_lines - 1) * 24)
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": top_margin, "b": 68},
         title={"text": ""},
-        height=max(420, rows * 310 + ((max_title_lines - 1) * 24)),
+        height=max(440, rows * 330 + ((max_title_lines - 1) * 28)),
     )
     fig.add_annotation(
         text=subtitle_text,

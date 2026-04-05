@@ -240,6 +240,56 @@ def test_build_cox_diagnostics_figure_uses_scaled_residual_hover_text() -> None:
     assert "Scaled Schoenfeld residual" in marker_trace["hovertemplate"]
 
 
+def test_build_cox_diagnostics_figure_uses_bottom_row_x_titles_only_in_multirow_layout() -> None:
+    cox_result = {
+        "diagnostics_plot_data": [
+            {
+                "term": "sex: Male vs Female",
+                "log_time": [0.0, 1.0, 2.0],
+                "residual": [0.2, -0.1, 0.15],
+                "trend_log_time": [0.0, 2.0],
+                "trend_residual": [0.05, 0.12],
+                "schoenfeld_rho": 0.31,
+                "p_value": 0.021,
+            },
+            {
+                "term": "stage_group: Stage II vs Stage I",
+                "log_time": [0.2, 1.4, 2.6],
+                "residual": [0.1, -0.08, -0.02],
+                "trend_log_time": [0.2, 2.6],
+                "trend_residual": [0.03, -0.04],
+                "schoenfeld_rho": -0.22,
+                "p_value": 0.044,
+            },
+            {
+                "term": "age",
+                "log_time": [0.1, 1.2, 2.4],
+                "residual": [0.04, -0.05, 0.02],
+                "trend_log_time": [0.1, 2.4],
+                "trend_residual": [0.01, 0.0],
+                "schoenfeld_rho": 0.11,
+                "p_value": 0.19,
+            },
+            {
+                "term": "stage_group: Stage III vs Stage I",
+                "log_time": [0.3, 1.6, 2.8],
+                "residual": [0.14, -0.18, -0.06],
+                "trend_log_time": [0.3, 2.8],
+                "trend_residual": [0.04, -0.03],
+                "schoenfeld_rho": -0.18,
+                "p_value": 0.08,
+            },
+        ],
+    }
+
+    figure = build_cox_diagnostics_figure(cox_result)
+
+    assert figure["layout"]["xaxis"]["title"]["text"] == ""
+    assert figure["layout"]["xaxis2"]["title"]["text"] == ""
+    assert figure["layout"]["xaxis3"]["title"]["text"] == "log(time)"
+    assert figure["layout"]["xaxis4"]["title"]["text"] == "log(time)"
+
+
 def test_build_cox_diagnostics_figure_uses_robust_y_scale_when_outliers_flatten_panel() -> None:
     cox_result = {
         "diagnostics_plot_data": [
