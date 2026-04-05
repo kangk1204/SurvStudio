@@ -126,6 +126,18 @@ If you want the optional ML and DL workflows available on first launch, replace 
 pip install -e ".[all]"
 ```
 
+If you want cohort-table Excel `.xlsx` export and optional spreadsheet readers on first launch, use:
+
+```bash
+pip install -e ".[formats]"
+```
+
+If you want both `.xlsx` export and the optional ML/DL workflows, keep using:
+
+```bash
+pip install -e ".[all]"
+```
+
 ## Install
 
 ### Easiest Path For A New Mac
@@ -213,6 +225,18 @@ pip install -e .
 ```
 
 This path is for running the app. It does **not** install the optional format readers for Excel or Parquet, the ML stack, the DL stack, pytest extras, or Playwright.
+
+If you want cohort-table Excel `.xlsx` export, install the format extras instead:
+
+```bash
+pip install -e ".[formats]"
+```
+
+If you want `.xlsx` export plus the optional ML and DL workflows, use:
+
+```bash
+pip install -e ".[all]"
+```
 
 ### Easiest Path For A New Windows 11 Machine
 

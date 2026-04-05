@@ -183,6 +183,8 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="tableDependencyText"' in response.text
     assert 'id="tableOutputStatusText"' in response.text
     assert 'id="runCohortTableButtonLabel"' in response.text
+    assert 'id="downloadCohortTableButton"' in response.text
+    assert 'id="downloadCohortTableXlsxButton"' in response.text
     assert 'id="cohortVariableSearchInput"' in response.text
     assert 'id="selectAllCohortVariablesButton"' in response.text
     assert 'id="clearCohortVariablesButton"' in response.text
@@ -4483,6 +4485,39 @@ def test_export_table_endpoint_returns_docx_archive() -> None:
     assert "Lancet-style comments block." in document_xml
 
 
+def test_export_table_endpoint_returns_xlsx_archive() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [
+                {"Rank": 1, "Model": "Cox PH", "C-index": 0.712},
+                {"Rank": 2, "Model": "RSF", "C-index": 0.701},
+            ],
+            "format": "xlsx",
+            "style": "journal",
+            "template": "default",
+            "caption": "Table 1. Cohort summary.",
+            "notes": ["Exported from SurvStudio."],
+        },
+    )
+
+    assert response.status_code == 200
+    assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in response.headers["content-type"]
+
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        pytest.skip("openpyxl not installed in test environment")
+
+    workbook = load_workbook(io.BytesIO(response.content), read_only=True, data_only=True)
+    worksheet = workbook.active
+    assert worksheet["A1"].value == "Table 1. Cohort summary."
+    assert worksheet["A3"].value == "Rank"
+    assert worksheet["B4"].value == "Cox PH"
+    assert worksheet["A7"].value == "Notes"
+    assert worksheet["A8"].value == "Exported from SurvStudio."
+
+
 def test_export_table_endpoint_rejects_empty_rows() -> None:
     response = client.post(
         "/api/export-table",
@@ -5504,6 +5539,29 @@ def test_guided_tables_run_uses_clicked_button_and_state_based_success_check() -
     assert 'void runGuidedGoal("tables", target, runCohortTable, {' in app_js
     assert 'successCheck: () => Boolean(state.cohort?.analysis),' in app_js
     assert 'void runGuidedGoal("tables", refs.runCohortTableButton, runCohortTable, {' in app_js
+
+
+def test_cohort_table_frontend_exposes_csv_xlsx_downloads_and_guided_header_override() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert 'downloadCohortTableXlsxButton: document.getElementById("downloadCohortTableXlsxButton")' in app_js
+    assert 'buildDownloadFilename("cohort_summary", "xlsx", { includeGroup: true })' in app_js
+    assert 'format: "xlsx"' in app_js
+    assert 'body[data-ui-mode="guided"][data-guided-step="4"] #panel-tables.guided-visible .card-head,' in styles
+    assert 'body[data-ui-mode="guided"][data-guided-step="5"] #panel-tables.guided-visible .card-head {' in styles
 
 
 def test_guided_runs_use_scope_override_for_loading_locks() -> None:
