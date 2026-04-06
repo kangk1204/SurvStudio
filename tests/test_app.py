@@ -5611,6 +5611,23 @@ def test_guided_runs_use_scope_override_for_loading_locks() -> None:
     assert "setButtonLoading(activeButton, isBusy);" in app_js
 
 
+def test_loading_helpers_publish_busy_state_and_repeat_cv_blocked_ml_run_does_not_spin() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'button.setAttribute("aria-busy", loading ? "true" : "false");' in app_js
+    assert 'button.setAttribute("aria-busy", "false");' in app_js
+    assert 'const primaryBusy = goal === "predictive"' in app_js
+    assert "const primaryDisabled = primaryBusy || mlSingleModelBlocked;" in app_js
+    assert 'guided-run-choice${primaryBusy ? " is-loading" : ""}' in app_js
+    assert 'aria-busy="${primaryBusy ? "true" : "false"}"' in app_js
+
+
 def test_compare_all_actions_surface_pending_feedback() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
@@ -5718,6 +5735,45 @@ def test_window_resize_schedules_plot_resizing() -> None:
     assert "window.clearTimeout(runtime.plotResizeTimer);" in app_js
     assert "window.addEventListener(\"resize\", () => {" in app_js
     assert "scheduleVisiblePlotResize(80);" in app_js
+
+
+def test_frontend_styles_support_reduced_motion_and_tabular_numeric_alignment() -> None:
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    header_start = styles.index(".header-right {")
+    header_end = styles.index("}", header_start)
+    header_css = styles[header_start:header_end]
+    assert "gap: var(--space-3);" in header_css
+    assert "gap: 12px;" not in header_css
+
+    metric_start = styles.index(".metric-pill strong {")
+    metric_end = styles.index("}", metric_start)
+    metric_css = styles[metric_start:metric_end]
+    assert "font-variant-numeric: tabular-nums;" in metric_css
+
+    benchmark_start = styles.rindex(".benchmark-table td {")
+    benchmark_end = styles.index("}", benchmark_start)
+    benchmark_css = styles[benchmark_start:benchmark_end]
+    assert "font-variant-numeric: tabular-nums;" in benchmark_css
+
+    summary_start = styles.index(".signature-summary-grid .summary-value {")
+    summary_end = styles.index("}", summary_start)
+    summary_css = styles[summary_start:summary_end]
+    assert "font-variant-numeric: tabular-nums;" in summary_css
+
+    motion_start = styles.index("@media (prefers-reduced-motion: reduce) {")
+    motion_end = styles.index("/* ─── Utility ─── */", motion_start)
+    motion_css = styles[motion_start:motion_end]
+    assert "scroll-behavior: auto;" in motion_css
+    assert "transition-duration: 0.01ms !important;" in motion_css
+    assert "animation: none !important;" in motion_css
+    assert "transition: none !important;" in motion_css
 
 
 def test_ml_single_model_endpoint_rejects_repeated_cv_strategy() -> None:
