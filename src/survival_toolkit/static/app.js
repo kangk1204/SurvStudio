@@ -2061,8 +2061,11 @@ async function runGuidedKaplanMeier() {
 }
 
 function setButtonLoading(button, isLoading) {
-  button.classList.toggle("is-loading", isLoading);
-  button.disabled = isLoading;
+  if (!button) return;
+  const loading = Boolean(isLoading);
+  button.classList.toggle("is-loading", loading);
+  button.disabled = loading;
+  button.setAttribute("aria-busy", loading ? "true" : "false");
 }
 
 function setPanelResultMode(panel, mode = "idle") {
@@ -2138,6 +2141,7 @@ function setScopeBusy(scope, isBusy, activeButton = null) {
     }
     button.disabled = Boolean(isBusy);
     button.classList.toggle("is-loading", false);
+    button.setAttribute("aria-busy", "false");
   });
   syncSharedFeatureControlsBusy();
   if (scope === "ml") updateMlEvaluationControls();
@@ -4799,13 +4803,14 @@ function guidedPanelMarkup(step) {
     const scopeBusy = isScopeBusy(configureCopy.runScope);
     const predictivePrimaryBusy = goal === "predictive" && isScopeBusy(predictiveFamilyGoal());
     const predictiveCompareBusy = goal === "predictive" && (isScopeBusy("predictive") || isScopeBusy("ml") || isScopeBusy("dl"));
-  const mlSingleModelBlocked = goal === "ml" && refs.mlEvaluationStrategy?.value === "repeated_cv";
-  const mlSingleModelBlockedText = mlSingleModelBlocked
+    const mlSingleModelBlocked = goal === "ml" && refs.mlEvaluationStrategy?.value === "repeated_cv";
+    const mlSingleModelBlockedText = mlSingleModelBlocked
       ? "Run Analysis is disabled while Repeated CV is selected. Use Compare all ML models or switch Evaluation Mode back to Deterministic Holdout."
       : "";
-    const primaryDisabled = goal === "predictive"
+    const primaryBusy = goal === "predictive"
       ? predictiveCompareBusy
-      : (scopeBusy || mlSingleModelBlocked);
+      : scopeBusy;
+    const primaryDisabled = primaryBusy || mlSingleModelBlocked;
     const secondaryDisabled = goal === "predictive"
       ? predictiveCompareBusy
       : scopeBusy;
@@ -4823,9 +4828,9 @@ function guidedPanelMarkup(step) {
           <h3>${escapeHtml(configureCopy.title)}</h3>
           <div class="guided-actions guided-actions-priority${configureCopy.secondaryAction ? " guided-actions-dual" : ""}">
             ${configureCopy.secondaryAction
-              ? `<button class="button ghost compact-btn guided-run-choice guided-run-choice-secondary" type="button" data-guided-action="${escapeHtml(configureCopy.secondaryAction)}"${secondaryDisabled ? " disabled" : ""}>${escapeHtml(configureCopy.secondaryLabel)}</button>`
+              ? `<button class="button ghost compact-btn guided-run-choice guided-run-choice-secondary" type="button" data-guided-action="${escapeHtml(configureCopy.secondaryAction)}"${secondaryDisabled ? " disabled" : ""} aria-busy="false">${escapeHtml(configureCopy.secondaryLabel)}</button>`
               : ""}
-            <button class="button primary compact-btn guided-run-choice${primaryDisabled ? " is-loading" : ""}" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${primaryDisabled ? " disabled" : ""}>${escapeHtml(configureCopy.runLabel)}</button>
+            <button class="button primary compact-btn guided-run-choice${primaryBusy ? " is-loading" : ""}" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${primaryDisabled ? " disabled" : ""} aria-busy="${primaryBusy ? "true" : "false"}">${escapeHtml(configureCopy.runLabel)}</button>
           </div>
           ${mlSingleModelBlockedText ? `<div class="guided-run-status" role="status">${escapeHtml(mlSingleModelBlockedText)}</div>` : ""}
           <div class="guided-actions guided-actions-secondary">

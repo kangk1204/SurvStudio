@@ -255,7 +255,7 @@ body {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .mode-toggle {
@@ -2908,6 +2908,7 @@ h3 {
 
 .metric-pill strong {
   font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .insight-sections {
@@ -3133,6 +3134,10 @@ h3 {
 .benchmark-table th,
 .benchmark-table td {
   vertical-align: middle;
+}
+
+.benchmark-table td {
+  font-variant-numeric: tabular-nums;
 }
 
 .benchmark-family-pill {
@@ -3388,6 +3393,7 @@ tr:nth-child(even) td {
   display: block;
   min-width: 0;
   max-width: 100%;
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -3673,6 +3679,30 @@ tbody tr {
 
 tbody tr:hover td {
   background: rgba(37, 115, 135, 0.04);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html,
+  .workspace {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .workspace.fade-in,
+  .button.is-loading::after {
+    animation: none !important;
+  }
+
+  tbody tr {
+    transition: none !important;
+  }
 }
 
 /* ─── Utility ─── */
