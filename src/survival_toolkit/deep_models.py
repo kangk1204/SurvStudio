@@ -845,6 +845,39 @@ def _digitize_time_bins(
     return indices
 
 
+def _append_evaluation_note(note: str | None, extra_note: str | None) -> str:
+    base = str(note or "").strip()
+    extra = str(extra_note or "").strip()
+    if not base:
+        return extra
+    if not extra or extra in base:
+        return base
+    return f"{base} {extra}"
+
+
+def _discrete_time_tail_bucket_note(
+    time_values: torch.Tensor | np.ndarray | Sequence[float],
+    indices: torch.Tensor | np.ndarray | Sequence[int] | None,
+    bin_edges: np.ndarray,
+    *,
+    scope_label: str,
+) -> str | None:
+    if indices is None:
+        return None
+    index_arr = np.asarray(indices, dtype=int).reshape(-1)
+    if index_arr.size == 0:
+        return None
+    time_arr = np.asarray(time_values, dtype=float).reshape(-1)
+    scoped_times = time_arr[index_arr]
+    overflow_count = int(np.sum(scoped_times > float(bin_edges[-1])))
+    if overflow_count <= 0:
+        return None
+    return (
+        f"{overflow_count} {scope_label} sample(s) exceeded the training-time horizon used for discrete bins "
+        "and were assigned to the tail bucket; interpret late-time tail-bin estimates cautiously."
+    )
+
+
 def _gradient_feature_importance(
     model: Any,
     x_tensor: torch.Tensor,
@@ -2308,6 +2341,24 @@ def train_deephit(
             preserve_tail_overflow=True,
         )
         monitor_bin_tensor = torch.tensor(monitor_bin_indices, dtype=torch.long)
+    evaluation_note = _append_evaluation_note(
+        evaluation_note,
+        _discrete_time_tail_bucket_note(
+            t_all.detach().cpu().numpy(),
+            eval_idx.detach().cpu().numpy(),
+            bin_edges,
+            scope_label="evaluation",
+        ),
+    )
+    evaluation_note = _append_evaluation_note(
+        evaluation_note,
+        _discrete_time_tail_bucket_note(
+            t_all.detach().cpu().numpy(),
+            None if monitor_idx is None else monitor_idx.detach().cpu().numpy(),
+            bin_edges,
+            scope_label="monitor",
+        ),
+    )
 
     model = DeepHitNet(data["n_features"], hidden_layers, num_time_bins, dropout)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
@@ -2618,6 +2669,24 @@ def train_neural_mtlr(
             preserve_tail_overflow=True,
         )
         monitor_bin_tensor = torch.tensor(monitor_bin_indices, dtype=torch.long)
+    evaluation_note = _append_evaluation_note(
+        evaluation_note,
+        _discrete_time_tail_bucket_note(
+            t_all.detach().cpu().numpy(),
+            eval_idx.detach().cpu().numpy(),
+            bin_edges,
+            scope_label="evaluation",
+        ),
+    )
+    evaluation_note = _append_evaluation_note(
+        evaluation_note,
+        _discrete_time_tail_bucket_note(
+            t_all.detach().cpu().numpy(),
+            None if monitor_idx is None else monitor_idx.detach().cpu().numpy(),
+            bin_edges,
+            scope_label="monitor",
+        ),
+    )
 
     model = NeuralMTLRNet(data["n_features"], hidden_layers, num_time_bins, dropout=dropout)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
