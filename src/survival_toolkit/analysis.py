@@ -1158,7 +1158,7 @@ def _restricted_mean_survival_time_delta_stats(
     horizon: float,
     *,
     alpha: float = 0.05,
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     """Estimate RMST uncertainty using a Greenwood/delta-method approximation.
 
     Parameters
@@ -1226,6 +1226,25 @@ def _restricted_mean_survival_time_delta_stats(
     post_event_area_terms = interval_widths[1:] * survival_arr
     tail_areas = np.cumsum(post_event_area_terms[::-1])[::-1]
     greenwood_increments = np.zeros_like(tail_areas, dtype=float)
+    exhausted_risk_set = (
+        np.isfinite(n_risk_arr)
+        & np.isfinite(n_events_arr)
+        & (n_events_arr > 0.0)
+        & (n_risk_arr <= n_events_arr)
+    )
+    if np.any(exhausted_risk_set):
+        warnings.warn(
+            "RMST delta-method confidence intervals were not reported because the Kaplan-Meier risk set was exhausted at an event time.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return {
+            "rmst": float(rmst),
+            "variance": None,
+            "se": None,
+            "ci_lower": None,
+            "ci_upper": None,
+        }
     valid = (
         np.isfinite(n_risk_arr)
         & np.isfinite(n_events_arr)
@@ -1259,6 +1278,15 @@ def _cox_martingale_plot_data(
 ) -> list[dict[str, Any]]:
     categorical_set = {str(value) for value in categorical_covariates}
     residual_array = np.asarray(martingale_residuals, dtype=float).reshape(-1)
+    if residual_array.size == 0:
+        return []
+    if residual_array.size != len(frame):
+        warnings.warn(
+            "Martingale residual diagnostics were skipped because the residual vector length did not match the analyzable cohort.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return []
     panels: list[dict[str, Any]] = []
     for covariate in covariates:
         if covariate in categorical_set or covariate not in frame.columns:
@@ -1619,10 +1647,14 @@ def _km_scientific_summary(
     min_group_n = min(int(row["N"]) for row in summary_rows)
     min_group_events = min(int(row["Events"]) for row in summary_rows)
     total_events = int(cohort_summary["events"])
+    rmst_ci_available = all(
+        row.get("RMST CI lower") is not None and row.get("RMST CI upper") is not None
+        for row in summary_rows
+    )
 
     strengths = [
         "Kaplan-Meier estimation uses Greenwood standard errors with log-log confidence intervals.",
-        "Groupwise RMST summaries include Greenwood/delta-method confidence intervals at the display horizon.",
+        "Groupwise RMST summaries include Greenwood/delta-method confidence intervals at the display horizon when estimable.",
     ]
     cautions: list[str] = []
     next_steps: list[str] = []
@@ -1652,6 +1684,10 @@ def _km_scientific_summary(
         cautions.append("At least one group has fewer than 5 events, so median survival and p-values may be unstable.")
     if cohort_summary["median_follow_up"] is None:
         cautions.append("Median follow-up could not be estimated from the censoring distribution.")
+    if not rmst_ci_available:
+        cautions.append(
+            "At least one RMST confidence interval was not estimable because the KM risk set was exhausted at an event time; interpret RMST point estimates descriptively."
+        )
 
     if group_column and outcome_informed_group:
         headline = "Outcome-informed groups were visualized descriptively; a fresh log-rank p-value is not reported on the same selected split."
@@ -1660,7 +1696,7 @@ def _km_scientific_summary(
     elif group_column and test_payload:
         if float(test_payload["p_value"]) < 0.05:
             headline = f"Global {_weighted_test_label(test_payload['test'], fh_p=fh_p)} testing suggests survival differs across groups."
-            next_steps.append("Inspect groupwise medians, RMST with delta-method confidence intervals, and adjusted pairwise comparisons before making a manuscript claim.")
+            next_steps.append("Inspect groupwise medians, RMST summaries with delta-method confidence intervals when estimable, and adjusted pairwise comparisons before making a manuscript claim.")
         else:
             headline = f"Global {_weighted_test_label(test_payload['test'], fh_p=fh_p)} testing does not show clear survival separation across groups."
             next_steps.append("Do not treat visual curve separation alone as evidence if the global test is not significant.")
@@ -1670,7 +1706,12 @@ def _km_scientific_summary(
 
     if min_group_events < 5 or min_group_n < 15:
         next_steps.append("Avoid anchoring on median survival in sparse groups; emphasize confidence intervals and follow-up maturity.")
-    if rmst_contrast is not None and rmst_contrast.get("estimate") is not None:
+    if (
+        rmst_contrast is not None
+        and rmst_contrast.get("estimate") is not None
+        and rmst_contrast.get("ci_lower") is not None
+        and rmst_contrast.get("ci_upper") is not None
+    ):
         strengths.append(
             f"Two-group RMST contrast ({rmst_contrast['comparison']}) was summarized with a delta-method confidence interval."
         )
@@ -3319,17 +3360,28 @@ def compute_km_analysis(
         left_row, right_row = summary_rows
         left_stats, right_stats = rmst_stats_by_group
         estimate = float(left_stats["rmst"] - right_stats["rmst"])
-        variance = float(left_stats["variance"] + right_stats["variance"])
-        se = math.sqrt(max(variance, 0.0))
-        z_value = float(ndtri(1.0 - alpha / 2.0))
         rmst_contrast = {
             "comparison": f"{left_row['Group']} minus {right_row['Group']}",
             "estimate": _safe_float(estimate),
-            "se": _safe_float(se),
-            "ci_lower": _safe_float(estimate - z_value * se),
-            "ci_upper": _safe_float(estimate + z_value * se),
+            "se": None,
+            "ci_lower": None,
+            "ci_upper": None,
             "horizon": _safe_float(display_horizon),
         }
+        left_variance = left_stats.get("variance")
+        right_variance = right_stats.get("variance")
+        if (
+            left_variance is not None
+            and right_variance is not None
+            and np.isfinite(left_variance)
+            and np.isfinite(right_variance)
+        ):
+            variance = float(left_variance + right_variance)
+            se = math.sqrt(max(variance, 0.0))
+            z_value = float(ndtri(1.0 - alpha / 2.0))
+            rmst_contrast["se"] = _safe_float(se)
+            rmst_contrast["ci_lower"] = _safe_float(estimate - z_value * se)
+            rmst_contrast["ci_upper"] = _safe_float(estimate + z_value * se)
 
     scientific_summary = _km_scientific_summary(
         summary_rows=summary_rows,

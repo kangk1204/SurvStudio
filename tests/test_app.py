@@ -268,6 +268,7 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert "function scrollWorkspaceEntryToTop()" in text
     assert "syncModelFeatureMirrors(refs.modelFeatureChecklist);" in text
     assert "syncModelCategoricalMirrors(refs.modelCategoricalChecklist);" in text
+    assert 'dlModelCategoricals: selectedCheckboxValues(refs.dlModelCategoricalChecklist),' in text
 
 
 def test_guided_step_indicator_exposes_navigation_a11y_labels() -> None:
@@ -528,8 +529,12 @@ def test_frontend_shared_model_features_auto_mark_categorical_candidates() -> No
     assert "column.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD" in text
     assert "c.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD" in text
     assert "const autoCategoricalCandidates = new Set(sharedModelCategoricalCandidates());" in text
-    assert 'setCheckedValues(refs.modelCategoricalChecklist, normalizedCategoricals);' in text
-    assert 'setCheckedValues(refs.dlModelCategoricalChecklist, normalizedCategoricals);' in text
+    assert "const preservedMlCategoricals = clearCategoricals" in text
+    assert "const preservedDlCategoricals = clearCategoricals" in text
+    assert 'setCheckedValues(refs.modelCategoricalChecklist, preservedMlCategoricals);' in text
+    assert 'setCheckedValues(refs.dlModelCategoricalChecklist, preservedDlCategoricals);' in text
+    assert 'normalizeModelCategoricalSelection(refs.modelCategoricalChecklist, featureValues, { autoSelectCandidates: true });' in text
+    assert 'normalizeModelCategoricalSelection(refs.dlModelCategoricalChecklist, featureValues, { autoSelectCandidates: true });' in text
 
 
 def test_predictive_workbench_hides_stale_single_result_panels_until_rerun() -> None:
@@ -787,7 +792,7 @@ def test_benchmark_leaderboard_exposes_params_actions() -> None:
     assert 'const paramsButton = event.target.closest("[data-benchmark-params-goal]");' in app_js
     assert 'showBenchmarkParams(' in app_js
     assert 'label: "Params"' in benchmark_js
-    assert 'benchmarkParamsGoal: row.familyTab' in benchmark_js
+    assert 'benchmarkParamsGoal: familyMeta.familyTab === "unknown" ? "" : familyMeta.familyTab,' in benchmark_js
     assert 'benchmarkParamsModel: row.model' in benchmark_js
     assert 'function createBenchmarkActionGroup(row) {' in benchmark_js
     assert ".benchmark-row-actions" in styles
@@ -825,6 +830,11 @@ def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() 
     assert 'cv_folds: expectsCompare ? Number(requestConfig.cv_folds || 5) : null,' in text
     assert 'cv_repeats: expectsCompare ? Number(requestConfig.cv_repeats || 3) : null,' in text
     assert 'model_type: expectsCompare ? "compare" : String(refs.mlModelType?.value || ""),' in text
+    assert 'function currentSharedModelSelections(goal = "ml") {' in text
+    assert 'const featureChecklist = goal === "dl" ? refs.dlModelFeatureChecklist : refs.modelFeatureChecklist;' in text
+    assert 'const categoricalChecklist = goal === "dl" ? refs.dlModelCategoricalChecklist : refs.modelCategoricalChecklist;' in text
+    assert 'const { features, categoricalFeatures } = currentSharedModelSelections("ml");' in text
+    assert 'const { features, categoricalFeatures } = currentSharedModelSelections("dl");' in text
     assert '&& (compareRun || Boolean(requestConfig.compute_shap) === !Boolean(refs.mlSkipShap?.checked))' not in text
 
 
@@ -4604,10 +4614,10 @@ def test_deep_model_compare_endpoint_supports_repeated_cv() -> None:
             "n_clusters": 3,
             "evaluation_strategy": "repeated_cv",
             "cv_folds": 2,
-            "cv_repeats": 2,
+            "cv_repeats": 1,
             "early_stopping_patience": 2,
             "early_stopping_min_delta": 0.0,
-            "parallel_jobs": 2,
+            "parallel_jobs": 1,
         },
     )
 
@@ -4672,7 +4682,7 @@ def test_deep_single_model_endpoint_supports_repeated_cv(monkeypatch) -> None:
             "cv_repeats": 2,
             "early_stopping_patience": 2,
             "early_stopping_min_delta": 0.0,
-            "parallel_jobs": 2,
+            "parallel_jobs": 1,
         },
     )
 
@@ -5561,10 +5571,27 @@ def test_cohort_table_frontend_exposes_csv_xlsx_downloads_and_guided_header_over
     ).read_text(encoding="utf-8")
 
     assert 'downloadCohortTableXlsxButton: document.getElementById("downloadCohortTableXlsxButton")' in app_js
+    assert 'function buildCohortTableExportPayload(format = "xlsx") {' in app_js
     assert 'buildDownloadFilename("cohort_summary", "xlsx", { includeGroup: true })' in app_js
-    assert 'format: "xlsx"' in app_js
+    assert 'caption: tableState.outputGroupLabel === "overall only"' in app_js
+    assert 'notes.push("Current visible settings no longer match this table. Rebuild Table before sharing if you need the latest selections.");' in app_js
+    assert "provenance: {" in app_js
+    assert "request_config: requestConfig," in app_js
+    assert 'buildCohortTableExportPayload("xlsx")' in app_js
     assert 'body[data-ui-mode="guided"][data-guided-step="4"] #panel-tables.guided-visible .card-head,' in styles
     assert 'body[data-ui-mode="guided"][data-guided-step="5"] #panel-tables.guided-visible .card-head {' in styles
+
+
+def test_benchmark_frontend_normalizes_missing_family_labels_before_rendering() -> None:
+    benchmark_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_benchmark.js"
+    text = benchmark_js.read_text(encoding="utf-8")
+
+    assert "function benchmarkRowFamilyMeta(row) {" in text
+    assert 'return { familyTab: "unknown", familyLabel: familyLabel || "Unknown", familyShortLabel: familyLabel || "Unknown" };' in text
+    assert 'benchmarkParamsGoal: familyMeta.familyTab === "unknown" ? "" : familyMeta.familyTab,' in text
+    assert 'disabled: familyMeta.familyTab === "unknown",' in text
+    assert 'const presentFamilies = [...new Set(board.visibleRows.map((row) => benchmarkRowFamilyMeta(row).familyLabel))];' in text
+    assert '<td><span class="benchmark-family-pill family-${escapeHtml(familyMeta.familyTab)}">${escapeHtml(familyMeta.familyLabel)}</span></td>' in text
 
 
 def test_guided_runs_use_scope_override_for_loading_locks() -> None:

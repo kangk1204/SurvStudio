@@ -825,11 +825,13 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
-function currentSharedModelSelections() {
-  const features = selectedCheckboxValues(refs.modelFeatureChecklist);
+function currentSharedModelSelections(goal = "ml") {
+  const featureChecklist = goal === "dl" ? refs.dlModelFeatureChecklist : refs.modelFeatureChecklist;
+  const categoricalChecklist = goal === "dl" ? refs.dlModelCategoricalChecklist : refs.modelCategoricalChecklist;
+  const features = selectedCheckboxValues(featureChecklist);
   return {
     features,
-    categoricalFeatures: selectedCheckboxValues(refs.modelCategoricalChecklist)
+    categoricalFeatures: selectedCheckboxValues(categoricalChecklist)
       .filter((value) => features.includes(value)),
   };
 }
@@ -973,7 +975,7 @@ function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) 
   }
 
   if (goal === "ml") {
-    const { features, categoricalFeatures } = currentSharedModelSelections();
+    const { features, categoricalFeatures } = currentSharedModelSelections("ml");
     const expectsCompare = expectsCompareOverride == null
       ? preferredResultMode("ml") === "compare"
       : Boolean(expectsCompareOverride);
@@ -993,7 +995,7 @@ function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) 
   }
 
   if (goal === "dl") {
-    const { features, categoricalFeatures } = currentSharedModelSelections();
+    const { features, categoricalFeatures } = currentSharedModelSelections("dl");
     const expectsCompare = expectsCompareOverride == null
       ? preferredResultMode("dl") === "compare"
       : Boolean(expectsCompareOverride);
@@ -1750,6 +1752,7 @@ function captureControlSnapshot() {
     coxPreviewKey: runtime.coxPreview?.key || "",
     modelFeatures: selectedCheckboxValues(refs.modelFeatureChecklist),
     modelCategoricals: selectedCheckboxValues(refs.modelCategoricalChecklist),
+    dlModelCategoricals: selectedCheckboxValues(refs.dlModelCategoricalChecklist),
     cohortVariables: selectedCheckboxValues(refs.cohortVariableChecklist),
     mlModelType: refs.mlModelType?.value || "",
     mlNEstimators: refs.mlNEstimators?.value || "",
@@ -1886,9 +1889,10 @@ function applyControlSnapshot(snapshot) {
   setCheckedValues(refs.modelFeatureChecklist, snapshot.modelFeatures || []);
   setCheckedValues(refs.modelCategoricalChecklist, snapshot.modelCategoricals || []);
   setCheckedValues(refs.dlModelFeatureChecklist, snapshot.modelFeatures || []);
-  setCheckedValues(refs.dlModelCategoricalChecklist, snapshot.modelCategoricals || []);
+  setCheckedValues(refs.dlModelCategoricalChecklist, snapshot.dlModelCategoricals || snapshot.modelCategoricals || []);
   syncModelFeatureMirrors(refs.modelFeatureChecklist);
   syncModelCategoricalMirrors(refs.modelCategoricalChecklist);
+  syncModelCategoricalMirrors(refs.dlModelCategoricalChecklist);
   setCheckedValues(refs.cohortVariableChecklist, snapshot.cohortVariables || []);
   syncCoxCovariateSelection();
   renderSharedFeatureSummary();
@@ -3162,6 +3166,33 @@ function manuscriptExportPayload(manuscript, format, template, fallbackCaption, 
   };
 }
 
+function buildCohortTableExportPayload(format = "xlsx") {
+  const payload = state.cohort;
+  const tableState = currentCohortTableOutputState();
+  const requestConfig = requestConfigFromPayload(payload) || currentGoalRequestConfig("tables");
+  const notes = [];
+  if (tableState.hasOutput && !tableState.isCurrent) {
+    notes.push("Current visible settings no longer match this table. Rebuild Table before sharing if you need the latest selections.");
+  }
+  return {
+    rows: payload?.analysis?.rows || [],
+    format,
+    style: "plain",
+    caption: tableState.outputGroupLabel === "overall only"
+      ? "Cohort summary table"
+      : `Cohort summary table by ${tableState.outputGroupLabel}`,
+    notes,
+    provenance: {
+      request_config: requestConfig,
+      analysis: {
+        output_group_label: tableState.outputGroupLabel,
+        output_variables: tableState.outputVariables,
+        is_current: tableState.isCurrent,
+      },
+    },
+  };
+}
+
 function downloadPlotImage(plotEl, filename, format) {
   return downloadHelpers.downloadPlotImage({ plotEl, filename, format });
 }
@@ -3553,7 +3584,7 @@ function sharedModelCategoricalCandidates() {
   const availableFeatures = new Set(modelFeatureCandidateColumns());
   return state.dataset.columns
     .filter((column) => availableFeatures.has(column.name))
-    .filter((column) => ["categorical", "binary"].includes(column.kind) || column.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD)
+    .filter((column) => ["categorical", "binary"].includes(column.kind) || (column.n_unique != null && column.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD))
     .map((column) => column.name);
 }
 
@@ -3564,9 +3595,10 @@ function refreshVariableSelections() {
   const previousCategoricals = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => availableCovariates.includes(v));
   const previousModelFeatures = selectedCheckboxValues(refs.modelFeatureChecklist).filter((v) => availableCovariates.includes(v));
   const previousModelCategoricals = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => availableCovariates.includes(v));
+  const previousDlModelCategoricals = selectedCheckboxValues(refs.dlModelCategoricalChecklist).filter((v) => availableCovariates.includes(v));
   const previousTableVars = selectedCheckboxValues(refs.cohortVariableChecklist).filter((v) => availableCovariates.includes(v));
   const defaultCategoricals = state.dataset.columns
-    .filter((c) => ["categorical", "binary"].includes(c.kind) || c.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD)
+    .filter((c) => ["categorical", "binary"].includes(c.kind) || (c.n_unique != null && c.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD))
     .map((c) => c.name)
     .filter((name) => availableCovariates.includes(name));
   const defaultModelFeatures = availableCovariates.slice(0, DEFAULT_MODEL_FEATURE_SELECTION_LIMIT);
@@ -3575,7 +3607,7 @@ function refreshVariableSelections() {
   renderChecklist(refs.modelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
   renderChecklist(refs.modelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
   renderChecklist(refs.dlModelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
-  renderChecklist(refs.dlModelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
+  renderChecklist(refs.dlModelCategoricalChecklist, availableCovariates, previousDlModelCategoricals.length ? previousDlModelCategoricals : defaultCategoricals);
   renderChecklist(refs.cohortVariableChecklist, availableCovariates, previousTableVars.length ? previousTableVars : availableCovariates.slice(0, 6));
   const numericOptions = state.dataset.numeric_columns.filter((c) => !isSurvivalOutcomeLikeColumn(c));
   renderSelect(refs.deriveSource, numericOptions, { selected: numericOptions.includes(refs.deriveSource.value) ? refs.deriveSource.value : numericOptions[0] || null });
@@ -3587,19 +3619,25 @@ function setSharedModelFeatureSelection(nextFeatures = [], { clearCategoricals =
   const availableFeatures = modelFeatureCandidateColumns();
   const normalizedFeatures = nextFeatures.filter((value) => availableFeatures.includes(value));
   const autoCategoricalCandidates = new Set(sharedModelCategoricalCandidates());
-  const preservedCategoricals = clearCategoricals
+  const preservedMlCategoricals = clearCategoricals
     ? []
     : selectedCheckboxValues(refs.modelCategoricalChecklist).filter((value) => normalizedFeatures.includes(value));
+  const preservedDlCategoricals = clearCategoricals
+    ? []
+    : selectedCheckboxValues(refs.dlModelCategoricalChecklist).filter((value) => normalizedFeatures.includes(value));
   normalizedFeatures.forEach((value) => {
-    if (autoCategoricalCandidates.has(value) && !preservedCategoricals.includes(value)) {
-      preservedCategoricals.push(value);
+    if (autoCategoricalCandidates.has(value) && !preservedMlCategoricals.includes(value)) {
+      preservedMlCategoricals.push(value);
+    }
+    if (autoCategoricalCandidates.has(value) && !preservedDlCategoricals.includes(value)) {
+      preservedDlCategoricals.push(value);
     }
   });
 
   setCheckedValues(refs.modelFeatureChecklist, normalizedFeatures);
   setCheckedValues(refs.dlModelFeatureChecklist, normalizedFeatures);
-  setCheckedValues(refs.modelCategoricalChecklist, preservedCategoricals);
-  setCheckedValues(refs.dlModelCategoricalChecklist, preservedCategoricals);
+  setCheckedValues(refs.modelCategoricalChecklist, preservedMlCategoricals);
+  setCheckedValues(refs.dlModelCategoricalChecklist, preservedDlCategoricals);
   renderSharedFeatureSummary();
   queueHistorySync();
 }
@@ -3609,29 +3647,40 @@ function syncChecklistSelections(sourceContainer, targetContainer) {
   setCheckedValues(targetContainer, selectedCheckboxValues(sourceContainer));
 }
 
+function normalizeModelCategoricalSelection(
+  categoricalChecklist,
+  featureValues,
+  { autoSelectCandidates = false } = {},
+) {
+  if (!categoricalChecklist) return;
+  const normalizedCategoricals = selectedCheckboxValues(categoricalChecklist)
+    .filter((value) => featureValues.includes(value));
+  if (autoSelectCandidates) {
+    const autoCategoricalCandidates = new Set(sharedModelCategoricalCandidates());
+    featureValues.forEach((value) => {
+      if (autoCategoricalCandidates.has(value) && !normalizedCategoricals.includes(value)) {
+        normalizedCategoricals.push(value);
+      }
+    });
+  }
+  setCheckedValues(categoricalChecklist, normalizedCategoricals);
+}
+
 function syncModelFeatureMirrors(sourceContainer = refs.modelFeatureChecklist) {
   const counterpart = sourceContainer === refs.dlModelFeatureChecklist
     ? refs.modelFeatureChecklist
     : refs.dlModelFeatureChecklist;
   syncChecklistSelections(sourceContainer, counterpart);
   const featureValues = selectedCheckboxValues(sourceContainer);
-  const autoCategoricalCandidates = new Set(sharedModelCategoricalCandidates());
-  const normalizedCategoricals = selectedCheckboxValues(refs.modelCategoricalChecklist)
-    .filter((value) => featureValues.includes(value));
-  featureValues.forEach((value) => {
-    if (autoCategoricalCandidates.has(value) && !normalizedCategoricals.includes(value)) {
-      normalizedCategoricals.push(value);
-    }
-  });
-  setCheckedValues(refs.modelCategoricalChecklist, normalizedCategoricals);
-  setCheckedValues(refs.dlModelCategoricalChecklist, normalizedCategoricals);
+  normalizeModelCategoricalSelection(refs.modelCategoricalChecklist, featureValues, { autoSelectCandidates: true });
+  normalizeModelCategoricalSelection(refs.dlModelCategoricalChecklist, featureValues, { autoSelectCandidates: true });
 }
 
 function syncModelCategoricalMirrors(sourceContainer = refs.modelCategoricalChecklist) {
-  const counterpart = sourceContainer === refs.dlModelCategoricalChecklist
-    ? refs.modelCategoricalChecklist
-    : refs.dlModelCategoricalChecklist;
-  syncChecklistSelections(sourceContainer, counterpart);
+  const featureChecklist = sourceContainer === refs.dlModelCategoricalChecklist
+    ? refs.dlModelFeatureChecklist
+    : refs.modelFeatureChecklist;
+  normalizeModelCategoricalSelection(sourceContainer, selectedCheckboxValues(featureChecklist));
 }
 
 function setCheckedValues(container, values) {
@@ -4203,7 +4252,8 @@ function renderSharedFeatureSummary() {
   const coxFeatures = hasDataset ? selectedCheckboxValues(refs.covariateChecklist) : [];
   const coxCategoricals = hasDataset ? selectedCheckboxValues(refs.categoricalChecklist).filter((value) => coxFeatures.includes(value)) : [];
   const features = hasDataset ? selectedCheckboxValues(refs.modelFeatureChecklist) : [];
-  const categoricals = hasDataset ? selectedCheckboxValues(refs.modelCategoricalChecklist).filter((value) => features.includes(value)) : [];
+  const mlCategoricals = hasDataset ? selectedCheckboxValues(refs.modelCategoricalChecklist).filter((value) => features.includes(value)) : [];
+  const dlCategoricals = hasDataset ? selectedCheckboxValues(refs.dlModelCategoricalChecklist).filter((value) => features.includes(value)) : [];
   const tableVariables = hasDataset ? selectedCheckboxValues(refs.cohortVariableChecklist) : [];
   const timeLabel = hasDataset ? (refs.timeColumn?.value || "time") : "time";
   const eventLabel = hasDataset ? (refs.eventColumn?.value || "event") : "event";
@@ -4212,28 +4262,40 @@ function renderSharedFeatureSummary() {
   const mlSummaryText = !hasDataset
     ? "Load a dataset first. ML uses the shared model feature selections shown here."
     : features.length
-      ? `ML and DL share this model feature list: ${summarizeFeatureNames(features)}. Compare All uses the Evaluation section for cross-model screening only. Group by is shown here for context only.`
+      ? `ML and DL share this model feature list: ${summarizeFeatureNames(features)}. ML categorical handling stays local to this tab. Compare All uses the Evaluation section for cross-model screening only. Group by is shown here for context only.`
       : "No model feature set selected yet. Choose ML/DL model features before training.";
   const dlSummaryText = !hasDataset
     ? "Load a dataset first. DL uses the same shared model feature selections shown in this workspace."
     : features.length
-      ? `Training inputs come only from the shared ML/DL model feature selections: ${summarizeFeatureNames(features)}. Group by is shown here for context only.`
+      ? `Training inputs come only from the shared ML/DL model feature selections: ${summarizeFeatureNames(features)}. DL categorical handling stays local to this tab. Group by is shown here for context only.`
       : "No model feature set selected yet. Choose ML/DL model features before training.";
-  const finalChips = !hasDataset
+  const sharedChips = !hasDataset
     ? []
     : [
         formatOutcomeChip(timeLabel, eventLabel, eventValue),
         formatGroupChip(groupLabel),
         `Model features: ${features.length}`,
-        `Categorical: ${categoricals.length}`,
         features.length ? `Preview: ${summarizeFeatureNames(features)}` : "Preview: none selected",
-        categoricals.length ? `Categoricals: ${summarizeFeatureNames(categoricals, 3)}` : "Categoricals: none",
+      ];
+  const mlChips = !hasDataset
+    ? []
+    : [
+        ...sharedChips,
+        `Categorical: ${mlCategoricals.length}`,
+        mlCategoricals.length ? `Categoricals: ${summarizeFeatureNames(mlCategoricals, 3)}` : "Categoricals: none",
+      ];
+  const dlChips = !hasDataset
+    ? []
+    : [
+        ...sharedChips,
+        `Categorical: ${dlCategoricals.length}`,
+        dlCategoricals.length ? `Categoricals: ${summarizeFeatureNames(dlCategoricals, 3)}` : "Categoricals: none",
       ];
 
   if (refs.mlFeatureSummaryText) refs.mlFeatureSummaryText.textContent = mlSummaryText;
   if (refs.dlFeatureSummaryText) refs.dlFeatureSummaryText.textContent = dlSummaryText;
-  renderChipList(refs.mlFeatureSummaryChips, finalChips);
-  renderChipList(refs.dlFeatureSummaryChips, finalChips);
+  renderChipList(refs.mlFeatureSummaryChips, mlChips);
+  renderChipList(refs.dlFeatureSummaryChips, dlChips);
 
   renderContextCards({
     hasDataset,
@@ -4244,7 +4306,7 @@ function renderSharedFeatureSummary() {
     coxFeatures,
     coxCategoricals,
     modelFeatures: features,
-    modelCategoricals: categoricals,
+    modelCategoricals: mlCategoricals,
     tableVariables,
   });
   syncDownloadButtonAvailability();
@@ -5834,9 +5896,8 @@ async function runMlModel() {
     throw new Error("Run Analysis uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.");
   }
   const base = currentBaseConfig();
-  const features = selectedCheckboxValues(refs.modelFeatureChecklist);
+  const { features, categoricalFeatures } = currentSharedModelSelections("ml");
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
-  const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
   const selectedModelType = refs.mlModelType.value;
   const modelLabel = mlModelLabel(selectedModelType);
   const computeShap = mlModelSupportsShap(selectedModelType) && !refs.mlSkipShap?.checked;
@@ -5945,9 +6006,8 @@ async function runMlModel() {
 async function runCompareModels({ suppressCompletionToast = false } = {}) {
   runtime.resultPreference.ml = "compare";
   const base = currentBaseConfig();
-  const features = selectedCheckboxValues(refs.modelFeatureChecklist);
+  const { features, categoricalFeatures } = currentSharedModelSelections("ml");
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
-  const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
   refs.mlMetaBanner.textContent = mlComparePendingBannerText({
     rowCount: base.row_count,
     evaluationStrategy: refs.mlEvaluationStrategy.value,
@@ -6076,9 +6136,8 @@ async function runDlModel() {
   runtime.resultPreference.dl = "single";
   const base = currentBaseConfig();
   validateDlControls();
-  const features = selectedCheckboxValues(refs.modelFeatureChecklist);
+  const { features, categoricalFeatures } = currentSharedModelSelections("dl");
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
-  const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
   const hiddenLayers = parseHiddenLayersStrict();
   const startedAt = performance.now();
 
@@ -6220,9 +6279,8 @@ async function runDlCompareModels({ suppressCompletionToast = false } = {}) {
   runtime.resultPreference.dl = "compare";
   const base = currentBaseConfig();
   validateDlControls();
-  const features = selectedCheckboxValues(refs.modelFeatureChecklist);
+  const { features, categoricalFeatures } = currentSharedModelSelections("dl");
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
-  const categoricalFeatures = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => features.includes(v));
   const hiddenLayers = parseHiddenLayersStrict();
 
   refs.dlMetaBanner.textContent = dlComparePendingBannerText({
@@ -6372,16 +6430,16 @@ function wireDownloads() {
   refs.downloadCohortTableButton.addEventListener("click", () => {
     const payload = state.cohort;
     if (!requireCurrentResultForExport("tables", { payload })) return;
-    downloadCsv(buildDownloadFilename("cohort_summary", "csv", { includeGroup: true }), payload.analysis.rows, payload.analysis.columns);
+    downloadCsv(buildDownloadFilename("cohort_summary", "csv", { includeGroup: true }), payload?.analysis?.rows, payload?.analysis?.columns);
   });
   if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.addEventListener("click", () => {
     const payload = state.cohort;
     if (!requireCurrentResultForExport("tables", { payload })) return;
-    void downloadServerTable(buildDownloadFilename("cohort_summary", "xlsx", { includeGroup: true }), {
-      rows: payload.analysis.rows,
-      format: "xlsx",
-      style: "plain",
-    }, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").catch((error) => showError(errorMessageText(error, "Download failed.")));
+    void downloadServerTable(
+      buildDownloadFilename("cohort_summary", "xlsx", { includeGroup: true }),
+      buildCohortTableExportPayload("xlsx"),
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadMlComparisonButton.addEventListener("click", () => {
     const payload = currentGoalResult("ml");

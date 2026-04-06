@@ -12,6 +12,7 @@ from survival_toolkit.analysis import (
     MAX_MODEL_FEATURE_CANDIDATES,
     _bh_adjust,
     _cohort_frame,
+    _cox_martingale_plot_data,
     _cox_scientific_summary,
     _harrell_c_index,
     _harrell_c_index_bootstrap_ci,
@@ -726,6 +727,36 @@ def test_km_analysis_returns_grouped_results() -> None:
     assert result["rmst_contrast"]["ci_lower"] <= result["rmst_contrast"]["estimate"] <= result["rmst_contrast"]["ci_upper"]
 
 
+def test_km_analysis_marks_rmst_ci_unavailable_when_risk_set_is_exhausted() -> None:
+    df = pd.DataFrame(
+        {
+            "time": [1.0, 1.0, 2.0, 2.0],
+            "event": [1, 1, 1, 1],
+            "group": ["A", "A", "B", "B"],
+        }
+    )
+
+    with pytest.warns(RuntimeWarning, match="risk set was exhausted"):
+        result = compute_km_analysis(
+            df,
+            time_column="time",
+            event_column="event",
+            group_column="group",
+            event_positive_value=1,
+            max_time=2.0,
+        )
+
+    assert result["rmst_contrast"] is not None
+    assert result["rmst_contrast"]["estimate"] is not None
+    assert result["rmst_contrast"]["ci_lower"] is None
+    assert result["rmst_contrast"]["ci_upper"] is None
+    assert any("not estimable" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    for row in result["summary_table"]:
+        assert row["RMST SE"] is None
+        assert row["RMST CI lower"] is None
+        assert row["RMST CI upper"] is None
+
+
 def test_km_analysis_marks_outcome_informed_group_results_as_descriptive() -> None:
     df = make_example_dataset(seed=18, n_patients=180)
     updated, column_name, _ = derive_group_column(
@@ -1029,6 +1060,20 @@ def test_cox_analysis_scales_schoenfeld_diagnostics_and_reports_ci(monkeypatch) 
     assert result["model_stats"]["c_index_ci_upper"] == pytest.approx(0.67)
     assert result["model_stats"]["lr_statistic"] == pytest.approx(6.0)
     assert result["model_stats"]["lr_pvalue"] is not None
+
+
+def test_cox_martingale_plot_data_skips_mismatched_residual_lengths() -> None:
+    frame = pd.DataFrame({"age": [50.0, 55.0, 60.0, 65.0]})
+
+    with pytest.warns(RuntimeWarning, match="residual vector length"):
+        result = _cox_martingale_plot_data(
+            frame,
+            np.asarray([0.1, 0.2, 0.3], dtype=float),
+            covariates=["age"],
+            categorical_covariates=[],
+        )
+
+    assert result == []
 
 
 def test_cox_analysis_reports_missing_covariate_exclusions() -> None:

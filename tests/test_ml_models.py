@@ -1700,6 +1700,33 @@ def test_integrated_brier_score_restricts_eval_times_to_support_event_window() -
     assert any(metric["label"] == "Brier Skill Score" for metric in result["scientific_summary"]["metrics"])
 
 
+def test_integrated_brier_score_reports_pointwise_mode_when_support_window_collapses() -> None:
+    from survival_toolkit.ml_models import compute_integrated_brier_score
+
+    times = np.array([0.0, 1.0, 2.0], dtype=float)
+    events = np.array([1, 0, 1], dtype=int)
+    support_times = np.array([0.0, 0.0, 0.0], dtype=float)
+    support_events = np.array([1, 0, 0], dtype=int)
+
+    def _predicted(eval_times: np.ndarray) -> np.ndarray:
+        return np.full((len(times), len(eval_times)), 0.75, dtype=float)
+
+    result = compute_integrated_brier_score(
+        times,
+        events,
+        _predicted,
+        support_times=support_times,
+        support_events=support_events,
+    )
+
+    assert result["eval_times"] == [0.0]
+    assert len(result["brier_scores"]) == 1
+    assert result["ibs"] == pytest.approx(result["brier_scores"][0]["score"])
+    assert result["null_ibs"] == pytest.approx(result["null_brier_scores"][0]["score"])
+    assert "Pointwise Brier score" in result["scientific_summary"]["headline"]
+    assert any("single time point" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
 def test_integrated_brier_score_falls_back_when_numpy_has_no_trapezoid(monkeypatch: pytest.MonkeyPatch) -> None:
     import survival_toolkit.ml_models as ml_models
 
