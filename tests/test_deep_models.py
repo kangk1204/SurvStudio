@@ -1727,3 +1727,53 @@ def test_discrete_time_models_use_same_tail_bucket_setting_for_train_and_monitor
     )
 
     assert preserve_flags[:2] == [True, True]
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+@pytest.mark.parametrize("trainer_name", ["train_deephit", "train_neural_mtlr"])
+def test_discrete_time_models_report_eval_tail_bucket_overflow(
+    monkeypatch,
+    trainer_name: str,
+) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    df = make_example_dataset(seed=61, n_patients=16)
+    train_idx = np.arange(0, 12, dtype=int)
+    eval_idx = np.arange(12, 16, dtype=int)
+    train_horizon = float(df.loc[train_idx, "os_months"].max())
+    df.loc[eval_idx, "os_months"] = train_horizon + np.array([12.0, 18.0, 24.0, 30.0], dtype=float)
+    df.loc[eval_idx, "os_event"] = np.array([1, 0, 1, 0], dtype=int)
+
+    prepared = deep_models._prepare_deep_data(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+    )
+    evaluation_split = {
+        "train_idx": train_idx,
+        "eval_idx": eval_idx,
+        "evaluation_mode": "holdout",
+        "evaluation_note": "test split",
+    }
+
+    monkeypatch.setattr(deep_models, "_resolve_monitor_indices", lambda *args, **kwargs: None)
+
+    trainer = getattr(deep_models, trainer_name)
+    result = trainer(
+        pd.DataFrame(),
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+        hidden_layers=[8],
+        num_time_bins=6,
+        epochs=1,
+        batch_size=8,
+        random_seed=61,
+        prepared_data=prepared,
+        evaluation_split=evaluation_split,
+        early_stopping_patience=2,
+    )
+
+    assert "tail bucket" in result["evaluation_note"].lower()
+    assert any("tail bucket" in caution.lower() for caution in result["scientific_summary"]["cautions"])
