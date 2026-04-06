@@ -429,7 +429,7 @@ survival-toolkit inspect path/to/data.csv
 
 Best starting dataset choices:
 - `Upload-Ready TCGA`
-- `Load TCGA LUAD`
+- `TCGA LUAD (Real)`
 
 Recommended study columns:
 - time column: `os_months`
@@ -510,7 +510,7 @@ The actual column names are `stage` and `treatment`.
 ## Input Data Format
 
 Supported file types:
-- included in the base `pip install -e .`: `csv`, `tsv`
+- included in the base `pip install -e .`: `csv`, `tsv`, `txt`
 - requires `pip install -e ".[formats]"`: `xlsx`, `xls`, `parquet`
 
 If you are choosing a spreadsheet format, prefer `.xlsx` over legacy `.xls`.
@@ -693,7 +693,7 @@ If upload or analysis fails:
 3. check that you selected the correct event-positive value
 4. check that one patient appears only once
 5. check missing values in the variables you selected for modeling
-6. use `Load Example` first to confirm the app itself is working
+6. use `Synthetic Example` first to confirm the app itself is working
 7. use `survival-toolkit inspect path/to/file.csv` to inspect your file before opening the UI
 
 ## Main Analyses
@@ -880,10 +880,7 @@ Available exports:
   - forest plot as `SVG`
 - Cohort Table:
   - table as `CSV`
-
-When Group by is active in the cohort table:
-- `Overall` refers to the grouped non-missing subset used in that table
-- it is not a separate all-rows summary outside the grouped analysis frame
+  - table as `XLSX`
 - ML and DL comparison:
   - comparison table as `CSV`
   - comparison plot as `PNG`
@@ -892,6 +889,10 @@ When Group by is active in the cohort table:
   - manuscript table as `Markdown`
   - manuscript table as `LaTeX`
   - manuscript table as `DOCX`
+
+When Group by is active in the cohort table:
+- `Overall` refers to the grouped non-missing subset used in that table
+- it is not a separate all-rows summary outside the grouped analysis frame
 
 You can export comparison tables and manuscript tables as:
 - CSV
@@ -998,7 +999,7 @@ Then increase epochs or switch to repeated CV only after the single-run workflow
 
 ## Development and Testing
 
-Run the test suite with:
+After installing `pip install -e ".[dev]"` or `pip install -e ".[all]"`, run the test suite with:
 
 ```bash
 pytest -q
