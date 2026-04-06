@@ -49,17 +49,37 @@
       return button;
     }
 
+    function benchmarkRowFamilyMeta(row) {
+      const explicitTab = String(row?.familyTab || "").trim().toLowerCase();
+      if (explicitTab === "ml") {
+        return { familyTab: "ml", familyLabel: "Classical ML", familyShortLabel: "ML" };
+      }
+      if (explicitTab === "dl") {
+        return { familyTab: "dl", familyLabel: "Deep Learning", familyShortLabel: "DL" };
+      }
+      const familyLabel = String(row?.family || "").trim();
+      const normalizedFamily = familyLabel.toLowerCase();
+      if (normalizedFamily.includes("deep")) {
+        return { familyTab: "dl", familyLabel: familyLabel || "Deep Learning", familyShortLabel: "DL" };
+      }
+      if (normalizedFamily.includes("ml")) {
+        return { familyTab: "ml", familyLabel: familyLabel || "Classical ML", familyShortLabel: "ML" };
+      }
+      return { familyTab: "unknown", familyLabel: familyLabel || "Unknown", familyShortLabel: familyLabel || "Unknown" };
+    }
+
     function createBenchmarkActionGroup(row) {
+      const familyMeta = benchmarkRowFamilyMeta(row);
       const actionGroup = document.createElement("div");
       actionGroup.className = "button-row compact benchmark-row-actions";
       actionGroup.appendChild(createBenchmarkActionButton(benchmarkReviewAction(row)));
       actionGroup.appendChild(createBenchmarkActionButton({
         dataset: {
-          benchmarkParamsGoal: row.familyTab,
+          benchmarkParamsGoal: familyMeta.familyTab === "unknown" ? "" : familyMeta.familyTab,
           benchmarkParamsModel: row.model,
         },
         label: "Params",
-        disabled: false,
+        disabled: familyMeta.familyTab === "unknown",
         title: "Show the exact compare-run settings used for this leaderboard row.",
       }));
       return actionGroup;
@@ -328,16 +348,28 @@
       }
       refs.benchmarkPlotNote.textContent = noteParts.join(" ");
 
-      const x = board.plottableRows.map((row) => `${row.model}<br>${row.family === "Classical ML" ? "ML" : "DL"}`);
+      const x = board.plottableRows.map((row) => {
+        const familyMeta = benchmarkRowFamilyMeta(row);
+        return `${row.model}<br>${familyMeta.familyShortLabel}`;
+      });
       const y = board.plottableRows.map((row) => row.numericCIndex);
-      const colors = board.plottableRows.map((row) => (row.familyTab === "ml" ? "rgba(47, 101, 217, 0.92)" : "rgba(219, 126, 21, 0.92)"));
-      const borderColors = board.plottableRows.map((row) => (row.familyTab === "ml" ? "rgba(34, 72, 156, 1)" : "rgba(156, 86, 15, 1)"));
-      const customdata = board.plottableRows.map((row, index) => ([
+      const colors = board.plottableRows.map((row) => {
+        const familyMeta = benchmarkRowFamilyMeta(row);
+        return familyMeta.familyTab === "ml" ? "rgba(47, 101, 217, 0.92)" : "rgba(219, 126, 21, 0.92)";
+      });
+      const borderColors = board.plottableRows.map((row) => {
+        const familyMeta = benchmarkRowFamilyMeta(row);
+        return familyMeta.familyTab === "ml" ? "rgba(34, 72, 156, 1)" : "rgba(156, 86, 15, 1)";
+      });
+      const customdata = board.plottableRows.map((row, index) => {
+        const familyMeta = benchmarkRowFamilyMeta(row);
+        return ([
         index + 1,
-        row.family,
+        familyMeta.familyLabel,
         benchmarkEvaluationLabel(row.evaluation_mode),
         row.status,
-      ]));
+        ]);
+      });
       const referenceMax = Math.max(0.72, ...y.filter((value) => Number.isFinite(value)).map((value) => value + 0.04));
       const layout = {
         title: { text: "Unified C-index Screening Board", x: 0.02, xanchor: "left" },
@@ -572,13 +604,13 @@
         return;
       }
 
-      const presentFamilies = [...new Set(board.visibleRows.map((row) => row.family))];
+      const presentFamilies = [...new Set(board.visibleRows.map((row) => benchmarkRowFamilyMeta(row).familyLabel))];
       const noteParts = [
         board.hasMixedEvaluation
           ? "Visible compare rows are grouped by family because evaluation modes differ. No cross-family ranking is published."
           : (presentFamilies.length === 2
             ? `Showing ${board.visibleRows.length} ${board.showingStaleBoard ? "stale" : "current"} screening rows from the latest ML and DL comparison outputs.`
-            : `Showing ${board.visibleRows.length} ${board.showingStaleBoard ? "stale" : "current"} screening row(s) from ${presentFamilies[0]} only.`),
+            : `Showing ${board.visibleRows.length} ${board.showingStaleBoard ? "stale" : "current"} screening row(s) from ${presentFamilies[0] ?? "one family"} only.`),
       ];
       if (board.visibleExcludedRows.length) {
         noteParts.push(`${board.visibleExcludedRows.length} excluded model row(s) are listed below without rank or C-index.`);
@@ -613,17 +645,20 @@
             </tr>
           </thead>
           <tbody>
-            ${board.tableRows.map((row, index) => `
+            ${board.tableRows.map((row, index) => {
+              const familyMeta = benchmarkRowFamilyMeta(row);
+              return `
               <tr>
                 <td>${row.excluded ? "—" : (board.hasMixedEvaluation ? row.sourceRank : index + 1)}</td>
-                <td><span class="benchmark-family-pill family-${escapeHtml(row.familyTab)}">${escapeHtml(row.family)}</span></td>
+                <td><span class="benchmark-family-pill family-${escapeHtml(familyMeta.familyTab)}">${escapeHtml(familyMeta.familyLabel)}</span></td>
                 <td>${escapeHtml(formatValue(row.model))}${row.excluded && row.exclusionReason ? `<div class="benchmark-row-subcopy">${escapeHtml(row.exclusionReason)}</div>` : ""}</td>
                 <td>${escapeHtml(formatValue(row.c_index))}</td>
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>
                 <td class="benchmark-review-column"><span class="benchmark-action-slot" data-benchmark-action-slot="${index}"></span></td>
               </tr>
-            `).join("")}
+            `;
+            }).join("")}
           </tbody>
         </table>
       `;

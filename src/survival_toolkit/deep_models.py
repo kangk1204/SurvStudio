@@ -12,6 +12,7 @@ All functions return plain dicts (JSON-serializable) suitable for FastAPI respon
 
 from __future__ import annotations
 
+import gc
 import multiprocessing as mp
 import time
 import warnings
@@ -1416,7 +1417,9 @@ def compare_deep_survival_models(
                             "fold": task["fold"],
                             "error": str(exc),
                         })
-                # task goes out of scope here: tensors freed immediately
+                finally:
+                    del task
+                    gc.collect()
 
         if parallel_jobs > 1 and len(fold_splits) > 1:
             try:

@@ -443,7 +443,10 @@ def _time_integral_mean(values: np.ndarray, times: np.ndarray) -> float:
         area = float(trapezoid(values_arr, times_arr))
     else:
         area = float(np.sum(np.diff(times_arr) * (values_arr[:-1] + values_arr[1:]) * 0.5))
-    return area / float(times_arr[-1] - times_arr[0])
+    range_ = float(times_arr[-1] - times_arr[0])
+    if range_ <= 0.0:
+        return float(np.mean(values_arr))
+    return area / range_
 
 
 def _step_survival_lookup(event_times: np.ndarray, survival: np.ndarray, query_times: np.ndarray) -> np.ndarray:
@@ -523,6 +526,33 @@ def _maybe_compute_brier_metrics(
             RuntimeWarning,
         )
         return None
+
+
+def _maybe_compute_sksurv_brier_metrics(
+    times: np.ndarray,
+    events: np.ndarray,
+    model: Any,
+    X: pd.DataFrame,
+    *,
+    alpha: float | None = None,
+    support_times: np.ndarray | None = None,
+    support_events: np.ndarray | None = None,
+) -> dict[str, Any] | None:
+    try:
+        predicted_survival_fn = _sksurv_survival_predictor(model, X, alpha=alpha)
+    except Exception as exc:
+        warnings.warn(
+            f"Integrated Brier Score / Brier Skill Score could not be computed because survival-function predictions were unavailable: {exc}",
+            RuntimeWarning,
+        )
+        return None
+    return _maybe_compute_brier_metrics(
+        times,
+        events,
+        predicted_survival_fn,
+        support_times=support_times,
+        support_events=support_events,
+    )
 
 
 def _augment_scientific_summary_with_brier(
@@ -1308,10 +1338,11 @@ def train_random_survival_forest(
     n_eval_patients = int(eval_frame.shape[0])
     n_eval_events = int(eval_frame[event_column].sum())
     support_frame = train_frame if evaluation_mode == "holdout" else full_frame
-    brier_result = _maybe_compute_brier_metrics(
+    brier_result = _maybe_compute_sksurv_brier_metrics(
         eval_frame[time_column].to_numpy(dtype=float),
         eval_frame[event_column].to_numpy(dtype=int),
-        _sksurv_survival_predictor(model, eval_encoded),
+        model,
+        eval_encoded,
         support_times=support_frame[time_column].to_numpy(dtype=float),
         support_events=support_frame[event_column].to_numpy(dtype=int),
     )
@@ -1474,10 +1505,11 @@ def train_gradient_boosted_survival(
     n_eval_patients = int(eval_frame.shape[0])
     n_eval_events = int(eval_frame[event_column].sum())
     support_frame = train_frame if evaluation_mode == "holdout" else full_frame
-    brier_result = _maybe_compute_brier_metrics(
+    brier_result = _maybe_compute_sksurv_brier_metrics(
         eval_frame[time_column].to_numpy(dtype=float),
         eval_frame[event_column].to_numpy(dtype=int),
-        _sksurv_survival_predictor(model, eval_encoded),
+        model,
+        eval_encoded,
         support_times=support_frame[time_column].to_numpy(dtype=float),
         support_events=support_frame[event_column].to_numpy(dtype=int),
     )
@@ -1647,10 +1679,12 @@ def train_lasso_cox(
     n_eval_patients = int(eval_frame.shape[0])
     n_eval_events = int(eval_frame[event_column].sum())
     support_frame = train_frame if evaluation_mode == "holdout" else full_frame
-    brier_result = _maybe_compute_brier_metrics(
+    brier_result = _maybe_compute_sksurv_brier_metrics(
         eval_frame[time_column].to_numpy(dtype=float),
         eval_frame[event_column].to_numpy(dtype=int),
-        _sksurv_survival_predictor(model, eval_encoded, alpha=float(alpha_meta["alpha"])),
+        model,
+        eval_encoded,
+        alpha=float(alpha_meta["alpha"]),
         support_times=support_frame[time_column].to_numpy(dtype=float),
         support_events=support_frame[event_column].to_numpy(dtype=int),
     )
@@ -2007,10 +2041,12 @@ def _fit_evaluate_lasso_cox_split(
     coef_vector = _coerce_coxnet_coef_vector(model)
 
     y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
-    brier_result = _maybe_compute_brier_metrics(
+    brier_result = _maybe_compute_sksurv_brier_metrics(
         test_eval[time_column].to_numpy(dtype=float),
         test_eval[event_column].to_numpy(dtype=int),
-        _sksurv_survival_predictor(model, test_encoded, alpha=float(alpha_meta["alpha"])),
+        model,
+        test_encoded,
+        alpha=float(alpha_meta["alpha"]),
         support_times=train_eval[time_column].to_numpy(dtype=float),
         support_events=train_eval[event_column].to_numpy(dtype=int),
     )
@@ -2074,10 +2110,11 @@ def _fit_evaluate_rsf_split(
     risk_score = model.predict(test_encoded.to_numpy())
 
     y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
-    brier_result = _maybe_compute_brier_metrics(
+    brier_result = _maybe_compute_sksurv_brier_metrics(
         test_eval[time_column].to_numpy(dtype=float),
         test_eval[event_column].to_numpy(dtype=int),
-        _sksurv_survival_predictor(model, test_encoded),
+        model,
+        test_encoded,
         support_times=train_eval[time_column].to_numpy(dtype=float),
         support_events=train_eval[event_column].to_numpy(dtype=int),
     )
@@ -2140,10 +2177,11 @@ def _fit_evaluate_gbs_split(
     risk_score = model.predict(test_encoded.to_numpy())
 
     y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
-    brier_result = _maybe_compute_brier_metrics(
+    brier_result = _maybe_compute_sksurv_brier_metrics(
         test_eval[time_column].to_numpy(dtype=float),
         test_eval[event_column].to_numpy(dtype=int),
-        _sksurv_survival_predictor(model, test_encoded),
+        model,
+        test_encoded,
         support_times=train_eval[time_column].to_numpy(dtype=float),
         support_events=train_eval[event_column].to_numpy(dtype=int),
     )
@@ -2922,6 +2960,8 @@ def compute_integrated_brier_score(
         raise ValueError(
             "No evaluation time points fall within the IPCW support range."
         )
+    eval_times_arr = np.unique(np.asarray(eval_times_arr, dtype=float))
+    single_time_support = eval_times_arr.size == 1 or float(eval_times_arr[-1] - eval_times_arr[0]) <= 0.0
 
     # Predicted survival matrix: (n_samples, n_eval_times)
     surv_matrix = np.asarray(predicted_survival_fn(eval_times_arr), dtype=float)
@@ -3001,22 +3041,35 @@ def compute_integrated_brier_score(
 
     # Scientific summary
     n_events = int(np.sum(events_arr))
-    strengths: list[str] = [
-        f"IBS computed over {len(eval_times_arr)} time points for {n_samples} patients ({n_events} events).",
-        "IBS summarizes predicted-vs-observed survival error across time, and Brier Skill Score contextualizes that error versus a Kaplan-Meier null model.",
-        f"Evaluation times were restricted to the IPCW support window [0, {support_time_upper:.4g}] to avoid late-time extrapolation beyond the last support event.",
-    ]
+    strengths: list[str] = (
+        [
+            f"Brier score computed at a single IPCW-supported time point for {n_samples} patients ({n_events} events).",
+            "The Kaplan-Meier null-model reference was evaluated at the same time point to contextualize absolute prediction error.",
+            f"Evaluation times were restricted to the IPCW support window [0, {support_time_upper:.4g}], which collapsed to a single supported time point.",
+        ]
+        if single_time_support
+        else [
+            f"IBS computed over {len(eval_times_arr)} time points for {n_samples} patients ({n_events} events).",
+            "IBS summarizes predicted-vs-observed survival error across time, and Brier Skill Score contextualizes that error versus a Kaplan-Meier null model.",
+            f"Evaluation times were restricted to the IPCW support window [0, {support_time_upper:.4g}] to avoid late-time extrapolation beyond the last support event.",
+        ]
+    )
     cautions: list[str] = []
     next_steps: list[str] = []
+    if single_time_support:
+        cautions.append(
+            "The IPCW support window collapsed to a single time point, so the reported IBS and null-model IBS reduce to pointwise Brier scores rather than a time-integrated summary."
+        )
 
+    score_label = "Pointwise Brier score" if single_time_support else "IBS"
     if ibs < 0.1:
-        strengths.append(f"IBS = {ibs:.4f}; smaller values imply closer agreement between predictions and observations.")
+        strengths.append(f"{score_label} = {ibs:.4f}; smaller values imply closer agreement between predictions and observations.")
     elif ibs < 0.2:
-        strengths.append(f"IBS = {ibs:.4f}; smaller values imply closer agreement between predictions and observations.")
+        strengths.append(f"{score_label} = {ibs:.4f}; smaller values imply closer agreement between predictions and observations.")
     elif ibs < 0.25:
-        cautions.append(f"IBS = {ibs:.4f}; the prediction error is moderate, so review the survival curves.")
+        cautions.append(f"{score_label} = {ibs:.4f}; the prediction error is moderate, so review the survival curves.")
     else:
-        cautions.append(f"IBS = {ibs:.4f}; the prediction error is large, so the model needs review.")
+        cautions.append(f"{score_label} = {ibs:.4f}; the prediction error is large, so the model needs review.")
 
     if brier_skill_score is None:
         cautions.append(
@@ -3044,6 +3097,10 @@ def compute_integrated_brier_score(
     next_steps.append(
         "Compare both IBS and Brier Skill Score across models; Brier Skill Score should stay above 0 to justify improvement over the Kaplan-Meier null reference."
     )
+    if single_time_support:
+        next_steps.append(
+            "Use follow-up support beyond a single time point if you need a true integrated Brier score across time."
+        )
     next_steps.append(
         "Use compute_calibration_data() for a descriptive visual check of calibration agreement."
     )
@@ -3053,13 +3110,18 @@ def compute_integrated_brier_score(
         status = "review"
     if ibs >= 0.25 or n_events < 10 or (brier_skill_score is not None and brier_skill_score <= 0.0):
         status = "caution"
-    elif brier_skill_score is None:
+    elif brier_skill_score is None or single_time_support:
         status = "review"
 
+    headline_prefix = (
+        f"Pointwise Brier score = {ibs:.4f} at t={_safe_float(eval_times_arr[0])}"
+        if single_time_support
+        else f"Integrated Brier Score = {ibs:.4f} over [{_safe_float(eval_times_arr[0])}, {_safe_float(eval_times_arr[-1])}]"
+    )
     scientific_summary = {
         "status": status,
         "headline": (
-            f"Integrated Brier Score = {ibs:.4f} over [{_safe_float(eval_times_arr[0])}, {_safe_float(eval_times_arr[-1])}]"
+            headline_prefix
             + (
                 f"; Brier Skill Score = {brier_skill_score:.3f} versus the Kaplan-Meier null model."
                 if brier_skill_score is not None
