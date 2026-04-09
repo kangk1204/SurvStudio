@@ -5706,23 +5706,26 @@ async function runKaplanMeier() {
     }),
   });
   state.km = payload;
+  const kmFigure = payload?.figure || { data: [], layout: {} };
+  const kmAnalysis = payload?.analysis || {};
+  const kmRiskTable = kmAnalysis.risk_table || {};
+  const kmSummary = kmAnalysis.scientific_summary || null;
+  const cohort = kmAnalysis.cohort || {};
+  const test = kmAnalysis.test || null;
   purgePlot(refs.kmPlot);
   refs.kmPlot.innerHTML = "";
-  await Plotly.newPlot(refs.kmPlot, payload.figure.data, payload.figure.layout, plotConfig("km_curve"));
+  await Plotly.newPlot(refs.kmPlot, kmFigure.data || [], kmFigure.layout || {}, plotConfig("km_curve"));
   stabilizePlotShellHeight(refs.kmPlot);
   updateStepIndicator(3);
-  renderTable(refs.kmSummaryShell, payload.analysis.summary_table);
-  renderTable(refs.kmRiskShell, payload.analysis.risk_table.rows, payload.analysis.risk_table.columns);
+  renderTable(refs.kmSummaryShell, kmAnalysis.summary_table);
+  renderTable(refs.kmRiskShell, kmRiskTable.rows, kmRiskTable.columns);
   flashPresetTargets([refs.kmRiskShell]);
-  renderTable(refs.kmPairwiseShell, payload.analysis.pairwise_table);
-  const kmSummary = payload.analysis.scientific_summary;
+  renderTable(refs.kmPairwiseShell, kmAnalysis.pairwise_table);
   renderInsightBoard(refs.kmInsightBoard, kmSummary, "Run KM to generate an interpretation panel.");
-  const cohort = payload.analysis.cohort;
-  const test = payload.analysis.test;
   const kmCompetingRiskPrefix = summaryHasCaution(kmSummary, "competing risk")
     ? "Competing risks not modeled; 1-KM is not cumulative incidence when competing events can preclude the endpoint. "
     : "";
-  refs.kmMetaBanner.textContent = `${kmCompetingRiskPrefix}N=${cohort.n}, events=${cohort.events}, censored=${cohort.censored}, median follow-up=${formatValue(cohort.median_follow_up)} ${base.time_unit_label}${test ? `, ${test.test} p=${formatValue(test.p_value)}` : ""}`;
+  refs.kmMetaBanner.textContent = `${kmCompetingRiskPrefix}N=${formatValue(cohort.n)}, events=${formatValue(cohort.events)}, censored=${formatValue(cohort.censored)}, median follow-up=${formatValue(cohort.median_follow_up)} ${base.time_unit_label}${test ? `, ${test.test} p=${formatValue(test.p_value)}` : ""}`;
   syncDownloadButtonAvailability();
   revealCompletedResultIfCurrent("km", {
     successMessage: `Kaplan-Meier analysis complete. Risk table updated to ${requestedRiskTicks} time points.`,
@@ -5831,9 +5834,13 @@ async function runCox() {
     body: JSON.stringify({ ...base, covariates, categorical_covariates: categoricalCovariates }),
   });
   state.cox = payload;
+  const coxFigure = payload?.figure || { data: [], layout: {} };
+  const coxAnalysis = payload?.analysis || {};
+  const coxSummary = coxAnalysis.scientific_summary || null;
+  const stats = coxAnalysis.model_stats || {};
   purgePlot(refs.coxPlot);
   refs.coxPlot.innerHTML = "";
-  await Plotly.newPlot(refs.coxPlot, payload.figure.data, payload.figure.layout, plotConfig("cox_forest"));
+  await Plotly.newPlot(refs.coxPlot, coxFigure.data || [], coxFigure.layout || {}, plotConfig("cox_forest"));
   stabilizePlotShellHeight(refs.coxPlot);
   stabilizeCoxPlotResetAxes(refs.coxPlot);
   if (payload.diagnostics_figure?.data?.length) {
@@ -5851,11 +5858,9 @@ async function runCox() {
   }
   await renderCoxMartingalePlot(runtime.coxMartingaleTerm);
   updateStepIndicator(3);
-  renderTable(refs.coxResultsShell, payload.analysis.results_table);
-  renderTable(refs.coxDiagnosticsShell, payload.analysis.diagnostics_table);
-  const coxSummary = payload.analysis.scientific_summary;
+  renderTable(refs.coxResultsShell, coxAnalysis.results_table);
+  renderTable(refs.coxDiagnosticsShell, coxAnalysis.diagnostics_table);
   renderInsightBoard(refs.coxInsightBoard, coxSummary, "Run Cox PH to review diagnostics.");
-  const stats = payload.analysis.model_stats;
   const coxMetricLabel = stats.c_index_label || ((stats.evaluation_mode === "apparent") ? "Apparent C-index" : "C-index");
   const coxMetricCore = `${coxMetricLabel}=${formatValue(stats.c_index)}`;
   const hasCoxMetricCi = stats.c_index_ci_lower != null && stats.c_index_ci_upper != null;
@@ -5865,7 +5870,7 @@ async function runCox() {
   const coxCompetingRiskPrefix = summaryHasCaution(coxSummary, "competing risk")
     ? "Competing risks not modeled; cause-specific questions need dedicated competing-risk methods. "
     : "";
-  refs.coxMetaBanner.textContent = `${coxCompetingRiskPrefix}N=${stats.n}, events=${stats.events}, parameters=${stats.parameters}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricCore}${coxMetricCi}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
+  refs.coxMetaBanner.textContent = `${coxCompetingRiskPrefix}N=${formatValue(stats.n)}, events=${formatValue(stats.events)}, parameters=${formatValue(stats.parameters)}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricCore}${coxMetricCi}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
   syncDownloadButtonAvailability();
   revealCompletedResultIfCurrent("cox", {
     successMessage: "Cox PH model fitted.",

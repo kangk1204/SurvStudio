@@ -1102,6 +1102,25 @@ def test_frontend_uses_teal_primary_actions_and_visible_active_step_descriptions
     assert "opacity: 0.75;" in styles
 
 
+def test_frontend_guards_km_and_cox_result_payload_accesses() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'const kmFigure = payload?.figure || { data: [], layout: {} };' in app_js
+    assert "const kmAnalysis = payload?.analysis || {};" in app_js
+    assert "const kmRiskTable = kmAnalysis.risk_table || {};" in app_js
+    assert "N=${formatValue(cohort.n)}" in app_js
+    assert 'const coxFigure = payload?.figure || { data: [], layout: {} };' in app_js
+    assert "const coxAnalysis = payload?.analysis || {};" in app_js
+    assert "const stats = coxAnalysis.model_stats || {};" in app_js
+    assert "N=${formatValue(stats.n)}" in app_js
+
+
 def test_frontend_removes_study_design_board_and_uses_readable_scope_tags() -> None:
     template = (
         Path(__file__).resolve().parents[1]
@@ -1584,6 +1603,14 @@ def test_request_models_reject_invalid_scalar_and_text_validation_inputs() -> No
         )
 
     with pytest.raises(ValidationError):
+        KaplanMeierRequest(
+            dataset_id="demo",
+            time_column="os_months",
+            event_column="os_event",
+            event_positive_value=float("inf"),
+        )
+
+    with pytest.raises(ValidationError):
         SignatureSearchRequest(
             dataset_id="demo",
             time_column="os_months",
@@ -1597,6 +1624,13 @@ def test_request_models_reject_invalid_scalar_and_text_validation_inputs() -> No
             rows=[{"Model": "Cox PH"}],
             format="markdown",
             caption="X" * 4001,
+        )
+
+    with pytest.raises(ValidationError):
+        TableExportRequest(
+            rows=[{"Model": "Cox PH"}],
+            format="markdown",
+            notes=["bad\0note"],
         )
 
 
