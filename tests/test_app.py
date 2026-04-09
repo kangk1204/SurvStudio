@@ -4526,6 +4526,25 @@ def test_export_table_endpoint_returns_journal_latex() -> None:
     assert "DeepSurv" in response.text
 
 
+def test_export_table_endpoint_normalizes_carriage_returns_in_latex_notes() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [
+                {"Rank": 1, "Model": "DeepSurv"},
+            ],
+            "format": "latex",
+            "style": "journal",
+            "template": "default",
+            "notes": ["Line one\rLine two"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Line one Line two" in response.text
+    assert "Line one\rLine two" not in response.text
+
+
 def test_export_table_endpoint_escapes_backslashes_without_double_escaping_braces() -> None:
     response = client.post(
         "/api/export-table",

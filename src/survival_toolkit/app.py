@@ -1072,7 +1072,7 @@ def _export_template_profile(template: str) -> dict[str, str]:
 
 
 def _normalize_export_text(value: Any, style: str) -> str:
-    return _format_export_value(value, style).replace("\n", " ").strip()
+    return _format_export_value(value, style).replace("\r\n", " ").replace("\r", " ").replace("\n", " ").strip()
 
 
 def _default_export_caption(template: str) -> str:
@@ -1275,7 +1275,11 @@ def _export_rows_to_latex(
     ]
     if notes:
         notes_heading = _latex_escape(template_profile["notes_heading"])
-        notes_text = " ".join(_latex_escape(note.strip()) for note in notes if note.strip())
+        notes_text = " ".join(
+            _latex_escape(_normalize_export_text(note, "plain"))
+            for note in notes
+            if _normalize_export_text(note, "plain")
+        )
         if notes_text:
             lines.extend(
                 [
