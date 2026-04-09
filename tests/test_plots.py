@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from survival_toolkit.plots import (
     build_cox_diagnostics_figure,
@@ -324,6 +325,36 @@ def test_build_cox_martingale_figure_uses_separate_title_and_linearity_copy() ->
     assert figure["layout"]["margin"]["t"] >= 72
 
 
+def test_build_cox_martingale_figure_reports_when_robust_y_clipping_is_applied() -> None:
+    cox_result = {
+        "martingale_plot_data": [
+            {
+                "term": "age",
+                "value": [float(value) for value in np.linspace(40.0, 80.0, 20)],
+                "residual": [
+                    -0.2, -0.1, -0.06, -0.03, 0.0, 0.02, 0.03, -0.01, 0.05, 0.04,
+                    -0.02, 0.03, 0.08, -0.05, 0.01, 0.0, -0.03, 0.07, 0.06, 150.0,
+                ],
+                "trend_value": [float(value) for value in np.linspace(40.0, 80.0, 20)],
+                "trend_residual": [
+                    -0.03, -0.02, -0.01, -0.01, 0.0, 0.01, 0.01, 0.0, 0.01, 0.02,
+                    0.01, 0.01, 0.02, 0.01, 0.0, 0.0, 0.01, 0.01, 0.02, 0.03,
+                ],
+            },
+        ],
+    }
+
+    figure = build_cox_martingale_figure(cox_result)
+
+    subtitle = next(
+        annotation["text"]
+        for annotation in figure["layout"]["annotations"]
+        if "Screening view only" in annotation.get("text", "")
+    )
+    assert "martingale residual panels were clipped for" in subtitle
+    assert "readability" in subtitle
+
+
 def test_build_cutpoint_scan_figure_with_data() -> None:
     result = {
         "scan_data": [
@@ -559,6 +590,22 @@ def test_build_time_dependent_importance_figure_orients_matrix_correctly() -> No
     assert figure["data"][0]["x"] == ["1.0", "2.0"]
     assert figure["data"][0]["y"] == ["biomarker", "age"]
     assert figure["data"][0]["z"] == [[0.5, 0.4], [0.1, 0.2]]
+
+
+def test_build_time_dependent_importance_figure_rejects_ragged_feature_major_matrix() -> None:
+    result = {
+        "features": ["age", "stage", "biomarker"],
+        "eval_times": [1.0, 2.0],
+        "importance_matrix_orientation": "feature_major",
+        "importance_matrix": [
+            [0.1, 0.2],
+            [0.3],
+            [0.4, 0.5],
+        ],
+    }
+
+    with pytest.raises(ValueError):
+        build_time_dependent_importance_figure(result, top_n=2)
 
 
 def test_build_loss_curve_figure() -> None:

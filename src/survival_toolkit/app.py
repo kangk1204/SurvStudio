@@ -127,6 +127,55 @@ _LATEX_ESCAPE_TABLE = str.maketrans(
 )
 
 
+def _normalize_optional_text_field(
+    value: Any,
+    *,
+    field_name: str,
+    allow_empty_as_none: bool = False,
+) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        if allow_empty_as_none:
+            return None
+        raise ValueError(f"{field_name} must not be empty.")
+    if _CONTROL_CHAR_PATTERN.search(text):
+        raise ValueError(f"{field_name} must not contain control characters.")
+    return text
+
+
+def _normalize_event_positive_value(value: Any) -> Any:
+    if value is None or value == "":
+        return value
+    if isinstance(value, (bool, int, str)):
+        if isinstance(value, str):
+            text = _normalize_optional_text_field(value, field_name="event_positive_value")
+            return text
+        return value
+    if isinstance(value, float):
+        if not pd.notna(value):
+            raise ValueError("event_positive_value must be a finite scalar value.")
+        return value
+    raise ValueError("event_positive_value must be a scalar JSON value (string, number, boolean, or null).")
+
+
+class _DatasetRequestModel(BaseModel):
+    @field_validator("dataset_id", mode="before", check_fields=False)
+    @classmethod
+    def validate_dataset_id(cls, value: Any) -> str:
+        text = _normalize_optional_text_field(value, field_name="dataset_id")
+        assert text is not None
+        return text
+
+
+class _EventPositiveValueRequestModel(_DatasetRequestModel):
+    @field_validator("event_positive_value", mode="before", check_fields=False)
+    @classmethod
+    def validate_event_positive_value(cls, value: Any) -> Any:
+        return _normalize_event_positive_value(value)
+
+
 class _MlArtifactCache:
     def __init__(self, *, max_items: int) -> None:
         self._max_items = int(max_items)
@@ -199,7 +248,7 @@ _ml_artifact_cache = _MlArtifactCache(max_items=8)
 # ── Request models ──────────────────────────────────────────────
 
 
-class DeriveGroupRequest(BaseModel):
+class DeriveGroupRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     source_column: str
     method: Literal[
@@ -224,14 +273,11 @@ class DeriveGroupRequest(BaseModel):
     @field_validator("new_column_name", mode="before")
     @classmethod
     def validate_new_column_name(cls, value: Any) -> str | None:
-        if value is None:
-            return None
-        text = str(value).strip()
-        if not text:
-            return None
-        if _CONTROL_CHAR_PATTERN.search(text):
-            raise ValueError("Derived column names must not contain control characters.")
-        return text
+        return _normalize_optional_text_field(
+            value,
+            field_name="Derived column names",
+            allow_empty_as_none=True,
+        )
 
     @field_validator("lower_label", "upper_label", mode="before")
     @classmethod
@@ -244,13 +290,13 @@ class DeriveGroupRequest(BaseModel):
         return text
 
 
-class KaplanMeierRequest(BaseModel):
+class KaplanMeierRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
     group_column: str | None = None
     event_positive_value: Any = 1
-    time_unit_label: str = "Months"
+    time_unit_label: str = Field(default="Months", max_length=40)
     confidence_level: float = Field(default=0.95, gt=0.5, lt=0.999)
     max_time: float | None = Field(default=None, gt=0)
     risk_table_points: int = Field(default=6, ge=4, le=12)
@@ -259,8 +305,15 @@ class KaplanMeierRequest(BaseModel):
     logrank_weight: Literal["logrank", "gehan_breslow", "tarone_ware", "fleming_harrington"] = "logrank"
     fh_p: float = Field(default=1.0, ge=0.0, le=5.0)
 
+    @field_validator("time_unit_label", mode="before")
+    @classmethod
+    def validate_time_unit_label(cls, value: Any) -> str:
+        text = _normalize_optional_text_field(value, field_name="time_unit_label")
+        assert text is not None
+        return text
 
-class CoxRequest(BaseModel):
+
+class CoxRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -269,13 +322,13 @@ class CoxRequest(BaseModel):
     categorical_covariates: list[str] = Field(default_factory=list, max_length=200)
 
 
-class CohortTableRequest(BaseModel):
+class CohortTableRequest(_DatasetRequestModel):
     dataset_id: str
     variables: list[str] = Field(max_length=200)
     group_column: str | None = None
 
 
-class SignatureSearchRequest(BaseModel):
+class SignatureSearchRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -292,10 +345,19 @@ class SignatureSearchRequest(BaseModel):
     significance_level: float = Field(default=0.05, gt=0.0, le=0.2)
     combination_operator: Literal["and", "or", "mixed"] = "mixed"
     random_seed: int = Field(default=20260311, ge=0)
-    new_column_name: str | None = None
+    new_column_name: str | None = Field(default=None, max_length=200)
+
+    @field_validator("new_column_name", mode="before")
+    @classmethod
+    def validate_new_column_name(cls, value: Any) -> str | None:
+        return _normalize_optional_text_field(
+            value,
+            field_name="Signature-derived column names",
+            allow_empty_as_none=True,
+        )
 
 
-class MLModelRequest(BaseModel):
+class MLModelRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -314,7 +376,7 @@ class MLModelRequest(BaseModel):
     cv_repeats: int = Field(default=3, ge=1, le=20)
 
 
-class DeepModelRequest(BaseModel):
+class DeepModelRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -360,7 +422,7 @@ class DeepModelRequest(BaseModel):
         return self
 
 
-class OptimalCutpointRequest(BaseModel):
+class OptimalCutpointRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -375,7 +437,7 @@ class TableExportRequest(BaseModel):
     format: Literal["csv", "markdown", "latex", "docx", "xlsx"]
     style: Literal["plain", "journal"] = "journal"
     template: Literal["default", "nejm", "lancet", "jco"] = "default"
-    caption: str | None = None
+    caption: str | None = Field(default=None, max_length=4000)
     notes: list[str] = Field(default_factory=list, max_length=50)
     provenance: dict[str, Any] | None = None
 
@@ -389,6 +451,15 @@ class TableExportRequest(BaseModel):
                 raise ValueError("Each table note must be 4000 characters or fewer.")
             cleaned.append(text)
         return cleaned
+
+    @field_validator("caption", mode="before")
+    @classmethod
+    def validate_caption(cls, value: Any) -> str | None:
+        return _normalize_optional_text_field(
+            value,
+            field_name="caption",
+            allow_empty_as_none=True,
+        )
 
 
 # ── Helpers ─────────────────────────────────────────────────────
@@ -2152,7 +2223,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
 # ── XAI endpoints ──────────────────────────────────────────────
 
 
-class TimeDependentImportanceRequest(BaseModel):
+class TimeDependentImportanceRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -2162,7 +2233,7 @@ class TimeDependentImportanceRequest(BaseModel):
     eval_times: list[float] | None = Field(default=None, max_length=100)
 
 
-class CounterfactualRequest(BaseModel):
+class CounterfactualRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -2179,7 +2250,7 @@ class CounterfactualRequest(BaseModel):
     random_state: int = 42
 
 
-class PDPRequest(BaseModel):
+class PDPRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str

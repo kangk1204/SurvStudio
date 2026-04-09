@@ -12,10 +12,19 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import numpy as np
 import pandas as pd
+from pydantic import ValidationError
 import pytest
 
 import survival_toolkit.app as app_module
-from survival_toolkit.app import DeepModelRequest, app, fail_bad_request, store
+from survival_toolkit.app import (
+    DeepModelRequest,
+    KaplanMeierRequest,
+    SignatureSearchRequest,
+    TableExportRequest,
+    app,
+    fail_bad_request,
+    store,
+)
 from survival_toolkit.errors import ColumnNotFoundError, DatasetNotFoundError, UserInputError
 from survival_toolkit.sample_data import make_example_dataset
 
@@ -1555,6 +1564,40 @@ def test_deep_model_request_accepts_1000_epochs() -> None:
     )
 
     assert request_model.epochs == 1000
+
+
+def test_request_models_reject_invalid_scalar_and_text_validation_inputs() -> None:
+    with pytest.raises(ValidationError):
+        KaplanMeierRequest(
+            dataset_id="demo",
+            time_column="os_months",
+            event_column="os_event",
+            event_positive_value={"bad": 1},
+        )
+
+    with pytest.raises(ValidationError):
+        KaplanMeierRequest(
+            dataset_id="demo",
+            time_column="os_months",
+            event_column="os_event",
+            time_unit_label="Months" * 20,
+        )
+
+    with pytest.raises(ValidationError):
+        SignatureSearchRequest(
+            dataset_id="demo",
+            time_column="os_months",
+            event_column="os_event",
+            candidate_columns=["age"],
+            new_column_name="sig_\nname",
+        )
+
+    with pytest.raises(ValidationError):
+        TableExportRequest(
+            rows=[{"Model": "Cox PH"}],
+            format="markdown",
+            caption="X" * 4001,
+        )
 
 
 def test_health_rejects_null_origin_for_file_preview() -> None:
