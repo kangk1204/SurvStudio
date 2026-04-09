@@ -68,6 +68,13 @@ def test_deep_model_source_uses_type_checked_bases_adamw_and_inference_mode() ->
     assert "for hidden_dim in hidden_layers:" not in text
     assert "np.random.default_rng(seed)" in text
     assert "np.random.RandomState(seed)" not in text
+    assert "torch.autograd.grad(output.sum(), x_input" in text
+    assert "output.sum().backward()" not in text
+    mtlr_loss_start = text.index("def _mtlr_loss(")
+    mtlr_loss_end = text.index("def train_neural_mtlr(", mtlr_loss_start)
+    mtlr_loss_block = text[mtlr_loss_start:mtlr_loss_end]
+    assert "def _mtlr_loss(" in mtlr_loss_block
+    assert "num_time_bins: int," not in mtlr_loss_block
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -122,6 +129,24 @@ def test_deep_trainers_report_explicit_evaluation_metadata(
 
     if result_key is not None:
         assert result[result_key]
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_gradient_feature_importance_does_not_accumulate_parameter_grads() -> None:
+    import torch
+    from survival_toolkit.deep_models import _gradient_feature_importance
+
+    model = torch.nn.Sequential(
+        torch.nn.Linear(3, 4),
+        torch.nn.ReLU(),
+        torch.nn.Linear(4, 1),
+    )
+    x_tensor = torch.randn(6, 3)
+
+    importance = _gradient_feature_importance(model, x_tensor)
+
+    assert len(importance) == 3
+    assert all(param.grad is None for param in model.parameters())
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")

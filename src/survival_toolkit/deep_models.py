@@ -967,8 +967,7 @@ def _gradient_feature_importance(
         output = output_to_score(output)
     elif output.dim() > 1:
         output = output.sum(dim=1)
-    output.sum().backward()
-    grad = x_input.grad
+    grad = torch.autograd.grad(output.sum(), x_input, retain_graph=False, create_graph=False)[0]
     if grad is None:
         return [0.0] * x_tensor.shape[1]
     importance = grad.abs().mean(dim=0).detach().cpu().numpy()
@@ -2742,7 +2741,6 @@ def _mtlr_loss(
     cumsum_logits: torch.Tensor,
     time_bin_indices: torch.Tensor,
     events: torch.Tensor,
-    num_time_bins: int,
 ) -> torch.Tensor:
     """Discrete-time survival NLL with right censoring.
 
@@ -2891,7 +2889,7 @@ def train_neural_mtlr(
         for x_b, bin_b, e_b in loader:
             optimizer.zero_grad()
             cumsum_logits = model(x_b)
-            loss = _mtlr_loss(cumsum_logits, bin_b, e_b, num_time_bins)
+            loss = _mtlr_loss(cumsum_logits, bin_b, e_b)
             _require_finite_loss(loss, context="Neural MTLR loss")
             loss.backward()
             _clip_gradients(model)
@@ -2902,7 +2900,7 @@ def train_neural_mtlr(
             model.eval()
             with torch.inference_mode():
                 cumsum_logits_monitor = model(x_all[monitor_idx])
-                monitor_loss = float(_mtlr_loss(cumsum_logits_monitor, monitor_bin_tensor, e_all[monitor_idx], num_time_bins).item())
+                monitor_loss = float(_mtlr_loss(cumsum_logits_monitor, monitor_bin_tensor, e_all[monitor_idx]).item())
             monitor_loss_history.append(monitor_loss)
             best_monitor, early_wait, best_state, should_stop = _update_early_stopping(
                 monitor_loss,
