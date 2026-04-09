@@ -289,9 +289,9 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
 
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": axis_layout["l"], "r": 40, "t": 72, "b": 70},
+        margin={"l": axis_layout["l"], "r": 40, "t": 28, "b": 70},
         title={
-            "text": "Cox PH Forest Plot",
+            "text": "",
             "font": {"family": "Source Serif 4, serif", "size": 24, "color": INK},
             "x": 0.02,
         },

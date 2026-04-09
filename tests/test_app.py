@@ -1121,6 +1121,18 @@ def test_frontend_guards_km_and_cox_result_payload_accesses() -> None:
     assert "N=${formatValue(stats.n)}" in app_js
 
 
+def test_cox_forest_plot_heading_and_copy_render_outside_plot_shell() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit"
+    html = (root / "templates" / "index.html").read_text(encoding="utf-8")
+    styles = (root / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert '<div class="table-card full-width">' in html
+    assert '<div class="diagnostic-copy" id="coxForestCopy">' in html
+    assert "<h3>Cox PH Forest Plot</h3>" in html
+    assert "PH diagnostics are reviewed separately in the diagnostics table." in html
+    assert ".diagnostic-copy {" in styles
+
+
 def test_frontend_removes_study_design_board_and_uses_readable_scope_tags() -> None:
     template = (
         Path(__file__).resolve().parents[1]
