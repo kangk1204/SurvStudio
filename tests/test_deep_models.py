@@ -125,6 +125,31 @@ def test_deep_trainers_report_explicit_evaluation_metadata(
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_deep_trainers_report_nonpositive_time_exclusions_in_summary() -> None:
+    from survival_toolkit.deep_models import train_deepsurv
+
+    df = make_example_dataset(seed=10, n_patients=60)
+    df.loc[df.index[:3], "os_months"] = [0.0, -1.0, 0.0]
+
+    result = train_deepsurv(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+        hidden_layers=[8],
+        epochs=1,
+        batch_size=8,
+        random_seed=11,
+    )
+
+    assert any(
+        metric["label"] == "Dropped for nonpositive time" and metric["value"] == 3
+        for metric in result["scientific_summary"]["metrics"]
+    )
+    assert any("nonpositive survival time" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
 @pytest.mark.parametrize(
     "trainer_name, trainer_kwargs",
     [
