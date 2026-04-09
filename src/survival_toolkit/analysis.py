@@ -2083,11 +2083,6 @@ def _bh_adjust(p_values: Sequence[float]) -> list[float]:
     return [float(value) for value in adjusted]
 
 
-def _coerce_numeric_if_needed(series: pd.Series) -> pd.Series:
-    if is_numeric_dtype(series):
-        return pd.to_numeric(series, errors="coerce")
-    return series
-
 
 def _format_percent_value(value: float) -> str:
     numeric = float(value)

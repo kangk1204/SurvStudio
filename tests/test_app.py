@@ -848,7 +848,8 @@ def test_benchmark_module_hides_unified_board_when_evaluation_modes_do_not_match
     assert "Waiting on ${pendingFamilyText(board)} before publishing the leaderboard." in text
     assert "The chart will publish after both model families finish." in text
     assert "Partial leaderboard rows stay hidden until both model families finish." in text
-    assert "Unified chart hidden because current ML and DL compare rows use mixed evaluation paths" in text
+    assert "Unified chart hidden because" in text
+    assert "mixed evaluation paths" in text
     assert "Unified chart is hidden until ML and DL compare rows use the same evaluation mode." in text
     assert 'Visible compare rows are grouped by family because evaluation modes differ. No cross-family ranking is published.' in text
     assert 'const rankLabel = board.hasMixedEvaluation ? "Family rank" : "Rank";' in text

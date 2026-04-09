@@ -16,7 +16,7 @@ import gc
 import multiprocessing as mp
 import time
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import numpy as np
@@ -73,6 +73,7 @@ _SKLEARN_INSTALL_MSG = (
 )
 _ADAM_WEIGHT_DECAY = 1e-4
 _DEEPHIT_RANKING_SIGMA = 1.0
+_DEEP_COMPARE_PARALLEL_MAX_INFLIGHT_BYTES = 512 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +454,26 @@ def _prepare_deep_split_data(
         },
         evaluation_split,
     )
+
+
+def _estimate_array_like_nbytes(value: Any) -> int:
+    if TORCH_AVAILABLE and isinstance(value, torch.Tensor):
+        return int(value.element_size() * value.numel())
+    if isinstance(value, np.ndarray):
+        return int(value.nbytes)
+    return 0
+
+
+def _estimate_deep_compare_task_bytes(task: dict[str, Any]) -> int:
+    total = 0
+    prepared_data = task.get("prepared_data")
+    if isinstance(prepared_data, dict):
+        total += sum(_estimate_array_like_nbytes(value) for value in prepared_data.values())
+    evaluation_split = task.get("evaluation_split")
+    if isinstance(evaluation_split, dict):
+        total += sum(_estimate_array_like_nbytes(value) for value in evaluation_split.values())
+    total += _estimate_array_like_nbytes(task.get("monitor_indices"))
+    return int(total)
 
 
 def _prepare_deep_training_inputs(
@@ -1433,62 +1454,124 @@ def compare_deep_survival_models(
 
         parallel_execution_note: str | None = None
 
-        def _run_folds_sequentially() -> None:
-            for split in fold_splits:
+        def _collect_task_result(task: dict[str, Any], *, task_result: dict[str, Any] | None = None, exc: Exception | None = None) -> None:
+            if exc is None and task_result is not None:
+                fold_results.extend(task_result["fold_results"])
+                errors.extend(task_result["errors"])
+                return
+            if exc is None:
+                return
+            for model_spec in task["model_specs"]:
+                errors.append({
+                    "model": model_spec["model_name"],
+                    "repeat": task["repeat"],
+                    "fold": task["fold"],
+                    "error": str(exc),
+                })
+
+        def _run_folds_sequentially(*, initial_task: dict[str, Any] | None = None, start_index: int = 0) -> None:
+            task = initial_task
+            if task is not None:
+                try:
+                    _collect_task_result(task, task_result=_run_deep_compare_fold_task(task))
+                except Exception as exc:
+                    _collect_task_result(task, exc=exc)
+                finally:
+                    del task
+                    gc.collect()
+            for split in fold_splits[start_index:]:
                 task = _build_fold_task(split)
                 if task is None:
                     continue
                 try:
-                    task_result = _run_deep_compare_fold_task(task)
-                    fold_results.extend(task_result["fold_results"])
-                    errors.extend(task_result["errors"])
+                    _collect_task_result(task, task_result=_run_deep_compare_fold_task(task))
                 except Exception as exc:
-                    for model_spec in task["model_specs"]:
-                        errors.append({
-                            "model": model_spec["model_name"],
-                            "repeat": task["repeat"],
-                            "fold": task["fold"],
-                            "error": str(exc),
-                        })
+                    _collect_task_result(task, exc=exc)
                 finally:
                     del task
                     gc.collect()
 
         if parallel_jobs > 1 and len(fold_splits) > 1:
-            try:
-                with ProcessPoolExecutor(
-                    max_workers=max(1, parallel_jobs),
-                    mp_context=mp.get_context("spawn"),
-                ) as executor:
-                    future_meta: dict[Any, dict[str, int]] = {}
-                    for split in fold_splits:
-                        task = _build_fold_task(split)
-                        if task is None:
-                            continue
-                        future = executor.submit(_run_deep_compare_fold_task, task)
-                        # Store only lightweight fold metadata, not the task with tensors.
-                        future_meta[future] = {"repeat": split["repeat"], "fold": split["fold"]}
-                        # task goes out of scope: tensors freed after pickling for subprocess
-                    for future in as_completed(future_meta):
-                        meta = future_meta.pop(future)
-                        try:
-                            task_result = future.result()
-                            fold_results.extend(task_result["fold_results"])
-                            errors.extend(task_result["errors"])
-                        except Exception as exc:
-                            for model_spec in model_specs:
-                                errors.append({
-                                    "model": model_spec["model_name"],
-                                    "repeat": meta["repeat"],
-                                    "fold": meta["fold"],
-                                    "error": str(exc),
-                                })
-            except (NotImplementedError, PermissionError, OSError) as exc:
-                parallel_execution_note = (
-                    "Parallel repeated-CV execution was unavailable in this runtime; "
-                    f"SurvStudio fell back to sequential folds ({type(exc).__name__})."
+            max_workers = min(max(1, parallel_jobs), len(fold_splits))
+            first_task: dict[str, Any] | None = None
+            next_split_index = len(fold_splits)
+            for split_index, split in enumerate(fold_splits):
+                first_task = _build_fold_task(split)
+                if first_task is None:
+                    continue
+                next_split_index = split_index + 1
+                break
+            if first_task is None:
+                pass
+            elif _estimate_deep_compare_task_bytes(first_task) * max_workers >= _DEEP_COMPARE_PARALLEL_MAX_INFLIGHT_BYTES:
+                estimated_inflight_mib = (
+                    _estimate_deep_compare_task_bytes(first_task) * max_workers / (1024 ** 2)
                 )
-                _run_folds_sequentially()
+                parallel_execution_note = (
+                    "Parallel repeated-CV execution was disabled because fold payloads were too large "
+                    f"for safe multi-process buffering ({estimated_inflight_mib:.1f} MiB estimated in flight "
+                    f"across {max_workers} worker(s)); SurvStudio fell back to sequential folds."
+                )
+                _run_folds_sequentially(initial_task=first_task, start_index=next_split_index)
+            else:
+                try:
+                    with ProcessPoolExecutor(
+                        max_workers=max_workers,
+                        mp_context=mp.get_context("spawn"),
+                    ) as executor:
+                        future_meta: dict[Any, dict[str, Any]] = {}
+
+                        def _submit_task(task: dict[str, Any]) -> None:
+                            future = executor.submit(_run_deep_compare_fold_task, task)
+                            future_meta[future] = {
+                                "repeat": task["repeat"],
+                                "fold": task["fold"],
+                                "model_specs": task["model_specs"],
+                            }
+
+                        _submit_task(first_task)
+                        del first_task
+                        gc.collect()
+
+                        while next_split_index < len(fold_splits) and len(future_meta) < max_workers:
+                            task = _build_fold_task(fold_splits[next_split_index])
+                            next_split_index += 1
+                            if task is None:
+                                continue
+                            _submit_task(task)
+                            del task
+                            gc.collect()
+
+                        while future_meta:
+                            done, _pending = wait(set(future_meta), return_when=FIRST_COMPLETED)
+                            for future in done:
+                                meta = future_meta.pop(future)
+                                try:
+                                    task_result = future.result()
+                                    fold_results.extend(task_result["fold_results"])
+                                    errors.extend(task_result["errors"])
+                                except Exception as exc:
+                                    for model_spec in meta["model_specs"]:
+                                        errors.append({
+                                            "model": model_spec["model_name"],
+                                            "repeat": meta["repeat"],
+                                            "fold": meta["fold"],
+                                            "error": str(exc),
+                                        })
+                            while next_split_index < len(fold_splits) and len(future_meta) < max_workers:
+                                task = _build_fold_task(fold_splits[next_split_index])
+                                next_split_index += 1
+                                if task is None:
+                                    continue
+                                _submit_task(task)
+                                del task
+                                gc.collect()
+                except (NotImplementedError, PermissionError, OSError) as exc:
+                    parallel_execution_note = (
+                        "Parallel repeated-CV execution was unavailable in this runtime; "
+                        f"SurvStudio fell back to sequential folds ({type(exc).__name__})."
+                    )
+                    _run_folds_sequentially(start_index=0)
         else:
             _run_folds_sequentially()
 
