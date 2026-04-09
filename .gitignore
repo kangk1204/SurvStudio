@@ -19,3 +19,4 @@ node_modules/
 manuscript/
 survival_xai_survey.md
 *.pdf
+.omx/

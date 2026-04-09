@@ -385,6 +385,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         annotation.bgcolor = "rgba(255,255,255,0.96)"
         annotation.borderpad = 3
 
+    clipped_for_readability = False
     for panel_index, panel in enumerate(panels):
         row = (panel_index // cols) + 1
         col = (panel_index % cols) + 1
@@ -429,6 +430,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             )
         fig.add_hline(y=0.0, line_width=1, line_dash="dot", line_color="rgba(90, 103, 118, 0.7)", row=row, col=col)
         robust_range = _diagnostic_residual_axis_range(y_values, trend_y)
+        clipped_for_readability = clipped_for_readability or (robust_range is not None)
         fig.update_xaxes(
             title="log(time)" if row == rows else "",
             title_standoff=14,
@@ -446,6 +448,28 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         )
 
     top_margin = 84 + ((max_title_lines - 1) * 18)
+    if clipped_for_readability:
+        subtitle_text, subtitle_lines = _wrap_annotation_text(
+            "Screening view only: one or more residual panels were clipped for readability. "
+            "Inspect hover values and raw outputs before drawing PH conclusions.",
+            width=86,
+            max_lines=2,
+        )
+        fig.add_annotation(
+            text=subtitle_text,
+            xref="paper",
+            yref="paper",
+            x=0.0,
+            y=1.12,
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            align="left",
+            font={"size": 12, "color": INK, "family": "Sora, sans-serif"},
+            bgcolor="rgba(255,255,255,0.92)",
+            borderpad=4,
+        )
+        top_margin += 24 + ((subtitle_lines - 1) * 16)
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": top_margin, "b": 68},
