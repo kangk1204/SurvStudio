@@ -1721,6 +1721,11 @@ def test_compare_deep_survival_models_disables_parallel_cv_when_available_memory
     monkeypatch.setattr(deep_models, "_prepare_deep_split_data", _fake_prepare)
     monkeypatch.setattr(deep_models, "_estimate_deep_compare_task_bytes", lambda task: 1024)
     monkeypatch.setattr(deep_models, "_available_system_memory_bytes", lambda: None)
+    monkeypatch.setattr(
+        deep_models,
+        "_estimate_parallel_deep_compare_memory_bytes",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("parallel memory estimate should not run when memory is unknown")),
+    )
 
     class _UnexpectedExecutor:
         def __init__(self, *args, **kwargs) -> None:

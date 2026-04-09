@@ -517,8 +517,7 @@ def _available_system_memory_bytes() -> int | None:
     return None
 
 
-def _estimate_parallel_deep_compare_memory_bytes(task: dict[str, Any], *, max_workers: int) -> int:
-    payload_bytes = _estimate_deep_compare_task_bytes(task)
+def _estimate_parallel_deep_compare_memory_bytes(*, payload_bytes: int, max_workers: int) -> int:
     return int(
         (payload_bytes + _DEEP_COMPARE_PARALLEL_WORKER_OVERHEAD_BYTES) * max(1, max_workers)
         + _DEEP_COMPARE_PARALLEL_MEMORY_RESERVE_BYTES
@@ -1565,69 +1564,45 @@ def compare_deep_survival_models(
                     _run_folds_sequentially(initial_task=first_task, start_index=next_split_index)
                 else:
                     available_memory = _available_system_memory_bytes()
-                    estimated_parallel_bytes = _estimate_parallel_deep_compare_memory_bytes(
-                        first_task,
-                        max_workers=max_workers,
-                    )
-                    if available_memory is None or estimated_parallel_bytes >= available_memory:
-                        if available_memory is None:
-                            parallel_execution_note = (
-                                "Parallel repeated-CV execution was disabled because available system memory "
-                                "could not be determined for this runtime; SurvStudio fell back to sequential folds."
-                            )
-                        else:
+                    if available_memory is None:
+                        parallel_execution_note = (
+                            "Parallel repeated-CV execution was disabled because available system memory "
+                            "could not be determined for this runtime; SurvStudio fell back to sequential folds."
+                        )
+                        _run_folds_sequentially(initial_task=first_task, start_index=next_split_index)
+                    else:
+                        estimated_parallel_bytes = _estimate_parallel_deep_compare_memory_bytes(
+                            payload_bytes=estimated_task_bytes,
+                            max_workers=max_workers,
+                        )
+                        if estimated_parallel_bytes >= available_memory:
                             parallel_execution_note = (
                                 "Parallel repeated-CV execution was disabled because available system memory "
                                 f"({available_memory / (1024 ** 2):.1f} MiB) was below the estimated worker footprint "
                                 f"({estimated_parallel_bytes / (1024 ** 2):.1f} MiB including process startup overhead); "
                                 "SurvStudio fell back to sequential folds."
                             )
-                        _run_folds_sequentially(initial_task=first_task, start_index=next_split_index)
-                    else:
-                        try:
-                            with ProcessPoolExecutor(
-                                max_workers=max_workers,
-                                mp_context=mp.get_context("spawn"),
-                            ) as executor:
-                                future_meta: dict[Any, dict[str, Any]] = {}
+                            _run_folds_sequentially(initial_task=first_task, start_index=next_split_index)
+                        else:
+                            try:
+                                with ProcessPoolExecutor(
+                                    max_workers=max_workers,
+                                    mp_context=mp.get_context("spawn"),
+                                ) as executor:
+                                    future_meta: dict[Any, dict[str, Any]] = {}
 
-                                def _submit_task(task: dict[str, Any]) -> None:
-                                    future = executor.submit(_run_deep_compare_fold_task, task)
-                                    future_meta[future] = {
-                                        "repeat": task["repeat"],
-                                        "fold": task["fold"],
-                                        "model_specs": task["model_specs"],
-                                    }
+                                    def _submit_task(task: dict[str, Any]) -> None:
+                                        future = executor.submit(_run_deep_compare_fold_task, task)
+                                        future_meta[future] = {
+                                            "repeat": task["repeat"],
+                                            "fold": task["fold"],
+                                            "model_specs": task["model_specs"],
+                                        }
 
-                                _submit_task(first_task)
-                                del first_task
-                                gc.collect()
-
-                                while next_split_index < len(fold_splits) and len(future_meta) < max_workers:
-                                    task = _build_fold_task(fold_splits[next_split_index])
-                                    next_split_index += 1
-                                    if task is None:
-                                        continue
-                                    _submit_task(task)
-                                    del task
+                                    _submit_task(first_task)
+                                    del first_task
                                     gc.collect()
 
-                                while future_meta:
-                                    done, _pending = wait(set(future_meta), return_when=FIRST_COMPLETED)
-                                    for future in done:
-                                        meta = future_meta.pop(future)
-                                        try:
-                                            task_result = future.result()
-                                            fold_results.extend(task_result["fold_results"])
-                                            errors.extend(task_result["errors"])
-                                        except Exception as exc:
-                                            for model_spec in meta["model_specs"]:
-                                                errors.append({
-                                                    "model": model_spec["model_name"],
-                                                    "repeat": meta["repeat"],
-                                                    "fold": meta["fold"],
-                                                    "error": str(exc),
-                                                })
                                     while next_split_index < len(fold_splits) and len(future_meta) < max_workers:
                                         task = _build_fold_task(fold_splits[next_split_index])
                                         next_split_index += 1
@@ -1636,12 +1611,37 @@ def compare_deep_survival_models(
                                         _submit_task(task)
                                         del task
                                         gc.collect()
-                        except (NotImplementedError, PermissionError, OSError) as exc:
-                            parallel_execution_note = (
-                                "Parallel repeated-CV execution was unavailable in this runtime; "
-                                f"SurvStudio fell back to sequential folds ({type(exc).__name__})."
-                            )
-                            _run_folds_sequentially(start_index=0)
+
+                                    while future_meta:
+                                        done, _pending = wait(set(future_meta), return_when=FIRST_COMPLETED)
+                                        for future in done:
+                                            meta = future_meta.pop(future)
+                                            try:
+                                                task_result = future.result()
+                                                fold_results.extend(task_result["fold_results"])
+                                                errors.extend(task_result["errors"])
+                                            except Exception as exc:
+                                                for model_spec in meta["model_specs"]:
+                                                    errors.append({
+                                                        "model": model_spec["model_name"],
+                                                        "repeat": meta["repeat"],
+                                                        "fold": meta["fold"],
+                                                        "error": str(exc),
+                                                    })
+                                        while next_split_index < len(fold_splits) and len(future_meta) < max_workers:
+                                            task = _build_fold_task(fold_splits[next_split_index])
+                                            next_split_index += 1
+                                            if task is None:
+                                                continue
+                                            _submit_task(task)
+                                            del task
+                                            gc.collect()
+                            except (NotImplementedError, PermissionError, OSError) as exc:
+                                parallel_execution_note = (
+                                    "Parallel repeated-CV execution was unavailable in this runtime; "
+                                    f"SurvStudio fell back to sequential folds ({type(exc).__name__})."
+                                )
+                                _run_folds_sequentially(start_index=0)
         else:
             _run_folds_sequentially()
 
