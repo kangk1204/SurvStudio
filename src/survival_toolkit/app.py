@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
@@ -110,6 +111,7 @@ _SHAP_SAFE_MODE_MAX_ENCODED_FEATURES = 80
 _SHAP_SAFE_MODE_MAX_RAW_FEATURES = 30
 _SIGNED_NUMERIC_CSV_LITERAL = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 _CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
+_NOTE_CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _DATASET_PROFILE_CACHE_KEY = "_dataset_profile_cache"
 _LATEX_ESCAPE_TABLE = str.maketrans(
     {
@@ -154,7 +156,7 @@ def _normalize_event_positive_value(value: Any) -> Any:
             return text
         return value
     if isinstance(value, float):
-        if not pd.notna(value):
+        if not np.isfinite(value):
             raise ValueError("event_positive_value must be a finite scalar value.")
         return value
     raise ValueError("event_positive_value must be a scalar JSON value (string, number, boolean, or null).")
@@ -165,7 +167,10 @@ class _DatasetRequestModel(BaseModel):
     @classmethod
     def validate_dataset_id(cls, value: Any) -> str:
         text = _normalize_optional_text_field(value, field_name="dataset_id")
-        assert text is not None
+        if text is None:
+            raise ValueError("dataset_id must not be empty or null.")
+        if len(text) > 64:
+            raise ValueError("dataset_id must be 64 characters or fewer.")
         return text
 
 
@@ -309,7 +314,8 @@ class KaplanMeierRequest(_EventPositiveValueRequestModel):
     @classmethod
     def validate_time_unit_label(cls, value: Any) -> str:
         text = _normalize_optional_text_field(value, field_name="time_unit_label")
-        assert text is not None
+        if text is None:
+            raise ValueError("time_unit_label must not be empty or null.")
         return text
 
 
@@ -449,6 +455,8 @@ class TableExportRequest(BaseModel):
             text = str(note)
             if len(text) > 4000:
                 raise ValueError("Each table note must be 4000 characters or fewer.")
+            if _NOTE_CONTROL_CHAR_PATTERN.search(text):
+                raise ValueError("Table notes must not contain control characters.")
             cleaned.append(text)
         return cleaned
 
