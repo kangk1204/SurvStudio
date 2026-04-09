@@ -19,6 +19,37 @@ def _torch_available() -> bool:
         return False
 
 
+class _InlineFuture:
+    def __init__(self, *, result=None, error: Exception | None = None) -> None:
+        self._result = result
+        self._error = error
+
+    def result(self):
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+class _InlineExecutor:
+    def __init__(self, *args, **kwargs) -> None:
+        self.submitted = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def submit(self, fn, *args, **kwargs):
+        try:
+            result = fn(*args, **kwargs)
+            future = _InlineFuture(result=result)
+        except Exception as exc:
+            future = _InlineFuture(error=exc)
+        self.submitted.append(future)
+        return future
+
+
 def test_deep_model_source_uses_type_checked_bases_adamw_and_inference_mode() -> None:
     text = (
         Path(__file__).resolve().parents[1]
@@ -1343,11 +1374,15 @@ def test_compare_deep_survival_models_reports_mixed_holdout_apparent_caption(mon
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
-def test_compare_deep_survival_models_supports_parallel_repeated_cv() -> None:
-    from survival_toolkit.deep_models import compare_deep_survival_models
+def test_compare_deep_survival_models_supports_parallel_repeated_cv(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    monkeypatch.setattr(deep_models, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(deep_models, "wait", lambda futures, return_when=None: (set(futures), set()))
+    monkeypatch.setattr(deep_models, "_available_system_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
 
     df = make_example_dataset(seed=16, n_patients=48)
-    result = compare_deep_survival_models(
+    result = deep_models.compare_deep_survival_models(
         df,
         time_column="os_months",
         event_column="os_event",
@@ -1374,6 +1409,7 @@ def test_compare_deep_survival_models_supports_parallel_repeated_cv() -> None:
     assert result["comparison_table"]
     assert result["fold_results"]
     assert result["manuscript_tables"]["model_performance_table"]
+    assert "parallel_execution_note" not in result
     first_row = result["comparison_table"][0]
     assert first_row["training_seeds"]
     assert first_row["split_seeds"]
@@ -1382,8 +1418,12 @@ def test_compare_deep_survival_models_supports_parallel_repeated_cv() -> None:
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
-def test_parallel_repeated_cv_is_reproducible_with_fixed_seed() -> None:
-    from survival_toolkit.deep_models import compare_deep_survival_models
+def test_parallel_repeated_cv_is_reproducible_with_fixed_seed(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    monkeypatch.setattr(deep_models, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(deep_models, "wait", lambda futures, return_when=None: (set(futures), set()))
+    monkeypatch.setattr(deep_models, "_available_system_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
 
     df = make_example_dataset(seed=18, n_patients=48)
     common = dict(
@@ -1409,8 +1449,8 @@ def test_parallel_repeated_cv_is_reproducible_with_fixed_seed() -> None:
         random_seed=29,
     )
 
-    first = compare_deep_survival_models(**common)
-    second = compare_deep_survival_models(**common)
+    first = deep_models.compare_deep_survival_models(**common)
+    second = deep_models.compare_deep_survival_models(**common)
 
     first_rows = [(row["model"], row["c_index"]) for row in first["comparison_table"]]
     second_rows = [(row["model"], row["c_index"]) for row in second["comparison_table"]]
@@ -1528,6 +1568,116 @@ def test_compare_deep_survival_models_disables_parallel_cv_when_fold_payloads_ar
     assert "parallel_execution_note" in result
     assert "too large for safe multi-process buffering" in result["parallel_execution_note"]
     assert "sequential folds" in result["parallel_execution_note"]
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_compare_deep_survival_models_disables_parallel_cv_when_available_memory_is_low(monkeypatch) -> None:
+    import torch
+    import survival_toolkit.deep_models as deep_models
+    import survival_toolkit.ml_models as ml_models
+
+    df = make_example_dataset(seed=21, n_patients=48)
+
+    monkeypatch.setattr(
+        deep_models,
+        "_deep_trainer_specs",
+        lambda **kwargs: [("FakeNet", object(), {})],
+    )
+
+    def _fake_prepare(*args, **kwargs):
+        x_tensor = torch.zeros((12, 3), dtype=torch.float32)
+        time_tensor = torch.ones(12, dtype=torch.float32)
+        event_tensor = torch.tensor([0, 1] * 6, dtype=torch.int64)
+        return (
+            {
+                "X_tensor": x_tensor,
+                "time_tensor": time_tensor,
+                "event_tensor": event_tensor,
+                "feature_names": ["age", "biomarker_score", "immune_index"],
+                "scaler_params": {},
+                "categorical_feature_indices": [],
+                "numeric_feature_indices": [0, 1, 2],
+                "n_samples": 12,
+                "n_features": 3,
+            },
+            {
+                "train_idx": np.arange(6, dtype=int),
+                "eval_idx": np.arange(6, 12, dtype=int),
+                "evaluation_mode": "holdout",
+                "evaluation_note": "Reported C-index is computed on an external fold.",
+            },
+        )
+
+    monkeypatch.setattr(deep_models, "_prepare_deep_split_data", _fake_prepare)
+    monkeypatch.setattr(deep_models, "_estimate_deep_compare_task_bytes", lambda task: 1024)
+    monkeypatch.setattr(deep_models, "_available_system_memory_bytes", lambda: 64 * 1024 * 1024)
+
+    class _UnexpectedExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("parallel executor should not be used when available memory is too low")
+
+    monkeypatch.setattr(deep_models, "ProcessPoolExecutor", _UnexpectedExecutor)
+
+    def _fake_fold_runner(task):
+        return {
+            "fold_results": [
+                {
+                    "model": "FakeNet",
+                    "repeat": task["repeat"],
+                    "fold": task["fold"],
+                    "c_index": 0.61,
+                    "evaluation_mode": "holdout",
+                    "training_seed": task["seed_base"],
+                    "split_seed": task["split_seed"],
+                    "monitor_seed": task["monitor_seed"],
+                    "epochs_trained": 1,
+                    "training_samples": 6,
+                    "evaluation_samples": 6,
+                    "n_features": 3,
+                    "training_time_ms": 10.0,
+                    "ibs": None,
+                    "null_ibs": None,
+                    "brier_skill_score": None,
+                },
+            ],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(deep_models, "_run_deep_compare_fold_task", _fake_fold_runner)
+    monkeypatch.setattr(
+        ml_models,
+        "build_manuscript_result_tables",
+        lambda result: {"model_performance_table": [{"Model": "FakeNet"}]},
+    )
+
+    result = deep_models.compare_deep_survival_models(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "immune_index"],
+        hidden_layers=[8],
+        epochs=1,
+        batch_size=8,
+        num_time_bins=6,
+        d_model=16,
+        n_heads=4,
+        n_layers=1,
+        latent_dim=4,
+        n_clusters=3,
+        evaluation_strategy="repeated_cv",
+        cv_folds=2,
+        cv_repeats=1,
+        early_stopping_patience=1,
+        early_stopping_min_delta=0.0,
+        parallel_jobs=2,
+        random_seed=32,
+        included_models=["FakeNet"],
+    )
+
+    assert result["comparison_table"][0]["model"] == "FakeNet"
+    assert "parallel_execution_note" in result
+    assert "available system memory" in result["parallel_execution_note"]
+    assert "process startup overhead" in result["parallel_execution_note"]
 
 
 def test_evaluate_single_deep_survival_model_repeated_cv_reuses_compare_path(monkeypatch) -> None:
