@@ -119,7 +119,8 @@ def test_build_cox_forest_figure_returns_json() -> None:
     assert "layout" in figure
     shapes = figure["layout"].get("shapes", [])
     assert any(shape.get("type") == "line" and shape.get("x0") == 1.0 and shape.get("x1") == 1.0 for shape in shapes)
-    assert figure["layout"]["margin"]["t"] == 72
+    assert figure["layout"]["margin"]["t"] == 28
+    assert figure["layout"]["title"]["text"] == ""
 
 
 def test_build_cox_forest_figure_keeps_stats_out_of_plot_annotations() -> None:
