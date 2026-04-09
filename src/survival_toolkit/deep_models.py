@@ -304,7 +304,9 @@ def _coerce_deep_frame(
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
 
     frame = frame.dropna(subset=[time_column, event_column]).copy()
-    frame = frame.loc[frame[time_column] > 0].reset_index(drop=True)
+    positive_mask = frame[time_column] > 0
+    frame = frame.loc[positive_mask].reset_index(drop=True)
+    frame.attrs["dropped_nonpositive_time_rows"] = int((~positive_mask).sum())
 
     if frame.empty:
         raise ValueError("No analyzable rows remain after removing missing/invalid values.")
@@ -455,6 +457,8 @@ def _prepare_deep_split_data(
             **feature_meta,
             "n_samples": train_n + eval_n,
             "n_features": int(combined_x.shape[1]),
+            "dropped_nonpositive_time_rows": int(train_frame.attrs.get("dropped_nonpositive_time_rows", 0))
+            + int(eval_frame.attrs.get("dropped_nonpositive_time_rows", 0)),
         },
         evaluation_split,
     )
@@ -577,6 +581,7 @@ def _prepare_deep_training_inputs(
             split_eval["evaluation_note"] = str(
                 resolved_split.get("evaluation_note", split_eval["evaluation_note"])
             )
+            split_data["dropped_nonpositive_time_rows"] = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
             return split_data, split_eval
         except ValueError:
             resolved_split = {
@@ -597,6 +602,7 @@ def _prepare_deep_training_inputs(
         event_column=event_column,
         encoder=encoder,
     )
+    full_data["dropped_nonpositive_time_rows"] = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
     return full_data, resolved_split
 
 
@@ -985,6 +991,7 @@ def _scientific_summary_dl(
     loss_history: list[float],
     evaluation_mode: str,
     evaluation_note: str | None = None,
+    dropped_nonpositive_time_rows: int = 0,
 ) -> dict[str, Any]:
     """Build an insight board dict for deep learning models."""
     c_val = c_index if c_index is not None else 0.5
@@ -1016,6 +1023,10 @@ def _scientific_summary_dl(
 
     if evaluation_note:
         cautions.append(evaluation_note)
+    if int(dropped_nonpositive_time_rows) > 0:
+        cautions.append(
+            f"{int(dropped_nonpositive_time_rows)} row(s) with nonpositive survival time were excluded before deep-model preprocessing."
+        )
 
     if train_samples < 100:
         cautions.append("Sample size is small for a deep learning model; results may be unreliable.")
@@ -1093,6 +1104,7 @@ def _scientific_summary_dl(
             {"label": "Evaluation mode", "value": evaluation_mode},
             {"label": "Training samples", "value": train_samples},
             {"label": "Training events", "value": train_events},
+            {"label": "Dropped for nonpositive time", "value": int(dropped_nonpositive_time_rows) or None},
             {"label": "Evaluation samples", "value": eval_samples},
             {"label": "Features", "value": n_features},
             {"label": "Epochs", "value": epochs_trained or epochs},
@@ -1218,6 +1230,7 @@ def compare_deep_survival_models(
         *,
         evaluation_mode: str,
         fold_results: list[dict[str, Any]] | None = None,
+        dropped_nonpositive_time_rows: int = 0,
     ) -> dict[str, Any]:
         if not comparison:
             raise ValueError(
@@ -1317,6 +1330,10 @@ def compare_deep_survival_models(
             )
         if errors:
             cautions.append(f"{len(errors)} deep model fit(s) failed and were excluded from the ranking.")
+        if int(dropped_nonpositive_time_rows) > 0:
+            cautions.append(
+                f"{int(dropped_nonpositive_time_rows)} row(s) with nonpositive survival time were excluded before deep-model preprocessing."
+            )
         if evaluation_mode == "repeated_cv" and any(int(row.get("n_apparent_fallbacks", 0) or 0) > 0 for row in comparison):
             cautions.append(
                 "Some repeated-CV folds fell back to apparent evaluation inside model training and were excluded from the repeated-CV aggregate."
@@ -1363,6 +1380,7 @@ def compare_deep_survival_models(
                 {"label": "Best model", "value": best["model"]},
                 {"label": metric_name, "value": best.get("c_index")},
                 {"label": "Evaluation mode", "value": result_evaluation_mode},
+                {"label": "Dropped for nonpositive time", "value": int(dropped_nonpositive_time_rows) or None},
                 {"label": "Failures", "value": len(errors)},
             ],
         }
@@ -1415,6 +1433,7 @@ def compare_deep_survival_models(
             categorical_features=categorical_features,
             event_positive_value=event_positive_value,
         )
+        dropped_nonpositive_time_rows = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
         events = clean_frame[event_column].astype(int).to_numpy()
         unique, counts = np.unique(events, return_counts=True)
         if len(unique) < 2 or counts.min() < cv_folds:
@@ -1700,7 +1719,13 @@ def compare_deep_survival_models(
                 "test_events": None if summary is None else summary["test_events"],
                 "repeat_results": [] if summary is None else summary["repeat_results"],
             })
-        result = _finalize_result(comparison, errors, evaluation_mode="repeated_cv", fold_results=fold_results)
+        result = _finalize_result(
+            comparison,
+            errors,
+            evaluation_mode="repeated_cv",
+            fold_results=fold_results,
+            dropped_nonpositive_time_rows=dropped_nonpositive_time_rows,
+        )
         if parallel_execution_note:
             result["parallel_execution_note"] = parallel_execution_note
             result["scientific_summary"]["cautions"].append(parallel_execution_note)
@@ -1715,6 +1740,7 @@ def compare_deep_survival_models(
         event_positive_value=event_positive_value,
         random_seed=random_seed,
     )
+    dropped_nonpositive_time_rows = int(shared_data.get("dropped_nonpositive_time_rows", 0))
     shared_monitor_indices = _build_monitor_indices(
         shared_eval_split["train_idx"],
         shared_data["event_tensor"],
@@ -1761,7 +1787,12 @@ def compare_deep_survival_models(
             })
         except Exception as exc:
             errors.append({"model": model_name, "error": str(exc)})
-    return _finalize_result(comparison, errors, evaluation_mode="holdout")
+    return _finalize_result(
+        comparison,
+        errors,
+        evaluation_mode="holdout",
+        dropped_nonpositive_time_rows=dropped_nonpositive_time_rows,
+    )
 
 
 def evaluate_single_deep_survival_model(
@@ -2269,6 +2300,7 @@ def train_deepsurv(
         loss_history,
         evaluation_mode,
         evaluation_note,
+        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
@@ -2633,6 +2665,7 @@ def train_deephit(
         loss_history,
         evaluation_mode,
         evaluation_note,
+        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
     )
 
     return {
@@ -3000,6 +3033,7 @@ def train_neural_mtlr(
         loss_history,
         evaluation_mode,
         evaluation_note,
+        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
     )
 
     return {
@@ -3334,6 +3368,7 @@ def train_survival_transformer(
         loss_history,
         evaluation_mode,
         evaluation_note,
+        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
@@ -3783,6 +3818,7 @@ def train_survival_vae(
         loss_history,
         evaluation_mode,
         evaluation_note,
+        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,

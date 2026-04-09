@@ -1276,9 +1276,9 @@ def _export_rows_to_latex(
     if notes:
         notes_heading = _latex_escape(template_profile["notes_heading"])
         notes_text = " ".join(
-            _latex_escape(_normalize_export_text(note, "plain"))
+            _latex_escape(normalized_note)
             for note in notes
-            if _normalize_export_text(note, "plain")
+            if (normalized_note := _normalize_export_text(note, "plain"))
         )
         if notes_text:
             lines.extend(
