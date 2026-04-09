@@ -1047,7 +1047,9 @@ def _cohort_frame(
         frame = frame.dropna()
     else:
         frame = frame.dropna(subset=[time_column, event_column])
-    frame = frame.loc[_ensure_positive_times(frame[time_column])].reset_index(drop=True)
+    positive_mask = _ensure_positive_times(frame[time_column])
+    frame = frame.loc[positive_mask].reset_index(drop=True)
+    frame.attrs["dropped_nonpositive_time_rows"] = int((~positive_mask).sum())
     if frame.empty:
         raise ValueError("No analyzable rows remain after removing missing values.")
     if frame[event_column].sum() == 0:
@@ -1651,6 +1653,7 @@ def _km_scientific_summary(
         row.get("RMST CI lower") is not None and row.get("RMST CI upper") is not None
         for row in summary_rows
     )
+    dropped_nonpositive_time_rows = int(cohort_summary.get("dropped_nonpositive_time_rows") or 0)
 
     strengths = [
         "Kaplan-Meier estimation uses Greenwood standard errors with log-log confidence intervals.",
@@ -1687,6 +1690,10 @@ def _km_scientific_summary(
     if not rmst_ci_available:
         cautions.append(
             "At least one RMST confidence interval was not estimable because the KM risk set was exhausted at an event time; interpret RMST point estimates descriptively."
+        )
+    if dropped_nonpositive_time_rows:
+        cautions.append(
+            f"{dropped_nonpositive_time_rows} row(s) with nonpositive survival time were excluded before KM estimation."
         )
 
     if group_column and outcome_informed_group:
@@ -1734,6 +1741,11 @@ def _km_scientific_summary(
             {"label": "Groups", "value": group_count},
             {"label": "Median follow-up", "value": _safe_float(cohort_summary["median_follow_up"])},
             *(
+                [{"label": "Dropped for nonpositive time", "value": dropped_nonpositive_time_rows}]
+                if dropped_nonpositive_time_rows
+                else []
+            ),
+            *(
                 [{"label": "RMST difference", "value": _safe_float(rmst_contrast["estimate"])}]
                 if rmst_contrast is not None and rmst_contrast.get("estimate") is not None
                 else []
@@ -1776,6 +1788,7 @@ def _cox_scientific_summary(
     complete_case_n = int(model_stats["n"])
     outcome_rows_raw = model_stats.get("outcome_rows")
     dropped_rows_raw = model_stats.get("dropped_rows")
+    dropped_nonpositive_time_rows = int(model_stats.get("dropped_nonpositive_time_rows") or 0)
     outcome_rows = int(outcome_rows_raw) if outcome_rows_raw is not None else None
     dropped_rows = int(dropped_rows_raw) if dropped_rows_raw is not None else None
     dropped_fraction = None
@@ -1824,6 +1837,10 @@ def _cox_scientific_summary(
             )
         cautions.append(drop_message)
         next_steps.append("Review missingness patterns or use an imputation strategy before treating the fitted cohort as representative.")
+    if dropped_nonpositive_time_rows:
+        cautions.append(
+            f"{dropped_nonpositive_time_rows} outcome-valid row(s) with nonpositive survival time were excluded before Cox fitting."
+        )
     if ph_alert_terms:
         cautions.append(
             f"Possible proportional-hazards violations detected for: {', '.join(ph_alert_terms)}."
@@ -1933,6 +1950,7 @@ def _cox_scientific_summary(
     metrics = [
         {"label": "Outcome-valid rows", "value": outcome_rows},
         {"label": "Dropped for missing covariates", "value": dropped_rows},
+        {"label": "Dropped for nonpositive time", "value": dropped_nonpositive_time_rows or None},
         {"label": "Events", "value": int(model_stats["events"])},
         {"label": "Parameters", "value": int(model_stats["parameters"])},
         {"label": "EPV", "value": epv},
@@ -3349,6 +3367,7 @@ def compute_km_analysis(
         "censored": int((1 - frame[event_column]).sum()),
         "median_follow_up": _median_follow_up(frame[time_column], frame[event_column]),
         "time_max": float(np.nanmax(frame[time_column])),
+        "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
     }
     rmst_contrast: dict[str, Any] | None = None
     if len(summary_rows) == 2 and len(rmst_stats_by_group) == 2:
@@ -3894,6 +3913,7 @@ def compute_cox_analysis(
             "n": n_obs,
             "outcome_rows": outcome_rows,
             "dropped_rows": dropped_rows,
+            "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
             "events": n_events,
             "parameters": k_params,
             "events_per_parameter": float(n_events / k_params) if k_params else None,
@@ -3926,6 +3946,7 @@ def compute_cox_analysis(
             "n": n_obs,
             "outcome_rows": outcome_rows,
             "dropped_rows": dropped_rows,
+            "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
             "events": n_events,
             "parameters": k_params,
             "events_per_parameter": float(n_events / k_params) if k_params else None,

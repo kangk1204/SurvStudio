@@ -1095,6 +1095,46 @@ def test_cox_analysis_reports_missing_covariate_exclusions() -> None:
     assert any("were excluded" in caution.lower() and "missing" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 
+def test_km_analysis_reports_nonpositive_time_exclusions() -> None:
+    df = make_example_dataset(seed=212, n_patients=60)
+    df.loc[df.index[:3], "os_months"] = [0.0, -1.0, 0.0]
+
+    result = compute_km_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+    )
+
+    assert result["cohort"]["dropped_nonpositive_time_rows"] == 3
+    assert any(
+        metric["label"] == "Dropped for nonpositive time" and metric["value"] == 3
+        for metric in result["scientific_summary"]["metrics"]
+    )
+    assert any("nonpositive survival time" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
+def test_cox_analysis_reports_nonpositive_time_exclusions() -> None:
+    df = make_example_dataset(seed=213, n_patients=120)
+    df.loc[df.index[:4], "os_months"] = [0.0, -2.0, 0.0, -0.5]
+
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age", "biomarker_score"],
+        categorical_covariates=[],
+    )
+
+    assert result["model_stats"]["dropped_nonpositive_time_rows"] == 4
+    assert any(
+        metric["label"] == "Dropped for nonpositive time" and metric["value"] == 4
+        for metric in result["scientific_summary"]["metrics"]
+    )
+    assert any("nonpositive survival time" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
 def test_cox_scientific_summary_reports_when_lr_test_is_not_reportable() -> None:
     summary = _cox_scientific_summary(
         model_rows=[],
