@@ -119,12 +119,10 @@ def test_build_cox_forest_figure_returns_json() -> None:
     assert "layout" in figure
     shapes = figure["layout"].get("shapes", [])
     assert any(shape.get("type") == "line" and shape.get("x0") == 1.0 and shape.get("x1") == 1.0 for shape in shapes)
-    annotation_text = " ".join(str(annotation.get("text", "")) for annotation in figure["layout"].get("annotations", []))
-    assert "Apparent C-index = 0.650" in annotation_text
-    assert "Red: term p &lt; 0.05" in annotation_text
+    assert figure["layout"]["margin"]["t"] == 72
 
 
-def test_build_cox_forest_figure_includes_c_index_ci_when_available() -> None:
+def test_build_cox_forest_figure_keeps_stats_out_of_plot_annotations() -> None:
     cox_result = {
         "results_table": [
             {"Label": "age", "Hazard ratio": 1.05, "CI lower": 1.01, "CI upper": 1.10, "P value": 0.02},
@@ -143,7 +141,9 @@ def test_build_cox_forest_figure_includes_c_index_ci_when_available() -> None:
     figure = build_cox_forest_figure(cox_result)
 
     annotation_text = " ".join(str(annotation.get("text", "")) for annotation in figure["layout"].get("annotations", []))
-    assert "95% CI = 0.610 to 0.690" in annotation_text
+    assert "Apparent C-index" not in annotation_text
+    assert "95% CI =" not in annotation_text
+    assert "Red: term p" not in annotation_text
 
 
 def test_build_cox_forest_figure_wraps_long_labels() -> None:

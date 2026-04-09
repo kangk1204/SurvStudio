@@ -287,46 +287,15 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         )
     )
 
-    stats = cox_result["model_stats"]
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": axis_layout["l"], "r": 40, "t": 90, "b": 70},
+        margin={"l": axis_layout["l"], "r": 40, "t": 72, "b": 70},
         title={
             "text": "Cox PH Forest Plot",
             "font": {"family": "Source Serif 4, serif", "size": 24, "color": INK},
             "x": 0.02,
         },
         height=max(420, axis_layout["height"]),
-    )
-    stat_parts = [f"N = {stats['n']}", f"events = {stats['events']}"]
-    if stats.get("c_index") is not None:
-        c_index_label = str(stats.get("c_index_label", "C-index"))
-        stat_parts.append(f"{c_index_label} = {stats['c_index']:.3f}")
-        ci_low = stats.get("c_index_ci_lower")
-        ci_high = stats.get("c_index_ci_upper")
-        if ci_low is not None and ci_high is not None:
-            level_pct = int(round(float(stats.get("c_index_ci_level", 0.95)) * 100.0))
-            stat_parts.append(f"{level_pct}% CI = {float(ci_low):.3f} to {float(ci_high):.3f}")
-    fig.add_annotation(
-        text=", ".join(stat_parts),
-        xref="paper", yref="paper", x=0.98, y=0.98,
-        showarrow=False, font={"size": 11, "color": INK},
-        align="right", xanchor="right", yanchor="top",
-        bgcolor="rgba(255,255,255,0.85)", borderpad=4,
-    )
-    fig.add_annotation(
-        text="Red: term p &lt; 0.05. Blue: term p ≥ 0.05. PH diagnostics are reviewed separately in the diagnostics table.",
-        xref="paper",
-        yref="paper",
-        x=0.02,
-        y=1.08,
-        showarrow=False,
-        font={"size": 10, "color": INK},
-        align="left",
-        xanchor="left",
-        yanchor="bottom",
-        bgcolor="rgba(255,255,255,0.85)",
-        borderpad=4,
     )
     if not rows:
         fig.add_annotation(
