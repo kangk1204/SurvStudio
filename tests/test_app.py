@@ -1130,6 +1130,10 @@ def test_cox_forest_plot_heading_and_copy_render_outside_plot_shell() -> None:
     assert '<div class="diagnostic-copy" id="coxForestCopy">' in html
     assert "<h3>Cox PH Forest Plot</h3>" in html
     assert "PH diagnostics are reviewed separately in the diagnostics table." in html
+    cox_block = html[html.index("<h3>Cox PH Forest Plot</h3>"):html.index('<div class="insight-board" id="coxInsightBoard">')]
+    assert 'id="coxMetaBanner"' in cox_block
+    assert 'class="diagnostic-copy-note" id="coxMetaBanner"' in cox_block
+    assert cox_block.index('id="coxMetaBanner"') < cox_block.index('id="coxPlot"')
     assert ".diagnostic-copy {" in styles
 
 
