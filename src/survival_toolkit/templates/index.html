@@ -14,6 +14,7 @@
     <script src="../static/app.js?v={{ static_version }}" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#workspace">Skip to workspace</a>
     <header class="shell-header">
       <a class="brand-line" id="brandHome" href="#" style="text-decoration:none;color:inherit;">
         <div class="brand-mark">S</div>
@@ -1029,7 +1030,10 @@
               <div>
                 <h3>Model Workbench</h3>
               </div>
-              <button class="button ghost compact-btn" id="closePredictiveWorkbenchButton" type="button">Back to leaderboard</button>
+              <div class="button-row compact benchmark-workspace-actions">
+                <button class="button primary compact-btn hidden" id="runPredictiveWorkbenchButton" type="button">Train selected model</button>
+                <button class="button ghost compact-btn" id="closePredictiveWorkbenchButton" type="button">Back to leaderboard</button>
+              </div>
             </div>
             <div class="benchmark-workspace-frame">
               <div class="benchmark-workspace-caption" id="benchmarkWorkbenchCaption">Random Survival Forest is selected. The workbench below shows the exact controls for that model family.</div>

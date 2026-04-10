@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import types
 from pathlib import Path
 
@@ -41,6 +42,28 @@ def test_find_optimal_cutpoint_returns_valid_split() -> None:
     assert result["n_high"] > 0
     assert result["n_low"] > 0
     assert len(result["scan_data"]) > 2
+
+
+def test_split_train_test_falls_back_to_apparent_when_stratified_split_raises(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    df = make_example_dataset(seed=123, n_patients=30)
+
+    def _boom(*args, **kwargs):
+        raise ValueError("forced stratified split failure")
+
+    monkeypatch.setattr(ml_models, "train_test_split", _boom)
+
+    train_frame, test_frame, evaluation_mode = ml_models._split_train_test(
+        df,
+        event_column="os_event",
+        random_state=7,
+        test_size=0.3,
+    )
+
+    assert evaluation_mode == "apparent"
+    assert len(train_frame) == len(df)
+    assert len(test_frame) == len(df)
 
 
 def test_optimal_cutpoint_derive_method() -> None:
@@ -1193,6 +1216,33 @@ def test_partial_dependence_raises_on_internal_prediction_failure() -> None:
         )
 
 
+def test_partial_dependence_requires_predict_callable() -> None:
+    from survival_toolkit.ml_models import compute_partial_dependence
+
+    with pytest.raises(ValueError, match="callable predict\\(\\)"):
+        compute_partial_dependence(
+            object(),
+            pd.DataFrame({"age": [10.0, 20.0, 30.0]}),
+            feature_name="age",
+        )
+
+
+def test_partial_dependence_rejects_n_points_below_two() -> None:
+    from survival_toolkit.ml_models import compute_partial_dependence
+
+    class _LinearModel:
+        def predict(self, X):
+            return np.asarray(X)[:, 0]
+
+    with pytest.raises(ValueError, match="n_points must be at least 2"):
+        compute_partial_dependence(
+            _LinearModel(),
+            pd.DataFrame({"age": [10.0, 20.0, 30.0]}),
+            feature_name="age",
+            n_points=1,
+        )
+
+
 def test_store_lru_eviction() -> None:
     from survival_toolkit.store import DatasetStore
     from survival_toolkit.errors import DatasetNotFoundError
@@ -1332,6 +1382,53 @@ def test_compute_shap_values_rejects_high_dimensional_kernel_fallback(monkeypatc
         ml_models.compute_shap_values(model, encoded, feature_names=list(encoded.columns))
 
 
+def test_compute_shap_values_accepts_list_output_from_older_shap(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    class _FakeTreeExplainer:
+        def __init__(self, model) -> None:
+            self.model = model
+
+        def shap_values(self, matrix):
+            arr = np.asarray(matrix, dtype=float)
+            return [
+                np.zeros_like(arr),
+                np.ones_like(arr),
+            ]
+
+    monkeypatch.setattr(ml_models, "SHAP_AVAILABLE", True)
+    monkeypatch.setattr(
+        ml_models,
+        "shap",
+        types.SimpleNamespace(TreeExplainer=_FakeTreeExplainer, KernelExplainer=object),
+    )
+
+    encoded = pd.DataFrame(np.arange(12, dtype=float).reshape(4, 3), columns=["a", "b", "c"])
+    model = types.SimpleNamespace(predict=lambda matrix: np.asarray(matrix).sum(axis=1))
+
+    result = ml_models.compute_shap_values(model, encoded, feature_names=list(encoded.columns))
+
+    assert result["method"] == "tree"
+    assert result["feature_importance"][0]["feature"] == "a"
+    assert result["shap_summary"]
+
+
+def test_compute_shap_values_requires_predict_callable(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    monkeypatch.setattr(ml_models, "SHAP_AVAILABLE", True)
+    monkeypatch.setattr(
+        ml_models,
+        "shap",
+        types.SimpleNamespace(TreeExplainer=lambda model: (_ for _ in ()).throw(RuntimeError("tree unsupported")), KernelExplainer=object),
+    )
+
+    encoded = pd.DataFrame(np.arange(6, dtype=float).reshape(2, 3), columns=["a", "b", "c"])
+
+    with pytest.raises(ValueError, match="callable predict\\(\\)"):
+        ml_models.compute_shap_values(object(), encoded, feature_names=list(encoded.columns))
+
+
 def test_rsf_permutation_importance_caps_rows_and_repeats(monkeypatch) -> None:
     import numpy as np
     import pandas as pd
@@ -1340,8 +1437,14 @@ def test_rsf_permutation_importance_caps_rows_and_repeats(monkeypatch) -> None:
 
     seen: dict[str, object] = {}
 
-    train_encoded = pd.DataFrame(np.ones((160, 24)), columns=[f"f{i}" for i in range(24)])
-    eval_encoded = pd.DataFrame(np.ones((180, 24)), columns=[f"f{i}" for i in range(24)])
+    train_encoded = pd.DataFrame(
+        np.linspace(0.0, 1.0, 160 * 24, dtype=float).reshape(160, 24),
+        columns=[f"f{i}" for i in range(24)],
+    )
+    eval_encoded = pd.DataFrame(
+        np.linspace(1.0, 2.0, 180 * 24, dtype=float).reshape(180, 24),
+        columns=[f"f{i}" for i in range(24)],
+    )
     full_encoded = pd.concat([train_encoded, eval_encoded], ignore_index=True)
     frame = pd.DataFrame({
         "os_months": np.linspace(1, 340, 340),
@@ -1789,6 +1892,26 @@ def test_integrated_brier_score_falls_back_when_numpy_has_no_trapezoid(monkeypat
     assert result["eval_times"] == [2.0, 6.0, 12.0]
 
 
+def test_integrated_brier_score_rejects_nonfinite_survival_matrix() -> None:
+    from survival_toolkit.ml_models import compute_integrated_brier_score
+
+    times = np.array([5.0, 12.0, 18.0], dtype=float)
+    events = np.array([1, 0, 1], dtype=int)
+
+    def _predicted(eval_times: np.ndarray) -> np.ndarray:
+        return np.array(
+            [
+                [0.9, np.nan],
+                [0.8, 0.7],
+                [0.7, 0.6],
+            ],
+            dtype=float,
+        )
+
+    with pytest.raises(ValueError, match="non-finite survival probabilities"):
+        compute_integrated_brier_score(times, events, _predicted, eval_times=[2.0, 6.0])
+
+
 def test_integrated_brier_score_prefers_patient_informed_predictions_over_flat_baseline() -> None:
     from survival_toolkit.ml_models import compute_integrated_brier_score
 
@@ -1810,3 +1933,72 @@ def test_integrated_brier_score_prefers_patient_informed_predictions_over_flat_b
     assert better["brier_skill_score"] is not None
     assert flat["brier_skill_score"] is not None
     assert better["brier_skill_score"] > flat["brier_skill_score"]
+
+
+def test_counterfactual_survival_requires_predict_callable() -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    df = make_example_dataset(seed=88, n_patients=40)
+    trained_result = {
+        "_model": object(),
+        "_X_encoded": pd.DataFrame({"age": [1.0, 2.0, 3.0]}),
+        "_analysis_frame": df[["os_months", "os_event", "age"]].copy(),
+    }
+
+    with pytest.raises(ValueError, match="callable predict\\(\\)"):
+        ml_models.counterfactual_survival(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            features=["age"],
+            target_feature="age",
+            counterfactual_value=65,
+            trained_result=trained_result,
+        )
+
+
+def test_cross_validate_survival_models_rejects_excessive_total_evaluations() -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    df = make_example_dataset(seed=34, n_patients=80)
+
+    with pytest.raises(ValueError, match="must not exceed 200"):
+        ml_models.cross_validate_survival_models(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            features=["age", "biomarker_score"],
+            cv_folds=10,
+            cv_repeats=21,
+        )
+
+
+def test_augment_scientific_summary_with_brier_does_not_mutate_input() -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    summary = {
+        "status": "robust",
+        "headline": "Summary",
+        "strengths": [],
+        "cautions": [],
+        "next_steps": [],
+        "metrics": [],
+    }
+    original = copy.deepcopy(summary)
+
+    updated = ml_models._augment_scientific_summary_with_brier(
+        summary,
+        {"ibs": 0.12, "null_ibs": 0.20, "brier_skill_score": 0.40},
+    )
+
+    assert summary == original
+    assert updated["metrics"]
+
+
+def test_fit_feature_encoder_rejects_empty_feature_list() -> None:
+    from survival_toolkit.encoding import fit_feature_encoder
+
+    df = make_example_dataset(seed=55, n_patients=20)
+
+    with pytest.raises(ValueError, match="Select at least one feature"):
+        fit_feature_encoder(df, [])

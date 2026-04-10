@@ -14,6 +14,7 @@ from survival_toolkit.analysis import (
     MAX_MODEL_FEATURE_CANDIDATES,
     _bh_adjust,
     _cohort_frame,
+    _cox_global_ph_screening,
     _cox_martingale_plot_data,
     _cox_scientific_summary,
     _harrell_c_index,
@@ -24,7 +25,6 @@ from survival_toolkit.analysis import (
     _prepare_cox_frame,
     _reference_levels,
     _pointwise_km_ci,
-    _safe_exp,
     _stability_score,
     _survival_outcome_like_columns,
     _signature_scientific_summary,
@@ -126,6 +126,15 @@ def test_bh_adjust_matches_standard_monotone_fdr() -> None:
     assert adjusted == pytest.approx(expected)
 
 
+def test_bh_adjust_preserves_finite_values_when_some_p_values_are_nan() -> None:
+    adjusted = _bh_adjust([0.01, 0.05, np.nan, 0.20])
+
+    assert adjusted[0] == pytest.approx(0.03)
+    assert adjusted[1] == pytest.approx(0.075)
+    assert np.isnan(adjusted[2])
+    assert adjusted[3] == pytest.approx(0.20)
+
+
 def test_permutation_p_value_compares_logrank_statistics(monkeypatch) -> None:
     import survival_toolkit.analysis as analysis
 
@@ -149,12 +158,61 @@ def test_permutation_p_value_compares_logrank_statistics(monkeypatch) -> None:
     assert empirical_p == pytest.approx(0.5)
 
 
-def test_safe_exp_returns_finite_values_for_nonfinite_inputs() -> None:
-    finfo = np.finfo(float)
+def test_cohort_frame_tracks_missing_and_infinite_rows() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [12.0, np.inf, 24.0, 36.0],
+            "os_event": [1, 0, 1, 0],
+            "age": [60.0, 61.0, np.nan, 63.0],
+        }
+    )
 
-    assert _safe_exp(np.inf) == float(finfo.max)
-    assert _safe_exp(-np.inf) == float(finfo.tiny)
-    assert _safe_exp(np.nan) == float(finfo.tiny)
+    frame = _cohort_frame(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        extra_columns=["age"],
+        drop_missing_extra_columns=True,
+    )
+
+    assert frame.shape[0] == 2
+    assert frame.attrs["rows_with_infinite_values"] == 1
+    assert frame.attrs["dropped_missing_rows"] == 2
+
+
+def test_bootstrap_signature_metrics_reports_skipped_resamples(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    df = pd.DataFrame(
+        {
+            "time": [1.0, 2.0, 3.0, 4.0],
+            "event": [1, 1, 0, 0],
+            "marker": [0.0, 0.0, 1.0, 1.0],
+        }
+    )
+
+    monkeypatch.setattr(
+        analysis,
+        "_signature_mask",
+        lambda sampled, combo, operator="AND": np.ones(len(sampled), dtype=bool),
+    )
+
+    metrics = analysis._bootstrap_signature_metrics(
+        frame=df,
+        time_column="time",
+        event_column="event",
+        combo=[{"column": "marker", "label": "marker"}],
+        combo_operator="AND",
+        min_group_size=1,
+        n_iterations=4,
+        sample_fraction=0.8,
+        random_seed=7,
+        significance_level=0.05,
+    )
+
+    assert metrics["Bootstrap valid resamples"] == 0
+    assert metrics["Bootstrap skipped resamples"] == 4
 
 
 def test_cox_preview_warns_when_events_per_parameter_is_extremely_low() -> None:
@@ -1008,7 +1066,7 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert any("analyzable cohort" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("spearman" in strength.lower() and "schoenfeld" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("likelihood-ratio test" in strength.lower() for strength in result["scientific_summary"]["strengths"])
-    assert any("comparable patient pairs" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+    assert any("evaluable patient pairs" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("external-cohort apply workflow" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("changing the covariate set" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert result["diagnostics_plot_data"]
@@ -1351,6 +1409,57 @@ def test_km_analysis_orders_common_group_labels_clinically() -> None:
     )
 
     assert [row["Group"] for row in result["summary_table"]] == ["Stage I", "Stage II", "Stage III", "Stage IV", "unknown"]
+
+
+def test_km_analysis_rejects_nonpositive_max_time_and_invalid_confidence_level() -> None:
+    df = make_example_dataset(seed=41, n_patients=40)
+
+    with pytest.raises(ValueError, match="confidence_level must be between 0 and 1"):
+        compute_km_analysis(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            confidence_level=1.0,
+        )
+
+    with pytest.raises(ValueError, match="max_time must be positive"):
+        compute_km_analysis(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            max_time=0,
+        )
+
+
+def test_km_analysis_rejects_identifier_like_group_columns_with_too_many_levels() -> None:
+    n_patients = 51
+    df = pd.DataFrame(
+        {
+            "time": np.linspace(1.0, float(n_patients), n_patients),
+            "event": [1 if idx % 2 == 0 else 0 for idx in range(n_patients)],
+            "patient_id": [f"P{idx:03d}" for idx in range(n_patients)],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Kaplan-Meier can plot at most 50 groups"):
+        compute_km_analysis(
+            df,
+            time_column="time",
+            event_column="event",
+            group_column="patient_id",
+        )
+
+
+def test_cox_global_ph_screening_keeps_exact_zero_p_values() -> None:
+    summary = _cox_global_ph_screening(
+        [
+            {"Variable": "age", "P value": 0.0},
+            {"Variable": "stage", "P value": 0.20},
+        ]
+    )
+
+    assert summary["terms_tested"] == 2
+    assert summary["p_value"] is not None
 
 
 def test_cohort_table_orders_group_columns_clinically() -> None:
@@ -2330,6 +2439,8 @@ def test_signature_summary_keeps_internal_confirmation_language_conservative() -
     )
 
     assert "passes the current internal significance" not in summary["headline"].lower()
+    assert "internally screened result" in summary["headline"].lower()
+    assert "internally supported" not in summary["headline"].lower()
     assert "external validation" in summary["headline"].lower()
 
 

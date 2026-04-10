@@ -55,6 +55,9 @@ def fit_feature_encoder(
 ) -> dict[str, Any]:
     """Fit a deterministic tabular encoder shared by ML and DL paths."""
 
+    if not list(features):
+        raise ValueError("Select at least one feature before fitting the encoder.")
+
     selected, resolved_categorical, numeric_features = coerce_feature_subset(
         df,
         features,

@@ -13,6 +13,7 @@ they are not installed.
 
 from __future__ import annotations
 
+import copy
 import math
 import time
 import warnings
@@ -561,6 +562,7 @@ def _augment_scientific_summary_with_brier(
     scientific_summary: dict[str, Any],
     brier_result: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    scientific_summary = copy.deepcopy(scientific_summary)
     if not brier_result:
         scientific_summary["cautions"].append(
             "IBS / Brier Skill Score could not be computed for this run, so calibration-error interpretation remains incomplete."
@@ -610,6 +612,14 @@ def _augment_scientific_summary_with_brier(
     return scientific_summary
 
 
+def _require_predict_callable(model: Any, *, context: str) -> None:
+    predict_fn = getattr(model, "predict", None)
+    if not callable(predict_fn):
+        raise ValueError(
+            f"{context} requires a fitted model with a callable predict() method."
+        )
+
+
 def _split_train_test(
     frame: pd.DataFrame,
     event_column: str,
@@ -628,12 +638,15 @@ def _split_train_test(
     if events.nunique() < 2 or events.value_counts().min() < 4:
         return frame.copy().reset_index(drop=True), frame.copy().reset_index(drop=True), "apparent"
 
-    train_idx, test_idx = train_test_split(
-        frame.index.to_numpy(),
-        test_size=test_size,
-        random_state=random_state,
-        stratify=events.to_numpy(),
-    )
+    try:
+        train_idx, test_idx = train_test_split(
+            frame.index.to_numpy(),
+            test_size=test_size,
+            random_state=random_state,
+            stratify=events.to_numpy(),
+        )
+    except ValueError:
+        return frame.copy().reset_index(drop=True), frame.copy().reset_index(drop=True), "apparent"
     train_frame = frame.loc[train_idx].reset_index(drop=True)
     test_frame = frame.loc[test_idx].reset_index(drop=True)
     return train_frame, test_frame, "holdout"
@@ -673,6 +686,28 @@ def _drop_constant_train_columns(
         train_encoded.loc[:, varying_columns].copy(),
         eval_encoded.loc[:, varying_columns].copy(),
     )
+
+
+def _drop_constant_train_columns_with_full(
+    train_encoded: pd.DataFrame,
+    eval_encoded: pd.DataFrame,
+    full_encoded: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
+    reduced_train, reduced_eval = _drop_constant_train_columns(train_encoded, eval_encoded)
+    if full_encoded is None:
+        return reduced_train, reduced_eval, None
+    return reduced_train, reduced_eval, full_encoded.loc[:, reduced_train.columns].copy()
+
+
+def _effective_tree_min_samples_leaf(
+    min_samples_leaf: int,
+    n_training_rows: int,
+) -> int:
+    requested = max(1, int(min_samples_leaf))
+    available_rows = int(n_training_rows)
+    if available_rows < 1:
+        raise ValueError("Tree-based survival models need at least one training row.")
+    return min(requested, available_rows)
 
 
 def _drop_rank_deficient_train_columns(
@@ -984,7 +1019,7 @@ def _prepare_model_evaluation_split(
 # 1. Optimal cutpoint scanning
 # ===================================================================
 
-
+@user_input_boundary
 def find_optimal_cutpoint(
     df: pd.DataFrame,
     time_column: str,
@@ -1276,6 +1311,12 @@ def train_random_survival_forest(
         train_encoded = eval_encoded = full_encoded
         evaluation_mode = "apparent"
         metric_name = _metric_name_for_evaluation(evaluation_mode)
+    train_encoded, eval_encoded, full_encoded = _drop_constant_train_columns_with_full(
+        train_encoded,
+        eval_encoded,
+        full_encoded,
+    )
+    effective_min_samples_leaf = _effective_tree_min_samples_leaf(min_samples_leaf, int(train_encoded.shape[0]))
     y_train = _prepare_sksurv_data(train_frame, time_column, event_column)
     y_eval = _prepare_sksurv_data(eval_frame, time_column, event_column)
     y_full = _prepare_sksurv_data(full_frame, time_column, event_column)
@@ -1286,7 +1327,7 @@ def train_random_survival_forest(
         model = RandomSurvivalForest(
             n_estimators=n_estimators,
             max_depth=max_depth,
-            min_samples_leaf=min_samples_leaf,
+            min_samples_leaf=effective_min_samples_leaf,
             random_state=random_state,
             n_jobs=_TREE_N_JOBS,
         )
@@ -1367,7 +1408,7 @@ def train_random_survival_forest(
         n_fit_patients=int(train_frame.shape[0]),
         n_fit_events=int(train_frame[event_column].sum()),
         extra_strengths=[
-            f"Ensemble of {n_estimators} trees with min_samples_leaf={min_samples_leaf}.",
+            f"Ensemble of {n_estimators} trees with min_samples_leaf={effective_min_samples_leaf}.",
             "Non-parametric model; no proportional-hazards assumption required.",
         ],
     )
@@ -1384,7 +1425,7 @@ def train_random_survival_forest(
             "evaluation_mode": evaluation_mode,
             "n_estimators": n_estimators,
             "max_depth": max_depth,
-            "min_samples_leaf": min_samples_leaf,
+            "min_samples_leaf": effective_min_samples_leaf,
             "n_patients": n_patients,
             "n_events": n_events,
             "n_evaluation_patients": n_eval_patients,
@@ -1476,6 +1517,12 @@ def train_gradient_boosted_survival(
         train_encoded = eval_encoded = full_encoded
         evaluation_mode = "apparent"
         metric_name = _metric_name_for_evaluation(evaluation_mode)
+    train_encoded, eval_encoded, full_encoded = _drop_constant_train_columns_with_full(
+        train_encoded,
+        eval_encoded,
+        full_encoded,
+    )
+    effective_min_samples_leaf = _effective_tree_min_samples_leaf(min_samples_leaf, int(train_encoded.shape[0]))
     y_train = _prepare_sksurv_data(train_frame, time_column, event_column)
     y_eval = _prepare_sksurv_data(eval_frame, time_column, event_column)
     y_full = _prepare_sksurv_data(full_frame, time_column, event_column)
@@ -1486,8 +1533,8 @@ def train_gradient_boosted_survival(
         model = GradientBoostingSurvivalAnalysis(
             n_estimators=n_estimators,
             learning_rate=learning_rate,
-            max_depth=max_depth if max_depth is not None else 3,
-            min_samples_leaf=min_samples_leaf,
+            max_depth=max_depth,
+            min_samples_leaf=effective_min_samples_leaf,
             random_state=random_state,
         )
         model.fit(train_encoded.to_numpy(), y_train)
@@ -1534,7 +1581,7 @@ def train_gradient_boosted_survival(
         n_fit_patients=int(train_frame.shape[0]),
         n_fit_events=int(train_frame[event_column].sum()),
         extra_strengths=[
-            f"Boosted ensemble with {n_estimators} stages, learning_rate={learning_rate}, max_depth={max_depth}.",
+            f"Boosted ensemble with {n_estimators} stages, learning_rate={learning_rate}, max_depth={max_depth}, min_samples_leaf={effective_min_samples_leaf}.",
             "Non-parametric model; no proportional-hazards assumption required.",
         ],
     )
@@ -1552,7 +1599,7 @@ def train_gradient_boosted_survival(
             "n_estimators": n_estimators,
             "learning_rate": learning_rate,
             "max_depth": max_depth,
-            "min_samples_leaf": min_samples_leaf,
+            "min_samples_leaf": effective_min_samples_leaf,
             "n_patients": n_patients,
             "n_events": n_events,
             "n_evaluation_patients": n_eval_patients,
@@ -2097,10 +2144,12 @@ def _fit_evaluate_rsf_split(
         features,
         categorical_features,
     )
+    train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
     train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
     test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
     if train_encoded.empty or test_encoded.empty:
         raise ValueError("No valid rows remain after encoding features for Random Survival Forest.")
+    effective_min_samples_leaf = _effective_tree_min_samples_leaf(min_samples_leaf, int(train_encoded.shape[0]))
 
     y_train = _prepare_sksurv_data(train_eval, time_column, event_column)
     t_start = time.monotonic()
@@ -2109,7 +2158,7 @@ def _fit_evaluate_rsf_split(
         model = RandomSurvivalForest(
             n_estimators=n_estimators,
             max_depth=max_depth,
-            min_samples_leaf=min_samples_leaf,
+            min_samples_leaf=effective_min_samples_leaf,
             random_state=random_state,
             n_jobs=_TREE_N_JOBS,
         )
@@ -2151,7 +2200,7 @@ def _fit_evaluate_gbs_split(
     categorical_features: Sequence[str] | None = None,
     n_estimators: int = 100,
     learning_rate: float = 0.1,
-    max_depth: int = 3,
+    max_depth: int | None = 3,
     min_samples_leaf: int = 10,
     random_state: int = 42,
 ) -> dict[str, Any]:
@@ -2164,10 +2213,12 @@ def _fit_evaluate_gbs_split(
         features,
         categorical_features,
     )
+    train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
     train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
     test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
     if train_encoded.empty or test_encoded.empty:
         raise ValueError("No valid rows remain after encoding features for Gradient Boosted Survival.")
+    effective_min_samples_leaf = _effective_tree_min_samples_leaf(min_samples_leaf, int(train_encoded.shape[0]))
 
     y_train = _prepare_sksurv_data(train_eval, time_column, event_column)
     t_start = time.monotonic()
@@ -2176,8 +2227,8 @@ def _fit_evaluate_gbs_split(
         model = GradientBoostingSurvivalAnalysis(
             n_estimators=n_estimators,
             learning_rate=learning_rate,
-            max_depth=max_depth if max_depth is not None else 3,
-            min_samples_leaf=min_samples_leaf,
+            max_depth=max_depth,
+            min_samples_leaf=effective_min_samples_leaf,
             random_state=random_state,
         )
         model.fit(train_encoded.to_numpy(), y_train)
@@ -2382,6 +2433,8 @@ def cross_validate_survival_models(
         raise ValueError("cv_folds must be at least 2.")
     if cv_repeats < 1:
         raise ValueError("cv_repeats must be at least 1.")
+    if cv_folds * cv_repeats > 200:
+        raise ValueError("cv_folds * cv_repeats must not exceed 200 total evaluations.")
     _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
 
     frame = _cohort_frame(
@@ -2611,6 +2664,7 @@ def compute_shap_values(
     if feature_names is None:
         feature_names = list(X_encoded.columns)
 
+    _require_predict_callable(model, context="SHAP explanations")
     X_array = X_encoded.to_numpy() if isinstance(X_encoded, pd.DataFrame) else np.asarray(X_encoded)
 
     shap_method = "tree"
@@ -2663,6 +2717,11 @@ def compute_shap_values(
             shap_values = explainer.shap_values(X_eval, nsamples=kernel_nsamples)
 
     # shap_values may be 2-D (n_samples, n_features) or 3-D for multi-output
+    if isinstance(shap_values, (list, tuple)):
+        shap_values = np.asarray(shap_values[-1] if len(shap_values) else shap_values, dtype=float)
+    else:
+        shap_values = np.asarray(shap_values, dtype=float)
+
     if shap_values.ndim == 3:
         # Use the last output (typically risk) or average across outputs
         shap_values = shap_values[:, :, -1]
@@ -2732,6 +2791,10 @@ def compute_partial_dependence(
         ``feature``, ``feature_type``, ``values`` (grid or categories),
         ``mean_risk`` (averaged predicted risk at each value).
     """
+    if int(n_points) < 2:
+        raise ValueError("n_points must be at least 2 for partial dependence.")
+    _require_predict_callable(model, context="Partial dependence")
+    n_points = int(n_points)
     categorical_features = list(categorical_features or [])
     computation_errors: list[str] = []
 
@@ -2977,6 +3040,10 @@ def compute_integrated_brier_score(
         raise ValueError(
             f"predicted_survival_fn must return shape ({n_samples}, {len(eval_times_arr)}), "
             f"got {surv_matrix.shape}."
+        )
+    if not np.all(np.isfinite(surv_matrix)):
+        raise ValueError(
+            "predicted_survival_fn returned non-finite survival probabilities."
         )
 
     # Compute Brier Score at each evaluation time with IPCW to handle censoring.
@@ -3702,6 +3769,7 @@ def counterfactual_survival(
             )
 
     model = result["_model"]
+    _require_predict_callable(model, context="Counterfactual survival analysis")
     X_original = result["_X_encoded"]
     encoder = result.get("_feature_encoder")
     analysis_frame = result.get("_analysis_frame")

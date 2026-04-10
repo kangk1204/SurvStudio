@@ -71,6 +71,33 @@ def test_build_km_figure_uses_fixed_high_low_colors_regardless_of_curve_order() 
     line_colors = {trace["name"]: trace["line"]["color"] for trace in line_traces}
     assert line_colors["High"] == "#c94e33"
     assert line_colors["Low"] == "#2563eb"
+    line_dashes = {trace["name"]: trace["line"].get("dash") for trace in line_traces}
+    assert line_dashes["High"] == "solid"
+    assert line_dashes["Low"] == "solid"
+
+
+def test_build_km_figure_cycles_dash_patterns_for_multigroup_curves() -> None:
+    km_result = {
+        "curves": [
+            {
+                "group": label,
+                "timeline": [0.0, 1.0, 2.0],
+                "survival": [1.0, 0.9, 0.8],
+                "ci_lower": [1.0, 0.85, 0.75],
+                "ci_upper": [1.0, 0.95, 0.85],
+                "censor_times": [],
+                "censor_survival": [],
+            }
+            for label in ["Stage I", "Stage II", "Stage III", "Stage IV"]
+        ],
+        "test": None,
+        "display_horizon": 3.0,
+    }
+
+    figure = build_km_figure(km_result)
+    line_traces = [trace for trace in figure["data"] if trace.get("mode") == "lines"]
+
+    assert [trace["line"].get("dash") for trace in line_traces] == ["solid", "dash", "dot", "dashdot"]
 
 
 def test_build_km_figure_explains_hidden_p_value_for_outcome_informed_groups() -> None:

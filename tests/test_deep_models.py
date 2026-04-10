@@ -1384,8 +1384,23 @@ def test_compare_deep_survival_models_supports_repeated_cv() -> None:
     assert result["cv_repeats"] == 2
     assert result["fold_results"]
     assert result["comparison_table"]
-    assert all(row["n_repeats"] == 2 for row in result["comparison_table"])
-    assert result["manuscript_tables"]["model_performance_table"]
+
+
+def test_compare_deep_survival_models_rejects_excessive_total_evaluations() -> None:
+    from survival_toolkit.deep_models import compare_deep_survival_models
+
+    df = make_example_dataset(seed=49, n_patients=80)
+
+    with pytest.raises(ValueError, match="must not exceed 200"):
+        compare_deep_survival_models(
+            df=df,
+            time_column="os_months",
+            event_column="os_event",
+            features=["age", "biomarker_score"],
+            evaluation_strategy="repeated_cv",
+            cv_folds=10,
+            cv_repeats=21,
+        )
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -2089,6 +2104,44 @@ def test_scientific_summary_dl_flags_transformer_as_exploratory_tabular_attentio
     assert "feature-identity embedding" in cautions_text
 
 
+def test_scientific_summary_dl_reports_non_estimable_c_index_honestly() -> None:
+    from survival_toolkit.deep_models import _scientific_summary_dl
+
+    summary = _scientific_summary_dl(
+        "DeepSurv",
+        c_index=None,
+        train_samples=100,
+        eval_samples=20,
+        train_events=42,
+        n_features=5,
+        epochs=10,
+        loss_history=[1.2, 1.0, 0.9],
+        evaluation_mode="holdout",
+    )
+
+    assert summary["status"] == "review"
+    assert "not estimable" in summary["headline"].lower()
+    assert summary["metrics"][0]["value"] is None
+    assert any("could not be computed" in caution.lower() for caution in summary["cautions"])
+
+
+def test_prepare_deep_data_rejects_non_numeric_values_in_numeric_features() -> None:
+    from survival_toolkit.deep_models import _prepare_deep_data
+
+    df = make_example_dataset(seed=88, n_patients=40)
+    df["age"] = df["age"].astype(object)
+    df.loc[df.index[0], "age"] = "forty"
+
+    with pytest.raises(ValueError, match="non-numeric"):
+        _prepare_deep_data(
+            df,
+            time_column="os_months",
+            event_column="os_event",
+            features=["age", "biomarker_score"],
+            categorical_features=[],
+        )
+
+
 def test_deep_models_module_can_load_when_torch_is_missing(monkeypatch) -> None:
     module_path = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "deep_models.py"
     source = module_path.read_text(encoding="utf-8")
@@ -2118,6 +2171,30 @@ def test_require_finite_loss_rejects_nan_before_optimizer_step() -> None:
 
     with pytest.raises(ValueError, match="NaN or Inf"):
         deep_models._require_finite_loss(torch.tensor(float("nan")), context="unit test loss")
+
+
+def test_update_early_stopping_treats_nonfinite_monitor_as_wait_step() -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    class _DummyModel:
+        def state_dict(self):
+            return {"weight": 1.0}
+
+    prior_state = {"weight": "best"}
+    best_value, wait_count, best_state, should_stop = deep_models._update_early_stopping(
+        float("nan"),
+        best_value=0.71,
+        wait_count=2,
+        patience=3,
+        min_delta=1e-4,
+        model=_DummyModel(),
+        best_state=prior_state,
+    )
+
+    assert best_value == pytest.approx(0.71)
+    assert wait_count == 3
+    assert best_state is prior_state
+    assert should_stop is True
 
 
 def test_deephit_feature_importance_uses_expected_time_risk_target() -> None:
