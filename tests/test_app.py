@@ -4425,6 +4425,8 @@ def test_frontend_caps_importance_plot_container_height() -> None:
 
     assert "#mlImportancePlot," in styles
     assert "#dlImportancePlot" in styles
+    assert ".ml-plots-grid .plot-shell {" in styles
+    assert "margin-bottom: 0;" in styles
     assert "max-height: 720px;" in styles
     assert "overflow: auto;" in styles
 

@@ -3886,6 +3886,10 @@ tbody tr:hover td {
   margin-bottom: 16px;
 }
 
+.ml-plots-grid .plot-shell {
+  margin-bottom: 0;
+}
+
 #mlImportancePlot,
 #dlImportancePlot {
   max-height: 720px;

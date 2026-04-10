@@ -110,6 +110,21 @@
       return `Excluded from current ${benchmarkGoalMeta(goal).label} compare run: ${models.join(", ")}.`;
     }
 
+    function benchmarkStarterActionMarkup() {
+      return `
+        <div class="button-row compact benchmark-row-actions">
+          <button
+            class="button ghost compact-btn"
+            type="button"
+            data-benchmark-model="rsf"
+            data-benchmark-mode="single"
+          >
+            Open model controls
+          </button>
+        </div>
+      `;
+    }
+
     function benchmarkExcludedRows(goal, { currentOnly = false } = {}) {
       const payload = benchmarkComparePayload(goal, { currentOnly });
       if (!payload) return [];
@@ -585,6 +600,7 @@
           <strong class="benchmark-family-title">${escapeHtml(summary.title)}</strong>
           <p class="benchmark-family-copy">${escapeHtml(summary.text)}</p>
           <div class="dataset-preset-chips">${summary.chips.map((label) => `<span class="dataset-preset-chip">${escapeHtml(label)}</span>`).join("")}</div>
+          ${!hasAnyResult ? benchmarkStarterActionMarkup() : ""}
         </article>
       `;
     }
@@ -600,7 +616,12 @@
         refs.benchmarkTableNote.textContent = board.staleFamilies.length
           ? "Stored compare rows are stale and hidden. Rerun Compare All Models to rebuild the shared board with the current settings."
           : "Run Compare All Models to build a shared leaderboard across classical ML and deep learning.";
-        refs.benchmarkComparisonShell.innerHTML = '<div class="empty-state">Run Compare All Models to build a shared leaderboard across classical ML and deep learning.</div>';
+        refs.benchmarkComparisonShell.innerHTML = `
+          <div class="empty-state">
+            <span>Run Compare All Models to build a shared leaderboard across classical ML and deep learning.</span>
+            ${benchmarkStarterActionMarkup()}
+          </div>
+        `;
         return;
       }
 

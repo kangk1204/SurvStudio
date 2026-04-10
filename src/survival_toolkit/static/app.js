@@ -1831,6 +1831,43 @@ function queueVisiblePlotResize() {
   });
 }
 
+function waitForRenderFrames(count = 1) {
+  const frames = Math.max(1, Number(count) || 1);
+  return new Promise((resolve) => {
+    const step = (remaining) => {
+      requestAnimationFrame(() => {
+        if (remaining <= 1) {
+          resolve();
+          return;
+        }
+        step(remaining - 1);
+      });
+    };
+    step(frames);
+  });
+}
+
+async function stabilizePlotsBeforeBanner(plots = [], banner, { maxAttempts = 12, tolerance = 1 } = {}) {
+  const visiblePlots = plots.filter((plot) => plot && !plot.closest(".hidden"));
+  if (!visiblePlots.length || !banner) return;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await waitForRenderFrames(2);
+    visiblePlots.forEach((plot) => {
+      if (!plot?.data?.length) return;
+      try {
+        Plotly.Plots.resize(plot);
+        stabilizePlotShellHeight(plot);
+      } catch {
+        // Ignore detached or stale plot nodes during fast UI transitions.
+      }
+    });
+    const bannerRect = banner.getBoundingClientRect();
+    const plotsAreOrdered = visiblePlots.every((plot) => plot.getBoundingClientRect().bottom <= bannerRect.top + tolerance);
+    if (plotsAreOrdered) return;
+    await new Promise((resolve) => window.setTimeout(resolve, 25));
+  }
+}
+
 function scheduleVisiblePlotResize(delay = 80) {
   if (runtime.plotResizeTimer) {
     window.clearTimeout(runtime.plotResizeTimer);
@@ -4428,8 +4465,8 @@ function renderContextCards({
 
   if (refs.coxDependencyText) {
     refs.coxDependencyText.textContent = !hasDataset
-      ? "Cox uses the Study Design outcome definition plus the covariates and optional strata selected in this tab. Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting. PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots."
-      : "Cox uses the Study Design outcome definition plus the covariates and optional strata selected in this tab. Group by does not change the model unless you add that column as a covariate or strata variable. Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting. PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots.";
+      ? "Cox uses the Study Design outcome definition plus the covariates selected in this tab and any optional strata selected in this tab. Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting. PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots."
+      : "Cox uses the Study Design outcome definition plus the covariates selected in this tab and any optional strata selected in this tab. Group by does not change the model unless you add that column as a covariate or strata variable. Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting. PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots.";
     renderChipList(refs.coxDependencyChips, hasDataset ? [
       formatOutcomeChip(timeLabel, eventLabel, eventValue),
       formatGroupChip(groupLabel),
@@ -6390,6 +6427,7 @@ async function runMlModel() {
       showToast(shapToast, "warning", 5200);
     }
   }
+  await stabilizePlotsBeforeBanner([refs.mlImportancePlot, refs.mlShapPlot], refs.mlMetaBanner);
   renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "ML model results.");
   const stats = payload.analysis?.model_stats || {};
   const mlMetricLabel = stats.metric_name || ((stats.evaluation_mode === "holdout") ? "Holdout C-index" : "Apparent C-index");
