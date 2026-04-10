@@ -388,7 +388,7 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
             assert page.locator("#benchmarkDlMount .model-choice-field").is_hidden()
             assert page.locator("#benchmarkDlMount #runDlCompareButton").is_hidden()
             assert page.locator("#benchmarkDlMount #runDlCompareInlineButton").is_hidden()
-            page.locator("#runPredictiveSelectedButton").click()
+            page.locator("#runPredictiveWorkbenchButton").click()
             page.wait_for_function(
                 "document.getElementById('dlMetaBanner').textContent.includes('DEEPHIT: Holdout C-index=0.726')"
             )
@@ -609,18 +609,31 @@ def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: st
             )
             assert "Selected model:" not in page.locator("#benchmarkSummaryGrid").inner_text()
             assert "Show selected controls" not in page.locator("#benchmarkSummaryGrid").inner_text()
+            assert "Compare all models" in page.locator("#guidedRailActions").inner_text()
+            assert "Review shared features" in page.locator("#guidedRailActions").inner_text()
+            assert "Back" in page.locator("#guidedRailActions").inner_text()
 
             benchmark_text = page.locator("#benchmarkComparisonShell").inner_text()
             assert "Random Survival Forest" in benchmark_text
             assert "DeepHit" in benchmark_text
             assert "current screening rows from the latest ML and DL comparison outputs" in page.locator("#benchmarkTableNote").inner_text()
 
+            page.locator('#guidedRailActions [data-guided-action="review-shared-features"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+            page.wait_for_function("document.getElementById('benchmarkWorkbench').classList.contains('hidden') === false")
+            page.wait_for_function("document.getElementById('runPredictiveWorkbenchButton').classList.contains('hidden')")
+            page.wait_for_function("document.querySelectorAll('#guidedPanel [data-guided-action=\"run-predictive-selected\"]').length === 0")
+            page.locator('#guidedPanel [data-guided-action="close-predictive-workbench"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '5'")
+            page.wait_for_function("document.getElementById('benchmarkWorkbench').classList.contains('hidden')")
+
             page.wait_for_function("document.querySelectorAll('#benchmarkComparisonShell [data-benchmark-model]').length > 0")
             page.locator("#benchmarkComparisonShell [data-benchmark-model]").first.click()
             page.wait_for_function("document.getElementById('benchmarkWorkbench').classList.contains('hidden') === false")
             page.wait_for_function("document.body.dataset.guidedStep === '4'")
+            page.wait_for_function("document.getElementById('runPredictiveWorkbenchButton') && !document.getElementById('runPredictiveWorkbenchButton').classList.contains('hidden')")
+            page.wait_for_function("document.querySelectorAll('#guidedPanel [data-guided-action=\"run-predictive-selected\"]').length === 0")
             guided_panel_text = page.locator("#guidedPanel").inner_text()
-            assert "Run Analysis" not in guided_panel_text
             assert "Compare all" not in guided_panel_text
             assert "Back to leaderboard" in guided_panel_text
             assert "\nBack\n" not in f"\n{guided_panel_text}\n"
@@ -634,6 +647,134 @@ def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: st
                 assert page.locator("#benchmarkDlMount #runDlButton").is_hidden()
                 assert page.locator("#benchmarkDlMount #runDlCompareButton").is_hidden()
                 assert page.locator("#benchmarkDlMount #runDlCompareInlineButton").is_hidden()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_guided_predictive_single_model_tuning_returns_to_stale_leaderboard(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    def _mock_ml_payload(body: dict) -> dict:
+        return {
+            "request_config": body,
+            "analysis": {
+                "comparison_table": [
+                    {"model": "Random Survival Forest", "c_index": 0.712, "evaluation_mode": "holdout", "n_features": len(body.get("features", [])), "training_time_ms": 120.0, "rank": 1},
+                    {"model": "Gradient Boosted Survival", "c_index": 0.701, "evaluation_mode": "holdout", "n_features": len(body.get("features", [])), "training_time_ms": 150.0, "rank": 2},
+                ],
+                "evaluation_mode": "holdout",
+                "scientific_summary": {
+                    "status": "review",
+                    "headline": "ML comparison complete.",
+                    "strengths": [],
+                    "cautions": [],
+                    "next_steps": [],
+                },
+            },
+        }
+
+    def _mock_dl_compare_payload(body: dict) -> dict:
+        return {
+            "request_config": body,
+            "analysis": {
+                "comparison_table": [
+                    {"model": "DeepSurv", "c_index": 0.676, "evaluation_mode": "holdout", "epochs_trained": 48, "n_features": len(body.get("features", [])), "training_time_ms": 420.0, "rank": 1},
+                    {"model": "DeepHit", "c_index": 0.651, "evaluation_mode": "holdout", "epochs_trained": 44, "n_features": len(body.get("features", [])), "training_time_ms": 510.0, "rank": 2},
+                ],
+                "evaluation_mode": "holdout",
+                "scientific_summary": {
+                    "status": "review",
+                    "headline": "DL comparison complete.",
+                    "strengths": [],
+                    "cautions": [],
+                    "next_steps": [],
+                },
+            },
+        }
+
+    def _mock_dl_single_payload(body: dict) -> dict:
+        return {
+            "request_config": body,
+            "analysis": {
+                "c_index": 0.633,
+                "evaluation_mode": "holdout",
+                "epochs_trained": 36,
+                "n_features": len(body.get("features", [])),
+                "training_seed": 42,
+                "scientific_summary": {
+                    "status": "review",
+                    "headline": "DeepSurv single fit complete.",
+                    "strengths": [],
+                    "cautions": [],
+                    "next_steps": [],
+                },
+            },
+            "figures": {},
+        }
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1400})
+
+            def route_ml_model(route) -> None:
+                body = json.loads(route.request.post_data or "{}")
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(_mock_ml_payload(body)),
+                )
+
+            def route_dl_model(route) -> None:
+                body = json.loads(route.request.post_data or "{}")
+                payload = _mock_dl_compare_payload(body) if body.get("model_type") == "compare" else _mock_dl_single_payload(body)
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(payload),
+                )
+
+            page.route("**/api/ml-model", route_ml_model)
+            page.route("**/api/deep-model", route_dl_model)
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#guidedShell").wait_for(state="visible")
+            page.wait_for_function("document.body.dataset.guidedStep === '2'")
+            page.locator('[data-guided-action="next-step"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            page.locator('[data-guided-action="choose-goal"][data-goal="predictive"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+
+            page.locator('[data-guided-action="run-predictive-compare-all"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '5'")
+            page.wait_for_function("document.getElementById('benchmarkComparisonShell').textContent.includes('DeepSurv')")
+
+            page.locator('#benchmarkComparisonShell [data-benchmark-model="deepsurv"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+            page.wait_for_function("document.getElementById('benchmarkWorkbench').classList.contains('hidden') === false")
+            page.locator("#dlHiddenLayers").fill("64")
+            page.wait_for_function("document.getElementById('dlHiddenLayers').value === '64'")
+            page.locator("#runPredictiveWorkbenchButton").click()
+            page.wait_for_function("document.body.dataset.guidedStep === '5'")
+            page.wait_for_function("document.getElementById('dlMetaBanner').textContent.includes('DEEPSURV')")
+            page.wait_for_function("document.getElementById('closePredictiveWorkbenchButton') && !document.getElementById('closePredictiveWorkbenchButton').classList.contains('hidden')")
+            page.locator("#closePredictiveWorkbenchButton").click()
+            page.wait_for_function("document.body.dataset.guidedStep === '5'")
+            page.wait_for_function("document.querySelector('[data-tab=\"benchmark\"]').getAttribute('aria-selected') === 'true'")
+            page.wait_for_function("document.getElementById('benchmarkWorkbench').classList.contains('hidden')")
+            page.wait_for_function("document.getElementById('benchmarkComparisonShell').textContent.includes('DeepSurv')")
+
+            summary_text = page.locator("#benchmarkSummaryGrid").inner_text().lower()
+            table_text = page.locator("#benchmarkComparisonShell").inner_text()
+            assert "stale reference" in summary_text or "current settings no longer match" in summary_text
+            assert "DeepSurv" in table_text
+            assert "DeepHit" in table_text
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path

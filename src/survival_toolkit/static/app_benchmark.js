@@ -302,7 +302,8 @@
         && runtime.guidedGoal === "predictive"
         && !predictiveBusy
         && currentFamilies.length > 0
-        && !hasUnifiedCoverage(currentFamilies);
+        && !hasUnifiedCoverage(currentFamilies)
+        && !showingStaleBoard;
       const pendingFamilies = ["ml", "dl"].filter((goal) => !currentFamilies.includes(goal));
       return {
         currentRows,

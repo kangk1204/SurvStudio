@@ -38,6 +38,7 @@ const appState = {
   },
   predictiveFamily: "ml",
   workbenchRevealed: false,
+  predictiveWorkbenchIntent: null,
 };
 
 // Keep the legacy aliases, but route all mutable client state through one object.
@@ -303,6 +304,7 @@ const refs = {
   runPredictiveCompareAllButton: document.getElementById("runPredictiveCompareAllButton"),
   predictiveModelSelector: document.getElementById("predictiveModelSelector"),
   runPredictiveSelectedButton: document.getElementById("runPredictiveSelectedButton"),
+  runPredictiveWorkbenchButton: document.getElementById("runPredictiveWorkbenchButton"),
   predictiveActionStatusText: document.getElementById("predictiveActionStatusText"),
   benchmarkActionCard: document.getElementById("benchmarkActionCard"),
   benchmarkSummaryGrid: document.getElementById("benchmarkSummaryGrid"),
@@ -621,7 +623,12 @@ function evaluationModeLabel(goal) {
 }
 
 function guidedResultModeLabel(goal) {
-  if (goal === "predictive") return guidedResultModeLabel(predictiveFamilyGoal());
+  if (goal === "predictive") {
+    if (guidedPredictiveCompareReady()) return "Compare all";
+    if (guidedPredictiveHasLeaderboardReference()) return "Compare all";
+    if (runtime.predictiveWorkbenchIntent === "train") return "Run Analysis";
+    return guidedResultModeLabel(predictiveFamilyGoal());
+  }
   if (goal !== "ml" && goal !== "dl") return null;
   return (runtime.resultPreference?.[goal] || "single") === "compare" ? "Compare all" : "Run Analysis";
 }
@@ -1279,6 +1286,14 @@ function goalResultStatusState(goal, { currentLabel = "Ready", noResultLabel = "
   };
 }
 
+function guidedGoalCanReachReviewStep(goal = runtime.guidedGoal) {
+  if (!goal) return false;
+  if (goal === "predictive") {
+    return Boolean(currentGoalResult(goal) || guidedPredictiveHasLeaderboardReference());
+  }
+  return Boolean(currentGoalResult(goal));
+}
+
 function renderGuidedCoxSelectionSummary() {
   const { covariates, categoricalCovariates, strataColumns } = currentCoxSelections();
   if (!covariates.length && !strataColumns.length) {
@@ -1470,7 +1485,9 @@ function renderGuidedRailStatus() {
   const showReviewActions = runtime.uiMode === "guided" && currentGuidedStep() === 5 && Boolean(runtime.guidedGoal);
   const reviewGoal = showReviewActions ? runtime.guidedGoal : null;
   const reviewFamily = reviewGoal === "predictive" ? predictiveFamilyGoal() : reviewGoal;
-  const reviewScopeBusy = reviewFamily ? isScopeBusy(reviewFamily) : false;
+  const reviewScopeBusy = reviewGoal === "predictive"
+    ? (isScopeBusy("predictive") || isScopeBusy("ml") || isScopeBusy("dl"))
+    : (reviewFamily ? isScopeBusy(reviewFamily) : false);
   const reviewMode = reviewGoal ? guidedResultModeLabel(reviewGoal) : null;
   const mlSingleModelBlocked = reviewFamily === "ml" && refs.mlEvaluationStrategy?.value === "repeated_cv";
   const reviewRunActions = reviewFamily === "ml"
@@ -1506,13 +1523,9 @@ function renderGuidedRailStatus() {
         }[reviewGoal] || [];
   const predictiveReviewActions = reviewGoal === "predictive"
     ? [
-        ...(runtime.workbenchRevealed
-          ? [{ label: "Run again", action: "run-predictive-selected", tone: "primary" }]
-          : []),
-        runtime.workbenchRevealed
-          ? { label: "Back to leaderboard", action: "close-predictive-workbench", tone: "ghost" }
-          : { label: "Back", action: "previous-step", tone: "ghost" },
-        { label: "Change analysis", action: "choose-another-analysis", tone: "ghost" },
+        { label: "Compare all models", action: "run-predictive-compare-all", tone: "primary" },
+        { label: "Review shared features", action: "review-shared-features", tone: "ghost" },
+        { label: "Back", action: "previous-step", tone: "ghost" },
       ]
     : null;
   const compactStatus = showReviewActions
@@ -1576,7 +1589,7 @@ function normalizedGuidedStep(step = runtime.guidedStep) {
   if (bounded <= 2) return 2;
   if (!runtime.guidedGoal) return 3;
   if (bounded <= 3) return 3;
-  if (!currentGoalResult(runtime.guidedGoal) && bounded > 4) return 4;
+  if (!guidedGoalCanReachReviewStep(runtime.guidedGoal) && bounded > 4) return 4;
   return bounded;
 }
 
@@ -1588,7 +1601,7 @@ function maxReachableGuidedStep() {
   if (!state.dataset) return 1;
   if (!endpointIsReady()) return 2;
   if (!runtime.guidedGoal) return 3;
-  if (!currentGoalResult(runtime.guidedGoal)) return 4;
+  if (!guidedGoalCanReachReviewStep(runtime.guidedGoal)) return 4;
   return 5;
 }
 
@@ -2124,6 +2137,7 @@ async function restoreHistoryState(historyState) {
   const restoredPredictiveFamily = normalizedPredictiveFamily(historyState?.predictiveFamily);
   if (!historyState || historyState.view === "home") {
     runtime.predictiveFamily = restoredPredictiveFamily;
+    runtime.predictiveWorkbenchIntent = null;
     if (restoredUiMode === "guided") {
       runtime.guidedGoal = restoredGuidedGoal;
       runtime.guidedStep = restoredGuidedStep;
@@ -2134,6 +2148,7 @@ async function restoreHistoryState(historyState) {
   }
   if (historyState.view !== "workspace" || !historyState.datasetId) {
     runtime.predictiveFamily = restoredPredictiveFamily;
+    runtime.predictiveWorkbenchIntent = null;
     if (restoredUiMode === "guided") {
       runtime.guidedGoal = restoredGuidedGoal;
       runtime.guidedStep = restoredGuidedStep;
@@ -2147,6 +2162,8 @@ async function restoreHistoryState(historyState) {
   try {
     runtime.predictiveFamily = restoredPredictiveFamily;
     runtime.workbenchRevealed = Boolean(historyState?.workbenchRevealed);
+    runtime.predictiveWorkbenchIntent = normalizedPredictiveWorkbenchIntent(historyState?.predictiveWorkbenchIntent)
+      || (runtime.workbenchRevealed ? "train" : null);
     if (restoredUiMode === "guided") {
       runtime.guidedGoal = restoredGuidedGoal;
       runtime.guidedStep = restoredGuidedStep;
@@ -2161,6 +2178,8 @@ async function restoreHistoryState(historyState) {
     }
     if (restoreToken !== runtime.historyRestoreToken) return;
     runtime.workbenchRevealed = Boolean(historyState?.workbenchRevealed);
+    runtime.predictiveWorkbenchIntent = normalizedPredictiveWorkbenchIntent(historyState?.predictiveWorkbenchIntent)
+      || (runtime.workbenchRevealed ? "train" : null);
     applyControlSnapshot(historyState.controls || null);
     runtime.guidedGoal = restoredGuidedGoal;
     runtime.guidedStep = restoredGuidedStep;
@@ -2274,14 +2293,32 @@ function runScopeForGoal(goal) {
   return null;
 }
 
+function normalizedPredictiveWorkbenchIntent(value) {
+  return value === "train" || value === "features" ? value : null;
+}
+
 function isScopeBusy(scope) {
   return Boolean(scope && runtime.busyScopes?.[scope]);
 }
 
 function buttonsForScope(scope) {
   if (scope === "predictive") return [refs.runPredictiveCompareAllButton];
-  if (scope === "ml") return [refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton];
-  if (scope === "dl") return [refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton];
+  if (scope === "ml") {
+    return [
+      refs.runMlButton,
+      refs.runCompareButton,
+      refs.runCompareInlineButton,
+      ...(runtime.workbenchRevealed && predictiveFamilyGoal() === "ml" ? [refs.runPredictiveWorkbenchButton] : []),
+    ];
+  }
+  if (scope === "dl") {
+    return [
+      refs.runDlButton,
+      refs.runDlCompareButton,
+      refs.runDlCompareInlineButton,
+      ...(runtime.workbenchRevealed && predictiveFamilyGoal() === "dl" ? [refs.runPredictiveWorkbenchButton] : []),
+    ];
+  }
   if (scope === "km") return [refs.runKmButton, refs.runSignatureSearchButton];
   if (scope === "cox") {
     return [
@@ -4632,6 +4669,7 @@ function syncAnalysisRunButtonAvailability() {
     ? "Wait for the current predictive comparison to finish."
     : (selectedPredictiveModel.family === "ml" ? mlSingleTitle : dlSingleTitle);
   setActionDisabledState(refs.runPredictiveSelectedButton, predictiveSelectedDisabled, predictiveSelectedTitle);
+  setActionDisabledState(refs.runPredictiveWorkbenchButton, predictiveSelectedDisabled, predictiveSelectedTitle);
   setActionDisabledState(
     refs.predictiveModelSelector,
     predictiveBusy,
@@ -4725,6 +4763,7 @@ function benchmarkGoalMeta(goal) {
 function syncBenchmarkWorkbenchVisibility() {
   const workbenchOpen = Boolean(runtime.workbenchRevealed);
   const guidedPredictiveWorkbench = workbenchOpen && runtime.uiMode === "guided" && runtime.guidedGoal === "predictive";
+  const guidedPredictiveFeatureReview = guidedPredictiveWorkbench && runtime.predictiveWorkbenchIntent === "features";
   refs.benchmarkSummaryGrid?.classList.toggle("hidden", workbenchOpen);
   refs.benchmarkComparisonPlot?.closest(".table-card")?.classList.toggle("hidden", workbenchOpen);
   refs.benchmarkComparisonShell?.closest(".table-card")?.classList.toggle("hidden", workbenchOpen);
@@ -4739,7 +4778,8 @@ function syncBenchmarkWorkbenchVisibility() {
   refs.runMlButton?.classList.toggle("hidden", guidedPredictiveWorkbench);
   refs.runDlButton?.classList.toggle("hidden", guidedPredictiveWorkbench);
   refs.predictiveModelSelector?.closest(".predictive-model-picker")?.classList.toggle("hidden", !workbenchOpen);
-  refs.runPredictiveSelectedButton?.classList.toggle("hidden", !workbenchOpen);
+  refs.runPredictiveSelectedButton?.classList.add("hidden");
+  refs.runPredictiveWorkbenchButton?.classList.toggle("hidden", !workbenchOpen || guidedPredictiveFeatureReview);
 }
 
 function renderPredictiveWorkbench() {
@@ -4748,29 +4788,40 @@ function renderPredictiveWorkbench() {
   const familyMode = runtime.resultPreference?.[family] || "single";
   const unifiedWorkspaceActive = activeTabName() === "benchmark" || (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive");
   const guidedPredictiveWorkbench = runtime.uiMode === "guided" && runtime.guidedGoal === "predictive" && runtime.workbenchRevealed;
+  const guidedPredictiveFeatureReview = guidedPredictiveWorkbench && runtime.predictiveWorkbenchIntent === "features";
+  const guidedPredictiveTrainReview = guidedPredictiveWorkbench
+    && runtime.predictiveWorkbenchIntent === "train"
+    && currentGuidedStep() === 5;
   runtime.predictiveFamily = family;
 
   refs.benchmarkMlMount?.classList.toggle("hidden", family !== "ml");
   refs.benchmarkDlMount?.classList.toggle("hidden", family !== "dl");
   refs.benchmarkWorkbench?.setAttribute("data-active-family", family);
-  refs.closePredictiveWorkbenchButton?.classList.toggle("hidden", guidedPredictiveWorkbench);
+  refs.closePredictiveWorkbenchButton?.classList.toggle("hidden", guidedPredictiveWorkbench && !guidedPredictiveTrainReview);
   syncPredictiveModelSelector();
   syncBenchmarkWorkbenchVisibility();
 
   if (refs.benchmarkWorkbenchCaption) {
     refs.benchmarkWorkbenchCaption.textContent = runtime.workbenchRevealed
-      ? `${selectedModel.label} is selected. Train this model directly with the controls below.`
+      ? (guidedPredictiveFeatureReview
+        ? `${selectedModel.label} inputs are open for feature review. Update the shared inputs here, then rerun Compare All or return to the leaderboard.`
+        : `${selectedModel.label} is selected. Train this model directly with the controls below.`)
       : (unifiedWorkspaceActive && familyMode === "compare"
         ? `${selectedModel.label} is selected. Cross-family Compare All results stay in the unified chart and leaderboard above. Use Test ${selectedModel.label} when you want model-specific outputs below.`
         : `${selectedModel.label} is selected. The workbench below shows the exact controls for the ${family === "ml" ? "classical ML" : "deep-learning"} family.`);
   }
   if (refs.predictiveActionStatusText) {
     refs.predictiveActionStatusText.textContent = runtime.workbenchRevealed
-      ? `Train ${selectedModel.label} directly with the controls below.`
+      ? (guidedPredictiveFeatureReview
+        ? `Review or adjust the shared predictive inputs for ${selectedModel.label} here.`
+        : `Train ${selectedModel.label} directly with the controls below.`)
       : "Runs all 8 models (RSF, GBS, LASSO-Cox, DeepSurv, DeepHit, MTLR, Transformer, VAE) and ranks them by C-index. Results appear in the Unified Leaderboard below. Click any result to open that model\u2019s controls.";
   }
   if (refs.runPredictiveSelectedButton) {
     refs.runPredictiveSelectedButton.textContent = `Train ${selectedModel.label}`;
+  }
+  if (refs.runPredictiveWorkbenchButton) {
+    refs.runPredictiveWorkbenchButton.textContent = `Train ${selectedModel.label}`;
   }
   syncPredictiveWorkbenchCompareVisibility();
   syncPredictiveWorkbenchSingleResultVisibility();
@@ -5139,7 +5190,12 @@ function guidedPanelMarkup(step) {
   if (step === 4) {
     const coxSelectionSummary = goal === "cox" ? '<div id="guidedCoxSelectionMount"></div>' : "";
     const coxPreviewSummary = goal === "cox" ? '<div id="guidedCoxPreviewMount"></div>' : "";
-    const workbenchSingleModelMode = runtime.workbenchRevealed && ["predictive", "ml", "dl"].includes(goal);
+    const predictiveWorkbenchTrainMode = goal === "predictive" && runtime.workbenchRevealed && runtime.predictiveWorkbenchIntent === "train";
+    const predictiveWorkbenchFeatureMode = goal === "predictive" && runtime.workbenchRevealed && runtime.predictiveWorkbenchIntent === "features";
+    const workbenchSingleModelMode = goal === "predictive"
+      ? predictiveWorkbenchTrainMode
+      : (runtime.workbenchRevealed && ["predictive", "ml", "dl"].includes(goal));
+    const selectedPredictiveModel = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey());
     const configureCopy = {
       km: {
         title: "Run Kaplan-Meier",
@@ -5180,15 +5236,15 @@ function guidedPanelMarkup(step) {
         tip: "Start with one model. This is the slowest and most advanced path.",
       },
       predictive: {
-        title: runtime.workbenchRevealed ? "Train a model" : "Run ML/DL Models",
-        text: runtime.workbenchRevealed
+        title: predictiveWorkbenchTrainMode ? "Train a model" : "Run ML/DL Models",
+        text: predictiveWorkbenchTrainMode
           ? "Train the selected model directly. The leaderboard is already built, so use the selected model controls below."
           : "Compare all models to build the leaderboard, then click any result to open its controls.",
-        runAction: runtime.workbenchRevealed ? "run-predictive-selected" : "run-predictive-compare-all",
-        runLabel: runtime.workbenchRevealed ? "Run Analysis" : "Compare all models",
+        runAction: predictiveWorkbenchTrainMode ? "run-predictive-selected" : "run-predictive-compare-all",
+        runLabel: predictiveWorkbenchTrainMode ? `Train ${selectedPredictiveModel.label}` : "Compare all models",
         runScope: "predictive",
         busyText: "A predictive model run is already in progress. Wait for it to finish before starting another one.",
-        tip: runtime.workbenchRevealed
+        tip: predictiveWorkbenchTrainMode
           ? "Use the selected model controls to train one model at a time."
           : "Run Compare All once to see every model ranked. Then click a result to tune that model.",
       },
@@ -5234,10 +5290,10 @@ function guidedPanelMarkup(step) {
       )
       : (scopeBusy ? configureCopy.busyText : "");
     const guidedPredictiveWorkbenchOpen = goal === "predictive" && runtime.workbenchRevealed;
-    const showGuidedPrimaryAction = !guidedPredictiveWorkbenchOpen;
+    const showGuidedPrimaryAction = !predictiveWorkbenchTrainMode;
     const showGuidedBackAction = !(goal === "predictive" && runtime.workbenchRevealed);
-    const predictiveSecondaryAction = runtime.workbenchRevealed
-      ? '<button class="button ghost compact-btn" type="button" data-guided-action="close-predictive-workbench">Back to leaderboard</button>'
+    const predictiveSecondaryAction = predictiveWorkbenchTrainMode || predictiveWorkbenchFeatureMode
+      ? `<button class="button ghost compact-btn" type="button" data-guided-action="close-predictive-workbench">${predictiveWorkbenchFeatureMode ? "Back to results" : "Back to leaderboard"}</button>`
       : '<button class="button ghost compact-btn" type="button" data-guided-action="review-shared-features">Review shared features</button>';
     const guidedPredictiveFeatureSummary = goal === "predictive" ? "" : renderGuidedPredictiveFeatureSummary(goal);
     return `
@@ -5345,6 +5401,10 @@ function focusModelFeatureEditor(tabName = "ml") {
 
   if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive") {
     runtime.workbenchRevealed = true;
+    runtime.predictiveWorkbenchIntent = "features";
+    if (currentGuidedStep() === 5) {
+      setGuidedStep(4, { syncHistory: false, scroll: false, historyMode: "replace" });
+    }
     setPredictiveWorkbenchFamily(tabName, { syncHistory: false, historyMode: "replace" });
     activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });
     requestAnimationFrame(() => {
@@ -5650,9 +5710,11 @@ function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", his
   }
   if (resolvedTabName !== "benchmark" && activeTabName() === "benchmark") {
     runtime.workbenchRevealed = false;
+    runtime.predictiveWorkbenchIntent = null;
     refs.benchmarkWorkbench?.classList.add("hidden");
     refs.predictiveModelSelector?.closest(".predictive-model-picker")?.classList.add("hidden");
     refs.runPredictiveSelectedButton?.classList.add("hidden");
+    refs.runPredictiveWorkbenchButton?.classList.add("hidden");
   }
   refs.tabButtons.forEach((button) => {
     const isActive = button.dataset.tab === resolvedTabName;
@@ -5736,6 +5798,7 @@ function clearAnalysisOutputs() {
   runtime.compareCache.ml = null;
   runtime.compareCache.dl = null;
   runtime.workbenchRevealed = false;
+  runtime.predictiveWorkbenchIntent = null;
   refs.kmMetaBanner.textContent = "Configure your study columns above, then click Run Analysis.";
   refs.coxMetaBanner.textContent = "Select covariates above, then click Run Analysis.";
   refs.mlMetaBanner.textContent = "Select shared model features in Predictive Models, then run analysis.";
@@ -5811,6 +5874,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   runtime.guidedGoal = null;
   runtime.guidedStep = runtime.uiMode === "guided" ? 2 : 1;
   runtime.workbenchRevealed = false;
+  runtime.predictiveWorkbenchIntent = null;
   refs.kmMetaBanner.textContent = "Configure your study columns above, then click Run Analysis.";
   refs.coxMetaBanner.textContent = "Select covariates above, then click Run Analysis.";
   refs.mlMetaBanner.textContent = "Select shared model features in Predictive Models, then run analysis.";
@@ -6603,6 +6667,7 @@ async function runCompareModels({ suppressCompletionToast = false } = {}) {
 
 async function runPredictiveSelectedModel() {
   runtime.workbenchRevealed = true;
+  runtime.predictiveWorkbenchIntent = "train";
   const selectedModel = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey());
   setPredictiveModel(selectedModel.key, { syncHistory: false });
   activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });
@@ -7183,7 +7248,12 @@ function getActiveRunButton() {
   if (tab === "tables") return refs.runCohortTableButton;
   if (tab === "ml") return refs.runMlButton;
   if (tab === "dl") return refs.runDlButton;
-  if (tab === "benchmark") return refs.runPredictiveSelectedButton;
+  if (tab === "benchmark") {
+    if (runtime.workbenchRevealed && refs.runPredictiveWorkbenchButton && !refs.runPredictiveWorkbenchButton.classList.contains("hidden")) {
+      return refs.runPredictiveWorkbenchButton;
+    }
+    return runtime.workbenchRevealed ? null : refs.runPredictiveCompareAllButton;
+  }
   return null;
 }
 
@@ -7194,7 +7264,12 @@ function getActiveRunAction() {
   if (tab === "tables") return runCohortTable;
   if (tab === "ml") return runMlModel;
   if (tab === "dl") return runDlModel;
-  if (tab === "benchmark") return runPredictiveSelectedModel;
+  if (tab === "benchmark") {
+    if (runtime.workbenchRevealed && refs.runPredictiveWorkbenchButton && !refs.runPredictiveWorkbenchButton.classList.contains("hidden")) {
+      return runPredictiveSelectedModel;
+    }
+    return runtime.workbenchRevealed ? null : runUnifiedPredictiveComparison;
+  }
   return null;
 }
 
@@ -7228,6 +7303,7 @@ function reviewBenchmarkSourceTab(tabName, mode = null) {
 
 function reviewBenchmarkModel(modelKey, mode = null) {
   runtime.workbenchRevealed = true;
+  runtime.predictiveWorkbenchIntent = "train";
   const meta = predictiveModelMeta(modelKey);
   setPredictiveModel(meta.key, { syncHistory: false });
   if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive") {
@@ -7239,12 +7315,27 @@ function reviewBenchmarkModel(modelKey, mode = null) {
 function closePredictiveWorkbench() {
   if (!runtime.workbenchRevealed) return;
   runtime.workbenchRevealed = false;
+  runtime.predictiveWorkbenchIntent = null;
+  const returnToPredictiveLeaderboard = runtime.uiMode === "guided"
+    && runtime.guidedGoal === "predictive"
+    && guidedPredictiveHasLeaderboardReference();
+  if (returnToPredictiveLeaderboard) {
+    activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });
+    setGuidedStep(5, { syncHistory: false, scroll: false, historyMode: "replace" });
+  }
   renderBenchmarkBoard();
   syncPredictiveWorkbenchSingleResultVisibility();
-  renderGuidedChrome();
+  if (!returnToPredictiveLeaderboard) {
+    renderGuidedChrome();
+  }
   if (state.dataset) syncHistoryState("push");
   requestAnimationFrame(() => {
-    refs.benchmarkActionCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const closeTarget = returnToPredictiveLeaderboard
+      ? (refs.benchmarkComparisonShell?.closest(".table-card")
+        || refs.benchmarkComparisonPlot?.closest(".table-card")
+        || refs.benchmarkSummaryGrid)
+      : refs.benchmarkActionCard;
+    closeTarget?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 }
 
@@ -7473,13 +7564,42 @@ function guidedPredictiveCompareReady() {
     && benchmarkCompareRows("dl", { currentOnly: true }).length > 0;
 }
 
+function guidedPredictiveHasLeaderboardReference() {
+  if (typeof benchmarkBoardState !== "function") return false;
+  const board = benchmarkBoardState();
+  return Boolean((board?.visibleRows?.length || 0) + (board?.visibleExcludedRows?.length || 0));
+}
+
+function guidedPredictiveSelectedModelReady() {
+  const family = predictiveFamilyGoal();
+  const payload = goalPayload(family);
+  if (!payload || payloadRepresentsCompareRun(payload)) return false;
+  const requestConfig = payload.request_config || payload.analysis?.request_config || null;
+  if (!requestConfig) return false;
+  const selectedModel = predictiveModelMeta(currentPredictiveModelKey());
+  return selectedModel.family === family
+    && String(requestConfig.model_type || "").trim().toLowerCase() === selectedModel.key;
+}
+
 async function runGuidedGoal(tabName, button, action, { resultMode = "single", successCheck = null } = {}) {
   activateTab(tabName, { historyMode: "replace" });
   await withLoading(button, action, tabName);
-  const hasResult = typeof successCheck === "function" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName));
+  const resolveHasResult = () => (typeof successCheck === "function" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName)));
+  let hasResult = resolveHasResult();
+  if (!hasResult) {
+    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+    hasResult = resolveHasResult();
+  }
   if (hasResult && shouldRevealCompletedResult(tabName)) {
     setGuidedStep(5, { scroll: false, historyMode: "push" });
     scrollToAnalysisResult(tabName, { mode: resultMode });
+    if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive" && ["ml", "dl"].includes(tabName)) {
+      window.requestAnimationFrame(() => {
+        if (!resolveHasResult() || currentGuidedStep() === 5) return;
+        setGuidedStep(5, { syncHistory: false, scroll: false, historyMode: "replace" });
+        if (state.dataset) syncHistoryState("replace");
+      });
+    }
   }
 }
 
@@ -7535,8 +7655,18 @@ function handleGuidedPanelAction(target) {
   if (action === "run-ml-compare") { void runGuidedGoal("ml", target, runCompareModels, { resultMode: "compare" }); return; }
   if (action === "run-dl") { void runGuidedGoal("dl", target, runDlModel, { resultMode: "single" }); return; }
   if (action === "run-dl-compare") { void runGuidedGoal("dl", target, runDlCompareModels, { resultMode: "compare" }); return; }
-  if (action === "run-predictive-selected") { void runGuidedGoal(predictiveFamilyGoal(), target, runPredictiveSelectedModel, { resultMode: "single" }); return; }
+  if (action === "run-predictive-selected") {
+    runtime.workbenchRevealed = true;
+    runtime.predictiveWorkbenchIntent = "train";
+    void runGuidedGoal(predictiveFamilyGoal(), target, runPredictiveSelectedModel, {
+      resultMode: "single",
+      successCheck: guidedPredictiveSelectedModelReady,
+    });
+    return;
+  }
   if (action === "run-predictive-compare-all") {
+    runtime.workbenchRevealed = false;
+    runtime.predictiveWorkbenchIntent = null;
     void runGuidedGoal("predictive", target, runUnifiedPredictiveComparison, {
       resultMode: "compare",
       successCheck: guidedPredictiveCompareReady,
@@ -7717,13 +7847,31 @@ function initListeners() {
   });
   refs.runPredictiveSelectedButton?.addEventListener("click", () => {
     runtime.workbenchRevealed = true;
+    runtime.predictiveWorkbenchIntent = "train";
     const selectedFamily = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey()).family;
     if (runtime.uiMode === "guided") {
       runtime.guidedGoal = "predictive";
-      void runGuidedGoal(selectedFamily, refs.runPredictiveSelectedButton, runPredictiveSelectedModel, { resultMode: "single" });
+      void runGuidedGoal(selectedFamily, refs.runPredictiveSelectedButton, runPredictiveSelectedModel, {
+        resultMode: "single",
+        successCheck: guidedPredictiveSelectedModelReady,
+      });
       return;
     }
     withLoading(refs.runPredictiveSelectedButton, runPredictiveSelectedModel, selectedFamily);
+  });
+  refs.runPredictiveWorkbenchButton?.addEventListener("click", () => {
+    runtime.workbenchRevealed = true;
+    runtime.predictiveWorkbenchIntent = "train";
+    const selectedFamily = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey()).family;
+    if (runtime.uiMode === "guided") {
+      runtime.guidedGoal = "predictive";
+      void runGuidedGoal(selectedFamily, refs.runPredictiveWorkbenchButton, runPredictiveSelectedModel, {
+        resultMode: "single",
+        successCheck: guidedPredictiveSelectedModelReady,
+      });
+      return;
+    }
+    withLoading(refs.runPredictiveWorkbenchButton, runPredictiveSelectedModel, selectedFamily);
   });
   refs.closePredictiveWorkbenchButton?.addEventListener("click", () => {
     closePredictiveWorkbench();
