@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 from typing import Any
+import warnings
 
 import numpy as np
 import pytest
@@ -23,6 +24,7 @@ from survival_toolkit.analysis import (
     _prepare_cox_frame,
     _reference_levels,
     _pointwise_km_ci,
+    _safe_exp,
     _stability_score,
     _survival_outcome_like_columns,
     _signature_scientific_summary,
@@ -145,6 +147,14 @@ def test_permutation_p_value_compares_logrank_statistics(monkeypatch) -> None:
 
     assert valid == 3
     assert empirical_p == pytest.approx(0.5)
+
+
+def test_safe_exp_returns_finite_values_for_nonfinite_inputs() -> None:
+    finfo = np.finfo(float)
+
+    assert _safe_exp(np.inf) == float(finfo.max)
+    assert _safe_exp(-np.inf) == float(finfo.tiny)
+    assert _safe_exp(np.nan) == float(finfo.tiny)
 
 
 def test_cox_preview_warns_when_events_per_parameter_is_extremely_low() -> None:
@@ -720,6 +730,8 @@ def test_km_analysis_returns_grouped_results() -> None:
     assert any("left truncation" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert result["rmst_contrast"] is not None
     assert any(metric["label"] == "RMST difference" for metric in result["scientific_summary"]["metrics"])
+    assert any(metric["label"] == "RMST difference p" for metric in result["scientific_summary"]["metrics"])
+    assert result["rmst_contrast"]["p_value"] is not None
     for row in result["summary_table"]:
         assert row["RMST CI lower"] is not None
         assert row["RMST CI upper"] is not None
@@ -749,6 +761,7 @@ def test_km_analysis_marks_rmst_ci_unavailable_when_risk_set_is_exhausted() -> N
 
     assert result["rmst_contrast"] is not None
     assert result["rmst_contrast"]["estimate"] is not None
+    assert result["rmst_contrast"]["p_value"] is None
     assert result["rmst_contrast"]["ci_lower"] is None
     assert result["rmst_contrast"]["ci_upper"] is None
     assert any("not estimable" in caution.lower() for caution in result["scientific_summary"]["cautions"])
@@ -781,8 +794,14 @@ def test_km_analysis_marks_outcome_informed_group_results_as_descriptive() -> No
     assert result["pairwise_table"] == []
     assert result["logrank_p"] is None
     assert result["outcome_informed_group"] is True
+    assert result["rmst_contrast"] is not None
+    assert result["rmst_contrast"]["estimate"] is not None
+    assert result["rmst_contrast"]["p_value"] is None
+    assert result["rmst_contrast"]["p_value_method"] is None
     assert "descriptive" in result["scientific_summary"]["headline"].lower()
     assert any("exploratory rather than confirmatory" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("wald p-value is intentionally withheld" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert not any(metric["label"] == "RMST difference p" for metric in result["scientific_summary"]["metrics"])
 
 
 def test_km_analysis_extends_curve_to_followup_horizon_when_last_observation_is_censored() -> None:
@@ -964,13 +983,18 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert result["model_stats"]["evaluation_mode"] == "apparent"
     assert result["model_stats"]["c_index_label"] == "Apparent C-index (training cohort)"
     assert result["model_stats"]["apparent_c_index"] == result["model_stats"]["c_index"]
-    assert result["model_stats"]["c_index_ci_method"] == "bootstrap_percentile"
+    assert result["model_stats"]["c_index_ci_method"] == "bootstrap_percentile_fixed_score"
     assert result["model_stats"]["c_index_ci_level"] == pytest.approx(0.95)
     assert result["model_stats"]["c_index_ci_lower"] is not None
     assert result["model_stats"]["c_index_ci_upper"] is not None
     assert result["model_stats"]["c_index_ci_lower"] <= result["model_stats"]["c_index"] <= result["model_stats"]["c_index_ci_upper"]
     assert result["model_stats"]["lr_statistic"] is not None
     assert result["model_stats"]["lr_pvalue"] is not None
+    assert result["model_stats"]["global_ph_pvalue"] is not None
+    assert any(
+        row["Term"] == "Global PH screen (combined per-term p-values)"
+        for row in result["diagnostics_table"]
+    )
     assert result["scientific_summary"]["headline"]
     assert result["scientific_summary"]["status"] in {"robust", "review", "caution"}
     assert result["scientific_summary"]["metrics"]
@@ -1061,6 +1085,7 @@ def test_cox_analysis_scales_schoenfeld_diagnostics_and_reports_ci(monkeypatch) 
     assert result["model_stats"]["c_index_ci_upper"] == pytest.approx(0.67)
     assert result["model_stats"]["lr_statistic"] == pytest.approx(6.0)
     assert result["model_stats"]["lr_pvalue"] is not None
+    assert result["model_stats"]["global_ph_pvalue"] is None
 
 
 def test_cox_martingale_plot_data_skips_mismatched_residual_lengths() -> None:
@@ -1092,7 +1117,7 @@ def test_cox_analysis_reports_missing_covariate_exclusions() -> None:
 
     assert result["model_stats"]["dropped_rows"] == 24
     assert result["model_stats"]["outcome_rows"] == result["model_stats"]["n"] + result["model_stats"]["dropped_rows"]
-    assert any(metric["label"] == "Dropped for missing covariates" and metric["value"] == 24 for metric in result["scientific_summary"]["metrics"])
+    assert any(metric["label"] == "Dropped for missing Cox inputs" and metric["value"] == 24 for metric in result["scientific_summary"]["metrics"])
     assert any("were excluded" in caution.lower() and "missing" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 
@@ -1674,14 +1699,11 @@ def test_cox_analysis_passes_strata_to_phreg_and_reports_stratification(monkeypa
     )
 
     assert captured["formula"] == 'Q("os_months") ~ Q("age")'
-    assert captured["strata"] == [
-        "sex=Female | stage_group=Stage I",
-        "sex=Female | stage_group=Stage II",
-        "sex=Male | stage_group=Stage I",
-        "sex=Male | stage_group=Stage II",
-    ]
+    assert len(set(captured["strata"])) == 4
     assert result["strata_columns"] == ["sex", "stage_group"]
     assert result["model_stats"]["n_strata"] == 4
+    assert result["model_stats"]["evaluation_mode"] == "stratified_not_reported"
+    assert result["model_stats"]["c_index"] is None
     assert any(
         "baseline hazards were stratified by" in strength.lower()
         and "sex" in strength.lower()
@@ -1689,6 +1711,128 @@ def test_cox_analysis_passes_strata_to_phreg_and_reports_stratification(monkeypa
         for strength in result["scientific_summary"]["strengths"]
     )
     assert any("do not receive hazard-ratio estimates" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("discrimination was not reported" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+
+
+def test_preview_cox_analysis_warns_on_high_cardinality_numeric_strata() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": np.arange(1, 31, dtype=float),
+            "os_event": ([1, 0] * 15),
+            "age": np.linspace(50, 79, 30),
+            "tsize": np.linspace(1.0, 30.0, 30),
+        }
+    )
+
+    preview = preview_cox_analysis_inputs(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age"],
+        categorical_covariates=[],
+        strata_columns=["tsize"],
+    )
+
+    assert preview["n_strata"] == 30
+    assert any("high-cardinality numeric column" in warning.lower() for warning in preview["stability_warnings"])
+
+
+def test_cox_strata_encoding_is_collision_free(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    df = make_example_dataset(seed=33, n_patients=4)
+    frame = pd.DataFrame(
+        {
+            "os_months": [1.0, 2.0, 3.0, 4.0],
+            "os_event": [1, 1, 0, 0],
+            "age": [50.0, 55.0, 60.0, 65.0],
+            "left": ["A", "A | right=B", "A", "A | right=B"],
+            "right": ["B | tail=C", "C", "B | tail=C", "C"],
+        }
+    )
+    captured: dict[str, Any] = {}
+
+    class _FakeResults:
+        params = np.asarray([0.2], dtype=float)
+        bse = np.asarray([0.1], dtype=float)
+        tvalues = np.asarray([2.0], dtype=float)
+        pvalues = np.asarray([0.04], dtype=float)
+        schoenfeld_residuals = np.asarray([[1.0], [2.0], [3.0], [4.0]], dtype=float)
+        martingale_residuals = np.asarray([-0.2, -0.1, 0.1, 0.2], dtype=float)
+        llf = -4.0
+        llnull = -7.0
+        model = type("_FakeModelMeta", (), {"exog_names": ['Q("age")'], "exog": np.ones((4, 1), dtype=float)})()
+
+        def conf_int(self):
+            return np.asarray([[0.1, 0.3]], dtype=float)
+
+        def cov_params(self):
+            return np.asarray([[2.0]], dtype=float)
+
+    class _FakePHReg:
+        @staticmethod
+        def from_formula(*args, **kwargs):
+            captured["strata"] = list(kwargs["strata"]) if kwargs.get("strata") is not None else []
+
+            class _FakeFit:
+                @staticmethod
+                def fit(disp=False):
+                    return _FakeResults()
+
+            return _FakeFit()
+
+    monkeypatch.setattr(analysis, "_prepare_cox_frame", lambda *args, **kwargs: frame.copy())
+    monkeypatch.setattr(analysis, "PHReg", _FakePHReg)
+    monkeypatch.setattr(analysis, "_reference_levels", lambda *args, **kwargs: {})
+
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age"],
+        strata_columns=["left", "right"],
+    )
+
+    assert len(set(captured["strata"])) == 2
+    assert result["model_stats"]["n_strata"] == 2
+
+
+def test_cox_analysis_raises_on_convergence_warning(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    frame = pd.DataFrame(
+        {
+            "os_months": [1.0, 2.0, 3.0, 4.0],
+            "os_event": [1, 1, 0, 0],
+            "age": [50.0, 55.0, 60.0, 65.0],
+        }
+    )
+
+    class _FakePHReg:
+        @staticmethod
+        def from_formula(*args, **kwargs):
+            class _FakeFit:
+                @staticmethod
+                def fit(disp=False):
+                    warnings.warn("Maximum likelihood optimization failed to converge.", analysis.ConvergenceWarning)
+                    return object()
+
+            return _FakeFit()
+
+    monkeypatch.setattr(analysis, "_prepare_cox_frame", lambda *args, **kwargs: frame.copy())
+    monkeypatch.setattr(analysis, "PHReg", _FakePHReg)
+
+    with pytest.raises(ValueError, match="did not converge cleanly"):
+        compute_cox_analysis(
+            frame,
+            time_column="os_months",
+            event_column="os_event",
+            event_positive_value=1,
+            covariates=["age"],
+            categorical_covariates=[],
+        )
 
 
 def test_cox_analysis_lists_all_current_ph_alert_terms_in_summary_caution() -> None:
@@ -1705,6 +1849,7 @@ def test_cox_analysis_lists_all_current_ph_alert_terms_in_summary_caution() -> N
     significant_terms = [
         str(row["Term"])
         for row in result["diagnostics_table"]
+        if row.get("_kind") != "global"
         if row["P value"] is not None and float(row["P value"]) < 0.05
     ]
     cautions = result["scientific_summary"]["cautions"]
@@ -1715,6 +1860,7 @@ def test_cox_analysis_lists_all_current_ph_alert_terms_in_summary_caution() -> N
     )
 
     assert significant_terms
+    assert any("combined ph screening" in caution.lower() for caution in cautions)
     for term in significant_terms:
         assert term in ph_caution
 

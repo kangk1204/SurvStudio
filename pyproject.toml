@@ -45,6 +45,7 @@ all = [
   "scikit-learn>=1.4.0",
   "scikit-survival>=0.23.0",
   "shap>=0.45.0",
+  "tomli>=2.0.1; python_version < '3.11'",
   "torch>=2.0.0",
   "httpx>=0.28.1",
   "kaleido>=0.2.1",
@@ -59,6 +60,7 @@ dev = [
   "pytest>=8.3.5",
   "scikit-survival>=0.23.0",
   "shap>=0.45.0",
+  "tomli>=2.0.1; python_version < '3.11'",
   "torch>=2.0.0",
   "xlrd>=2.0.1",
 ]

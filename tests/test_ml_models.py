@@ -72,6 +72,45 @@ def test_optimal_cutpoint_derive_method() -> None:
     assert groups.issubset({"Low", "High"})
 
 
+def test_find_optimal_cutpoint_can_return_split_series_for_internal_callers() -> None:
+    from survival_toolkit.analysis import derive_group_column
+    from survival_toolkit.ml_models import find_optimal_cutpoint
+
+    df = make_example_dataset(seed=27, n_patients=180)
+    result = find_optimal_cutpoint(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        variable="biomarker_score",
+        event_positive_value=1,
+        include_split_series=True,
+        permutation_iterations=10,
+    )
+    split_series = result.get("split_series")
+
+    assert isinstance(split_series, pd.Series)
+    assert str(split_series.dtype) == "string"
+    assert split_series.index.equals(df.index)
+
+    updated, column_name, _ = derive_group_column(
+        df,
+        source_column="biomarker_score",
+        method="optimal_cutpoint",
+        new_column_name="optimal_group",
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        permutation_iterations=10,
+    )
+
+    assert column_name == "optimal_group"
+    pd.testing.assert_series_equal(
+        split_series.rename(column_name),
+        updated[column_name],
+        check_names=True,
+    )
+
+
 def test_find_optimal_cutpoint_excludes_invalid_permutation_resamples_from_denominator(monkeypatch) -> None:
     import survival_toolkit.ml_models as ml_models
 

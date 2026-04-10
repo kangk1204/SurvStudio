@@ -3224,11 +3224,37 @@ function setDlManuscriptDownloadsEnabled(enabled) {
   refs.downloadDlManuscriptDocxButton.disabled = !enabled;
 }
 
+function exportColumnsFromRows(rows) {
+  const seen = new Set();
+  const ordered = [];
+  (rows || []).forEach((row) => {
+    Object.keys(row || {}).forEach((column) => {
+      if (!column || column.startsWith("_") || seen.has(column)) return;
+      seen.add(column);
+      ordered.push(column);
+    });
+  });
+  return ordered;
+}
+
+function exportNotesFromScientificSummary(summary, extraNotes = []) {
+  const notes = [];
+  if (summary?.headline) notes.push(summary.headline);
+  (summary?.cautions || []).forEach((item) => {
+    if (item) notes.push(item);
+  });
+  extraNotes.forEach((item) => {
+    if (item) notes.push(item);
+  });
+  return [...new Set(notes)];
+}
+
 function manuscriptExportPayload(manuscript, format, template, fallbackCaption, resultPayload = null) {
   const analysis = resultPayload?.analysis || {};
   const requestConfig = resultPayload?.request_config || null;
   return {
     rows: manuscript?.model_performance_table || [],
+    columns: exportColumnsFromRows(manuscript?.model_performance_table || []),
     format,
     style: "journal",
     template,
@@ -3248,6 +3274,121 @@ function manuscriptExportPayload(manuscript, format, template, fallbackCaption, 
   };
 }
 
+function buildCoxTableExportPayload(rows, caption, resultPayload = null) {
+  const analysis = resultPayload?.analysis || {};
+  const stats = analysis?.model_stats || {};
+  const strataColumns = Array.isArray(analysis?.strata_columns) ? analysis.strata_columns : [];
+  const notes = exportNotesFromScientificSummary(
+    analysis?.scientific_summary,
+    ["Combined global PH screening row is a convenience screen, not a formal cox.zph omnibus test."],
+  );
+  if (strataColumns.length) {
+    notes.push(`Strata variables: ${strataColumns.join(", ")}.`);
+  }
+  if (stats?.evaluation_mode === "stratified_not_reported") {
+    notes.push("Pooled C-index is intentionally omitted for stratified Cox because cross-stratum ranking is not directly interpretable.");
+  }
+  return {
+    rows: rows || [],
+    columns: exportColumnsFromRows(rows || []),
+    format: "csv",
+    style: "plain",
+    caption,
+    notes,
+    provenance: {
+      request_config: resultPayload?.request_config || null,
+      analysis: {
+        formula: analysis?.formula,
+        tie_method: stats?.tie_method,
+        n: stats?.n,
+        events: stats?.events,
+        parameters: stats?.parameters,
+        evaluation_mode: stats?.evaluation_mode,
+        c_index_label: stats?.c_index_label,
+        strata_columns: strataColumns,
+        n_strata: stats?.n_strata,
+        zero_event_strata_count: stats?.zero_event_strata_count,
+        sparse_event_strata_count: stats?.sparse_event_strata_count,
+      },
+    },
+  };
+}
+
+function buildKmTableExportPayload(rows, caption, resultPayload = null, { includePairwiseGuardrail = false } = {}) {
+  const analysis = resultPayload?.analysis || {};
+  const extraNotes = [];
+  if (analysis?.outcome_informed_group) {
+    extraNotes.push("This grouping used outcome information. Treat the KM/table output as descriptive rather than confirmatory.");
+  }
+  if (
+    includePairwiseGuardrail
+    && analysis?.test?.p_value != null
+    && Number(analysis.test.p_value) >= 0.05
+  ) {
+    extraNotes.push("The omnibus group comparison was not statistically significant. Interpret pairwise rows only if that analysis path was pre-specified.");
+  }
+  return {
+    rows: rows || [],
+    columns: exportColumnsFromRows(rows || []),
+    format: "csv",
+    style: "plain",
+    caption,
+    notes: exportNotesFromScientificSummary(analysis?.scientific_summary, extraNotes),
+    provenance: {
+      request_config: resultPayload?.request_config || null,
+      analysis: {
+        test: analysis?.test || null,
+        outcome_informed_group: analysis?.outcome_informed_group || false,
+      },
+    },
+  };
+}
+
+function buildSignatureTableExportPayload(rows, caption, resultPayload = null) {
+  return {
+    rows: rows || [],
+    columns: exportColumnsFromRows(rows || []),
+    format: "csv",
+    style: "plain",
+    caption,
+    notes: exportNotesFromScientificSummary(
+      resultPayload?.scientific_summary,
+      ["Signature discovery is exploratory and should be treated as hypothesis-generating until externally validated."],
+    ),
+    provenance: {
+      request_config: resultPayload?.request_config || null,
+      analysis: {
+        best_split: resultPayload?.best_split || null,
+        search_space: resultPayload?.search_space || null,
+      },
+    },
+  };
+}
+
+function buildComparisonTableExportPayload(rows, caption, resultPayload = null) {
+  const analysis = resultPayload?.analysis || {};
+  const extraNotes = [];
+  if (analysis?.evaluation_mode === "mixed_holdout_apparent") {
+    extraNotes.push("This comparison mixes holdout-comparable models with apparent-only screening rows. Do not treat the ranking as a single external-validation table.");
+  }
+  return {
+    rows: rows || [],
+    columns: exportColumnsFromRows(rows || []),
+    format: "csv",
+    style: "plain",
+    caption,
+    notes: exportNotesFromScientificSummary(analysis?.scientific_summary, extraNotes),
+    provenance: {
+      request_config: resultPayload?.request_config || null,
+      analysis: {
+        evaluation_mode: analysis?.evaluation_mode,
+        cv_folds: analysis?.cv_folds,
+        cv_repeats: analysis?.cv_repeats,
+      },
+    },
+  };
+}
+
 function buildCohortTableExportPayload(format = "xlsx") {
   const payload = state.cohort;
   const tableState = currentCohortTableOutputState();
@@ -3258,6 +3399,7 @@ function buildCohortTableExportPayload(format = "xlsx") {
   }
   return {
     rows: payload?.analysis?.rows || [],
+    columns: payload?.analysis?.columns || exportColumnsFromRows(payload?.analysis?.rows || []),
     format,
     style: "plain",
     caption: tableState.outputGroupLabel === "overall only"
@@ -3491,6 +3633,17 @@ function syncCoxMartingaleSelector(panels, preferredTerm = runtime.coxMartingale
   return normalizedPreferred;
 }
 
+function currentCoxMartingaleUnavailableMessage() {
+  const note = String(state.cox?.analysis?.model_stats?.martingale_note || "").trim();
+  return note || "Martingale residual screening was unavailable for this fit.";
+}
+
+function currentCoxMartingaleEmptyLabel() {
+  const note = currentCoxMartingaleUnavailableMessage().toLowerCase();
+  if (note.includes("no continuous covariates")) return "No continuous covariates";
+  return "Diagnostics unavailable";
+}
+
 function martingaleResidualAxisRange(residualValues, trendValues) {
   const residuals = residualValues.filter((value) => Number.isFinite(value));
   if (residuals.length < 12) return null;
@@ -3597,8 +3750,8 @@ function buildCoxMartingaleFigure(panel) {
 async function renderCoxMartingalePlot(selectedTerm = runtime.coxMartingaleTerm) {
   const panels = coxMartingalePanels();
   if (!panels.length) {
-    resetCoxMartingaleSelector("No continuous covariates");
-    clearPlotShell(refs.coxMartingalePlot, '<div class="empty-state plot-empty"><span>Martingale residual screening was unavailable for this fit.</span></div>');
+    resetCoxMartingaleSelector(currentCoxMartingaleEmptyLabel());
+    clearPlotShell(refs.coxMartingalePlot, `<div class="empty-state plot-empty"><span>${escapeHtml(currentCoxMartingaleUnavailableMessage())}</span></div>`);
     return;
   }
   const term = syncCoxMartingaleSelector(panels, selectedTerm);
@@ -4168,8 +4321,8 @@ function renderContextCards({
 
   if (refs.coxDependencyText) {
     refs.coxDependencyText.textContent = !hasDataset
-      ? "Cox uses the Study Design outcome definition and the covariates selected in this tab. The reported C-index is apparent on the analyzable cohort, PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots."
-      : "Cox uses the Study Design outcome definition and the covariates selected in this tab. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots.";
+      ? "Cox uses the Study Design outcome definition plus the covariates and optional strata selected in this tab. Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting. PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots."
+      : "Cox uses the Study Design outcome definition plus the covariates and optional strata selected in this tab. Group by does not change the model unless you add that column as a covariate or strata variable. Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting. PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots.";
     renderChipList(refs.coxDependencyChips, hasDataset ? [
       formatOutcomeChip(timeLabel, eventLabel, eventValue),
       formatGroupChip(groupLabel),
@@ -5361,8 +5514,80 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   }
 }
 
+function clearAnalysisOutputs() {
+  state.km = null;
+  state.cox = null;
+  state.cohort = null;
+  state.signature = null;
+  state.ml = null;
+  state.dl = null;
+  runtime.compareCache.ml = null;
+  runtime.compareCache.dl = null;
+  runtime.workbenchRevealed = false;
+  refs.kmMetaBanner.textContent = "Configure your study columns above, then click Run Analysis.";
+  refs.coxMetaBanner.textContent = "Select covariates above, then click Run Analysis.";
+  refs.mlMetaBanner.textContent = "Select shared model features in Predictive Models, then run analysis.";
+  refs.dlMetaBanner.textContent = "Select model features here, configure hyperparameters, then run analysis.";
+  resetCoxPreview({ rerender: false });
+  refs.kmSummaryShell.innerHTML = '<div class="empty-state">Survival statistics will appear after you run the analysis.</div>';
+  refs.kmRiskShell.innerHTML = '<div class="empty-state">Number of patients at risk over time.</div>';
+  refs.kmPairwiseShell.innerHTML = '<div class="empty-state">Group-vs-group comparisons (requires 2+ groups).</div>';
+  refs.signatureShell.innerHTML = '<div class="empty-state">Use auto-discovery to find the best feature combinations.</div>';
+  refs.coxResultsShell.innerHTML = '<div class="empty-state">Hazard ratios will appear after running Cox analysis.</div>';
+  refs.coxDiagnosticsShell.innerHTML = '<div class="empty-state">Scaled Schoenfeld residual screening details and the combined PH screening row will appear here.</div>';
+  renderInsightBoard(refs.kmInsightBoard, null, "Run KM to generate an interpretation panel.");
+  renderInsightBoard(refs.signatureInsightBoard, null, "Run auto-discovery to assess robustness.");
+  renderInsightBoard(refs.coxInsightBoard, null, "Run Cox PH to review diagnostics.");
+  renderInsightBoard(refs.mlInsightBoard, null, "ML model results.");
+  renderInsightBoard(refs.dlInsightBoard, null, "Deep learning results.");
+  clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Scaled Schoenfeld residual screening appears here after fitting the model.</span></div>', { state: "placeholder" });
+  resetCoxMartingaleSelector();
+  clearPlotShell(refs.coxMartingalePlot, '<div class="empty-state plot-empty"><span>Martingale residual screening for continuous covariates appears here after fitting the model.</span></div>', { state: "placeholder" });
+  refs.cohortTableShell.innerHTML = COHORT_TABLE_EMPTY_STATE_HTML;
+  refs.mlComparisonShell.innerHTML = '<div class="empty-state">Click "Compare All" to see Cox vs RSF vs GBS side by side.</div>';
+  if (refs.mlComparisonTitle) refs.mlComparisonTitle.textContent = "Model Comparison";
+  refs.mlManuscriptShell.innerHTML = '<div class="empty-state">Comparison-ready manuscript rows appear after running a comparison.</div>';
+  refs.mlComparisonPlot.innerHTML = "";
+  refs.mlComparisonPlot.classList.add("hidden");
+  refs.dlComparisonShell.innerHTML = '<div class="empty-state">Click "Compare All" to benchmark DeepSurv, DeepHit, Neural MTLR, Transformer, and VAE.</div>';
+  if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Deep Model Comparison";
+  refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Comparison-ready manuscript rows appear after running a deep comparison.</div>';
+  refs.dlComparisonPlot.innerHTML = "";
+  refs.dlComparisonPlot.classList.add("hidden");
+  setPanelResultMode(refs.mlPanel, "idle");
+  setPanelResultMode(refs.dlPanel, "idle");
+  clearPlotShell(refs.mlImportancePlot, '<div class="empty-state plot-empty"><span>Run Analysis to see feature importance</span></div>', { state: "placeholder" });
+  clearPlotShell(refs.mlShapPlot, '<div class="empty-state plot-empty"><span>SHAP values will appear after training</span></div>', { state: "placeholder" });
+  clearPlotShell(refs.dlImportancePlot, '<div class="empty-state plot-empty"><span>Run Analysis to see deep learning results</span></div>', { state: "placeholder" });
+  clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Training and monitor metric curves will appear here</span></div>', { state: "placeholder" });
+  purgePlot(refs.kmPlot);
+  purgePlot(refs.coxPlot);
+  refs.kmPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Click <strong>Run Analysis</strong> to generate your survival curve</span><small>Tip: Press Ctrl+Enter as a shortcut</small></div>';
+  refs.coxPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg><span>Select covariates and click <strong>Run Analysis</strong> to see the forest plot</span></div>';
+  refs.downloadKmSummaryButton.disabled = true;
+  refs.downloadKmPairwiseButton.disabled = true;
+  if (refs.downloadKmPngButton) refs.downloadKmPngButton.disabled = true;
+  if (refs.downloadKmSvgButton) refs.downloadKmSvgButton.disabled = true;
+  refs.downloadSignatureButton.disabled = true;
+  refs.downloadCoxResultsButton.disabled = true;
+  refs.downloadCoxDiagnosticsButton.disabled = true;
+  if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.disabled = true;
+  if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.disabled = true;
+  refs.downloadCohortTableButton.disabled = true;
+  if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.disabled = true;
+  refs.downloadMlComparisonButton.disabled = true;
+  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = true;
+  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = true;
+  setMlManuscriptDownloadsEnabled(false);
+  refs.downloadDlComparisonButton.disabled = true;
+  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
+  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
+  setDlManuscriptDownloadsEnabled(false);
+}
+
 function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   state.dataset = payload;
+  clearAnalysisOutputs();
   state.km = null;
   state.cox = null;
   state.cohort = null;
@@ -5395,7 +5620,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.kmPairwiseShell.innerHTML = '<div class="empty-state">Group-vs-group comparisons (requires 2+ groups).</div>';
   refs.signatureShell.innerHTML = '<div class="empty-state">Use auto-discovery to find the best feature combinations.</div>';
   refs.coxResultsShell.innerHTML = '<div class="empty-state">Hazard ratios will appear after running Cox analysis.</div>';
-  refs.coxDiagnosticsShell.innerHTML = '<div class="empty-state">Scaled Schoenfeld residual screening details will appear here.</div>';
+  refs.coxDiagnosticsShell.innerHTML = '<div class="empty-state">Scaled Schoenfeld residual screening details and the combined PH screening row will appear here.</div>';
   clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Scaled Schoenfeld residual screening appears here after fitting the model.</span></div>', { state: "placeholder" });
   resetCoxMartingaleSelector();
   clearPlotShell(refs.coxMartingalePlot, '<div class="empty-state plot-empty"><span>Martingale residual screening for continuous covariates appears here after fitting the model.</span></div>', { state: "placeholder" });
@@ -5444,16 +5669,6 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
 
 function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   const snapshot = captureControlSnapshot();
-  const preservedStates = {
-    km: state.km,
-    cox: state.cox,
-    cohort: state.cohort,
-    signature: state.signature,
-    ml: state.ml,
-    dl: state.dl,
-    compareMl: runtime.compareCache.ml,
-    compareDl: runtime.compareCache.dl,
-  };
   const preservedGuidedGoal = runtime.guidedGoal;
   const preservedGuidedStep = runtime.guidedStep;
   const columnNames = payload.columns.map((column) => column.name);
@@ -5469,11 +5684,11 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
     : null;
 
   state.dataset = payload;
+  clearAnalysisOutputs();
   runtime.derivedColumnProvenance = normalizeDerivedColumnProvenance(payload.derived_column_provenance);
   runtime.deriveDraftTouched = false;
   runtime.guidedGoal = preservedGuidedGoal;
   runtime.guidedStep = preservedGuidedStep;
-  resetCoxPreview({ rerender: false });
 
   if (refs.showAllEventColumns) refs.showAllEventColumns.checked = Boolean(snapshot?.showAllEventColumns);
   renderTimeColumnOptions({ preferred: preferredTime, silent: true });
@@ -5485,15 +5700,6 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   renderDatasetPreview();
   updateDatasetPresetBar();
   showWorkspace();
-
-  state.km = preservedStates.km;
-  state.cox = preservedStates.cox;
-  state.cohort = preservedStates.cohort;
-  state.signature = preservedStates.signature;
-  state.ml = preservedStates.ml;
-  state.dl = preservedStates.dl;
-  runtime.compareCache.ml = preservedStates.compareMl;
-  runtime.compareCache.dl = preservedStates.compareDl;
 
   if (!deferChrome) {
     renderGuidedChrome();
@@ -5946,15 +6152,23 @@ async function runCox() {
   renderTable(refs.coxDiagnosticsShell, coxAnalysis.diagnostics_table);
   renderInsightBoard(refs.coxInsightBoard, coxSummary, "Run Cox PH to review diagnostics.");
   const coxMetricLabel = stats.c_index_label || ((stats.evaluation_mode === "apparent") ? "Apparent C-index" : "C-index");
-  const coxMetricCore = `${coxMetricLabel}=${formatValue(stats.c_index)}`;
-  const hasCoxMetricCi = stats.c_index_ci_lower != null && stats.c_index_ci_upper != null;
+  const hasReportedCoxMetric = stats.c_index != null && stats.evaluation_mode !== "stratified_not_reported";
+  const coxMetricCore = hasReportedCoxMetric
+    ? `${coxMetricLabel}=${formatValue(stats.c_index)}`
+    : "Discrimination metric omitted for stratified Cox";
+  const hasCoxMetricCi = hasReportedCoxMetric && stats.c_index_ci_lower != null && stats.c_index_ci_upper != null;
   const coxMetricCi = hasCoxMetricCi
     ? ` (${Math.round((Number(stats.c_index_ci_level) || 0.95) * 100)}% CI ${formatValue(stats.c_index_ci_lower)} to ${formatValue(stats.c_index_ci_upper)})`
     : "";
+  const coxStrataMeta = [];
+  if (stats.n_strata != null) coxStrataMeta.push(`strata=${formatValue(stats.n_strata)}`);
+  if (Number(stats.zero_event_strata_count || 0) > 0) coxStrataMeta.push(`zero-event strata=${formatValue(stats.zero_event_strata_count)}`);
+  if (Number(stats.sparse_event_strata_count || 0) > 0) coxStrataMeta.push(`one-event strata=${formatValue(stats.sparse_event_strata_count)}`);
+  const coxStrataCore = coxStrataMeta.length ? `, ${coxStrataMeta.join(", ")}` : "";
   const coxCompetingRiskPrefix = summaryHasCaution(coxSummary, "competing risk")
     ? "Competing risks not modeled; cause-specific questions need dedicated competing-risk methods. "
     : "";
-  refs.coxMetaBanner.textContent = `${coxCompetingRiskPrefix}N=${formatValue(stats.n)}, events=${formatValue(stats.events)}, parameters=${formatValue(stats.parameters)}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricCore}${coxMetricCi}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
+  refs.coxMetaBanner.textContent = `${coxCompetingRiskPrefix}N=${formatValue(stats.n)}, events=${formatValue(stats.events)}, parameters=${formatValue(stats.parameters)}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricCore}${coxMetricCi}${coxStrataCore}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
   syncDownloadButtonAvailability();
   revealCompletedResultIfCurrent("cox", {
     successMessage: "Cox PH model fitted.",
@@ -6486,12 +6700,20 @@ function wireDownloads() {
   refs.downloadKmSummaryButton.addEventListener("click", () => {
     const payload = currentGoalResult("km");
     if (!requireCurrentResultForExport("km", { payload })) return;
-    downloadCsv(buildDownloadFilename("km_summary", "csv", { includeGroup: true }), payload.analysis.summary_table);
+    void downloadServerTable(
+      buildDownloadFilename("km_summary", "csv", { includeGroup: true }),
+      buildKmTableExportPayload(payload.analysis.summary_table, "Kaplan-Meier summary", payload),
+      "text/csv;charset=utf-8;",
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadKmPairwiseButton.addEventListener("click", () => {
     const payload = currentGoalResult("km");
     if (!requireCurrentResultForExport("km", { payload })) return;
-    downloadCsv(buildDownloadFilename("km_pairwise", "csv", { includeGroup: true }), payload.analysis.pairwise_table);
+    void downloadServerTable(
+      buildDownloadFilename("km_pairwise", "csv", { includeGroup: true }),
+      buildKmTableExportPayload(payload.analysis.pairwise_table, "Kaplan-Meier pairwise comparisons", payload, { includePairwiseGuardrail: true }),
+      "text/csv;charset=utf-8;",
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadSignatureButton.addEventListener("click", () => {
     const payload = currentSignatureResult();
@@ -6499,17 +6721,29 @@ function wireDownloads() {
       showToast("Visible settings no longer match the current signature result. Run again before exporting.", "warning", 3600);
       return;
     }
-    downloadCsv(buildDownloadFilename("signature_ranking", "csv"), payload.results_table);
+    void downloadServerTable(
+      buildDownloadFilename("signature_ranking", "csv"),
+      buildSignatureTableExportPayload(payload.results_table, "Signature discovery ranking", payload),
+      "text/csv;charset=utf-8;",
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadCoxResultsButton.addEventListener("click", () => {
     const payload = currentGoalResult("cox");
     if (!requireCurrentResultForExport("cox", { payload })) return;
-    downloadCsv(buildDownloadFilename("cox_results", "csv"), payload.analysis.results_table);
+    void downloadServerTable(
+      buildDownloadFilename("cox_results", "csv"),
+      buildCoxTableExportPayload(payload.analysis.results_table, "Cox proportional hazards results", payload),
+      "text/csv;charset=utf-8;",
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadCoxDiagnosticsButton.addEventListener("click", () => {
     const payload = currentGoalResult("cox");
     if (!requireCurrentResultForExport("cox", { payload })) return;
-    downloadCsv(buildDownloadFilename("cox_diagnostics", "csv"), payload.analysis.diagnostics_table);
+    void downloadServerTable(
+      buildDownloadFilename("cox_diagnostics", "csv"),
+      buildCoxTableExportPayload(payload.analysis.diagnostics_table, "Cox proportional hazards diagnostics", payload),
+      "text/csv;charset=utf-8;",
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.addEventListener("click", () => {
     const payload = currentGoalResult("cox");
@@ -6539,11 +6773,11 @@ function wireDownloads() {
     const payload = currentGoalResult("ml");
     const rows = payload?.analysis?.comparison_table;
     if (!requireCurrentResultForExport("ml", { payload })) return;
-    void downloadServerTable(buildDownloadFilename("ml_model_comparison", "csv"), {
-      rows,
-      format: "csv",
-      style: "plain",
-    }, "text/csv;charset=utf-8;").catch((error) => showError(errorMessageText(error, "Download failed.")));
+    void downloadServerTable(
+      buildDownloadFilename("ml_model_comparison", "csv"),
+      buildComparisonTableExportPayload(rows, "ML model comparison", payload),
+      "text/csv;charset=utf-8;",
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.addEventListener("click", () => {
     const payload = currentGoalResult("ml");
@@ -6607,11 +6841,11 @@ function wireDownloads() {
     const payload = currentGoalResult("dl");
     const rows = payload?.analysis?.comparison_table;
     if (!requireCurrentResultForExport("dl", { payload })) return;
-    void downloadServerTable(buildDownloadFilename("dl_model_comparison", "csv"), {
-      rows,
-      format: "csv",
-      style: "plain",
-    }, "text/csv;charset=utf-8;").catch((error) => showError(errorMessageText(error, "Download failed.")));
+    void downloadServerTable(
+      buildDownloadFilename("dl_model_comparison", "csv"),
+      buildComparisonTableExportPayload(rows, "Deep learning model comparison", payload),
+      "text/csv;charset=utf-8;",
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.addEventListener("click", () => {
     const payload = currentGoalResult("dl");

@@ -5,8 +5,12 @@ import io
 import json
 import os
 from pathlib import Path
-import tomllib
 import zipfile
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback for local QA runs
+    import tomli as tomllib
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -47,6 +51,8 @@ def _is_plotly_image_runtime_error(exc: Exception) -> bool:
         "host system is missing dependencies",
         "choreo_get_chrome",
         "missing libs",
+        "plotly_get_chrome",
+        "requires google chrome",
     )
     return any(marker in message for marker in markers)
 
@@ -202,11 +208,11 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="selectAllCohortVariablesButton"' in response.text
     assert 'id="clearCohortVariablesButton"' in response.text
     assert 'id="coxMartingaleVariableSelect"' in response.text
-    assert "The reported C-index is apparent on the analyzable cohort, PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots." in response.text
+    assert "Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting." in response.text
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
     assert 'id="deriveButton" type="button">Create</button>' in response.text
-    assert "Scaled Schoenfeld residual screening with rank-based Spearman correlation versus log time appears here." in response.text
+    assert "Scaled Schoenfeld residual screening with rank-based Spearman correlation versus log time appears here, alongside a combined PH screening row based on the per-term tests." in response.text
     assert "Allowed ranges:" not in response.text
 
 
@@ -878,12 +884,15 @@ def test_cox_ui_wires_graphical_diagnostics_plot() -> None:
     assert 'coxMartingalePlot: document.getElementById("coxMartingalePlot"),' in text
     assert 'if (payload.diagnostics_figure?.data?.length) {' in text
     assert "function syncCoxMartingaleSelector(panels, preferredTerm = runtime.coxMartingaleTerm)" in text
+    assert "function currentCoxMartingaleUnavailableMessage()" in text
+    assert "function currentCoxMartingaleEmptyLabel()" in text
     assert "async function renderCoxMartingalePlot(selectedTerm = runtime.coxMartingaleTerm)" in text
     assert 'plotLayoutConfig(payload.diagnostics_figure.layout, "cox_diagnostics")' in text
     assert 'plotLayoutConfig(figure.layout, `cox_martingale_${term}`)' in text
     assert "clearPlotShell(refs.coxDiagnosticsPlot, '<div class=\"empty-state plot-empty\"><span>Scaled Schoenfeld residual screening was unavailable for this fit.</span></div>');" in text
-    assert "clearPlotShell(refs.coxMartingalePlot, '<div class=\"empty-state plot-empty\"><span>Martingale residual screening was unavailable for this fit.</span></div>');" in text
-    assert 'refs.coxDiagnosticsShell.innerHTML = \'<div class="empty-state">Scaled Schoenfeld residual screening details will appear here.</div>\';' in text
+    assert 'resetCoxMartingaleSelector(currentCoxMartingaleEmptyLabel());' in text
+    assert 'escapeHtml(currentCoxMartingaleUnavailableMessage())' in text
+    assert 'refs.coxDiagnosticsShell.innerHTML = \'<div class="empty-state">Scaled Schoenfeld residual screening details and the combined PH screening row will appear here.</div>\';' in text
     assert 'refs.coxMartingaleVariableSelect?.addEventListener("change", () => {' in text
 
 
@@ -905,7 +914,8 @@ def test_cox_ui_banner_includes_c_index_ci_when_available() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     text = app_js.read_text()
 
-    assert "const hasCoxMetricCi = stats.c_index_ci_lower != null && stats.c_index_ci_upper != null;" in text
+    assert 'const hasReportedCoxMetric = stats.c_index != null && stats.evaluation_mode !== "stratified_not_reported";' in text
+    assert "const hasCoxMetricCi = hasReportedCoxMetric && stats.c_index_ci_lower != null && stats.c_index_ci_upper != null;" in text
     assert 'const coxMetricCi = hasCoxMetricCi' in text
     assert '% CI ${formatValue(stats.c_index_ci_lower)} to ${formatValue(stats.c_index_ci_upper)}' in text
 
@@ -3771,6 +3781,13 @@ def test_frontend_uses_dataset_aware_download_filenames() -> None:
     assert "function currentOutcomeSlug()" in app_js
     assert 'buildDownloadFilename("km_summary", "csv", { includeGroup: true })' in app_js
     assert 'buildDownloadFilename("cox_results", "csv")' in app_js
+    assert "function buildKmTableExportPayload(rows, caption, resultPayload = null" in app_js
+    assert "function buildSignatureTableExportPayload(rows, caption, resultPayload = null)" in app_js
+    assert "function buildCoxTableExportPayload(rows, caption, resultPayload = null)" in app_js
+    assert 'buildKmTableExportPayload(payload.analysis.summary_table, "Kaplan-Meier summary", payload)' in app_js
+    assert 'buildSignatureTableExportPayload(payload.results_table, "Signature discovery ranking", payload)' in app_js
+    assert 'buildCoxTableExportPayload(payload.analysis.results_table, "Cox proportional hazards results", payload)' in app_js
+    assert 'buildCoxTableExportPayload(payload.analysis.diagnostics_table, "Cox proportional hazards diagnostics", payload)' in app_js
     assert 'buildDownloadFilename("cox_forest", "png")' in app_js
     assert 'buildDownloadFilename("cox_forest", "svg")' in app_js
     assert 'showToast?.("No rows available for export.", "warning")' in downloads_js
@@ -3994,8 +4011,9 @@ def test_frontend_derive_group_uses_lightweight_dataset_refresh() -> None:
     ).read_text(encoding="utf-8")
 
     assert "function updateAfterDerivedDataset(payload, { deferChrome = false } = {})" in app_js
-    assert "state.km = preservedStates.km;" in app_js
-    assert "state.ml = preservedStates.ml;" in app_js
+    assert "clearAnalysisOutputs();" in app_js
+    assert "state.km = preservedStates.km;" not in app_js
+    assert "state.ml = preservedStates.ml;" not in app_js
     assert "if (!deferChrome) {" in app_js
     derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
@@ -4485,7 +4503,7 @@ def test_export_table_endpoint_preserves_union_of_row_keys() -> None:
         json={
             "rows": [
                 {"Rank": 1, "Model": "Cox PH"},
-                {"Rank": 2, "Model": "RSF", "Mean C-index": 0.7011},
+                {"Rank": 2, "Model": "RSF", "Mean C-index": 0.7011, "_kind": "internal"},
             ],
             "format": "csv",
             "style": "plain",
@@ -4495,9 +4513,10 @@ def test_export_table_endpoint_preserves_union_of_row_keys() -> None:
     assert response.status_code == 200
     assert "Mean C-index" in response.text.splitlines()[0]
     assert "0.7011" in response.text
+    assert "_kind" not in response.text.splitlines()[0]
 
 
-def test_export_table_endpoint_csv_ignores_caption_and_notes_preamble() -> None:
+def test_export_table_endpoint_csv_includes_caption_and_notes_preamble() -> None:
     response = client.post(
         "/api/export-table",
         json={
@@ -4513,8 +4532,30 @@ def test_export_table_endpoint_csv_ignores_caption_and_notes_preamble() -> None:
 
     assert response.status_code == 200
     lines = response.text.splitlines()
-    assert lines[0] == "Rank,Model,C-index"
-    assert not response.text.startswith("# ")
+    assert lines[0] == "# Table 1. Should not appear in CSV preamble."
+    assert lines[1] == "# Notes:"
+    assert lines[2] == "# - This note should stay out of the CSV body."
+    assert lines[3] == "Rank,Model,C-index"
+
+
+def test_export_table_endpoint_honors_explicit_columns_and_skips_private_keys() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [
+                {"Term": "age", "P value": 0.04},
+                {"Term": "Global PH screen (combined per-term p-values)", "P value": 0.12, "_kind": "global"},
+            ],
+            "columns": ["Term", "P value"],
+            "format": "csv",
+            "style": "plain",
+        },
+    )
+
+    assert response.status_code == 200
+    lines = response.text.splitlines()
+    assert lines[0] == "Term,P value"
+    assert all("_kind" not in line for line in lines)
 
 
 def test_export_table_endpoint_sanitizes_formula_like_csv_cells() -> None:
@@ -5636,8 +5677,10 @@ def test_optional_extras_include_format_ml_dl_and_export_dependencies() -> None:
     assert {"openpyxl>=3.1.5", "pyarrow>=17.0.0", "xlrd>=2.0.1"}.issubset(dev_dependencies)
     assert {"scikit-survival>=0.23.0", "shap>=0.45.0", "torch>=2.0.0"}.issubset(dev_dependencies)
     assert {"httpx>=0.28.1", "pytest>=8.3.5", "kaleido>=0.2.1"}.issubset(dev_dependencies)
+    assert {"tomli>=2.0.1; python_version < '3.11'"}.issubset(dev_dependencies)
     assert {"openpyxl>=3.1.5", "pyarrow>=17.0.0", "xlrd>=2.0.1"}.issubset(all_dependencies)
     assert {"kaleido>=0.2.1", "playwright>=1.52.0"}.issubset(all_dependencies)
+    assert {"tomli>=2.0.1; python_version < '3.11'"}.issubset(all_dependencies)
 
 
 def test_guided_tables_hide_cutpoint_scan_when_goal_is_not_km() -> None:
@@ -5907,6 +5950,15 @@ def test_frontend_styles_support_reduced_motion_and_tabular_numeric_alignment() 
     assert "transition-duration: 0.01ms !important;" in motion_css
     assert "animation: none !important;" in motion_css
     assert "transition: none !important;" in motion_css
+
+    assert "--accent-rgb: 201, 78, 51;" in styles
+    assert "--accent: #c94e33;" in styles
+
+    mobile_start = styles.index("@media (max-width: 768px) {")
+    mobile_end = styles.index("}", mobile_start)
+    mobile_css = styles[mobile_start:styles.index(".shell-header {", mobile_start)]
+    assert "min-height: 44px;" in mobile_css
+    assert "padding: 10px 14px;" in mobile_css
 
 
 def test_ml_single_model_endpoint_rejects_repeated_cv_strategy() -> None:

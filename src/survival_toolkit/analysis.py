@@ -18,6 +18,7 @@ from scipy import stats
 from statsmodels.duration.hazard_regression import PHReg
 from statsmodels.duration.survfunc import SurvfuncRight, survdiff
 from statsmodels.nonparametric.smoothers_lowess import lowess
+from statsmodels.tools.sm_exceptions import ConvergenceWarning
 
 from survival_toolkit.errors import ColumnNotFoundError, user_input_boundary
 
@@ -1336,6 +1337,8 @@ def _safe_float(value: Any) -> float | None:
 def _safe_exp(value: Any) -> float:
     """Exponentiate with saturation, always returning a finite float."""
     exponent = float(value)
+    if not math.isfinite(exponent):
+        return float(np.finfo(float).max) if exponent > 0 else float(np.finfo(float).tiny)
     if exponent >= _MAX_EXP_INPUT:
         return float(np.finfo(float).max)
     if exponent <= _MIN_EXP_INPUT:
@@ -1388,11 +1391,145 @@ def _summarize_labels(labels: Sequence[str], max_items: int = 3) -> str:
     return f"{', '.join(cleaned[:max_items])} +{len(cleaned) - max_items} more"
 
 
+def _format_cox_strata_label(columns: Sequence[str], values: Sequence[Any]) -> str:
+    return " | ".join(
+        f"{column}={value}"
+        for column, value in zip(columns, values, strict=True)
+    )
+
+
+def _build_cox_strata_payload(
+    frame: pd.DataFrame,
+    strata_columns: Sequence[str],
+) -> dict[str, Any]:
+    normalized = [str(column) for column in strata_columns if str(column)]
+    if not normalized:
+        return {
+            "codes": None,
+            "row_labels": None,
+            "display_labels": [],
+            "n_strata": None,
+        }
+
+    strata_frame = frame[normalized].copy()
+    for column in normalized:
+        strata_frame[column] = strata_frame[column].astype("string")
+
+    tuple_rows = [
+        tuple(str(value) for value in row)
+        for row in strata_frame.itertuples(index=False, name=None)
+    ]
+    tuple_index = pd.Index(tuple_rows, tupleize_cols=False)
+    codes, unique_rows = pd.factorize(tuple_index, sort=False)
+    display_labels = [
+        _format_cox_strata_label(normalized, unique_row if isinstance(unique_row, tuple) else (unique_row,))
+        for unique_row in unique_rows.tolist()
+    ]
+    row_labels = np.asarray([display_labels[int(code)] for code in codes], dtype=object)
+    return {
+        "codes": np.asarray(codes, dtype=np.int64),
+        "row_labels": row_labels,
+        "display_labels": display_labels,
+        "n_strata": int(len(display_labels)),
+    }
+
+
+def _cox_strata_snapshot(
+    frame: pd.DataFrame,
+    event_column: str,
+    strata_columns: Sequence[str],
+    strata_row_labels: np.ndarray | None,
+) -> dict[str, Any]:
+    normalized = [str(column) for column in strata_columns if str(column)]
+    if not normalized or strata_row_labels is None:
+        return {
+            "n_strata": None,
+            "zero_event_strata_count": 0,
+            "zero_event_strata_examples": [],
+            "sparse_event_strata_count": 0,
+            "sparse_event_strata_examples": [],
+            "high_cardinality_columns": [],
+            "high_cardinality_numeric_columns": [],
+            "stability_warnings": [],
+        }
+
+    n_rows = int(frame.shape[0])
+    high_cardinality_columns: list[str] = []
+    high_cardinality_numeric_columns: list[str] = []
+    stability_warnings: list[str] = []
+    numeric_level_cutoff = max(10, min(30, int(math.ceil(max(n_rows, 1) * 0.10))))
+    generic_level_cutoff = max(20, min(60, int(math.ceil(max(n_rows, 1) * 0.20))))
+
+    for column in normalized:
+        if column not in frame.columns:
+            continue
+        series = frame[column].dropna()
+        unique_count = int(series.nunique())
+        if is_numeric_dtype(series) and unique_count > numeric_level_cutoff:
+            high_cardinality_numeric_columns.append(f"{column} ({unique_count} unique values)")
+        elif unique_count > generic_level_cutoff:
+            high_cardinality_columns.append(f"{column} ({unique_count} observed levels)")
+
+    if high_cardinality_numeric_columns:
+        stability_warnings.append(
+            "Selected strata include high-cardinality numeric column(s): "
+            f"{_summarize_labels(high_cardinality_numeric_columns, max_items=3)}. "
+            "Recode continuous variables into a small number of clinically meaningful levels before stratifying."
+        )
+    if high_cardinality_columns:
+        stability_warnings.append(
+            "Selected strata include many observed levels: "
+            f"{_summarize_labels(high_cardinality_columns, max_items=3)}. "
+            "Too many strata can make a stratified Cox model unstable."
+        )
+
+    grouped = pd.DataFrame(
+        {
+            "__stratum": np.asarray(strata_row_labels, dtype=object),
+            "__event": frame[event_column].astype(int).to_numpy(),
+        }
+    ).groupby("__stratum", observed=False)["__event"].agg(["size", "sum"])
+
+    zero_event_examples = grouped[grouped["sum"] == 0].index.astype(str).tolist()
+    sparse_event_examples = grouped[(grouped["sum"] > 0) & (grouped["sum"] <= 1)].index.astype(str).tolist()
+    n_strata = int(grouped.shape[0])
+    if zero_event_examples:
+        stability_warnings.append(
+            f"{len(zero_event_examples)} observed stratum/strata have zero events, including "
+            f"{_summarize_labels(zero_event_examples, max_items=3)}. "
+            "Collapse sparse strata before treating this stratified fit as stable."
+        )
+    if sparse_event_examples:
+        stability_warnings.append(
+            f"{len(sparse_event_examples)} observed stratum/strata have only one event, including "
+            f"{_summarize_labels(sparse_event_examples, max_items=3)}. "
+            "Term-specific hazard ratios can look unstable when strata are this sparse."
+        )
+    if n_strata > max(12, min(40, int(math.ceil(max(n_rows, 1) * 0.20)))):
+        stability_warnings.append(
+            f"The fitted stratified Cox specification created {n_strata} observed strata. "
+            "Large numbers of strata reduce the information available within each baseline-hazard stratum."
+        )
+
+    return {
+        "n_strata": n_strata,
+        "zero_event_strata_count": int(len(zero_event_examples)),
+        "zero_event_strata_examples": zero_event_examples,
+        "sparse_event_strata_count": int(len(sparse_event_examples)),
+        "sparse_event_strata_examples": sparse_event_examples,
+        "high_cardinality_columns": high_cardinality_columns,
+        "high_cardinality_numeric_columns": high_cardinality_numeric_columns,
+        "stability_warnings": stability_warnings,
+    }
+
+
 def _cox_stability_snapshot(
     frame: pd.DataFrame,
     event_column: str,
     covariates: Sequence[str],
     categorical_covariates: Sequence[str],
+    strata_columns: Sequence[str] | None = None,
+    strata_row_labels: np.ndarray | None = None,
 ) -> dict[str, Any]:
     estimated_parameters = _cox_estimated_parameter_count(frame, covariates, categorical_covariates)
     event_count = int(frame[event_column].sum())
@@ -1485,6 +1622,13 @@ def _cox_stability_snapshot(
             stability_warnings.append(
                 f"Events per parameter is {events_per_parameter:.2f}, so coefficient estimates may still be unstable."
             )
+    strata_snapshot = _cox_strata_snapshot(
+        frame,
+        event_column,
+        strata_columns or [],
+        strata_row_labels,
+    )
+    stability_warnings.extend(strata_snapshot["stability_warnings"])
     return {
         "events": event_count,
         "estimated_parameters": int(estimated_parameters),
@@ -1492,6 +1636,7 @@ def _cox_stability_snapshot(
         "stability_warnings": stability_warnings,
         "risky_levels": risky_levels,
         "constant_design_columns": constant_design_columns,
+        "strata_snapshot": strata_snapshot,
     }
 
 
@@ -1562,6 +1707,13 @@ def _cox_nonfinite_estimate_message(stability_snapshot: dict[str, Any]) -> str:
 def _cox_fit_failure_message(exc: Exception, stability_snapshot: dict[str, Any]) -> str:
     raw = str(exc).strip()
     lowered = raw.lower()
+    if "converg" in lowered:
+        return (
+            "Cox PH fit did not converge cleanly. This usually means sparse strata, sparse categories, "
+            "quasi-separation, or an over-specified model for the available events. "
+            "Collapse sparse levels, reduce strata complexity, or simplify the covariate set. "
+            f"{_cox_nonfinite_estimate_message(stability_snapshot)}"
+        )
     if "singular matrix" in lowered:
         detail = _cox_nonfinite_estimate_message(stability_snapshot)
         return (
@@ -1571,6 +1723,59 @@ def _cox_fit_failure_message(exc: Exception, stability_snapshot: dict[str, Any])
             f"{detail}"
         )
     return _cox_nonfinite_estimate_message(stability_snapshot)
+
+
+def _fit_cox_model(model: PHReg, stability_snapshot: dict[str, Any]):
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = model.fit(disp=False)
+    except MemoryError:
+        raise
+    except Exception as exc:
+        raise ValueError(_cox_fit_failure_message(exc, stability_snapshot)) from exc
+
+    convergence_warnings = [
+        warning
+        for warning in caught
+        if (
+            issubclass(warning.category, ConvergenceWarning)
+            or "converg" in str(warning.message).lower()
+        )
+    ]
+    if convergence_warnings:
+        message = str(convergence_warnings[0].message).strip() or "Cox PH fit did not converge cleanly."
+        raise ValueError(_cox_fit_failure_message(RuntimeError(message), stability_snapshot))
+    return results
+
+
+def _cox_global_ph_screening(diagnostic_rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    valid_p_values = [
+        float(row["P value"])
+        for row in diagnostic_rows
+        if row.get("_kind") != "global"
+        and row.get("P value") is not None
+        and np.isfinite(float(row["P value"]))
+        and 0.0 < float(row["P value"]) <= 1.0
+    ]
+    if len(valid_p_values) < 2:
+        return {
+            "method": "fisher_combined_spearman",
+            "terms_tested": int(len(valid_p_values)),
+            "statistic": None,
+            "df": None,
+            "p_value": None,
+        }
+
+    clipped = np.clip(np.asarray(valid_p_values, dtype=float), np.finfo(float).tiny, 1.0)
+    statistic, p_value = stats.combine_pvalues(clipped, method="fisher")
+    return {
+        "method": "fisher_combined_spearman",
+        "terms_tested": int(len(valid_p_values)),
+        "statistic": _safe_float(statistic),
+        "df": int(2 * len(valid_p_values)),
+        "p_value": _safe_float(p_value),
+    }
 
 
 def _cox_categorical_stability_alerts(
@@ -1674,6 +1879,9 @@ def _km_scientific_summary(
         strengths.append(f"Global {test_name} comparison was run across {group_count} groups.")
         if pairwise_rows:
             strengths.append("Pairwise group comparisons include Benjamini-Hochberg adjusted p-values.")
+            cautions.append(
+                "Pairwise BH-adjusted comparisons are shown alongside the global test, so pre-specify in the manuscript how omnibus and pairwise evidence will be interpreted."
+            )
     elif group_column and outcome_informed_group:
         strengths.append("Outcome-informed groups were visualized descriptively without a fresh between-group hypothesis test.")
     else:
@@ -1700,6 +1908,8 @@ def _km_scientific_summary(
         headline = "Outcome-informed groups were visualized descriptively; a fresh log-rank p-value is not reported on the same selected split."
         cautions.append("This grouping was derived using outcome information, so treat the KM figure as exploratory rather than confirmatory.")
         next_steps.append("Report the selection procedure and any selection-adjusted p-value from the cutpoint or signature workflow instead of a fresh raw log-rank test.")
+        if rmst_contrast is not None and rmst_contrast.get("estimate") is not None:
+            cautions.append("Two-group RMST contrast is shown descriptively on the selected split; a fresh Wald p-value is intentionally withheld.")
     elif group_column and test_payload:
         if float(test_payload["p_value"]) < 0.05:
             headline = f"Global {_weighted_test_label(test_payload['test'], fh_p=fh_p)} testing suggests survival differs across groups."
@@ -1721,6 +1931,10 @@ def _km_scientific_summary(
     ):
         strengths.append(
             f"Two-group RMST contrast ({rmst_contrast['comparison']}) was summarized with a delta-method confidence interval."
+        )
+    if rmst_contrast is not None and rmst_contrast.get("p_value") is not None:
+        strengths.append(
+            f"Two-group RMST contrast ({rmst_contrast['comparison']}) also reports a Wald p-value from the delta-method standard error."
         )
 
     status = "robust"
@@ -1750,6 +1964,11 @@ def _km_scientific_summary(
                 if rmst_contrast is not None and rmst_contrast.get("estimate") is not None
                 else []
             ),
+            *(
+                [{"label": "RMST difference p", "value": _safe_float(rmst_contrast["p_value"])}]
+                if rmst_contrast is not None and rmst_contrast.get("p_value") is not None
+                else []
+            ),
         ],
     }
 
@@ -1773,6 +1992,7 @@ def _cox_scientific_summary(
     ph_alert_terms = [
         str(row["Term"])
         for row in diagnostic_rows
+        if row.get("_kind") != "global"
         if row["P value"] is not None and float(row["P value"]) < 0.05
     ]
     categorical_alerts = categorical_alerts or {"reference_levels": [], "sparse_levels": []}
@@ -1795,19 +2015,28 @@ def _cox_scientific_summary(
     if outcome_rows is not None and outcome_rows > 0 and dropped_rows is not None:
         dropped_fraction = float(dropped_rows / outcome_rows)
 
-    cohort_statement = f"Model estimates use the analyzable cohort after dropping rows with missing selected covariates (N = {complete_case_n})."
+    cohort_statement = f"Model estimates use the analyzable cohort after dropping rows with missing selected Cox inputs (N = {complete_case_n})."
     if outcome_rows is not None:
         cohort_statement = (
-            "Model estimates use the analyzable cohort after dropping rows with missing selected covariates "
+            "Model estimates use the analyzable cohort after dropping rows with missing selected Cox inputs "
             f"(N = {complete_case_n} of {int(outcome_rows)} outcome-valid rows)."
         )
 
+    strata_columns = [str(column) for column in model_stats.get("strata_columns") or [] if column]
+    c_index_label = str(model_stats.get("c_index_label") or "Apparent C-index (training cohort)")
     strengths = [
         "Cox regression was fit with the Efron tie method.",
         cohort_statement,
         "Proportional-hazards screening used scaled Schoenfeld residuals with rank-based Spearman correlations versus log time, and the plot overlay uses LOWESS smoothing for visual screening only; this is not a formal Grambsch-Therneau test.",
-        "The reported discrimination metric is an apparent C-index on the fitted cohort, so it reflects training-cohort ranking only.",
     ]
+    if strata_columns:
+        strengths.append(
+            "Discrimination was not reported for the stratified Cox fit because pooled cross-stratum ranking is not directly interpretable."
+        )
+    else:
+        strengths.append(
+            "The reported discrimination metric is an apparent C-index on the fitted cohort, so it reflects training-cohort ranking only."
+        )
     cautions: list[str] = []
     next_steps: list[str] = []
 
@@ -1816,9 +2045,22 @@ def _cox_scientific_summary(
     lr_statistic = _safe_float(model_stats.get("lr_statistic"))
     lr_pvalue = _safe_float(model_stats.get("lr_pvalue"))
     lr_note = str(model_stats.get("lr_note") or "").strip()
+    global_ph_statistic = _safe_float(model_stats.get("global_ph_statistic"))
+    global_ph_df = _safe_float(model_stats.get("global_ph_df"))
+    global_ph_pvalue = _safe_float(model_stats.get("global_ph_pvalue"))
+    global_ph_terms_tested = int(model_stats.get("global_ph_terms_tested") or 0)
+    global_ph_method = str(model_stats.get("global_ph_method") or "").strip()
     martingale_terms = [str(term) for term in model_stats.get("martingale_terms") or [] if term]
-    strata_columns = [str(column) for column in model_stats.get("strata_columns") or [] if column]
+    martingale_note = str(model_stats.get("martingale_note") or "").strip()
     n_strata = _safe_float(model_stats.get("n_strata"))
+    zero_event_strata_count = int(model_stats.get("zero_event_strata_count") or 0)
+    sparse_event_strata_count = int(model_stats.get("sparse_event_strata_count") or 0)
+    high_cardinality_strata_columns = [
+        str(item) for item in model_stats.get("high_cardinality_strata_columns") or [] if item
+    ]
+    high_cardinality_numeric_strata_columns = [
+        str(item) for item in model_stats.get("high_cardinality_numeric_strata_columns") or [] if item
+    ]
     if epv is not None and epv < 10:
         cautions.append("Events per parameter is below 10, so coefficients may be unstable or overfit.")
         next_steps.append("Reduce model complexity or increase the event count before treating estimates as final.")
@@ -1832,6 +2074,26 @@ def _cox_scientific_summary(
         if n_strata is not None:
             strengths.append(f"The fitted stratified Cox specification used {int(n_strata)} observed strata combination(s).")
         cautions.append("Stratified variables are used only for stratum-specific baseline hazards and do not receive hazard-ratio estimates.")
+        if zero_event_strata_count:
+            cautions.append(
+                f"{zero_event_strata_count} observed stratum/strata had zero events, so the stratified Cox fit can look more stable than the within-stratum information actually supports."
+            )
+            next_steps.append("Collapse sparse strata before treating a stratified Cox fit as manuscript-ready.")
+        if sparse_event_strata_count:
+            cautions.append(
+                f"{sparse_event_strata_count} observed stratum/strata had only one event, which makes within-stratum information thin for a stratified Cox fit."
+            )
+        if high_cardinality_numeric_strata_columns:
+            cautions.append(
+                "Selected strata include numeric/high-cardinality columns: "
+                f"{_summarize_labels(high_cardinality_numeric_strata_columns, max_items=3)}."
+            )
+            next_steps.append("Recode continuous strata into a small number of clinically meaningful levels before fitting stratified Cox.")
+        elif high_cardinality_strata_columns:
+            cautions.append(
+                "Selected strata include many observed levels: "
+                f"{_summarize_labels(high_cardinality_strata_columns, max_items=3)}."
+            )
     else:
         cautions.append("Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.")
     cautions.append("All Cox outputs assume non-informative (independent) censoring.")
@@ -1842,11 +2104,11 @@ def _cox_scientific_summary(
         "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, coefficient estimates and survival summaries can be biased."
     )
     if dropped_rows:
-        drop_message = f"{int(dropped_rows)} outcome-valid rows were excluded because at least one selected covariate was missing."
+        drop_message = f"{int(dropped_rows)} outcome-valid rows were excluded because at least one selected Cox input was missing."
         if dropped_fraction is not None:
             drop_message = (
                 f"{int(dropped_rows)} outcome-valid rows ({dropped_fraction:.1%}) were excluded "
-                "because at least one selected covariate was missing."
+                "because at least one selected Cox input was missing."
             )
         cautions.append(drop_message)
         next_steps.append("Review missingness patterns or use an imputation strategy before treating the fitted cohort as representative.")
@@ -1881,7 +2143,8 @@ def _cox_scientific_summary(
         next_steps.append("Collapse sparse categories or remove quasi-separated terms before interpreting those contrasts.")
     if c_index is not None and c_index < 0.6:
         cautions.append("Apparent model discrimination is modest (C-index below 0.60).")
-    cautions.append("The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.")
+    if c_index is not None:
+        cautions.append("The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.")
     if c_index is not None:
         strengths.append(
             f"A C-index of {c_index:.3f} means the fitted model ranks about {c_index * 100:.1f}% of comparable patient pairs in the observed risk order."
@@ -1892,6 +2155,28 @@ def _cox_scientific_summary(
         )
     elif lr_note:
         cautions.append(lr_note)
+    if global_ph_pvalue is not None:
+        label = "Combined proportional-hazards screening"
+        if global_ph_method == "fisher_combined_spearman":
+            label = "Combined proportional-hazards screening (Fisher combination of term-level Spearman tests)"
+        if global_ph_statistic is not None and global_ph_df is not None:
+            strengths.append(
+                f"{label} summarized {global_ph_terms_tested} term-level PH checks with chi-square {global_ph_statistic:.2f} on {int(global_ph_df)} df (p={global_ph_pvalue:.3g})."
+            )
+        else:
+            strengths.append(
+                f"{label} summarized {global_ph_terms_tested} term-level PH checks (p={global_ph_pvalue:.3g})."
+            )
+        cautions.append(
+            "The combined PH screening p-value aggregates per-term residual tests and is an omnibus screen, not a formal cox.zph global test."
+        )
+        if global_ph_pvalue < 0.05:
+            cautions.append(
+                "The combined PH screening result suggests at least one term may drift from proportional hazards, even if not every single term crosses the nominal cutoff."
+            )
+            next_steps.append(
+                "Inspect the per-term PH table and Schoenfeld residual plots before writing that the proportional-hazards assumption was fully satisfied."
+            )
     if martingale_terms:
         strengths.append(
             f"Martingale residual screening is available for continuous covariates not marked categorical: {_summarize_labels(martingale_terms, max_items=4)}."
@@ -1899,16 +2184,21 @@ def _cox_scientific_summary(
         next_steps.append(
             "If martingale LOWESS trends curve strongly away from zero, consider splines, nonlinear transforms, or recoding the continuous covariate."
         )
+    elif martingale_note:
+        if "unavailable" in martingale_note.lower():
+            cautions.append(martingale_note)
+        else:
+            strengths.append(martingale_note)
     ci_low = _safe_float(model_stats.get("c_index_ci_lower"))
     ci_high = _safe_float(model_stats.get("c_index_ci_upper"))
     ci_level = _safe_float(model_stats.get("c_index_ci_level"))
     if ci_low is not None and ci_high is not None:
         level_pct = int(round((ci_level or 0.95) * 100.0))
         strengths.append(
-            f"The apparent C-index includes an internal bootstrap percentile {level_pct}% CI ({ci_low:.3f} to {ci_high:.3f}) to show fitted-cohort uncertainty."
+            f"{c_index_label} includes an internal bootstrap percentile {level_pct}% CI ({ci_low:.3f} to {ci_high:.3f}) on the fixed fitted risk scores."
         )
         cautions.append(
-            "The reported C-index confidence interval is an internal bootstrap interval on the same cohort, so it still does not replace external validation."
+            "The reported C-index confidence interval is a bootstrap interval on the same cohort using fixed fitted risk scores, so it understates full model-building uncertainty and does not replace external validation."
         )
     cautions.append(
         "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; validate the final specification on a separate cohort outside this run."
@@ -1922,6 +2212,8 @@ def _cox_scientific_summary(
         or sparse_level_alerts
         or wide_ci_terms
         or non_estimable_terms
+        or zero_event_strata_count
+        or high_cardinality_numeric_strata_columns
     )
 
     if significant_terms:
@@ -1957,31 +2249,48 @@ def _cox_scientific_summary(
     status = "robust"
     if cautions:
         status = "review"
-    if (epv is not None and epv < 5) or len(ph_alert_terms) >= 2 or reference_alerts or sparse_level_alerts:
+    if (
+        (epv is not None and epv < 5)
+        or len(ph_alert_terms) >= 2
+        or reference_alerts
+        or sparse_level_alerts
+        or zero_event_strata_count
+        or high_cardinality_numeric_strata_columns
+    ):
         status = "caution"
 
     metrics = [
         {"label": "Outcome-valid rows", "value": outcome_rows},
-        {"label": "Dropped for missing covariates", "value": dropped_rows},
+        {"label": "Dropped for missing Cox inputs", "value": dropped_rows},
         {"label": "Dropped for nonpositive time", "value": dropped_nonpositive_time_rows or None},
         {"label": "Events", "value": int(model_stats["events"])},
         {"label": "Parameters", "value": int(model_stats["parameters"])},
         {"label": "EPV", "value": epv},
-        {"label": "Apparent C-index (training cohort)", "value": c_index},
     ]
+    if c_index is not None:
+        metrics.append({"label": c_index_label, "value": c_index})
     if strata_columns:
         metrics.append({"label": "Strata variables", "value": len(strata_columns)})
     if n_strata is not None:
         metrics.append({"label": "Observed strata", "value": int(n_strata)})
+    if zero_event_strata_count:
+        metrics.append({"label": "Zero-event strata", "value": zero_event_strata_count})
+    if sparse_event_strata_count:
+        metrics.append({"label": "One-event strata", "value": sparse_event_strata_count})
     if lr_statistic is not None:
         metrics.append({"label": "LR chi-square", "value": lr_statistic})
     if lr_pvalue is not None:
         metrics.append({"label": "LR test p-value", "value": lr_pvalue})
-    if ci_low is not None and ci_high is not None:
+    if c_index is not None and ci_low is not None and ci_high is not None:
         level_pct = int(round(float(ci_level or 0.95) * 100.0))
+        ci_metric_label = (
+            f"Apparent C-index {level_pct}% CI"
+            if c_index_label == "Apparent C-index (training cohort)"
+            else f"{c_index_label} {level_pct}% CI"
+        )
         metrics.append(
             {
-                "label": f"Apparent C-index {level_pct}% CI",
+                "label": ci_metric_label,
                 "value": f"{float(ci_low):.3f} to {float(ci_high):.3f}",
             }
         )
@@ -2261,11 +2570,16 @@ def derive_group_column(
             upper_label=upper_label,
             permutation_iterations=permutation_iterations,
             random_seed=random_seed,
+            include_split_series=True,
         )
         split_point = result["optimal_cutpoint"]
         lbl_above = result["label_above_cutpoint"]
         lbl_below = result["label_below_cutpoint"]
-        labels = np.where(numeric_series > split_point, lbl_above, lbl_below)
+        split_series = result.get("split_series")
+        if isinstance(split_series, pd.Series):
+            labels = split_series.reindex(df.index).astype("string")
+        else:
+            labels = np.where(numeric_series > split_point, lbl_above, lbl_below)
         summary = {
             "method": method,
             "cutoff": split_point,
@@ -3395,6 +3709,9 @@ def compute_km_analysis(
             "comparison": f"{left_row['Group']} minus {right_row['Group']}",
             "estimate": _safe_float(estimate),
             "se": None,
+            "z_statistic": None,
+            "p_value": None,
+            "p_value_method": None,
             "ci_lower": None,
             "ci_upper": None,
             "horizon": _safe_float(display_horizon),
@@ -3411,8 +3728,21 @@ def compute_km_analysis(
             se = math.sqrt(max(variance, 0.0))
             z_value = float(ndtri(1.0 - alpha / 2.0))
             rmst_contrast["se"] = _safe_float(se)
+            if se > 0.0 and np.isfinite(se):
+                z_statistic = float(estimate / se)
+                rmst_contrast["z_statistic"] = _safe_float(z_statistic)
+                rmst_contrast["p_value"] = _safe_float(2.0 * stats.norm.sf(abs(z_statistic)))
+                rmst_contrast["p_value_method"] = "wald_normal"
+            elif estimate == 0.0:
+                rmst_contrast["z_statistic"] = 0.0
+                rmst_contrast["p_value"] = 1.0
+                rmst_contrast["p_value_method"] = "wald_normal"
             rmst_contrast["ci_lower"] = _safe_float(estimate - z_value * se)
             rmst_contrast["ci_upper"] = _safe_float(estimate + z_value * se)
+        if outcome_informed_group:
+            rmst_contrast["z_statistic"] = None
+            rmst_contrast["p_value"] = None
+            rmst_contrast["p_value_method"] = None
 
     scientific_summary = _km_scientific_summary(
         summary_rows=summary_rows,
@@ -3555,18 +3885,7 @@ def _build_cox_formula(time_column: str, covariates: Sequence[str], categorical_
 
 
 def _build_cox_strata_labels(frame: pd.DataFrame, strata_columns: Sequence[str]) -> np.ndarray | None:
-    normalized = [str(column) for column in strata_columns if str(column)]
-    if not normalized:
-        return None
-    strata_frame = frame[normalized].copy()
-    for column in normalized:
-        strata_frame[column] = strata_frame[column].astype("string")
-    if len(normalized) == 1:
-        return strata_frame[normalized[0]].astype(str).to_numpy(dtype=object)
-    return strata_frame.apply(
-        lambda row: " | ".join(f"{column}={row[column]}" for column in normalized),
-        axis=1,
-    ).to_numpy(dtype=object)
+    return _build_cox_strata_payload(frame, strata_columns)["codes"]
 
 
 _STAGE_ORDER = [
@@ -3681,10 +4000,14 @@ def _clean_term(term: str, reference_levels: dict[str, str]) -> tuple[str, str, 
     return term, term, None
 
 
-def _harrell_c_index(time_values: np.ndarray, event_values: np.ndarray, risk_score: np.ndarray) -> float | None:
+def _harrell_c_index_counts(
+    time_values: np.ndarray,
+    event_values: np.ndarray,
+    risk_score: np.ndarray,
+) -> tuple[float, float]:
     event_mask = event_values == 1
     if int(np.sum(event_mask)) == 0:
-        return None
+        return 0.0, 0.0
 
     order = np.argsort(time_values, kind="mergesort")
     unique_risks, inverse = np.unique(risk_score.astype(float), return_inverse=True)
@@ -3729,6 +4052,11 @@ def _harrell_c_index(time_values: np.ndarray, event_values: np.ndarray, risk_sco
             _fenwick_add(int(ranks[idx]), 1)
             later_count += 1
 
+    return concordant, comparable
+
+
+def _harrell_c_index(time_values: np.ndarray, event_values: np.ndarray, risk_score: np.ndarray) -> float | None:
+    concordant, comparable = _harrell_c_index_counts(time_values, event_values, risk_score)
     if comparable <= 0.0:
         return None
     return concordant / comparable
@@ -3820,18 +4148,22 @@ def compute_cox_analysis(
         frame[column] = pd.Categorical(string_values, categories=categories)
     formula = _build_cox_formula(time_column, covariates, categorical_covariates)
     status = frame[event_column].astype(int).to_numpy()
-    strata_labels = _build_cox_strata_labels(frame, strata_columns)
-    stability_snapshot = _cox_stability_snapshot(frame, event_column, covariates, categorical_covariates)
+    strata_payload = _build_cox_strata_payload(frame, strata_columns)
+    strata_codes = strata_payload["codes"]
+    strata_row_labels = strata_payload["row_labels"]
+    stability_snapshot = _cox_stability_snapshot(
+        frame,
+        event_column,
+        covariates,
+        categorical_covariates,
+        strata_columns=strata_columns,
+        strata_row_labels=strata_row_labels,
+    )
     constant_design_message = _cox_constant_design_message(stability_snapshot)
     if constant_design_message:
         raise ValueError(constant_design_message)
-    model = PHReg.from_formula(formula, data=frame, status=status, strata=strata_labels, ties="efron")
-    try:
-        results = model.fit(disp=False)
-    except MemoryError:
-        raise
-    except Exception as exc:
-        raise ValueError(_cox_fit_failure_message(exc, stability_snapshot)) from exc
+    model = PHReg.from_formula(formula, data=frame, status=status, strata=strata_codes, ties="efron")
+    results = _fit_cox_model(model, stability_snapshot)
 
     conf_int = np.asarray(results.conf_int(), dtype=float)
     param_vector = np.asarray(results.params, dtype=float)
@@ -3921,23 +4253,48 @@ def compute_cox_analysis(
                     "trend_residual": [_safe_float(value) for value in np.asarray(trend_y, dtype=float).tolist()],
                 }
             )
+    global_ph_screen = _cox_global_ph_screening(diagnostic_rows)
+    if global_ph_screen.get("p_value") is not None:
+        diagnostic_rows.append(
+            {
+                "Term": "Global PH screen (combined per-term p-values)",
+                "Schoenfeld rho": None,
+                "P value": _safe_float(global_ph_screen["p_value"]),
+                "_kind": "global",
+            }
+        )
+    martingale_note = None
+    martingale_candidate_terms = [
+        str(covariate)
+        for covariate in covariates
+        if covariate not in {str(value) for value in categorical_covariates}
+        and covariate in frame.columns
+        and pd.api.types.is_numeric_dtype(frame[covariate])
+    ]
     try:
         martingale_residuals = np.asarray(getattr(results, "martingale_residuals", np.array([])), dtype=float)
     except Exception:
         martingale_residuals = np.array([])
+        martingale_note = "Martingale residual screening was unavailable for this fit."
     martingale_plot_data = _cox_martingale_plot_data(
         frame,
         martingale_residuals,
         covariates,
         categorical_covariates,
     )
+    if not martingale_plot_data:
+        if martingale_note is None and martingale_candidate_terms:
+            martingale_note = "Martingale residual screening was unavailable for this fit."
+        elif martingale_note is None:
+            martingale_note = "No continuous covariates were eligible for martingale screening."
 
     n_obs = int(frame.shape[0])
     outcome_rows = int(preview_frame.shape[0])
     dropped_rows = int(outcome_rows - n_obs)
     n_events = int(frame[event_column].sum())
     k_params = len(results.params)
-    n_strata = int(pd.Index(strata_labels).nunique()) if strata_labels is not None else None
+    strata_snapshot = dict(stability_snapshot.get("strata_snapshot") or {})
+    n_strata = strata_snapshot.get("n_strata")
     llnull_raw = getattr(results, "llnull", None)
     if llnull_raw is None:
         try:
@@ -3962,16 +4319,23 @@ def compute_cox_analysis(
             )
     elif llnull_value is None:
         lr_note = "Overall likelihood-ratio test was not reportable because the null-model log-likelihood was unavailable."
-    c_index = _harrell_c_index(
-        frame[time_column].to_numpy(dtype=float),
-        frame[event_column].to_numpy(dtype=int),
-        risk_score.astype(float),
-    )
-    c_index_ci = _harrell_c_index_bootstrap_ci(
-        frame[time_column].to_numpy(dtype=float),
-        frame[event_column].to_numpy(dtype=int),
-        risk_score.astype(float),
-    )
+    c_index = None
+    c_index_ci = {"c_index_std": None, "c_index_ci_lower": None, "c_index_ci_upper": None}
+    c_index_label = "C-index not reported for stratified Cox"
+    evaluation_mode = "stratified_not_reported"
+    if not strata_columns:
+        c_index = _harrell_c_index(
+            frame[time_column].to_numpy(dtype=float),
+            frame[event_column].to_numpy(dtype=int),
+            risk_score.astype(float),
+        )
+        c_index_ci = _harrell_c_index_bootstrap_ci(
+            frame[time_column].to_numpy(dtype=float),
+            frame[event_column].to_numpy(dtype=int),
+            risk_score.astype(float),
+        )
+        c_index_label = "Apparent C-index (training cohort)"
+        evaluation_mode = "apparent"
 
     scientific_summary = _cox_scientific_summary(
         model_rows=model_rows,
@@ -3989,18 +4353,30 @@ def compute_cox_analysis(
             "lr_statistic": _safe_float(lr_statistic),
             "lr_pvalue": _safe_float(lr_pvalue),
             "lr_note": lr_note,
+            "global_ph_statistic": _safe_float(global_ph_screen.get("statistic")),
+            "global_ph_df": _safe_float(global_ph_screen.get("df")),
+            "global_ph_pvalue": _safe_float(global_ph_screen.get("p_value")),
+            "global_ph_terms_tested": int(global_ph_screen.get("terms_tested") or 0),
+            "global_ph_method": global_ph_screen.get("method"),
             "martingale_terms": [panel["term"] for panel in martingale_plot_data],
+            "martingale_note": martingale_note,
             "aic": _safe_float(-2 * llf_value + 2 * k_params),
             "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),
             "c_index_std": _safe_float(c_index_ci["c_index_std"]),
             "c_index_ci_lower": _safe_float(c_index_ci["c_index_ci_lower"]),
             "c_index_ci_upper": _safe_float(c_index_ci["c_index_ci_upper"]),
-            "c_index_ci_level": 0.95,
-            "c_index_ci_method": "bootstrap_percentile",
+            "c_index_ci_level": 0.95 if c_index is not None else None,
+            "c_index_ci_method": "bootstrap_percentile_fixed_score" if c_index is not None else None,
+            "c_index_label": c_index_label,
+            "evaluation_mode": evaluation_mode,
             "tie_method": "efron",
             "strata_columns": list(strata_columns),
             "n_strata": n_strata,
+            "zero_event_strata_count": int(strata_snapshot.get("zero_event_strata_count") or 0),
+            "sparse_event_strata_count": int(strata_snapshot.get("sparse_event_strata_count") or 0),
+            "high_cardinality_strata_columns": list(strata_snapshot.get("high_cardinality_columns") or []),
+            "high_cardinality_numeric_strata_columns": list(strata_snapshot.get("high_cardinality_numeric_columns") or []),
         },
         categorical_alerts=_cox_categorical_stability_alerts(frame, categorical_covariates),
     )
@@ -4024,7 +4400,13 @@ def compute_cox_analysis(
             "lr_statistic": _safe_float(lr_statistic),
             "lr_pvalue": _safe_float(lr_pvalue),
             "lr_note": lr_note,
+            "global_ph_statistic": _safe_float(global_ph_screen.get("statistic")),
+            "global_ph_df": _safe_float(global_ph_screen.get("df")),
+            "global_ph_pvalue": _safe_float(global_ph_screen.get("p_value")),
+            "global_ph_terms_tested": int(global_ph_screen.get("terms_tested") or 0),
+            "global_ph_method": global_ph_screen.get("method"),
             "martingale_terms": [panel["term"] for panel in martingale_plot_data],
+            "martingale_note": martingale_note,
             "aic": _safe_float(-2 * llf_value + 2 * k_params),
             "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
             "c_index": _safe_float(c_index),
@@ -4032,13 +4414,17 @@ def compute_cox_analysis(
             "c_index_std": _safe_float(c_index_ci["c_index_std"]),
             "c_index_ci_lower": _safe_float(c_index_ci["c_index_ci_lower"]),
             "c_index_ci_upper": _safe_float(c_index_ci["c_index_ci_upper"]),
-            "c_index_ci_level": 0.95,
-            "c_index_ci_method": "bootstrap_percentile",
-            "c_index_label": "Apparent C-index (training cohort)",
-            "evaluation_mode": "apparent",
+            "c_index_ci_level": 0.95 if c_index is not None else None,
+            "c_index_ci_method": "bootstrap_percentile_fixed_score" if c_index is not None else None,
+            "c_index_label": c_index_label,
+            "evaluation_mode": evaluation_mode,
             "tie_method": "efron",
             "strata_columns": list(strata_columns),
             "n_strata": n_strata,
+            "zero_event_strata_count": int(strata_snapshot.get("zero_event_strata_count") or 0),
+            "sparse_event_strata_count": int(strata_snapshot.get("sparse_event_strata_count") or 0),
+            "high_cardinality_strata_columns": list(strata_snapshot.get("high_cardinality_columns") or []),
+            "high_cardinality_numeric_strata_columns": list(strata_snapshot.get("high_cardinality_numeric_columns") or []),
         },
         "categorical_covariates": categorical_covariates,
         "strata_columns": list(strata_columns),
@@ -4079,8 +4465,17 @@ def preview_cox_analysis_inputs(
     complete_case = preview_frame.dropna(subset=list(dict.fromkeys([*covariates, *strata_columns]))).reset_index(drop=True)
     if complete_case.empty:
         raise ValueError("No rows remain after removing missing values for the Cox model.")
-    stability_snapshot = _cox_stability_snapshot(complete_case, event_column, covariates, categorical_covariates)
+    strata_payload = _build_cox_strata_payload(complete_case, strata_columns)
+    stability_snapshot = _cox_stability_snapshot(
+        complete_case,
+        event_column,
+        covariates,
+        categorical_covariates,
+        strata_columns=strata_columns,
+        strata_row_labels=strata_payload["row_labels"],
+    )
     missing_by_covariate.sort(key=lambda item: (-int(item["missing_rows"]), str(item["column"])))
+    strata_snapshot = dict(stability_snapshot.get("strata_snapshot") or {})
     return {
         "outcome_rows": int(preview_frame.shape[0]),
         "analyzable_rows": int(complete_case.shape[0]),
@@ -4094,6 +4489,9 @@ def preview_cox_analysis_inputs(
         "missing_by_covariate": missing_by_covariate,
         "stability_warnings": list(stability_snapshot["stability_warnings"]),
         "risky_levels": list(stability_snapshot["risky_levels"]),
+        "n_strata": strata_snapshot.get("n_strata"),
+        "zero_event_strata_count": int(strata_snapshot.get("zero_event_strata_count") or 0),
+        "sparse_event_strata_count": int(strata_snapshot.get("sparse_event_strata_count") or 0),
     }
 
 
