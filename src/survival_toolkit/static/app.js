@@ -165,13 +165,17 @@ const refs = {
   downloadKmSvgButton: document.getElementById("downloadKmSvgButton"),
   covariateChecklist: document.getElementById("covariateChecklist"),
   categoricalChecklist: document.getElementById("categoricalChecklist"),
+  strataChecklist: document.getElementById("strataChecklist"),
   covariateSearchInput: document.getElementById("covariateSearchInput"),
   categoricalSearchInput: document.getElementById("categoricalSearchInput"),
+  strataSearchInput: document.getElementById("strataSearchInput"),
   coxCovariateWarning: document.getElementById("coxCovariateWarning"),
   selectAllCoxCovariatesButton: document.getElementById("selectAllCoxCovariatesButton"),
   clearCoxCovariatesButton: document.getElementById("clearCoxCovariatesButton"),
   selectAllCoxCategoricalsButton: document.getElementById("selectAllCoxCategoricalsButton"),
   clearCoxCategoricalsButton: document.getElementById("clearCoxCategoricalsButton"),
+  selectAllCoxStrataButton: document.getElementById("selectAllCoxStrataButton"),
+  clearCoxStrataButton: document.getElementById("clearCoxStrataButton"),
   modelFeatureChecklist: document.getElementById("modelFeatureChecklist"),
   modelCategoricalChecklist: document.getElementById("modelCategoricalChecklist"),
   dlModelFeatureChecklist: document.getElementById("dlModelFeatureChecklist"),
@@ -592,7 +596,7 @@ function guidedGoalMeta(goal) {
 }
 
 function goalFeatureCount(goal) {
-  if (goal === "cox") return selectedCheckboxValues(refs.covariateChecklist).length;
+  if (goal === "cox") return currentCoxSelections().covariates.length;
   if (goal === "ml" || goal === "dl" || goal === "predictive") return selectedCheckboxValues(refs.modelFeatureChecklist).length;
   if (goal === "tables") return selectedCheckboxValues(refs.cohortVariableChecklist).length;
   return 0;
@@ -628,14 +632,16 @@ function sortedStrings(values = []) {
 
 function currentCoxSelections() {
   const covariates = selectedCheckboxValues(refs.covariateChecklist);
+  const strataColumns = selectedCheckboxValues(refs.strataChecklist);
   return {
     covariates,
     categoricalCovariates: selectedCheckboxValues(refs.categoricalChecklist).filter((value) => covariates.includes(value)),
+    strataColumns,
   };
 }
 
 function coxPreviewRequestFromCurrentState() {
-  const { covariates, categoricalCovariates } = currentCoxSelections();
+  const { covariates, categoricalCovariates, strataColumns } = currentCoxSelections();
   if (!covariates.length) return null;
   const base = currentBaseConfig();
   return {
@@ -645,6 +651,7 @@ function coxPreviewRequestFromCurrentState() {
     event_positive_value: base.event_positive_value,
     covariates,
     categorical_covariates: categoricalCovariates,
+    strata_columns: strataColumns,
   };
 }
 
@@ -657,6 +664,7 @@ function coxPreviewRequestKey(requestConfig) {
     event_positive_value: requestConfig.event_positive_value,
     covariates: sortedStrings(requestConfig.covariates || []),
     categorical_covariates: sortedStrings(requestConfig.categorical_covariates || []),
+    strata_columns: sortedStrings(requestConfig.strata_columns || []),
   });
 }
 
@@ -868,6 +876,7 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
       ...base,
       covariates: sortedStrings(requestConfig.covariates || []),
       categorical_covariates: sortedStrings(requestConfig.categorical_covariates || []),
+      strata_columns: sortedStrings(requestConfig.strata_columns || []),
     };
   }
 
@@ -966,11 +975,12 @@ function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) 
   }
 
   if (goal === "cox") {
-    const { covariates, categoricalCovariates } = currentCoxSelections();
+    const { covariates, categoricalCovariates, strataColumns } = currentCoxSelections();
     return normalizedRequestConfig(goal, {
       ...base,
       covariates,
       categorical_covariates: categoricalCovariates,
+      strata_columns: strataColumns,
     });
   }
 
@@ -1147,8 +1157,8 @@ function goalResultStatusState(goal, { currentLabel = "Ready", noResultLabel = "
 }
 
 function renderGuidedCoxSelectionSummary() {
-  const { covariates, categoricalCovariates } = currentCoxSelections();
-  if (!covariates.length) {
+  const { covariates, categoricalCovariates, strataColumns } = currentCoxSelections();
+  if (!covariates.length && !strataColumns.length) {
     return `
       <div class="guided-readiness">
         <strong>No covariates selected</strong>
@@ -1157,17 +1167,40 @@ function renderGuidedCoxSelectionSummary() {
     `;
   }
   const categoricalSet = new Set(categoricalCovariates);
-  const chips = covariates.map((value) => `
+  const covariateChips = covariates.map((value) => `
     <span class="dataset-preset-chip guided-selection-chip${categoricalSet.has(value) ? " is-categorical" : ""}">
       ${escapeHtml(value)}
       ${categoricalSet.has(value) ? '<span class="guided-selection-chip-tag">cat</span>' : ""}
     </span>
   `).join("");
+  const strataChips = strataColumns.map((value) => `
+    <span class="dataset-preset-chip guided-selection-chip">${escapeHtml(value)}<span class="guided-selection-chip-tag">strata</span></span>
+  `).join("");
+  const covariateBlock = covariates.length
+    ? `
+      <div class="guided-selection-block">
+        <strong>Selected covariates (${covariates.length})</strong>
+        <div class="dataset-preset-chips guided-selection-chips">${covariateChips}</div>
+      </div>
+    `
+    : `
+      <div class="guided-readiness">
+        <strong>No covariates selected</strong>
+        <span>Select at least one non-stratified covariate before running Cox PH.</span>
+      </div>
+    `;
+  const strataBlock = strataColumns.length
+    ? `
+      <div class="guided-selection-block">
+        <strong>Selected strata (${strataColumns.length})</strong>
+        <div class="dataset-preset-chips guided-selection-chips">${strataChips}</div>
+        <span class="guided-inline-note">Stratified variables use stratum-specific baseline hazards and are not reported with hazard ratios.</span>
+      </div>
+    `
+    : "";
   return `
-    <div class="guided-selection-block">
-      <strong>Selected covariates (${covariates.length})</strong>
-      <div class="dataset-preset-chips guided-selection-chips">${chips}</div>
-    </div>
+    ${covariateBlock}
+    ${strataBlock}
   `;
 }
 
@@ -1214,8 +1247,8 @@ function renderGuidedCoxPreviewSummary() {
     ? "NA"
     : formatValue(preview.events_per_parameter, { scientificLarge: false });
   const noteText = preview.dropped_rows
-    ? `Complete-case Cox will drop rows with missing selected covariates. Biggest drops: ${missingNotes.join(", ")}${preview.missing_by_covariate.length > 4 ? " ..." : ""}.`
-    : "All rows remain analyzable with the current covariate set.";
+    ? `Complete-case Cox will drop rows with missing selected Cox inputs. Biggest drops: ${missingNotes.join(", ")}${preview.missing_by_covariate.length > 4 ? " ..." : ""}.`
+    : "All rows remain analyzable with the current Cox input set.";
   return `
     <div class="guided-selection-block">
       <strong>Cox preview</strong>
@@ -1749,6 +1782,7 @@ function captureControlSnapshot() {
     signatureRandomSeed: refs.signatureRandomSeed?.value || "",
     covariates: selectedCheckboxValues(refs.covariateChecklist),
     categoricals: selectedCheckboxValues(refs.categoricalChecklist),
+    coxStrata: selectedCheckboxValues(refs.strataChecklist),
     coxPreviewKey: runtime.coxPreview?.key || "",
     modelFeatures: selectedCheckboxValues(refs.modelFeatureChecklist),
     modelCategoricals: selectedCheckboxValues(refs.modelCategoricalChecklist),
@@ -1886,6 +1920,7 @@ function applyControlSnapshot(snapshot) {
   updateDlModelControlVisibility();
   setCheckedValues(refs.covariateChecklist, snapshot.covariates || []);
   setCheckedValues(refs.categoricalChecklist, snapshot.categoricals || []);
+  setCheckedValues(refs.strataChecklist, snapshot.coxStrata || []);
   setCheckedValues(refs.modelFeatureChecklist, snapshot.modelFeatures || []);
   setCheckedValues(refs.modelCategoricalChecklist, snapshot.modelCategoricals || []);
   setCheckedValues(refs.dlModelFeatureChecklist, snapshot.modelFeatures || []);
@@ -2735,6 +2770,7 @@ function searchControlForChecklist(container) {
   if (!container) return null;
   if (container === refs.covariateChecklist) return refs.covariateSearchInput;
   if (container === refs.categoricalChecklist) return refs.categoricalSearchInput;
+  if (container === refs.strataChecklist) return refs.strataSearchInput;
   if (container === refs.cohortVariableChecklist) return refs.cohortVariableSearchInput;
   return null;
 }
@@ -2821,22 +2857,46 @@ function shouldAutoCategorizeCoxCovariate(columnName) {
   return meta.kind === "categorical" || meta.kind === "binary";
 }
 
-function syncCoxCovariateSelection({ preferredValue = null, notify = false, autoCategoricalValues = [] } = {}) {
+function syncCoxCovariateSelection({
+  preferredValue = null,
+  preferredScope = null,
+  notify = false,
+  autoCategoricalValues = [],
+} = {}) {
   if (!refs.covariateChecklist) return { kept: null, removed: [], changed: false };
   const selected = selectedCheckboxValues(refs.covariateChecklist);
-  const selectedStageVars = COX_STAGE_VARIABLE_PREFERENCE.filter((value) => selected.includes(value));
+  let normalizedStrata = refs.strataChecklist
+    ? selectedCheckboxValues(refs.strataChecklist)
+    : [];
+  let overlapRemovedFromCovariates = [];
+  let overlapRemovedFromStrata = [];
+  const overlappingSelections = normalizedStrata.filter((value) => selected.includes(value));
+  let normalizedCovariates = [...selected];
+
+  if (overlappingSelections.length) {
+    if (preferredScope === "covariate") {
+      overlapRemovedFromStrata = overlappingSelections;
+      normalizedStrata = normalizedStrata.filter((value) => !overlappingSelections.includes(value));
+    } else {
+      overlapRemovedFromCovariates = overlappingSelections;
+      normalizedCovariates = normalizedCovariates.filter((value) => !overlappingSelections.includes(value));
+    }
+  }
+
+  const selectedStageVars = COX_STAGE_VARIABLE_PREFERENCE.filter((value) => normalizedCovariates.includes(value));
   let kept = selectedStageVars[0] || null;
   let removed = [];
-  let normalizedCovariates = [...selected];
 
   if (selectedStageVars.length > 1) {
     kept = selectedStageVars.includes(preferredValue)
       ? preferredValue
       : COX_STAGE_VARIABLE_PREFERENCE.find((value) => selectedStageVars.includes(value)) || selectedStageVars[0];
     removed = selectedStageVars.filter((value) => value !== kept);
-    normalizedCovariates = selected.filter((value) => !removed.includes(value));
-    setCheckedValues(refs.covariateChecklist, normalizedCovariates);
+    normalizedCovariates = normalizedCovariates.filter((value) => !removed.includes(value));
   }
+
+  setCheckedValues(refs.covariateChecklist, normalizedCovariates);
+  if (refs.strataChecklist) setCheckedValues(refs.strataChecklist, normalizedStrata);
 
   if (refs.categoricalChecklist) {
     const normalizedCategoricals = selectedCheckboxValues(refs.categoricalChecklist).filter((value) => normalizedCovariates.includes(value));
@@ -2853,10 +2913,28 @@ function syncCoxCovariateSelection({ preferredValue = null, notify = false, auto
     setCheckedValues(refs.categoricalChecklist, normalizedCategoricals);
   }
   renderCoxCovariateWarning({ kept, removed });
-  if (notify && removed.length) {
-    showToast(`Cox can use only one stage variable. Keeping ${kept} and clearing ${removed.join(", ")}.`, "warning", 3600);
+  if (notify) {
+    if (overlapRemovedFromCovariates.length) {
+      showToast(
+        `Moved ${overlapRemovedFromCovariates.join(", ")} from Cox covariates to Strata. Stratified variables are not estimated as hazard ratios.`,
+        "info",
+        4200,
+      );
+    } else if (overlapRemovedFromStrata.length) {
+      showToast(
+        `Removed ${overlapRemovedFromStrata.join(", ")} from Strata and kept them as Cox covariates.`,
+        "info",
+        3600,
+      );
+    } else if (removed.length) {
+      showToast(`Cox can use only one stage variable. Keeping ${kept} and clearing ${removed.join(", ")}.`, "warning", 3600);
+    }
   }
-  return { kept, removed, changed: removed.length > 0 };
+  return {
+    kept,
+    removed,
+    changed: removed.length > 0 || overlapRemovedFromCovariates.length > 0 || overlapRemovedFromStrata.length > 0,
+  };
 }
 
 function formatValue(value, options = {}) {
@@ -2900,7 +2978,7 @@ function renderInsightBoard(container, summary, emptyMessage) {
   const sections = [
     strengths.length ? `<div class="insight-section"><h4>What was checked</h4><ul>${strengths.map(escapeListItem).join("")}</ul></div>` : "",
     cautions.length ? `<div class="insight-section"><h4>What to watch</h4><ul>${cautions.map(escapeListItem).join("")}</ul></div>` : "",
-    nextSteps.length ? `<div class="insight-section"><h4>Next step</h4><ul>${nextSteps.map(escapeListItem).join("")}</ul></div>` : "",
+    nextSteps.length ? `<div class="insight-section"><h4>Next steps</h4><ul>${nextSteps.map(escapeListItem).join("")}</ul></div>` : "",
   ].filter(Boolean).join("");
   container.innerHTML = `
     <article class="insight-card tone-${escapeHtml(tone)}">
@@ -3597,6 +3675,7 @@ function refreshVariableSelections() {
   const availableCovariates = modelFeatureCandidateColumns();
   const previousCovariates = selectedCheckboxValues(refs.covariateChecklist).filter((v) => availableCovariates.includes(v));
   const previousCategoricals = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => availableCovariates.includes(v));
+  const previousStrata = selectedCheckboxValues(refs.strataChecklist).filter((v) => availableCovariates.includes(v));
   const previousModelFeatures = selectedCheckboxValues(refs.modelFeatureChecklist).filter((v) => availableCovariates.includes(v));
   const previousModelCategoricals = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => availableCovariates.includes(v));
   const previousDlModelCategoricals = selectedCheckboxValues(refs.dlModelCategoricalChecklist).filter((v) => availableCovariates.includes(v));
@@ -3608,6 +3687,7 @@ function refreshVariableSelections() {
   const defaultModelFeatures = availableCovariates.slice(0, DEFAULT_MODEL_FEATURE_SELECTION_LIMIT);
   renderChecklist(refs.covariateChecklist, availableCovariates, previousCovariates.length ? previousCovariates : availableCovariates.slice(0, 4));
   renderChecklist(refs.categoricalChecklist, availableCovariates, previousCategoricals.length ? previousCategoricals : defaultCategoricals);
+  renderChecklist(refs.strataChecklist, availableCovariates, previousStrata);
   renderChecklist(refs.modelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
   renderChecklist(refs.modelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
   renderChecklist(refs.dlModelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
@@ -4050,6 +4130,7 @@ function renderContextCards({
   groupLabel,
   coxFeatures,
   coxCategoricals,
+  coxStrata,
   modelFeatures,
   modelCategoricals,
   tableVariables,
@@ -4094,6 +4175,7 @@ function renderContextCards({
       formatGroupChip(groupLabel),
       `Covariates: ${coxFeatures.length}`,
       `Categorical: ${coxCategoricals.length}`,
+      `Strata: ${coxStrata.length}`,
     ] : []);
   }
 
@@ -4253,8 +4335,9 @@ function syncAnalysisRunButtonAvailability() {
 function renderSharedFeatureSummary() {
   const hasDataset = Boolean(state.dataset);
   syncCoxCovariateSelection();
-  const coxFeatures = hasDataset ? selectedCheckboxValues(refs.covariateChecklist) : [];
-  const coxCategoricals = hasDataset ? selectedCheckboxValues(refs.categoricalChecklist).filter((value) => coxFeatures.includes(value)) : [];
+  const { covariates: coxFeatures, categoricalCovariates: coxCategoricals, strataColumns: coxStrata } = hasDataset
+    ? currentCoxSelections()
+    : { covariates: [], categoricalCovariates: [], strataColumns: [] };
   const features = hasDataset ? selectedCheckboxValues(refs.modelFeatureChecklist) : [];
   const mlCategoricals = hasDataset ? selectedCheckboxValues(refs.modelCategoricalChecklist).filter((value) => features.includes(value)) : [];
   const dlCategoricals = hasDataset ? selectedCheckboxValues(refs.dlModelCategoricalChecklist).filter((value) => features.includes(value)) : [];
@@ -4309,6 +4392,7 @@ function renderSharedFeatureSummary() {
     groupLabel,
     coxFeatures,
     coxCategoricals,
+    coxStrata,
     modelFeatures: features,
     modelCategoricals: mlCategoricals,
     tableVariables,
@@ -4957,6 +5041,7 @@ function applyDatasetPreset(mode) {
   } else {
     setCheckedValues(refs.covariateChecklist, covariates);
     setCheckedValues(refs.categoricalChecklist, categoricals);
+    setCheckedValues(refs.strataChecklist, []);
     syncCoxCovariateSelection();
   }
   setCheckedValues(refs.cohortVariableChecklist, tableVariables);
@@ -5825,13 +5910,12 @@ async function runSignatureSearch() {
 
 async function runCox() {
   const base = currentBaseConfig();
-  const covariates = selectedCheckboxValues(refs.covariateChecklist);
+  const { covariates, categoricalCovariates, strataColumns } = currentCoxSelections();
   if (!covariates.length) { showToast("Select at least one covariate for the Cox model.", "error"); return; }
-  const categoricalCovariates = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => covariates.includes(v));
   setShimmer(refs.coxResultsShell);
   const payload = await fetchJSON("/api/cox", {
     method: "POST",
-    body: JSON.stringify({ ...base, covariates, categorical_covariates: categoricalCovariates }),
+    body: JSON.stringify({ ...base, covariates, categorical_covariates: categoricalCovariates, strata_columns: strataColumns }),
   });
   state.cox = payload;
   const coxFigure = payload?.figure || { data: [], layout: {} };
@@ -7312,6 +7396,7 @@ function initListeners() {
     const input = event.target.closest('input[type="checkbox"]');
     syncCoxCovariateSelection({
       preferredValue: input?.checked ? input.value : null,
+      preferredScope: "covariate",
       notify: Boolean(input?.checked),
       autoCategoricalValues: input?.checked ? [input.value] : [],
     });
@@ -7332,10 +7417,25 @@ function initListeners() {
   refs.categoricalSearchInput?.addEventListener("input", () => {
     applyChecklistSearch(refs.categoricalChecklist);
   });
+  refs.strataChecklist?.addEventListener("change", (event) => {
+    const input = event.target.closest('input[type="checkbox"]');
+    syncCoxCovariateSelection({
+      preferredValue: input?.checked ? input.value : null,
+      preferredScope: "strata",
+      notify: Boolean(input?.checked),
+    });
+    renderSharedFeatureSummary();
+    syncGuidedCoxPanelMounts();
+    queueHistorySync();
+    scheduleCoxPreview();
+  });
+  refs.strataSearchInput?.addEventListener("input", () => {
+    applyChecklistSearch(refs.strataChecklist);
+  });
   refs.selectAllCoxCovariatesButton?.addEventListener("click", () => {
     const covariates = allCheckboxValues(refs.covariateChecklist, { visibleOnly: true });
     setCheckedValues(refs.covariateChecklist, covariates);
-    syncCoxCovariateSelection({ autoCategoricalValues: covariates });
+    syncCoxCovariateSelection({ preferredScope: "covariate", autoCategoricalValues: covariates });
     renderSharedFeatureSummary();
     syncGuidedCoxPanelMounts();
     queueHistorySync();
@@ -7371,6 +7471,25 @@ function initListeners() {
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Cleared Cox categorical flags.", "success", 2200);
+  });
+  refs.selectAllCoxStrataButton?.addEventListener("click", () => {
+    const strata = allCheckboxValues(refs.strataChecklist, { visibleOnly: true });
+    setCheckedValues(refs.strataChecklist, strata);
+    syncCoxCovariateSelection({ preferredScope: "strata" });
+    renderSharedFeatureSummary();
+    syncGuidedCoxPanelMounts();
+    queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
+    showToast("Selected visible Cox strata. Matching covariates were cleared automatically.", "success", 2400);
+  });
+  refs.clearCoxStrataButton?.addEventListener("click", () => {
+    setCheckedValues(refs.strataChecklist, []);
+    syncCoxCovariateSelection();
+    renderSharedFeatureSummary();
+    syncGuidedCoxPanelMounts();
+    queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
+    showToast("Cleared Cox strata.", "success", 2200);
   });
   refs.modelFeatureChecklist?.addEventListener("change", () => { syncModelFeatureMirrors(refs.modelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.modelCategoricalChecklist?.addEventListener("change", () => { syncModelCategoricalMirrors(refs.modelCategoricalChecklist); renderSharedFeatureSummary(); queueHistorySync(); });

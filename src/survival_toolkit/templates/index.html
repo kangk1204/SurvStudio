@@ -517,7 +517,7 @@
               <div class="dataset-preset-chips hidden" id="coxDependencyChips"></div>
             </div>
           </div>
-          <div class="checklist-grid">
+          <div class="checklist-grid checklist-grid-triple">
             <div class="selection-card">
               <div class="selection-card-head">
                 <h3>Model Covariates <button class="help-dot" type="button" data-tooltip="Variables to include in the model. Check the ones you want to test as potential risk factors.">?</button></h3>
@@ -540,6 +540,18 @@
               </div>
               <input class="selection-search" id="categoricalSearchInput" type="search" placeholder="Search categorical vars" aria-label="Search categorical covariates" />
               <div class="checklist" id="categoricalChecklist"></div>
+            </div>
+            <div class="selection-card">
+              <div class="selection-card-head">
+                <h3>Strata <button class="help-dot" type="button" data-tooltip="Use selected variables for stratified baseline hazards. Stratified variables are excluded from hazard-ratio estimation.">?</button></h3>
+                <div class="selection-card-actions">
+                  <button class="button ghost compact-btn" id="selectAllCoxStrataButton" type="button">Select all</button>
+                  <button class="button ghost compact-btn" id="clearCoxStrataButton" type="button">Clear</button>
+                </div>
+              </div>
+              <div class="selection-card-note">Selected strata variables are removed from Model Covariates and Treat as Categorical automatically.</div>
+              <input class="selection-search" id="strataSearchInput" type="search" placeholder="Search strata vars" aria-label="Search Cox strata variables" />
+              <div class="checklist" id="strataChecklist"></div>
             </div>
           </div>
           <div class="table-card full-width">

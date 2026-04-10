@@ -3337,6 +3337,10 @@ tr:nth-child(even) td {
   margin-bottom: 16px;
 }
 
+.checklist-grid-triple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .check-item {
   display: flex;
   align-items: center;
