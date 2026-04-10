@@ -125,6 +125,10 @@
       `;
     }
 
+    function showBenchmarkStarterAction() {
+      return !(runtime.uiMode === "guided" && runtime.guidedGoal === "predictive");
+    }
+
     function benchmarkExcludedRows(goal, { currentOnly = false } = {}) {
       const payload = benchmarkComparePayload(goal, { currentOnly });
       if (!payload) return [];
@@ -294,6 +298,11 @@
       const missingMetricCount = rawVisibleRows.filter((row) => row.numericCIndex === null).length;
       const nonComparableCount = rawVisibleRows.filter((row) => !row.comparableForRanking).length;
       const predictiveBusy = isScopeBusy("predictive") || isScopeBusy("ml") || isScopeBusy("dl");
+      const guidedPredictiveIncomplete = runtime.uiMode === "guided"
+        && runtime.guidedGoal === "predictive"
+        && !predictiveBusy
+        && currentFamilies.length > 0
+        && !hasUnifiedCoverage(currentFamilies);
       const pendingFamilies = ["ml", "dl"].filter((goal) => !currentFamilies.includes(goal));
       return {
         currentRows,
@@ -312,6 +321,7 @@
         missingMetricCount,
         nonComparableCount,
         predictiveBusy,
+        guidedPredictiveIncomplete,
         pendingFamilies,
         excludedByFamily: showingStaleBoard ? latestExcludedByFamily : excludedByFamily,
         showingStaleBoard,
@@ -324,6 +334,12 @@
         refs.benchmarkPlotNote.textContent = `Waiting on ${pendingFamilyText(board)} before charting the shared C-index board.`;
         refs.benchmarkComparisonPlot.classList.add("hidden");
         clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>The chart will publish after both model families finish.</span></div>');
+        return;
+      }
+      if (board.guidedPredictiveIncomplete) {
+        refs.benchmarkPlotNote.textContent = "The unified chart publishes only after both ML and DL comparison rows are current.";
+        refs.benchmarkComparisonPlot.classList.add("hidden");
+        clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>Compare All Models must finish with both model families before SurvStudio publishes the unified chart.</span></div>');
         return;
       }
       if (!board.visibleRows.length) {
@@ -540,6 +556,20 @@
         };
       }
 
+      if (board.guidedPredictiveIncomplete) {
+        return {
+          chips: [
+            `Families represented: ${board.visibleFamilies.length}`,
+            `ML rows ready: ${currentMlRows}`,
+            `DL rows ready: ${currentDlRows}`,
+          ],
+          status: "Incomplete compare",
+          title: "Unified predictive board is incomplete",
+          text: `Compare All Models has not produced current rows for both model families yet. ${coverageText} Keep waiting if a family is still running, or rerun Compare All Models before interpreting the predictive board.${cautionSuffix}`,
+          tone: "warning",
+        };
+      }
+
       if (!board.visibleRows.length) {
         return {
           chips: [
@@ -600,7 +630,7 @@
           <strong class="benchmark-family-title">${escapeHtml(summary.title)}</strong>
           <p class="benchmark-family-copy">${escapeHtml(summary.text)}</p>
           <div class="dataset-preset-chips">${summary.chips.map((label) => `<span class="dataset-preset-chip">${escapeHtml(label)}</span>`).join("")}</div>
-          ${!hasAnyResult ? benchmarkStarterActionMarkup() : ""}
+          ${!hasAnyResult && showBenchmarkStarterAction() ? benchmarkStarterActionMarkup() : ""}
         </article>
       `;
     }
@@ -612,16 +642,23 @@
         refs.benchmarkComparisonShell.innerHTML = '<div class="empty-state">Partial leaderboard rows stay hidden until both model families finish.</div>';
         return;
       }
+      if (board.guidedPredictiveIncomplete) {
+        refs.benchmarkTableNote.textContent = "The unified leaderboard publishes only after both ML and DL comparison rows are current.";
+        refs.benchmarkComparisonShell.innerHTML = '<div class="empty-state">Compare All Models must finish with both model families before SurvStudio publishes the unified leaderboard.</div>';
+        return;
+      }
       if (!board.visibleRows.length) {
         refs.benchmarkTableNote.textContent = board.staleFamilies.length
           ? "Stored compare rows are stale and hidden. Rerun Compare All Models to rebuild the shared board with the current settings."
           : "Run Compare All Models to build a shared leaderboard across classical ML and deep learning.";
-        refs.benchmarkComparisonShell.innerHTML = `
-          <div class="empty-state">
-            <span>Run Compare All Models to build a shared leaderboard across classical ML and deep learning.</span>
-            ${benchmarkStarterActionMarkup()}
-          </div>
-        `;
+        refs.benchmarkComparisonShell.innerHTML = showBenchmarkStarterAction()
+          ? `
+            <div class="empty-state">
+              <span>Run Compare All Models to build a shared leaderboard across classical ML and deep learning.</span>
+              ${benchmarkStarterActionMarkup()}
+            </div>
+          `
+          : '<div class="empty-state">Run Compare All Models to build a shared leaderboard across classical ML and deep learning.</div>';
         return;
       }
 
