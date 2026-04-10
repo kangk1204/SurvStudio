@@ -103,6 +103,10 @@ def test_index_uses_relative_static_assets() -> None:
     assert 'id="clearCoxCovariatesButton"' in response.text
     assert 'id="selectAllCoxCategoricalsButton"' in response.text
     assert 'id="clearCoxCategoricalsButton"' in response.text
+    assert 'id="strataChecklist"' in response.text
+    assert 'id="strataSearchInput"' in response.text
+    assert 'id="selectAllCoxStrataButton"' in response.text
+    assert 'id="clearCoxStrataButton"' in response.text
 
 
 def test_static_asset_version_changes_with_subsecond_asset_update(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -881,6 +885,20 @@ def test_cox_ui_wires_graphical_diagnostics_plot() -> None:
     assert "clearPlotShell(refs.coxMartingalePlot, '<div class=\"empty-state plot-empty\"><span>Martingale residual screening was unavailable for this fit.</span></div>');" in text
     assert 'refs.coxDiagnosticsShell.innerHTML = \'<div class="empty-state">Scaled Schoenfeld residual screening details will appear here.</div>\';' in text
     assert 'refs.coxMartingaleVariableSelect?.addEventListener("change", () => {' in text
+
+
+def test_cox_ui_includes_strata_controls_and_auto_exclusion_rules() -> None:
+    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    text = app_js.read_text()
+
+    assert 'strataChecklist: document.getElementById("strataChecklist"),' in text
+    assert 'strataSearchInput: document.getElementById("strataSearchInput"),' in text
+    assert 'selectAllCoxStrataButton: document.getElementById("selectAllCoxStrataButton"),' in text
+    assert 'clearCoxStrataButton: document.getElementById("clearCoxStrataButton"),' in text
+    assert 'const strataColumns = selectedCheckboxValues(refs.strataChecklist);' in text
+    assert 'preferredScope: "strata",' in text
+    assert 'Moved ${overlapRemovedFromCovariates.join(", ")} from Cox covariates to Strata.' in text
+    assert 'Removed ${overlapRemovedFromStrata.join(", ")} from Strata and kept them as Cox covariates.' in text
 
 
 def test_cox_ui_banner_includes_c_index_ci_when_available() -> None:
@@ -1911,6 +1929,7 @@ def test_cox_response_includes_request_config() -> None:
             "event_positive_value": 1,
             "covariates": ["age", "sex", "stage"],
             "categorical_covariates": ["sex", "stage"],
+            "strata_columns": ["treatment"],
         },
     )
 
@@ -1919,6 +1938,7 @@ def test_cox_response_includes_request_config() -> None:
     request_config = payload["request_config"]
     assert request_config["covariates"] == ["age", "sex", "stage"]
     assert request_config["categorical_covariates"] == ["sex", "stage"]
+    assert request_config["strata_columns"] == ["treatment"]
     assert "diagnostics_figure" in payload
     assert "data" in payload["diagnostics_figure"]
     assert "martingale_figure" in payload

@@ -1817,10 +1817,23 @@ def _cox_scientific_summary(
     lr_pvalue = _safe_float(model_stats.get("lr_pvalue"))
     lr_note = str(model_stats.get("lr_note") or "").strip()
     martingale_terms = [str(term) for term in model_stats.get("martingale_terms") or [] if term]
+    strata_columns = [str(column) for column in model_stats.get("strata_columns") or [] if column]
+    n_strata = _safe_float(model_stats.get("n_strata"))
     if epv is not None and epv < 10:
         cautions.append("Events per parameter is below 10, so coefficients may be unstable or overfit.")
         next_steps.append("Reduce model complexity or increase the event count before treating estimates as final.")
-    cautions.append("Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.")
+    if strata_columns:
+        cautions.append(
+            "Changing the covariate set or strata set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected inputs."
+        )
+        strengths.append(
+            f"Baseline hazards were stratified by {_summarize_labels(strata_columns, max_items=3)}, so those variables are not reported as hazard-ratio terms."
+        )
+        if n_strata is not None:
+            strengths.append(f"The fitted stratified Cox specification used {int(n_strata)} observed strata combination(s).")
+        cautions.append("Stratified variables are used only for stratum-specific baseline hazards and do not receive hazard-ratio estimates.")
+    else:
+        cautions.append("Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.")
     cautions.append("All Cox outputs assume non-informative (independent) censoring.")
     cautions.append(
         "Competing risks are not modeled in this Cox workflow, so cause-specific questions need dedicated competing-risk methods rather than treating other event types as ordinary censoring."
@@ -1956,6 +1969,10 @@ def _cox_scientific_summary(
         {"label": "EPV", "value": epv},
         {"label": "Apparent C-index (training cohort)", "value": c_index},
     ]
+    if strata_columns:
+        metrics.append({"label": "Strata variables", "value": len(strata_columns)})
+    if n_strata is not None:
+        metrics.append({"label": "Observed strata", "value": int(n_strata)})
     if lr_statistic is not None:
         metrics.append({"label": "LR chi-square", "value": lr_statistic})
     if lr_pvalue is not None:
@@ -3455,11 +3472,12 @@ def _prepare_cox_frame(
     event_column: str,
     covariates: Sequence[str],
     categorical_covariates: Sequence[str],
+    strata_columns: Sequence[str] | None = None,
     event_positive_value: Any = None,
     *,
     drop_missing_covariates: bool = True,
 ) -> pd.DataFrame:
-    required_columns = [*covariates]
+    required_columns = list(dict.fromkeys([*covariates, *(strata_columns or [])]))
     frame = _cohort_frame(
         df,
         time_column=time_column,
@@ -3499,6 +3517,31 @@ def _validate_cox_covariates(covariates: Sequence[str]) -> None:
             )
 
 
+def _normalize_cox_strata_columns(
+    strata_columns: Sequence[str] | None,
+    covariates: Sequence[str],
+    categorical_covariates: Sequence[str],
+) -> list[str]:
+    normalized = list(dict.fromkeys(str(column) for column in (strata_columns or []) if str(column).strip()))
+    covariate_set = {str(column) for column in covariates}
+    categorical_set = {str(column) for column in categorical_covariates}
+    overlap = sorted(set(normalized) & covariate_set)
+    if overlap:
+        joined = ", ".join(overlap)
+        raise ValueError(
+            f"Strata variables cannot also be included as Cox covariates ({joined}). "
+            "Use each variable only once in the Cox specification."
+        )
+    categorical_overlap = sorted(set(normalized) & categorical_set)
+    if categorical_overlap:
+        joined = ", ".join(categorical_overlap)
+        raise ValueError(
+            f"Strata variables cannot also be marked as categorical covariates ({joined}). "
+            "Use each variable only once in the Cox specification."
+        )
+    return normalized
+
+
 def _build_cox_formula(time_column: str, covariates: Sequence[str], categorical_covariates: Sequence[str]) -> str:
     if not covariates:
         raise ValueError("Select at least one covariate for the Cox PH model.")
@@ -3509,6 +3552,21 @@ def _build_cox_formula(time_column: str, covariates: Sequence[str], categorical_
         else:
             terms.append(quote_name(column))
     return f"{quote_name(time_column)} ~ {' + '.join(terms)}"
+
+
+def _build_cox_strata_labels(frame: pd.DataFrame, strata_columns: Sequence[str]) -> np.ndarray | None:
+    normalized = [str(column) for column in strata_columns if str(column)]
+    if not normalized:
+        return None
+    strata_frame = frame[normalized].copy()
+    for column in normalized:
+        strata_frame[column] = strata_frame[column].astype("string")
+    if len(normalized) == 1:
+        return strata_frame[normalized[0]].astype(str).to_numpy(dtype=object)
+    return strata_frame.apply(
+        lambda row: " | ".join(f"{column}={row[column]}" for column in normalized),
+        axis=1,
+    ).to_numpy(dtype=object)
 
 
 _STAGE_ORDER = [
@@ -3737,16 +3795,19 @@ def compute_cox_analysis(
     event_column: str,
     covariates: Sequence[str],
     categorical_covariates: Sequence[str] | None = None,
+    strata_columns: Sequence[str] | None = None,
     event_positive_value: Any = None,
 ) -> dict[str, Any]:
     _validate_cox_covariates(covariates)
     categorical_covariates = list(dict.fromkeys(categorical_covariates or _categorical_candidates(df, covariates)))
+    strata_columns = _normalize_cox_strata_columns(strata_columns, covariates, categorical_covariates)
     preview_frame = _prepare_cox_frame(
         df,
         time_column=time_column,
         event_column=event_column,
         covariates=covariates,
         categorical_covariates=categorical_covariates,
+        strata_columns=strata_columns,
         event_positive_value=event_positive_value,
         drop_missing_covariates=False,
     )
@@ -3759,11 +3820,12 @@ def compute_cox_analysis(
         frame[column] = pd.Categorical(string_values, categories=categories)
     formula = _build_cox_formula(time_column, covariates, categorical_covariates)
     status = frame[event_column].astype(int).to_numpy()
+    strata_labels = _build_cox_strata_labels(frame, strata_columns)
     stability_snapshot = _cox_stability_snapshot(frame, event_column, covariates, categorical_covariates)
     constant_design_message = _cox_constant_design_message(stability_snapshot)
     if constant_design_message:
         raise ValueError(constant_design_message)
-    model = PHReg.from_formula(formula, data=frame, status=status, ties="efron")
+    model = PHReg.from_formula(formula, data=frame, status=status, strata=strata_labels, ties="efron")
     try:
         results = model.fit(disp=False)
     except MemoryError:
@@ -3859,9 +3921,13 @@ def compute_cox_analysis(
                     "trend_residual": [_safe_float(value) for value in np.asarray(trend_y, dtype=float).tolist()],
                 }
             )
+    try:
+        martingale_residuals = np.asarray(getattr(results, "martingale_residuals", np.array([])), dtype=float)
+    except Exception:
+        martingale_residuals = np.array([])
     martingale_plot_data = _cox_martingale_plot_data(
         frame,
-        np.asarray(getattr(results, "martingale_residuals", np.array([])), dtype=float),
+        martingale_residuals,
         covariates,
         categorical_covariates,
     )
@@ -3871,6 +3937,7 @@ def compute_cox_analysis(
     dropped_rows = int(outcome_rows - n_obs)
     n_events = int(frame[event_column].sum())
     k_params = len(results.params)
+    n_strata = int(pd.Index(strata_labels).nunique()) if strata_labels is not None else None
     llnull_raw = getattr(results, "llnull", None)
     if llnull_raw is None:
         try:
@@ -3932,6 +3999,8 @@ def compute_cox_analysis(
             "c_index_ci_level": 0.95,
             "c_index_ci_method": "bootstrap_percentile",
             "tie_method": "efron",
+            "strata_columns": list(strata_columns),
+            "n_strata": n_strata,
         },
         categorical_alerts=_cox_categorical_stability_alerts(frame, categorical_covariates),
     )
@@ -3968,8 +4037,11 @@ def compute_cox_analysis(
             "c_index_label": "Apparent C-index (training cohort)",
             "evaluation_mode": "apparent",
             "tie_method": "efron",
+            "strata_columns": list(strata_columns),
+            "n_strata": n_strata,
         },
         "categorical_covariates": categorical_covariates,
+        "strata_columns": list(strata_columns),
         "scientific_summary": scientific_summary,
     }
 
@@ -3981,27 +4053,30 @@ def preview_cox_analysis_inputs(
     event_column: str,
     covariates: Sequence[str],
     categorical_covariates: Sequence[str] | None = None,
+    strata_columns: Sequence[str] | None = None,
     event_positive_value: Any = None,
 ) -> dict[str, Any]:
     if not covariates:
         raise ValueError("Select at least one covariate for the Cox model.")
     _validate_cox_covariates(covariates)
     categorical_covariates = list(dict.fromkeys(categorical_covariates or _categorical_candidates(df, covariates)))
+    strata_columns = _normalize_cox_strata_columns(strata_columns, covariates, categorical_covariates)
     preview_frame = _prepare_cox_frame(
         df,
         time_column=time_column,
         event_column=event_column,
         covariates=covariates,
         categorical_covariates=categorical_covariates,
+        strata_columns=strata_columns,
         event_positive_value=event_positive_value,
         drop_missing_covariates=False,
     )
     missing_by_covariate: list[dict[str, Any]] = []
-    for column in covariates:
+    for column in list(dict.fromkeys([*covariates, *strata_columns])):
         missing_count = int(preview_frame[column].isna().sum())
         if missing_count > 0:
             missing_by_covariate.append({"column": column, "missing_rows": missing_count})
-    complete_case = preview_frame.dropna(subset=list(covariates)).reset_index(drop=True)
+    complete_case = preview_frame.dropna(subset=list(dict.fromkeys([*covariates, *strata_columns]))).reset_index(drop=True)
     if complete_case.empty:
         raise ValueError("No rows remain after removing missing values for the Cox model.")
     stability_snapshot = _cox_stability_snapshot(complete_case, event_column, covariates, categorical_covariates)
@@ -4015,6 +4090,7 @@ def preview_cox_analysis_inputs(
         "events_per_parameter": stability_snapshot["events_per_parameter"],
         "covariates": list(covariates),
         "categorical_covariates": list(categorical_covariates),
+        "strata_columns": list(strata_columns),
         "missing_by_covariate": missing_by_covariate,
         "stability_warnings": list(stability_snapshot["stability_warnings"]),
         "risky_levels": list(stability_snapshot["risky_levels"]),

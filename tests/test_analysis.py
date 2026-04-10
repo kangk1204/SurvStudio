@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -1581,6 +1582,113 @@ def test_preview_cox_analysis_inputs_warns_on_single_level_categorical_covariate
         "stage_group has only one observed level" in warning
         for warning in preview["stability_warnings"]
     )
+
+
+def test_preview_cox_analysis_inputs_counts_missing_strata_rows() -> None:
+    df = pd.DataFrame(
+        {
+            "os_months": [10, 12, 14, 16, 18, 20],
+            "os_event": [1, 0, 1, 0, 1, 0],
+            "age": [50, 52, 54, 56, 58, 60],
+            "stage_group": ["Stage I", None, "Stage II", None, "Stage I", "Stage II"],
+        }
+    )
+
+    preview = preview_cox_analysis_inputs(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age"],
+        categorical_covariates=[],
+        strata_columns=["stage_group"],
+    )
+
+    assert preview["dropped_rows"] == 2
+    assert preview["strata_columns"] == ["stage_group"]
+    assert {"column": "stage_group", "missing_rows": 2} in preview["missing_by_covariate"]
+
+
+def test_cox_analysis_passes_strata_to_phreg_and_reports_stratification(monkeypatch) -> None:
+    import survival_toolkit.analysis as analysis
+
+    df = make_example_dataset(seed=31, n_patients=4)
+    frame = pd.DataFrame(
+        {
+            "os_months": [1.0, 2.0, 3.0, 4.0],
+            "os_event": [1, 1, 0, 0],
+            "age": [50.0, 55.0, 60.0, 65.0],
+            "sex": ["Female", "Female", "Male", "Male"],
+            "stage_group": ["Stage I", "Stage II", "Stage I", "Stage II"],
+        }
+    )
+    captured: dict[str, Any] = {}
+
+    class _FakeResults:
+        params = np.asarray([0.2], dtype=float)
+        bse = np.asarray([0.1], dtype=float)
+        tvalues = np.asarray([2.0], dtype=float)
+        pvalues = np.asarray([0.04], dtype=float)
+        schoenfeld_residuals = np.asarray([[1.0], [2.0], [3.0], [4.0]], dtype=float)
+        martingale_residuals = np.asarray([-0.2, -0.1, 0.1, 0.2], dtype=float)
+        llf = -4.0
+        llnull = -7.0
+        model = type("_FakeModelMeta", (), {"exog_names": ['Q("age")'], "exog": np.ones((4, 1), dtype=float)})()
+
+        def conf_int(self):
+            return np.asarray([[0.1, 0.3]], dtype=float)
+
+        def cov_params(self):
+            return np.asarray([[2.0]], dtype=float)
+
+    class _FakePHReg:
+        @staticmethod
+        def from_formula(*args, **kwargs):
+            captured["formula"] = args[0]
+            captured["strata"] = list(kwargs["strata"]) if kwargs.get("strata") is not None else []
+
+            class _FakeFit:
+                @staticmethod
+                def fit(disp=False):
+                    return _FakeResults()
+
+            return _FakeFit()
+
+    monkeypatch.setattr(analysis, "_prepare_cox_frame", lambda *args, **kwargs: frame.copy())
+    monkeypatch.setattr(analysis, "PHReg", _FakePHReg)
+    monkeypatch.setattr(analysis, "_reference_levels", lambda *args, **kwargs: {})
+    monkeypatch.setattr(analysis, "_harrell_c_index", lambda *args, **kwargs: 0.62)
+    monkeypatch.setattr(
+        analysis,
+        "_harrell_c_index_bootstrap_ci",
+        lambda *args, **kwargs: {"c_index_std": 0.03, "c_index_ci_lower": 0.57, "c_index_ci_upper": 0.67},
+    )
+
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age"],
+        strata_columns=["sex", "stage_group"],
+    )
+
+    assert captured["formula"] == 'Q("os_months") ~ Q("age")'
+    assert captured["strata"] == [
+        "sex=Female | stage_group=Stage I",
+        "sex=Female | stage_group=Stage II",
+        "sex=Male | stage_group=Stage I",
+        "sex=Male | stage_group=Stage II",
+    ]
+    assert result["strata_columns"] == ["sex", "stage_group"]
+    assert result["model_stats"]["n_strata"] == 4
+    assert any(
+        "baseline hazards were stratified by" in strength.lower()
+        and "sex" in strength.lower()
+        and "stage_group" in strength.lower()
+        for strength in result["scientific_summary"]["strengths"]
+    )
+    assert any("do not receive hazard-ratio estimates" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 
 def test_cox_analysis_lists_all_current_ph_alert_terms_in_summary_caution() -> None:

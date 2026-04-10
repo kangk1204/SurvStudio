@@ -326,6 +326,7 @@ class CoxRequest(_EventPositiveValueRequestModel):
     event_positive_value: Any = 1
     covariates: list[str] = Field(max_length=200)
     categorical_covariates: list[str] = Field(default_factory=list, max_length=200)
+    strata_columns: list[str] = Field(default_factory=list, max_length=200)
 
 
 class CohortTableRequest(_DatasetRequestModel):
@@ -1711,9 +1712,14 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
     try:
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
+        selected_cox_inputs = [
+            *request_model.covariates,
+            *request_model.categorical_covariates,
+            *request_model.strata_columns,
+        ]
         _reject_survival_outcome_feature_columns(
             stored,
-            [*request_model.covariates, *request_model.categorical_covariates],
+            selected_cox_inputs,
             time_column=request_model.time_column,
             event_column=request_model.event_column,
             event_positive_value=request_model.event_positive_value,
@@ -1721,7 +1727,7 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
         )
         _reject_outcome_informed_columns(
             stored,
-            [*request_model.covariates, *request_model.categorical_covariates],
+            selected_cox_inputs,
             context="Cox covariates",
         )
 
@@ -1739,6 +1745,7 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
                 event_positive_value=request_model.event_positive_value,
                 covariates=request_model.covariates,
                 categorical_covariates=request_model.categorical_covariates,
+                strata_columns=request_model.strata_columns,
             )
             figure = build_cox_forest_figure(analysis)
             diagnostics_figure = build_cox_diagnostics_figure(analysis)
@@ -1761,9 +1768,14 @@ async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
     try:
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
+        selected_cox_inputs = [
+            *request_model.covariates,
+            *request_model.categorical_covariates,
+            *request_model.strata_columns,
+        ]
         _reject_survival_outcome_feature_columns(
             stored,
-            [*request_model.covariates, *request_model.categorical_covariates],
+            selected_cox_inputs,
             time_column=request_model.time_column,
             event_column=request_model.event_column,
             event_positive_value=request_model.event_positive_value,
@@ -1771,7 +1783,7 @@ async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
         )
         _reject_outcome_informed_columns(
             stored,
-            [*request_model.covariates, *request_model.categorical_covariates],
+            selected_cox_inputs,
             context="Cox covariates",
         )
 
@@ -1783,6 +1795,7 @@ async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
                 event_positive_value=request_model.event_positive_value,
                 covariates=request_model.covariates,
                 categorical_covariates=request_model.categorical_covariates,
+                strata_columns=request_model.strata_columns,
             )
             return {"preview": preview, "request_config": request_config}
 
