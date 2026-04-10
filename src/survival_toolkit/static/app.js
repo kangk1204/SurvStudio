@@ -340,6 +340,10 @@ assertRequiredRefs();
 
 const DEFAULT_MODEL_FEATURE_SELECTION_LIMIT = 20;
 const AUTO_CATEGORICAL_UNIQUE_THRESHOLD = 6;
+const GUIDED_FEATURESET_WARNING_COUNT = 100;
+const GUIDED_FEATURESET_WARNING_WIDTH = 256;
+const GUIDED_FEATURESET_HIGH_COUNT = 250;
+const GUIDED_FEATURESET_HIGH_WIDTH = 500;
 const COX_STAGE_VARIABLE_PREFERENCE = ["stage_group", "pathologic_stage", "stage"];
 const DATASET_PRESETS = Object.freeze({
   gbsg2: {
@@ -842,6 +846,109 @@ function currentSharedModelSelections(goal = "ml") {
     categoricalFeatures: selectedCheckboxValues(categoricalChecklist)
       .filter((value) => features.includes(value)),
   };
+}
+
+function estimateEncodedFeatureWidth(features = [], categoricalFeatures = []) {
+  if (!state.dataset) return 0;
+  const categoricalSet = new Set(categoricalFeatures);
+  const datasetColumns = new Map((state.dataset.columns || []).map((column) => [column.name, column]));
+  return features.reduce((width, feature) => {
+    const column = datasetColumns.get(feature);
+    if (!column) return width;
+    const inferredCategorical = categoricalSet.has(feature) || ["categorical", "datetime"].includes(String(column.kind || ""));
+    if (!inferredCategorical) return width + 1;
+    const uniqueCount = Number(column.n_unique);
+    const resolvedUniqueCount = Number.isFinite(uniqueCount) ? Math.max(uniqueCount, 0) : 0;
+    return width + Math.max(resolvedUniqueCount - 1, 0) + 2;
+  }, 0);
+}
+
+function guidedPredictiveFeatureSummaryState() {
+  if (!state.dataset) return null;
+  const { features, categoricalFeatures: mlCategoricalFeatures } = currentSharedModelSelections("ml");
+  const { categoricalFeatures: dlCategoricalFeatures } = currentSharedModelSelections("dl");
+  const eligibleCount = modelFeatureCandidateColumns().length;
+  const featureCount = features.length;
+  const mlEncodedWidth = estimateEncodedFeatureWidth(features, mlCategoricalFeatures);
+  const dlEncodedWidth = estimateEncodedFeatureWidth(features, dlCategoricalFeatures);
+  const widestEncodedWidth = Math.max(mlEncodedWidth, dlEncodedWidth);
+
+  let readiness = null;
+  if (!featureCount) {
+    readiness = {
+      tone: "warning",
+      title: "No shared features selected",
+      text: "Select at least one shared ML/DL feature before running Compare All or a single predictive model.",
+    };
+  } else if (featureCount === DEFAULT_MODEL_FEATURE_SELECTION_LIMIT && eligibleCount > featureCount) {
+    readiness = {
+      tone: "ready",
+      title: "Compact starter set selected",
+      text: `Fresh cohorts start with up to 20 shared features for a faster first run. This cohort has ${formatValue(eligibleCount)} eligible features, so review the list if you expected a wider benchmark.`,
+    };
+  } else if (featureCount >= GUIDED_FEATURESET_HIGH_COUNT || widestEncodedWidth >= GUIDED_FEATURESET_HIGH_WIDTH) {
+    readiness = {
+      tone: "warning",
+      title: "Large feature set selected",
+      text: "Compare All can slow down substantially with a wide shared feature list. Review the selection before benchmarking; runtime and instability usually become the limiting factors before raw memory on moderate cohorts.",
+    };
+  } else if (featureCount >= GUIDED_FEATURESET_WARNING_COUNT || widestEncodedWidth >= GUIDED_FEATURESET_WARNING_WIDTH) {
+    readiness = {
+      tone: "warning",
+      title: "Expanded feature set selected",
+      text: "Expect slower Compare All runs with this many shared inputs. Review the list if you only need a first-pass benchmark.",
+    };
+  }
+
+  return {
+    featureCount,
+    eligibleCount,
+    mlCategoricalCount: mlCategoricalFeatures.length,
+    dlCategoricalCount: dlCategoricalFeatures.length,
+    mlEncodedWidth,
+    dlEncodedWidth,
+    featurePreview: summarizeFeatureNames(features, 5),
+    readiness,
+  };
+}
+
+function renderGuidedPredictiveFeatureSummary(goal = runtime.guidedGoal) {
+  if (!["ml", "dl", "predictive"].includes(goal) || !state.dataset) return "";
+  const summary = guidedPredictiveFeatureSummaryState();
+  if (!summary) return "";
+  return `
+    <div class="guided-selection-block">
+      <strong>Shared model inputs</strong>
+      <div class="guided-quick-grid guided-quick-grid-compact">
+        <div class="guided-quick-item">
+          <strong>Selected raw features</strong>
+          <span>${escapeHtml(`${formatValue(summary.featureCount)} / ${formatValue(summary.eligibleCount)} eligible`)}</span>
+        </div>
+        <div class="guided-quick-item">
+          <strong>ML encoded width</strong>
+          <span>${escapeHtml(`${formatValue(summary.mlEncodedWidth)} cols`)}</span>
+        </div>
+        <div class="guided-quick-item">
+          <strong>DL encoded width</strong>
+          <span>${escapeHtml(`${formatValue(summary.dlEncodedWidth)} cols`)}</span>
+        </div>
+        <div class="guided-quick-item">
+          <strong>Categorical flags</strong>
+          <span>${escapeHtml(`ML ${formatValue(summary.mlCategoricalCount)} · DL ${formatValue(summary.dlCategoricalCount)}`)}</span>
+        </div>
+      </div>
+      <span class="guided-inline-note">Compare All uses the shared raw feature list. ML and DL keep their own categorical flags on top of the same raw inputs.</span>
+      <span class="guided-inline-note">Preview: ${escapeHtml(summary.featurePreview)}</span>
+    </div>
+    ${summary.readiness
+      ? `
+        <div class="guided-readiness${summary.readiness.tone === "ready" ? " ready" : ""}">
+          <strong>${escapeHtml(summary.readiness.title)}</strong>
+          <span>${escapeHtml(summary.readiness.text)}</span>
+        </div>
+      `
+      : ""}
+  `;
 }
 
 function normalizeBaseRequestConfig(requestConfig) {
@@ -5058,6 +5165,7 @@ function guidedPanelMarkup(step) {
           : (predictivePrimaryBusy ? "The selected model family is already running. Wait for it to finish before testing this model again." : "")
       )
       : (scopeBusy ? configureCopy.busyText : "");
+    const guidedPredictiveFeatureSummary = renderGuidedPredictiveFeatureSummary(goal);
     return `
       <div class="guided-panel-grid guided-panel-grid-compact">
         <article class="guided-card guided-card-focus">
@@ -5070,7 +5178,11 @@ function guidedPanelMarkup(step) {
             <button class="button primary compact-btn guided-run-choice${primaryBusy ? " is-loading" : ""}" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${primaryDisabled ? " disabled" : ""} aria-busy="${primaryBusy ? "true" : "false"}">${escapeHtml(configureCopy.runLabel)}</button>
           </div>
           ${mlSingleModelBlockedText ? `<div class="guided-run-status" role="status">${escapeHtml(mlSingleModelBlockedText)}</div>` : ""}
+          ${guidedPredictiveFeatureSummary}
           <div class="guided-actions guided-actions-secondary">
+            ${["ml", "dl", "predictive"].includes(goal)
+              ? '<button class="button ghost compact-btn" type="button" data-guided-action="review-shared-features">Review shared features</button>'
+              : ""}
             <button class="button ghost compact-btn" type="button" data-guided-action="previous-step">Back</button>
           </div>
           ${coxSelectionSummary}
@@ -7309,6 +7421,13 @@ function handleGuidedPanelAction(target) {
   if (action === "open-ml") { focusTabWorkspace("ml", { historyMode: "push" }); return; }
   if (action === "open-dl") { focusTabWorkspace("dl", { historyMode: "push" }); return; }
   if (action === "open-tables") { focusTabWorkspace("tables", { historyMode: "push" }); return; }
+  if (action === "review-shared-features") {
+    const reviewTab = runtime.guidedGoal === "dl"
+      ? "dl"
+      : (runtime.guidedGoal === "ml" ? "ml" : predictiveFamilyGoal());
+    focusModelFeatureEditor(reviewTab);
+    return;
+  }
   if (action === "run-km") { void runGuidedGoal("km", target, runGuidedKaplanMeier); return; }
   if (action === "run-cox") { void runGuidedGoal("cox", target, runCox); return; }
   if (action === "run-ml") { void runGuidedGoal("ml", target, runMlModel, { resultMode: "single" }); return; }
