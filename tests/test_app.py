@@ -4128,6 +4128,42 @@ def test_guided_choose_analysis_uses_single_predictive_card() -> None:
     assert 'data-guided-action="choose-goal" data-goal="${entry}"' in app_js
 
 
+def test_guided_predictive_configure_panel_surfaces_shared_feature_summary() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function estimateEncodedFeatureWidth(features = [], categoricalFeatures = []) {" in app_js
+    assert "function guidedPredictiveFeatureSummaryState() {" in app_js
+    assert "function renderGuidedPredictiveFeatureSummary(goal = runtime.guidedGoal) {" in app_js
+    assert "Fresh cohorts start with up to 20 shared features for a faster first run." in app_js
+    assert "Compare All can slow down substantially with a wide shared feature list." in app_js
+    assert "Selected raw features" in app_js
+    assert "ML encoded width" in app_js
+    assert "DL encoded width" in app_js
+    assert "Compare All uses the shared raw feature list. ML and DL keep their own categorical flags on top of the same raw inputs." in app_js
+    assert 'data-guided-action="review-shared-features"' in app_js
+
+
+def test_guided_review_shared_features_action_opens_model_editor() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'if (action === "review-shared-features") {' in app_js
+    assert 'const reviewTab = runtime.guidedGoal === "dl"' in app_js
+    assert ': (runtime.guidedGoal === "ml" ? "ml" : predictiveFamilyGoal());' in app_js
+    assert "focusModelFeatureEditor(reviewTab);" in app_js
+
+
 def test_frontend_download_helpers_accept_fallback_mime_type() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
