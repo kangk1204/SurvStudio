@@ -456,10 +456,12 @@ def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
     assert 'id="benchmarkComparisonShell"' in html
     assert 'id="benchmarkWorkbench"' in html
     assert 'id="benchmarkWorkbenchCaption"' in html
+    assert 'id="runPredictiveWorkbenchButton"' in html
     assert 'id="closePredictiveWorkbenchButton"' in html
     assert 'runPredictiveCompareAllButton: document.getElementById("runPredictiveCompareAllButton")' in text
     assert 'predictiveModelSelector: document.getElementById("predictiveModelSelector")' in text
     assert 'runPredictiveSelectedButton: document.getElementById("runPredictiveSelectedButton")' in text
+    assert 'runPredictiveWorkbenchButton: document.getElementById("runPredictiveWorkbenchButton")' in text
     assert 'benchmarkWorkbench: document.getElementById("benchmarkWorkbench")' in text
     assert 'benchmarkWorkbenchCaption: document.getElementById("benchmarkWorkbenchCaption")' in text
     assert 'closePredictiveWorkbenchButton: document.getElementById("closePredictiveWorkbenchButton")' in text
@@ -496,6 +498,7 @@ def test_frontend_persists_predictive_workbench_visibility_in_history_state() ->
     assert "runtime.workbenchRevealed = Boolean(historyState?.workbenchRevealed);" in text
     assert 'benchmarkActionCard: document.getElementById("benchmarkActionCard")' in text
     assert 'runPredictiveCompareAllButton: document.getElementById("runPredictiveCompareAllButton")' in text
+    assert 'runPredictiveWorkbenchButton: document.getElementById("runPredictiveWorkbenchButton")' in text
     assert 'closePredictiveWorkbenchButton: document.getElementById("closePredictiveWorkbenchButton")' in text
     assert "function syncBenchmarkWorkbenchVisibility()" in text
     assert "function closePredictiveWorkbench()" in text
@@ -508,10 +511,20 @@ def test_frontend_persists_predictive_workbench_visibility_in_history_state() ->
     assert 'refs.runMlButton?.classList.toggle("hidden", guidedPredictiveWorkbench);' in text
     assert 'refs.runDlButton?.classList.toggle("hidden", guidedPredictiveWorkbench);' in text
     assert 'refs.predictiveModelSelector?.closest(".predictive-model-picker")?.classList.toggle("hidden", !workbenchOpen);' in text
+    assert 'refs.runPredictiveSelectedButton?.classList.add("hidden");' in text
+    assert 'const guidedPredictiveFeatureReview = guidedPredictiveWorkbench && runtime.predictiveWorkbenchIntent === "features";' in text
+    assert 'refs.runPredictiveWorkbenchButton?.classList.toggle("hidden", !workbenchOpen || guidedPredictiveFeatureReview);' in text
     assert "runtime.workbenchRevealed = false;" in text
-    assert 'title: runtime.workbenchRevealed ? "Train a model" : "Run ML/DL Models"' in text
-    assert 'runAction: runtime.workbenchRevealed ? "run-predictive-selected" : "run-predictive-compare-all"' in text
-    assert '{ label: "Run again", action: "run-predictive-selected", tone: "primary" }' in text
+    assert 'predictiveWorkbenchIntent: runtime.predictiveWorkbenchIntent,' in shell_text
+    assert 'runtime.predictiveWorkbenchIntent = normalizedPredictiveWorkbenchIntent(historyState?.predictiveWorkbenchIntent)' in text
+    assert 'runtime.predictiveWorkbenchIntent = null;' in text
+    assert 'title: predictiveWorkbenchTrainMode ? "Train a model" : "Run ML/DL Models"' in text
+    assert 'runAction: predictiveWorkbenchTrainMode ? "run-predictive-selected" : "run-predictive-compare-all"' in text
+    assert "const selectedPredictiveModel = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey());" in text
+    assert 'runLabel: predictiveWorkbenchTrainMode ? `Train ${selectedPredictiveModel.label}` : "Compare all models"' in text
+    assert '{ label: "Compare all models", action: "run-predictive-compare-all", tone: "primary" },' in text
+    assert '{ label: "Review shared features", action: "review-shared-features", tone: "ghost" },' in text
+    assert '{ label: "Back", action: "previous-step", tone: "ghost" },' in text
 
 
 def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None:
@@ -4091,9 +4104,11 @@ def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
     assert 'secondaryAction: "run-dl-compare"' in app_js
     assert 'secondaryLabel: "Compare all ML models"' in app_js
     assert 'secondaryLabel: "Compare all DL models"' in app_js
-    assert 'const workbenchSingleModelMode = runtime.workbenchRevealed && ["predictive", "ml", "dl"].includes(goal);' in app_js
-    assert 'runAction: runtime.workbenchRevealed ? "run-predictive-selected" : "run-predictive-compare-all"' in app_js
-    assert 'runLabel: runtime.workbenchRevealed ? "Run Analysis" : "Compare all models"' in app_js
+    assert 'const predictiveWorkbenchTrainMode = goal === "predictive" && runtime.workbenchRevealed && runtime.predictiveWorkbenchIntent === "train";' in app_js
+    assert 'const predictiveWorkbenchFeatureMode = goal === "predictive" && runtime.workbenchRevealed && runtime.predictiveWorkbenchIntent === "features";' in app_js
+    assert 'const workbenchSingleModelMode = goal === "predictive"' in app_js
+    assert 'runAction: predictiveWorkbenchTrainMode ? "run-predictive-selected" : "run-predictive-compare-all"' in app_js
+    assert 'runLabel: predictiveWorkbenchTrainMode ? `Train ${selectedPredictiveModel.label}` : "Compare all models"' in app_js
     assert "if (workbenchSingleModelMode) {" in app_js
     assert "configureCopy.secondaryAction = null;" in app_js
     assert "configureCopy.secondaryLabel = null;" in app_js
@@ -4125,8 +4140,8 @@ def test_guided_choose_analysis_uses_single_predictive_card() -> None:
     assert 'const GUIDED_GOALS = ["km", "cox", "predictive", "tables", "ml", "dl"];' in app_js
     assert 'predictive: "ML/DL Models"' in app_js
     assert '["km", "cox", "tables", "predictive"].map((entry) => {' in app_js
-    assert 'title: runtime.workbenchRevealed ? "Train a model" : "Run ML/DL Models"' in app_js
-    assert 'runLabel: runtime.workbenchRevealed ? "Run Analysis" : "Compare all models"' in app_js
+    assert 'title: predictiveWorkbenchTrainMode ? "Train a model" : "Run ML/DL Models"' in app_js
+    assert 'runLabel: predictiveWorkbenchTrainMode ? `Train ${selectedPredictiveModel.label}` : "Compare all models"' in app_js
     assert 'data-guided-action="choose-goal" data-goal="${entry}"' in app_js
 
 
@@ -4168,6 +4183,9 @@ def test_guided_review_shared_features_action_opens_model_editor() -> None:
     assert "focusModelFeatureEditor(reviewTab);" in app_js
     assert 'if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive") {' in app_js
     assert "runtime.workbenchRevealed = true;" in app_js
+    assert 'runtime.predictiveWorkbenchIntent = "features";' in app_js
+    assert 'if (currentGuidedStep() === 5) {' in app_js
+    assert 'setGuidedStep(4, { syncHistory: false, scroll: false, historyMode: "replace" });' in app_js
     assert 'setPredictiveWorkbenchFamily(tabName, { syncHistory: false, historyMode: "replace" });' in app_js
     assert 'activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });' in app_js
     assert "(featureCard || featureSummaryCard || refs.benchmarkGuidedFeatureSummary)?.scrollIntoView({ behavior: \"smooth\", block: \"start\" });" in app_js
@@ -4227,6 +4245,7 @@ def test_guided_predictive_incomplete_compare_hides_unified_board() -> None:
     ).read_text(encoding="utf-8")
 
     assert 'const guidedPredictiveIncomplete = runtime.uiMode === "guided"' in benchmark_js
+    assert "&& !showingStaleBoard;" in benchmark_js
     assert 'status: "Incomplete compare"' in benchmark_js
     assert 'title: "Unified predictive board is incomplete"' in benchmark_js
     assert 'The unified chart publishes only after both ML and DL comparison rows are current.' in benchmark_js
@@ -4272,12 +4291,41 @@ def test_guided_predictive_workbench_uses_navigation_actions_instead_of_run_butt
     ).read_text(encoding="utf-8")
 
     assert 'const guidedPredictiveWorkbenchOpen = goal === "predictive" && runtime.workbenchRevealed;' in app_js
-    assert "const showGuidedPrimaryAction = !guidedPredictiveWorkbenchOpen;" in app_js
+    assert "const showGuidedPrimaryAction = !predictiveWorkbenchTrainMode;" in app_js
     assert 'const showGuidedBackAction = !(goal === "predictive" && runtime.workbenchRevealed);' in app_js
     assert "showGuidedPrimaryAction" in app_js
     assert "showGuidedBackAction" in app_js
-    assert "data-guided-action=\"close-predictive-workbench\">Back to leaderboard</button>" in app_js
-    assert 'refs.closePredictiveWorkbenchButton?.classList.toggle("hidden", guidedPredictiveWorkbench);' in app_js
+    assert 'data-guided-action="close-predictive-workbench"' in app_js
+    assert '${predictiveWorkbenchFeatureMode ? "Back to results" : "Back to leaderboard"}' in app_js
+    assert "const guidedPredictiveTrainReview = guidedPredictiveWorkbench" in app_js
+    assert 'refs.closePredictiveWorkbenchButton?.classList.toggle("hidden", guidedPredictiveWorkbench && !guidedPredictiveTrainReview);' in app_js
+
+
+def test_guided_predictive_preserves_reviewable_leaderboard_after_single_model_tuning() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function guidedPredictiveHasLeaderboardReference() {" in app_js
+    assert "function guidedPredictiveSelectedModelReady() {" in app_js
+    assert "function guidedGoalCanReachReviewStep(goal = runtime.guidedGoal) {" in app_js
+    assert 'return Boolean(currentGoalResult(goal) || guidedPredictiveHasLeaderboardReference());' in app_js
+    assert 'if (!guidedGoalCanReachReviewStep(runtime.guidedGoal) && bounded > 4) return 4;' in app_js
+    assert 'if (!guidedGoalCanReachReviewStep(runtime.guidedGoal)) return 4;' in app_js
+    assert 'if (guidedPredictiveHasLeaderboardReference()) return "Compare all";' in app_js
+    assert "successCheck: guidedPredictiveSelectedModelReady," in app_js
+    assert "const resolveHasResult = () => (typeof successCheck === \"function\" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName)));" in app_js
+    assert "await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));" in app_js
+    assert 'if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive" && ["ml", "dl"].includes(tabName)) {' in app_js
+    assert 'if (!resolveHasResult() || currentGuidedStep() === 5) return;' in app_js
+    assert 'const returnToPredictiveLeaderboard = runtime.uiMode === "guided"' in app_js
+    assert 'activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });' in app_js
+    assert 'setGuidedStep(5, { syncHistory: false, scroll: false, historyMode: "replace" });' in app_js
+    assert 'refs.benchmarkComparisonShell?.closest(".table-card")' in app_js
 
 
 def test_frontend_download_helpers_accept_fallback_mime_type() -> None:
@@ -4319,8 +4367,8 @@ def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
     assert "busyScopes: {}" in app_js
     assert "function buttonsForScope(scope)" in app_js
     assert 'if (scope === "predictive") return [refs.runPredictiveCompareAllButton];' in app_js
-    assert 'if (scope === "ml") return [refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton];' in app_js
-    assert 'if (scope === "dl") return [refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton];' in app_js
+    assert '...(runtime.workbenchRevealed && predictiveFamilyGoal() === "ml" ? [refs.runPredictiveWorkbenchButton] : []),' in app_js
+    assert '...(runtime.workbenchRevealed && predictiveFamilyGoal() === "dl" ? [refs.runPredictiveWorkbenchButton] : []),' in app_js
     assert "function setScopeBusy(scope, isBusy, activeButton = null)" in app_js
     assert 'button === refs.runMlButton || button === refs.runCompareButton || button === refs.runCompareInlineButton ? "ml"' in app_js
     assert 'button === refs.runDlButton || button === refs.runDlCompareButton || button === refs.runDlCompareInlineButton ? "dl"' in app_js
