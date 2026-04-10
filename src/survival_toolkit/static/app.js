@@ -2943,8 +2943,8 @@ function formatValue(value, options = {}) {
     if (!Number.isFinite(value)) return "NA";
     const { scientificLarge = true } = options;
     const absValue = Math.abs(value);
-    if (absValue > 0 && absValue < 0.1) return value.toFixed(4).replace(/\.?0+$/, "");
     if ((scientificLarge && absValue >= 1000) || (absValue > 0 && absValue < 0.001)) return value.toExponential(2);
+    if (absValue > 0 && absValue < 0.1) return value.toFixed(4).replace(/\.?0+$/, "");
     return value.toFixed(3).replace(/\.?0+$/, "");
   }
   return String(value);
