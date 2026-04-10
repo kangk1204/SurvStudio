@@ -3253,6 +3253,10 @@ body[data-ui-mode="guided"][data-guided-goal="predictive"] #panel-benchmark .ben
   margin-top: 0;
 }
 
+.benchmark-guided-feature-summary {
+  margin: 0 0 12px;
+}
+
 @media (max-width: 1080px) {
   .benchmark-action-card {
     flex-direction: column;

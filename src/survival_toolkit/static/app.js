@@ -306,6 +306,7 @@ const refs = {
   predictiveActionStatusText: document.getElementById("predictiveActionStatusText"),
   benchmarkActionCard: document.getElementById("benchmarkActionCard"),
   benchmarkSummaryGrid: document.getElementById("benchmarkSummaryGrid"),
+  benchmarkGuidedFeatureSummary: document.getElementById("benchmarkGuidedFeatureSummary"),
   benchmarkComparisonPlot: document.getElementById("benchmarkComparisonPlot"),
   benchmarkPlotNote: document.getElementById("benchmarkPlotNote"),
   benchmarkComparisonShell: document.getElementById("benchmarkComparisonShell"),
@@ -951,6 +952,21 @@ function renderGuidedPredictiveFeatureSummary(goal = runtime.guidedGoal) {
   `;
 }
 
+function syncGuidedPredictiveFeatureSummaryMount() {
+  if (!refs.benchmarkGuidedFeatureSummary) return false;
+  const showSummary = (
+    runtime.uiMode === "guided"
+    && currentGuidedStep() === 4
+    && runtime.guidedGoal === "predictive"
+    && Boolean(state.dataset)
+  );
+  refs.benchmarkGuidedFeatureSummary.classList.toggle("hidden", !showSummary);
+  refs.benchmarkGuidedFeatureSummary.innerHTML = showSummary
+    ? renderGuidedPredictiveFeatureSummary("predictive")
+    : "";
+  return showSummary;
+}
+
 function normalizeBaseRequestConfig(requestConfig) {
   return {
     dataset_id: String(requestConfig?.dataset_id || ""),
@@ -1158,9 +1174,9 @@ function matchesRequestConfig(goal, requestConfig, { expectsCompareOverride = nu
 
 function currentGoalResult(goal) {
   if (goal === "predictive") {
-    const currentMl = currentGoalResult("ml");
-    const currentDl = currentGoalResult("dl");
-    return currentMl || currentDl ? { ml: currentMl, dl: currentDl } : null;
+    const currentMl = currentCompareGoalPayload("ml");
+    const currentDl = currentCompareGoalPayload("dl");
+    return currentMl && currentDl ? { ml: currentMl, dl: currentDl } : null;
   }
   const payload = {
     km: state.km,
@@ -4731,11 +4747,13 @@ function renderPredictiveWorkbench() {
   const selectedModel = predictiveModelMeta(currentPredictiveModelKey());
   const familyMode = runtime.resultPreference?.[family] || "single";
   const unifiedWorkspaceActive = activeTabName() === "benchmark" || (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive");
+  const guidedPredictiveWorkbench = runtime.uiMode === "guided" && runtime.guidedGoal === "predictive" && runtime.workbenchRevealed;
   runtime.predictiveFamily = family;
 
   refs.benchmarkMlMount?.classList.toggle("hidden", family !== "ml");
   refs.benchmarkDlMount?.classList.toggle("hidden", family !== "dl");
   refs.benchmarkWorkbench?.setAttribute("data-active-family", family);
+  refs.closePredictiveWorkbenchButton?.classList.toggle("hidden", guidedPredictiveWorkbench);
   syncPredictiveModelSelector();
   syncBenchmarkWorkbenchVisibility();
 
@@ -4914,6 +4932,13 @@ const renderUnifiedBenchmarkSummary = benchmarkBoardApi.renderUnifiedBenchmarkSu
 const renderUnifiedBenchmarkTable = benchmarkBoardApi.renderUnifiedBenchmarkTable;
 const renderBenchmarkBoard = benchmarkBoardApi.renderBenchmarkBoard;
 
+function syncBenchmarkBoardChrome() {
+  if (!state.dataset || !refs.benchmarkSummaryGrid || !refs.benchmarkComparisonShell || !refs.benchmarkTableNote) return;
+  const board = benchmarkBoardState();
+  renderUnifiedBenchmarkSummary(board);
+  renderUnifiedBenchmarkTable(board);
+}
+
 function renderGuidedSummaryChips(items) {
   if (!refs.guidedSummaryChips) return;
   refs.guidedSummaryChips.classList.toggle("hidden", items.length === 0);
@@ -4942,7 +4967,11 @@ function renderGuidedChrome() {
   const showGuided = runtime.uiMode === "guided" && Boolean(state.dataset);
   refs.guidedShell.classList.toggle("hidden", !showGuided);
   updateGuidedSurfaceVisibility();
-  if (!showGuided) return;
+  if (!showGuided) {
+    syncGuidedPredictiveFeatureSummaryMount();
+    syncBenchmarkBoardChrome();
+    return;
+  }
 
   runtime.guidedStep = normalizedGuidedStep(runtime.guidedStep);
   const step = currentGuidedStep();
@@ -4995,6 +5024,8 @@ function renderGuidedChrome() {
   updateStepIndicator(step);
   refs.guidedPanel.innerHTML = guidedPanelMarkup(step);
   syncGuidedCoxPanelMounts();
+  syncGuidedPredictiveFeatureSummaryMount();
+  syncBenchmarkBoardChrome();
   renderGuidedRailStatus();
   updateGuidedResultVisibility();
 }
@@ -5202,25 +5233,37 @@ function guidedPanelMarkup(step) {
           : (predictivePrimaryBusy ? "The selected model family is already running. Wait for it to finish before testing this model again." : "")
       )
       : (scopeBusy ? configureCopy.busyText : "");
-    const guidedPredictiveFeatureSummary = renderGuidedPredictiveFeatureSummary(goal);
+    const guidedPredictiveWorkbenchOpen = goal === "predictive" && runtime.workbenchRevealed;
+    const showGuidedPrimaryAction = !guidedPredictiveWorkbenchOpen;
+    const showGuidedBackAction = !(goal === "predictive" && runtime.workbenchRevealed);
+    const predictiveSecondaryAction = runtime.workbenchRevealed
+      ? '<button class="button ghost compact-btn" type="button" data-guided-action="close-predictive-workbench">Back to leaderboard</button>'
+      : '<button class="button ghost compact-btn" type="button" data-guided-action="review-shared-features">Review shared features</button>';
+    const guidedPredictiveFeatureSummary = goal === "predictive" ? "" : renderGuidedPredictiveFeatureSummary(goal);
     return `
       <div class="guided-panel-grid guided-panel-grid-compact">
         <article class="guided-card guided-card-focus">
           <span class="guided-kicker">Step 4 of 5</span>
           <h3>${escapeHtml(configureCopy.title)}</h3>
-          <div class="guided-actions guided-actions-priority${configureCopy.secondaryAction ? " guided-actions-dual" : ""}">
-            ${configureCopy.secondaryAction
-              ? `<button class="button ghost compact-btn guided-run-choice guided-run-choice-secondary" type="button" data-guided-action="${escapeHtml(configureCopy.secondaryAction)}"${secondaryDisabled ? " disabled" : ""} aria-busy="false">${escapeHtml(configureCopy.secondaryLabel)}</button>`
-              : ""}
-            <button class="button primary compact-btn guided-run-choice${primaryBusy ? " is-loading" : ""}" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${primaryDisabled ? " disabled" : ""} aria-busy="${primaryBusy ? "true" : "false"}">${escapeHtml(configureCopy.runLabel)}</button>
-          </div>
-          ${mlSingleModelBlockedText ? `<div class="guided-run-status" role="status">${escapeHtml(mlSingleModelBlockedText)}</div>` : ""}
+          ${showGuidedPrimaryAction
+            ? `
+              <div class="guided-actions guided-actions-priority${configureCopy.secondaryAction ? " guided-actions-dual" : ""}">
+                ${configureCopy.secondaryAction
+                  ? `<button class="button ghost compact-btn guided-run-choice guided-run-choice-secondary" type="button" data-guided-action="${escapeHtml(configureCopy.secondaryAction)}"${secondaryDisabled ? " disabled" : ""} aria-busy="false">${escapeHtml(configureCopy.secondaryLabel)}</button>`
+                  : ""}
+                <button class="button primary compact-btn guided-run-choice${primaryBusy ? " is-loading" : ""}" type="button" data-guided-action="${escapeHtml(configureCopy.runAction)}"${primaryDisabled ? " disabled" : ""} aria-busy="${primaryBusy ? "true" : "false"}">${escapeHtml(configureCopy.runLabel)}</button>
+              </div>
+              ${mlSingleModelBlockedText ? `<div class="guided-run-status" role="status">${escapeHtml(mlSingleModelBlockedText)}</div>` : ""}
+            `
+            : ""}
           ${guidedPredictiveFeatureSummary}
           <div class="guided-actions guided-actions-secondary">
             ${["ml", "dl", "predictive"].includes(goal)
-              ? '<button class="button ghost compact-btn" type="button" data-guided-action="review-shared-features">Review shared features</button>'
+              ? (goal === "predictive" ? predictiveSecondaryAction : '<button class="button ghost compact-btn" type="button" data-guided-action="review-shared-features">Review shared features</button>')
               : ""}
-            <button class="button ghost compact-btn" type="button" data-guided-action="previous-step">Back</button>
+            ${showGuidedBackAction
+              ? '<button class="button ghost compact-btn" type="button" data-guided-action="previous-step">Back</button>'
+              : ""}
           </div>
           ${coxSelectionSummary}
           ${coxPreviewSummary}
@@ -5286,12 +5329,32 @@ function updateGroupingDetailsVisibility(tabName = activeTabName(), { force = fa
 }
 
 function focusModelFeatureEditor(tabName = "ml") {
-  activateTab(tabName);
-  requestAnimationFrame(() => {
+  const focusTargets = () => {
     const featureChecklist = tabName === "dl" ? refs.dlModelFeatureChecklist : refs.modelFeatureChecklist;
-    featureChecklist?.closest(".selection-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
-    flashPresetTargets([refs.modelFeatureChecklist, refs.modelCategoricalChecklist, refs.dlModelFeatureChecklist, refs.dlModelCategoricalChecklist]);
-  });
+    const featureCard = featureChecklist?.closest(".selection-card");
+    const featureSummaryCard = featureChecklist?.closest(".workspace-card")?.querySelector(".shared-feature-card");
+    (featureCard || featureSummaryCard || refs.benchmarkGuidedFeatureSummary)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    flashPresetTargets([
+      featureSummaryCard,
+      refs.modelFeatureChecklist,
+      refs.modelCategoricalChecklist,
+      refs.dlModelFeatureChecklist,
+      refs.dlModelCategoricalChecklist,
+    ]);
+  };
+
+  if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive") {
+    runtime.workbenchRevealed = true;
+    setPredictiveWorkbenchFamily(tabName, { syncHistory: false, historyMode: "replace" });
+    activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(focusTargets);
+    });
+    return;
+  }
+
+  activateTab(tabName);
+  requestAnimationFrame(focusTargets);
 }
 
 function validateDerivedColumnName(rawName) {
@@ -7558,24 +7621,28 @@ function initTooltips() {
   const popup = refs.tooltipPopup;
   if (!popup) return;
   let activeTarget = null;
+  const closestFromEvent = (event, selector) => {
+    const target = event?.target;
+    return target instanceof Element ? target.closest(selector) : null;
+  };
   // Mouse
   document.addEventListener("mouseenter", (e) => {
-    const dot = e.target.closest("[data-tooltip]");
+    const dot = closestFromEvent(e, "[data-tooltip]");
     if (!dot) return;
     activeTarget = dot;
     showTooltipAt(dot);
   }, true);
   document.addEventListener("mouseleave", (e) => {
-    const dot = e.target.closest("[data-tooltip]");
+    const dot = closestFromEvent(e, "[data-tooltip]");
     if (dot && dot === activeTarget) { hideTooltip(); activeTarget = null; }
   }, true);
   // Keyboard: focus/blur on help-dot buttons
   document.addEventListener("focusin", (e) => {
-    const dot = e.target.closest("[data-tooltip]");
+    const dot = closestFromEvent(e, "[data-tooltip]");
     if (dot) { activeTarget = dot; showTooltipAt(dot); }
   }, true);
   document.addEventListener("focusout", (e) => {
-    const dot = e.target.closest("[data-tooltip]");
+    const dot = closestFromEvent(e, "[data-tooltip]");
     if (dot) { hideTooltip(); activeTarget = null; }
   }, true);
 }
@@ -7621,6 +7688,10 @@ function goHome({ syncHistory = true, historyMode = "replace" } = {}) {
 }
 
 function initListeners() {
+  const closestFromEvent = (event, selector) => {
+    const target = event?.target;
+    return target instanceof Element ? target.closest(selector) : null;
+  };
   const brandHome = refs.brandHome;
   if (brandHome) {
     brandHome.addEventListener("click", (e) => { e.preventDefault(); goHome({ historyMode: "push" }); });
@@ -7658,17 +7729,17 @@ function initListeners() {
     closePredictiveWorkbench();
   });
   refs.benchmarkSummaryGrid?.addEventListener("click", (event) => {
-    const modelButton = event.target.closest("[data-benchmark-model]");
+    const modelButton = closestFromEvent(event, "[data-benchmark-model]");
     if (modelButton) {
       reviewBenchmarkModel(modelButton.dataset.benchmarkModel || currentPredictiveModelKey(), modelButton.dataset.benchmarkMode || null);
       return;
     }
-    const button = event.target.closest("[data-benchmark-tab]");
+    const button = closestFromEvent(event, "[data-benchmark-tab]");
     if (!button) return;
     reviewBenchmarkSourceTab(button.dataset.benchmarkTab || "ml", button.dataset.benchmarkMode || null);
   });
   refs.benchmarkComparisonShell?.addEventListener("click", (event) => {
-    const paramsButton = event.target.closest("[data-benchmark-params-goal]");
+    const paramsButton = closestFromEvent(event, "[data-benchmark-params-goal]");
     if (paramsButton) {
       showBenchmarkParams(
         paramsButton.dataset.benchmarkParamsGoal || "ml",
@@ -7676,34 +7747,34 @@ function initListeners() {
       );
       return;
     }
-    const modelButton = event.target.closest("[data-benchmark-model]");
+    const modelButton = closestFromEvent(event, "[data-benchmark-model]");
     if (modelButton) {
       reviewBenchmarkModel(modelButton.dataset.benchmarkModel || currentPredictiveModelKey(), modelButton.dataset.benchmarkMode || null);
       return;
     }
-    const button = event.target.closest("[data-benchmark-tab]");
+    const button = closestFromEvent(event, "[data-benchmark-tab]");
     if (!button) return;
     reviewBenchmarkSourceTab(button.dataset.benchmarkTab || "ml", button.dataset.benchmarkMode || null);
   });
   refs.guidedPanel?.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-guided-action]");
+    const button = closestFromEvent(event, "[data-guided-action]");
     if (!button) return;
     handleGuidedPanelAction(button);
   });
   refs.guidedRailActions?.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-guided-action]");
+    const button = closestFromEvent(event, "[data-guided-action]");
     if (!button) return;
     handleGuidedPanelAction(button);
   });
   refs.guidedPanel?.addEventListener("change", (event) => {
-    const select = event.target.closest("[data-guided-predictive-model-selector]");
+    const select = closestFromEvent(event, "[data-guided-predictive-model-selector]");
     if (!select) return;
     setPredictiveModel(select.value, { historyMode: "push" });
     renderBenchmarkBoard();
     syncAnalysisRunButtonAvailability();
   });
   refs.stepIndicator?.addEventListener("click", (event) => {
-    const button = event.target.closest(".step");
+    const button = closestFromEvent(event, ".step");
     if (!button) return;
     const requestedStep = Number(button.dataset.step || 0);
     if (!requestedStep || !canNavigateToGuidedStep(requestedStep)) return;
@@ -7784,7 +7855,7 @@ function initListeners() {
   refs.maxTime.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.confidenceLevel.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.covariateChecklist?.addEventListener("change", (event) => {
-    const input = event.target.closest('input[type="checkbox"]');
+    const input = closestFromEvent(event, 'input[type="checkbox"]');
     syncCoxCovariateSelection({
       preferredValue: input?.checked ? input.value : null,
       preferredScope: "covariate",
@@ -7809,7 +7880,7 @@ function initListeners() {
     applyChecklistSearch(refs.categoricalChecklist);
   });
   refs.strataChecklist?.addEventListener("change", (event) => {
-    const input = event.target.closest('input[type="checkbox"]');
+    const input = closestFromEvent(event, 'input[type="checkbox"]');
     syncCoxCovariateSelection({
       preferredValue: input?.checked ? input.value : null,
       preferredScope: "strata",

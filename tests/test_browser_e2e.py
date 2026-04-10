@@ -591,6 +591,9 @@ def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: st
             page.wait_for_function("document.body.dataset.guidedStep === '4'")
             assert page.locator("#panel-benchmark .benchmark-action-card").is_hidden()
             assert page.locator("#benchmarkWorkbench").is_hidden()
+            assert page.locator("text=Open model controls").count() == 0
+            assert "Open model controls" not in page.locator("#benchmarkSummaryGrid").inner_text()
+            assert "Open model controls" not in page.locator("#benchmarkComparisonShell").inner_text()
 
             page.locator('[data-guided-action="run-predictive-compare-all"]').click()
             page.wait_for_function("document.getElementById('runPredictiveCompareAllButton').disabled === true")
@@ -617,8 +620,10 @@ def test_browser_guided_predictive_compare_all_runs_ml_and_dl(browser_server: st
             page.wait_for_function("document.getElementById('benchmarkWorkbench').classList.contains('hidden') === false")
             page.wait_for_function("document.body.dataset.guidedStep === '4'")
             guided_panel_text = page.locator("#guidedPanel").inner_text()
-            assert "Run Analysis" in guided_panel_text
+            assert "Run Analysis" not in guided_panel_text
             assert "Compare all" not in guided_panel_text
+            assert "Back to leaderboard" in guided_panel_text
+            assert "\nBack\n" not in f"\n{guided_panel_text}\n"
             if page.locator("#benchmarkMlMount").is_visible():
                 assert page.locator("#benchmarkMlMount .model-choice-field").is_hidden()
                 assert page.locator("#benchmarkMlMount #runMlButton").is_hidden()
@@ -698,13 +703,16 @@ def test_browser_guided_predictive_compare_partial_failure_stays_on_step4(browse
             page.wait_for_function("document.body.dataset.guidedStep === '4'")
             page.locator('[data-guided-action="run-predictive-compare-all"]').click()
             page.wait_for_function(
-                "() => { const text = document.querySelector('#benchmarkSummaryGrid')?.innerText ?? ''; return text.includes('Classical ML is currently represented.') || text.includes('Needs review'); }",
+                "() => { const text = document.querySelector('#benchmarkSummaryGrid')?.innerText ?? ''; return text.includes('Unified predictive board is incomplete') || text.includes('Incomplete compare'); }",
                 timeout=60000,
             )
 
             assert page.locator("body").get_attribute("data-guided-step") == "4"
             summary_text = page.locator("#benchmarkSummaryGrid").inner_text()
-            assert "Classical ML is currently represented." in summary_text or "Needs review" in summary_text
+            assert "Unified predictive board is incomplete" in summary_text
+            assert "both ml and dl comparison rows are current" in page.locator("#benchmarkPlotNote").inner_text().lower()
+            assert "both ml and dl comparison rows are current" in page.locator("#benchmarkTableNote").inner_text().lower()
+            assert "must finish with both model families" in page.locator("#benchmarkComparisonShell").inner_text()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path

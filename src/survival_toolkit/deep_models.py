@@ -78,6 +78,7 @@ _DEEPHIT_RANKING_SIGMA = 1.0
 _DEEP_COMPARE_PARALLEL_MAX_INFLIGHT_BYTES = 512 * 1024 * 1024
 _DEEP_COMPARE_PARALLEL_WORKER_OVERHEAD_BYTES = 650 * 1024 * 1024
 _DEEP_COMPARE_PARALLEL_MEMORY_RESERVE_BYTES = 256 * 1024 * 1024
+_TRANSFORMER_MAX_ATTENTION_BYTES = 1024 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +526,48 @@ def _estimate_parallel_deep_compare_memory_bytes(*, payload_bytes: int, max_work
     return int(
         (payload_bytes + _DEEP_COMPARE_PARALLEL_WORKER_OVERHEAD_BYTES) * max(1, max_workers)
         + _DEEP_COMPARE_PARALLEL_MEMORY_RESERVE_BYTES
+    )
+
+
+def _estimate_transformer_attention_bytes(
+    *,
+    training_samples: int,
+    n_features: int,
+    n_heads: int,
+    n_layers: int,
+) -> int:
+    return int(
+        max(1, training_samples)
+        * max(1, n_features)
+        * max(1, n_features)
+        * max(1, n_heads)
+        * max(1, n_layers)
+        * 4
+    )
+
+
+def _guard_transformer_attention_budget(
+    *,
+    training_samples: int,
+    n_features: int,
+    n_heads: int,
+    n_layers: int,
+) -> None:
+    estimated_bytes = _estimate_transformer_attention_bytes(
+        training_samples=training_samples,
+        n_features=n_features,
+        n_heads=n_heads,
+        n_layers=n_layers,
+    )
+    if estimated_bytes <= _TRANSFORMER_MAX_ATTENTION_BYTES:
+        return
+    estimated_gib = estimated_bytes / (1024 ** 3)
+    raise ValueError(
+        "Survival Transformer is disabled for this feature set because full-batch self-attention on "
+        f"the training split is estimated at {estimated_gib:.1f} GiB "
+        f"({int(training_samples)} training samples x {int(n_features)} encoded features x "
+        f"{int(n_heads)} head(s) x {int(n_layers)} layer(s)). Reduce the shared feature set before "
+        "rerunning Compare All or testing Survival Transformer directly."
     )
 
 
@@ -3251,6 +3294,12 @@ def train_survival_transformer(
     evaluation_mode = str(eval_split["evaluation_mode"])
     evaluation_note = str(eval_split["evaluation_note"])
     x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
+    _guard_transformer_attention_budget(
+        training_samples=int(train_idx.numel()),
+        n_features=int(data["n_features"]),
+        n_heads=int(n_heads),
+        n_layers=int(n_layers),
+    )
 
     if d_model % n_heads != 0:
         raise ValueError("Transformer width must be divisible by attention heads.")

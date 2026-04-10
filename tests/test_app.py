@@ -4140,12 +4140,14 @@ def test_guided_predictive_configure_panel_surfaces_shared_feature_summary() -> 
     assert "function estimateEncodedFeatureWidth(features = [], categoricalFeatures = []) {" in app_js
     assert "function guidedPredictiveFeatureSummaryState() {" in app_js
     assert "function renderGuidedPredictiveFeatureSummary(goal = runtime.guidedGoal) {" in app_js
+    assert "function syncGuidedPredictiveFeatureSummaryMount() {" in app_js
     assert "Fresh cohorts start with up to 20 shared features for a faster first run." in app_js
     assert "Compare All can slow down substantially with a wide shared feature list." in app_js
     assert "Selected raw features" in app_js
     assert "ML encoded width" in app_js
     assert "DL encoded width" in app_js
     assert "Compare All uses the shared raw feature list. ML and DL keep their own categorical flags on top of the same raw inputs." in app_js
+    assert 'const guidedPredictiveFeatureSummary = goal === "predictive" ? "" : renderGuidedPredictiveFeatureSummary(goal);' in app_js
     assert 'data-guided-action="review-shared-features"' in app_js
 
 
@@ -4162,6 +4164,118 @@ def test_guided_review_shared_features_action_opens_model_editor() -> None:
     assert 'const reviewTab = runtime.guidedGoal === "dl"' in app_js
     assert ': (runtime.guidedGoal === "ml" ? "ml" : predictiveFamilyGoal());' in app_js
     assert "focusModelFeatureEditor(reviewTab);" in app_js
+    assert 'if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive") {' in app_js
+    assert "runtime.workbenchRevealed = true;" in app_js
+    assert 'setPredictiveWorkbenchFamily(tabName, { syncHistory: false, historyMode: "replace" });' in app_js
+    assert 'activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });' in app_js
+    assert "(featureCard || featureSummaryCard || refs.benchmarkGuidedFeatureSummary)?.scrollIntoView({ behavior: \"smooth\", block: \"start\" });" in app_js
+
+
+def test_benchmark_panel_hosts_guided_predictive_feature_summary_mount() -> None:
+    html = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "templates"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+    styles = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "styles.css"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="benchmarkGuidedFeatureSummary"' in html
+    assert 'benchmarkGuidedFeatureSummary: document.getElementById("benchmarkGuidedFeatureSummary")' in app_js
+    assert "syncGuidedPredictiveFeatureSummaryMount();" in app_js
+    assert ".benchmark-guided-feature-summary {" in styles
+
+
+def test_guided_predictive_hides_right_side_starter_workbench_buttons() -> None:
+    benchmark_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app_benchmark.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function showBenchmarkStarterAction() {" in benchmark_js
+    assert 'return !(runtime.uiMode === "guided" && runtime.guidedGoal === "predictive");' in benchmark_js
+    assert '${!hasAnyResult && showBenchmarkStarterAction() ? benchmarkStarterActionMarkup() : ""}' in benchmark_js
+    assert "refs.benchmarkComparisonShell.innerHTML = showBenchmarkStarterAction()" in benchmark_js
+
+
+def test_guided_predictive_incomplete_compare_hides_unified_board() -> None:
+    benchmark_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app_benchmark.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'const guidedPredictiveIncomplete = runtime.uiMode === "guided"' in benchmark_js
+    assert 'status: "Incomplete compare"' in benchmark_js
+    assert 'title: "Unified predictive board is incomplete"' in benchmark_js
+    assert 'The unified chart publishes only after both ML and DL comparison rows are current.' in benchmark_js
+    assert 'The unified leaderboard publishes only after both ML and DL comparison rows are current.' in benchmark_js
+
+
+def test_predictive_current_result_requires_both_current_compare_payloads() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'const currentMl = currentCompareGoalPayload("ml");' in app_js
+    assert 'const currentDl = currentCompareGoalPayload("dl");' in app_js
+    assert "return currentMl && currentDl ? { ml: currentMl, dl: currentDl } : null;" in app_js
+
+
+def test_guided_chrome_rerenders_benchmark_starter_visibility() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function syncBenchmarkBoardChrome() {" in app_js
+    assert "renderUnifiedBenchmarkSummary(board);" in app_js
+    assert "renderUnifiedBenchmarkTable(board);" in app_js
+    assert "syncBenchmarkBoardChrome();" in app_js
+
+
+def test_guided_predictive_workbench_uses_navigation_actions_instead_of_run_button() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'const guidedPredictiveWorkbenchOpen = goal === "predictive" && runtime.workbenchRevealed;' in app_js
+    assert "const showGuidedPrimaryAction = !guidedPredictiveWorkbenchOpen;" in app_js
+    assert 'const showGuidedBackAction = !(goal === "predictive" && runtime.workbenchRevealed);' in app_js
+    assert "showGuidedPrimaryAction" in app_js
+    assert "showGuidedBackAction" in app_js
+    assert "data-guided-action=\"close-predictive-workbench\">Back to leaderboard</button>" in app_js
+    assert 'refs.closePredictiveWorkbenchButton?.classList.toggle("hidden", guidedPredictiveWorkbench);' in app_js
 
 
 def test_frontend_download_helpers_accept_fallback_mime_type() -> None:

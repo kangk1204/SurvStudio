@@ -337,6 +337,83 @@ def test_run_deep_compare_task_rejects_apparent_fallback_when_holdout_is_require
         )
 
 
+def test_transformer_attention_budget_estimate_scales_with_feature_count() -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    small = deep_models._estimate_transformer_attention_bytes(
+        training_samples=100,
+        n_features=32,
+        n_heads=4,
+        n_layers=2,
+    )
+    large = deep_models._estimate_transformer_attention_bytes(
+        training_samples=487,
+        n_features=527,
+        n_heads=4,
+        n_layers=2,
+    )
+
+    assert small < large
+    assert large > deep_models._TRANSFORMER_MAX_ATTENTION_BYTES
+
+
+def test_transformer_attention_budget_guard_rejects_high_dimensional_input() -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    with pytest.raises(ValueError, match="Survival Transformer is disabled for this feature set"):
+        deep_models._guard_transformer_attention_budget(
+            training_samples=487,
+            n_features=527,
+            n_heads=4,
+            n_layers=2,
+        )
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_train_survival_transformer_rejects_wide_full_batch_attention_before_model_build(monkeypatch) -> None:
+    import torch
+    import survival_toolkit.deep_models as deep_models
+
+    prepared = {
+        "X_tensor": torch.zeros((609, 527), dtype=torch.float32),
+        "time_tensor": torch.ones(609, dtype=torch.float32),
+        "event_tensor": torch.ones(609, dtype=torch.float32),
+        "feature_names": [f"f{i}" for i in range(527)],
+        "scaler_params": {},
+        "categorical_feature_indices": [],
+        "numeric_feature_indices": list(range(527)),
+        "n_samples": 609,
+        "n_features": 527,
+        "dropped_nonpositive_time_rows": 0,
+    }
+    eval_split = {
+        "train_idx": np.arange(487, dtype=int),
+        "eval_idx": np.arange(487, 609, dtype=int),
+        "evaluation_mode": "holdout",
+        "evaluation_note": "ok",
+    }
+
+    monkeypatch.setattr(
+        deep_models,
+        "_prepare_deep_training_inputs",
+        lambda *args, **kwargs: (prepared, eval_split),
+    )
+
+    with pytest.raises(ValueError, match="Survival Transformer is disabled for this feature set"):
+        deep_models.train_survival_transformer(
+            None,
+            time_column="os_months",
+            event_column="os_event",
+            features=[f"f{i}" for i in range(509)],
+            categorical_features=[],
+            event_positive_value=1,
+            d_model=64,
+            n_heads=4,
+            n_layers=2,
+            epochs=1,
+        )
+
+
 def test_survival_from_log_cumulative_hazard_handles_extreme_values() -> None:
     import survival_toolkit.deep_models as deep_models
 
