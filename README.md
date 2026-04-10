@@ -752,6 +752,7 @@ Practical note:
 - ML result payloads now include IPCW `IBS`, a Kaplan-Meier null-model `IBS`, and `Brier Skill Score = 1 - IBS_model / IBS_null` so raw error can be interpreted relative to a no-covariate reference
 - for quick RSF checks on larger cohorts, leave `Fast mode` enabled
 - if `TreeExplainer` is unsupported, SHAP falls back to a tightly capped `KernelExplainer` approximation using a small background/evaluation sample, so treat the ranking as approximate rather than publication-grade
+- if SHAP safe mode is triggered because the encoded matrix is too wide, SurvStudio explains a reduced companion tree model for interpretability only; describe that companion-model caveat explicitly if you cite SHAP outputs in a manuscript
 
 ### Deep Learning
 
@@ -862,6 +863,7 @@ If you derive a `High/Low` grouping from the same cohort with optimal cutpointin
 - do not treat the repeated group-separation p-value as an independent confirmatory test
 - use external validation if you want inferential claims for the derived grouping
 - signature stability scores are heuristic composite rankings, not independently validated statistical tests
+- describe the top-ranked signature as hypothesis-generating rather than confirmatory until it has external validation
 
 ### Calibration and Time-Dependent Importance
 
@@ -1001,7 +1003,7 @@ Then increase epochs or switch to repeated CV only after the single-run workflow
 - Cox PH currently reports an apparent C-index only. If you need bootstrap optimism correction or cross-validated Cox discrimination, run that validation outside the current dashboard workflow.
 - Standard unpenalized Cox PH is not the right tool for very wide `p >> n` settings. Use the ML-panel `LASSO-Cox` path for penalized predictive screening instead of forcing a classical Cox PH fit.
 - External-cohort validation is currently a manual workflow: load the separate cohort, reproduce the endpoint and covariate specification, and rerun the analysis.
-- Left truncation and competing risks are outside the current scope.
+- Left truncation and competing risks are outside the current scope. In manuscript Methods, state explicitly that these workflows assume standard cause-specific survival with independent censoring and do not estimate cumulative incidence under competing events.
 - Martingale residual plots are available as a visual screening aid for continuous covariates, but SurvStudio does not yet implement richer Cox linearity tooling such as spline recommendation or automated term selection.
 
 ## Development and Testing

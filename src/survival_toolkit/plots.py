@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 
 PAPER = "#ffffff"
 INK = "#1a2332"
-ACCENT = "#db583b"
+ACCENT = "#c94e33"
 SLATE = "#2563eb"
 GOLD = "#d97706"
 SAGE = "#059669"

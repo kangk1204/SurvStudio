@@ -30,10 +30,8 @@ from survival_toolkit.analysis import (
     _harrell_c_index,
     _restricted_mean_survival_time,
     _safe_float,
-    coerce_event,
 )
 from survival_toolkit.encoding import (
-    coerce_feature_subset as _coerce_feature_subset,
     fit_feature_encoder as _fit_shared_feature_encoder,
     ordered_category_values as _ordered_category_values,
     transform_feature_encoder as _transform_shared_feature_encoder,
@@ -66,6 +64,10 @@ try:
 
     SKSURV_AVAILABLE = True
 except ImportError:
+    GradientBoostingSurvivalAnalysis = None
+    RandomSurvivalForest = None
+    CoxnetSurvivalAnalysis = None
+    concordance_index_censored = None
     SKSURV_AVAILABLE = False
 
 try:
@@ -994,6 +996,7 @@ def find_optimal_cutpoint(
     upper_label: str = "High",
     permutation_iterations: int = 500,
     random_seed: int = 20260311,
+    include_split_series: bool = False,
 ) -> dict[str, Any]:
     """Scan all unique values of *variable* and return the cutpoint that
     maximises the log-rank chi-square statistic.
@@ -1135,11 +1138,13 @@ def find_optimal_cutpoint(
         label_above, label_below = upper_label, lower_label
 
     split_col_name = f"{variable}_group"
-    split_series = pd.Series(
-        np.where(high_mask, label_above, label_below),
-        index=frame.index,
-        dtype="string",
-    )
+    split_series = None
+    if include_split_series:
+        split_series = pd.Series(
+            np.where(high_mask, label_above, label_below),
+            index=frame.index,
+            dtype="string",
+        )
 
     selection_adjusted_p_value = None
     perm_valid = 0
@@ -1174,7 +1179,7 @@ def find_optimal_cutpoint(
     if primary_p_value is None:
         primary_p_value = raw_p_value
 
-    return {
+    result = {
         "optimal_cutpoint": best_record["cutpoint"],
         "statistic": best_record["statistic"],
         "p_value": primary_p_value,
@@ -1200,6 +1205,9 @@ def find_optimal_cutpoint(
         "scan_data": scan_data,
         "split_column": split_col_name,
     }
+    if split_series is not None:
+        result["split_series"] = split_series
+    return result
 
 
 # ===================================================================

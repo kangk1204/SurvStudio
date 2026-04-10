@@ -69,7 +69,7 @@ def test_build_km_figure_uses_fixed_high_low_colors_regardless_of_curve_order() 
 
     line_traces = [trace for trace in figure["data"] if trace.get("mode") == "lines"]
     line_colors = {trace["name"]: trace["line"]["color"] for trace in line_traces}
-    assert line_colors["High"] == "#db583b"
+    assert line_colors["High"] == "#c94e33"
     assert line_colors["Low"] == "#2563eb"
 
 

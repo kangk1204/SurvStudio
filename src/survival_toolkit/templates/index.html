@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SurvStudio</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23db583b'/><text x='50' y='68' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='44' fill='white'>SA</text></svg>" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23c94e33'/><text x='50' y='68' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='44' fill='white'>SA</text></svg>" />
     <meta name="description" content="Upload clinical data and generate exploratory Kaplan-Meier curves, Cox regression, ML/DL comparisons, and cohort summary tables." />
     <link rel="stylesheet" href="../static/styles.css?v={{ static_version }}" />
     <script src="../static/vendor/plotly-3.4.0.min.js?v={{ static_version }}" defer></script>
@@ -497,7 +497,7 @@
           <div class="card-head">
             <div class="card-head-left">
               <h2>Cox Proportional Hazards</h2>
-              <p class="card-subtitle">Identify which risk factors independently affect survival</p>
+              <p class="card-subtitle">Estimate adjusted hazard associations for survival outcomes</p>
             </div>
             <div class="button-row compact">
               <button class="button primary" id="runCoxButton">
@@ -513,7 +513,7 @@
           <div class="dependency-card" id="coxDependencyCard">
             <div class="dependency-copy">
               <strong>What this tab uses</strong>
-              <span id="coxDependencyText">Cox uses the Study Design outcome definition and the covariates selected in this tab. Group by does not change the model unless you add that column as a covariate. The reported C-index is apparent on the analyzable cohort, PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots.</span>
+              <span id="coxDependencyText">Cox uses the Study Design outcome definition plus the covariates and optional strata selected in this tab. Group by does not change the model unless you add that column as a covariate or strata variable. Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting. PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots.</span>
               <div class="dataset-preset-chips hidden" id="coxDependencyChips"></div>
             </div>
           </div>
@@ -573,7 +573,7 @@
             <div class="table-card full-width">
               <h3>PH Diagnostics</h3>
               <div class="diagnostic-copy" id="coxDiagnosticsCopy">
-                <span>Scaled Schoenfeld residual screening: LOWESS-smoothed scaled Schoenfeld residual trends versus log time. Use alongside the PH table, not as a full Grambsch-Therneau test. Extreme residual outliers may be clipped for readability.</span>
+                <span>Scaled Schoenfeld residual screening: LOWESS-smoothed scaled Schoenfeld residual trends versus log time. Use alongside the PH table, including the combined PH screening row, not as a full Grambsch-Therneau test. Extreme residual outliers may be clipped for readability.</span>
                 <span class="diagnostic-copy-note">Red: PH table p &lt; 0.05. Blue: PH table p ≥ 0.05.</span>
               </div>
               <div class="plot-shell" id="coxDiagnosticsPlot">
@@ -581,7 +581,7 @@
                   <span>Scaled Schoenfeld residual screening appears here after fitting the model.</span>
                 </div>
               </div>
-              <div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Scaled Schoenfeld residual screening with rank-based Spearman correlation versus log time appears here. The plot overlay uses LOWESS smoothing for screening only, not a full cox.zph test.</div></div>
+              <div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Scaled Schoenfeld residual screening with rank-based Spearman correlation versus log time appears here, alongside a combined PH screening row based on the per-term tests. The plot overlay uses LOWESS smoothing for screening only, not a full cox.zph test.</div></div>
             </div>
             <div class="table-card full-width">
               <div class="table-card-head">

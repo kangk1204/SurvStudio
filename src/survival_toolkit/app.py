@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import os
 import platform
 import re
@@ -56,6 +57,7 @@ from survival_toolkit.sample_data import (
 from survival_toolkit.store import DatasetStore
 
 BASE_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 
 
 def _package_version_or_unknown(distribution_name: str) -> str:
@@ -441,6 +443,7 @@ class OptimalCutpointRequest(_EventPositiveValueRequestModel):
 
 class TableExportRequest(BaseModel):
     rows: list[dict[str, Any]] = Field(default_factory=list, max_length=2000)
+    columns: list[str] = Field(default_factory=list, max_length=500)
     format: Literal["csv", "markdown", "latex", "docx", "xlsx"]
     style: Literal["plain", "journal"] = "journal"
     template: Literal["default", "nejm", "lancet", "jco"] = "default"
@@ -458,6 +461,19 @@ class TableExportRequest(BaseModel):
                 raise ValueError("Each table note must be 4000 characters or fewer.")
             if _NOTE_CONTROL_CHAR_PATTERN.search(text):
                 raise ValueError("Table notes must not contain control characters.")
+            cleaned.append(text)
+        return cleaned
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for column in value:
+            text = str(column)
+            if len(text) > 4000:
+                raise ValueError("Each export column name must be 4000 characters or fewer.")
+            if _CONTROL_CHAR_PATTERN.search(text):
+                raise ValueError("Export column names must not contain control characters.")
             cleaned.append(text)
         return cleaned
 
@@ -1018,6 +1034,10 @@ def fail_bad_request(exc: Exception) -> NoReturn:
             status_code=400,
             detail="The request could not be processed with the selected dataset and settings.",
         ) from exc
+    logger.exception(
+        "Unhandled SurvStudio request error",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
     raise exc
 
 
@@ -1091,17 +1111,28 @@ def _resolve_export_caption(caption: str | None, template: str) -> str:
     return clean_caption or _default_export_caption(template)
 
 
-def _export_columns(rows: list[dict[str, Any]]) -> list[str]:
+def _export_columns(rows: list[dict[str, Any]], columns: Sequence[str] | None = None) -> list[str]:
     if not rows:
         raise UserInputError("No rows available for export.")
-    columns: list[str] = []
+    resolved_columns: list[str] = []
     seen: set[str] = set()
+
+    def _maybe_add(column: Any) -> None:
+        name = str(column)
+        if not name or name.startswith("_") or name in seen:
+            return
+        seen.add(name)
+        resolved_columns.append(name)
+
+    for column in columns or []:
+        _maybe_add(column)
     for row in rows:
         for column in row.keys():
-            if column not in seen:
-                seen.add(column)
-                columns.append(column)
-    return columns
+            _maybe_add(column)
+
+    if not resolved_columns:
+        raise UserInputError("No exportable columns available for export.")
+    return resolved_columns
 
 
 def _sanitize_csv_cell(value: Any) -> str:
@@ -1129,21 +1160,34 @@ def _export_rows_to_csv(
     rows: list[dict[str, Any]],
     style: str,
     *,
+    columns: Sequence[str] | None = None,
     caption: str | None = None,
     notes: Sequence[str] | None = None,
     template: str = "default",
 ) -> str:
     if not rows:
         raise UserInputError("No rows available for export.")
-    columns = _export_columns(rows)
+    resolved_columns = _export_columns(rows, columns)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow([_sanitize_csv_cell(column) for column in columns])
+    clean_caption = _sanitize_export_note(caption) if caption else ""
+    clean_notes = [
+        sanitized_note
+        for note in (notes or [])
+        if (sanitized_note := _sanitize_export_note(note))
+    ]
+    if clean_caption:
+        buffer.write(f"# {clean_caption}\n")
+    if clean_notes:
+        buffer.write(f"# {_export_template_profile(template)['notes_heading']}:\n")
+        for note in clean_notes:
+            buffer.write(f"# - {note}\n")
+    writer.writerow([_sanitize_csv_cell(column) for column in resolved_columns])
     for row in rows:
         writer.writerow(
             [
                 _sanitize_csv_cell(_format_export_value(row.get(column), style))
-                for column in columns
+                for column in resolved_columns
             ]
         )
     return buffer.getvalue()
@@ -1153,6 +1197,7 @@ def _export_rows_to_xlsx(
     rows: list[dict[str, Any]],
     style: str,
     *,
+    columns: Sequence[str] | None = None,
     caption: str | None = None,
     notes: Sequence[str] | None = None,
     template: str = "default",
@@ -1166,7 +1211,7 @@ def _export_rows_to_xlsx(
             "XLSX export requires openpyxl. Install the formats extra with `pip install -e \".[formats]\"`."
         ) from exc
 
-    columns = _export_columns(rows)
+    resolved_columns = _export_columns(rows, columns)
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Table"
@@ -1176,12 +1221,12 @@ def _export_rows_to_xlsx(
         worksheet.append([_sanitize_csv_cell(resolved_caption)])
         worksheet.append([])
 
-    worksheet.append([_sanitize_csv_cell(column) for column in columns])
+    worksheet.append([_sanitize_csv_cell(column) for column in resolved_columns])
     for row in rows:
         worksheet.append(
             [
                 _sanitize_csv_cell(_format_export_value(row.get(column), style))
-                for column in columns
+                for column in resolved_columns
             ]
         )
 
@@ -1204,6 +1249,7 @@ def _export_rows_to_xlsx(
 def _export_rows_to_markdown(
     rows: list[dict[str, Any]],
     *,
+    columns: Sequence[str] | None = None,
     caption: str | None,
     notes: list[str],
     style: str,
@@ -1211,7 +1257,7 @@ def _export_rows_to_markdown(
 ) -> str:
     if not rows:
         raise UserInputError("No rows available for export.")
-    columns = _export_columns(rows)
+    resolved_columns = _export_columns(rows, columns)
     template_profile = _export_template_profile(template)
     resolved_caption = _resolve_export_caption(caption, template)
     clean_notes: list[str] = []
@@ -1219,11 +1265,11 @@ def _export_rows_to_markdown(
         sanitized_note = _sanitize_export_note(note)
         if sanitized_note:
             clean_notes.append(sanitized_note)
-    header = f"| {' | '.join(_sanitize_markdown_cell(column, 'plain') for column in columns)} |"
-    divider = f"| {' | '.join(['---'] * len(columns))} |"
+    header = f"| {' | '.join(_sanitize_markdown_cell(column, 'plain') for column in resolved_columns)} |"
+    divider = f"| {' | '.join(['---'] * len(resolved_columns))} |"
     body = [
         "| "
-        + " | ".join(_sanitize_markdown_cell(row.get(column), style) for column in columns)
+        + " | ".join(_sanitize_markdown_cell(row.get(column), style) for column in resolved_columns)
         + " |"
         for row in rows
     ]
@@ -1246,6 +1292,7 @@ def _latex_escape(value: str) -> str:
 def _export_rows_to_latex(
     rows: list[dict[str, Any]],
     *,
+    columns: Sequence[str] | None = None,
     caption: str | None,
     notes: list[str],
     style: str,
@@ -1253,12 +1300,12 @@ def _export_rows_to_latex(
 ) -> str:
     if not rows:
         raise UserInputError("No rows available for export.")
-    columns = _export_columns(rows)
+    resolved_columns = _export_columns(rows, columns)
     template_profile = _export_template_profile(template)
     resolved_caption = _resolve_export_caption(caption, template)
-    column_spec = "l" * len(columns)
+    column_spec = "l" * len(resolved_columns)
     body = [
-        " & ".join(_latex_escape(_normalize_export_text(row.get(column), style)) for column in columns) + r" \\"
+        " & ".join(_latex_escape(_normalize_export_text(row.get(column), style)) for column in resolved_columns) + r" \\"
         for row in rows
     ]
     lines = [
@@ -1268,7 +1315,7 @@ def _export_rows_to_latex(
         f"\\caption{{{_latex_escape(resolved_caption)}}}",
         f"\\begin{{tabular}}{{{column_spec}}}",
         "\\toprule",
-        " & ".join(_latex_escape(column) for column in columns) + r" \\",
+        " & ".join(_latex_escape(column) for column in resolved_columns) + r" \\",
         "\\midrule",
         *body,
         "\\bottomrule",
@@ -1318,10 +1365,10 @@ def _docx_cell(text: str, *, width: int, bold: bool = False) -> str:
     )
 
 
-def _docx_table(rows: list[dict[str, Any]], *, style: str) -> str:
-    columns = _export_columns(rows)
-    cell_width = max(1200, int(9000 / max(len(columns), 1)))
-    grid = "".join(f'<w:gridCol w:w="{cell_width}"/>' for _ in columns)
+def _docx_table(rows: list[dict[str, Any]], *, style: str, columns: Sequence[str] | None = None) -> str:
+    resolved_columns = _export_columns(rows, columns)
+    cell_width = max(1200, int(9000 / max(len(resolved_columns), 1)))
+    grid = "".join(f'<w:gridCol w:w="{cell_width}"/>' for _ in resolved_columns)
     borders = (
         "<w:tblBorders>"
         '<w:top w:val="single" w:sz="8" w:space="0" w:color="auto"/>'
@@ -1332,10 +1379,10 @@ def _docx_table(rows: list[dict[str, Any]], *, style: str) -> str:
         '<w:insideV w:val="single" w:sz="6" w:space="0" w:color="auto"/>'
         "</w:tblBorders>"
     )
-    header_row = "<w:tr>" + "".join(_docx_cell(column, width=cell_width, bold=True) for column in columns) + "</w:tr>"
+    header_row = "<w:tr>" + "".join(_docx_cell(column, width=cell_width, bold=True) for column in resolved_columns) + "</w:tr>"
     body_rows = [
         "<w:tr>"
-        + "".join(_docx_cell(_normalize_export_text(row.get(column), style), width=cell_width) for column in columns)
+        + "".join(_docx_cell(_normalize_export_text(row.get(column), style), width=cell_width) for column in resolved_columns)
         + "</w:tr>"
         for row in rows
     ]
@@ -1351,6 +1398,7 @@ def _docx_table(rows: list[dict[str, Any]], *, style: str) -> str:
 def _export_rows_to_docx(
     rows: list[dict[str, Any]],
     *,
+    columns: Sequence[str] | None = None,
     caption: str | None,
     notes: list[str],
     style: str,
@@ -1364,7 +1412,7 @@ def _export_rows_to_docx(
     caption_italic = template == "nejm"
     body_parts = [
         _docx_paragraph(resolved_caption, bold=caption_bold, italic=caption_italic),
-        _docx_table(rows, style=style),
+        _docx_table(rows, style=style, columns=columns),
     ]
     clean_notes: list[str] = []
     for note in notes:
@@ -1574,6 +1622,7 @@ async def export_table(request_model: TableExportRequest) -> Response:
             content = _export_rows_to_csv(
                 request_model.rows,
                 request_model.style,
+                columns=request_model.columns,
                 caption=request_model.caption,
                 notes=export_notes,
                 template=request_model.template,
@@ -1583,6 +1632,7 @@ async def export_table(request_model: TableExportRequest) -> Response:
             content = _export_rows_to_xlsx(
                 request_model.rows,
                 request_model.style,
+                columns=request_model.columns,
                 caption=request_model.caption,
                 notes=export_notes,
                 template=request_model.template,
@@ -1594,6 +1644,7 @@ async def export_table(request_model: TableExportRequest) -> Response:
         if request_model.format == "markdown":
             content = _export_rows_to_markdown(
                 request_model.rows,
+                columns=request_model.columns,
                 caption=request_model.caption,
                 notes=export_notes,
                 style=request_model.style,
@@ -1603,6 +1654,7 @@ async def export_table(request_model: TableExportRequest) -> Response:
         if request_model.format == "latex":
             content = _export_rows_to_latex(
                 request_model.rows,
+                columns=request_model.columns,
                 caption=request_model.caption,
                 notes=export_notes,
                 style=request_model.style,
@@ -1611,6 +1663,7 @@ async def export_table(request_model: TableExportRequest) -> Response:
             return Response(content=content, media_type="text/x-tex; charset=utf-8")
         content = _export_rows_to_docx(
             request_model.rows,
+            columns=request_model.columns,
             caption=request_model.caption,
             notes=export_notes,
             style=request_model.style,
