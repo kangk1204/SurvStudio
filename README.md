@@ -70,6 +70,7 @@ If you want a file that you can upload manually instead of clicking a built-in l
 - Python `3.11` or newer
 - internet access during the first install so `pip` can download dependencies
 - if `python --version` or `python3 --version` prints `3.10` or older, do **not** use the standard `venv` path yet; use the `Project-local Conda fallback` section below first
+- if you are using WSL, keep the repo on the Linux filesystem for the first install (for example `~/projects/SurvStudio`), not under `/mnt/c/...`; editable `pip install -e .` can stall on mounted Windows paths
 
 ## 1-Minute Quick Start
 
@@ -284,6 +285,10 @@ This is the safest fallback on:
 - shared servers where you cannot use `sudo`
 - WSL setups where the OS Python is older than the project requirement
 
+WSL note:
+- if the repo is inside `/mnt/c/...` or another mounted Windows path, clone or move it to the Linux filesystem first before running the commands below
+- the editable install was verified on WSL2 from the Linux filesystem; on mounted Windows paths it can hang in 9p filesystem I/O during `pip install -e .`
+
 It bootstraps a project-local Python `3.11`, then creates the normal `.venv` from that interpreter.
 
 ```bash
@@ -347,6 +352,7 @@ Notes:
 - `.[dev]` includes pytest, httpx, `kaleido`, the format readers, and the ML and DL extras
 - `.[all]` includes the format readers, ML, DL, export, and browser-test extras
 - on Linux, `.[dl]`, `.[dev]`, and `.[all]` can download a large PyTorch wheel and, depending on platform resolution, additional CUDA runtime packages
+- on Linux, PyTorch may print a CUDA initialization warning if the installed NVIDIA driver is older than the wheel expects; SurvStudio can still run on CPU, so this warning is only a blocker if you specifically need GPU acceleration
 - if you only want to run the dashboard or classical survival workflows with CSV or TSV input, stay with `pip install -e .`
 
 ### Optional Browser E2E Test Install
@@ -393,6 +399,7 @@ If `python -m survival_toolkit` does not start the server, check:
 - Add `.[dl]` only when you need the optional deep-learning models.
 - Add `.[dev]` when you want the full local development stack, normal pytest suite, and the optional format readers.
 - On Linux, `.[dl]` and `.[dev]` may be large because PyTorch can pull platform-specific runtime packages.
+- On Linux, an older NVIDIA driver can trigger a PyTorch CUDA initialization warning even when CPU execution still works; this matters only if you expect GPU acceleration.
 - If your machine only has Python `3.10`, bootstrap Python `3.11` first with the `Project-local Conda fallback` section.
 - Browser E2E testing is optional and uses the separate `e2e` extra.
 - The app itself does not need Playwright.
