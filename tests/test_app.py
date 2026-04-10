@@ -535,7 +535,9 @@ def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None
     assert "Board freshness: stale reference" in text
     assert "showing the latest full cross-family board as reference only" in text
     assert "Showing the last Compare All board as a stale reference." in text
-    assert "benchmark-row-subcopy" in text
+    assert "benchmark-row-note" in text
+    assert '<th class="benchmark-review-column">Review</th>' in text
+    assert '<th class="benchmark-notes-column">Notes</th>' in text
     assert "Show selected controls" not in text
     assert "Selected model:" not in text
 
@@ -809,7 +811,7 @@ def test_benchmark_leaderboard_exposes_params_actions() -> None:
 
     assert 'function benchmarkParamsSummary(goal, modelLabel) {' in app_js
     assert 'function showBenchmarkParams(goal, modelLabel) {' in app_js
-    assert 'const paramsButton = event.target.closest("[data-benchmark-params-goal]");' in app_js
+    assert 'const paramsButton = closestFromEvent(event, "[data-benchmark-params-goal]");' in app_js
     assert 'showBenchmarkParams(' in app_js
     assert 'label: "Params"' in benchmark_js
     assert 'benchmarkParamsGoal: familyMeta.familyTab === "unknown" ? "" : familyMeta.familyTab,' in benchmark_js
@@ -5953,6 +5955,8 @@ def test_benchmark_frontend_normalizes_missing_family_labels_before_rendering() 
     assert 'disabled: familyMeta.familyTab === "unknown",' in text
     assert 'const presentFamilies = [...new Set(board.visibleRows.map((row) => benchmarkRowFamilyMeta(row).familyLabel))];' in text
     assert '<td><span class="benchmark-family-pill family-${escapeHtml(familyMeta.familyTab)}">${escapeHtml(familyMeta.familyLabel)}</span></td>' in text
+    assert '<td>${escapeHtml(formatValue(row.model))}</td>' in text
+    assert '<td class="benchmark-notes-column">${row.excluded && row.exclusionReason ? `<div class="benchmark-row-note">${escapeHtml(row.exclusionReason)}</div>` : ""}</td>' in text
 
 
 def test_guided_runs_use_scope_override_for_loading_locks() -> None:
