@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import zipfile
 
 try:
@@ -3817,6 +3818,38 @@ def test_frontend_csv_download_sanitizes_formula_like_cells() -> None:
     assert 'trimmed.startsWith("-")' in downloads_js
     assert 'trimmed.startsWith("@")' in downloads_js
     assert "return `'${text}`;" in downloads_js
+
+
+def test_frontend_format_value_keeps_tiny_p_values_nonzero() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    start = app_js.index("function formatValue(value, options = {}) {")
+    end = app_js.index("\n\nfunction formatPercent", start)
+    snippet = app_js[start:end]
+    node_script = "\n".join(
+        [
+            snippet,
+            "const values = [formatValue(7.582823258189819e-14), formatValue(0.00072), formatValue(0.0042)];",
+            "console.log(JSON.stringify(values));",
+        ]
+    )
+    completed = subprocess.run(
+        ["node", "-e", node_script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    formatted = json.loads(completed.stdout.strip())
+
+    assert formatted[0] == "7.58e-14"
+    assert formatted[1] == "7.20e-4"
+    assert formatted[2] == "0.0042"
 
 
 def test_frontend_covariate_picker_keeps_all_unique_continuous_columns() -> None:
