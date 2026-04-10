@@ -3172,7 +3172,7 @@ h3 {
   white-space: nowrap;
 }
 
-.benchmark-row-subcopy {
+.benchmark-row-note {
   margin-top: 6px;
   font-size: 0.84rem;
   line-height: 1.35;
@@ -3181,6 +3181,11 @@ h3 {
 
 .benchmark-table th.benchmark-review-column {
   text-align: center;
+}
+
+.benchmark-table th.benchmark-notes-column,
+.benchmark-table td.benchmark-notes-column {
+  min-width: 320px;
 }
 
 .benchmark-workspace-shell {

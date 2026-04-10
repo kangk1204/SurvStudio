@@ -700,6 +700,7 @@
               <th>Evaluation</th>
               <th>Status</th>
               <th class="benchmark-review-column">Review</th>
+              <th class="benchmark-notes-column">Notes</th>
             </tr>
           </thead>
           <tbody>
@@ -709,11 +710,12 @@
               <tr>
                 <td>${row.excluded ? "—" : (board.hasMixedEvaluation ? row.sourceRank : index + 1)}</td>
                 <td><span class="benchmark-family-pill family-${escapeHtml(familyMeta.familyTab)}">${escapeHtml(familyMeta.familyLabel)}</span></td>
-                <td>${escapeHtml(formatValue(row.model))}${row.excluded && row.exclusionReason ? `<div class="benchmark-row-subcopy">${escapeHtml(row.exclusionReason)}</div>` : ""}</td>
+                <td>${escapeHtml(formatValue(row.model))}</td>
                 <td>${escapeHtml(formatValue(row.c_index))}</td>
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>
                 <td class="benchmark-review-column"><span class="benchmark-action-slot" data-benchmark-action-slot="${index}"></span></td>
+                <td class="benchmark-notes-column">${row.excluded && row.exclusionReason ? `<div class="benchmark-row-note">${escapeHtml(row.exclusionReason)}</div>` : ""}</td>
               </tr>
             `;
             }).join("")}
