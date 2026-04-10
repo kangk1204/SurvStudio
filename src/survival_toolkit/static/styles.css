@@ -200,6 +200,26 @@ body {
   background: var(--bg);
 }
 
+.skip-link {
+  position: absolute;
+  left: var(--space-4);
+  top: var(--space-3);
+  z-index: 140;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--teal-rgb), 0.24);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+  box-shadow: var(--shadow);
+  transform: translateY(-160%);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
 ::selection {
   background: rgba(37, 115, 135, 0.18);
   color: var(--ink);
@@ -3204,6 +3224,11 @@ h3 {
   gap: 16px;
 }
 
+.benchmark-workspace-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 .benchmark-workspace-frame {
   display: grid;
   gap: 14px;
@@ -3306,6 +3331,7 @@ td {
   vertical-align: top;
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 th {

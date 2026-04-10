@@ -1043,13 +1043,23 @@ def _cohort_frame(
     for column in extra_columns:
         if not is_numeric_dtype(frame[column]):
             frame[column] = frame[column].astype("string")
+    drop_subset = required_columns if drop_missing_extra_columns else [time_column, event_column]
+    inf_row_mask = np.zeros(len(frame), dtype=bool)
+    for column in drop_subset:
+        series = frame[column]
+        if is_numeric_dtype(series):
+            numeric_values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+            inf_row_mask |= np.isinf(numeric_values)
     frame = frame.replace([np.inf, -np.inf], np.nan)
+    missing_row_mask = frame[drop_subset].isna().any(axis=1).to_numpy(dtype=bool)
     if drop_missing_extra_columns:
         frame = frame.dropna()
     else:
         frame = frame.dropna(subset=[time_column, event_column])
     positive_mask = _ensure_positive_times(frame[time_column])
     frame = frame.loc[positive_mask].reset_index(drop=True)
+    frame.attrs["rows_with_infinite_values"] = int(inf_row_mask.sum())
+    frame.attrs["dropped_missing_rows"] = int(missing_row_mask.sum())
     frame.attrs["dropped_nonpositive_time_rows"] = int((~positive_mask).sum())
     if frame.empty:
         raise ValueError("No analyzable rows remain after removing missing values.")
@@ -1332,18 +1342,6 @@ def _safe_float(value: Any) -> float | None:
     if not np.isfinite(float_value):
         return None
     return float_value
-
-
-def _safe_exp(value: Any) -> float:
-    """Exponentiate with saturation, always returning a finite float."""
-    exponent = float(value)
-    if not math.isfinite(exponent):
-        return float(np.finfo(float).max) if exponent > 0 else float(np.finfo(float).tiny)
-    if exponent >= _MAX_EXP_INPUT:
-        return float(np.finfo(float).max)
-    if exponent <= _MIN_EXP_INPUT:
-        return float(np.finfo(float).tiny)
-    return math.exp(exponent)
 
 
 def _safe_exp_or_none(value: Any) -> float | None:
@@ -1756,7 +1754,7 @@ def _cox_global_ph_screening(diagnostic_rows: Sequence[dict[str, Any]]) -> dict[
         if row.get("_kind") != "global"
         and row.get("P value") is not None
         and np.isfinite(float(row["P value"]))
-        and 0.0 < float(row["P value"]) <= 1.0
+        and 0.0 <= float(row["P value"]) <= 1.0
     ]
     if len(valid_p_values) < 2:
         return {
@@ -1859,6 +1857,8 @@ def _km_scientific_summary(
         for row in summary_rows
     )
     dropped_nonpositive_time_rows = int(cohort_summary.get("dropped_nonpositive_time_rows") or 0)
+    dropped_missing_rows = int(cohort_summary.get("dropped_missing_rows") or 0)
+    rows_with_infinite_values = int(cohort_summary.get("rows_with_infinite_values") or 0)
 
     strengths = [
         "Kaplan-Meier estimation uses Greenwood standard errors with log-log confidence intervals.",
@@ -1903,6 +1903,14 @@ def _km_scientific_summary(
         cautions.append(
             f"{dropped_nonpositive_time_rows} row(s) with nonpositive survival time were excluded before KM estimation."
         )
+    if dropped_missing_rows:
+        missing_message = f"{dropped_missing_rows} row(s) with missing KM inputs were excluded before KM estimation."
+        if rows_with_infinite_values:
+            missing_message = (
+                f"{dropped_missing_rows} row(s) with missing KM inputs were excluded before KM estimation, "
+                f"including {rows_with_infinite_values} row(s) where +/-Inf values were coerced to missing."
+            )
+        cautions.append(missing_message)
 
     if group_column and outcome_informed_group:
         headline = "Outcome-informed groups were visualized descriptively; a fresh log-rank p-value is not reported on the same selected split."
@@ -2009,6 +2017,7 @@ def _cox_scientific_summary(
     outcome_rows_raw = model_stats.get("outcome_rows")
     dropped_rows_raw = model_stats.get("dropped_rows")
     dropped_nonpositive_time_rows = int(model_stats.get("dropped_nonpositive_time_rows") or 0)
+    rows_with_infinite_values = int(model_stats.get("rows_with_infinite_values") or 0)
     outcome_rows = int(outcome_rows_raw) if outcome_rows_raw is not None else None
     dropped_rows = int(dropped_rows_raw) if dropped_rows_raw is not None else None
     dropped_fraction = None
@@ -2116,6 +2125,10 @@ def _cox_scientific_summary(
         cautions.append(
             f"{dropped_nonpositive_time_rows} outcome-valid row(s) with nonpositive survival time were excluded before Cox fitting."
         )
+    if rows_with_infinite_values:
+        cautions.append(
+            f"{rows_with_infinite_values} outcome-valid row(s) contained +/-Inf values in selected Cox inputs; those values were coerced to missing before complete-case filtering."
+        )
     if ph_alert_terms:
         cautions.append(
             f"Possible proportional-hazards violations detected for: {', '.join(ph_alert_terms)}."
@@ -2147,7 +2160,7 @@ def _cox_scientific_summary(
         cautions.append("The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.")
     if c_index is not None:
         strengths.append(
-            f"A C-index of {c_index:.3f} means the fitted model ranks about {c_index * 100:.1f}% of comparable patient pairs in the observed risk order."
+            f"A C-index of {c_index:.3f} means the fitted model correctly orders approximately {c_index * 100:.1f}% of evaluable patient pairs by predicted risk."
         )
     if lr_statistic is not None and lr_pvalue is not None:
         strengths.append(
@@ -2318,15 +2331,25 @@ def _signature_scientific_summary(
         "Stability score is a composite heuristic that mixes significance, effect size, replication support, and parsimony; its weights are expert-set and not independently validated."
     )
 
-    if search_space["permutation_iterations"] > 0:
+    permutation_iterations = int(search_space.get("permutation_iterations") or 0)
+    validation_iterations = int(search_space.get("validation_iterations") or 0)
+    bootstrap_iterations = int(search_space.get("bootstrap_iterations") or 0)
+
+    if permutation_iterations > 0:
         strengths.append("Permutation-based empirical filtering was enabled for top-ranked candidates.")
-    if search_space["validation_iterations"] > 0:
+    if validation_iterations > 0:
         strengths.append("Repeated subsample holdout checks were enabled for top-ranked candidates.")
 
     support = _safe_float(best_split.get("Bootstrap support (p<alpha)"))
     direction_consistency = _safe_float(best_split.get("Bootstrap HR direction consistency"))
     validation_support = _safe_float(best_split.get("Validation support (p<alpha)"))
     permutation_p = _safe_float(best_split.get("Permutation p"))
+    bootstrap_valid_resamples = int(best_split.get("Bootstrap valid resamples") or 0)
+    bootstrap_skipped_resamples = int(best_split.get("Bootstrap skipped resamples") or 0)
+    permutation_valid_resamples = int(best_split.get("Permutation valid resamples") or 0)
+    permutation_skipped_resamples = int(best_split.get("Permutation skipped resamples") or 0)
+    validation_valid_folds = int(best_split.get("Validation valid folds") or 0)
+    validation_skipped_folds = int(best_split.get("Validation skipped folds") or 0)
     signature_n = int(best_split["N signature+"])
     is_significant = bool(best_split["Statistically significant"])
     alpha = float(search_space["significance_level"])
@@ -2346,7 +2369,7 @@ def _signature_scientific_summary(
         cautions.append(
             "Signature discovery uses the analyzable subset after dropping missing candidate values; changing the candidate set can change the search cohort."
         )
-    if search_space["permutation_iterations"] == 0 and search_space["validation_iterations"] == 0:
+    if permutation_iterations == 0 and validation_iterations == 0:
         cautions.append(
             "Because the signature is selected from many tested rules in the same cohort, "
             "reported p-values (including BH-adjusted) can be optimistic without permutation or holdout checks."
@@ -2358,19 +2381,37 @@ def _signature_scientific_summary(
         cautions.append("The signature-positive subgroup is small, which can inflate apparent separation.")
     if support is not None and support < 0.7:
         cautions.append("Bootstrap support is below 0.70, so the signal may be unstable.")
+    if bootstrap_iterations > 0 and bootstrap_valid_resamples == 0:
+        cautions.append("Bootstrap resampling did not yield any valid signature resamples, so bootstrap stability support is unavailable.")
+    elif bootstrap_iterations > 0 and bootstrap_skipped_resamples > 0:
+        cautions.append(
+            f"Bootstrap screening used {bootstrap_valid_resamples} valid resamples and skipped {bootstrap_skipped_resamples}, so stability support is based on a reduced resampling subset."
+        )
     if direction_consistency is not None and direction_consistency < 0.75:
         cautions.append("Bootstrap hazard-ratio direction is not consistently preserved.")
     if validation_support is not None and validation_support < 0.5:
         cautions.append("Internal validation support is below 0.50.")
+    if validation_iterations > 0 and validation_valid_folds == 0:
+        cautions.append("Validation subsampling did not yield any analyzable holdout folds, so internal replication support is unavailable.")
+    elif validation_iterations > 0 and validation_skipped_folds > 0:
+        cautions.append(
+            f"Internal validation used {validation_valid_folds} valid holdout folds and skipped {validation_skipped_folds}, so replication support is based on a reduced subset."
+        )
     if permutation_p is not None and permutation_p > alpha:
         cautions.append("Permutation testing does not confirm the observed ranking at the configured alpha.")
+    if permutation_iterations > 0 and permutation_valid_resamples == 0:
+        cautions.append("Permutation screening did not yield any valid resamples, so the empirical p-value is unavailable.")
+    elif permutation_iterations > 0 and permutation_skipped_resamples > 0:
+        cautions.append(
+            f"Permutation screening used {permutation_valid_resamples} valid shuffles and skipped {permutation_skipped_resamples}, so the empirical p-value is based on fewer resamples than requested."
+        )
 
     has_internal_confirmation = (
-        search_space["permutation_iterations"] > 0 or search_space["validation_iterations"] > 0
+        permutation_iterations > 0 or validation_iterations > 0
     )
     if is_significant and has_internal_confirmation:
         headline = (
-            "Top-ranked signature remains an internally supported screening result "
+            "Top-ranked signature remains an internally screened result "
             "and still needs external validation before it is framed as a biomarker claim."
         )
         next_steps.append("Validate the locked signature on an external cohort before presenting it as a biomarker claim.")
@@ -2417,13 +2458,19 @@ def _bh_adjust(p_values: Sequence[float]) -> list[float]:
     p_array = np.asarray(p_values, dtype=float)
     if p_array.size == 0:
         return []
-    order = np.argsort(p_array)
-    sorted_p = p_array[order]
-    n_tests = p_array.size
-    candidate = np.minimum(1.0, sorted_p * n_tests / np.arange(1, p_array.size + 1, dtype=float))
+    adjusted = np.full(p_array.shape, np.nan, dtype=float)
+    valid_mask = np.isfinite(p_array)
+    if not valid_mask.any():
+        return [float(value) for value in adjusted]
+    valid_p = p_array[valid_mask]
+    order = np.argsort(valid_p)
+    sorted_p = valid_p[order]
+    n_tests = valid_p.size
+    candidate = np.minimum(1.0, sorted_p * n_tests / np.arange(1, valid_p.size + 1, dtype=float))
     monotone = np.minimum.accumulate(candidate[::-1])[::-1]
-    adjusted = np.empty_like(p_array)
-    adjusted[order] = monotone
+    valid_adjusted = np.empty_like(valid_p)
+    valid_adjusted[order] = monotone
+    adjusted[valid_mask] = valid_adjusted
     return [float(value) for value in adjusted]
 
 
@@ -2965,6 +3012,7 @@ def _bootstrap_signature_metrics(
             "Bootstrap median p": None,
             "Bootstrap HR direction consistency": None,
             "Bootstrap valid resamples": 0,
+            "Bootstrap skipped resamples": 0,
         }
 
     n_obs = int(frame.shape[0])
@@ -2973,6 +3021,7 @@ def _bootstrap_signature_metrics(
     rng = np.random.default_rng(random_seed)
     significant_count = 0
     valid_resamples = 0
+    skipped_resamples = 0
     p_values: list[float] = []
     hazard_ratios: list[float] = []
 
@@ -2984,11 +3033,13 @@ def _bootstrap_signature_metrics(
         n_high = int(mask_values.sum())
         n_low = sample_size - n_high
         if n_high < min_group_size or n_low < min_group_size:
+            skipped_resamples += 1
             continue
 
         events = sampled[event_column].to_numpy(dtype=int)
         times = sampled[time_column].to_numpy(dtype=float)
         if events[mask_values].sum() == 0 or events[~mask_values].sum() == 0:
+            skipped_resamples += 1
             continue
 
         try:
@@ -3010,6 +3061,7 @@ def _bootstrap_signature_metrics(
         except MemoryError:
             raise
         except Exception:
+            skipped_resamples += 1
             continue
 
         valid_resamples += 1
@@ -3028,6 +3080,7 @@ def _bootstrap_signature_metrics(
             "Bootstrap median p": None,
             "Bootstrap HR direction consistency": None,
             "Bootstrap valid resamples": 0,
+            "Bootstrap skipped resamples": int(skipped_resamples),
         }
 
     direction_consistency = None
@@ -3043,6 +3096,7 @@ def _bootstrap_signature_metrics(
         "Bootstrap median p": float(np.median(p_values)),
         "Bootstrap HR direction consistency": direction_consistency,
         "Bootstrap valid resamples": int(valid_resamples),
+        "Bootstrap skipped resamples": int(skipped_resamples),
     }
 
 
@@ -3105,6 +3159,7 @@ def _validation_signature_metrics(
             "Validation median HR": None,
             "Validation median p": None,
             "Validation valid folds": 0,
+            "Validation skipped folds": 0,
         }
 
     n_obs = int(frame.shape[0])
@@ -3116,12 +3171,14 @@ def _validation_signature_metrics(
             "Validation median HR": None,
             "Validation median p": None,
             "Validation valid folds": 0,
+            "Validation skipped folds": 0,
         }
     holdout_size = int(math.ceil(n_obs * validation_fraction))
     holdout_size = min(max(holdout_size, min_holdout), max_holdout)
     rng = np.random.default_rng(random_seed)
     significant_count = 0
     valid_folds = 0
+    skipped_folds = 0
     p_values: list[float] = []
     hazard_ratios: list[float] = []
 
@@ -3132,11 +3189,13 @@ def _validation_signature_metrics(
         n_high = int(mask_values.sum())
         n_low = holdout_size - n_high
         if n_high < min_group_size or n_low < min_group_size:
+            skipped_folds += 1
             continue
 
         events = sampled[event_column].to_numpy(dtype=int)
         times = sampled[time_column].to_numpy(dtype=float)
         if events[mask_values].sum() < min_events_per_group or events[~mask_values].sum() < min_events_per_group:
+            skipped_folds += 1
             continue
 
         try:
@@ -3159,6 +3218,7 @@ def _validation_signature_metrics(
         except MemoryError:
             raise
         except Exception:
+            skipped_folds += 1
             continue
 
         ci_low = _safe_exp_or_none(conf_int[0, 0])
@@ -3178,6 +3238,7 @@ def _validation_signature_metrics(
             "Validation median HR": None,
             "Validation median p": None,
             "Validation valid folds": 0,
+            "Validation skipped folds": int(skipped_folds),
         }
 
     return {
@@ -3185,6 +3246,7 @@ def _validation_signature_metrics(
         "Validation median HR": float(np.median(hazard_ratios)) if hazard_ratios else None,
         "Validation median p": float(np.median(p_values)),
         "Validation valid folds": int(valid_folds),
+        "Validation skipped folds": int(skipped_folds),
     }
 
 
@@ -3315,12 +3377,15 @@ def discover_feature_signature(
                         "Bootstrap median p": None,
                         "Bootstrap HR direction consistency": None,
                         "Bootstrap valid resamples": 0,
+                        "Bootstrap skipped resamples": 0,
                         "Permutation p": None,
                         "Permutation valid resamples": 0,
+                        "Permutation skipped resamples": 0,
                         "Validation support (p<alpha)": None,
                         "Validation median HR": None,
                         "Validation median p": None,
                         "Validation valid folds": 0,
+                        "Validation skipped folds": 0,
                         "Stability score": None,
                         "Statistically significant": False,
                     }
@@ -3400,6 +3465,7 @@ def discover_feature_signature(
             )
             rows[idx]["Permutation p"] = empirical_p
             rows[idx]["Permutation valid resamples"] = valid_perm
+            rows[idx]["Permutation skipped resamples"] = max(0, int(permutation_iterations) - int(valid_perm))
 
     if validation_iterations > 0:
         for idx in sorted(metric_candidate_idx):
@@ -3491,14 +3557,23 @@ def discover_feature_signature(
         "bootstrap_scored_signatures": int(
             sum(1 for row in rows if row["Bootstrap valid resamples"] > 0)
         ),
+        "bootstrap_skipped_resamples_total": int(
+            sum(int(row.get("Bootstrap skipped resamples") or 0) for row in rows)
+        ),
         "permutation_iterations": int(permutation_iterations),
         "permutation_scored_signatures": int(
             sum(1 for row in rows if row["Permutation valid resamples"] > 0)
+        ),
+        "permutation_skipped_resamples_total": int(
+            sum(int(row.get("Permutation skipped resamples") or 0) for row in rows)
         ),
         "validation_iterations": int(validation_iterations),
         "validation_fraction": float(validation_fraction),
         "validation_scored_signatures": int(
             sum(1 for row in rows if row["Validation valid folds"] > 0)
+        ),
+        "validation_skipped_folds_total": int(
+            sum(int(row.get("Validation skipped folds") or 0) for row in rows)
         ),
         "significance_level": float(significance_level),
         "permutation_required_for_significance": bool(permutation_iterations > 0),
@@ -3557,6 +3632,13 @@ def compute_km_analysis(
     suppress_group_inference: bool = False,
     outcome_informed_group: bool = False,
 ) -> dict[str, Any]:
+    if not (0.0 < float(confidence_level) < 1.0):
+        raise ValueError("confidence_level must be between 0 and 1.")
+    if max_time is not None and float(max_time) <= 0.0:
+        raise ValueError("max_time must be positive when provided.")
+    if int(risk_table_points) < 1:
+        raise ValueError("risk_table_points must be at least 1.")
+
     extra_columns = [group_column] if group_column else []
     frame = _cohort_frame(
         df,
@@ -3574,6 +3656,11 @@ def compute_km_analysis(
 
     if len(group_labels) == 0:
         raise ValueError("No groups remain after removing missing values.")
+    if group_column and len(group_labels) > 50:
+        raise ValueError(
+            "Kaplan-Meier can plot at most 50 groups at once. "
+            "Choose a grouped clinical variable instead of an identifier-like column."
+        )
 
     time_values = frame[time_column].to_numpy(dtype=float)
     event_values = frame[event_column].to_numpy(dtype=int)
@@ -3698,7 +3785,9 @@ def compute_km_analysis(
         "censored": int((1 - frame[event_column]).sum()),
         "median_follow_up": _median_follow_up(frame[time_column], frame[event_column]),
         "time_max": float(np.nanmax(frame[time_column])),
+        "dropped_missing_rows": int(frame.attrs.get("dropped_missing_rows", 0)),
         "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
+        "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_values", 0)),
     }
     rmst_contrast: dict[str, Any] | None = None
     if len(summary_rows) == 2 and len(rmst_stats_by_group) == 2:
@@ -4345,6 +4434,7 @@ def compute_cox_analysis(
             "outcome_rows": outcome_rows,
             "dropped_rows": dropped_rows,
             "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
+            "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_values", 0)),
             "events": n_events,
             "parameters": k_params,
             "events_per_parameter": float(n_events / k_params) if k_params else None,
@@ -4392,6 +4482,7 @@ def compute_cox_analysis(
             "outcome_rows": outcome_rows,
             "dropped_rows": dropped_rows,
             "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
+            "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_values", 0)),
             "events": n_events,
             "parameters": k_params,
             "events_per_parameter": float(n_events / k_params) if k_params else None,

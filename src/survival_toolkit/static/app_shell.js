@@ -10,6 +10,7 @@
       guidedStep: runtime.guidedStep,
       predictiveFamily: runtime.predictiveFamily,
       workbenchRevealed: runtime.workbenchRevealed,
+      predictiveWorkbenchIntent: runtime.predictiveWorkbenchIntent,
       controls: captureControlSnapshot(),
     };
   }
@@ -80,6 +81,10 @@
     runtime.deriveDraftTouched = false;
     runtime.predictiveFamily = "ml";
     runtime.workbenchRevealed = false;
+    runtime.predictiveWorkbenchIntent = null;
+    runtime.compareCache.ml = null;
+    runtime.compareCache.dl = null;
+    runtime.compareCache.unified = null;
     runtime.resultPreference.ml = "single";
     runtime.resultPreference.dl = "single";
     resetCoxPreview({ rerender: false });

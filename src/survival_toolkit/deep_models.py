@@ -13,6 +13,7 @@ All functions return plain dicts (JSON-serializable) suitable for FastAPI respon
 from __future__ import annotations
 
 import gc
+import math
 import multiprocessing as mp
 import os
 import subprocess
@@ -302,7 +303,15 @@ def _coerce_deep_frame(
         if col in categorical_features:
             frame[col] = frame[col].astype("string")
         else:
-            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+            raw_values = frame[col]
+            numeric_values = pd.to_numeric(raw_values, errors="coerce")
+            introduced_missing = raw_values.notna() & numeric_values.isna()
+            if introduced_missing.any():
+                raise ValueError(
+                    f"Numeric deep-learning feature '{col}' contains {int(introduced_missing.sum())} non-numeric value(s). "
+                    "Clean or recode that column before training."
+                )
+            frame[col] = numeric_values
 
     frame = frame.dropna(subset=[time_column, event_column]).copy()
     positive_mask = frame[time_column] > 0
@@ -678,8 +687,13 @@ def _compute_c_index_torch(
         try:
             result = _sksurv_concordance(event_bool, time_np, risk_np)
             return float(result[0])
-        except Exception:
-            pass
+        except (ImportError, RuntimeError, TypeError, ValueError, ZeroDivisionError) as exc:
+            warnings.warn(
+                "scikit-survival concordance computation failed; falling back to the internal O(n^2) concordance routine. "
+                f"Reason: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     # Fallback: pure-NumPy O(n²) implementation
     if len(time_np) > 2000:
@@ -1003,18 +1017,23 @@ def _gradient_feature_importance(
     output_to_score: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> list[float]:
     """Compute gradient-based feature importance: mean |grad of output w.r.t. input|."""
+    was_training = bool(getattr(model, "training", False))
     model.eval()
-    x_input = x_tensor.clone().detach().requires_grad_(True)
-    output = model(x_input)
-    if output_to_score is not None:
-        output = output_to_score(output)
-    elif output.dim() > 1:
-        output = output.sum(dim=1)
-    grad = torch.autograd.grad(output.sum(), x_input, retain_graph=False, create_graph=False)[0]
-    if grad is None:
-        return [0.0] * x_tensor.shape[1]
-    importance = grad.abs().mean(dim=0).detach().cpu().numpy()
-    return [float(v) for v in importance]
+    try:
+        x_input = x_tensor.clone().detach().requires_grad_(True)
+        output = model(x_input)
+        if output_to_score is not None:
+            output = output_to_score(output)
+        elif output.dim() > 1:
+            output = output.sum(dim=1)
+        grad = torch.autograd.grad(output.sum(), x_input, retain_graph=False, create_graph=False)[0]
+        if grad is None:
+            return [0.0] * x_tensor.shape[1]
+        importance = grad.abs().mean(dim=0).detach().cpu().numpy()
+        return [float(v) for v in importance]
+    finally:
+        if was_training:
+            model.train()
 
 
 def _require_finite_loss(loss: torch.Tensor, *, context: str) -> None:
@@ -1036,12 +1055,14 @@ def _scientific_summary_dl(
     dropped_nonpositive_time_rows: int = 0,
 ) -> dict[str, Any]:
     """Build an insight board dict for deep learning models."""
-    c_val = c_index if c_index is not None else 0.5
     metric_name = _metric_name_for_evaluation(evaluation_mode)
+    c_val = float(c_index) if c_index is not None else None
 
     epochs_trained = int(len(loss_history))
 
-    if c_val > 0.65:
+    if c_val is None:
+        status = "review"
+    elif c_val > 0.65:
         status = "robust"
     elif c_val >= 0.55:
         status = "review"
@@ -1079,7 +1100,12 @@ def _scientific_summary_dl(
             cautions.append(
                 f"Training events per feature is {events_per_feature:.1f}; deep models can overfit quickly when feature count is high relative to events."
             )
-    if c_val < 0.55:
+    if c_val is None:
+        cautions.append(
+            f"{metric_name} could not be computed for this run, usually because the evaluation subset had no usable event/comparison pairs."
+        )
+        next_steps.append("Use a larger evaluation split or a comparison path that preserves evaluable events before interpreting discrimination.")
+    elif c_val < 0.55:
         cautions.append(f"{metric_name} ({c_val:.3f}) suggests weak discrimination.")
         next_steps.append("Try different architectures, hyperparameters, or additional features.")
     elif c_val < 0.65:
@@ -1135,8 +1161,9 @@ def _scientific_summary_dl(
     return {
         "status": status,
         "headline": (
-            f"{model_name} estimated a {metric_name.lower()} of {c_val:.3f} on "
-            f"{evaluation_mode.replace('_', ' ')} evaluation."
+            f"{model_name} estimated a {metric_name.lower()} of {c_val:.3f} on {evaluation_mode.replace('_', ' ')} evaluation."
+            if c_val is not None
+            else f"{model_name} completed {evaluation_mode.replace('_', ' ')} evaluation, but the {metric_name.lower()} was not estimable for this run."
         ),
         "strengths": strengths,
         "cautions": cautions,
@@ -1176,6 +1203,9 @@ def _update_early_stopping(
         return best_value, wait_count, best_state, False
     if goal not in {"min", "max"}:
         raise ValueError("Early-stopping goal must be 'min' or 'max'.")
+    if not math.isfinite(monitor_value):
+        wait_count += 1
+        return best_value, wait_count, best_state, wait_count >= patience
 
     improved = best_value is None or (
         monitor_value < (best_value - min_delta)
@@ -1466,6 +1496,8 @@ def compare_deep_survival_models(
             raise ValueError("cv_folds must be at least 2 for deep-learning repeated CV.")
         if cv_repeats < 1:
             raise ValueError("cv_repeats must be at least 1 for deep-learning repeated CV.")
+        if cv_folds * cv_repeats > 200:
+            raise ValueError("cv_folds * cv_repeats must not exceed 200 total evaluations for deep-learning repeated CV.")
 
         clean_frame = _coerce_deep_frame(
             df,
@@ -1836,7 +1868,7 @@ def compare_deep_survival_models(
         dropped_nonpositive_time_rows=dropped_nonpositive_time_rows,
     )
 
-
+@user_input_boundary
 def evaluate_single_deep_survival_model(
     model_type: str,
     *,
@@ -3829,21 +3861,29 @@ def train_survival_vae(
         mask = cluster_labels_np == c
         if mask.sum() < 2:
             continue
-        c_times = time_np[mask]
-        c_events = event_np[mask]
+        c_times = np.asarray(time_np[mask], dtype=float)
+        c_events = np.asarray(event_np[mask], dtype=float)
 
         # Simple KM estimator
-        unique_times = np.sort(np.unique(c_times))
+        unique_times, inverse_index, exit_counts = np.unique(
+            c_times,
+            return_inverse=True,
+            return_counts=True,
+        )
+        event_counts = np.bincount(
+            inverse_index,
+            weights=(c_events == 1).astype(float),
+            minlength=unique_times.size,
+        ).astype(float)
         survival = np.ones(len(unique_times))
         n_at_risk = float(mask.sum())
-        for j, t_j in enumerate(unique_times):
-            d_j = float(((c_times == t_j) & (c_events == 1)).sum())
+        for j, (d_j, exits_at_time) in enumerate(zip(event_counts, exit_counts, strict=True)):
+            previous_survival = survival[j - 1] if j > 0 else 1.0
             if n_at_risk > 0:
-                survival[j] = (survival[j - 1] if j > 0 else 1.0) * (1.0 - d_j / n_at_risk)
+                survival[j] = min(previous_survival, previous_survival * max(0.0, 1.0 - d_j / n_at_risk))
             else:
-                survival[j] = survival[j - 1] if j > 0 else 1.0
-            # Update at-risk count: subtract all who had event or were censored at this time
-            n_at_risk -= float((c_times == t_j).sum())
+                survival[j] = previous_survival
+            n_at_risk = max(0.0, n_at_risk - float(exits_at_time))
 
         timeline = [0.0] + [float(t) for t in unique_times]
         surv_values = [1.0] + [float(s) for s in survival]
@@ -3852,6 +3892,19 @@ def train_survival_vae(
             "n_patients": int(mask.sum()),
             "curve": _make_survival_curve(timeline, surv_values),
         })
+
+    # Feature importance (gradient-based salience of the survival head risk output)
+    importance = _gradient_feature_importance(
+        model,
+        x_all[artifact_idx],
+        output_to_score=lambda output: output[3].reshape(-1),
+    )
+    feature_importance = [
+        {"feature": name, "importance": imp}
+        for name, imp in sorted(
+            zip(data["feature_names"], importance), key=lambda p: p[1], reverse=True
+        )
+    ]
 
     training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs, monitor_goal="max")
     insight = _scientific_summary_dl(
@@ -3898,6 +3951,7 @@ def train_survival_vae(
         "latent_embeddings": latent_embeddings,
         "cluster_labels": cluster_labels,
         "cluster_survival_curves": cluster_survival_curves,
+        "feature_importance": feature_importance,
         "risk_scores": risk_list,
         "artifact_scope": artifact_scope,
         "artifact_samples": int(artifact_idx.numel()),

@@ -783,6 +783,111 @@ def test_browser_guided_predictive_single_model_tuning_returns_to_stale_leaderbo
         raise
 
 
+def test_browser_guided_predictive_failed_single_model_rerun_stays_on_step4(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    def _mock_ml_payload(body: dict) -> dict:
+        return {
+            "request_config": body,
+            "analysis": {
+                "comparison_table": [
+                    {"model": "Random Survival Forest", "c_index": 0.712, "evaluation_mode": "holdout", "n_features": len(body.get("features", [])), "training_time_ms": 120.0, "rank": 1},
+                    {"model": "Gradient Boosted Survival", "c_index": 0.701, "evaluation_mode": "holdout", "n_features": len(body.get("features", [])), "training_time_ms": 150.0, "rank": 2},
+                ],
+                "evaluation_mode": "holdout",
+                "scientific_summary": {
+                    "status": "review",
+                    "headline": "ML comparison complete.",
+                    "strengths": [],
+                    "cautions": [],
+                    "next_steps": [],
+                },
+            },
+        }
+
+    def _mock_dl_compare_payload(body: dict) -> dict:
+        return {
+            "request_config": body,
+            "analysis": {
+                "comparison_table": [
+                    {"model": "DeepSurv", "c_index": 0.676, "evaluation_mode": "holdout", "epochs_trained": 48, "n_features": len(body.get("features", [])), "training_time_ms": 420.0, "rank": 1},
+                    {"model": "DeepHit", "c_index": 0.651, "evaluation_mode": "holdout", "epochs_trained": 44, "n_features": len(body.get("features", [])), "training_time_ms": 510.0, "rank": 2},
+                ],
+                "evaluation_mode": "holdout",
+                "scientific_summary": {
+                    "status": "review",
+                    "headline": "DL comparison complete.",
+                    "strengths": [],
+                    "cautions": [],
+                    "next_steps": [],
+                },
+            },
+        }
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1400})
+
+            def route_ml_model(route) -> None:
+                body = json.loads(route.request.post_data or "{}")
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(_mock_ml_payload(body)),
+                )
+
+            def route_dl_model(route) -> None:
+                body = json.loads(route.request.post_data or "{}")
+                if body.get("model_type") == "compare":
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(_mock_dl_compare_payload(body)),
+                    )
+                    return
+                route.fulfill(
+                    status=500,
+                    content_type="application/json",
+                    body=json.dumps({"detail": "forced single-model failure"}),
+                )
+
+            page.route("**/api/ml-model", route_ml_model)
+            page.route("**/api/deep-model", route_dl_model)
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#workspace").wait_for(state="visible")
+            page.locator("#guidedShell").wait_for(state="visible")
+            page.wait_for_function("document.body.dataset.guidedStep === '2'")
+            page.locator('[data-guided-action="next-step"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '3'")
+            page.locator('[data-guided-action="choose-goal"][data-goal="predictive"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+
+            page.locator('[data-guided-action="run-predictive-compare-all"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '5'")
+            page.wait_for_function("document.getElementById('benchmarkComparisonShell').textContent.includes('DeepSurv')")
+
+            page.locator('#benchmarkComparisonShell [data-benchmark-model="deepsurv"]').click()
+            page.wait_for_function("document.body.dataset.guidedStep === '4'")
+            page.wait_for_function("document.getElementById('benchmarkWorkbench').classList.contains('hidden') === false")
+            page.locator("#dlHiddenLayers").fill("64")
+            page.locator("#runPredictiveWorkbenchButton").click()
+            page.wait_for_function("document.querySelector('#toastContainer .toast-error') !== null")
+
+            assert page.locator("body").get_attribute("data-guided-step") == "4"
+            assert page.locator("#benchmarkWorkbench").is_visible()
+            assert page.locator("#runPredictiveWorkbenchButton").is_visible()
+            assert "DeepSurv" in page.locator("#benchmarkWorkbench").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
 def test_browser_guided_change_analysis_returns_to_step3_with_valid_tab(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 

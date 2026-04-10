@@ -164,6 +164,42 @@ def _normalize_event_positive_value(value: Any) -> Any:
     raise ValueError("event_positive_value must be a scalar JSON value (string, number, boolean, or null).")
 
 
+def _normalize_unique_name_list(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        raise ValueError(f"{field_name} must be a list of column names.")
+    try:
+        raw_values = list(value)
+    except TypeError as exc:  # pragma: no cover - defensive branch
+        raise ValueError(f"{field_name} must be a list of column names.") from exc
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        text = _normalize_optional_text_field(raw_value, field_name=field_name)
+        if text is None or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized
+
+
+def _validate_subset_names(
+    subset: Sequence[str],
+    superset: Sequence[str],
+    *,
+    subset_name: str,
+    superset_name: str,
+) -> None:
+    allowed = {str(value) for value in superset}
+    extras = [str(value) for value in subset if str(value) not in allowed]
+    if extras:
+        raise ValueError(
+            f"{subset_name} must be a subset of {superset_name}; unexpected value(s): {', '.join(extras)}."
+        )
+
+
 class _DatasetRequestModel(BaseModel):
     @field_validator("dataset_id", mode="before", check_fields=False)
     @classmethod
@@ -181,6 +217,26 @@ class _EventPositiveValueRequestModel(_DatasetRequestModel):
     @classmethod
     def validate_event_positive_value(cls, value: Any) -> Any:
         return _normalize_event_positive_value(value)
+
+
+class _FeatureSelectionRequestModel(_EventPositiveValueRequestModel):
+    @field_validator("features", "categorical_features", mode="before", check_fields=False)
+    @classmethod
+    def validate_feature_name_lists(cls, value: Any, info: Any) -> list[str]:
+        return _normalize_unique_name_list(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def validate_categorical_feature_subset(self) -> "_FeatureSelectionRequestModel":
+        features = getattr(self, "features", None)
+        categorical_features = getattr(self, "categorical_features", None)
+        if features is not None and categorical_features is not None:
+            _validate_subset_names(
+                categorical_features,
+                features,
+                subset_name="categorical_features",
+                superset_name="features",
+            )
+        return self
 
 
 class _MlArtifactCache:
@@ -330,6 +386,21 @@ class CoxRequest(_EventPositiveValueRequestModel):
     categorical_covariates: list[str] = Field(default_factory=list, max_length=200)
     strata_columns: list[str] = Field(default_factory=list, max_length=200)
 
+    @field_validator("covariates", "categorical_covariates", "strata_columns", mode="before")
+    @classmethod
+    def validate_name_lists(cls, value: Any, info: Any) -> list[str]:
+        return _normalize_unique_name_list(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def validate_categorical_subset(self) -> "CoxRequest":
+        _validate_subset_names(
+            self.categorical_covariates,
+            self.covariates,
+            subset_name="categorical_covariates",
+            superset_name="covariates",
+        )
+        return self
+
 
 class CohortTableRequest(_DatasetRequestModel):
     dataset_id: str
@@ -366,7 +437,7 @@ class SignatureSearchRequest(_EventPositiveValueRequestModel):
         )
 
 
-class MLModelRequest(_EventPositiveValueRequestModel):
+class MLModelRequest(_FeatureSelectionRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -385,7 +456,7 @@ class MLModelRequest(_EventPositiveValueRequestModel):
     cv_repeats: int = Field(default=3, ge=1, le=20)
 
 
-class DeepModelRequest(_EventPositiveValueRequestModel):
+class DeepModelRequest(_FeatureSelectionRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -1018,11 +1089,52 @@ def _export_provenance_notes(provenance: dict[str, Any] | None) -> list[str]:
     return notes
 
 
+def _classify_runtime_request_error(exc: Exception) -> tuple[int, str] | None:
+    if isinstance(exc, np.linalg.LinAlgError):
+        return (
+            400,
+            "The analysis hit a linear-algebra stability problem (for example, a singular or redundant design matrix). "
+            "Reduce overlapping variables, sparse categories, or feature count and try again.",
+        )
+
+    raw_message = str(exc).strip()
+    lowered = raw_message.lower()
+    if isinstance(exc, ArithmeticError):
+        return (
+            400,
+            "The analysis hit a numerical stability problem. Reduce sparse levels, simplify the model, or narrow the feature set and try again.",
+        )
+    if isinstance(exc, RuntimeError):
+        if any(token in lowered for token in ("out of memory", "cuda", "cudnn", "cublas", "allocator", "alloc")):
+            return (
+                400,
+                "The run ran out of memory or hit a CUDA runtime limit. Reduce batch size, model width, or feature count and try again.",
+            )
+        if any(token in lowered for token in ("nan", "inf", "non-finite", "numerical", "overflow", "underflow")):
+            return (
+                400,
+                "The run became numerically unstable. Check for invalid values, simplify the model, or reduce the learning rate and try again.",
+            )
+        if any(token in lowered for token in ("size mismatch", "shape", "dimension")):
+            return (
+                400,
+                "The run failed because the model inputs were incompatible with the requested configuration. Review the selected features and model settings.",
+            )
+    return None
+
+
 def fail_bad_request(exc: Exception) -> NoReturn:
     if isinstance(exc, HTTPException):
         raise exc
     if isinstance(exc, MemoryError):
-        raise exc
+        raise HTTPException(
+            status_code=500,
+            detail="The analysis ran out of memory. Reduce the cohort size, feature count, or model complexity and try again.",
+        ) from exc
+    runtime_classification = _classify_runtime_request_error(exc)
+    if runtime_classification is not None:
+        status_code, detail = runtime_classification
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     if isinstance(exc, ImportError):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if isinstance(exc, NotFoundError):
@@ -2301,7 +2413,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
 # ── XAI endpoints ──────────────────────────────────────────────
 
 
-class TimeDependentImportanceRequest(_EventPositiveValueRequestModel):
+class TimeDependentImportanceRequest(_FeatureSelectionRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -2311,7 +2423,7 @@ class TimeDependentImportanceRequest(_EventPositiveValueRequestModel):
     eval_times: list[float] | None = Field(default=None, max_length=100)
 
 
-class CounterfactualRequest(_EventPositiveValueRequestModel):
+class CounterfactualRequest(_FeatureSelectionRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -2327,8 +2439,26 @@ class CounterfactualRequest(_EventPositiveValueRequestModel):
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = 42
 
+    @field_validator("target_feature", mode="before")
+    @classmethod
+    def validate_target_feature(cls, value: Any) -> str:
+        text = _normalize_optional_text_field(value, field_name="target_feature")
+        if text is None:
+            raise ValueError("target_feature must not be empty or null.")
+        return text
 
-class PDPRequest(_EventPositiveValueRequestModel):
+    @model_validator(mode="after")
+    def validate_target_feature_membership(self) -> "CounterfactualRequest":
+        _validate_subset_names(
+            [self.target_feature],
+            self.features,
+            subset_name="target_feature",
+            superset_name="features",
+        )
+        return self
+
+
+class PDPRequest(_FeatureSelectionRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
@@ -2341,6 +2471,24 @@ class PDPRequest(_EventPositiveValueRequestModel):
     max_depth: int | None = None
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = 42
+
+    @field_validator("target_feature", mode="before")
+    @classmethod
+    def validate_target_feature(cls, value: Any) -> str:
+        text = _normalize_optional_text_field(value, field_name="target_feature")
+        if text is None:
+            raise ValueError("target_feature must not be empty or null.")
+        return text
+
+    @model_validator(mode="after")
+    def validate_target_feature_membership(self) -> "PDPRequest":
+        _validate_subset_names(
+            [self.target_feature],
+            self.features,
+            subset_name="target_feature",
+            superset_name="features",
+        )
+        return self
 
 
 @app.post("/api/time-dependent-importance")

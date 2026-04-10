@@ -168,6 +168,13 @@ def _km_group_color(label: Any, fallback_index: int) -> str:
     return PALETTE[fallback_index % len(PALETTE)]
 
 
+def _km_group_dash(label: Any, fallback_index: int) -> str:
+    normalized = str(label or "").strip().lower()
+    if normalized in {"high", "high risk", "low", "low risk"}:
+        return "solid"
+    return ["solid", "dash", "dot", "dashdot"][fallback_index % 4]
+
+
 # ── KM & Cox (existing) ────────────────────────────────────────
 
 
@@ -196,7 +203,7 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
                 y=curve["survival"],
                 mode="lines",
                 name=label,
-                line={"shape": "hv", "width": 3, "color": color},
+                line={"shape": "hv", "width": 3, "color": color, "dash": _km_group_dash(label, idx)},
                 hovertemplate=f"{label}<br>{time_unit_label}: %{{x:.2f}}<br>Survival: %{{y:.1%}}<extra></extra>",
             )
         )

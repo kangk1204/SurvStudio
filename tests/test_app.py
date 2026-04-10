@@ -533,7 +533,12 @@ def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None
 
     assert "function hasUnifiedCoverage(families)" in text
     assert "function buildBenchmarkSummaryContent(board, hasAnyResult, currentMlRows, currentDlRows)" in text
-    assert "const showingStaleBoard = latestRows.length > 0 && hasUnifiedCoverage(latestFamilies) && !hasUnifiedCoverage(currentFamilies);" in text
+    assert 'function comparePayloadGroupId(payload) {' in text
+    assert "const currentGroupIds = [" in text
+    assert "const hasMixedRunGroups = currentFamilies.length > 1 && currentGroupIds.length > 1;" in text
+    assert "const showingStaleBoard = snapshotRows.length > 0 && hasUnifiedCoverage(snapshotFamilies) && (!hasUnifiedCoverage(currentFamilies) || hasMixedRunGroups);" in text
+    assert "visibleHasMixedRunGroups" in text
+    assert "function benchmarkSnapshotComparePayload(goal) {" in text
     assert '`ML rows ready: ${currentMlRows}`' in text
     assert '`DL rows ready: ${currentDlRows}`' in text
     assert '`Completed families: ${completedFamiliesLabel}`' in text
@@ -542,12 +547,14 @@ def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None
     assert "const erroredModels = errors.map((entry) => String(entry?.model || \"\").trim()).filter(Boolean);" in text
     assert "return [...new Set([...explicit, ...erroredModels])];" in text
     assert "function benchmarkExcludedRows(" in text
-    assert "Excluded from current" in text
+    assert "Excluded from ${sourceLabel}" in text
     assert "excluded model row(s) are listed below without rank or C-index" in text
     assert "successful current screening row(s)" in text
     assert "Board freshness: stale reference" in text
-    assert "showing the latest full cross-family board as reference only" in text
+    assert "last Compare All snapshot" in text
     assert "Showing the last Compare All board as a stale reference." in text
+    assert "Visible ML and DL screening rows were produced by different compare runs" in text
+    assert "Visible ML and DL rows come from different compare runs" in text
     assert "benchmark-row-note" in text
     assert '<th class="benchmark-review-column">Review</th>' in text
     assert '<th class="benchmark-notes-column">Notes</th>' in text
@@ -763,6 +770,9 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
 
     assert 'const matchingOutcomeWarning = identicalOutcomeColumnMessage();' in text
     assert 'refs.eventColumn.addEventListener("change", () => {' in text
+    assert 'refs.timeColumn.addEventListener("change", () => {\n    clearAnalysisOutputs();' in text
+    assert 'refs.eventColumn.addEventListener("change", () => {\n    clearAnalysisOutputs();' in text
+    assert 'refs.eventPositiveValue.addEventListener("change", () => {\n    clearAnalysisOutputs();' in text
     assert 'updateTimeColumnGuidance();' in text
     assert 'const coxCovariateCount = goalFeatureCount("cox");' in text
     assert 'const tableVariableCount = goalFeatureCount("tables");' in text
@@ -822,13 +832,15 @@ def test_benchmark_leaderboard_exposes_params_actions() -> None:
     benchmark_js = (root / "app_benchmark.js").read_text()
     styles = (root / "styles.css").read_text()
 
-    assert 'function benchmarkParamsSummary(goal, modelLabel) {' in app_js
-    assert 'function showBenchmarkParams(goal, modelLabel) {' in app_js
+    assert 'function benchmarkParamsPayload(goal, source = "current") {' in app_js
+    assert 'function benchmarkParamsSummary(goal, modelLabel, source = "current") {' in app_js
+    assert 'function showBenchmarkParams(goal, modelLabel, source = "current") {' in app_js
     assert 'const paramsButton = closestFromEvent(event, "[data-benchmark-params-goal]");' in app_js
     assert 'showBenchmarkParams(' in app_js
     assert 'label: "Params"' in benchmark_js
     assert 'benchmarkParamsGoal: familyMeta.familyTab === "unknown" ? "" : familyMeta.familyTab,' in benchmark_js
     assert 'benchmarkParamsModel: row.model' in benchmark_js
+    assert 'benchmarkParamsSource: row.paramsSource || "current",' in benchmark_js
     assert 'function createBenchmarkActionGroup(row) {' in benchmark_js
     assert ".benchmark-row-actions" in styles
 
@@ -887,8 +899,23 @@ def test_benchmark_module_hides_unified_board_when_evaluation_modes_do_not_match
     assert "mixed evaluation paths" in text
     assert "Unified chart is hidden until ML and DL compare rows use the same evaluation mode." in text
     assert 'Visible compare rows are grouped by family because evaluation modes differ. No cross-family ranking is published.' in text
-    assert 'const rankLabel = board.hasMixedEvaluation ? "Family rank" : "Rank";' in text
+    assert 'const rankLabel = board.hasMixedEvaluation ? "Family rank" : "Screen rank";' in text
     assert 'throw new Error("SurvStudio benchmark module failed to load.");' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js").read_text()
+
+
+def test_frontend_includes_skip_link_and_base_table_tabular_numbers() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit"
+    html = (root / "templates" / "index.html").read_text(encoding="utf-8")
+    styles = (root / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert '<a class="skip-link" href="#workspace">Skip to workspace</a>' in html
+    assert ".skip-link {" in styles
+    assert ".skip-link:focus-visible {" in styles
+
+    table_cell_start = styles.index("td {", styles.index("th,\ntd {"))
+    table_cell_end = styles.index("}", table_cell_start)
+    table_cell_css = styles[table_cell_start:table_cell_end]
+    assert "font-variant-numeric: tabular-nums;" in table_cell_css
 
 
 def test_cox_ui_wires_graphical_diagnostics_plot() -> None:
@@ -2229,9 +2256,28 @@ def test_fail_bad_request_reraises_server_errors() -> None:
         fail_bad_request(RuntimeError("boom"))
 
 
-def test_fail_bad_request_reraises_memory_errors() -> None:
-    with pytest.raises(MemoryError, match="oom"):
+def test_fail_bad_request_wraps_memory_errors_with_guidance() -> None:
+    with pytest.raises(HTTPException) as excinfo:
         fail_bad_request(MemoryError("oom"))
+
+    assert excinfo.value.status_code == 500
+    assert "out of memory" in excinfo.value.detail.lower()
+
+
+def test_fail_bad_request_maps_runtime_resource_errors_to_400() -> None:
+    with pytest.raises(HTTPException) as excinfo:
+        fail_bad_request(RuntimeError("CUDA out of memory while training"))
+
+    assert excinfo.value.status_code == 400
+    assert "memory" in excinfo.value.detail.lower()
+
+
+def test_fail_bad_request_maps_linalg_errors_to_400() -> None:
+    with pytest.raises(HTTPException) as excinfo:
+        fail_bad_request(np.linalg.LinAlgError("singular matrix"))
+
+    assert excinfo.value.status_code == 400
+    assert "linear-algebra" in excinfo.value.detail.lower()
 
 
 def test_fail_bad_request_maps_dependency_errors_to_503() -> None:
@@ -3663,9 +3709,8 @@ def test_single_deep_model_endpoints_handle_mixed_features(model_type: str) -> N
     assert payload["analysis"]["evaluation_mode"] in {"holdout", "apparent", "holdout_fallback_apparent"}
     assert payload["analysis"]["scientific_summary"]["headline"]
     assert payload["figures"]["loss"]["data"]
-    if model_type == "mtlr":
-        assert payload["analysis"]["feature_importance"]
-        assert payload["figures"]["importance"]["data"]
+    assert payload["analysis"]["feature_importance"]
+    assert payload["figures"]["importance"]["data"]
 
 
 def test_deep_model_endpoint_rejects_invalid_transformer_width() -> None:
@@ -3738,7 +3783,7 @@ def test_frontend_ml_compare_forwards_visible_hyperparameters() -> None:
         / "app.js"
     ).read_text(encoding="utf-8")
 
-    run_compare_start = app_js.index("async function runCompareModels({ suppressCompletionToast = false } = {})")
+    run_compare_start = app_js.index("async function runCompareModels({ suppressCompletionToast = false, compareGroupId = null, compareSource = \"single_family_compare\" } = {})")
     run_compare_end = app_js.index("state.ml = payload;", run_compare_start)
     run_compare_body = app_js[run_compare_start:run_compare_end]
 
@@ -4311,13 +4356,30 @@ def test_guided_predictive_preserves_reviewable_leaderboard_after_single_model_t
     ).read_text(encoding="utf-8")
 
     assert "function guidedPredictiveHasLeaderboardReference() {" in app_js
-    assert "function guidedPredictiveSelectedModelReady() {" in app_js
+    assert "&& !board?.hasMixedEvaluation" in app_js
+    assert "&& !board?.visibleHasMixedRunGroups" in app_js
+    assert '&& (board?.visibleRows?.length || 0) > 0,' in app_js
+    assert 'function guidedPredictiveSelectedModelReady({ family = predictiveFamilyGoal(), modelKey = currentPredictiveModelKey(), previousPayload = null } = {}) {' in app_js
+    assert "const payload = goalPayload(family);" in app_js
+    assert 'return matchesRequestConfig(family, requestConfig, { expectsCompareOverride: false });' in app_js
     assert "function guidedGoalCanReachReviewStep(goal = runtime.guidedGoal) {" in app_js
-    assert 'return Boolean(currentGoalResult(goal) || guidedPredictiveHasLeaderboardReference());' in app_js
+    assert "unified: null," in app_js
+    assert 'return Boolean(selectedPredictiveSingleResult(predictiveFamilyGoal()) || guidedPredictiveHasLeaderboardReference());' in app_js
     assert 'if (!guidedGoalCanReachReviewStep(runtime.guidedGoal) && bounded > 4) return 4;' in app_js
     assert 'if (!guidedGoalCanReachReviewStep(runtime.guidedGoal)) return 4;' in app_js
+    assert 'runtime.guidedStep = normalizedGuidedStep(guidedGoalCanReachReviewStep(runtime.guidedGoal) ? 5 : 4);' in app_js
+    assert 'if (runtime.predictiveWorkbenchIntent === "train" && Boolean(selectedPredictiveSingleResult(predictiveFamilyGoal()))) return "Run Analysis";' in app_js
     assert 'if (guidedPredictiveHasLeaderboardReference()) return "Compare all";' in app_js
-    assert "successCheck: guidedPredictiveSelectedModelReady," in app_js
+    assert 'const runStatus = await withLoading(button, action, tabName);' in app_js
+    assert 'if (!runStatus?.ok) return;' in app_js
+    assert 'successCheck: () => guidedPredictiveSelectedModelReady({ family, modelKey, previousPayload }),' in app_js
+    assert "compareRunSequence: 0," in app_js
+    assert "function nextCompareRunGroupId(prefix = \"compare\") {" in app_js
+    assert "function tagComparePayload(payload, groupId, source = \"compare\") {" in app_js
+    assert "const sharedCompareGroupId = nextCompareRunGroupId(\"predictive-compare-all\");" in app_js
+    assert 'compareSource: "predictive_compare_all",' in app_js
+    assert "group_id: sharedCompareGroupId," in app_js
+    assert "runtime.compareCache.unified = {" in app_js
     assert "const resolveHasResult = () => (typeof successCheck === \"function\" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName)));" in app_js
     assert "await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));" in app_js
     assert 'if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive" && ["ml", "dl"].includes(tabName)) {' in app_js
@@ -4376,6 +4438,27 @@ def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
     assert 'setScopeBusy(scope, false, button);' in app_js
 
 
+def test_frontend_invalidates_stale_analysis_responses_with_request_tokens() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "requestTokens: {" in app_js
+    assert "function beginRequestToken(scope) {" in app_js
+    assert "function requestTokenMatches(scope, token) {" in app_js
+    assert "function invalidateRequestTokens(scopes = []) {" in app_js
+    assert 'invalidateRequestTokens(["km", "cox", "tables", "signature", "ml", "dl"]);' in app_js
+    assert 'if (!requestTokenMatches("km", requestToken) || state.dataset?.dataset_id !== datasetId) return;' in app_js
+    assert 'if (!requestTokenMatches("cox", requestToken) || state.dataset?.dataset_id !== datasetId) return;' in app_js
+    assert 'if (!requestTokenMatches("tables", requestToken) || state.dataset?.dataset_id !== datasetId) return;' in app_js
+    assert 'if (!requestTokenMatches("ml", requestToken) || state.dataset?.dataset_id !== datasetId) return;' in app_js
+    assert 'if (!requestTokenMatches("dl", requestToken) || state.dataset?.dataset_id !== datasetId) return;' in app_js
+
+
 def test_frontend_predictive_compare_uses_unified_scope_and_honest_review_actions() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
@@ -4389,8 +4472,10 @@ def test_frontend_predictive_compare_uses_unified_scope_and_honest_review_action
     assert 'successCheck: guidedPredictiveCompareReady,' in app_js
     assert 'withLoading(refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, "predictive");' in app_js
     assert 'void runGuidedGoal("predictive", target, runUnifiedPredictiveComparison, {' in app_js
-    assert '() => runCompareModels({ suppressCompletionToast: true })' in app_js
-    assert '() => runDlCompareModels({ suppressCompletionToast: true })' in app_js
+    assert '() => runCompareModels({' in app_js
+    assert 'compareGroupId: sharedCompareGroupId,' in app_js
+    assert '() => runDlCompareModels({' in app_js
+    assert 'compareSource: "predictive_compare_all",' in app_js
     assert 'label: "Train a model"' in app_js
     assert 'label: "Screening only"' in app_js
     assert 'if (action === "close-predictive-workbench")' in app_js
@@ -5958,7 +6043,7 @@ def test_guided_tables_run_uses_clicked_button_and_state_based_success_check() -
     ).read_text(encoding="utf-8")
 
     assert 'async function runGuidedGoal(tabName, button, action, { resultMode = "single", successCheck = null } = {})' in app_js
-    assert 'const hasResult = typeof successCheck === "function" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName));' in app_js
+    assert 'const resolveHasResult = () => (typeof successCheck === "function" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName)));' in app_js
     assert 'if (action === "run-tables") {' in app_js
     assert 'void runGuidedGoal("tables", target, runCohortTable, {' in app_js
     assert 'successCheck: () => Boolean(state.cohort?.analysis),' in app_js
