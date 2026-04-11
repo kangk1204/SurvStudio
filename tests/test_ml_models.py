@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timedelta, timezone
 import types
 from pathlib import Path
 
@@ -1289,6 +1290,24 @@ def test_store_create_and_get_are_defensive_against_scalar_cell_mutation() -> No
 
     refetched = store.get(stored.dataset_id)
     assert float(refetched.dataframe.iloc[0]["age"]) == pytest.approx(original_age)
+
+
+def test_store_uses_idle_ttl_and_records_dataset_hash() -> None:
+    from survival_toolkit.store import DatasetStore
+
+    store = DatasetStore(ttl_seconds=1)
+    stored = store.create(make_example_dataset(seed=17, n_patients=24), filename="idle_ttl.csv")
+
+    assert isinstance(stored.metadata.get("dataset_hash"), str)
+    assert len(str(stored.metadata["dataset_hash"])) == 16
+
+    internal = store._datasets[stored.dataset_id]
+    internal.created_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    internal.last_accessed = datetime.now(timezone.utc)
+
+    refetched = store.get(stored.dataset_id)
+    assert refetched.dataset_id == stored.dataset_id
+    assert refetched.metadata["dataset_hash"] == stored.metadata["dataset_hash"]
 
 
 def test_store_delete() -> None:
