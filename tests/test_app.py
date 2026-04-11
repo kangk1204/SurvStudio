@@ -3959,6 +3959,49 @@ def test_frontend_format_value_keeps_tiny_p_values_nonzero() -> None:
     assert formatted[2] == "0.0042"
 
 
+def test_frontend_format_p_value_uses_journal_thresholds() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    start = app_js.index("function formatPValue(value) {")
+    end = app_js.index("\n\nfunction formatDisplayValue", start)
+    snippet = app_js[start:end]
+    node_script = "\n".join(
+        [
+            snippet,
+            "const values = [formatPValue(7.582823258189819e-14), formatPValue(0.00072), formatPValue(0.0042), formatPValue(0.2817)];",
+            "console.log(JSON.stringify(values));",
+        ]
+    )
+    completed = subprocess.run(
+        ["node", "-e", node_script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    formatted = json.loads(completed.stdout.strip())
+
+    assert formatted == ["<0.001", "<0.001", "0.004", "0.282"]
+
+
+def test_frontend_uses_p_value_formatter_for_km_banner_and_tables() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "p=${formatPValue(test.p_value)}" in app_js
+    assert "td.textContent = formatDisplayValue(row[column], column);" in app_js
+
+
 def test_frontend_covariate_picker_keeps_all_unique_continuous_columns() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]

@@ -38,6 +38,19 @@ def figure_to_json(fig: go.Figure) -> dict[str, Any]:
     return json.loads(pio.to_json(fig, pretty=False))
 
 
+def _format_p_value(value: Any) -> str:
+    if not isinstance(value, (int, float)) or not np.isfinite(float(value)):
+        return "NA"
+    p_value = float(value)
+    if p_value < 0.0:
+        return "NA"
+    if p_value < 1e-16:
+        return "<1e-16"
+    if p_value < 0.001:
+        return "<0.001"
+    return f"{p_value:.3f}"
+
+
 def _truncate_label_fragment(text: str, width: int) -> str:
     if len(text) <= width:
         return text
@@ -180,6 +193,8 @@ def _km_group_dash(label: Any, fallback_index: int) -> str:
 
 def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", show_confidence_bands: bool = True) -> dict[str, Any]:
     fig = go.Figure()
+    confidence_level = float(km_result.get("confidence_level", 0.95) or 0.95)
+    confidence_percent = max(1, round(confidence_level * 100))
     for idx, curve in enumerate(km_result["curves"]):
         label = curve["group"]
         color = _km_group_color(label, idx)
@@ -234,7 +249,7 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
     if km_result.get("test"):
         test = km_result["test"]
         fig.add_annotation(
-            text=f"{test['test'].replace('_', ' ').title()} test: p = {test['p_value']:.4g}",
+            text=f"{test['test'].replace('_', ' ').title()} test: p = {_format_p_value(test['p_value'])}",
             xref="paper", yref="paper", x=0.98, y=0.98,
             showarrow=False, font={"size": 12, "color": INK},
             align="right", xanchor="right", yanchor="top",
@@ -247,6 +262,21 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
             showarrow=False, font={"size": 12, "color": INK},
             align="right", xanchor="right", yanchor="top",
             bgcolor="rgba(255,255,255,0.85)", borderpad=4,
+        )
+    if show_confidence_bands:
+        fig.add_annotation(
+            text=f"Shaded bands: {confidence_percent}% pointwise CI",
+            xref="paper",
+            yref="paper",
+            x=0.01,
+            y=0.98,
+            showarrow=False,
+            font={"size": 12, "color": INK},
+            align="left",
+            xanchor="left",
+            yanchor="top",
+            bgcolor="rgba(255,255,255,0.85)",
+            borderpad=4,
         )
     fig.update_xaxes(title=f"Time ({time_unit_label})", **_COMMON_AXES, range=[0, km_result["display_horizon"]])
     fig.update_yaxes(title="Survival probability", tickformat=".0%", range=[0, 1.02], **_COMMON_AXES)
@@ -303,6 +333,20 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             "x": 0.02,
         },
         height=max(420, axis_layout["height"]),
+    )
+    fig.add_annotation(
+        text="Points = HR; whiskers = 95% Wald CI",
+        xref="paper",
+        yref="paper",
+        x=0.99,
+        y=0.99,
+        showarrow=False,
+        font={"size": 12, "color": INK},
+        align="right",
+        xanchor="right",
+        yanchor="top",
+        bgcolor="rgba(255,255,255,0.85)",
+        borderpad=4,
     )
     if not rows:
         fig.add_annotation(
@@ -383,7 +427,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
                 hovertemplate=(
                     f"{panel.get('term') or 'Term'}<br>log(time): %{{x:.3f}}<br>Scaled Schoenfeld residual: %{{y:.3f}}"
                     + (f"<br>rho={float(rho):.3f}" if isinstance(rho, (int, float)) and np.isfinite(float(rho)) else "")
-                    + (f"<br>p={float(p_value):.3g}" if isinstance(p_value, (int, float)) and np.isfinite(float(p_value)) else "")
+                    + (f"<br>p={_format_p_value(p_value)}" if isinstance(p_value, (int, float)) and np.isfinite(float(p_value)) else "")
                     + "<extra></extra>"
                 ),
                 showlegend=False,
@@ -598,8 +642,8 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
                 name=f"Optimal: {optimal:.3f}",
                 hovertemplate=(
                     f"Optimal cutpoint: {optimal:.3f}<br>Chi-square: {opt_stat:.3f}"
-                    + (f"<br>Selection-adjusted p: {adjusted_p:.4g}" if adjusted_p is not None else "")
-                    + (f"<br>Raw p: {raw_p:.4g}" if raw_p is not None else "")
+                    + (f"<br>Selection-adjusted p: {_format_p_value(adjusted_p)}" if adjusted_p is not None else "")
+                    + (f"<br>Raw p: {_format_p_value(raw_p)}" if raw_p is not None else "")
                     + "<extra></extra>"
                 ),
             )
@@ -619,9 +663,9 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
     if optimal is not None:
         p_parts = []
         if adjusted_p is not None:
-            p_parts.append(f"Adj. p = {adjusted_p:.4g}")
+            p_parts.append(f"Adj. p = {_format_p_value(adjusted_p)}")
         if raw_p is not None:
-            p_parts.append(f"Raw p = {raw_p:.4g}")
+            p_parts.append(f"Raw p = {_format_p_value(raw_p)}")
         group_parts = []
         label_below = result.get("label_below_cutpoint")
         label_above = result.get("label_above_cutpoint")
