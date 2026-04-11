@@ -16,6 +16,7 @@ import gc
 import math
 import multiprocessing as mp
 import os
+import random
 import subprocess
 import time
 import warnings
@@ -98,6 +99,8 @@ def _require_sklearn() -> None:
 
 
 def _seed_torch(random_seed: int) -> None:
+    np.random.seed(random_seed)
+    random.seed(random_seed)
     torch.manual_seed(random_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(random_seed)
@@ -1145,7 +1148,7 @@ def _scientific_summary_dl(
         )
     if model_name == "Neural MTLR":
         cautions.append(
-            "This path is a Neural MTLR-inspired discrete-time variant, not a literal reference implementation of the original MTLR parameterization."
+            "This path uses a neuralized right-cumulative MTLR parameterization; treat it as a flexible discrete-time extension rather than a line-by-line clone of any single reference codebase."
         )
     if model_name == "Survival VAE":
         cautions.append(
@@ -2817,9 +2820,11 @@ def _mtlr_loss(
     time_bin_indices: torch.Tensor,
     events: torch.Tensor,
 ) -> torch.Tensor:
-    """Discrete-time survival NLL with right censoring.
+    """Canonical right-cumulative MTLR negative log-likelihood.
 
-    We treat the network output as logits for a PMF over time bins (softmax).
+    We normalize the right-cumulative interval scores with ``softmax`` to
+    obtain a PMF over time bins, which is algebraically equivalent to the
+    canonical MTLR parameterization.
     - Event in bin k: -log pmf[k]
     - Censored in bin k: -log S_start[k] where S_start[k] = sum_{j>=k} pmf[j]
     """
