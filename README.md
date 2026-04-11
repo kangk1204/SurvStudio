@@ -11,6 +11,69 @@ It supports:
 - manuscript-oriented table export
 - one unified Predictive Models workspace for ML and DL screening
 
+## Interface Preview
+
+These screenshots match the current guided UI in this repository and show the main manuscript-facing workflows.
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="github_images/01_survstudio_main.png" alt="SurvStudio guided main screen" />
+      <br />
+      <strong>Guided entry point</strong><br />
+      Load a cohort, confirm the endpoint, choose one analysis path, then review one result view at a time.
+    </td>
+    <td width="50%">
+      <img src="github_images/02_analysis.png" alt="SurvStudio analysis selection screen" />
+      <br />
+      <strong>Analysis selection</strong><br />
+      Classical workflows and the unified predictive workspace are separated so the UI stays focused.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="github_images/03_KM_plot.png" alt="Kaplan-Meier analysis screenshot" />
+      <br />
+      <strong>Kaplan-Meier</strong><br />
+      Survival curves, weighted log-rank testing, and manuscript-ready figure export.
+    </td>
+    <td width="50%">
+      <img src="github_images/04_Cox_PH.png" alt="Cox proportional hazards forest plot screenshot" />
+      <br />
+      <strong>Cox PH</strong><br />
+      Hazard-ratio forest plots, PH diagnostics, and stratified Cox support.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="github_images/05_cohort_table.png" alt="Cohort table screenshot" />
+      <br />
+      <strong>Cohort table</strong><br />
+      Baseline summaries stay aligned to the currently analyzable grouped subset.
+    </td>
+    <td width="50%">
+      <img src="github_images/06_MLDL_cindex.png" alt="Unified ML and DL model comparison screenshot" />
+      <br />
+      <strong>Unified predictive screening</strong><br />
+      One board compares classical ML and deep-learning survival models on the same shared feature set.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="github_images/07_importance.png" alt="Model feature importance screenshot" />
+      <br />
+      <strong>Feature salience</strong><br />
+      Tree-model importance and deep-model salience views stay inside the same predictive workbench.
+    </td>
+    <td width="50%">
+      <img src="github_images/08_SHAP.png" alt="SHAP explanation screenshot" />
+      <br />
+      <strong>SHAP explanations</strong><br />
+      Companion-model SHAP support is available for screened tree models when the encoded feature matrix allows it.
+    </td>
+  </tr>
+</table>
+
 ## Who This Is For
 
 This project is for users who have cohort data in a spreadsheet-like table and want to:
@@ -121,11 +184,17 @@ Click `Synthetic Example` first.
 
 Use the `pip` bundled with the fresh virtual environment for the first install. If you upgraded `pip` separately and the editable install failed, recreate `.venv` and retry without the `pip` upgrade step.
 
-If you want the optional ML and DL workflows available on first launch, replace `pip install -e .` with:
+If you want the full workflow shown in the screenshots on first launch, replace `pip install -e .` with:
 
 ```bash
 pip install -e ".[all]"
 ```
+
+That full install is the right default for manuscript work because it includes:
+- Excel / Parquet readers
+- optional ML and DL workflows
+- figure-export runtime (`kaleido`) for PNG / SVG saves
+- pytest and browser-test extras for local QA
 
 If you want cohort-table Excel `.xlsx` export and optional spreadsheet readers on first launch, use:
 
