@@ -19,6 +19,7 @@ const appState = {
   derivedColumnProvenance: {},
   busyScopes: {},
   plotResizeTimer: null,
+  plotResizeObserver: null,
   coxPreview: {
     key: "",
     status: "idle",
@@ -1916,7 +1917,21 @@ function setUiMode(mode, { syncHistory = true, historyMode = "replace", preserve
 }
 
 function resizeVisiblePlotsNow() {
-  const plots = [
+  const plots = allPlotRefs();
+  plots.forEach((plot) => {
+    if (!plot?.data?.length) return;
+    if (plot.closest(".hidden")) return;
+    try {
+      Plotly.Plots.resize(plot);
+      stabilizePlotShellHeight(plot);
+    } catch {
+      // Ignore stale nodes during guided view remounts.
+    }
+  });
+}
+
+function allPlotRefs() {
+  return [
     refs.kmPlot,
     refs.coxPlot,
     refs.coxDiagnosticsPlot,
@@ -1930,16 +1945,6 @@ function resizeVisiblePlotsNow() {
     refs.dlComparisonPlot,
     refs.benchmarkComparisonPlot,
   ];
-  plots.forEach((plot) => {
-    if (!plot?.data?.length) return;
-    if (plot.closest(".hidden")) return;
-    try {
-      Plotly.Plots.resize(plot);
-      stabilizePlotShellHeight(plot);
-    } catch {
-      // Ignore stale nodes during guided view remounts.
-    }
-  });
 }
 
 function queueVisiblePlotResize() {
@@ -1997,6 +2002,28 @@ function scheduleVisiblePlotResize(delay = 80) {
     runtime.plotResizeTimer = null;
     queueVisiblePlotResize();
   }, delay);
+}
+
+function initPlotResizeObserver() {
+  if (runtime.plotResizeObserver || typeof window.ResizeObserver !== "function") return;
+  const widthCache = new WeakMap();
+  runtime.plotResizeObserver = new window.ResizeObserver((entries) => {
+    const widthChanged = entries.some((entry) => {
+      const target = entry?.target;
+      if (!target) return false;
+      const nextWidth = Number(entry.contentRect?.width || target.clientWidth || 0);
+      if (!Number.isFinite(nextWidth) || nextWidth <= 0) return false;
+      const previousWidth = widthCache.get(target);
+      widthCache.set(target, nextWidth);
+      return Number.isFinite(previousWidth) && Math.abs(nextWidth - previousWidth) > 1;
+    });
+    if (widthChanged) scheduleVisiblePlotResize(30);
+  });
+  allPlotRefs().forEach((plot) => {
+    if (!plot) return;
+    widthCache.set(plot, Number(plot.clientWidth || 0));
+    runtime.plotResizeObserver.observe(plot);
+  });
 }
 
 function setGuidedGoal(goal, { activate = true, syncHistory = true, historyMode = "replace" } = {}) {
@@ -8733,6 +8760,7 @@ updateMlEvaluationControls();
 updateDlModelControlVisibility();
 updateDlEvaluationControls();
 syncDeriveToggleButton();
+initPlotResizeObserver();
 initializeRuntime();
 
 if (refs.smartBannerClose) {

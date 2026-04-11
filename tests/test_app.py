@@ -4743,7 +4743,11 @@ def test_frontend_caps_importance_plot_container_height() -> None:
     assert ".ml-plots-grid .plot-shell {" in styles
     assert "margin-bottom: 0;" in styles
     assert "max-height: 720px;" in styles
-    assert "overflow: auto;" in styles
+    assert "overflow-y: auto;" in styles
+    assert "overflow-x: hidden;" in styles
+    assert ".plot-shell .js-plotly-plot," in styles
+    assert "max-width: 100% !important;" in styles
+    assert "width: 100% !important;" in styles
 
 
 def test_predictive_plot_panels_stack_vertically_by_default() -> None:

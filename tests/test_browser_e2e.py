@@ -1788,6 +1788,145 @@ def test_browser_ml_importance_plot_stays_inside_its_section(browser_server: str
         raise
 
 
+def test_browser_predictive_workbench_plots_resize_with_viewport(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    long_labels = [
+        "histology_Lung Micropapillary Adenocarcinoma",
+        "smoking_status_Former smoker (duration unknown)",
+        "histology_Mucinous (Colloid) carcinoma",
+        "histology_Lung Solid Pattern Predominant Adenocarcinoma",
+        "pathologic_stage_Stage IIIB",
+        "stage_group_Stage IV",
+        "expression_subtype_Squamoid",
+        "pathologic_stage_Stage IA",
+    ]
+
+    def _mock_dl_single(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "request_config": body,
+                "analysis": {
+                    "c_index": 0.739,
+                    "evaluation_mode": "holdout",
+                    "epochs_trained": 100,
+                    "best_monitor_epoch": 100,
+                    "max_epochs_requested": 100,
+                    "training_seed": 42,
+                    "scientific_summary": {
+                        "status": "review",
+                        "headline": "MTLR run complete.",
+                        "strengths": [],
+                        "cautions": [],
+                        "next_steps": [],
+                    },
+                },
+                "figures": {
+                    "importance": {
+                        "data": [
+                            {
+                                "type": "bar",
+                                "orientation": "h",
+                                "x": [62, 52, 51, 45, 40, 36, 31, 28],
+                                "y": long_labels,
+                                "marker": {"color": "rgba(47, 101, 217, 0.92)"},
+                            },
+                        ],
+                        "layout": {
+                            "title": {"text": "MTLR Gradient-Based Feature Salience"},
+                            "height": 720,
+                            "margin": {"l": 300, "r": 24, "t": 54, "b": 48},
+                        },
+                    },
+                    "loss": {
+                        "data": [
+                            {
+                                "type": "scatter",
+                                "mode": "lines",
+                                "x": [1, 20, 40, 60, 80, 100],
+                                "y": [1.48, 1.21, 0.96, 0.82, 0.74, 0.67],
+                                "name": "Training loss",
+                            },
+                            {
+                                "type": "scatter",
+                                "mode": "lines",
+                                "x": [1, 20, 40, 60, 80, 100],
+                                "y": [1.45, 1.19, 0.9, 0.77, 0.64, 0.55],
+                                "name": "Monitor loss",
+                            },
+                        ],
+                        "layout": {
+                            "title": {"text": "MTLR Training Loss and Monitor loss"},
+                            "height": 360,
+                        },
+                    },
+                },
+            }),
+        )
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1400})
+
+            page.route("**/api/deep-model", _mock_dl_single)
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _switch_to_expert(page)
+            _open_predictive_workbench(page)
+
+            page.locator("#predictiveModelSelector").select_option("mtlr")
+            page.wait_for_function(
+                "() => document.getElementById('benchmarkWorkbench')?.dataset.activeFamily === 'dl'"
+            )
+            page.locator("#runPredictiveWorkbenchButton").click()
+            page.wait_for_function(
+                "document.getElementById('dlMetaBanner').textContent.includes('MTLR:')"
+            )
+            page.wait_for_function(
+                "() => document.getElementById('dlImportancePlot')?.classList.contains('js-plotly-plot') === true"
+            )
+
+            page.set_viewport_size({"width": 980, "height": 1400})
+            page.wait_for_timeout(350)
+
+            overflow = page.locator("#dlImportancePlot").evaluate(
+                """(el) => ({
+                  scrollWidth: el.scrollWidth,
+                  clientWidth: el.clientWidth,
+                  offsetWidth: el.offsetWidth,
+                  plotWidth: el.classList.contains('js-plotly-plot')
+                    ? el.getBoundingClientRect().width
+                    : (el.querySelector('.js-plotly-plot')?.getBoundingClientRect().width || 0),
+                })"""
+            )
+            loss_overflow = page.locator("#dlLossPlot").evaluate(
+                """(el) => ({
+                  scrollWidth: el.scrollWidth,
+                  clientWidth: el.clientWidth,
+                  offsetWidth: el.offsetWidth,
+                  plotWidth: el.classList.contains('js-plotly-plot')
+                    ? el.getBoundingClientRect().width
+                    : (el.querySelector('.js-plotly-plot')?.getBoundingClientRect().width || 0),
+                })"""
+            )
+
+            assert overflow["scrollWidth"] <= overflow["clientWidth"] + 1
+            assert loss_overflow["scrollWidth"] <= loss_overflow["clientWidth"] + 1
+            assert overflow["plotWidth"] <= overflow["offsetWidth"] + 1
+            assert loss_overflow["plotWidth"] <= loss_overflow["offsetWidth"] + 1
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
 def test_browser_risk_table_ticks_change_columns_and_flash_table(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
