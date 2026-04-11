@@ -294,6 +294,15 @@
       return pending.length ? pending.join(" and ") : "the remaining compare runs";
     }
 
+    function benchmarkMethodologyNotes(board) {
+      const visibleFamilies = Array.isArray(board?.visibleFamilies) ? board.visibleFamilies : [];
+      if (!(visibleFamilies.includes("ml") && visibleFamilies.includes("dl"))) return [];
+      return [
+        "Cross-family partial-likelihood models do not share one tie method: Cox PH and LASSO-Cox use Efron, whereas DeepSurv, Survival Transformer, and Survival VAE use Breslow. Treat small cross-family C-index gaps cautiously when many event times are tied.",
+        "ML comparison rows may include IBS / Brier Skill Score, but DL comparison rows currently report C-index only, so calibration/error comparisons are not symmetric across families.",
+      ];
+    }
+
     function hasUnifiedCoverage(families) {
       return Array.isArray(families) && families.length === 2;
     }
@@ -447,6 +456,7 @@
       if (board.hiddenStaleFamilies.length) {
         noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
       }
+      noteParts.push(...benchmarkMethodologyNotes(board));
       if (board.missingMetricCount) {
         noteParts.push(`Omitted ${board.missingMetricCount} row(s) without a numeric C-index.`);
       }
@@ -579,6 +589,7 @@
       if (board.missingMetricCount) {
         cautionParts.push(`${board.missingMetricCount} row(s) have no numeric C-index.`);
       }
+      cautionParts.push(...benchmarkMethodologyNotes(board));
       ["ml", "dl"].forEach((goal) => {
         const copy = excludedModelsCopy(goal, board.excludedByFamily?.[goal], {
           sourceLabel: board.showingStaleBoard ? "the last complete snapshot" : "the current",
@@ -778,6 +789,7 @@
       if (board.visibleHasMixedRunGroups) {
         noteParts.push("Visible ML and DL rows come from different compare runs, so no cross-family rank or shared chart is published.");
       }
+      noteParts.push(...benchmarkMethodologyNotes(board));
       ["ml", "dl"].forEach((goal) => {
         const copy = excludedModelsCopy(goal, board.excludedByFamily?.[goal], {
           sourceLabel: board.showingStaleBoard ? "the last complete snapshot" : "the current",

@@ -956,9 +956,26 @@ def _enforce_upload_shape_limits(dataframe: Any) -> None:
         )
 
 
-def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -> list[str]:
+def _replay_dataset_note(request_config: dict[str, Any], *, dataset_filename: str) -> str:
+    return (
+        "Replay dataset: "
+        f"{dataset_filename}. Outcome: time={request_config.get('time_column')}, "
+        f"event={request_config.get('event_column')}={request_config.get('event_positive_value')}."
+    )
+
+
+def _replay_feature_notes(request_config: dict[str, Any]) -> list[str]:
+    notes: list[str] = []
     features = [str(value) for value in request_config.get("features") or []]
     categorical = [str(value) for value in request_config.get("categorical_features") or []]
+    if features:
+        notes.append("Replay features: " + ", ".join(features) + ".")
+    if categorical:
+        notes.append("Replay categorical features: " + ", ".join(categorical) + ".")
+    return notes
+
+
+def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -> list[str]:
     evaluation_strategy = str(request_config.get("evaluation_strategy", "holdout"))
     settings = [
         f"evaluation={evaluation_strategy}",
@@ -977,19 +994,11 @@ def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -
             f"cv={request_config.get('cv_repeats', 1)}x{request_config.get('cv_folds', 1)}"
         )
 
-    notes = [
-        (
-            "Replay dataset: "
-            f"{dataset_filename}. Outcome: time={request_config.get('time_column')}, "
-            f"event={request_config.get('event_column')}={request_config.get('event_positive_value')}."
-        ),
+    return [
+        _replay_dataset_note(request_config, dataset_filename=dataset_filename),
         "Replay settings: " + "; ".join(settings) + ".",
+        *_replay_feature_notes(request_config),
     ]
-    if features:
-        notes.append("Replay features: " + ", ".join(features) + ".")
-    if categorical:
-        notes.append("Replay categorical features: " + ", ".join(categorical) + ".")
-    return notes
 
 
 def _dl_replay_notes(
@@ -998,8 +1007,6 @@ def _dl_replay_notes(
     dataset_filename: str,
     resolved_analysis: dict[str, Any] | None = None,
 ) -> list[str]:
-    features = [str(value) for value in request_config.get("features") or []]
-    categorical = [str(value) for value in request_config.get("categorical_features") or []]
     evaluation_strategy = str(request_config.get("evaluation_strategy", "holdout"))
     settings = [
         f"evaluation={evaluation_strategy}",
@@ -1032,11 +1039,7 @@ def _dl_replay_notes(
         settings.append(f"n_clusters={request_config.get('n_clusters')}")
 
     notes = [
-        (
-            "Replay dataset: "
-            f"{dataset_filename}. Outcome: time={request_config.get('time_column')}, "
-            f"event={request_config.get('event_column')}={request_config.get('event_positive_value')}."
-        ),
+        _replay_dataset_note(request_config, dataset_filename=dataset_filename),
         "Replay settings: " + "; ".join(settings) + ".",
     ]
     if resolved_analysis:
@@ -1046,10 +1049,7 @@ def _dl_replay_notes(
         actual_note = (resolved_analysis.get("evaluation_note") or "").strip()
         if actual_note:
             notes.append("Reported evaluation note: " + actual_note)
-    if features:
-        notes.append("Replay features: " + ", ".join(features) + ".")
-    if categorical:
-        notes.append("Replay categorical features: " + ", ".join(categorical) + ".")
+    notes.extend(_replay_feature_notes(request_config))
     return notes
 
 
