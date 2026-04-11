@@ -2964,11 +2964,27 @@ h3 {
 
 .plot-shell {
   min-height: 360px;
+  min-width: 0;
+  max-width: 100%;
   padding: 8px;
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: var(--surface);
   margin-bottom: 16px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.plot-shell .js-plotly-plot,
+.plot-shell .plot-container,
+.plot-shell .svg-container {
+  max-width: 100% !important;
+  width: 100% !important;
+  box-sizing: border-box;
+}
+
+.plot-shell .js-plotly-plot {
+  min-width: 0;
 }
 
 /* ─── Tables ─── */
@@ -3971,5 +3987,6 @@ tbody tr:hover td {
 #mlImportancePlot,
 #dlImportancePlot {
   max-height: 720px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
