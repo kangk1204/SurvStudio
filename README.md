@@ -202,8 +202,11 @@ If you need only a subset, the available extras are:
 | `.[all]` | Everything — **recommended** |
 | `.[ml]` | scikit-survival ML models only |
 | `.[formats]` | Excel / Parquet I/O only |
-| `.[dev]` | pytest and test tooling only |
-| `.[kaleido]` | PNG / SVG figure export only |
+| `.[dl]` | torch-based deep-learning models only |
+| `.[dev]` | local test stack plus format / ML / DL extras |
+| `.[e2e]` | Playwright browser tests only |
+
+There is currently no standalone `.[kaleido]` extra. If you need local PNG / SVG figure export, use `.[dev]` or `.[all]`.
 
 ## Install
 
