@@ -3952,6 +3952,10 @@ def test_frontend_derive_group_explains_that_dl_features_do_not_change() -> None
     assert 'async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {' in app_js
     assert "Current grouping now uses" in app_js
     assert "Current grouping remains" in app_js
+    assert "Stored derived grouping" in app_js
+    assert "Current derived grouping" in app_js
+    assert "The counts and method details below describe" in app_js
+    assert "draft settings for the next Create action" in app_js
     assert "ML and DL feature selections did not change automatically." in app_js
     assert "Created ${payload.derived_column} and updated Group by." in app_js
     assert "ML/DL features were not changed." in app_js
@@ -4010,16 +4014,34 @@ def test_frontend_locks_derive_controls_when_group_by_is_active() -> None:
     assert "refs.deriveButton.disabled = deriveLocked;" in app_js
     assert "Derived-group settings are locked while Group by uses" in app_js
     assert "Run again only reuses the current Group by value." in app_js
+    assert "The card below describes" in app_js
 
     group_change_start = app_js.index('refs.groupColumn.addEventListener("change", () => {')
     group_change_end = app_js.index('  refs.timeUnitLabel.addEventListener("input", () => { renderSharedFeatureSummary(); queueHistorySync(); });', group_change_start)
     group_change_body = app_js[group_change_start:group_change_end]
+    assert "rerenderDerivedGroupSummaryIfVisible();" in group_change_body
     assert "syncDeriveControlsState();" in group_change_body
 
     derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
     assert "syncDeriveControlsState();" in derive_body
+
+
+def test_frontend_derive_summary_tracks_current_session_derived_columns() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function currentDerivedSummaryPayload() {" in app_js
+    assert "runtime.derivedColumnProvenance?.[currentGroup]" in app_js
+    assert "summary: payload.derive_summary || null," in app_js
+    assert 'refs.deriveSummary.dataset.summaryKind = "derived";' in app_js
+    assert 'refs.deriveSummary.dataset.summaryKind = "signature";' in app_js
 
 
 def test_frontend_request_matching_uses_normalized_stable_config_comparison() -> None:
@@ -4297,6 +4319,21 @@ def test_guided_predictive_incomplete_compare_hides_unified_board() -> None:
     assert 'The unified leaderboard publishes only after both ML and DL comparison rows are current.' in benchmark_js
 
 
+def test_benchmark_board_warns_about_cross_family_tie_methods_and_ibs_asymmetry() -> None:
+    benchmark_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app_benchmark.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function benchmarkMethodologyNotes(board) {" in benchmark_js
+    assert "Cox PH and LASSO-Cox use Efron" in benchmark_js
+    assert "DeepSurv, Survival Transformer, and Survival VAE use Breslow" in benchmark_js
+    assert "ML comparison rows may include IBS / Brier Skill Score, but DL comparison rows currently report C-index only" in benchmark_js
+
+
 def test_predictive_current_result_requires_both_current_compare_payloads() -> None:
     app_js = (
         Path(__file__).resolve().parents[1]
@@ -4309,6 +4346,35 @@ def test_predictive_current_result_requires_both_current_compare_payloads() -> N
     assert 'const currentMl = currentCompareGoalPayload("ml");' in app_js
     assert 'const currentDl = currentCompareGoalPayload("dl");' in app_js
     assert "return currentMl && currentDl ? { ml: currentMl, dl: currentDl } : null;" in app_js
+
+
+def test_cox_analysis_reuses_one_model_stats_definition() -> None:
+    analysis_py = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "analysis.py"
+    ).read_text(encoding="utf-8")
+
+    assert "model_stats = {" in analysis_py
+    assert 'model_stats=model_stats,' in analysis_py
+    assert '"model_stats": {' in analysis_py
+    assert "**model_stats," in analysis_py
+    assert '"apparent_c_index": _safe_float(c_index),' in analysis_py
+
+
+def test_replay_note_helpers_deduplicate_common_copy() -> None:
+    app_py = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "app.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def _replay_dataset_note(request_config: dict[str, Any], *, dataset_filename: str) -> str:" in app_py
+    assert "def _replay_feature_notes(request_config: dict[str, Any]) -> list[str]:" in app_py
+    assert "_replay_dataset_note(request_config, dataset_filename=dataset_filename)" in app_py
+    assert "_replay_feature_notes(request_config)" in app_py
 
 
 def test_guided_chrome_rerenders_benchmark_starter_visibility() -> None:

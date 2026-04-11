@@ -2309,6 +2309,14 @@ function syncDeriveToggleButton() {
 function syncDeriveControlsState() {
   const activeGroup = String(refs.groupColumn?.value || "").trim();
   const deriveLocked = Boolean(activeGroup);
+  const summaryPayload = refs.deriveSummary?.dataset.summaryKind === "derived"
+    ? currentDerivedSummaryPayload()
+    : null;
+  const displayedDerivedColumn = normalizeDeriveSummaryText(summaryPayload?.derivedColumn);
+  const displayedSummary = summaryPayload?.summary || null;
+  const controlsMismatch = displayedDerivedColumn
+    ? !deriveDraftMatchesStoredRecipe(displayedDerivedColumn, displayedSummary)
+    : false;
   const deriveInputs = [
     refs.deriveSource,
     refs.deriveMethod,
@@ -2347,9 +2355,24 @@ function syncDeriveControlsState() {
   }
   runtime.deriveLockMessageActive = deriveLocked;
   if (refs.deriveStatus) {
-    refs.deriveStatus.textContent = deriveLocked
-      ? `Derived-group settings are locked while Group by uses ${activeGroup}. Set Group by to Overall only if you want Create or these parameters to affect the next grouping analysis. Run again only reuses the current Group by value.`
-      : "";
+    if (!deriveLocked) {
+      refs.deriveStatus.textContent = "";
+      return;
+    }
+    let statusText = `Derived-group settings are locked while Group by uses ${activeGroup}. Set Group by to Overall only if you want Create or these parameters to affect the next grouping analysis. Run again only reuses the current Group by value.`;
+    if (displayedDerivedColumn) {
+      if (activeGroup === displayedDerivedColumn) {
+        statusText += controlsMismatch
+          ? ` The card below describes ${displayedDerivedColumn}; the disabled controls above are draft settings only and do not describe that stored result.`
+          : ` The card below describes the current derived grouping ${displayedDerivedColumn}.`;
+      } else {
+        statusText += ` The card below describes ${displayedDerivedColumn}, not the current Group by ${activeGroup}.`;
+        if (controlsMismatch) {
+          statusText += " The disabled controls above are draft settings only for the next Create action.";
+        }
+      }
+    }
+    refs.deriveStatus.textContent = statusText;
   }
 }
 
@@ -3116,6 +3139,7 @@ function normalizeDerivedColumnProvenance(provenance = {}) {
         ...normalizedMeta,
         outcomeInformed: Boolean(normalizedMeta.outcomeInformed ?? normalizedMeta.outcome_informed),
         recipe: normalizedMeta.recipe || {},
+        summary: normalizedMeta.summary || null,
       }];
     }),
   );
@@ -3309,6 +3333,86 @@ function humanizePValueLabel(label) {
   return "p-value";
 }
 
+function normalizeDeriveSummaryText(value) {
+  return String(value ?? "").trim();
+}
+
+function normalizeDeriveSummaryNumber(value) {
+  const text = normalizeDeriveSummaryText(value);
+  if (!text) return "";
+  const number = Number(text);
+  return Number.isFinite(number) ? String(number) : text;
+}
+
+function deriveMethodUsesCutoff(method) {
+  return method === "percentile_split" || method === "extreme_split";
+}
+
+function currentDeriveDraftConfig() {
+  const method = normalizeDeriveSummaryText(refs.deriveMethod?.value);
+  return {
+    sourceColumn: normalizeDeriveSummaryText(refs.deriveSource?.value),
+    method,
+    cutoffText: deriveMethodUsesCutoff(method) ? normalizeDeriveSummaryText(refs.deriveCutoff?.value) : "",
+    columnName: normalizeDeriveSummaryText(refs.deriveColumnName?.value),
+    minGroupFraction: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(refs.deriveMinGroupFraction?.value) : "",
+    permutationIterations: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(refs.derivePermutationIterations?.value) : "",
+    randomSeed: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(refs.deriveRandomSeed?.value) : "",
+  };
+}
+
+function storedDeriveRecipeConfig(derivedColumn, summary) {
+  const normalizedColumn = normalizeDeriveSummaryText(derivedColumn);
+  const recipe = runtime.derivedColumnProvenance?.[normalizedColumn]?.recipe || summary?.recipe || {};
+  const method = normalizeDeriveSummaryText(recipe.method ?? summary?.method);
+  return {
+    sourceColumn: normalizeDeriveSummaryText(recipe.source_column),
+    method,
+    cutoffText: deriveMethodUsesCutoff(method)
+      ? normalizeDeriveSummaryText(recipe.cutoff_spec ?? summary?.cutoff_spec ?? recipe.cutoff ?? summary?.cutoff)
+      : "",
+    columnName: normalizeDeriveSummaryText(recipe.column_name || normalizedColumn),
+    minGroupFraction: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(recipe.min_group_fraction ?? summary?.min_group_fraction) : "",
+    permutationIterations: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(recipe.permutation_iterations ?? summary?.permutation_iterations) : "",
+    randomSeed: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(recipe.random_seed ?? summary?.random_seed) : "",
+  };
+}
+
+function deriveDraftMatchesStoredRecipe(derivedColumn, summary) {
+  const stored = storedDeriveRecipeConfig(derivedColumn, summary);
+  if (!Object.values(stored).some(Boolean)) return true;
+  const draft = currentDeriveDraftConfig();
+  return ["sourceColumn", "method", "cutoffText", "columnName", "minGroupFraction", "permutationIterations", "randomSeed"]
+    .every((key) => draft[key] === stored[key]);
+}
+
+function currentDerivedSummaryPayload() {
+  const currentGroup = normalizeDeriveSummaryText(refs.groupColumn?.value);
+  const currentMeta = currentGroup ? runtime.derivedColumnProvenance?.[currentGroup] : null;
+  if (currentMeta?.summary) {
+    return {
+      derivedColumn: currentGroup,
+      summary: currentMeta.summary,
+    };
+  }
+  if (runtime.lastDerivedGroup?.derivedColumn && runtime.lastDerivedGroup?.summary) {
+    return runtime.lastDerivedGroup;
+  }
+  return null;
+}
+
+function rerenderDerivedGroupSummaryIfVisible() {
+  if (!refs.deriveSummary || refs.deriveSummary.dataset.summaryKind !== "derived") return;
+  const payload = currentDerivedSummaryPayload();
+  if (!payload) {
+    refs.deriveSummary.innerHTML = "";
+    refs.deriveSummary.classList.add("hidden");
+    refs.deriveSummary.dataset.summaryKind = "";
+    return;
+  }
+  renderDerivedGroupSummary(payload.derivedColumn, payload.summary);
+}
+
 function renderDerivedGroupSummary(derivedColumn, summary) {
   const counts = summary?.counts || [];
   const assignmentRule = summary?.assignment_rule || null;
@@ -3317,11 +3421,31 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
   const thresholds = Array.isArray(summary?.cutoffs)
     ? summary.cutoffs.map((value) => formatValue(value)).join(", ")
     : "";
-  const currentGroup = String(refs.groupColumn?.value || "");
+  const currentGroup = normalizeDeriveSummaryText(refs.groupColumn?.value);
   const currentGroupLabel = currentGroup || "overall only";
-  const groupingNote = currentGroup === String(derivedColumn || "")
-    ? `Current grouping now uses ${derivedColumn}. ML and DL feature selections did not change automatically.`
-    : `Derived column ${derivedColumn} is available. Current grouping remains ${currentGroupLabel}. ML and DL feature selections did not change automatically.`;
+  const normalizedDerivedColumn = normalizeDeriveSummaryText(derivedColumn);
+  const currentUsesDerived = currentGroup === normalizedDerivedColumn;
+  const controlsMismatch = !deriveDraftMatchesStoredRecipe(normalizedDerivedColumn, summary);
+  const summaryModeLabel = currentUsesDerived ? "Current derived grouping" : "Stored derived grouping";
+  const summaryModeText = currentUsesDerived
+    ? "This card describes the grouping currently selected in Group by."
+    : "This card describes the last derived column you created, not the current Group by selection.";
+  const notes = [];
+  if (currentUsesDerived) {
+    notes.push(`Current grouping now uses ${normalizedDerivedColumn}. ML and DL feature selections did not change automatically.`);
+  } else if (currentGroup) {
+    notes.push(`Derived column ${normalizedDerivedColumn} is available. Current grouping remains ${currentGroupLabel}. ML and DL feature selections did not change automatically.`);
+    notes.push(`The counts and method details below describe ${normalizedDerivedColumn}, not ${currentGroupLabel}.`);
+  } else {
+    notes.push(`Derived column ${normalizedDerivedColumn} is available. Current grouping remains overall only. ML and DL feature selections did not change automatically.`);
+    notes.push(`The counts and method details below describe ${normalizedDerivedColumn}. Group by is still Overall only until you select it or rerun Kaplan-Meier with auto-apply.`);
+  }
+  if (controlsMismatch) {
+    const controlsLead = currentGroup
+      ? "The disabled Source variable / Method / Column name controls above are draft settings for the next Create action after you clear Group by back to Overall only."
+      : "The visible Source variable / Method / Column name controls above are draft settings for the next Create action.";
+    notes.push(`${controlsLead} They do not describe ${normalizedDerivedColumn}.`);
+  }
   const summaryCell = (label, value, extraClass = "") => `
       <div class="${extraClass}">
         <strong>${escapeHtml(label)}</strong>
@@ -3332,16 +3456,25 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
     refs.cutpointPlot.classList.add("hidden");
   }
   refs.deriveSummary.classList.remove("hidden");
+  refs.deriveSummary.dataset.summaryKind = "derived";
   refs.deriveSummary.innerHTML = `
-    <div class="count-strip">
-      ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(deriveGroupCountLabel(item.group))}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
+    <div class="derive-summary-heading">
+      <span class="derive-summary-kicker">${escapeHtml(summaryModeLabel)}</span>
+      <strong>${escapeHtml(normalizedDerivedColumn || "NA")}</strong>
+      <span>${escapeHtml(summaryModeText)}</span>
     </div>
+    ${notes.map((note) => `<div class="note-box">${escapeHtml(note)}</div>`).join("")}
     ${summary?.method === "optimal_cutpoint" ? '<div class="note-box">High/Low indicate risk direction, not whether the source value itself is numerically high or low.</div>' : ""}
-    <div class="note-box">${escapeHtml(groupingNote)}</div>
     ${summary?.method === "optimal_cutpoint" ? '<div class="note-box">This optimal cutpoint used outcome information. Use it for grouping or visualization, not as an ML/DL training feature.</div>' : ""}
     ${summary?.method === "extreme_split" ? '<div class="note-box">Middle-range rows are excluded from grouped analyses for extreme split.</div>' : ""}
+    ${counts.length ? `
+      <div class="count-summary-label">${escapeHtml(currentUsesDerived ? "Counts for the current derived grouping" : "Counts for the stored derived column")}</div>
+      <div class="count-strip">
+        ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(deriveGroupCountLabel(item.group))}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
+      </div>
+    ` : ""}
     <div class="signature-summary-grid">
-      ${summaryCell("Derived column", derivedColumn || "NA")}
+      ${summaryCell("Derived column", normalizedDerivedColumn || "NA")}
       ${summaryCell("Method", humanizeDeriveMethod(summary?.method || "NA"))}
       ${percentileSpec ? summaryCell("Percentile(s)", percentileSpec) : ""}
       ${thresholds ? summaryCell(Array.isArray(summary?.cutoffs) && summary.cutoffs.length > 1 ? "Thresholds" : "Threshold", thresholds) : ""}
@@ -6029,6 +6162,7 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   refs.dlMetaBanner.textContent = "Select model features here, configure hyperparameters, then run analysis.";
   refs.deriveSummary.innerHTML = "";
   refs.deriveSummary.classList.add("hidden");
+  refs.deriveSummary.dataset.summaryKind = "";
   runtime.lastDerivedGroup = null;
   runtime.deriveDraftTouched = false;
   runtime.derivedColumnProvenance = normalizeDerivedColumnProvenance(payload.derived_column_provenance);
@@ -6259,6 +6393,7 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
   runtime.derivedColumnProvenance[payload.derived_column] = {
     outcomeInformed: Boolean(payload.derive_summary?.outcome_informed),
     recipe: payload.derive_summary?.recipe || {},
+    summary: payload.derive_summary || null,
   };
   refreshVariableSelections();
   if (shouldAutoApplyDerivedGroup) {
@@ -6459,6 +6594,7 @@ function renderSignatureResult(analysis) {
   const search = analysis.search_space || {};
   const significantFlag = best["Statistically significant"] ? "Yes" : "No";
   refs.deriveSummary.classList.remove("hidden");
+  refs.deriveSummary.dataset.summaryKind = "signature";
   refs.deriveSummary.innerHTML = `
     <div class="signature-summary-grid">
       <div><strong>Best signature</strong><br/>${escapeHtml(best.Signature || "NA")}</div>
@@ -6515,6 +6651,7 @@ async function runSignatureSearch() {
   runtime.derivedColumnProvenance[payload.derived_column] = {
     outcomeInformed: Boolean(derivedGroupMeta.outcome_informed ?? derivedGroupMeta.outcomeInformed ?? true),
     recipe: derivedGroupMeta.recipe || payload.signature_analysis?.signature_recipe || {},
+    summary: derivedGroupMeta.summary || null,
   };
   refreshVariableSelections();
   state.signature = {
@@ -8221,9 +8358,7 @@ function initListeners() {
     queueHistorySync();
   });
   refs.groupColumn.addEventListener("change", () => {
-    if (runtime.lastDerivedGroup) {
-      renderDerivedGroupSummary(runtime.lastDerivedGroup.derivedColumn, runtime.lastDerivedGroup.summary);
-    }
+    rerenderDerivedGroupSummaryIfVisible();
     syncDeriveControlsState();
     updateDatasetBadge();
     renderSharedFeatureSummary();
@@ -8372,12 +8507,17 @@ function initListeners() {
   });
   const markDeriveDraftTouched = () => {
     runtime.deriveDraftTouched = true;
+    rerenderDerivedGroupSummaryIfVisible();
+    syncDeriveControlsState();
     queueHistorySync();
   };
-  refs.deriveSource?.addEventListener("change", () => { runtime.deriveDraftTouched = true; queueHistorySync(); });
+  refs.deriveSource?.addEventListener("change", markDeriveDraftTouched);
   refs.deriveMethod.addEventListener("change", () => { updateMethodVisibility(); markDeriveDraftTouched(); });
   refs.deriveCutoff?.addEventListener("input", markDeriveDraftTouched);
   refs.deriveColumnName?.addEventListener("input", markDeriveDraftTouched);
+  refs.deriveMinGroupFraction?.addEventListener("input", markDeriveDraftTouched);
+  refs.derivePermutationIterations?.addEventListener("input", markDeriveDraftTouched);
+  refs.deriveRandomSeed?.addEventListener("input", markDeriveDraftTouched);
   refs.logrankWeight.addEventListener("change", () => { updateWeightVisibility(); queueHistorySync(); });
   refs.mlModelType.addEventListener("change", () => {
     updateMlModelControlVisibility();

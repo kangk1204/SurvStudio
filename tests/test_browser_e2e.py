@@ -1381,7 +1381,10 @@ def test_browser_km_derive_defaults_to_group_when_current_group_is_overall_only(
             page.wait_for_function(
                 "document.getElementById('deriveSummary').textContent.includes('Current grouping remains sex')"
             )
-            assert "Derived column age_guided_split is available." in page.locator("#deriveSummary").inner_text()
+            derive_text = page.locator("#deriveSummary").inner_text()
+            assert "Derived column age_guided_split is available." in derive_text
+            assert "The counts and method details below describe age_guided_split, not sex." in derive_text
+            assert "STORED DERIVED GROUPING" in derive_text
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
@@ -1484,6 +1487,50 @@ def test_browser_guided_km_run_keeps_existing_group_when_derive_draft_is_pending
             assert page.locator("#groupColumn").input_value() == "stage_group"
             assert "Derived column" not in page.locator("#deriveSummary").inner_text()
             assert "N=" in page.locator("#kmMetaBanner").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_km_derive_summary_marks_stored_result_vs_locked_draft(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadTcgaButton").click()
+            _switch_to_expert(page)
+
+            page.locator("#deriveToggle").click()
+            page.locator("#deriveSource").select_option("pack_years_smoked")
+            page.locator("#deriveMethod").select_option("median_split")
+            page.locator("#deriveButton").click(force=True)
+            page.wait_for_function(
+                "document.getElementById('groupColumn').value === 'pack_years_smoked__median_split'"
+            )
+
+            page.locator("#groupColumn").select_option("")
+            page.locator("#deriveSource").select_option("age")
+            page.locator("#deriveColumnName").fill("biomarker_group")
+            page.locator("#groupColumn").select_option("egfr_status")
+            page.wait_for_function(
+                "document.getElementById('deriveSummary').textContent.includes('Current grouping remains egfr_status')"
+            )
+
+            derive_text = page.locator("#deriveSummary").inner_text()
+            status_text = page.locator("#deriveStatus").inner_text()
+            assert "STORED DERIVED GROUPING" in derive_text
+            assert "Derived column pack_years_smoked__median_split is available." in derive_text
+            assert "The counts and method details below describe pack_years_smoked__median_split, not egfr_status." in derive_text
+            assert "The disabled Source variable / Method / Column name controls above are draft settings" in derive_text
+            assert "They do not describe pack_years_smoked__median_split." in derive_text
+            assert "The card below describes pack_years_smoked__median_split, not the current Group by egfr_status." in status_text
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
