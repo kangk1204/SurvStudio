@@ -137,9 +137,14 @@ If you want a file that you can upload manually instead of clicking a built-in l
 
 ## 1-Minute Quick Start
 
+**Recommended: install everything up front.**
+`pip install -e ".[all]"` is the right default for manuscript work.
+It unlocks Excel/Parquet import, ML and DL survival models, figure-export (`kaleido`), and the full test suite.
+A minimal `pip install -e .` works for KM + Cox only — use it only if disk space or install time is a concern.
+
 Use the first block that matches your machine.
 
-### If You Already Have Python 3.11+
+### If You Already Have Python 3.11+ (Recommended)
 
 On macOS or Linux:
 
@@ -148,7 +153,7 @@ git clone https://github.com/kangk1204/SurvStudio.git
 cd SurvStudio
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[all]"
 python -m survival_toolkit
 ```
 
@@ -158,7 +163,7 @@ On Windows 11 PowerShell:
 git clone https://github.com/kangk1204/SurvStudio.git
 cd SurvStudio
 py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m pip install -e ".[all]"
 .\.venv\Scripts\python.exe -m survival_toolkit
 ```
 
@@ -170,7 +175,7 @@ cd SurvStudio
 conda create -y -p .conda python=3.11 pip
 ./.conda/bin/python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[all]"
 python -m survival_toolkit
 ```
 
@@ -184,29 +189,21 @@ Click `Synthetic Example` first.
 
 Use the `pip` bundled with the fresh virtual environment for the first install. If you upgraded `pip` separately and the editable install failed, recreate `.venv` and retry without the `pip` upgrade step.
 
-If you want the full workflow shown in the screenshots on first launch, replace `pip install -e .` with:
-
-```bash
-pip install -e ".[all]"
-```
-
-That full install is the right default for manuscript work because it includes:
-- Excel / Parquet readers
-- optional ML and DL workflows
+The full `.[all]` install includes:
+- Excel / Parquet readers and `.xlsx` export
+- optional ML and DL survival model workflows
 - figure-export runtime (`kaleido`) for PNG / SVG saves
 - pytest and browser-test extras for local QA
 
-If you want cohort-table Excel `.xlsx` export and optional spreadsheet readers on first launch, use:
+If you need only a subset, the available extras are:
 
-```bash
-pip install -e ".[formats]"
-```
-
-If you want both `.xlsx` export and the optional ML/DL workflows, keep using:
-
-```bash
-pip install -e ".[all]"
-```
+| Extra | What it adds |
+|---|---|
+| `.[all]` | Everything — **recommended** |
+| `.[ml]` | scikit-survival ML models only |
+| `.[formats]` | Excel / Parquet I/O only |
+| `.[dev]` | pytest and test tooling only |
+| `.[kaleido]` | PNG / SVG figure export only |
 
 ## Install
 

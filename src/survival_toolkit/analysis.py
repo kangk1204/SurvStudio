@@ -3811,6 +3811,14 @@ def compute_km_analysis(
             }
         )
 
+    # If any group has non-estimable RMST uncertainty (e.g. exhausted risk set),
+    # null SE and CI for all groups so the summary table is internally consistent.
+    if any(s.get("variance") is None for s in rmst_stats_by_group):
+        for row in summary_rows:
+            row["RMST SE"] = None
+            row["RMST CI lower"] = None
+            row["RMST CI upper"] = None
+
     test_payload = None
     pairwise_rows: list[dict[str, Any]] = []
     weight_type = KM_WEIGHT_MAP.get(logrank_weight)
