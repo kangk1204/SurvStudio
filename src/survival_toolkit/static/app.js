@@ -62,6 +62,7 @@ const downloadHelpers = window.SurvStudioDownloads;
 
 const refs = {
   runtimeBanner: document.getElementById("runtimeBanner"),
+  analysisConsistencyBanner: document.getElementById("analysisConsistencyBanner"),
   landing: document.getElementById("landing"),
   workspace: document.getElementById("workspace"),
   datasetBadge: document.getElementById("datasetBadge"),
@@ -804,6 +805,88 @@ function scheduleCoxPreview({ delay = 180, force = false } = {}) {
 
 function requestConfigFromPayload(payload) {
   return payload?.request_config || payload?.analysis?.request_config || null;
+}
+
+function setAnalysisConsistencyBanner(text = "", tone = "warning") {
+  if (!refs.analysisConsistencyBanner) return;
+  if (!text) {
+    refs.analysisConsistencyBanner.textContent = "";
+    refs.analysisConsistencyBanner.className = "runtime-banner hidden";
+    return;
+  }
+  refs.analysisConsistencyBanner.textContent = text;
+  refs.analysisConsistencyBanner.className = `runtime-banner runtime-banner-${tone}`;
+}
+
+function analysisCohortFingerprint(goal, payload) {
+  if (!payload) return null;
+  const analysis = payload?.analysis || payload;
+  const datasetHash = String(payload?.dataset_hash || state.dataset?.dataset_hash || "");
+  if (goal === "km") {
+    const cohort = analysis?.cohort || {};
+    if (!cohort.row_mask_hash) return null;
+    return { goal, label: "KM", n: Number(cohort.n), rowMaskHash: String(cohort.row_mask_hash), datasetHash };
+  }
+  if (goal === "cox") {
+    const stats = analysis?.model_stats || {};
+    if (!stats.row_mask_hash) return null;
+    return { goal, label: "Cox", n: Number(stats.n), rowMaskHash: String(stats.row_mask_hash), datasetHash };
+  }
+  if (goal === "signature") {
+    const searchSpace = analysis?.search_space || {};
+    if (!searchSpace.row_mask_hash) return null;
+    return {
+      goal,
+      label: "Signature",
+      n: Number(searchSpace.n_rows_analyzed),
+      rowMaskHash: String(searchSpace.row_mask_hash),
+      datasetHash,
+    };
+  }
+  if (goal === "tables") {
+    if (!analysis?.row_mask_hash) return null;
+    return { goal, label: "Table", n: NaN, rowMaskHash: String(analysis.row_mask_hash), datasetHash };
+  }
+  return null;
+}
+
+function currentAnalysisCohortFingerprints() {
+  return [
+    analysisCohortFingerprint("km", state.km),
+    analysisCohortFingerprint("cox", state.cox),
+    analysisCohortFingerprint("signature", state.signature),
+    analysisCohortFingerprint("tables", state.cohort),
+  ].filter(Boolean);
+}
+
+function renderAnalysisConsistencyBanner() {
+  const fingerprints = currentAnalysisCohortFingerprints();
+  if (fingerprints.length < 2) {
+    setAnalysisConsistencyBanner("");
+    return;
+  }
+  const datasetHashes = new Set(fingerprints.map((item) => item.datasetHash).filter(Boolean));
+  if (datasetHashes.size > 1) {
+    setAnalysisConsistencyBanner(
+      "Loaded analyses do not share the same dataset fingerprint. Rebuild the analyses from one cohort before comparing them side by side.",
+      "warning",
+    );
+    return;
+  }
+  const rowMaskHashes = new Set(fingerprints.map((item) => item.rowMaskHash).filter(Boolean));
+  if (rowMaskHashes.size <= 1) {
+    setAnalysisConsistencyBanner("");
+    return;
+  }
+  const cohortSummary = fingerprints
+    .map((item) => (Number.isFinite(item.n) ? `${item.label} N=${formatValue(item.n)}` : item.label))
+    .join("; ");
+  setAnalysisConsistencyBanner(
+    `Loaded analyses currently use different analyzable cohorts on the same dataset (${cohortSummary}). `
+      + "This usually reflects different missing-value filtering or candidate-feature eligibility. "
+      + "Do not report KM, Cox, Signature, or grouped table outputs side by side as if they used the same patients.",
+    "warning",
+  );
 }
 
 function currentCohortTableOutputState() {
@@ -6165,6 +6248,7 @@ function clearAnalysisOutputs() {
   if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
   if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
   setDlManuscriptDownloadsEnabled(false);
+  setAnalysisConsistencyBanner("");
 }
 
 function updateAfterDataset(payload, { scrollToTop = false } = {}) {
@@ -6586,6 +6670,7 @@ async function runKaplanMeier() {
   });
   if (!requestTokenMatches("km", requestToken) || state.dataset?.dataset_id !== datasetId) return;
   state.km = payload;
+  renderAnalysisConsistencyBanner();
   const kmFigure = payload?.figure || { data: [], layout: {} };
   const kmAnalysis = payload?.analysis || {};
   const kmRiskTable = kmAnalysis.risk_table || {};
@@ -6684,7 +6769,9 @@ async function runSignatureSearch() {
   state.signature = {
     ...payload.signature_analysis,
     request_config: payload.signature_request_config || requestConfig,
+    dataset_hash: payload.dataset_hash || state.dataset?.dataset_hash || "",
   };
+  renderAnalysisConsistencyBanner();
   if (shouldAutoApplyDerivedGroup) {
     refs.groupColumn.value = payload.derived_column;
   } else {
@@ -6720,6 +6807,7 @@ async function runCox() {
   });
   if (!requestTokenMatches("cox", requestToken) || state.dataset?.dataset_id !== datasetId) return;
   state.cox = payload;
+  renderAnalysisConsistencyBanner();
   const coxFigure = payload?.figure || { data: [], layout: {} };
   const coxAnalysis = payload?.analysis || {};
   const coxSummary = coxAnalysis.scientific_summary || null;
@@ -6785,6 +6873,7 @@ async function runCohortTable() {
   });
   if (!requestTokenMatches("tables", requestToken) || state.dataset?.dataset_id !== datasetId) return;
   state.cohort = payload;
+  renderAnalysisConsistencyBanner();
   renderTable(refs.cohortTableShell, payload.analysis.rows, payload.analysis.columns);
   renderSharedFeatureSummary();
   syncDownloadButtonAvailability();

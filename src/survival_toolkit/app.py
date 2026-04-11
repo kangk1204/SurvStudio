@@ -689,6 +689,12 @@ def dataset_response(dataset_id: str) -> dict[str, Any]:
     payload["preset_eligible"] = stored.source == "builtin_demo"
     payload["preset_name"] = str(stored.metadata.get("preset_name")) if stored.metadata.get("preset_name") else None
     payload["derived_column_provenance"] = dict(stored.metadata.get("derived_column_provenance", {}))
+    payload["dataset_hash"] = str(stored.metadata.get("dataset_hash") or "")
+    return payload
+
+
+def _attach_dataset_hash(payload: dict[str, Any], stored: Any) -> dict[str, Any]:
+    payload["dataset_hash"] = str(stored.metadata.get("dataset_hash") or "")
     return payload
 
 
@@ -942,6 +948,8 @@ def _enforce_upload_shape_limits(dataframe: Any) -> None:
     n_rows = int(dataframe.shape[0])
     n_columns = int(dataframe.shape[1])
     n_cells = int(n_rows * n_columns)
+    if n_rows < 1:
+        raise UserInputError("Dataset has no rows. Upload a table with at least one patient row.")
     if n_rows > _MAX_UPLOAD_ROWS:
         raise UserInputError(
             f"Upload has {n_rows:,} rows. SurvStudio currently supports at most {_MAX_UPLOAD_ROWS:,} rows per uploaded cohort."
@@ -1865,7 +1873,10 @@ async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
                 time_unit_label=request_model.time_unit_label,
                 show_confidence_bands=request_model.show_confidence_bands,
             )
-            return {"analysis": analysis, "figure": figure, "request_config": request_config}
+            return _attach_dataset_hash(
+                {"analysis": analysis, "figure": figure, "request_config": request_config},
+                stored,
+            )
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -1915,13 +1926,16 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
             figure = build_cox_forest_figure(analysis)
             diagnostics_figure = build_cox_diagnostics_figure(analysis)
             martingale_figure = build_cox_martingale_figure(analysis)
-            return {
-                "analysis": analysis,
-                "figure": figure,
-                "diagnostics_figure": diagnostics_figure,
-                "martingale_figure": martingale_figure,
-                "request_config": request_config,
-            }
+            return _attach_dataset_hash(
+                {
+                    "analysis": analysis,
+                    "figure": figure,
+                    "diagnostics_figure": diagnostics_figure,
+                    "martingale_figure": martingale_figure,
+                    "request_config": request_config,
+                },
+                stored,
+            )
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -1962,7 +1976,7 @@ async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
                 categorical_covariates=request_model.categorical_covariates,
                 strata_columns=request_model.strata_columns,
             )
-            return {"preview": preview, "request_config": request_config}
+            return _attach_dataset_hash({"preview": preview, "request_config": request_config}, stored)
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -1982,11 +1996,17 @@ async def cohort_table(request_model: CohortTableRequest) -> dict[str, Any]:
             )
 
         def _run() -> dict[str, Any]:
-            return {"analysis": compute_cohort_table(
-                stored.dataframe,
-                variables=request_model.variables,
-                group_column=request_model.group_column,
-            ), "request_config": request_config}
+            return _attach_dataset_hash(
+                {
+                    "analysis": compute_cohort_table(
+                        stored.dataframe,
+                        variables=request_model.variables,
+                        group_column=request_model.group_column,
+                    ),
+                    "request_config": request_config,
+                },
+                stored,
+            )
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -2051,7 +2071,7 @@ async def discover_signature(request_model: SignatureSearchRequest) -> dict[str,
         payload["derived_column"] = column_name
         payload["signature_analysis"] = analysis
         payload["signature_request_config"] = request_config
-        return payload
+        return _attach_dataset_hash(payload, stored)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -2154,7 +2174,10 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                     _ml_replay_notes(request_config, dataset_filename=stored.filename),
                 )
                 figure = build_model_comparison_figure(comparison)
-                return {"analysis": comparison, "figure": figure, "request_config": request_config}
+                return _attach_dataset_hash(
+                    {"analysis": comparison, "figure": figure, "request_config": request_config},
+                    stored,
+                )
 
             if request_model.evaluation_strategy != "holdout":
                 raise UserInputError(
@@ -2276,15 +2299,18 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                                 )
 
             clean_result = {k: v for k, v in result.items() if not k.startswith("_")}
-            return {
-                "analysis": clean_result,
-                "importance_figure": importance_figure,
-                "shap_result": shap_result,
-                "shap_figure": shap_figure,
-                "shap_error": shap_error,
-                "shap_companion": shap_companion,
-                "request_config": request_config,
-            }
+            return _attach_dataset_hash(
+                {
+                    "analysis": clean_result,
+                    "importance_figure": importance_figure,
+                    "shap_result": shap_result,
+                    "shap_figure": shap_figure,
+                    "shap_error": shap_error,
+                    "shap_companion": shap_companion,
+                    "request_config": request_config,
+                },
+                stored,
+            )
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -2355,11 +2381,14 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                     _dl_replay_notes(request_config, dataset_filename=stored.filename, resolved_analysis=result),
                 )
                 clean_result = {k: v for k, v in result.items() if not k.startswith("_")}
-                return {
-                    "analysis": clean_result,
-                    "figures": {"comparison": build_model_comparison_figure(result)},
-                    "request_config": request_config,
-                }
+                return _attach_dataset_hash(
+                    {
+                        "analysis": clean_result,
+                        "figures": {"comparison": build_model_comparison_figure(result)},
+                        "request_config": request_config,
+                    },
+                    stored,
+                )
 
             result = deep_models.evaluate_single_deep_survival_model(
                 request_model.model_type,
@@ -2403,7 +2432,10 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                 clean_result["scientific_summary"] = clean_result["insight_board"]
             if "epochs_trained" not in clean_result:
                 clean_result["epochs_trained"] = request_model.epochs
-            return {"analysis": clean_result, "figures": figures, "request_config": request_config}
+            return _attach_dataset_hash(
+                {"analysis": clean_result, "figures": figures, "request_config": request_config},
+                stored,
+            )
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -2523,7 +2555,7 @@ async def time_dependent_importance(request_model: TimeDependentImportanceReques
                 eval_times=request_model.eval_times,
             )
             figure = build_time_dependent_importance_figure(result)
-            return {"analysis": result, "figure": figure}
+            return _attach_dataset_hash({"analysis": result, "figure": figure}, stored)
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -2579,7 +2611,7 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
                 if artifact is not None
                 else "Counterfactual analysis refit an RSF/GBS model from the requested configuration because no matching single-model artifact was cached. It does not explain a previously displayed Compare All winner."
             )
-            return {"analysis": analysis, "request_config": request_config}
+            return _attach_dataset_hash({"analysis": analysis, "request_config": request_config}, stored)
 
         return await run_in_threadpool(_run)
     except Exception as exc:
@@ -2659,7 +2691,10 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
                 else "Partial dependence refit an RSF/GBS model from the requested configuration because no matching single-model artifact was cached. It does not explain a previously displayed Compare All winner."
             )
             figure = build_pdp_figure(result)
-            return {"analysis": result, "figure": figure, "request_config": request_config}
+            return _attach_dataset_hash(
+                {"analysis": result, "figure": figure, "request_config": request_config},
+                stored,
+            )
 
         return await run_in_threadpool(_run)
     except Exception as exc:

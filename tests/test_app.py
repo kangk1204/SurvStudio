@@ -364,6 +364,19 @@ def test_app_uses_threadpool_for_builtin_loaders_and_derive_group() -> None:
     assert "return await run_in_threadpool(_run)" in app_py
 
 
+def test_frontend_exposes_analysis_consistency_banner_and_row_hash_checks() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit"
+    index_html = (root / "templates" / "index.html").read_text(encoding="utf-8")
+    app_js = (root / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="analysisConsistencyBanner"' in index_html
+    assert 'analysisConsistencyBanner: document.getElementById("analysisConsistencyBanner")' in app_js
+    assert "function currentAnalysisCohortFingerprints() {" in app_js
+    assert "function renderAnalysisConsistencyBanner() {" in app_js
+    assert "row_mask_hash" in app_js
+    assert "Loaded analyses currently use different analyzable cohorts on the same dataset" in app_js
+
+
 def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
     app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
     shell_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_shell.js"
@@ -2551,6 +2564,40 @@ def test_derive_group_rejects_control_characters_in_labels() -> None:
 
     assert response.status_code == 422
     assert "control characters" in json.dumps(response.json())
+
+
+def test_dataset_and_analysis_payloads_include_dataset_hash() -> None:
+    stored = store.create(
+        make_example_dataset(seed=205, n_patients=72),
+        filename="dataset_hash.csv",
+        copy_dataframe=False,
+    )
+
+    dataset_payload = app_module.dataset_response(stored.dataset_id)
+    km_response = client.post(
+        "/api/kaplan-meier",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "group_column": "stage",
+        },
+    )
+
+    assert dataset_payload["dataset_hash"] == stored.metadata["dataset_hash"]
+    assert km_response.status_code == 200
+    assert km_response.json()["dataset_hash"] == stored.metadata["dataset_hash"]
+
+
+def test_upload_endpoint_rejects_empty_datasets() -> None:
+    response = client.post(
+        "/api/upload",
+        files={"file": ("empty.csv", b"age,stage\n", "text/csv")},
+    )
+
+    assert response.status_code == 400
+    assert "no data rows" in response.json()["detail"].lower() or "has no rows" in response.json()["detail"].lower()
 
 
 @pytest.mark.parametrize("operator", ["and", "or", "mixed"])

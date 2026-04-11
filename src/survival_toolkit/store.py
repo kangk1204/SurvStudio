@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+import numpy as np
 import pandas as pd
 
 from survival_toolkit.errors import DatasetNotFoundError
@@ -23,6 +25,7 @@ class StoredDataset:
     source: str
     dataframe: pd.DataFrame
     created_at: datetime
+    last_accessed: datetime
     metadata: dict[str, Any]
 
 
@@ -45,12 +48,32 @@ class DatasetStore:
             return dataframe
         return dataframe.copy(deep=True)
 
+    @staticmethod
+    def _dataframe_hash(dataframe: pd.DataFrame) -> str:
+        digest = hashlib.sha256()
+        digest.update(np.asarray([int(dataframe.shape[0]), int(dataframe.shape[1])], dtype=np.int64).tobytes())
+        digest.update("|".join(str(column) for column in dataframe.columns).encode("utf-8"))
+        digest.update("|".join(str(dtype) for dtype in dataframe.dtypes.astype(str)).encode("utf-8"))
+        try:
+            hashed = pd.util.hash_pandas_object(dataframe, index=True, categorize=True).to_numpy(
+                dtype=np.uint64,
+                copy=False,
+            )
+        except TypeError:
+            hashed = pd.util.hash_pandas_object(
+                dataframe.astype("string"),
+                index=True,
+                categorize=True,
+            ).to_numpy(dtype=np.uint64, copy=False)
+        digest.update(np.ascontiguousarray(hashed).tobytes())
+        return digest.hexdigest()[:16]
+
     def _evict_expired(self) -> None:
         now = datetime.now(timezone.utc)
         expired = [
             key
             for key, stored in self._datasets.items()
-            if (now - stored.created_at).total_seconds() > self._ttl_seconds
+            if (now - stored.last_accessed).total_seconds() > self._ttl_seconds
         ]
         for key in expired:
             del self._datasets[key]
@@ -72,13 +95,18 @@ class DatasetStore:
             self._evict_expired()
             self._evict_lru()
             dataset_id = uuid4().hex
+            dataset_hash = self._dataframe_hash(dataframe)
+            created_at = datetime.now(timezone.utc)
+            stored_metadata = copy.deepcopy(metadata or {})
+            stored_metadata["dataset_hash"] = dataset_hash
             stored = StoredDataset(
                 dataset_id=dataset_id,
                 filename=filename,
                 source=source,
                 dataframe=self._copy_dataframe(dataframe, copy_dataframe=copy_dataframe),
-                created_at=datetime.now(timezone.utc),
-                metadata=copy.deepcopy(metadata or {}),
+                created_at=created_at,
+                last_accessed=created_at,
+                metadata=stored_metadata,
             )
             self._datasets[dataset_id] = stored
             return self._clone_stored(stored, copy_dataframe=copy_dataframe)
@@ -90,6 +118,7 @@ class DatasetStore:
             source=stored.source,
             dataframe=self._copy_dataframe(stored.dataframe, copy_dataframe=copy_dataframe),
             created_at=stored.created_at,
+            last_accessed=stored.last_accessed,
             metadata=copy.deepcopy(stored.metadata),
         )
 
@@ -106,6 +135,7 @@ class DatasetStore:
                 stored = self._datasets[dataset_id]
             except KeyError as exc:
                 raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}") from exc
+            stored.last_accessed = datetime.now(timezone.utc)
             self._datasets.move_to_end(dataset_id)
             return self._clone_stored(stored, copy_dataframe=copy_dataframe)
 
@@ -125,6 +155,11 @@ class DatasetStore:
                 raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}") from exc
             self._datasets.move_to_end(dataset_id)
             stored.dataframe = self._copy_dataframe(dataframe, copy_dataframe=copy_dataframe)
+            stored.last_accessed = datetime.now(timezone.utc)
+            stored.metadata = {
+                **stored.metadata,
+                "dataset_hash": self._dataframe_hash(stored.dataframe),
+            }
             return self._clone_stored(stored, copy_dataframe=copy_dataframe)
 
     def update_metadata(self, dataset_id: str, metadata: dict[str, Any]) -> StoredDataset:
@@ -135,7 +170,11 @@ class DatasetStore:
             except KeyError as exc:
                 raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}") from exc
             self._datasets.move_to_end(dataset_id)
-            stored.metadata = copy.deepcopy(metadata)
+            stored.last_accessed = datetime.now(timezone.utc)
+            stored.metadata = {
+                **copy.deepcopy(metadata),
+                "dataset_hash": stored.metadata.get("dataset_hash") or self._dataframe_hash(stored.dataframe),
+            }
             return self._clone_stored(stored, copy_dataframe=False)
 
     @property

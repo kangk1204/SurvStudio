@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import itertools
 import math
@@ -69,6 +70,7 @@ TERM_NUMERIC_PATTERN = re.compile(r'Q\("(?P<var>.+)"\)')
 _MAX_EXP_INPUT = math.log(np.finfo(float).max)
 _MIN_EXP_INPUT = math.log(np.finfo(float).tiny)
 MAX_MODEL_FEATURE_CANDIDATES = 1000
+COX_CONDITION_NUMBER_WARN_THRESHOLD = 1e10
 _MODEL_FEATURE_ID_PATTERN = re.compile(r"^(patient_id|sample_id|subject_id|id|barcode|uuid|cohort)$", re.IGNORECASE)
 _EVENT_NAME_PATTERNS = (
     re.compile(r"event"),
@@ -1057,15 +1059,35 @@ def _cohort_frame(
     else:
         frame = frame.dropna(subset=[time_column, event_column])
     positive_mask = _ensure_positive_times(frame[time_column])
-    frame = frame.loc[positive_mask].reset_index(drop=True)
+    frame = frame.loc[positive_mask].copy()
+    source_row_index = frame.index.copy()
+    frame = frame.reset_index(drop=True)
     frame.attrs["rows_with_infinite_values"] = int(inf_row_mask.sum())
     frame.attrs["dropped_missing_rows"] = int(missing_row_mask.sum())
     frame.attrs["dropped_nonpositive_time_rows"] = int((~positive_mask).sum())
+    frame.attrs["source_row_index"] = source_row_index.tolist()
+    frame.attrs["row_mask_hash"] = _row_mask_hash(source_row_index)
     if frame.empty:
         raise ValueError("No analyzable rows remain after removing missing values.")
     if frame[event_column].sum() == 0:
         raise ValueError("No events were found after preprocessing the event column.")
     return frame
+
+
+def _row_mask_hash(row_index: Sequence[Any] | pd.Index) -> str:
+    index = row_index if isinstance(row_index, pd.Index) else pd.Index(list(row_index))
+    hashed = pd.util.hash_pandas_object(index, index=False, categorize=True).to_numpy(dtype=np.uint64, copy=False)
+    digest = hashlib.sha256()
+    digest.update(np.asarray([len(index)], dtype=np.int64).tobytes())
+    digest.update(np.ascontiguousarray(hashed).tobytes())
+    return digest.hexdigest()[:16]
+
+
+def _frame_source_row_index(frame: pd.DataFrame) -> pd.Index:
+    source_rows = frame.attrs.get("source_row_index")
+    if source_rows is None:
+        return pd.Index(frame.index.tolist())
+    return pd.Index(list(source_rows))
 
 
 def _ordered_unique_level_strings(series: pd.Series, column_name: str | None = None) -> list[str]:
@@ -2069,6 +2091,10 @@ def _cox_scientific_summary(
     global_ph_pvalue = _safe_float(model_stats.get("global_ph_pvalue"))
     global_ph_terms_tested = int(model_stats.get("global_ph_terms_tested") or 0)
     global_ph_method = str(model_stats.get("global_ph_method") or "").strip()
+    design_condition_number = _safe_float(model_stats.get("design_condition_number"))
+    design_condition_warning_threshold = _safe_float(
+        model_stats.get("design_condition_warning_threshold") or COX_CONDITION_NUMBER_WARN_THRESHOLD
+    )
     martingale_terms = [str(term) for term in model_stats.get("martingale_terms") or [] if term]
     martingale_note = str(model_stats.get("martingale_note") or "").strip()
     n_strata = _safe_float(model_stats.get("n_strata"))
@@ -2138,6 +2164,18 @@ def _cox_scientific_summary(
     if rows_with_infinite_values:
         cautions.append(
             f"{rows_with_infinite_values} outcome-valid row(s) contained +/-Inf values in selected Cox inputs; those values were coerced to missing before complete-case filtering."
+        )
+    if (
+        design_condition_number is not None
+        and design_condition_warning_threshold is not None
+        and design_condition_number > design_condition_warning_threshold
+    ):
+        cautions.append(
+            f"The Cox design matrix is poorly conditioned (condition number {design_condition_number:.2e}), "
+            "so hazard ratios can become numerically unstable when selected inputs vary on very different scales or are nearly collinear."
+        )
+        next_steps.append(
+            "Standardize extreme-scale continuous covariates and review collinearity before treating Cox coefficients as stable."
         )
     if ph_alert_terms:
         cautions.append(
@@ -2237,6 +2275,11 @@ def _cox_scientific_summary(
         or non_estimable_terms
         or zero_event_strata_count
         or high_cardinality_numeric_strata_columns
+        or (
+            design_condition_number is not None
+            and design_condition_warning_threshold is not None
+            and design_condition_number > design_condition_warning_threshold
+        )
     )
 
     if significant_terms:
@@ -2294,6 +2337,12 @@ def _cox_scientific_summary(
         metrics.append({"label": c_index_label, "value": c_index})
     if strata_columns:
         metrics.append({"label": "Strata variables", "value": len(strata_columns)})
+    if (
+        design_condition_number is not None
+        and design_condition_warning_threshold is not None
+        and design_condition_number > design_condition_warning_threshold
+    ):
+        metrics.append({"label": "Condition number", "value": f"{design_condition_number:.2e}"})
     if n_strata is not None:
         metrics.append({"label": "Observed strata", "value": int(n_strata)})
     if zero_event_strata_count:
@@ -3554,6 +3603,7 @@ def discover_feature_signature(
     )
     search_space = {
         "n_rows_analyzed": n_obs,
+        "row_mask_hash": str(frame.attrs.get("row_mask_hash") or ""),
         "candidate_columns": unique_candidates,
         "generated_indicators": int(len(indicators)),
         "tested_combinations": int(len(rows)),
@@ -3804,6 +3854,7 @@ def compute_km_analysis(
         "censored": int((1 - frame[event_column]).sum()),
         "median_follow_up": _median_follow_up(frame[time_column], frame[event_column]),
         "time_max": float(np.nanmax(frame[time_column])),
+        "row_mask_hash": str(frame.attrs.get("row_mask_hash") or ""),
         "dropped_missing_rows": int(frame.attrs.get("dropped_missing_rows", 0)),
         "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
         "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_values", 0)),
@@ -3927,6 +3978,7 @@ def _prepare_cox_frame(
         extra_columns=required_columns,
         drop_missing_extra_columns=drop_missing_covariates,
     )
+    source_row_index = _frame_source_row_index(frame)
     for column in covariates:
         if column in categorical_covariates:
             string_values = frame[column].astype("string")
@@ -3936,7 +3988,13 @@ def _prepare_cox_frame(
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
     frame = frame.replace([np.inf, -np.inf], np.nan)
     if drop_missing_covariates:
-        frame = frame.dropna().reset_index(drop=True)
+        base_attrs = dict(frame.attrs)
+        keep_mask = ~frame.isna().any(axis=1).to_numpy(dtype=bool)
+        frame = frame.loc[keep_mask].copy().reset_index(drop=True)
+        frame.attrs.update(base_attrs)
+        kept_source_rows = source_row_index[keep_mask]
+        frame.attrs["source_row_index"] = kept_source_rows.tolist()
+        frame.attrs["row_mask_hash"] = _row_mask_hash(kept_source_rows)
     if frame.empty:
         raise ValueError("No rows remain after removing missing values for the Cox model.")
     return frame
@@ -3997,6 +4055,22 @@ def _build_cox_formula(time_column: str, covariates: Sequence[str], categorical_
 
 def _build_cox_strata_labels(frame: pd.DataFrame, strata_columns: Sequence[str]) -> np.ndarray | None:
     return _build_cox_strata_payload(frame, strata_columns)["codes"]
+
+
+def _cox_design_condition_number(exog: Any) -> float | None:
+    try:
+        design = np.asarray(exog, dtype=float)
+    except Exception:
+        return None
+    if design.ndim != 2 or design.size == 0 or not np.isfinite(design).all():
+        return None
+    try:
+        condition_number = float(np.linalg.cond(design))
+    except Exception:
+        return None
+    if not math.isfinite(condition_number):
+        return None
+    return condition_number
 
 
 _STAGE_ORDER = [
@@ -4250,7 +4324,14 @@ def compute_cox_analysis(
         event_positive_value=event_positive_value,
         drop_missing_covariates=False,
     )
-    frame = preview_frame.dropna().reset_index(drop=True)
+    complete_case_columns = list(dict.fromkeys([*covariates, *strata_columns]))
+    preview_source_row_index = _frame_source_row_index(preview_frame)
+    complete_case_mask = ~preview_frame[complete_case_columns].isna().any(axis=1).to_numpy(dtype=bool)
+    frame = preview_frame.loc[complete_case_mask].copy().reset_index(drop=True)
+    frame.attrs.update(dict(preview_frame.attrs))
+    complete_case_source_rows = preview_source_row_index[complete_case_mask]
+    frame.attrs["source_row_index"] = complete_case_source_rows.tolist()
+    frame.attrs["row_mask_hash"] = _row_mask_hash(complete_case_source_rows)
     if frame.empty:
         raise ValueError("No rows remain after removing missing values for the Cox model.")
     for column in categorical_covariates:
@@ -4274,6 +4355,7 @@ def compute_cox_analysis(
     if constant_design_message:
         raise ValueError(constant_design_message)
     model = PHReg.from_formula(formula, data=frame, status=status, strata=strata_codes, ties="efron")
+    design_condition_number = _cox_design_condition_number(getattr(model, "exog", None))
     results = _fit_cox_model(model, stability_snapshot)
 
     conf_int = np.asarray(results.conf_int(), dtype=float)
@@ -4452,6 +4534,8 @@ def compute_cox_analysis(
         "n": n_obs,
         "outcome_rows": outcome_rows,
         "dropped_rows": dropped_rows,
+        "row_mask_hash": str(frame.attrs.get("row_mask_hash") or ""),
+        "outcome_row_mask_hash": str(preview_frame.attrs.get("row_mask_hash") or ""),
         "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
         "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_values", 0)),
         "events": n_events,
@@ -4486,6 +4570,8 @@ def compute_cox_analysis(
         "sparse_event_strata_count": int(strata_snapshot.get("sparse_event_strata_count") or 0),
         "high_cardinality_strata_columns": list(strata_snapshot.get("high_cardinality_columns") or []),
         "high_cardinality_numeric_strata_columns": list(strata_snapshot.get("high_cardinality_numeric_columns") or []),
+        "design_condition_number": _safe_float(design_condition_number),
+        "design_condition_warning_threshold": COX_CONDITION_NUMBER_WARN_THRESHOLD,
     }
     scientific_summary = _cox_scientific_summary(
         model_rows=model_rows,
@@ -4541,6 +4627,12 @@ def preview_cox_analysis_inputs(
         if missing_count > 0:
             missing_by_covariate.append({"column": column, "missing_rows": missing_count})
     complete_case = preview_frame.dropna(subset=list(dict.fromkeys([*covariates, *strata_columns]))).reset_index(drop=True)
+    complete_case_source_rows = _frame_source_row_index(preview_frame)[
+        ~preview_frame[list(dict.fromkeys([*covariates, *strata_columns]))].isna().any(axis=1).to_numpy(dtype=bool)
+    ]
+    complete_case.attrs.update(dict(preview_frame.attrs))
+    complete_case.attrs["source_row_index"] = complete_case_source_rows.tolist()
+    complete_case.attrs["row_mask_hash"] = _row_mask_hash(complete_case_source_rows)
     if complete_case.empty:
         raise ValueError("No rows remain after removing missing values for the Cox model.")
     strata_payload = _build_cox_strata_payload(complete_case, strata_columns)
@@ -4561,6 +4653,8 @@ def preview_cox_analysis_inputs(
         "events": int(stability_snapshot["events"]),
         "estimated_parameters": int(stability_snapshot["estimated_parameters"]),
         "events_per_parameter": stability_snapshot["events_per_parameter"],
+        "row_mask_hash": str(complete_case.attrs.get("row_mask_hash") or ""),
+        "outcome_row_mask_hash": str(preview_frame.attrs.get("row_mask_hash") or ""),
         "covariates": list(covariates),
         "categorical_covariates": list(categorical_covariates),
         "strata_columns": list(strata_columns),
@@ -4667,6 +4761,7 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
     return {
         "columns": ["Variable", "Statistic", overall_label, *group_labels],
         "rows": rows,
+        "row_mask_hash": _row_mask_hash(frame.index),
         "overall_scope": (
             "Overall summarizes the non-missing grouped subset."
             if group_column

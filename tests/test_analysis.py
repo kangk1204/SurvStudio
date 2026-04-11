@@ -2042,6 +2042,80 @@ def test_cox_analysis_uses_ph_review_headline_when_fit_is_not_structurally_unsta
     assert "appear unstable" not in headline
 
 
+def test_cross_analysis_row_mask_hashes_expose_cohort_mismatch() -> None:
+    df = make_example_dataset(seed=123, n_patients=96)
+    df.loc[df.index[:8], "age"] = np.nan
+    df.loc[df.index[8:18], "biomarker_score"] = np.nan
+
+    km = compute_km_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        group_column="stage",
+        event_positive_value=1,
+    )
+    cox = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age", "stage"],
+        categorical_covariates=["stage"],
+    )
+    _, _, signature = discover_feature_signature(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        candidate_columns=["biomarker_score"],
+        max_combination_size=1,
+        top_k=5,
+        bootstrap_iterations=0,
+        permutation_iterations=0,
+        validation_iterations=0,
+        new_column_name="sig_biomarker",
+    )
+
+    km_hash = str(km["cohort"]["row_mask_hash"])
+    cox_hash = str(cox["model_stats"]["row_mask_hash"])
+    signature_hash = str(signature["search_space"]["row_mask_hash"])
+
+    assert len(km_hash) == 16
+    assert len(cox_hash) == 16
+    assert len(signature_hash) == 16
+    assert km_hash != cox_hash
+    assert km_hash != signature_hash
+
+
+def test_cox_analysis_reports_large_design_condition_number_warning() -> None:
+    rng = np.random.default_rng(20260411)
+    n_rows = 120
+    df = pd.DataFrame(
+        {
+            "os_months": rng.uniform(5.0, 200.0, size=n_rows),
+            "os_event": rng.binomial(1, 0.55, size=n_rows),
+            "x_small": rng.normal(size=n_rows),
+            "x_large": 1e12 * rng.normal(size=n_rows),
+        }
+    )
+    if int(df["os_event"].sum()) == 0:
+        df.loc[0, "os_event"] = 1
+
+    result = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        covariates=["x_small", "x_large"],
+        categorical_covariates=[],
+    )
+
+    condition_number = float(result["model_stats"]["design_condition_number"])
+    cautions = result["scientific_summary"]["cautions"]
+
+    assert condition_number > 1e10
+    assert any("condition number" in caution.lower() for caution in cautions)
+
+
 def test_cohort_table_includes_overall_column() -> None:
     df = make_example_dataset(seed=5, n_patients=120)
     table = compute_cohort_table(df, variables=["age", "sex", "stage"], group_column="treatment")
