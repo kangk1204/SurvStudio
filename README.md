@@ -796,7 +796,7 @@ Architecture note:
 - `Batch Size` currently affects DeepHit and Neural MTLR only. DeepSurv, Survival Transformer, and Survival VAE use full-batch optimization in the current implementation, and the run metadata reports the effective full-batch size for those paths.
 - Adam-based DL optimizers use light L2 regularization (`weight_decay=1e-4`) and gradient clipping for stability on wider feature sets.
 - DeepHit uses a stabilized ranking-loss scale (`sigma=1.0`) rather than the earlier sharper default.
-- `Neural MTLR` is implemented as an MTLR-inspired discrete-time neural variant for workflow comparison, not as a literal reference reproduction of the original formulation.
+- `Neural MTLR` uses a neuralized right-cumulative MTLR parameterization for workflow comparison. It matches the canonical MTLR probability construction, while the surrounding network/training path is a practical SurvStudio implementation rather than a line-by-line clone of one reference codebase.
 - `Survival VAE` should be interpreted as a VAE-inspired latent representation model for clustering and risk screening. SurvStudio does not claim validated generative simulation or uncertainty estimation from this path.
 - Cox-style DL paths (`DeepSurv`, `Survival Transformer`) use monitor C-index on an internal training-partition subset for early stopping. Discrete-time/VAE paths continue to use monitor loss. Neither monitor curve is the final holdout or external validation metric.
 - Deep-model summaries currently report discrimination (`C-index`) only. SurvStudio does not yet compute IBS for deep-model outputs, so calibration/error comparisons are not directly symmetric with the ML module.

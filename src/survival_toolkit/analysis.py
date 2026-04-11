@@ -1847,6 +1847,8 @@ def _km_scientific_summary(
     fh_p: float | None = None,
     outcome_informed_group: bool = False,
     rmst_contrast: dict[str, Any] | None = None,
+    rmst_horizon: float | None = None,
+    display_horizon: float | None = None,
 ) -> dict[str, Any]:
     group_count = len(summary_rows)
     min_group_n = min(int(row["N"]) for row in summary_rows)
@@ -1862,7 +1864,7 @@ def _km_scientific_summary(
 
     strengths = [
         "Kaplan-Meier estimation uses Greenwood standard errors with log-log confidence intervals.",
-        "Groupwise RMST summaries include Greenwood/delta-method confidence intervals at the display horizon when estimable.",
+        "Groupwise RMST summaries include Greenwood/delta-method confidence intervals at the RMST truncation horizon when estimable.",
     ]
     cautions: list[str] = []
     next_steps: list[str] = []
@@ -1877,6 +1879,14 @@ def _km_scientific_summary(
     if group_column and not outcome_informed_group:
         test_name = _weighted_test_label(test_payload["test"], fh_p=fh_p) if test_payload else "weighted"
         strengths.append(f"Global {test_name} comparison was run across {group_count} groups.")
+        if (
+            rmst_horizon is not None
+            and display_horizon is not None
+            and rmst_horizon + 1e-12 < display_horizon
+        ):
+            strengths.append(
+                "RMST was truncated at the shared observed follow-up support across groups rather than the full plot horizon."
+            )
         if pairwise_rows:
             strengths.append("Pairwise group comparisons include Benjamini-Hochberg adjusted p-values.")
             cautions.append(
@@ -3667,6 +3677,15 @@ def compute_km_analysis(
     alpha = 1.0 - confidence_level
     display_horizon = float(np.nanmax(time_values) if max_time is None else min(max_time, np.nanmax(time_values)))
     display_horizon = max(display_horizon, 1e-6)
+    if group_column:
+        group_max_times = [
+            float(frame.loc[frame[group_column] == label, time_column].max())
+            for label in group_labels
+        ]
+        common_group_horizon = min(group_max_times) if group_max_times else display_horizon
+        rmst_horizon = max(min(display_horizon, common_group_horizon), 1e-6)
+    else:
+        rmst_horizon = display_horizon
     risk_ticks = np.round(np.linspace(0, display_horizon, risk_table_points), 2).tolist()
 
     summary_rows: list[dict[str, Any]] = []
@@ -3706,7 +3725,7 @@ def compute_km_analysis(
             sf.surv_prob.astype(float),
             sf.n_risk.astype(float),
             sf.n_events.astype(float),
-            display_horizon,
+            rmst_horizon,
             alpha=alpha,
         )
         rmst_stats_by_group.append(rmst_stats)
@@ -3803,7 +3822,7 @@ def compute_km_analysis(
             "p_value_method": None,
             "ci_lower": None,
             "ci_upper": None,
-            "horizon": _safe_float(display_horizon),
+            "horizon": _safe_float(rmst_horizon),
         }
         left_variance = left_stats.get("variance")
         right_variance = right_stats.get("variance")
@@ -3842,6 +3861,8 @@ def compute_km_analysis(
         fh_p=fh_p,
         outcome_informed_group=outcome_informed_group,
         rmst_contrast=rmst_contrast,
+        rmst_horizon=rmst_horizon,
+        display_horizon=display_horizon,
     )
 
     test_label = (
@@ -3869,6 +3890,7 @@ def compute_km_analysis(
         "test_p_value_label": test_label,
         "cohort": cohort_summary,
         "display_horizon": display_horizon,
+        "rmst_horizon": rmst_horizon,
         "group_column": group_column,
         "outcome_informed_group": bool(outcome_informed_group),
         "rmst_contrast": rmst_contrast,

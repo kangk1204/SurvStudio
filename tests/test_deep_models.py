@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 from pathlib import Path
+import random
 
 import numpy as np
 import pandas as pd
@@ -75,6 +76,22 @@ def test_deep_model_source_uses_type_checked_bases_adamw_and_inference_mode() ->
     mtlr_loss_block = text[mtlr_loss_start:mtlr_loss_end]
     assert "def _mtlr_loss(" in mtlr_loss_block
     assert "num_time_bins: int," not in mtlr_loss_block
+
+
+@pytest.mark.skipif(not _torch_available(), reason="torch not installed")
+def test_seed_torch_aligns_numpy_and_python_random_streams() -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    deep_models._seed_torch(123)
+    numpy_first = np.random.rand(3)
+    python_first = [random.random() for _ in range(3)]
+
+    deep_models._seed_torch(123)
+    numpy_second = np.random.rand(3)
+    python_second = [random.random() for _ in range(3)]
+
+    assert np.allclose(numpy_first, numpy_second)
+    assert python_first == python_second
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")

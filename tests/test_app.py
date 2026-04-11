@@ -1889,7 +1889,7 @@ def test_readme_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -
     assert "Batch Size` currently affects DeepHit and Neural MTLR only." in text
     assert "weight_decay=1e-4" in text
     assert "DeepHit uses a stabilized ranking-loss scale (`sigma=1.0`)" in text
-    assert "MTLR-inspired discrete-time neural variant" in text
+    assert "neuralized right-cumulative MTLR parameterization" in text
     assert "SurvStudio does not claim validated generative simulation or uncertainty estimation from this path." in text
 
 
@@ -4332,6 +4332,7 @@ def test_benchmark_board_warns_about_cross_family_tie_methods_and_ibs_asymmetry(
     assert "Cox PH and LASSO-Cox use Efron" in benchmark_js
     assert "DeepSurv, Survival Transformer, and Survival VAE use Breslow" in benchmark_js
     assert "ML comparison rows may include IBS / Brier Skill Score, but DL comparison rows currently report C-index only" in benchmark_js
+    assert "SurvStudio does not run a paired significance test for C-index gaps between models" in benchmark_js
 
 
 def test_predictive_current_result_requires_both_current_compare_payloads() -> None:

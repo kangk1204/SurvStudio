@@ -300,6 +300,7 @@
       return [
         "Cross-family partial-likelihood models do not share one tie method: Cox PH and LASSO-Cox use Efron, whereas DeepSurv, Survival Transformer, and Survival VAE use Breslow. Treat small cross-family C-index gaps cautiously when many event times are tied.",
         "ML comparison rows may include IBS / Brier Skill Score, but DL comparison rows currently report C-index only, so calibration/error comparisons are not symmetric across families.",
+        "Leaderboard order is a point-estimate screening view only; SurvStudio does not run a paired significance test for C-index gaps between models.",
       ];
     }
 

@@ -790,6 +790,7 @@ def test_km_analysis_returns_grouped_results() -> None:
     assert any(metric["label"] == "RMST difference" for metric in result["scientific_summary"]["metrics"])
     assert any(metric["label"] == "RMST difference p" for metric in result["scientific_summary"]["metrics"])
     assert result["rmst_contrast"]["p_value"] is not None
+    assert result["rmst_horizon"] <= result["display_horizon"]
     for row in result["summary_table"]:
         assert row["RMST CI lower"] is not None
         assert row["RMST CI upper"] is not None
@@ -883,6 +884,33 @@ def test_km_analysis_extends_curve_to_followup_horizon_when_last_observation_is_
     assert curve["ci_lower"][-1] == pytest.approx(curve["ci_lower"][-2])
     assert curve["ci_upper"][-1] == pytest.approx(curve["ci_upper"][-2])
     assert curve["censor_times"] == [8.0, 12.0]
+
+
+def test_km_analysis_uses_common_group_follow_up_for_rmst_horizon() -> None:
+    df = pd.DataFrame(
+        {
+            "time": [5.0, 8.0, 11.0, 18.0, 20.0, 24.0],
+            "event": [1, 0, 1, 1, 0, 0],
+            "group": ["A", "A", "A", "B", "B", "B"],
+        }
+    )
+
+    result = compute_km_analysis(
+        df,
+        time_column="time",
+        event_column="event",
+        group_column="group",
+        event_positive_value=1,
+    )
+
+    assert result["display_horizon"] == pytest.approx(24.0)
+    assert result["rmst_horizon"] == pytest.approx(11.0)
+    assert result["rmst_contrast"] is not None
+    assert result["rmst_contrast"]["horizon"] == pytest.approx(11.0)
+    assert any(
+        "shared observed follow-up support" in strength.lower()
+        for strength in result["scientific_summary"]["strengths"]
+    )
 
 
 def test_km_analysis_all_event_group_keeps_final_ci_finite() -> None:
