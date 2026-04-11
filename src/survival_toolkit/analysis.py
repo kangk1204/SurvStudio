@@ -3940,6 +3940,7 @@ def compute_km_analysis(
         "test_p_value": None if test_payload is None else float(test_payload["p_value"]),
         "test_p_value_label": test_label,
         "cohort": cohort_summary,
+        "confidence_level": float(confidence_level),
         "display_horizon": display_horizon,
         "rmst_horizon": rmst_horizon,
         "group_column": group_column,

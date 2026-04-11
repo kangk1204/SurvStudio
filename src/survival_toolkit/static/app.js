@@ -3374,6 +3374,44 @@ function formatValue(value, options = {}) {
   return String(value);
 }
 
+function normalizeValueLabel(label) {
+  return String(label ?? "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isPValueLikeLabel(label) {
+  const text = normalizeValueLabel(label);
+  if (!text) return false;
+  return text === "p"
+    || text === "p value"
+    || text === "pvalue"
+    || text.endsWith(" p")
+    || text.endsWith(" p value")
+    || text.includes("adjusted p")
+    || text.includes("permutation p")
+    || text.includes("raw p")
+    || text.includes("rmst difference p")
+    || text.includes("logrank p")
+    || text.includes("global ph pvalue")
+    || text.includes("global ph p value")
+    || text.includes("test p");
+}
+
+function formatPValue(value) {
+  if (value === null || value === undefined || value === "") return "NA";
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "NA";
+  if (value < 1e-16) return "<1e-16";
+  if (value < 0.001) return "<0.001";
+  return value.toFixed(3);
+}
+
+function formatDisplayValue(value, label = "") {
+  return isPValueLikeLabel(label) ? formatPValue(value) : formatValue(value);
+}
+
 function formatPercent(numerator, denominator) {
   if (!denominator) return "0%";
   return `${((100 * numerator) / denominator).toFixed(1).replace(/\.0$/, "")}%`;
@@ -3397,7 +3435,7 @@ function renderInsightBoard(container, summary, emptyMessage) {
   const nextSteps = summary.next_steps || [];
   const tone = summary.status || "review";
   const metricsMarkup = metrics.length
-    ? `<div class="insight-metrics">${metrics.map((m) => `<div class="metric-pill"><span>${escapeHtml(m.label || "")}</span><strong>${escapeHtml(formatValue(m.value))}</strong></div>`).join("")}</div>`
+    ? `<div class="insight-metrics">${metrics.map((m) => `<div class="metric-pill"><span>${escapeHtml(m.label || "")}</span><strong>${escapeHtml(formatDisplayValue(m.value, m.label || ""))}</strong></div>`).join("")}</div>`
     : "";
   const sections = [
     strengths.length ? `<div class="insight-section"><h4>What was checked</h4><ul>${strengths.map(escapeListItem).join("")}</ul></div>` : "",
@@ -3589,7 +3627,7 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
       ${percentileSpec ? summaryCell("Percentile(s)", percentileSpec) : ""}
       ${thresholds ? summaryCell(Array.isArray(summary?.cutoffs) && summary.cutoffs.length > 1 ? "Thresholds" : "Threshold", thresholds) : ""}
       ${!percentileSpec && !thresholds ? summaryCell("Cutoff", formatValue(summary?.cutoff)) : ""}
-      ${summary?.p_value != null ? summaryCell(pValueLabel, formatValue(summary.p_value), "pvalue-card") : ""}
+      ${summary?.p_value != null ? summaryCell(pValueLabel, formatPValue(summary.p_value), "pvalue-card") : ""}
       ${summaryCell("Groups", formatValue(summary?.n_groups || counts.length || "NA"))}
       ${summary?.method === "optimal_cutpoint" ? summaryCell("Min group fraction", formatValue(summary?.min_group_fraction)) : ""}
       ${summary?.method === "optimal_cutpoint" ? summaryCell("Permutation iterations", formatValue(summary?.permutation_iterations)) : ""}
@@ -3661,7 +3699,7 @@ function renderTable(shell, rows, columns = null) {
     const tr = document.createElement("tr");
     visibleColumns.forEach((column) => {
       const td = document.createElement("td");
-      td.textContent = formatValue(row[column]);
+      td.textContent = formatDisplayValue(row[column], column);
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -6690,7 +6728,7 @@ async function runKaplanMeier() {
   const kmCompetingRiskPrefix = summaryHasCaution(kmSummary, "competing risk")
     ? "Competing risks not modeled; 1-KM is not cumulative incidence when competing events can preclude the endpoint. "
     : "";
-  refs.kmMetaBanner.textContent = `${kmCompetingRiskPrefix}N=${formatValue(cohort.n)}, events=${formatValue(cohort.events)}, censored=${formatValue(cohort.censored)}, median follow-up=${formatValue(cohort.median_follow_up)} ${base.time_unit_label}${test ? `, ${test.test} p=${formatValue(test.p_value)}` : ""}`;
+  refs.kmMetaBanner.textContent = `${kmCompetingRiskPrefix}N=${formatValue(cohort.n)}, events=${formatValue(cohort.events)}, censored=${formatValue(cohort.censored)}, median follow-up=${formatValue(cohort.median_follow_up)} ${base.time_unit_label}${test ? `, ${test.test} p=${formatPValue(test.p_value)}` : ""}`;
   syncDownloadButtonAvailability();
   revealCompletedResultIfCurrent("km", {
     successMessage: `Kaplan-Meier analysis complete. Risk table updated to ${requestedRiskTicks} time points.`,
@@ -6711,13 +6749,13 @@ function renderSignatureResult(analysis) {
     <div class="signature-summary-grid">
       <div><strong>Best signature</strong><br/>${escapeHtml(best.Signature || "NA")}</div>
       <div><strong>HR (sig+ vs -)</strong><br/>${formatValue(best["Hazard ratio (signature+ vs -)"])}</div>
-      <div><strong>BH-adjusted p</strong><br/>${formatValue(best["BH adjusted p"])}</div>
+      <div><strong>BH-adjusted p</strong><br/>${formatPValue(best["BH adjusted p"])}</div>
       <div><strong>Significant</strong><br/>${significantFlag}</div>
       <div><strong>Stability</strong><br/>${formatValue(best["Stability score"])}</div>
       <div><strong>Bootstrap support</strong><br/>${formatValue(best["Bootstrap support (p<alpha)"])}</div>
       <div><strong>Direction consistency</strong><br/>${formatValue(best["Bootstrap HR direction consistency"])}</div>
       <div><strong>Validation support</strong><br/>${formatValue(best["Validation support (p<alpha)"])}</div>
-      <div><strong>Permutation p</strong><br/>${formatValue(best["Permutation p"])}</div>
+      <div><strong>Permutation p</strong><br/>${formatPValue(best["Permutation p"])}</div>
       <div><strong>Tested</strong><br/>${formatValue(search.tested_combinations)}</div>
       <div><strong>Significant combos</strong><br/>${formatValue(search.significant_signatures)}</div>
       <div><strong>Operator</strong><br/>${escapeHtml(search.combination_operator || "mixed")}</div>

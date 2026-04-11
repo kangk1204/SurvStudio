@@ -31,6 +31,7 @@ def test_build_km_figure_returns_json_structure() -> None:
             }
         ],
         "test": {"test": "logrank", "chisq": 4.2, "p_value": 0.04},
+        "confidence_level": 0.95,
         "display_horizon": 3.0,
     }
     figure = build_km_figure(km_result)
@@ -134,6 +135,32 @@ def test_build_km_figure_explains_hidden_p_value_for_outcome_informed_groups() -
     assert "fresh raw p-value suppressed" in annotation_text
 
 
+def test_build_km_figure_uses_journal_style_p_value_and_ci_copy() -> None:
+    km_result = {
+        "curves": [
+            {
+                "group": "Stage I",
+                "timeline": [0.0, 1.0, 2.0],
+                "survival": [1.0, 0.9, 0.8],
+                "ci_lower": [1.0, 0.85, 0.75],
+                "ci_upper": [1.0, 0.95, 0.85],
+                "censor_times": [],
+                "censor_survival": [],
+            }
+        ],
+        "test": {"test": "logrank", "chisq": 61.2, "p_value": 7.582823258189819e-14},
+        "confidence_level": 0.95,
+        "display_horizon": 3.0,
+    }
+
+    figure = build_km_figure(km_result)
+
+    annotations = figure["layout"].get("annotations", [])
+    annotation_text = " ".join(str(annotation.get("text", "")) for annotation in annotations)
+    assert "p = <0.001" in annotation_text
+    assert "Shaded bands: 95% pointwise CI" in annotation_text
+
+
 def test_build_cox_forest_figure_returns_json() -> None:
     cox_result = {
         "results_table": [
@@ -172,6 +199,7 @@ def test_build_cox_forest_figure_keeps_stats_out_of_plot_annotations() -> None:
     assert "Apparent C-index" not in annotation_text
     assert "95% CI =" not in annotation_text
     assert "Red: term p" not in annotation_text
+    assert "Points = HR; whiskers = 95% Wald CI" in annotation_text
 
 
 def test_build_cox_forest_figure_wraps_long_labels() -> None:
