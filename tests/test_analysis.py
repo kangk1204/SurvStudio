@@ -14,14 +14,12 @@ from survival_toolkit.analysis import (
     MAX_MODEL_FEATURE_CANDIDATES,
     _bh_adjust,
     _cohort_frame,
-    _cox_global_ph_screening,
     _cox_martingale_plot_data,
     _cox_scientific_summary,
     _harrell_c_index,
     _harrell_c_index_bootstrap_ci,
     _has_ambiguous_competing_event_tokens,
     _ordered_reference_categories,
-    _permutation_p_value,
     _prepare_cox_frame,
     _reference_levels,
     _pointwise_km_ci,
@@ -135,27 +133,43 @@ def test_bh_adjust_preserves_finite_values_when_some_p_values_are_nan() -> None:
     assert adjusted[3] == pytest.approx(0.20)
 
 
-def test_permutation_p_value_compares_logrank_statistics(monkeypatch) -> None:
-    import survival_toolkit.analysis as analysis
+def test_vectorized_logrank_matches_statsmodels_survdiff() -> None:
+    from statsmodels.duration.survfunc import survdiff
 
-    results = iter([(6.0, 0.20), (4.0, 1e-6), (3.0, 1e-9)])
+    from survival_toolkit.analysis import _vectorized_logrank_chisq
 
-    def _fake_survdiff(times, events, groups):
-        return next(results)
+    rng = np.random.default_rng(0)
+    for _ in range(30):
+        n = int(rng.integers(20, 120))
+        times = rng.integers(1, 30, n).astype(float)
+        events = rng.integers(0, 2, n)
+        if events.sum() == 0:
+            continue
+        masks = rng.random((n, 4)) < 0.4
+        statistics = _vectorized_logrank_chisq(times, events, masks)
+        for column in range(4):
+            if masks[:, column].all() or (~masks[:, column]).all():
+                continue
+            reference, _ = survdiff(times, events, np.where(masks[:, column], "a", "b"))
+            assert statistics[column] == pytest.approx(reference, abs=1e-9)
 
-    monkeypatch.setattr(analysis, "survdiff", _fake_survdiff)
 
-    empirical_p, valid = analysis._permutation_p_value(
-        times=np.asarray([1.0, 2.0, 3.0, 4.0]),
-        events=np.asarray([1, 1, 1, 1]),
-        mask=np.asarray([True, True, False, False]),
-        observed_stat=5.0,
-        n_iterations=3,
-        random_seed=42,
+def test_search_adjusted_permutation_uses_best_statistic_of_every_shuffle() -> None:
+    from survival_toolkit.analysis import _search_adjusted_permutation_p_values
+
+    rng = np.random.default_rng(1)
+    n = 120
+    times = rng.exponential(1.0, n)
+    events = (rng.random(n) < 0.7).astype(int)
+    masks = rng.random((n, 30)) < 0.5
+    observed = np.array([0.0] * 29 + [1e6])
+    p_values, valid = _search_adjusted_permutation_p_values(
+        times, events, masks, observed, min_events_per_group=3, n_iterations=49, random_seed=3,
     )
-
-    assert valid == 3
-    assert empirical_p == pytest.approx(0.5)
+    assert valid == 49
+    # A statistic of 0 is always matched by the per-shuffle maximum; a huge one never is.
+    assert p_values[0] == pytest.approx(1.0)
+    assert p_values[-1] == pytest.approx(1.0 / 50.0)
 
 
 def test_cohort_frame_tracks_missing_and_infinite_rows() -> None:
@@ -331,7 +345,7 @@ def test_rnaseq_top100_upload_example_matches_bundled_tcga_clinical_rows() -> No
         "expression_subtype",
     }]
 
-    assert upload.shape == (609, 112)
+    assert upload.shape == (489, 112)
     assert len(gene_columns) == 100
     assert int(upload[gene_columns[0]].isna().sum()) == 4
     assert Counter(map(tuple, upload[key_columns].itertuples(index=False, name=None))) == Counter(
@@ -360,7 +374,7 @@ def test_rnaseq_top500_upload_example_matches_bundled_tcga_clinical_rows() -> No
         "expression_subtype",
     }]
 
-    assert upload.shape == (609, 512)
+    assert upload.shape == (489, 512)
     assert len(gene_columns) == 500
     assert int(upload[gene_columns[0]].isna().sum()) == 4
     assert Counter(map(tuple, upload[key_columns].itertuples(index=False, name=None))) == Counter(
@@ -799,7 +813,7 @@ def test_km_analysis_returns_grouped_results() -> None:
     assert result["rmst_contrast"]["ci_lower"] <= result["rmst_contrast"]["estimate"] <= result["rmst_contrast"]["ci_upper"]
 
 
-def test_km_analysis_marks_rmst_ci_unavailable_when_risk_set_is_exhausted() -> None:
+def test_km_analysis_keeps_rmst_ci_when_risk_set_is_exhausted() -> None:
     df = pd.DataFrame(
         {
             "time": [1.0, 1.0, 2.0, 2.0],
@@ -808,26 +822,55 @@ def test_km_analysis_marks_rmst_ci_unavailable_when_risk_set_is_exhausted() -> N
         }
     )
 
-    with pytest.warns(RuntimeWarning, match="risk set was exhausted"):
-        result = compute_km_analysis(
-            df,
-            time_column="time",
-            event_column="event",
-            group_column="group",
-            event_positive_value=1,
-            max_time=2.0,
-        )
+    result = compute_km_analysis(
+        df,
+        time_column="time",
+        event_column="event",
+        group_column="group",
+        event_positive_value=1,
+        max_time=2.0,
+    )
 
+    # survRM2 convention: an exhausted risk set (n == d) contributes zero
+    # variance because the KM tail area beyond that event is zero.
     assert result["rmst_contrast"] is not None
-    assert result["rmst_contrast"]["estimate"] is not None
-    assert result["rmst_contrast"]["p_value"] is None
-    assert result["rmst_contrast"]["ci_lower"] is None
-    assert result["rmst_contrast"]["ci_upper"] is None
-    assert any("not estimable" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert result["rmst_contrast"]["estimate"] == pytest.approx(0.0)
     for row in result["summary_table"]:
-        assert row["RMST SE"] is None
-        assert row["RMST CI lower"] is None
-        assert row["RMST CI upper"] is None
+        assert row["RMST"] == pytest.approx(1.0)
+        assert row["RMST SE"] == pytest.approx(0.0)
+        assert row["RMST CI lower"] == pytest.approx(1.0)
+        assert row["RMST CI upper"] == pytest.approx(1.0)
+
+
+def test_km_rmst_standard_errors_match_survrm2_convention_on_tcga() -> None:
+    df = pd.read_csv(Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "data" / "tcga_luad_upload_ready.csv")
+    result = compute_km_analysis(df, "os_months", "os_event", "stage_group")
+    for row in result["summary_table"]:
+        assert row["RMST SE"] is not None and row["RMST SE"] > 0.0
+        assert row["RMST CI lower"] < row["RMST"] < row["RMST CI upper"]
+
+
+def test_km_group_curves_stop_at_each_group_last_follow_up() -> None:
+    df = pd.DataFrame(
+        {
+            "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 20.0],
+            "event": [1, 0, 1, 0, 1, 1, 0, 1, 0, 0],
+            "group": ["A"] * 5 + ["B"] * 5,
+        }
+    )
+    result = compute_km_analysis(df, "time", "event", "group")
+    ends = {curve["group"]: curve["timeline"][-1] for curve in result["curves"]}
+    assert ends["A"] == pytest.approx(5.0)
+    assert ends["B"] == pytest.approx(20.0)
+
+
+def test_km_median_ci_uses_requested_confidence_level() -> None:
+    df = pd.read_csv(Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "data" / "gbsg2_upload_ready.csv")
+    wide = compute_km_analysis(df, "rfs_days", "rfs_event", confidence_level=0.95)["summary_table"][0]
+    narrow = compute_km_analysis(df, "rfs_days", "rfs_event", confidence_level=0.80)["summary_table"][0]
+    assert narrow["Median CI lower"] >= wide["Median CI lower"]
+    assert narrow["Median CI upper"] <= wide["Median CI upper"]
+    assert (narrow["Median CI lower"], narrow["Median CI upper"]) != (wide["Median CI lower"], wide["Median CI upper"])
 
 
 def test_km_analysis_marks_outcome_informed_group_results_as_descriptive() -> None:
@@ -1078,7 +1121,7 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert result["model_stats"]["lr_pvalue"] is not None
     assert result["model_stats"]["global_ph_pvalue"] is not None
     assert any(
-        row["Term"] == "Global PH screen (combined per-term p-values)"
+        row["Term"] == "Global PH test (Grambsch-Therneau)"
         for row in result["diagnostics_table"]
     )
     assert result["scientific_summary"]["headline"]
@@ -1092,7 +1135,7 @@ def test_cox_analysis_recovers_expected_directions() -> None:
     assert any("competing risks" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("left truncation" in caution.lower() for caution in result["scientific_summary"]["cautions"])
     assert any("analyzable cohort" in strength.lower() for strength in result["scientific_summary"]["strengths"])
-    assert any("spearman" in strength.lower() and "schoenfeld" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+    assert any("grambsch-therneau" in strength.lower() and "schoenfeld" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("likelihood-ratio test" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("evaluable patient pairs" in strength.lower() for strength in result["scientific_summary"]["strengths"])
     assert any("external-cohort apply workflow" in caution.lower() for caution in result["scientific_summary"]["cautions"])
@@ -1171,7 +1214,9 @@ def test_cox_analysis_scales_schoenfeld_diagnostics_and_reports_ci(monkeypatch) 
     assert result["model_stats"]["c_index_ci_upper"] == pytest.approx(0.67)
     assert result["model_stats"]["lr_statistic"] == pytest.approx(6.0)
     assert result["model_stats"]["lr_pvalue"] is not None
-    assert result["model_stats"]["global_ph_pvalue"] is None
+    # A single-term model still has a (1-df) global Grambsch-Therneau test.
+    assert result["model_stats"]["global_ph_pvalue"] is not None
+    assert result["model_stats"]["global_ph_df"] == pytest.approx(1.0)
 
 
 def test_cox_martingale_plot_data_skips_mismatched_residual_lengths() -> None:
@@ -1218,12 +1263,14 @@ def test_km_analysis_reports_nonpositive_time_exclusions() -> None:
         event_positive_value=1,
     )
 
-    assert result["cohort"]["dropped_nonpositive_time_rows"] == 3
+    # Time 0 is kept (as in R survival / lifelines); only the negative time is dropped.
+    assert result["cohort"]["dropped_nonpositive_time_rows"] == 1
+    assert result["cohort"]["n"] == 59
     assert any(
-        metric["label"] == "Dropped for nonpositive time" and metric["value"] == 3
+        metric["label"] == "Dropped for negative time" and metric["value"] == 1
         for metric in result["scientific_summary"]["metrics"]
     )
-    assert any("nonpositive survival time" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("negative survival time" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 
 def test_cox_analysis_reports_nonpositive_time_exclusions() -> None:
@@ -1239,12 +1286,12 @@ def test_cox_analysis_reports_nonpositive_time_exclusions() -> None:
         categorical_covariates=[],
     )
 
-    assert result["model_stats"]["dropped_nonpositive_time_rows"] == 4
+    assert result["model_stats"]["dropped_nonpositive_time_rows"] == 2
     assert any(
-        metric["label"] == "Dropped for nonpositive time" and metric["value"] == 4
+        metric["label"] == "Dropped for negative time" and metric["value"] == 2
         for metric in result["scientific_summary"]["metrics"]
     )
-    assert any("nonpositive survival time" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("negative survival time" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 
 def test_cox_scientific_summary_reports_when_lr_test_is_not_reportable() -> None:
@@ -1478,16 +1525,57 @@ def test_km_analysis_rejects_identifier_like_group_columns_with_too_many_levels(
         )
 
 
-def test_cox_global_ph_screening_keeps_exact_zero_p_values() -> None:
-    summary = _cox_global_ph_screening(
-        [
-            {"Variable": "age", "P value": 0.0},
-            {"Variable": "stage", "P value": 0.20},
-        ]
-    )
+def test_cox_grambsch_therneau_test_matches_lifelines_on_gbsg2() -> None:
+    lifelines = pytest.importorskip("lifelines")
+    from lifelines.statistics import proportional_hazard_test
 
-    assert summary["terms_tested"] == 2
-    assert summary["p_value"] is not None
+    df = pd.read_csv(Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "data" / "gbsg2_upload_ready.csv")
+    covariates = ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"]
+    categorical = ["horTh", "menostat", "tgrade"]
+    result = compute_cox_analysis(df, "rfs_days", "rfs_event", covariates, categorical)
+    by_term = {row["Term"]: row for row in result["diagnostics_table"]}
+
+    dummies = pd.get_dummies(df[["rfs_days", "rfs_event", *covariates]], columns=categorical, drop_first=True, dtype=float)
+    fitter = lifelines.CoxPHFitter().fit(dummies, "rfs_days", "rfs_event")
+    reference = proportional_hazard_test(fitter, dummies, time_transform="log").summary
+    mapping = {
+        "age": "age",
+        "pnodes": "pnodes",
+        "tsize": "tsize",
+        "horTh: yes vs no": "horTh_yes",
+        "menostat: Pre vs Post": "menostat_Pre",
+        "tgrade: II vs I": "tgrade_II",
+        "tgrade: III vs I": "tgrade_III",
+    }
+    for term, reference_name in mapping.items():
+        assert by_term[term]["Chi-square"] == pytest.approx(float(reference.loc[reference_name, "test_statistic"]), rel=0.02, abs=0.01)
+    assert result["model_stats"]["global_ph_method"] == "grambsch_therneau_log_time"
+    assert result["model_stats"]["global_ph_df"] == pytest.approx(7.0)
+
+
+def test_cox_ph_test_keeps_nominal_type_one_error_for_categorical_terms() -> None:
+    rng = np.random.default_rng(11)
+    rejections = 0
+    n_sim = 60
+    for _ in range(n_sim):
+        n = 250
+        x1 = rng.normal(size=n)
+        group = rng.choice(list("ABCD"), size=n)
+        linear_predictor = 0.5 * x1 + np.select([group == "B", group == "C", group == "D"], [0.3, 0.6, 0.9], 0.0)
+        event_time = rng.exponential(1.0 / np.exp(linear_predictor))
+        censor_time = rng.exponential(2.0, size=n)
+        frame = pd.DataFrame(
+            {
+                "time": np.minimum(event_time, censor_time),
+                "event": (event_time <= censor_time).astype(int),
+                "x1": x1,
+                "group": group,
+            }
+        )
+        result = compute_cox_analysis(frame, "time", "event", ["x1", "group"], ["group"])
+        rejections += int(result["model_stats"]["global_ph_pvalue"] < 0.05)
+    # The retired Spearman screen rejected ~50% of these PH-true datasets.
+    assert rejections / n_sim < 0.15
 
 
 def test_cohort_table_orders_group_columns_clinically() -> None:
@@ -1973,14 +2061,30 @@ def test_cox_analysis_raises_on_convergence_warning(monkeypatch) -> None:
 
 
 def test_cox_analysis_lists_all_current_ph_alert_terms_in_summary_caution() -> None:
-    df = load_tcga_luad_example_dataset()
+    rng = np.random.default_rng(5)
+    n = 600
+    arm = rng.choice(["control", "treated"], size=n)
+    age = rng.normal(60.0, 8.0, size=n)
+    # Crossing hazards: the treated arm is harmful early and protective late.
+    early = rng.exponential(1.0 / np.where(arm == "treated", 2.5, 0.6))
+    late = 1.0 + rng.exponential(1.0 / np.where(arm == "treated", 0.15, 0.9))
+    event_time = np.where(early < 1.0, early, late)
+    censor_time = rng.uniform(0.5, 6.0, size=n)
+    df = pd.DataFrame(
+        {
+            "time": np.minimum(event_time, censor_time),
+            "event": (event_time <= censor_time).astype(int),
+            "arm": arm,
+            "age": age,
+        }
+    )
     result = compute_cox_analysis(
         df,
-        time_column="os_months",
-        event_column="os_event",
+        time_column="time",
+        event_column="event",
         event_positive_value=1,
-        covariates=["age", "sex", "stage_group", "kras_status", "egfr_status"],
-        categorical_covariates=["sex", "stage_group", "kras_status", "egfr_status"],
+        covariates=["arm", "age"],
+        categorical_covariates=["arm"],
     )
 
     significant_terms = [
@@ -1997,7 +2101,7 @@ def test_cox_analysis_lists_all_current_ph_alert_terms_in_summary_caution() -> N
     )
 
     assert significant_terms
-    assert any("combined ph screening" in caution.lower() for caution in cautions)
+    assert any("grambsch-therneau" in caution.lower() for caution in cautions)
     for term in significant_terms:
         assert term in ph_caution
 
@@ -2156,17 +2260,15 @@ def test_tertile_split_handles_tied_quantile_edges() -> None:
     pattern = [0, 0, 1, 1, 2]
     df["biomarker_score"] = [pattern[idx % len(pattern)] for idx in range(len(df))]
 
-    updated, column_name, summary = derive_group_column(
-        df,
-        source_column="biomarker_score",
-        method="tertile_split",
-        new_column_name="biomarker_tertile",
-    )
-
-    values = set(updated[column_name].dropna().astype(str).unique().tolist())
-    assert values.issubset({"T1", "T2", "T3"})
-    assert summary["method"] == "tertile_split"
-    assert 2 <= summary["n_groups"] <= 3
+    # Tied edges collapse the tertiles to two bins; renaming the survivors
+    # "T1"/"T2" would mislabel the top third, so the split is refused.
+    with pytest.raises(ValueError, match="enough unique values"):
+        derive_group_column(
+            df,
+            source_column="biomarker_score",
+            method="tertile_split",
+            new_column_name="biomarker_tertile",
+        )
 
 
 def test_derive_group_column_generates_unique_default_name_on_repeat() -> None:
@@ -2464,23 +2566,6 @@ def test_discover_feature_signature_reraises_memory_error_from_cox_metrics(monke
         )
 
 
-def test_permutation_p_value_reraises_memory_error(monkeypatch) -> None:
-    import survival_toolkit.analysis as analysis
-
-    times = np.asarray([1.0, 2.0, 3.0, 4.0], dtype=float)
-    events = np.asarray([1, 1, 0, 0], dtype=int)
-    mask = np.asarray([True, False, True, False], dtype=bool)
-
-    monkeypatch.setattr(
-        analysis,
-        "survdiff",
-        lambda times, events, groups: (_ for _ in ()).throw(MemoryError("oom in permutation")),
-    )
-
-    with pytest.raises(MemoryError, match="oom in permutation"):
-        _permutation_p_value(times, events, mask, observed_stat=3.5, n_iterations=3, random_seed=7)
-
-
 def test_harrell_c_index_bootstrap_ci_warns_when_internal_bootstrap_is_skipped() -> None:
     times = np.asarray([1.0, 2.0, 3.0, 4.0], dtype=float)
     events = np.asarray([1, 0, 1, 0], dtype=int)
@@ -2541,7 +2626,7 @@ def test_signature_summary_keeps_internal_confirmation_language_conservative() -
     )
 
     assert "passes the current internal significance" not in summary["headline"].lower()
-    assert "internally screened result" in summary["headline"].lower()
+    assert "within-cohort screening rules" in summary["headline"].lower()
     assert "internally supported" not in summary["headline"].lower()
     assert "external validation" in summary["headline"].lower()
 
@@ -2568,3 +2653,136 @@ def test_signature_summary_warns_that_truncation_depends_on_candidate_order() ->
     )
 
     assert any("candidate order" in caution.lower() for caution in summary["cautions"])
+
+
+def test_bundled_tcga_files_have_one_row_per_patient() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for relative in [
+        "src/survival_toolkit/data/tcga_luad_xena_example.csv",
+        "src/survival_toolkit/data/tcga_luad_upload_ready.csv",
+        "examples/tcga_luad_nature2014_upload_ready.csv",
+        "examples/tcga_luad_rnaseq_top100_upload.csv",
+        "examples/tcga_luad_rnaseq_top500_upload.csv",
+    ]:
+        frame = pd.read_csv(root / relative)
+        assert frame["patient_id"].is_unique, relative
+        assert len(frame) == 489, relative
+
+
+def test_duplicate_identifier_columns_are_flagged_in_profile_and_km_cautions() -> None:
+    from survival_toolkit.analysis import detect_duplicate_identifier_columns, profile_dataframe
+
+    df = pd.DataFrame(
+        {
+            "patient_id": ["P1", "P1", "P2", "P3", "P4", "P5", "P6", "P7"],
+            "sample_type": ["tumor"] * 8,
+            "time": [5.0, 5.0, 3.0, 8.0, 2.0, 9.0, 4.0, 7.0],
+            "event": [1, 1, 0, 1, 1, 0, 1, 0],
+        }
+    )
+    findings = detect_duplicate_identifier_columns(df)
+    assert [item["column"] for item in findings] == ["patient_id"]
+    assert findings[0]["n_repeated_ids"] == 1
+    assert findings[0]["n_extra_rows"] == 1
+    profile = profile_dataframe(df, dataset_id="x", filename="x.csv")
+    assert profile["duplicate_identifier_columns"][0]["column"] == "patient_id"
+    km = compute_km_analysis(df, "time", "event")
+    assert any("patient_id" in caution for caution in km["scientific_summary"]["cautions"])
+    unique = df.drop_duplicates("patient_id")
+    assert detect_duplicate_identifier_columns(unique) == []
+
+
+def test_tertile_split_refuses_to_merge_tied_bins_silently() -> None:
+    df = make_example_dataset(seed=31, n_patients=100)
+    df["biomarker_score"] = [0.0] * 60 + list(np.linspace(1.0, 2.0, 40))
+    with pytest.raises(ValueError, match="enough unique values"):
+        derive_group_column(df, source_column="biomarker_score", method="tertile_split")
+
+
+def test_quantile_split_reports_exact_cutoffs() -> None:
+    df = make_example_dataset(seed=32, n_patients=999)
+    _, column, summary = derive_group_column(df, source_column="biomarker_score", method="tertile_split")
+    expected = np.quantile(pd.to_numeric(df["biomarker_score"]).to_numpy(dtype=float), [1 / 3, 2 / 3])
+    assert summary["cutoffs"] == pytest.approx(expected.tolist(), rel=0, abs=1e-12)
+
+
+def test_median_split_rejects_single_group_and_percent_fraction_input() -> None:
+    df = make_example_dataset(seed=33, n_patients=50)
+    df["flag"] = [1.0] * 40 + [0.0] * 10
+    with pytest.raises(ValueError, match="single group"):
+        derive_group_column(df, source_column="flag", method="median_split")
+    with pytest.raises(ValueError, match="fractions"):
+        derive_group_column(df, source_column="biomarker_score", method="percentile_split", cutoff="0.25")
+
+
+def test_derive_group_notes_non_numeric_inputs() -> None:
+    df = make_example_dataset(seed=34, n_patients=50)
+    df["marker"] = df["biomarker_score"].astype(object)
+    df.loc[df.index[:3], "marker"] = "<5"
+    _, _, summary = derive_group_column(df, source_column="marker", method="median_split")
+    assert any("non-numeric" in note for note in summary["input_notes"])
+
+
+def test_event_coding_handles_negated_labels_and_rejects_censor_targets() -> None:
+    from survival_toolkit.analysis import coerce_event
+
+    recurred = coerce_event(pd.Series(["0:Not Recurred", "1:Recurred", "0:Not Recurred"], name="rfs_status"))
+    assert recurred.tolist() == [0.0, 1.0, 0.0]
+    progression = coerce_event(pd.Series(["No progression", "Progression"], name="pfs_status"), "Progression")
+    assert progression.tolist() == [0.0, 1.0]
+    with pytest.raises(ValueError, match="means no event"):
+        coerce_event(pd.Series(["NED", "DOD", "NED"], name="os_status"), "NED")
+    with pytest.raises(ValueError, match="other causes"):
+        coerce_event(pd.Series(["NED", "DOD", "DOC"], name="dss_status"))
+    assert coerce_event(pd.Series(["NED", "DOD", "DOC"], name="os_status")).tolist() == [0.0, 1.0, 1.0]
+
+
+def test_censoring_indicator_column_is_not_used_as_event() -> None:
+    df = pd.DataFrame({"time": [1.0, 2, 3, 4, 5, 6], "censored": [1, 0, 1, 1, 0, 1], "death": [0, 1, 0, 0, 1, 0]})
+    assert "censored" not in suggest_columns(df)["event_columns"]
+    with pytest.raises(ValueError, match="censoring indicator"):
+        compute_km_analysis(df, "time", "censored", event_positive_value=1)
+
+
+def test_time_column_rules_accept_futime_and_reject_scores_and_dates() -> None:
+    df = pd.DataFrame(
+        {"futime": [5, 6, 7], "death": [1, 0, 1], "os_risk_score": [0.1, 0.3, 0.2], "last_followup_date": ["2020-01-01"] * 3}
+    )
+    assert suggest_columns(df)["time_columns"] == ["futime"]
+    dated = pd.DataFrame({"os_date": ["2020-01-03", "2021-05-06", "2022-01-01"], "os_event": [1, 0, 1]})
+    with pytest.raises(ValueError, match="calendar dates"):
+        compute_km_analysis(dated, "os_date", "os_event")
+
+
+def test_time_zero_rows_are_kept() -> None:
+    df = pd.DataFrame({"time": [0.0, 0.0, 1.0, 2.0, 3.0, -1.0], "event": [1, 0, 1, 0, 1, 1]})
+    result = compute_km_analysis(df, "time", "event")
+    assert result["cohort"]["n"] == 5
+    assert result["cohort"]["dropped_nonpositive_time_rows"] == 1
+
+
+def test_csv_loader_handles_single_column_decimal_comma_and_utf16() -> None:
+    from survival_toolkit.analysis import load_dataframe
+
+    assert load_dataframe(b"time\n1\n2\n3\n", "one.csv").columns.tolist() == ["time"]
+    european = load_dataframe("time;event;age\n12,5;1;60,1\n7,25;0;55,0\n".encode(), "eu.csv")
+    assert european["time"].tolist() == [12.5, 7.25]
+    assert load_dataframe("time,event\n1,0\n2,1\n".encode("utf-16"), "u16.csv")["event"].tolist() == [0, 1]
+
+
+def test_median_follow_up_and_km_median_use_s_le_half_convention() -> None:
+    from survival_toolkit.analysis import _median_follow_up
+
+    assert _median_follow_up(pd.Series([1.0, 2.0, 3.0, 4.0]), pd.Series([0, 0, 1, 1])) == pytest.approx(2.0)
+    km = compute_km_analysis(pd.DataFrame({"t": [1.0, 2.0, 3.0, 4.0], "e": [1, 1, 0, 0]}), "t", "e")
+    assert km["summary_table"][0]["Median survival"] == pytest.approx(2.0)
+
+
+def test_signature_discovery_accepts_boolean_candidates() -> None:
+    df = make_example_dataset(seed=51, n_patients=200)
+    df["flag"] = df["biomarker_score"] > df["biomarker_score"].median()
+    _, _, payload = discover_feature_signature(
+        df, "os_months", "os_event", ["flag", "age"], event_positive_value=1,
+        max_combination_size=1, bootstrap_iterations=0, permutation_iterations=0, validation_iterations=0,
+    )
+    assert payload["search_space"]["tested_combinations"] >= 1

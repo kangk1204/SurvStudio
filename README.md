@@ -455,6 +455,10 @@ http://127.0.0.1:8000
 
 The app opens in the guided workflow by default. For predictive modeling, use the unified `Predictive Models` workspace to compare ML and DL models together or test one selected model at a time.
 
+Local-only request guard:
+- the server answers only requests addressed to `localhost`, `127.x.x.x`, `[::1]`, or the `--host` bind address, and refuses state-changing requests (uploads, analyses, shutdown) sent from other websites
+- to reach it through another name (a LAN hostname or a reverse proxy), allow that name explicitly: `python -m survival_toolkit serve --host 0.0.0.0 --allowed-host my-workstation.local`, or set `SURVSTUDIO_ALLOWED_HOSTS=my-workstation.local` (comma-separated; `*` disables the Host check) when launching `uvicorn` directly
+
 If `python -m survival_toolkit` does not start the server, check:
 - the virtual environment is activated
 - installation finished without errors
@@ -603,7 +607,7 @@ At minimum, your file needs:
 
 1. a time column
 - numeric
-- positive values only
+- zero or positive values (time 0 is kept; negative times are dropped)
 - examples: `os_months`, `followup_months`, `time_to_event`
 
 2. an event column
@@ -663,7 +667,7 @@ Those are not single-event binary outcomes.
 The time column should be:
 - numeric
 - measured in one consistent unit
-- positive for all analyzable rows
+- zero or positive for all analyzable rows (negative times are dropped)
 
 Good examples:
 - months from diagnosis to death
@@ -734,7 +738,7 @@ On upload and analysis, the app checks things like:
 - uploaded dataset stays within the 1000-feature model-input cap
 - required columns exist
 - survival time can be interpreted as numeric
-- survival time is positive
+- survival time is zero or positive
 - event coding can be interpreted as a binary event indicator
 - selected model covariates remain analyzable after missing values are handled
 
@@ -801,8 +805,9 @@ Implemented ML paths:
 - model comparison against Cox PH
 
 Comparison supports:
-- deterministic holdout
+- deterministic holdout (stratified 70/30, shared with the deep-learning models)
 - repeated stratified CV
+- repeated stratified CV on a development set plus a **locked independent test set** (`locked_test_fraction`)
 - manuscript-oriented result tables
 
 Single-model ML training also supports:
@@ -833,9 +838,9 @@ Implemented DL paths:
 - Survival VAE
 
 Deep comparison supports:
-- deterministic holdout
-- repeated CV
-- early stopping
+- deterministic holdout (the same stratified 70/30 split as the ML comparison for the same seed)
+- repeated CV, optionally with a locked independent test set
+- early stopping on a monitor subset held out from gradient updates
 - parallel fold execution
 
 Single-model and comparison DL runs expose:
@@ -864,10 +869,10 @@ Architecture note:
 - `Dropout` is applied to all current deep model paths, including Neural MTLR
 - `Batch Size` currently affects DeepHit and Neural MTLR only. DeepSurv, Survival Transformer, and Survival VAE use full-batch optimization in the current implementation, and the run metadata reports the effective full-batch size for those paths.
 - Adam-based DL optimizers use light L2 regularization (`weight_decay=1e-4`) and gradient clipping for stability on wider feature sets.
-- DeepHit uses a stabilized ranking-loss scale (`sigma=1.0`) rather than the earlier sharper default.
-- `Neural MTLR` uses a neuralized right-cumulative MTLR parameterization for workflow comparison. It matches the canonical MTLR probability construction, while the surrounding network/training path is a practical SurvStudio implementation rather than a line-by-line clone of one reference codebase.
+- DeepHit ranks the predicted cumulative incidence at each event time (Lee et al., 2018), including subjects censored in the same time bin, with a stabilized ranking-loss scale (`sigma=1.0`).
+- `Neural MTLR` uses a neuralized right-cumulative MTLR parameterization for workflow comparison; its censored likelihood is evaluated in log space for numerical stability. It matches the canonical MTLR probability construction, while the surrounding network/training path is a practical SurvStudio implementation rather than a line-by-line clone of one reference codebase.
 - `Survival VAE` should be interpreted as a VAE-inspired latent representation model for clustering and risk screening. SurvStudio does not claim validated generative simulation or uncertainty estimation from this path.
-- Cox-style DL paths (`DeepSurv`, `Survival Transformer`) use monitor C-index on an internal training-partition subset for early stopping. Discrete-time/VAE paths continue to use monitor loss. Neither monitor curve is the final holdout or external validation metric.
+- Early stopping monitors a stratified 20% subset of the training partition that is **held out from gradient updates** (the model never trains on it). `DeepSurv`, `Survival Transformer`, and `Survival VAE` monitor C-index; `DeepHit` and `Neural MTLR` monitor the discrete-time loss. The restored checkpoint is the reported best monitor epoch. The monitor subset never overlaps the holdout, CV fold, or locked test set, and its curve is not a validation metric.
 - Deep-model summaries currently report discrimination (`C-index`) only. SurvStudio does not yet compute IBS for deep-model outputs, so calibration/error comparisons are not directly symmetric with the ML module.
 - Cox-style DL paths (`DeepSurv`, `Survival Transformer`) optimize a Breslow-ties partial-likelihood objective, while the classical Cox PH workflow reports Efron-ties estimates; this difference is intentional and should be documented in manuscript Methods if you compare those paths directly.
 
@@ -885,8 +890,7 @@ Architecture note:
 - Hazard ratio `< 1`: lower hazard
 - Confidence intervals crossing `1` mean the estimate is compatible with no effect
 - The current Cox discrimination summary is an `Apparent C-index` on the analyzable cohort, not an externally validated performance estimate.
-- PH diagnostics currently use rank-based Spearman correlations between Schoenfeld residuals and log time.
-- That is useful for screening PH problems, but it is not the same thing as a full Grambsch-Therneau omnibus test.
+- PH diagnostics use the Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time: one 1-df test per model term plus a global test (the classic `cox.zph` statistic, matching lifelines' `proportional_hazard_test` with a log transform).
 - Continuous covariates also expose Martingale residual trend plots as a visual linearity screen; strong curvature suggests splines, transforms, or recoding before locking the Cox specification.
 - A Cox `C-index = 0.65` means the fitted model ranks about `65%` of comparable patient pairs in the observed risk order; it is not "65% accuracy."
 
@@ -895,10 +899,13 @@ Architecture note:
 The app explicitly distinguishes different evaluation modes:
 
 - `Holdout C-index`
-  - discrimination measured on a deterministic holdout split
+  - discrimination measured on a deterministic stratified 70/30 holdout split
   - this is one split only, so no CI or SD is shown
 - `Repeated-CV mean C-index`
-  - average discrimination across repeated stratified CV
+  - average of all fold-level C-indices across repeated stratified CV; the reported SD is the SD across those fold-level estimates (folds share training data, so it is descriptive, not a confidence interval)
+- `Locked-test C-index`
+  - with a locked test set, models are ranked by repeated CV on the development set, refit once on the whole development set, and scored once on the untouched test set
+  - report the locked-test C-index of the CV-selected (rank 1) model as the independent test performance
 - `Apparent C-index`
   - measured on the training/analyzable cohort
   - optimistic
@@ -992,6 +999,10 @@ They are formatting helpers, not official publisher-certified house styles.
 - ML `Train a model` currently supports the deterministic holdout path for a single fitted model.
 - ML `Compare All` is the screening path for shared-model comparison, including repeated cross-validation when selected.
 - DL single-model runs can use holdout or repeated-CV according to the visible evaluation controls.
+- Every classical ML and deep model is trained and scored on identical row partitions for the same seed: one stratified 70/30 holdout helper and identical `StratifiedKFold` folds are shared by both families.
+- Each comparison result carries an `evaluation_split_fingerprint` (a hash of which source rows were trained and scored in each split). The unified ML+DL leaderboard ranks the two families together only when the fingerprints match.
+- For manuscript benchmarks, use repeated CV with a locked test set: the development set is used for all fitting, preprocessing, tuning, early stopping, and model selection; the locked test set is used once. Describe the training-set composition, the CV procedure, and the locked test set in the Methods or Supplement.
+- Datasets with repeated subject identifiers (for example several tumour samples per patient) are flagged: row-level splits would place one subject in both training and test data. Keep one row per subject before benchmarking.
 
 ### Download File Names
 

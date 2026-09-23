@@ -40,9 +40,10 @@
     return slugifyDownloadToken(refs?.groupColumn?.value || "overall", "overall");
   }
 
-  function buildDownloadFilename({ state, refs, stem, ext, includeGroup = false, template = null }) {
+  function buildDownloadFilename({ state, refs, stem, ext, includeGroup = false, template = null, group = null }) {
     const parts = [currentDatasetSlug(state), currentOutcomeSlug(refs)];
-    if (includeGroup) parts.push(currentGroupSlug(refs));
+    // `group` names the grouping the exported result actually used; fall back to the live control.
+    if (includeGroup) parts.push(group === null ? currentGroupSlug(refs) : slugifyDownloadToken(group || "overall", "overall"));
     parts.push(slugifyDownloadToken(stem, "export"));
     if (template) parts.push(slugifyDownloadToken(template, "default"));
     return `${parts.filter(Boolean).join("_")}.${ext}`;
@@ -65,7 +66,16 @@
     }
   }
 
-  function downloadCsv({ filename, rows, columns = null, showToast }) {
+  const UTF8_BOM = "\uFEFF";
+
+  // Signed display values such as "-0.50 ± 1.20", "-12%", "-1,234" or "-1.2 (−3.4 to 0.5)" are data,
+  // not formulas: they contain no letters (other than "to" and an exponent), so they cannot call functions.
+  function isNumericLikeText(value) {
+    const compact = String(value ?? "").replace(/\bto\b/gi, " ");
+    return /^[+-]?(?:\d|\.\d)/.test(compact) && /^[\d\s.,%±()[\]/:;+\-–—−eE]*$/.test(compact);
+  }
+
+  function downloadCsv({ filename, rows, columns = null, showToast, caption = "", notes = [] }) {
     if (!rows || rows.length === 0) {
       showToast?.("No rows available for export.", "warning");
       return;
@@ -78,7 +88,10 @@
         return `${text.slice(0, text.length - trimmed.length)}${trimmed.slice(1)}`;
       }
       if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) return text;
-      if (trimmed.startsWith("=") || trimmed.startsWith("+") || trimmed.startsWith("-") || trimmed.startsWith("@")) {
+      if (/^[\t\r]/.test(text) || trimmed.startsWith("=") || trimmed.startsWith("@")) {
+        return `'${text}`;
+      }
+      if ((trimmed.startsWith("+") || trimmed.startsWith("-")) && !isNumericLikeText(trimmed)) {
         return `'${text}`;
       }
       return text;
@@ -87,12 +100,29 @@
       const text = sanitizeCsvCell(value);
       return `"${text.replaceAll('"', '""')}"`;
     };
+    const commentLine = (text) => `# ${sanitizeCsvCell(String(text ?? "").replace(/[\r\n]+/g, " "))}`;
+    const cleanNotes = (notes || []).map((note) => String(note ?? "").trim()).filter(Boolean);
     const lines = [
+      ...(caption ? [commentLine(caption)] : []),
+      ...(cleanNotes.length ? ["# Notes:", ...cleanNotes.map((note) => commentLine(`- ${note}`))] : []),
       visibleColumns.map(escapeCell).join(","),
       ...rows.map((row) => visibleColumns.map((column) => escapeCell(row[column])).join(",")),
     ];
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    // The BOM makes Excel open the file as UTF-8 so symbols such as "±" survive.
+    const blob = new Blob([UTF8_BOM, lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     triggerBlobDownload(filename, blob);
+  }
+
+  async function withCsvByteOrderMark(blob, filename, mimeType) {
+    const isCsv = /\.csv$/i.test(String(filename || "")) || /text\/csv/i.test(String(blob?.type || mimeType || ""));
+    if (!isCsv || typeof blob?.slice !== "function") return blob;
+    try {
+      const head = new Uint8Array(await blob.slice(0, 3).arrayBuffer());
+      if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) return blob;
+    } catch {
+      return blob;
+    }
+    return new Blob([UTF8_BOM, blob], { type: blob.type || mimeType || "text/csv;charset=utf-8;" });
   }
 
   function downloadText({ filename, text, mimeType = "text/plain;charset=utf-8;" }) {
@@ -123,7 +153,7 @@
       }
       throw new Error(parseExportErrorResponse(errorPayload, rawText || "Export failed."));
     }
-    const blob = await response.blob();
+    const blob = await withCsvByteOrderMark(await response.blob(), filename, fallbackMimeType);
     triggerBlobDownload(filename, blob, fallbackMimeType);
   }
 
@@ -177,6 +207,7 @@
     downloadPlotImage,
     downloadServerTable,
     downloadText,
+    isNumericLikeText,
     isReadonlyPlot,
     plotLayoutConfig,
     slugifyDownloadToken,

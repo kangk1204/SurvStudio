@@ -34,7 +34,9 @@ from survival_toolkit.errors import ColumnNotFoundError, DatasetNotFoundError, U
 from survival_toolkit.sample_data import make_example_dataset
 
 
-client = TestClient(app)
+# The local request guard only answers loopback Host headers, so address the app as 127.0.0.1
+# instead of TestClient's default "testserver" host.
+client = TestClient(app, base_url="http://127.0.0.1")
 
 
 def _torch_available() -> bool:
@@ -213,7 +215,7 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert "What this tab uses" in response.text
     assert "KM / grouped summary settings" in response.text
     assert 'id="deriveButton" type="button">Create</button>' in response.text
-    assert "Scaled Schoenfeld residual screening with rank-based Spearman correlation versus log time appears here, alongside a combined PH screening row based on the per-term tests." in response.text
+    assert "Grambsch-Therneau proportional-hazards tests on scaled Schoenfeld residuals versus log time appear here, per term and as a global test." in response.text
     assert "Allowed ranges:" not in response.text
 
 
@@ -251,7 +253,8 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'class="table-card-head"' in response.text
     assert 'option value="lasso_cox"' in response.text
     assert "screening comparison across Cox PH and, when available, LASSO-Cox, RSF, and GBS" in response.text
-    assert "Partial dependence and counterfactual analysis are available for tree-model runs only" in response.text
+    # The workspace has no partial-dependence/counterfactual UI, so the page must not advertise it.
+    assert "Partial dependence and counterfactual analysis are available" not in response.text
     assert "Fresh datasets preselect up to 20 eligible model features for a faster first run." in response.text
     assert 'id="dlBatchSizeHint"' in response.text
     assert 'id="tab-benchmark"' in response.text
@@ -349,7 +352,7 @@ def test_readme_states_current_scope_and_validation_limitations() -> None:
     assert "no competing-risks analysis" in readme
     assert 'no built-in "apply the locked model directly to an external cohort" workflow yet' in readme
     assert "Apparent C-index" in readme
-    assert "rank-based Spearman correlations between Schoenfeld residuals and log time" in readme
+    assert "Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time" in readme
     assert "Martingale residual trend plots" in readme
     assert 'pip install -e ".[all]"' in readme
     assert "LASSO-Cox (penalized Cox)" in readme
@@ -360,8 +363,9 @@ def test_app_uses_threadpool_for_builtin_loaders_and_derive_group() -> None:
     app_py = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "app.py").read_text()
 
     assert "async def _load_builtin_dataset_response(" in app_py
-    assert "dataframe = await run_in_threadpool(loader)" in app_py
-    assert "return await run_in_threadpool(_run)" in app_py
+    assert "_store_loaded_dataframe(loader(), filename=filename" in app_py
+    assert "return await run_in_threadpool(job)" in app_py
+    assert "return await _run_dataset_job(request_model.dataset_id, _run)" in app_py
 
 
 def test_frontend_exposes_analysis_consistency_banner_and_row_hash_checks() -> None:
@@ -665,7 +669,8 @@ def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
     assert "CV folds must be between 2 and 10." in text
     assert "Parallel jobs must be between 1 and 16." in text
     assert "Transformer width must be divisible by attention heads." in text
-    assert "repeated CV (incomplete; fallback folds excluded)" in text
+    assert "function repeatedCvDesignLabel(analysis) {" in text
+    assert "(incomplete; fallback folds excluded)" in text
     assert "holdout requested, reported as apparent fallback" in text
     assert "Latent dim must be between 2 and 32." in text
     assert "validateDlControls();" in text
@@ -717,7 +722,8 @@ def test_frontend_labels_incomplete_repeated_cv_compare_as_mean_c_index() -> Non
 
     assert 'const repeatedCvLike = evaluationMode === "repeated_cv" || evaluationMode === "repeated_cv_incomplete";' in text
     assert 'const mlMetricLabel = repeatedCvLike ? "Mean C-index" : "C-index";' in text
-    assert 'repeated CV (incomplete)' in text
+    assert "function compareEvaluationLabel(analysis, evaluationMode) {" in text
+    assert '`${repeatedCvDesignLabel(analysis)} (incomplete)`' in text
 
 
 def test_frontend_warns_that_large_full_batch_dl_runs_can_hit_memory_limits() -> None:
@@ -886,9 +892,11 @@ def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() 
     assert 'const compareRun = String(requestConfig.model_type || "") === "compare";' in text
     assert 'const effectiveModelType = expectsCompare ? "compare" : String(requestConfig.model_type || "");' in text
     assert 'const learningRateApplies = expectsCompare || effectiveModelType === "gbs";' in text
-    assert 'evaluation_strategy: expectsCompare ? String(requestConfig.evaluation_strategy || "holdout") : null,' in text
-    assert 'cv_folds: expectsCompare ? Number(requestConfig.cv_folds || 5) : null,' in text
-    assert 'cv_repeats: expectsCompare ? Number(requestConfig.cv_repeats || 3) : null,' in text
+    assert 'const evaluationStrategy = expectsCompare ? String(requestConfig.evaluation_strategy || "holdout") : null;' in text
+    assert 'cv_folds: repeatedCv ? numberOrDefault(requestConfig.cv_folds, 5) : null,' in text
+    assert 'cv_repeats: repeatedCv ? numberOrDefault(requestConfig.cv_repeats, 3) : null,' in text
+    assert 'random_state: numberOrDefault(requestConfig.random_state, 42),' in text
+    assert 'locked_test_fraction: repeatedCv ? normalizedLockedTestFraction(requestConfig.locked_test_fraction) : null,' in text
     assert 'model_type: expectsCompare ? "compare" : String(refs.mlModelType?.value || ""),' in text
     assert 'function currentSharedModelSelections(goal = "ml") {' in text
     assert 'const featureChecklist = goal === "dl" ? refs.dlModelFeatureChecklist : refs.modelFeatureChecklist;' in text
@@ -948,7 +956,7 @@ def test_cox_ui_wires_graphical_diagnostics_plot() -> None:
     assert "clearPlotShell(refs.coxDiagnosticsPlot, '<div class=\"empty-state plot-empty\"><span>Scaled Schoenfeld residual screening was unavailable for this fit.</span></div>');" in text
     assert 'resetCoxMartingaleSelector(currentCoxMartingaleEmptyLabel());' in text
     assert 'escapeHtml(currentCoxMartingaleUnavailableMessage())' in text
-    assert 'refs.coxDiagnosticsShell.innerHTML = \'<div class="empty-state">Scaled Schoenfeld residual screening details and the combined PH screening row will appear here.</div>\';' in text
+    assert 'refs.coxDiagnosticsShell.innerHTML = \'<div class="empty-state">Grambsch-Therneau proportional-hazards tests (per term and global) will appear here.</div>\';' in text
     assert 'refs.coxMartingaleVariableSelect?.addEventListener("change", () => {' in text
 
 
@@ -1358,12 +1366,138 @@ def test_shutdown_endpoint_schedules_local_shutdown(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(app_module, "_schedule_process_shutdown", _fake_schedule)
 
-    response = client.post("/api/shutdown")
+    response = client.post("/api/shutdown", json={})
 
     assert response.status_code == 200
     assert response.json()["status"] == "shutting_down"
     assert "restart the server" in response.json()["detail"]
     assert called["count"] == 1
+
+
+def test_shutdown_endpoint_rejects_simple_form_style_posts(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = {"count": 0}
+    monkeypatch.setattr(app_module, "_schedule_process_shutdown", lambda *args, **kwargs: called.update(count=1))
+
+    text_plain = client.post("/api/shutdown", content=b"", headers={"Content-Type": "text/plain"})
+    form = client.post("/api/shutdown", data={"x": "1"})
+    no_body = client.post("/api/shutdown")
+
+    assert text_plain.status_code == 415
+    assert form.status_code == 415
+    assert no_body.status_code == 415
+    assert called["count"] == 0
+
+    custom_header = client.post("/api/shutdown", headers={"X-Requested-With": "SurvStudio"})
+    assert custom_header.status_code == 200
+    assert called["count"] == 1
+
+
+def test_local_request_guard_rejects_cross_site_state_changing_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = {"count": 0}
+    monkeypatch.setattr(app_module, "_schedule_process_shutdown", lambda *args, **kwargs: called.update(count=1))
+    evil = {"Origin": "http://evil.example"}
+    datasets_before = store.count
+
+    upload = client.post(
+        "/api/upload",
+        headers=evil,
+        files={"file": ("x.csv", b"time,event\n1,1\n", "text/csv")},
+    )
+    shutdown = client.post("/api/shutdown", headers={**evil, "Content-Type": "application/json"}, content=b"{}")
+    null_origin = client.post("/api/load-example", headers={"Origin": "null"})
+    referer_only = client.post("/api/load-example", headers={"Referer": "http://evil.example/page.html"})
+    lookalike = client.post("/api/load-example", headers={"Origin": "http://127.0.0.1.evil.example"})
+
+    for response in (upload, shutdown, null_origin, referer_only, lookalike):
+        assert response.status_code == 403
+        assert "Cross-site request rejected" in response.json()["detail"]
+    assert called["count"] == 0
+    assert store.count == datasets_before
+
+
+def test_local_request_guard_allows_loopback_and_same_origin_requests() -> None:
+    for origin in ("http://127.0.0.1:8000", "http://localhost:5173", "http://[::1]:8000"):
+        response = client.post("/api/load-example", headers={"Origin": origin})
+        assert response.status_code == 200, origin
+    referer = client.post("/api/load-example", headers={"Referer": "http://localhost:8000/index.html?x=1"})
+    assert referer.status_code == 200
+    no_origin = client.post("/api/load-example")
+    assert no_origin.status_code == 200
+    # Safe methods are never Origin-checked (CORS still controls whether a page may read them).
+    cross_site_get = client.get("/api/health", headers={"Origin": "http://evil.example"})
+    assert cross_site_get.status_code == 200
+
+
+def test_local_request_guard_rejects_foreign_host_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(app_module.BIND_HOST_ENV_VAR, raising=False)
+    monkeypatch.delenv(app_module.ALLOWED_HOSTS_ENV_VAR, raising=False)
+
+    for host in ("attacker.example:8000", "testserver", "127.0.0.1.evil.example", "", "bad host"):
+        response = client.get("/api/health", headers={"Host": host})
+        assert response.status_code == 400, host
+        assert "Invalid Host header" in response.json()["detail"]
+
+    for host in ("127.0.0.1:8000", "localhost", "LOCALHOST:9", "[::1]:8000", "127.0.0.2"):
+        assert client.get("/api/health", headers={"Host": host}).status_code == 200, host
+
+
+def test_local_request_guard_allows_configured_bind_and_extra_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(app_module.BIND_HOST_ENV_VAR, "192.168.10.5")
+    monkeypatch.setenv(app_module.ALLOWED_HOSTS_ENV_VAR, "survstudio.lan, proxy.example:443")
+
+    assert client.get("/api/health", headers={"Host": "192.168.10.5:8000"}).status_code == 200
+    assert client.get("/api/health", headers={"Host": "survstudio.lan"}).status_code == 200
+    assert client.get("/api/health", headers={"Host": "proxy.example"}).status_code == 200
+    assert client.get("/api/health", headers={"Host": "attacker.example"}).status_code == 400
+
+    same_origin = client.post(
+        "/api/load-example",
+        headers={"Host": "192.168.10.5:8000", "Origin": "http://192.168.10.5:8000"},
+    )
+    assert same_origin.status_code == 200
+    other_port = client.post(
+        "/api/load-example",
+        headers={"Host": "192.168.10.5:8000", "Origin": "http://192.168.10.5:9000"},
+    )
+    assert other_port.status_code == 403
+    cross_site = client.post(
+        "/api/load-example",
+        headers={"Host": "192.168.10.5:8000", "Origin": "http://survstudio.lan"},
+    )
+    assert cross_site.status_code == 403
+
+    monkeypatch.setenv(app_module.ALLOWED_HOSTS_ENV_VAR, "*")
+    assert client.get("/api/health", headers={"Host": "anything.example"}).status_code == 200
+
+
+def test_local_request_guard_wildcard_bind_allows_this_machines_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_module, "_local_interface_hostnames", lambda: {"192.168.1.20", "labbox"})
+    monkeypatch.setenv(app_module.BIND_HOST_ENV_VAR, "0.0.0.0")
+    monkeypatch.setenv(app_module.ALLOWED_HOSTS_ENV_VAR, "")
+    app_module._configured_request_hosts.cache_clear()
+    try:
+        assert client.get("/api/health", headers={"Host": "192.168.1.20:8000"}).status_code == 200
+        assert client.get("/api/health", headers={"Host": "labbox:8000"}).status_code == 200
+        assert client.get("/api/health", headers={"Host": "attacker.example:8000"}).status_code == 400
+    finally:
+        app_module._configured_request_hosts.cache_clear()
+
+
+def test_cli_serve_exports_bind_host_for_request_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    from survival_toolkit import __main__ as cli_module
+
+    captured: dict[str, object] = {}
+    # setenv (not delenv) so monkeypatch restores the variables the CLI writes.
+    monkeypatch.setenv(app_module.BIND_HOST_ENV_VAR, "")
+    monkeypatch.setenv(app_module.ALLOWED_HOSTS_ENV_VAR, "")
+    monkeypatch.setattr(cli_module.uvicorn, "run", lambda *args, **kwargs: captured.update(kwargs))
+
+    exit_code = cli_module.main(["serve", "--host", "10.0.0.7", "--port", "8123", "--allowed-host", "lab.example"])
+
+    assert exit_code == 0
+    assert captured["host"] == "10.0.0.7"
+    assert os.environ[app_module.BIND_HOST_ENV_VAR] == "10.0.0.7"
+    assert os.environ[app_module.ALLOWED_HOSTS_ENV_VAR] == "lab.example"
 
 
 def test_guided_grouping_context_only_uses_guided_goal_inside_guided_mode() -> None:
@@ -1734,6 +1868,30 @@ def test_request_models_reject_invalid_scalar_and_text_validation_inputs() -> No
         )
 
 
+def test_non_finite_json_inputs_return_serializable_422_errors() -> None:
+    dataset = client.post("/api/load-example").json()
+    headers = {"Content-Type": "application/json"}
+    base = f'"dataset_id":"{dataset["dataset_id"]}","time_column":"os_months","event_column":"os_event"'
+
+    cases = [
+        ("/api/kaplan-meier", "{" + base + ',"event_positive_value":NaN}', "event_positive_value", "NaN"),
+        ("/api/kaplan-meier", "{" + base + ',"max_time":Infinity}', "max_time", "Infinity"),
+        ("/api/kaplan-meier", "{" + base + ',"confidence_level":-Infinity}', "confidence_level", "-Infinity"),
+        (
+            "/api/derive-group",
+            '{"dataset_id":"%s","source_column":"age","method":"percentile_split","cutoff":NaN}' % dataset["dataset_id"],
+            "cutoff",
+            "NaN",
+        ),
+    ]
+    for path, body, field, echoed in cases:
+        response = client.post(path, content=body.encode(), headers=headers)
+        assert response.status_code == 422, (path, response.text[:200])
+        detail = response.json()["detail"]
+        assert any(field in error["loc"] for error in detail)
+        assert any(error.get("input") == echoed for error in detail)
+
+
 def test_health_rejects_null_origin_for_file_preview() -> None:
     response = client.get("/api/health", headers={"Origin": "null"})
 
@@ -1765,6 +1923,165 @@ def test_upload_dataset_preserves_too_large_status(monkeypatch) -> None:
 
     assert response.status_code == 413
     assert "200 MB limit" in response.json()["detail"]
+
+
+def test_upload_rejects_oversized_content_length_before_reading_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("upload body should not be parsed")
+
+    monkeypatch.setattr(app_module, "_ingest_uploaded_file", _must_not_run)
+    declared = app_module._max_upload_request_bytes() + 1
+    response = client.post(
+        "/api/upload",
+        content=b"--x--\r\n",
+        headers={"Content-Type": "multipart/form-data; boundary=x", "Content-Length": str(declared)},
+    )
+
+    assert response.status_code == 413
+    assert "200 MB limit" in response.json()["detail"]
+
+
+def test_upload_stops_reading_chunked_body_past_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_module, "_MAX_UPLOAD_BYTES", 64)
+    monkeypatch.setattr(app_module, "_UPLOAD_MULTIPART_OVERHEAD_BYTES", 256)
+    chunks_sent = {"count": 0}
+    body = (
+        b"--bnd\r\n"
+        b'Content-Disposition: form-data; name="file"; filename="big.csv"\r\n'
+        b"Content-Type: text/csv\r\n\r\n"
+        + b"a,b\n" + b"1,2\n" * 2000
+        + b"\r\n--bnd--\r\n"
+    )
+
+    def _chunks():
+        for start in range(0, len(body), 128):
+            chunks_sent["count"] += 1
+            yield body[start : start + 128]
+
+    response = client.post(
+        "/api/upload",
+        content=_chunks(),
+        headers={"Content-Type": "multipart/form-data; boundary=bnd"},
+    )
+
+    assert response.status_code == 413
+    assert "200 MB limit" in response.json()["detail"]
+
+
+def test_upload_rejects_xlsx_that_decompresses_past_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.append(["os_months", "os_event", "age"])
+    for index in range(50):
+        worksheet.append([12 + index, index % 2, 50 + index])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+
+    monkeypatch.setattr(app_module, "_MAX_XLSX_UNCOMPRESSED_BYTES", 2048)
+    response = client.post(
+        "/api/upload",
+        files={"file": ("bomb.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert response.status_code == 413
+    assert "decompressed" in response.json()["detail"]
+
+    not_a_zip = client.post("/api/upload", files={"file": ("broken.xlsx", b"not a zip", "application/octet-stream")})
+    assert not_a_zip.status_code == 400
+    assert "Excel" in not_a_zip.json()["detail"]
+
+
+def test_upload_checks_parquet_metadata_before_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("pyarrow")
+    frame = pd.DataFrame({"os_months": [12.0, 18.0, 24.0], "os_event": [1, 0, 1], "age": [60, 55, 70]})
+    buffer = io.BytesIO()
+    frame.to_parquet(buffer, index=False)
+
+    def _must_not_load(*args, **kwargs):
+        raise AssertionError("parquet data should not be loaded")
+
+    monkeypatch.setattr(app_module, "load_dataframe_from_path", _must_not_load)
+    monkeypatch.setattr(app_module, "_MAX_UPLOAD_ROWS", 2)
+    too_many_rows = client.post("/api/upload", files={"file": ("rows.parquet", buffer.getvalue(), "application/octet-stream")})
+    assert too_many_rows.status_code == 400
+    assert "supports at most 2 rows" in too_many_rows.json()["detail"]
+
+    monkeypatch.setattr(app_module, "_MAX_UPLOAD_ROWS", 100)
+    monkeypatch.setattr(app_module, "_MAX_PARQUET_UNCOMPRESSED_BYTES", 8)
+    too_big = client.post("/api/upload", files={"file": ("big.parquet", buffer.getvalue(), "application/octet-stream")})
+    assert too_big.status_code == 413
+    assert "decompressed" in too_big.json()["detail"]
+
+
+def test_upload_accepts_small_parquet_and_xlsx_files() -> None:
+    pytest.importorskip("pyarrow")
+    openpyxl = pytest.importorskip("openpyxl")
+    frame = pd.DataFrame({"os_months": [12.0, 18.0, 24.0], "os_event": [1, 0, 1], "age": [60, 55, 70]})
+    parquet_buffer = io.BytesIO()
+    frame.to_parquet(parquet_buffer, index=False)
+    workbook = openpyxl.Workbook()
+    for row in [list(frame.columns), *frame.values.tolist()]:
+        workbook.active.append(row)
+    xlsx_buffer = io.BytesIO()
+    workbook.save(xlsx_buffer)
+
+    for name, content in (("cohort.parquet", parquet_buffer.getvalue()), ("cohort.xlsx", xlsx_buffer.getvalue())):
+        response = client.post("/api/upload", files={"file": (name, content, "application/octet-stream")})
+        assert response.status_code == 200, (name, response.text[:200])
+        assert response.json()["n_rows"] == 3
+
+
+def _event_loop_is_running_in_this_thread() -> bool:
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def test_heavy_dataset_and_export_work_runs_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, list[bool]] = {}
+
+    def _record(name: str, func):
+        def wrapper(*args, **kwargs):
+            observed.setdefault(name, []).append(_event_loop_is_running_in_this_thread())
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(app_module, "dataset_response", _record("dataset_response", app_module.dataset_response))
+    monkeypatch.setattr(app_module, "_export_rows_to_csv", _record("export_csv", app_module._export_rows_to_csv))
+    monkeypatch.setattr(app_module.store, "create", _record("store_create", app_module.store.create))
+
+    dataset = client.post("/api/load-example").json()
+    uploaded = client.post(
+        "/api/upload",
+        files={"file": ("tiny.csv", b"os_months,os_event,age\n12,1,60\n18,0,55\n24,1,70\n", "text/csv")},
+    )
+    assert uploaded.status_code == 200
+    assert client.get(f"/api/dataset/{dataset['dataset_id']}").status_code == 200
+    exported = client.post("/api/export-table", json={"rows": [{"a": 1}], "format": "csv", "style": "plain"})
+    assert exported.status_code == 200
+    signature = client.post(
+        "/api/discover-signature",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "candidate_columns": ["age", "stage"],
+            "max_combination_size": 1,
+            "top_k": 3,
+            "bootstrap_iterations": 0,
+            "new_column_name": "sig_loop_check",
+        },
+    )
+    assert signature.status_code == 200
+
+    assert set(observed) == {"dataset_response", "export_csv", "store_create"}
+    assert len(observed["store_create"]) >= 3  # example load, upload, signature snapshot
+    assert not any(flag for flags in observed.values() for flag in flags), observed
 
 
 def test_upload_dataset_rejects_too_many_rows(monkeypatch) -> None:
@@ -1852,6 +2169,90 @@ def test_upload_dataset_rejects_more_than_1000_model_feature_candidates() -> Non
     assert "supports at most 1000 model features" in response.json()["detail"]
 
 
+def test_ml_artifact_cache_is_purged_when_dataset_leaves_the_store() -> None:
+    from survival_toolkit.store import DatasetStore
+
+    local_store = DatasetStore(max_datasets=2, ttl_seconds=3600)
+    cache = app_module._MlArtifactCache(max_items=8)
+    local_store.add_eviction_listener(cache.purge_dataset)
+    frame = make_example_dataset(seed=3, n_patients=20)
+    signature = {"model_type": "rsf"}
+    artifact = {"_model": {"tree": 1}, "_X_encoded": frame, "_feature_encoder": {}, "_analysis_frame": frame}
+
+    first = local_store.create(frame, filename="first.csv")
+    second = local_store.create(frame, filename="second.csv")
+    for stored in (first, second):
+        for model_type in ("rsf", "gbs"):
+            cache.remember(dataset_id=stored.dataset_id, model_type=model_type, signature=signature, result=artifact)
+    assert len(cache) == 4
+
+    local_store.create(frame, filename="third.csv")  # LRU-evicts `first`
+    assert not local_store.contains(first.dataset_id)
+    assert cache.get(dataset_id=first.dataset_id, model_type="rsf", signature=signature) is None
+    assert len(cache) == 2
+
+    local_store.delete(second.dataset_id)
+    assert len(cache) == 0
+
+
+def test_app_store_purges_ml_artifacts_on_eviction() -> None:
+    dataset = client.post("/api/load-example").json()
+    app_module._ml_artifact_cache.remember(
+        dataset_id=dataset["dataset_id"],
+        model_type="rsf",
+        signature={"model_type": "rsf"},
+        result={"_model": {"tree": 1}, "_X_encoded": pd.DataFrame({"a": [1.0]})},
+    )
+    store.delete(dataset["dataset_id"])
+
+    assert app_module._ml_artifact_cache.get(
+        dataset_id=dataset["dataset_id"], model_type="rsf", signature={"model_type": "rsf"}
+    ) is None
+
+
+def test_dataset_lease_blocks_ttl_expiry_and_lru_eviction_until_released() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from survival_toolkit.store import DatasetStore
+
+    local_store = DatasetStore(max_datasets=2, ttl_seconds=60)
+    evicted: list[str] = []
+    local_store.add_eviction_listener(evicted.append)
+    frame = make_example_dataset(seed=4, n_patients=20)
+    running = local_store.create(frame, filename="running.csv")
+
+    with local_store.lease(running.dataset_id):
+        local_store._datasets[running.dataset_id].last_accessed = datetime.now(timezone.utc) - timedelta(hours=2)
+        other = local_store.create(frame, filename="other.csv")
+        local_store.create(frame, filename="third.csv")  # must evict `other`, not the leased dataset
+        assert local_store.contains(running.dataset_id)
+        assert not local_store.contains(other.dataset_id)
+        assert evicted == [other.dataset_id]
+
+    # Releasing the lease refreshes the idle TTL, so the dataset survives the next expiry sweep.
+    assert local_store.get(running.dataset_id).dataset_id == running.dataset_id
+
+
+def test_analysis_endpoints_lease_their_dataset_while_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = client.post("/api/load-example").json()
+    leased: list[str] = []
+    original_lease = store.lease
+
+    def _recording_lease(dataset_id: str):
+        leased.append(dataset_id)
+        return original_lease(dataset_id)
+
+    monkeypatch.setattr(store, "lease", _recording_lease)
+    response = client.post(
+        "/api/kaplan-meier",
+        json={"dataset_id": dataset["dataset_id"], "time_column": "os_months", "event_column": "os_event"},
+    )
+
+    assert response.status_code == 200
+    assert leased == [dataset["dataset_id"]]
+    assert store._leases == {}
+
+
 def test_get_ml_artifact_returns_isolated_copy() -> None:
     import pandas as pd
 
@@ -1901,7 +2302,7 @@ def test_readme_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -
     assert "## DL Runtime Note" in text
     assert "Batch Size` currently affects DeepHit and Neural MTLR only." in text
     assert "weight_decay=1e-4" in text
-    assert "DeepHit uses a stabilized ranking-loss scale (`sigma=1.0`)" in text
+    assert "with a stabilized ranking-loss scale (`sigma=1.0`)" in text
     assert "neuralized right-cumulative MTLR parameterization" in text
     assert "SurvStudio does not claim validated generative simulation or uncertainty estimation from this path." in text
 
@@ -2026,6 +2427,60 @@ def test_cohort_table_response_includes_request_config() -> None:
     request_config = response.json()["request_config"]
     assert request_config["variables"] == ["age", "sex", "stage"]
     assert request_config["group_column"] == "stage"
+
+
+def test_cohort_table_restricts_to_survival_analysis_cohort_when_outcome_given() -> None:
+    frame = make_example_dataset(seed=21, n_patients=60)
+    frame.loc[0:4, "os_months"] = np.nan
+    frame.loc[5:6, "os_months"] = 0.0  # time 0 is a valid follow-up time and stays
+    frame.loc[7, "os_months"] = -1.0  # negative time is invalid and is dropped
+    frame.loc[8:9, "os_event"] = np.nan
+    stored = store.create(frame, filename="cohort_scope.csv", source="upload")
+
+    unrestricted = client.post(
+        "/api/cohort-table",
+        json={"dataset_id": stored.dataset_id, "variables": ["age", "sex"]},
+    )
+    assert unrestricted.status_code == 200
+    unrestricted_analysis = unrestricted.json()["analysis"]
+    assert unrestricted_analysis["rows"][0]["Overall"] == 60
+    assert "notes" not in unrestricted_analysis
+
+    restricted = client.post(
+        "/api/cohort-table",
+        json={
+            "dataset_id": stored.dataset_id,
+            "variables": ["age", "sex"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+        },
+    )
+    assert restricted.status_code == 200, restricted.text[:300]
+    analysis = restricted.json()["analysis"]
+    assert analysis["rows"][0]["Overall"] == 52
+    assert analysis["analysis_cohort"]["n_rows_total"] == 60
+    assert analysis["analysis_cohort"]["n_rows_analyzed"] == 52
+    assert analysis["analysis_cohort"]["dropped_nonpositive_time_rows"] == 1
+    assert "52 of 60 rows" in analysis["notes"][0]
+    assert "52 of 60 rows" in analysis["overall_scope"]
+
+    km = client.post(
+        "/api/kaplan-meier",
+        json={"dataset_id": stored.dataset_id, "time_column": "os_months", "event_column": "os_event"},
+    ).json()
+    assert analysis["row_mask_hash"] == km["analysis"]["cohort"]["row_mask_hash"]
+
+
+def test_cohort_table_requires_time_and_event_together() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/cohort-table",
+        json={"dataset_id": dataset["dataset_id"], "variables": ["age"], "time_column": "os_months"},
+    )
+
+    assert response.status_code == 422
+    assert "must be provided together" in json.dumps(response.json())
 
 
 def test_ml_compare_response_appends_replay_notes_to_manuscript_tables() -> None:
@@ -2323,6 +2778,167 @@ def test_fail_bad_request_maps_typed_not_found_errors_to_404() -> None:
     assert excinfo.value.detail == "Unknown dataset id: missing"
 
 
+def test_user_input_boundary_keeps_deliberate_messages_but_hides_library_internals() -> None:
+    from survival_toolkit.errors import InternalAnalysisError, user_input_boundary
+
+    namespace: dict[str, object] = {"__name__": "survival_toolkit._boundary_probe"}
+    exec("def deliberate():\n    raise ValueError('Select at least one variable.')\n", namespace)
+    deliberate = user_input_boundary(namespace["deliberate"])
+
+    @user_input_boundary
+    def pandas_internal() -> None:
+        if pd.Series([1, 2]):
+            return None
+
+    @user_input_boundary
+    def type_internal() -> None:
+        "a" - 1  # type: ignore[operator]
+
+    @user_input_boundary
+    def singular() -> None:
+        np.linalg.inv(np.zeros((2, 2)))
+
+    with pytest.raises(UserInputError, match="Select at least one variable."):
+        deliberate()
+    for func in (pandas_internal, type_internal):
+        with pytest.raises(InternalAnalysisError) as excinfo:
+            func()
+        assert isinstance(excinfo.value, ValueError)  # existing `except ValueError` fallbacks still work
+        assert "truth value" not in str(excinfo.value) and "operand" not in str(excinfo.value)
+        assert excinfo.value.__cause__ is not None
+    with pytest.raises(np.linalg.LinAlgError):
+        singular()
+
+
+def test_fail_bad_request_maps_internal_analysis_errors_to_generic_500(caplog: pytest.LogCaptureFixture) -> None:
+    from survival_toolkit.errors import InternalAnalysisError
+
+    try:
+        try:
+            bool(pd.Series([1, 2]))
+        except ValueError as cause:
+            raise InternalAnalysisError() from cause
+    except InternalAnalysisError as exc:
+        internal = exc
+
+    with caplog.at_level("ERROR", logger="survival_toolkit.app"):
+        with pytest.raises(HTTPException) as excinfo:
+            fail_bad_request(internal)
+
+    assert excinfo.value.status_code == 500
+    assert "unexpected internal error" in excinfo.value.detail
+    assert "truth value" not in excinfo.value.detail
+    assert any("truth value" in (record.exc_text or "") for record in caplog.records)
+
+
+def test_endpoint_hides_raw_internal_library_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    from survival_toolkit.errors import user_input_boundary
+
+    @user_input_boundary
+    def _broken_cohort_table(*args, **kwargs):
+        if pd.Series([True, False]):
+            return {}
+        return {}
+
+    monkeypatch.setattr(app_module, "compute_cohort_table", _broken_cohort_table)
+    dataset = client.post("/api/load-example").json()
+    response = client.post("/api/cohort-table", json={"dataset_id": dataset["dataset_id"], "variables": ["age"]})
+
+    assert response.status_code == 500
+    assert "unexpected internal error" in response.json()["detail"]
+    assert "truth value" not in response.json()["detail"]
+
+
+def test_endpoint_keeps_deliberate_validation_messages() -> None:
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/cohort-table",
+        json={"dataset_id": dataset["dataset_id"], "variables": ["stage"], "group_column": "stage"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Select at least one variable for the cohort summary table."
+
+
+def test_feature_encoder_dummy_names_never_collide_with_existing_features() -> None:
+    from survival_toolkit.encoding import fit_feature_encoder, transform_feature_encoder
+
+    frame = pd.DataFrame(
+        {
+            "tgrade": ["I", "II", "III", "II", "III", "I"],
+            "tgrade_III": [1.5, 2.5, 3.5, 4.5, 5.5, 6.5],
+            "tgrade__unknown": [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            "a": ["b_c", "x", "b_c", "x", "x", "b_c"],
+            "a_b": ["c", "d", "c", "d", "c", "d"],
+        }
+    )
+    features = ["tgrade", "tgrade_III", "tgrade__unknown", "a", "a_b"]
+    encoder = fit_feature_encoder(frame, features, ["tgrade", "a", "a_b"])
+
+    names = encoder["feature_names"]
+    assert len(names) == len(set(names))
+    assert "tgrade_III" in names and "tgrade__unknown" in names
+    level_column = encoder["categorical_mappings"]["tgrade"]["level_columns"]["III"]
+    assert level_column != "tgrade_III"
+
+    encoded = transform_feature_encoder(frame, encoder)
+    assert list(encoded.columns) == names
+    # The numeric column keeps its values; the dummy keeps its 0/1 indicator.
+    assert encoded["tgrade_III"].tolist() == frame["tgrade_III"].tolist()
+    assert encoded[level_column].tolist() == [0.0, 0.0, 1.0, 0.0, 1.0, 0.0]
+    assert encoded["tgrade__unknown"].tolist() == frame["tgrade__unknown"].tolist()
+
+    mapping = app_module._encoded_to_raw_feature_map(encoder, features)
+    assert mapping[level_column] == "tgrade"
+    assert mapping["tgrade_III"] == "tgrade_III"
+
+
+def test_feature_encoder_treats_infinite_values_as_missing_when_standardizing() -> None:
+    from survival_toolkit.encoding import fit_feature_encoder, transform_feature_encoder
+
+    frame = pd.DataFrame({"x": [1.0, 2.0, np.inf, 4.0, 5.0], "y": [1.0, 2.0, 3.0, 4.0, -np.inf]})
+    encoder = fit_feature_encoder(frame, ["x", "y"], [], standardize_numeric=True)
+
+    for column in ("x", "y"):
+        params = encoder["scaler_params"][column]
+        assert np.isfinite(params["mean"]) and np.isfinite(params["std"]) and params["std"] > 0
+    encoded = transform_feature_encoder(frame, encoder)
+    assert np.isfinite(encoded.to_numpy()).all()
+    # Finite values keep their spread instead of collapsing to zero.
+    assert encoded["x"].std() > 0.5
+    x_params = encoder["scaler_params"]["x"]
+    assert encoded.loc[2, "x"] == pytest.approx((x_params["impute_value"] - x_params["mean"]) / x_params["std"])
+
+    plain = fit_feature_encoder(pd.DataFrame({"z": [np.inf, np.inf, 1.0]}), ["z"], [])
+    assert plain["numeric_impute_values"]["z"] == 1.0
+    assert np.isfinite(transform_feature_encoder(pd.DataFrame({"z": [np.inf, 2.0]}), plain).to_numpy()).all()
+
+
+def test_ml_model_endpoint_handles_categorical_dummy_name_collision() -> None:
+    dataset = client.post("/api/load-gbsg2-example").json()
+    frame = store.get(dataset["dataset_id"]).dataframe
+    frame["tgrade_III"] = frame["pnodes"] * 1.0
+    stored = store.create(frame, filename="gbsg2_collision.csv", source="upload")
+
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": stored.dataset_id,
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "features": ["tgrade", "tgrade_III", "age"],
+            "categorical_features": ["tgrade"],
+            "model_type": "lasso_cox",
+        },
+    )
+
+    assert response.status_code == 200, response.text[:300]
+    importance_features = [row["feature"] for row in response.json()["analysis"]["feature_importance"]]
+    assert len(importance_features) == len(set(importance_features))
+    assert "tgrade_III" in importance_features
+
+
 def test_fail_bad_request_reraises_raw_key_errors() -> None:
     with pytest.raises(KeyError, match="internal_missing_key"):
         fail_bad_request(KeyError("internal_missing_key"))
@@ -2514,6 +3130,11 @@ def test_discover_signature_returns_new_dataset_snapshot_and_preserves_original_
     payload = response.json()
     assert payload["dataset_id"] != original_dataset_id
     assert any(column["name"] == "sig_age_stage" for column in payload["columns"])
+    # The returned hash must describe the new snapshot, not the parent dataset.
+    snapshot_hash = store.get(payload["dataset_id"], copy_dataframe=False).metadata["dataset_hash"]
+    assert payload["dataset_hash"] == snapshot_hash
+    assert payload["dataset_hash"] != dataset["dataset_hash"]
+    assert client.get(f"/api/dataset/{payload['dataset_id']}").json()["dataset_hash"] == snapshot_hash
 
     original = client.get(f"/api/dataset/{original_dataset_id}")
     assert original.status_code == 200
@@ -3455,6 +4076,36 @@ def test_cox_preview_flags_small_reference_levels() -> None:
     assert any(item["column"] == "pathologic_stage" and item["issue"] == "small_reference_level" for item in payload["risky_levels"])
 
 
+def test_derive_group_event_positive_value_defaults_match_other_survival_endpoints() -> None:
+    from survival_toolkit.app import CoxRequest, DeriveGroupRequest, MLModelRequest
+
+    derive_default = DeriveGroupRequest(dataset_id="d", source_column="age", method="optimal_cutpoint").event_positive_value
+    km_default = KaplanMeierRequest(dataset_id="d", time_column="t", event_column="e").event_positive_value
+    cox_default = CoxRequest(dataset_id="d", time_column="t", event_column="e", covariates=["age"]).event_positive_value
+    ml_default = MLModelRequest(
+        dataset_id="d", time_column="t", event_column="e", features=["age"], model_type="rsf"
+    ).event_positive_value
+    assert derive_default == km_default == cox_default == ml_default == 1
+
+    frame = make_example_dataset(seed=11, n_patients=120)
+    frame["os_event"] = frame["os_event"].map({0: 2, 1: 1})  # 1 = event, 2 = censored
+    stored = store.create(frame, filename="one_two_coded.csv", source="upload")
+    derived = client.post(
+        "/api/derive-group",
+        json={
+            "dataset_id": stored.dataset_id,
+            "source_column": "age",
+            "method": "optimal_cutpoint",
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "permutation_iterations": 0,
+            "new_column_name": "age_opt_default_event",
+        },
+    )
+    assert derived.status_code == 200, derived.text[:300]
+    assert derived.json()["derive_summary"]["recipe"]["event_positive_value"] == 1
+
+
 def test_derive_group_rejects_existing_column_name_collision() -> None:
     dataset = client.post("/api/load-example").json()
     response = client.post(
@@ -3834,8 +4485,9 @@ def test_frontend_ml_compare_forwards_visible_hyperparameters() -> None:
     run_compare_end = app_js.index("state.ml = payload;", run_compare_start)
     run_compare_body = app_js[run_compare_start:run_compare_end]
 
-    assert 'n_estimators: Number(refs.mlNEstimators.value)' in run_compare_body
-    assert 'learning_rate: Number(refs.mlLearningRate.value)' in run_compare_body
+    assert '...mlModelRequestFields("compare"),' in run_compare_body
+    assert 'if (compare || modelType === "rsf" || modelType === "gbs") fields.n_estimators = Number(refs.mlNEstimators.value);' in app_js
+    assert 'if (compare || modelType === "gbs") fields.learning_rate = Number(refs.mlLearningRate.value);' in app_js
 
 
 def test_frontend_exposes_real_dataset_loader_buttons() -> None:
@@ -3861,8 +4513,8 @@ def test_frontend_exposes_real_dataset_loader_buttons() -> None:
     assert 'id="datasetPresetBar"' in index_html
     assert 'id="applyBasicPresetButton"' in index_html
     assert 'id="applyModelPresetButton"' in index_html
-    assert 'fetchJSON("/api/load-tcga-upload-ready"' in app_js
-    assert 'fetchJSON("/api/load-gbsg2-example"' in app_js
+    assert 'loadBundledDataset("/api/load-tcga-upload-ready")' in app_js
+    assert 'loadBundledDataset("/api/load-gbsg2-example")' in app_js
     assert "function datasetPresetForCurrentDataset()" in app_js
     assert 'applyDatasetPreset("basic")' in app_js
     assert 'applyDatasetPreset("models")' in app_js
@@ -3917,7 +4569,10 @@ def test_frontend_csv_download_sanitizes_formula_like_cells() -> None:
         / "app_downloads.js"
     ).read_text(encoding="utf-8")
 
-    assert "function downloadCsv({ filename, rows, columns = null, showToast })" in downloads_js
+    assert 'function downloadCsv({ filename, rows, columns = null, showToast, caption = "", notes = [] })' in downloads_js
+    assert "function isNumericLikeText(value) {" in downloads_js
+    assert "!isNumericLikeText(trimmed)" in downloads_js
+    assert "new Blob([UTF8_BOM, lines.join" in downloads_js
     assert "const sanitizeCsvCell = (value) => {" in downloads_js
     assert 'if (/^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$/.test(trimmed)) return text;' in downloads_js
     assert 'trimmed.startsWith("=")' in downloads_js
@@ -3957,6 +4612,51 @@ def test_frontend_format_value_keeps_tiny_p_values_nonzero() -> None:
     assert formatted[0] == "7.58e-14"
     assert formatted[1] == "7.20e-4"
     assert formatted[2] == "0.0042"
+
+
+def test_frontend_format_value_keeps_ordinary_magnitudes_out_of_scientific_notation() -> None:
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+
+    start = app_js.index("function formatValue(value, options = {}) {")
+    end = app_js.index("\n\nfunction normalizeValueLabel", start)
+    node_script = "\n".join(
+        [
+            app_js[start:end],
+            "console.log(JSON.stringify([formatValue(1528), formatValue(1500), formatValue(2000.0), formatValue(1528.5), formatValue(3567.6254), formatValue(12345678.9), formatValue(0)]));",
+        ]
+    )
+    completed = subprocess.run(["node", "-e", node_script], check=True, capture_output=True, text=True)
+    formatted = json.loads(completed.stdout.strip())
+
+    assert formatted == ["1528", "1500", "2000", "1528.5", "3567.625", "1.23e+7", "0"]
+
+
+def test_frontend_csv_sanitizer_keeps_signed_display_numbers() -> None:
+    downloads_js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "survival_toolkit"
+        / "static"
+        / "app_downloads.js"
+    ).read_text(encoding="utf-8")
+
+    node_script = "\n".join(
+        [
+            "global.window = {};",
+            downloads_js,
+            "const f = window.SurvStudioDownloads.isNumericLikeText;",
+            "console.log(JSON.stringify(['-0.50 \u00b1 1.20', '-12%', '-1,234', '-1.2 (\u22123.4 to 0.5)', '-0.5\u20131.2', '-cmd|x', '-SUM(A1)', '@SUM(1)'].map(f)));",
+        ]
+    )
+    completed = subprocess.run(["node", "-e", node_script], check=True, capture_output=True, text=True)
+
+    assert json.loads(completed.stdout.strip()) == [True, True, True, True, True, False, False, False]
 
 
 def test_frontend_format_p_value_uses_journal_thresholds() -> None:
@@ -4923,11 +5623,11 @@ def test_export_table_endpoint_returns_journal_markdown() -> None:
     assert "Notes:" in response.text
 
 
-def test_export_table_markdown_sanitizes_formula_like_headers_cells_and_notes() -> None:
+def test_export_table_markdown_does_not_apply_csv_formula_escaping() -> None:
     response = client.post(
         "/api/export-table",
         json={
-            "rows": [{"@Rank": "=1+1"}],
+            "rows": [{"@Rank": "=1+1", "Mean ± SD": "-0.42 ± 1.00"}],
             "format": "markdown",
             "style": "journal",
             "template": "default",
@@ -4936,9 +5636,11 @@ def test_export_table_markdown_sanitizes_formula_like_headers_cells_and_notes() 
     )
 
     assert response.status_code == 200
-    assert "| '@Rank |" in response.text
-    assert "| '=1+1 |" in response.text
-    assert "- '@sum second line" in response.text
+    # Markdown is plain text: spreadsheet formula escaping would only add stray apostrophes.
+    assert "| @Rank | Mean ± SD |" in response.text
+    assert "| =1+1 | -0.42 ± 1.00 |" in response.text
+    assert "- @sum second line" in response.text
+    assert "'" not in response.text
 
 
 def test_export_table_rejects_excessively_long_notes() -> None:
@@ -5012,7 +5714,8 @@ def test_export_table_endpoint_csv_includes_caption_and_notes_preamble() -> None
     )
 
     assert response.status_code == 200
-    lines = response.text.splitlines()
+    assert response.content.startswith(b"\xef\xbb\xbf")
+    lines = response.content.decode("utf-8-sig").splitlines()
     assert lines[0] == "# Table 1. Should not appear in CSV preamble."
     assert lines[1] == "# Notes:"
     assert lines[2] == "# - This note should stay out of the CSV body."
@@ -5025,7 +5728,7 @@ def test_export_table_endpoint_honors_explicit_columns_and_skips_private_keys() 
         json={
             "rows": [
                 {"Term": "age", "P value": 0.04},
-                {"Term": "Global PH screen (combined per-term p-values)", "P value": 0.12, "_kind": "global"},
+                {"Term": "Global PH test (Grambsch-Therneau)", "P value": 0.12, "_kind": "global"},
             ],
             "columns": ["Term", "P value"],
             "format": "csv",
@@ -5034,7 +5737,7 @@ def test_export_table_endpoint_honors_explicit_columns_and_skips_private_keys() 
     )
 
     assert response.status_code == 200
-    lines = response.text.splitlines()
+    lines = response.content.decode("utf-8-sig").splitlines()
     assert lines[0] == "Term,P value"
     assert all("_kind" not in line for line in lines)
 
@@ -5060,6 +5763,114 @@ def test_export_table_endpoint_sanitizes_formula_like_csv_cells() -> None:
     assert first_row[1] == "'+SUM(1,1)"
     assert first_row[2] == "'@risk"
     assert second_row[0] == "-10"
+
+
+def test_export_csv_writes_caption_and_notes_as_single_sanitized_cells() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [{"Group": "Low,=HYPERLINK(\"http://evil.example\")", "N": 5}],
+            "format": "csv",
+            "style": "plain",
+            "caption": "Result, =cmd|' /C calc'!A0",
+            "notes": ['Dataset cohort,=HYPERLINK("http://evil.example").csv', "Plain note"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert "text/csv" in response.headers["content-type"]
+    assert response.content.startswith(b"\xef\xbb\xbf")
+    rows = list(csv.reader(io.StringIO(response.content.decode("utf-8-sig"))))
+    assert rows[0] == ["# Result, =cmd|' /C calc'!A0"]
+    assert rows[1] == ["# Notes:"]
+    assert rows[2] == ['# - Dataset cohort,=HYPERLINK("http://evil.example").csv']
+    assert rows[3] == ["# - Plain note"]
+    assert rows[4] == ["Group", "N"]
+    assert rows[5] == ['Low,=HYPERLINK("http://evil.example")', "5"]
+    for row in rows:
+        for cell in row:
+            assert not cell.startswith(("=", "+", "@", "\t", "\r")), cell
+
+
+def test_export_csv_keeps_signed_numeric_summaries_but_escapes_formulas() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [
+                {"Summary": "-0.42 ± 1.00 | -0.42 [-1.09, 0.28]", "Effect": "-1.2 (-2.0 to -0.4)", "Pct": "-12%", "Value": -3.5, "Dash": "-"},
+                {"Summary": "-cmd|' /C calc'!A0", "Effect": "+SUM(1,1)", "Pct": "\t=1+1", "Value": "@risk", "Dash": "-1+cmd|x"},
+            ],
+            "format": "csv",
+            "style": "plain",
+        },
+    )
+
+    assert response.status_code == 200
+    rows = list(csv.reader(io.StringIO(response.content.decode("utf-8-sig"))))
+    assert rows[1] == ["-0.42 ± 1.00 | -0.42 [-1.09, 0.28]", "-1.2 (-2.0 to -0.4)", "-12%", "-3.5", "-"]
+    assert rows[2] == ["'-cmd|' /C calc'!A0", "'+SUM(1,1)", "'\t=1+1", "'@risk", "'-1+cmd|x"]
+
+
+def test_export_xlsx_writes_numeric_cells_and_literal_text_without_apostrophes() -> None:
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        pytest.skip("openpyxl not installed in test environment")
+
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [
+                {"Variable": "age", "Mean ± SD": "-0.42 ± 1.00", "HR": 1.0234, "P value": 0.0496, "N": 12, "Formula": "=1+1"},
+                {"Variable": "grade", "Mean ± SD": "@risk", "HR": 2.5, "P value": 0.00004, "N": 7, "Formula": "-cmd|x"},
+            ],
+            "format": "xlsx",
+            "style": "journal",
+            "caption": "Table 1. Cohort, summary",
+            "notes": ["=2+2"],
+        },
+    )
+
+    assert response.status_code == 200
+    workbook = load_workbook(io.BytesIO(response.content))
+    worksheet = workbook.active
+    assert worksheet["A1"].value == "Table 1. Cohort, summary"
+    assert [cell.value for cell in worksheet[3]] == ["Variable", "Mean ± SD", "HR", "P value", "N", "Formula"]
+    first = worksheet[4]
+    assert first[1].value == "-0.42 ± 1.00"
+    assert first[2].data_type == "n" and first[2].value == pytest.approx(1.0234)
+    assert first[2].number_format == "0.000"
+    assert first[3].data_type == "n" and first[3].number_format == "0.0000"
+    assert first[4].value == 12
+    assert first[5].value == "=1+1" and first[5].data_type == "s"
+    second = worksheet[5]
+    assert second[1].value == "@risk"
+    assert second[3].value == "<0.001"
+    assert second[5].value == "-cmd|x"
+    assert worksheet["A8"].value == "=2+2" and worksheet["A8"].data_type == "s"
+    for row in worksheet.iter_rows():
+        for cell in row:
+            assert not (isinstance(cell.value, str) and cell.value.startswith("'")), cell.coordinate
+
+
+def test_export_docx_and_xlsx_strip_xml_illegal_control_characters() -> None:
+    from xml.dom import minidom
+
+    rows = [{"Group": "A\x0bB\x00C", "Note\x0c": "x\x1fy", "N": 3}]
+    docx = client.post("/api/export-table", json={"rows": rows, "format": "docx", "style": "plain"})
+    assert docx.status_code == 200
+    document_xml = zipfile.ZipFile(io.BytesIO(docx.content)).read("word/document.xml")
+    minidom.parseString(document_xml)
+    assert b"A B C" in document_xml
+
+    xlsx = client.post("/api/export-table", json={"rows": rows, "format": "xlsx", "style": "plain"})
+    assert xlsx.status_code == 200
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        pytest.skip("openpyxl not installed in test environment")
+    worksheet = load_workbook(io.BytesIO(xlsx.content)).active
+    assert [cell.value for cell in worksheet[2]] == ["A B C", "x y", 3]
 
 
 def test_export_table_endpoint_returns_journal_latex() -> None:
@@ -5123,6 +5934,36 @@ def test_export_table_endpoint_escapes_backslashes_without_double_escaping_brace
     assert r"\textbackslash\{\}" not in response.text
 
 
+def test_export_table_latex_escapes_comparison_pipe_quote_and_symbols() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [
+                {"Model": 'A|B "best"', "P value": 0.00001, "Mean ± SD": "1.0 ± 0.2", "Range": "1–2 × 3 ≤ 4 ≥ 5 — end"},
+            ],
+            "format": "latex",
+            "style": "journal",
+            "template": "default",
+            "caption": "Table 1. p<0.05 vs >0.10",
+            "notes": ["Café naïve"],
+        },
+    )
+
+    assert response.status_code == 200
+    text = response.text
+    assert r"\caption{Table 1. p\textless{}0.05 vs \textgreater{}0.10}" in text
+    assert r"A\textbar{}B ''best''" in text
+    assert r"\textless{}0.001" in text
+    assert r"Mean \ensuremath{\pm} SD" in text
+    assert r"1.0 \ensuremath{\pm} 0.2" in text
+    assert r"1--2 \ensuremath{\times} 3 \ensuremath{\leq} 4 \ensuremath{\geq} 5 --- end" in text
+    assert "<" not in text and ">" not in text and "|" not in text and '"' not in text
+    assert "% Requires \\usepackage{booktabs}" in text
+    # Remaining non-ASCII text is kept as UTF-8 with a preamble hint.
+    assert "Café naïve" in text
+    assert "\\usepackage[utf8]{inputenc}" in text
+
+
 def test_export_table_endpoint_returns_docx_archive() -> None:
     response = client.post(
         "/api/export-table",
@@ -5184,6 +6025,48 @@ def test_export_table_endpoint_returns_xlsx_archive() -> None:
     assert worksheet["B4"].value == "Cox PH"
     assert worksheet["A7"].value == "Notes"
     assert worksheet["A8"].value == "Exported from SurvStudio."
+
+
+def test_export_journal_style_formats_p_values_and_numbers_consistently() -> None:
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [
+                {"Term": "a", "Hazard ratio": 1.0234, "CI lower": 0.99951, "Coef": -0.0001, "P value": 0.00004, "BH adjusted p": 0.0496, "N": 3},
+                {"Term": "b", "Hazard ratio": 2.5, "CI lower": 1.5, "Coef": -0.0, "P value": 1e-20, "BH adjusted p": 0.9996, "N": 12},
+                {"Term": "c", "Hazard ratio": 0.4, "CI lower": 0.2, "Coef": 0.25, "P value": 0.0004999, "BH adjusted p": 0.0504, "N": 7},
+                {"Term": "d", "Hazard ratio": 12345.6789, "CI lower": 0.0, "Coef": 1e-20, "P value": 0.2817, "BH adjusted p": "<0.001", "N": 0},
+            ],
+            "columns": ["Term", "Hazard ratio", "CI lower", "Coef", "P value", "BH adjusted p", "N"],
+            "format": "csv",
+            "style": "journal",
+        },
+    )
+
+    assert response.status_code == 200
+    rows = list(csv.reader(io.StringIO(response.content.decode("utf-8-sig"))))
+    header_index = rows.index(["Term", "Hazard ratio", "CI lower", "Coef", "P value", "BH adjusted p", "N"])
+    body = rows[header_index + 1 :]
+    assert [row[1] for row in body] == ["1.023", "2.500", "0.400", "12345.679"]
+    assert [row[2] for row in body] == ["1.000", "1.500", "0.200", "0.000"]
+    assert [row[3] for row in body] == ["-1.00e-04", "0.000", "0.250", "1.00e-20"]
+    assert [row[4] for row in body] == ["<0.001", "<0.001", "<0.001", "0.282"]
+    # Rounding never moves a p-value across 0.05 and never prints "0"/"1" stripped forms.
+    assert [row[5] for row in body] == ["0.0496", "1.000", "0.050", "<0.001"]
+    assert [row[6] for row in body] == ["3", "12", "7", "0"]
+    assert all(cell not in {"0", "-0", "1", "-0.000"} for row in body for cell in row[1:6])
+
+
+def test_format_export_value_detects_p_value_columns() -> None:
+    fmt = app_module._format_export_value
+
+    for column in ("P value", "p-value", "p_value", "Adjusted P value", "BH adjusted p", "Permutation p", "logrank_p", "LR test p-value"):
+        assert fmt(0.0496, "journal", column) == "0.0496", column
+        assert fmt(0.0, "journal", column) == "<0.001", column
+    for column in ("Hazard ratio", "pnodes", "Top model", None):
+        assert fmt(0.0496, "journal", column) == "0.050", column
+    assert fmt(-0.0, "plain", "Coef") == "0.0"
+    assert fmt(float("nan"), "journal", "P value") == ""
 
 
 def test_export_table_endpoint_rejects_empty_rows() -> None:
@@ -5525,7 +6408,8 @@ def test_load_tcga_example_endpoint_returns_real_public_cohort() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["filename"] == "tcga_luad_xena_example"
-    assert payload["n_rows"] >= 500
+    # One row per patient after deduplicating the bundled TCGA cohort.
+    assert payload["n_rows"] == 489
     column_names = {column["name"] for column in payload["columns"]}
     assert {"os_months", "os_event", "age", "pathologic_stage", "stage_group", "smoking_status"}.issubset(column_names)
 
@@ -5555,7 +6439,7 @@ def test_load_tcga_upload_ready_endpoint_returns_compact_real_cohort() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["filename"] == "tcga_luad_upload_ready"
-    assert payload["n_rows"] == 609
+    assert payload["n_rows"] == 489
     column_names = {column["name"] for column in payload["columns"]}
     assert {"os_months", "os_event", "age", "sex", "stage_group", "smoking_status"}.issubset(column_names)
 
@@ -5701,7 +6585,7 @@ def test_upload_ready_real_tcga_file_runs_classical_and_ml_smoke() -> None:
 
     assert upload_response.status_code == 200
     dataset = upload_response.json()
-    assert dataset["n_rows"] == 609
+    assert dataset["n_rows"] == 489
 
     km_response = client.post(
         "/api/kaplan-meier",
@@ -6229,12 +7113,19 @@ def test_cohort_table_frontend_exposes_csv_xlsx_downloads_and_guided_header_over
 
     assert 'downloadCohortTableXlsxButton: document.getElementById("downloadCohortTableXlsxButton")' in app_js
     assert 'function buildCohortTableExportPayload(format = "xlsx") {' in app_js
-    assert 'buildDownloadFilename("cohort_summary", "xlsx", { includeGroup: true })' in app_js
+    assert 'buildDownloadFilename("cohort_summary", "xlsx", { includeGroup: true, group: cohortTableOutputGroup() })' in app_js
+    assert 'buildDownloadFilename("cohort_summary", "csv", { includeGroup: true, group: cohortTableOutputGroup() })' in app_js
     assert 'caption: tableState.outputGroupLabel === "overall only"' in app_js
     assert 'notes.push("Current visible settings no longer match this table. Rebuild Table before sharing if you need the latest selections.");' in app_js
     assert "provenance: {" in app_js
     assert "request_config: requestConfig," in app_js
     assert 'buildCohortTableExportPayload("xlsx")' in app_js
+    # Cohort tables follow the KM/Cox analyzable outcome rows when the endpoint is configured.
+    assert "function cohortTableOutcomeConfig() {" in app_js
+    assert app_js.count("...cohortTableOutcomeConfig(),") >= 2
+    assert 'time_column: outcomeRestricted ? String(requestConfig.time_column) : "",' in app_js
+    assert 'event_positive_value: outcomeRestricted ? String(requestConfig.event_positive_value ?? "") : "",' in app_js
+    assert "const notes = [...cohortTableAnalysisNotes(payload)];" in app_js
     assert 'body[data-ui-mode="guided"][data-guided-step="4"] #panel-tables.guided-visible .card-head,' in styles
     assert 'body[data-ui-mode="guided"][data-guided-step="5"] #panel-tables.guided-visible .card-head {' in styles
 
@@ -6610,3 +7501,51 @@ def test_kaplan_meier_rejects_binary_baseline_covariate_as_event_column_when_lik
 
     assert response.status_code == 400
     assert "does not look like a survival event column" in response.json()["detail"]
+
+
+def test_ml_compare_api_supports_locked_independent_test_set() -> None:
+    dataset = client.post("/api/load-gbsg2-example").json()
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "event_positive_value": 1,
+            "features": ["age", "pnodes", "tsize", "horTh"],
+            "categorical_features": ["horTh"],
+            "model_type": "compare",
+            "evaluation_strategy": "repeated_cv",
+            "cv_folds": 2,
+            "cv_repeats": 1,
+            "n_estimators": 10,
+            "random_state": 3,
+            "locked_test_fraction": 0.3,
+        },
+    )
+
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+    assert analysis["locked_test_fraction"] == pytest.approx(0.3)
+    assert analysis["n_locked_test_patients"] == 206
+    assert analysis["evaluation_split_fingerprint"]
+    assert all(row.get("locked_test_c_index") is not None for row in analysis["comparison_table"])
+    notes = analysis["manuscript_tables"]["table_notes"]
+    assert any("locked_test_fraction=0.3" in note for note in notes)
+
+
+def test_locked_test_fraction_is_validated() -> None:
+    dataset = client.post("/api/load-gbsg2-example").json()
+    response = client.post(
+        "/api/ml-model",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "rfs_days",
+            "event_column": "rfs_event",
+            "features": ["age", "pnodes"],
+            "model_type": "compare",
+            "evaluation_strategy": "repeated_cv",
+            "locked_test_fraction": 0.9,
+        },
+    )
+    assert response.status_code == 422

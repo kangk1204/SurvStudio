@@ -36,6 +36,7 @@
 
     <div class="runtime-banner hidden" id="runtimeBanner"></div>
     <div class="runtime-banner hidden" id="analysisConsistencyBanner"></div>
+    <div class="runtime-banner runtime-banner-warning dataset-integrity-warning hidden" id="datasetIntegrityWarning" role="alert"></div>
 
     <section class="landing" id="landing">
       <div class="landing-card">
@@ -279,7 +280,7 @@
           </label>
           <label class="config-field narrow">
             <span>Time Unit <span class="scope-tag scope-grouping">Display</span></span>
-            <input id="timeUnitLabel" type="text" value="Months" />
+            <input id="timeUnitLabel" type="text" value="Time" placeholder="Time" />
           </label>
           <label class="config-field narrow">
             <span>Max Time <span class="scope-tag scope-grouping">KM</span> <button class="help-dot" type="button" data-tooltip="Optional: truncate Kaplan-Meier display at this time point. Leave blank for auto.">?</button></span>
@@ -328,7 +329,7 @@
           <div class="derive-optimal-controls hidden" id="deriveOptimalControls">
             <label class="toolbar-field">
               <span>Min group frac</span>
-              <input id="deriveMinGroupFraction" type="number" min="0.02" max="0.45" step="0.01" value="0.1" />
+              <input id="deriveMinGroupFraction" type="number" min="0.03" max="0.44" step="0.01" value="0.1" />
             </label>
             <label class="toolbar-field">
               <span>Permutation iter</span>
@@ -449,7 +450,7 @@
             </summary>
             <div class="toolbar-grid signature-toolbar">
               <label><span>Max depth</span><input id="signatureMaxDepth" type="number" min="1" max="4" step="1" value="3" /></label>
-              <label><span>Min group frac</span><input id="signatureMinFraction" type="number" min="0.02" max="0.45" step="0.01" value="0.1" /></label>
+              <label><span>Min group frac</span><input id="signatureMinFraction" type="number" min="0.03" max="0.44" step="0.01" value="0.1" /></label>
               <label><span>Top K</span><input id="signatureTopK" type="number" min="3" max="50" step="1" value="15" /></label>
               <label><span>Bootstrap iter</span><input id="signatureBootstrapIterations" type="number" min="0" max="120" step="1" value="30" /></label>
               <label><span>Permutation iter</span><input id="signaturePermutationIterations" type="number" min="0" max="400" step="10" value="120" /></label>
@@ -515,7 +516,7 @@
           <div class="dependency-card" id="coxDependencyCard">
             <div class="dependency-copy">
               <strong>What this tab uses</strong>
-              <span id="coxDependencyText">Cox uses the Study Design outcome definition plus the covariates selected in this tab and any optional strata selected in this tab. Group by does not change the model unless you add that column as a covariate or strata variable. Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting. PH diagnostics shown here use scaled Schoenfeld residual screening with LOWESS trend lines rather than a full cox.zph test, and continuous-covariate linearity is screened with martingale residual trend plots.</span>
+              <span id="coxDependencyText">Cox uses the Study Design outcome definition plus the covariates selected in this tab and any optional strata selected in this tab. Group by does not change the model unless you add that column as a covariate or strata variable. Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting. PH diagnostics report Grambsch-Therneau score tests on scaled Schoenfeld residuals versus log time (per term and global); the LOWESS trend lines are for visual inspection only, and continuous-covariate linearity is screened with martingale residual trend plots.</span>
               <div class="dataset-preset-chips hidden" id="coxDependencyChips"></div>
             </div>
           </div>
@@ -575,7 +576,7 @@
             <div class="table-card full-width">
               <h3>PH Diagnostics</h3>
               <div class="diagnostic-copy" id="coxDiagnosticsCopy">
-                <span>Scaled Schoenfeld residual screening: LOWESS-smoothed scaled Schoenfeld residual trends versus log time. Use alongside the PH table, including the combined PH screening row, not as a full Grambsch-Therneau test. Extreme residual outliers may be clipped for readability.</span>
+                <span>Visual companion to the Grambsch-Therneau tests in the PH table: LOWESS-smoothed scaled Schoenfeld residual trends versus log time, for visual inspection only. Extreme residual outliers may be clipped for readability.</span>
                 <span class="diagnostic-copy-note">Red: PH table p &lt; 0.05. Blue: PH table p ≥ 0.05.</span>
               </div>
               <div class="plot-shell" id="coxDiagnosticsPlot">
@@ -583,7 +584,7 @@
                   <span>Scaled Schoenfeld residual screening appears here after fitting the model.</span>
                 </div>
               </div>
-              <div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Scaled Schoenfeld residual screening with rank-based Spearman correlation versus log time appears here, alongside a combined PH screening row based on the per-term tests. The plot overlay uses LOWESS smoothing for screening only, not a full cox.zph test.</div></div>
+              <div class="table-shell" id="coxDiagnosticsShell"><div class="empty-state">Grambsch-Therneau proportional-hazards tests on scaled Schoenfeld residuals versus log time appear here, per term and as a global test. The plot overlay uses LOWESS smoothing for visual inspection only.</div></div>
             </div>
             <div class="table-card full-width">
               <div class="table-card-head">
@@ -656,7 +657,7 @@
                   </label>
                   <label class="toolbar-field">
                     <span>Learning Rate</span>
-                    <input id="mlLearningRate" type="number" min="0.001" max="1" step="0.01" value="0.1" />
+                    <input id="mlLearningRate" type="number" min="0.002" max="1" step="0.001" value="0.1" />
                   </label>
                 </div>
                 <label class="toggle control-inline-toggle ml-fast-toggle" title="Skip SHAP to return the fitted model faster. Turn this off only when you need SHAP values.">
@@ -672,7 +673,7 @@
             <section class="control-section">
               <div class="control-section-head">
                 <strong>Evaluation</strong>
-                <span>These settings apply to Compare All screening only. Run Analysis uses its own holdout/apparent path.</span>
+                <span>Evaluation mode, CV design, and the locked test set apply to Compare All screening only; Run Analysis uses its own holdout/apparent path with the same seed.</span>
               </div>
               <div class="toolbar-grid expert-parameter-grid">
                 <label class="toolbar-field">
@@ -690,12 +691,24 @@
                   <span>CV Repeats</span>
                   <input id="mlCvRepeats" type="number" min="1" max="20" step="1" value="3" />
                 </label>
+                <label class="toolbar-field">
+                  <span>Random Seed <button class="help-dot" type="button" data-tooltip="Shared with Deep Learning. The same seed gives ML and DL the same holdout split and the same repeated-CV folds.">?</button></span>
+                  <input id="mlRandomSeed" type="number" min="0" step="1" value="42" />
+                </label>
+                <label class="toggle control-inline-toggle locked-test-toggle hidden" id="mlLockedTestWrap" title="Hold out a stratified test set before repeated CV. Models are ranked on the development set; the rank-1 model's locked-test C-index is the independent estimate to report.">
+                  <input id="mlLockedTestToggle" type="checkbox" checked />
+                  <span>Reserve a locked independent test set</span>
+                </label>
+                <label class="toolbar-field hidden" id="mlLockedTestFractionWrap">
+                  <span>Locked test %</span>
+                  <input id="mlLockedTestFraction" type="number" min="5" max="50" step="1" value="30" />
+                </label>
               </div>
+              <p class="control-section-note">Evaluation mode, CV folds/repeats, seed, and the locked test set are shared with Deep Learning so Compare All Models evaluates both families on the same row partitions.</p>
             </section>
           </div>
           <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH and, when available, LASSO-Cox, RSF, and GBS on one shared evaluation path. <strong>Run Analysis</strong> fits one RSF, GBS, or LASSO-Cox model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF and GBS return faster on larger cohorts. If TreeExplainer is unavailable, SHAP falls back to an approximate screening view rather than a manuscript-ready attribution. <strong>SHAP safe mode</strong> can refit a reduced companion tree model when the encoded feature matrix is too wide, and that companion run is labeled explicitly.</div>
           <div class="toolbar-note">As a rough interpretation guide, a C-index near <strong>0.50</strong> is chance-level ranking. Values above about <strong>0.70</strong> can be useful for screening, but external validation matters more than thresholds.</div>
-          <div class="toolbar-note">Partial dependence and counterfactual analysis are available for tree-model runs only (<strong>RSF</strong> or <strong>GBS</strong>). They reuse the latest matching trained tree model when available; otherwise they refit the same requested tree settings.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>What this tab uses</strong>
@@ -851,6 +864,14 @@
                   <span>CV Repeats</span>
                   <input id="dlCvRepeats" type="number" min="1" max="20" step="1" value="3" />
                 </label>
+                <label class="toggle control-inline-toggle locked-test-toggle hidden" id="dlLockedTestWrap" title="Compare All only: hold out a stratified test set before repeated CV. Models are ranked on the development set; the rank-1 model's locked-test C-index is the independent estimate to report.">
+                  <input id="dlLockedTestToggle" type="checkbox" checked />
+                  <span>Reserve a locked independent test set</span>
+                </label>
+                <label class="toolbar-field hidden" id="dlLockedTestFractionWrap">
+                  <span>Locked test %</span>
+                  <input id="dlLockedTestFraction" type="number" min="5" max="50" step="1" value="30" />
+                </label>
                 <label class="toolbar-field">
                   <span>Early Stop Patience</span>
                   <input id="dlEarlyStoppingPatience" type="number" min="1" max="100" step="1" value="10" />
@@ -877,8 +898,8 @@
                   <small id="dlBatchSizeHint">Applies to the current discrete-time trainer.</small>
                 </label>
                 <label class="toolbar-field">
-                  <span>Random Seed</span>
-                  <input id="dlRandomSeed" type="number" step="1" value="42" />
+                  <span>Random Seed <button class="help-dot" type="button" data-tooltip="Shared with Classical ML so both families use the same holdout split and repeated-CV folds.">?</button></span>
+                  <input id="dlRandomSeed" type="number" min="0" step="1" value="42" />
                 </label>
                 <label class="toolbar-field hidden" id="dlNumTimeBinsWrap">
                   <span>Time Bins</span>
@@ -907,7 +928,7 @@
               </div>
             </section>
           </div>
-          <div class="toolbar-note">Evaluation Mode applies to both <strong>Run Analysis</strong> and <strong>Compare All</strong>. <strong>Holdout</strong> is the fastest default and returns one fitted model with plots. <strong>Repeated CV</strong> is slower, returns aggregate performance, and skips single-fit plots such as one loss curve or one feature-importance chart.</div>
+          <div class="toolbar-note">Evaluation Mode applies to both <strong>Run Analysis</strong> and <strong>Compare All</strong>. <strong>Holdout</strong> is the fastest default and returns one fitted model with plots. <strong>Repeated CV</strong> is slower, returns aggregate performance, and skips single-fit plots such as one loss curve or one feature-importance chart. Evaluation mode, CV folds/repeats, the seed, and the locked test set (Compare All with repeated CV only) are shared with Classical ML so both families are scored on the same row partitions.</div>
           <div class="shared-feature-card" id="dlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>What this tab uses</strong>

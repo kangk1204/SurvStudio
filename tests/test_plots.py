@@ -157,7 +157,8 @@ def test_build_km_figure_uses_journal_style_p_value_and_ci_copy() -> None:
 
     annotations = figure["layout"].get("annotations", [])
     annotation_text = " ".join(str(annotation.get("text", "")) for annotation in annotations)
-    assert "p = <0.001" in annotation_text
+    assert "p < 0.001" in annotation_text
+    assert "p = <" not in annotation_text
     assert "Shaded bands: 95% pointwise CI" in annotation_text
 
 
@@ -718,3 +719,52 @@ def test_build_loss_curve_figure_supports_maximized_monitor_metric() -> None:
     annotations = figure["layout"].get("annotations", [])
     annotation_text = " ".join(str(annotation.get("text", "")) for annotation in annotations)
     assert "Best monitor epoch: 2" in annotation_text
+
+
+def test_format_p_value_never_rounds_across_the_nominal_threshold() -> None:
+    from survival_toolkit.plots import _format_p_value, _p_value_expression
+
+    assert _format_p_value(0.0496) == "0.0496"
+    assert _format_p_value(0.0504) == "0.050"
+    assert _format_p_value(0.2) == "0.200"
+    assert _p_value_expression(0.0004) == "p < 0.001"
+    assert _p_value_expression(0.012, "Adj. p") == "Adj. p = 0.012"
+
+
+def test_km_confidence_band_is_drawn_as_steps() -> None:
+    km_result = {
+        "curves": [
+            {
+                "group": "A",
+                "timeline": [0.0, 1.0, 2.0],
+                "survival": [1.0, 0.8, 0.6],
+                "ci_lower": [1.0, 0.7, 0.5],
+                "ci_upper": [1.0, 0.9, 0.7],
+                "censor_times": [],
+                "censor_survival": [],
+            }
+        ],
+        "test": None,
+        "confidence_level": 0.95,
+        "display_horizon": 2.0,
+    }
+    figure = build_km_figure(km_result)
+    band = next(trace for trace in figure["data"] if trace.get("fill") == "toself")
+    xs, ys = band["x"], band["y"]
+    # Upper boundary: (0,1) (1,1) (1,0.9) (2,0.9) (2,0.7) — a vertical jump at each time.
+    assert xs[:5] == [0.0, 1.0, 1.0, 2.0, 2.0]
+    assert ys[:5] == [1.0, 1.0, 0.9, 0.9, 0.7]
+
+
+def test_time_dependent_heatmap_keeps_distinct_time_labels() -> None:
+    from survival_toolkit.plots import build_time_dependent_importance_figure
+
+    figure = build_time_dependent_importance_figure(
+        {
+            "features": ["a", "b"],
+            "eval_times": [1.21, 1.24, 3.0],
+            "importance_matrix": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
+        }
+    )
+    labels = figure["data"][0]["x"]
+    assert len(set(labels)) == 3
