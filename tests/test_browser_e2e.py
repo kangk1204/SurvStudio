@@ -251,6 +251,7 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
                         {"model": "LASSO-Cox", "c_index": 0.681, "evaluation_mode": "holdout", "n_features": 4, "training_time_ms": 39.4, "rank": 2},
                     ],
                     "evaluation_mode": "holdout",
+                    "evaluation_split_fingerprint": "holdout-seed42-shared",
                     "scientific_summary": {
                         "status": "review",
                         "headline": "ML comparison complete.",
@@ -318,6 +319,7 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
                         {"model": "DeepSurv", "c_index": 0.703, "evaluation_mode": "holdout", "epochs_trained": 40, "n_features": 6, "training_time_ms": 388.1, "rank": 2},
                     ],
                     "evaluation_mode": "holdout",
+                    "evaluation_split_fingerprint": "holdout-seed42-shared",
                     "scientific_summary": {
                         "status": "review",
                         "headline": "DL comparison complete.",
@@ -429,6 +431,7 @@ def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(br
                         {"model": "Random Survival Forest", "c_index": 0.714, "evaluation_mode": "holdout", "n_features": 6, "training_time_ms": 121.5, "rank": 1},
                     ],
                     "evaluation_mode": "holdout",
+                    "evaluation_split_fingerprint": "holdout-seed42-shared",
                     "scientific_summary": {"status": "review", "headline": "ML comparison complete.", "strengths": [], "cautions": [], "next_steps": []},
                     "manuscript_tables": {"model_performance_table": []},
                 },
@@ -448,6 +451,7 @@ def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(br
                         {"model": "DeepHit", "c_index": 0.731, "evaluation_mode": "holdout", "epochs_trained": 40, "n_features": 6, "training_time_ms": 442.7, "rank": 1},
                     ],
                     "evaluation_mode": "holdout",
+                    "evaluation_split_fingerprint": "holdout-seed42-shared",
                     "scientific_summary": {"status": "review", "headline": "DL comparison complete.", "strengths": [], "cautions": [], "next_steps": []},
                     "manuscript_tables": {"model_performance_table": []},
                 },
@@ -509,6 +513,7 @@ def test_browser_benchmark_hides_unified_chart_for_mixed_evaluation_modes(browse
                         {"model": "LASSO-Cox", "c_index": 0.681, "evaluation_mode": "holdout", "n_features": 4, "training_time_ms": 39.4, "rank": 2},
                     ],
                     "evaluation_mode": "holdout",
+                    "evaluation_split_fingerprint": "holdout-seed42-shared",
                     "scientific_summary": {"status": "review", "headline": "ML comparison complete.", "strengths": [], "cautions": [], "next_steps": []},
                     "manuscript_tables": {"model_performance_table": []},
                 },
@@ -667,6 +672,7 @@ def test_browser_guided_predictive_single_model_tuning_returns_to_stale_leaderbo
                     {"model": "Gradient Boosted Survival", "c_index": 0.701, "evaluation_mode": "holdout", "n_features": len(body.get("features", [])), "training_time_ms": 150.0, "rank": 2},
                 ],
                 "evaluation_mode": "holdout",
+                "evaluation_split_fingerprint": "holdout-seed42-shared",
                 "scientific_summary": {
                     "status": "review",
                     "headline": "ML comparison complete.",
@@ -686,6 +692,7 @@ def test_browser_guided_predictive_single_model_tuning_returns_to_stale_leaderbo
                     {"model": "DeepHit", "c_index": 0.651, "evaluation_mode": "holdout", "epochs_trained": 44, "n_features": len(body.get("features", [])), "training_time_ms": 510.0, "rank": 2},
                 ],
                 "evaluation_mode": "holdout",
+                "evaluation_split_fingerprint": "holdout-seed42-shared",
                 "scientific_summary": {
                     "status": "review",
                     "headline": "DL comparison complete.",
@@ -795,6 +802,7 @@ def test_browser_guided_predictive_failed_single_model_rerun_stays_on_step4(brow
                     {"model": "Gradient Boosted Survival", "c_index": 0.701, "evaluation_mode": "holdout", "n_features": len(body.get("features", [])), "training_time_ms": 150.0, "rank": 2},
                 ],
                 "evaluation_mode": "holdout",
+                "evaluation_split_fingerprint": "holdout-seed42-shared",
                 "scientific_summary": {
                     "status": "review",
                     "headline": "ML comparison complete.",
@@ -814,6 +822,7 @@ def test_browser_guided_predictive_failed_single_model_rerun_stays_on_step4(brow
                     {"model": "DeepHit", "c_index": 0.651, "evaluation_mode": "holdout", "epochs_trained": 44, "n_features": len(body.get("features", [])), "training_time_ms": 510.0, "rank": 2},
                 ],
                 "evaluation_mode": "holdout",
+                "evaluation_split_fingerprint": "holdout-seed42-shared",
                 "scientific_summary": {
                     "status": "review",
                     "headline": "DL comparison complete.",
@@ -1980,6 +1989,329 @@ def test_browser_dl_epoch_validation_message_is_human_readable(browser_server: s
                 "document.getElementById('toastContainer').textContent.includes('Epochs must be between 10 and 1000')"
             )
             assert "Epochs must be between 10 and 1000" in page.locator("#toastContainer").inner_text()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def _compare_summary() -> dict:
+    return {"status": "review", "headline": "Comparison complete.", "strengths": [], "cautions": [], "next_steps": []}
+
+
+def test_browser_unified_board_requires_matching_split_fingerprints_and_reports_locked_test(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    sent: dict[str, list[dict]] = {"ml": [], "dl": []}
+    fingerprints = {"ml": "rcv-seed7-shared", "dl": "rcv-seed7-shared"}
+
+    def _mock_ml_compare(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        sent["ml"].append(body)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "request_config": body,
+                "analysis": {
+                    "comparison_table": [
+                        {"model": "Random Survival Forest", "c_index": 0.714, "c_index_std": 0.031, "evaluation_mode": "repeated_cv", "rank": 1, "locked_test_c_index": 0.688, "locked_test_samples": 108, "locked_test_events": 40},
+                        {"model": "LASSO-Cox", "c_index": 0.681, "c_index_std": 0.024, "evaluation_mode": "repeated_cv", "rank": 2, "locked_test_c_index": 0.702, "locked_test_samples": 108, "locked_test_events": 40},
+                    ],
+                    "evaluation_mode": "repeated_cv",
+                    "cv_folds": 5,
+                    "cv_repeats": 3,
+                    "evaluation_split_fingerprint": fingerprints["ml"],
+                    "locked_test_fraction": 0.3,
+                    "n_development_patients": 252,
+                    "n_locked_test_patients": 108,
+                    "n_locked_test_events": 40,
+                    "scientific_summary": _compare_summary(),
+                    "manuscript_tables": {"model_performance_table": []},
+                },
+            }),
+        )
+
+    def _mock_dl_compare(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        sent["dl"].append(body)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "request_config": body,
+                "analysis": {
+                    "comparison_table": [
+                        {"model": "DeepHit", "c_index": 0.731, "evaluation_mode": "repeated_cv", "rank": 1, "locked_test_c_index": 0.651, "locked_test_samples": 108, "locked_test_events": 40},
+                        {"model": "Survival VAE", "c_index": 0.604, "evaluation_mode": "repeated_cv", "rank": None, "comparable_for_ranking": False},
+                    ],
+                    "evaluation_mode": "repeated_cv",
+                    "cv_folds": 5,
+                    "cv_repeats": 3,
+                    "evaluation_split_fingerprint": fingerprints["dl"],
+                    "scientific_summary": _compare_summary(),
+                    "manuscript_tables": {"model_performance_table": []},
+                },
+            }),
+        )
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+            page.route("**/api/ml-model", _mock_ml_compare)
+            page.route("**/api/deep-model", _mock_dl_compare)
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _switch_to_expert(page)
+            _open_predictive_workbench(page)
+
+            page.locator("#mlEvaluationStrategy").select_option("repeated_cv")
+            page.locator("#mlRandomSeed").fill("7")
+            # Evaluation settings are shared, so DL follows the ML controls.
+            page.wait_for_function("() => document.getElementById('dlEvaluationStrategy').value === 'repeated_cv' && document.getElementById('dlRandomSeed').value === '7'")
+            assert page.locator("#mlLockedTestToggle").is_checked()
+            assert page.locator("#mlLockedTestFraction").input_value() == "30"
+
+            page.locator("#closePredictiveWorkbenchButton").click()
+            page.locator("#runPredictiveCompareAllButton").click()
+            page.wait_for_function(
+                "() => { const plot = document.getElementById('benchmarkComparisonPlot'); return plot && !plot.classList.contains('hidden') && Array.isArray(plot.data) && plot.data.length === 1; }",
+                timeout=60000,
+            )
+            ml_body, dl_body = sent["ml"][-1], sent["dl"][-1]
+            assert ml_body["random_state"] == 7 and dl_body["random_seed"] == 7
+            assert ml_body["evaluation_strategy"] == dl_body["evaluation_strategy"] == "repeated_cv"
+            assert (ml_body["cv_folds"], ml_body["cv_repeats"]) == (dl_body["cv_folds"], dl_body["cv_repeats"])
+            assert ml_body["locked_test_fraction"] == pytest.approx(0.3)
+            assert dl_body["locked_test_fraction"] == pytest.approx(0.3)
+
+            table_text = page.locator("#benchmarkComparisonShell").inner_text()
+            assert "LOCKED-TEST C-INDEX" in table_text.upper()
+            assert "Not ranked" in table_text
+            assert "0 \tDeep" not in table_text
+            assert "locked-test c-index of the rank-1 model" in page.locator("#benchmarkTableNote").inner_text().lower()
+            assert "SD (folds)" in page.locator("#mlComparisonShell").inner_text()
+
+            # Toggling the locked test set changes the request, so the ML compare result goes stale.
+            page.evaluate("() => document.getElementById('mlLockedTestToggle').click()")
+            page.wait_for_function("() => currentCompareGoalPayload('ml') === null")
+            assert not page.locator("#dlLockedTestToggle").is_checked()
+            page.evaluate("() => document.getElementById('mlLockedTestToggle').click()")
+            page.wait_for_function("() => currentCompareGoalPayload('ml') !== null")
+
+            fingerprints["dl"] = "rcv-seed7-different"
+            page.locator("#runPredictiveCompareAllButton").click()
+            page.wait_for_function(
+                "() => document.getElementById('benchmarkSummaryGrid').textContent.includes('different row partitions')",
+                timeout=60000,
+            )
+            page.wait_for_function("() => document.getElementById('benchmarkComparisonPlot').classList.contains('hidden')")
+            assert "split fingerprints differ" in page.locator("#benchmarkPlotNote").inner_text()
+            assert "family rank" in page.locator("#benchmarkComparisonShell").inner_text().lower()
+            assert "no cross-family ranking is published" in page.locator("#benchmarkTableNote").inner_text().lower()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_late_derive_response_does_not_replace_newer_dataset(browser_server: str, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    upload = tmp_path / "second_cohort.csv"
+    lines = ["subject,os_months,os_event,age,arm"]
+    for index in range(80):
+        lines.append(f"S{index},{5 + (index * 7) % 60},{index % 3 == 0 and 1 or 0},{40 + index % 30},{'AB'[index % 2]}")
+    upload.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadGbsg2Button").click()
+            _switch_to_expert(page)
+            page.evaluate(
+                """() => {
+                  const originalFetch = window.fetch;
+                  window.__deriveDelayed = 0;
+                  window.fetch = async (url, options) => {
+                    const response = await originalFetch(url, options);
+                    if (String(url).includes('/api/derive-group')) {
+                      window.__deriveDelayed += 1;
+                      await new Promise((resolve) => setTimeout(resolve, 2500));
+                    }
+                    return response;
+                  };
+                }"""
+            )
+            page.locator('[data-tab="km"]').click()
+            page.evaluate("() => document.getElementById('deriveToggle').click()")
+            page.select_option("#deriveMethod", "median_split")
+            page.evaluate("() => document.getElementById('deriveButton').click()")
+            page.wait_for_function("() => window.__deriveDelayed === 1")
+            page.set_input_files("#datasetFile", str(upload))
+            page.wait_for_function("() => state.dataset && state.dataset.filename === 'second_cohort.csv'")
+            page.wait_for_timeout(3200)
+
+            assert page.evaluate("() => state.dataset.filename") == "second_cohort.csv"
+            assert "second_cohort.csv" in page.locator("#datasetBadge").inner_text()
+            assert page.locator("#timeUnitLabel").input_value() == "Months"
+            assert page.locator("#maxTime").input_value() == ""
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_comparison_image_export_disabled_after_single_model_run(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    def _mock_ml(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        if body.get("model_type") == "compare":
+            payload = {
+                "request_config": body,
+                "analysis": {
+                    "comparison_table": [
+                        {"model": "Random Survival Forest", "c_index": 0.714, "evaluation_mode": "holdout", "rank": 1},
+                        {"model": "Cox PH", "c_index": 0.69, "evaluation_mode": "holdout", "rank": 2},
+                    ],
+                    "evaluation_mode": "holdout",
+                    "evaluation_split_fingerprint": "holdout-seed42-shared",
+                    "scientific_summary": _compare_summary(),
+                    "manuscript_tables": {"model_performance_table": []},
+                },
+                "figure": {"data": [{"type": "bar", "x": ["Random Survival Forest", "Cox PH"], "y": [0.714, 0.69]}], "layout": {"title": {"text": "Model Comparison"}}},
+            }
+        else:
+            payload = {
+                "request_config": body,
+                "analysis": {
+                    "model_stats": {"c_index": 0.7, "evaluation_mode": "holdout", "n_patients": 360, "n_features": 4},
+                    "scientific_summary": _compare_summary(),
+                },
+                "importance_figure": {"data": [{"type": "bar", "orientation": "h", "x": [0.3, 0.2], "y": ["age", "stage"]}], "layout": {"height": 360}},
+            }
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+            page.route("**/api/ml-model", _mock_ml)
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _switch_to_expert(page)
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
+
+            page.evaluate("() => document.getElementById('runCompareButton').click()")
+            page.wait_for_function("() => !document.getElementById('downloadMlComparisonPngButton').disabled")
+
+            _open_predictive_workbench(page, "rsf")
+            page.locator("#runPredictiveWorkbenchButton").click()
+            page.wait_for_function("document.getElementById('mlMetaBanner').textContent.includes('Holdout C-index=0.7')")
+            page.evaluate("() => renderSharedFeatureSummary()")
+
+            assert page.locator("#downloadMlComparisonPngButton").is_disabled()
+            assert page.locator("#downloadMlComparisonSvgButton").is_disabled()
+            assert page.evaluate("() => !(document.getElementById('mlComparisonPlot').data || []).length")
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_duplicate_identifier_warning_is_persistent_and_escaped(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    def _with_duplicates(route) -> None:
+        response = route.fetch()
+        payload = response.json()
+        payload["duplicate_identifier_columns"] = [
+            {"column": "patient_id<img src=x onerror=window.__xss=1>", "n_rows": 360, "n_unique": 300, "n_repeated_ids": 55, "n_extra_rows": 60},
+        ]
+        route.fulfill(response=response, body=json.dumps(payload))
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+            page.route("**/api/load-example", _with_duplicates)
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            page.locator("#datasetIntegrityWarning").wait_for(state="visible")
+            warning = page.locator("#datasetIntegrityWarning").inner_text()
+            assert "repeats 55 IDs" in warning
+            assert "360 rows vs 300 unique" in warning
+            assert "double-count" in warning
+            assert page.evaluate("() => window.__xss || 0") == 0
+            assert page.locator("#datasetIntegrityWarning img").count() == 0
+
+            _switch_to_expert(page)
+            assert page.locator("#datasetIntegrityWarning").is_visible()
+            page.locator("#brandHome").click()
+            page.locator("#landing").wait_for(state="visible")
+            assert page.locator("#datasetIntegrityWarning").is_hidden()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_cohort_table_sends_outcome_columns_and_shows_notes(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    sent: list[dict] = []
+
+    def _mock_cohort_table(route) -> None:
+        body = json.loads(route.request.post_data or "{}")
+        sent.append(body)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "request_config": body,
+                "analysis": {
+                    "rows": [{"Variable": "age", "Level": "", "Overall": "53.1 (10.1)"}],
+                    "columns": ["Variable", "Level", "Overall"],
+                    "notes": ["Restricted to 686 rows with a valid survival outcome (same rows as Kaplan-Meier and Cox)."],
+                },
+            }),
+        )
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+            page.route("**/api/cohort-table", _mock_cohort_table)
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadGbsg2Button").click()
+            _switch_to_expert(page)
+            page.locator('[data-tab="tables"]').click()
+            _assert_tab_active(page, "tables")
+            page.evaluate("() => setCheckedValues(refs.cohortVariableChecklist, ['age'])")
+            page.evaluate("() => renderSharedFeatureSummary()")
+            page.locator("#runCohortTableButton").click()
+            page.wait_for_function("() => !document.getElementById('downloadCohortTableButton').disabled")
+
+            body = sent[-1]
+            assert body["time_column"] == "rfs_days"
+            assert body["event_column"] == "rfs_event"
+            assert str(body["event_positive_value"]) == "1"
+            assert "same rows as Kaplan-Meier and Cox" in page.locator("#cohortTableShell").inner_text()
+            assert page.locator("#runCohortTableButtonLabel").inner_text() == "Build Table"
+            assert page.evaluate("() => currentCohortTableOutputState().isCurrent") is True
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path

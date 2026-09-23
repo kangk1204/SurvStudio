@@ -48,7 +48,32 @@ def _format_p_value(value: Any) -> str:
         return "<1e-16"
     if p_value < 0.001:
         return "<0.001"
-    return f"{p_value:.3f}"
+    text = f"{p_value:.3f}"
+    # Never let rounding push a p-value across the conventional 0.05 threshold
+    # (for example 0.0496 -> "0.050").
+    if p_value < 0.05 <= float(text):
+        text = f"{p_value:.4f}"
+    return text
+
+
+def _p_value_expression(value: Any, label: str = "p") -> str:
+    """Render ``label = value`` or ``label < bound`` without doubled operators."""
+    formatted = _format_p_value(value)
+    if formatted.startswith("<"):
+        return f"{label} < {formatted[1:]}"
+    return f"{label} = {formatted}"
+
+
+def _step_polyline(x_values: list[float], y_values: list[float]) -> tuple[list[float], list[float]]:
+    """Expand right-continuous step data into explicit polyline vertices."""
+    if not x_values:
+        return [], []
+    xs: list[float] = [x_values[0]]
+    ys: list[float] = [y_values[0]]
+    for index in range(1, len(x_values)):
+        xs.extend([x_values[index], x_values[index]])
+        ys.extend([y_values[index - 1], y_values[index]])
+    return xs, ys
 
 
 def _truncate_label_fragment(text: str, width: int) -> str:
@@ -199,10 +224,12 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
         label = curve["group"]
         color = _km_group_color(label, idx)
         if show_confidence_bands:
+            upper_x, upper_y = _step_polyline(list(curve["timeline"]), list(curve["ci_upper"]))
+            lower_x, lower_y = _step_polyline(list(curve["timeline"]), list(curve["ci_lower"]))
             fig.add_trace(
                 go.Scatter(
-                    x=curve["timeline"] + curve["timeline"][::-1],
-                    y=curve["ci_upper"] + curve["ci_lower"][::-1],
+                    x=upper_x + lower_x[::-1],
+                    y=upper_y + lower_y[::-1],
                     fill="toself",
                     fillcolor=color,
                     line={"color": "rgba(0,0,0,0)"},
@@ -249,7 +276,7 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
     if km_result.get("test"):
         test = km_result["test"]
         fig.add_annotation(
-            text=f"{test['test'].replace('_', ' ').title()} test: p = {_format_p_value(test['p_value'])}",
+            text=f"{test['test'].replace('_', ' ').title()} test: {_p_value_expression(test['p_value'])}",
             xref="paper", yref="paper", x=0.98, y=0.98,
             showarrow=False, font={"size": 12, "color": INK},
             align="right", xanchor="right", yanchor="top",
@@ -427,7 +454,7 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
                 hovertemplate=(
                     f"{panel.get('term') or 'Term'}<br>log(time): %{{x:.3f}}<br>Scaled Schoenfeld residual: %{{y:.3f}}"
                     + (f"<br>rho={float(rho):.3f}" if isinstance(rho, (int, float)) and np.isfinite(float(rho)) else "")
-                    + (f"<br>p={_format_p_value(p_value)}" if isinstance(p_value, (int, float)) and np.isfinite(float(p_value)) else "")
+                    + (f"<br>{_p_value_expression(p_value)}" if isinstance(p_value, (int, float)) and np.isfinite(float(p_value)) else "")
                     + "<extra></extra>"
                 ),
                 showlegend=False,
@@ -663,9 +690,9 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
     if optimal is not None:
         p_parts = []
         if adjusted_p is not None:
-            p_parts.append(f"Adj. p = {_format_p_value(adjusted_p)}")
+            p_parts.append(_p_value_expression(adjusted_p, "Adj. p"))
         if raw_p is not None:
-            p_parts.append(f"Raw p = {_format_p_value(raw_p)}")
+            p_parts.append(_p_value_expression(raw_p, "Raw p"))
         group_parts = []
         label_below = result.get("label_below_cutpoint")
         label_above = result.get("label_above_cutpoint")
@@ -1068,10 +1095,20 @@ def build_time_dependent_importance_figure(
         for feat_idx in selected_idx
     ]
 
+    # Category labels must stay unique; otherwise Plotly merges columns whose
+    # times collapse to the same rounded text (for example 1.21 and 1.24).
+    time_labels: list[str] = []
+    for decimals in range(1, 7):
+        time_labels = [f"{float(t):.{decimals}f}" for t in eval_times]
+        if len(set(time_labels)) == len(time_labels):
+            break
+    else:
+        time_labels = [f"{float(t):.6g} [{idx + 1}]" for idx, t in enumerate(eval_times)]
+
     fig = go.Figure(
         data=go.Heatmap(
             z=z,
-            x=[f"{t:.1f}" for t in eval_times],
+            x=time_labels,
             y=selected_features,
             colorscale=[[0, SLATE], [1, ACCENT]],
             hovertemplate="Feature: %{y}<br>Time: %{x}<br>Importance: %{z:.4f}<extra></extra>",

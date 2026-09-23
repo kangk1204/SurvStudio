@@ -12,7 +12,7 @@ Files included:
 ## Dataset 1: TCGA LUAD
 
 - File: `tcga_luad_nature2014_upload_ready.csv`
-- Rows: `609`
+- Rows: `489` (one row per patient)
 - Survival outcome:
   - time column: `os_months`
   - event column: `os_event`
@@ -21,6 +21,13 @@ Files included:
 ## Source
 
 This file is a simplified upload-ready subset of the bundled TCGA LUAD example cohort already shipped with SurvStudio.
+
+Deduplication note:
+
+- earlier releases shipped 609 rows for 489 unique TCGA patients: 120 patients appeared twice (one row per tumour portion) with identical survival outcomes, clinical fields, and RNA values; only `tumor_longest_dimension_cm` differed
+- the bundled TCGA files now keep one row per `patient_id`, and `tumor_longest_dimension_cm` keeps the larger of the two portion measurements (the patient-level longest dimension)
+- duplicated patients double-count survival information and let row-level train/test splits place the same patient in both partitions; any TCGA benchmark produced with the 609-row files should be re-run
+- if you rank or filter genes by their association with survival, do it inside the training folds only; ranking on the full cohort before cross-validation leaks outcome information into every fold
 
 Study citation:
 
@@ -62,7 +69,7 @@ Data provenance:
 ## Dataset 2: TCGA LUAD RNA Top 100
 
 - File: `tcga_luad_rnaseq_top100_upload.csv`
-- Rows: `609`
+- Rows: `489` (one row per patient)
 - Columns: `112` total (`12` clinical + `100` gene-expression features)
 - Survival outcome:
   - time column: `os_months`
@@ -71,13 +78,13 @@ Data provenance:
 
 ## Source
 
-This file starts from the same 609-row TCGA LUAD upload-ready clinical cohort as `tcga_luad_nature2014_upload_ready.csv` and left-joins the first 100 RNA features from the larger RNA example.
+This file starts from the same 489-patient TCGA LUAD upload-ready clinical cohort as `tcga_luad_nature2014_upload_ready.csv` and left-joins the first 100 RNA features from the larger RNA example.
 
 Notes:
 
 - the 100 genes are the first 100 features from the ranked RNA top-1000 source table
 - four patients do not have matching RNA values in the source RNA table, so those gene cells remain missing
-- clinical-only Kaplan-Meier and Cox settings stay aligned with the 609-row bundled TCGA cohort
+- clinical-only Kaplan-Meier and Cox settings stay aligned with the 489-patient bundled TCGA cohort
 - the file stays well below the SurvStudio upload cap of 1000 model feature candidates
 
 Recommended first settings:
@@ -97,7 +104,7 @@ Recommended first settings:
 ## Dataset 3: TCGA LUAD RNA Top 500
 
 - File: `tcga_luad_rnaseq_top500_upload.csv`
-- Rows: `609`
+- Rows: `489` (one row per patient)
 - Columns: `512` total (`12` clinical + `500` gene-expression features)
 - Survival outcome:
   - time column: `os_months`
@@ -106,13 +113,13 @@ Recommended first settings:
 
 ## Source
 
-This file starts from the same 609-row TCGA LUAD upload-ready clinical cohort as `tcga_luad_nature2014_upload_ready.csv` and left-joins the first 500 RNA features from the same ranked RNA top-1000 source table used for the top-100 upload file.
+This file starts from the same 489-patient TCGA LUAD upload-ready clinical cohort as `tcga_luad_nature2014_upload_ready.csv` and left-joins the first 500 RNA features from the same ranked RNA top-1000 source table used for the top-100 upload file.
 
 Notes:
 
 - the 500 genes are the first 500 features from the ranked RNA top-1000 source table
 - four patients do not have matching RNA values in the source RNA table, so those gene cells remain missing
-- clinical-only Kaplan-Meier and Cox settings stay aligned with the 609-row bundled TCGA cohort
+- clinical-only Kaplan-Meier and Cox settings stay aligned with the 489-patient bundled TCGA cohort
 - the file remains below the SurvStudio upload cap of 1000 model feature candidates
 
 Recommended first settings:
