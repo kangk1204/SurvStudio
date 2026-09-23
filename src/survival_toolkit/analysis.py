@@ -13,7 +13,13 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
+from pandas.api.types import (
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+    is_numeric_dtype,
+    is_object_dtype,
+    is_string_dtype,
+)
 from scipy.special import ndtri
 from scipy import stats
 from statsmodels.duration.hazard_regression import PHReg
@@ -231,6 +237,11 @@ def _sniff_delimiter(text: str, default: str) -> str:
         return default
 
 
+def _is_text_series(series: pd.Series) -> bool:
+    # pandas >= 3 reads text as the dedicated "str" dtype instead of object.
+    return is_object_dtype(series) or is_string_dtype(series)
+
+
 def _read_csv_with_fallback(source: io.BytesIO | str | Path, *, default_delimiter: str = ",") -> pd.DataFrame:
     if hasattr(source, "read"):
         if hasattr(source, "seek"):
@@ -255,7 +266,7 @@ def _read_csv_with_fallback(source: io.BytesIO | str | Path, *, default_delimite
     if delimiter != ",":
         # European-style exports (";" separated) often use decimal commas; if
         # text columns are mostly decimal-comma numbers, read them as numbers.
-        text_columns = [column for column in frame.columns if frame[column].dtype == object]
+        text_columns = [column for column in frame.columns if _is_text_series(frame[column])]
         decimal_like = [
             column
             for column in text_columns
@@ -1180,7 +1191,7 @@ def _reject_calendar_date_time_column(series: pd.Series, time_column: str) -> No
     )
     if is_datetime64_any_dtype(series):
         raise ValueError(message)
-    if series.dtype == object:
+    if _is_text_series(series):
         sample = series.dropna().astype(str).head(200)
         if sample.empty or pd.to_numeric(sample, errors="coerce").notna().mean() > 0.5:
             return
