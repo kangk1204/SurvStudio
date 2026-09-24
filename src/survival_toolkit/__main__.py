@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -19,6 +20,17 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
     serve_parser.add_argument("--reload", action="store_true")
+    serve_parser.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        dest="allowed_hosts",
+        metavar="HOST",
+        help=(
+            "Additional Host header value the server should answer (repeatable), for example a LAN name or "
+            "reverse-proxy host. Localhost and the --host bind address are always allowed."
+        ),
+    )
 
     inspect_parser = subparsers.add_parser(
         "inspect",
@@ -37,7 +49,25 @@ def _run_inspect(path: str) -> int:
     return 0
 
 
-def _run_serve(host: str, port: int, reload: bool) -> int:
+_BIND_HOST_ENV_VAR = "SURVSTUDIO_BIND_HOST"
+_ALLOWED_HOSTS_ENV_VAR = "SURVSTUDIO_ALLOWED_HOSTS"
+
+
+def _configure_request_host_guard(host: str, allowed_hosts: Sequence[str] = ()) -> None:
+    """Expose the bind host (and extra allowed hosts) to the app's Host/Origin guard.
+
+    Environment variables are used so the setting also reaches `--reload` worker processes.
+    """
+
+    os.environ[_BIND_HOST_ENV_VAR] = str(host)
+    extra_hosts = [str(item).strip() for item in allowed_hosts if str(item).strip()]
+    if extra_hosts:
+        existing = [item.strip() for item in os.environ.get(_ALLOWED_HOSTS_ENV_VAR, "").split(",") if item.strip()]
+        os.environ[_ALLOWED_HOSTS_ENV_VAR] = ",".join(dict.fromkeys([*existing, *extra_hosts]))
+
+
+def _run_serve(host: str, port: int, reload: bool, allowed_hosts: Sequence[str] = ()) -> int:
+    _configure_request_host_guard(host, allowed_hosts)
     uvicorn.run(
         "survival_toolkit.app:app",
         host=host,
@@ -63,6 +93,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             host=getattr(args, "host", "127.0.0.1"),
             port=getattr(args, "port", 8000),
             reload=bool(getattr(args, "reload", False)),
+            allowed_hosts=list(getattr(args, "allowed_hosts", []) or []),
         )
 
     parser.error(f"Unknown command: {args.command}")

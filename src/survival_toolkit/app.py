@@ -2,35 +2,46 @@ from __future__ import annotations
 
 import copy
 import csv
+import functools
 import hashlib
 import io
+import ipaddress
 import json
 import logging
+import math
 import os
 import platform
 import re
+import socket
 from collections import OrderedDict
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 import signal
 import tempfile
+from types import SimpleNamespace
 import threading
 import time
 import zipfile
-from typing import Any, Callable, Literal, NoReturn, Sequence
+from typing import Any, Callable, Literal, NoReturn, Sequence, TypeVar
+from urllib.parse import urlsplit
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from survival_toolkit.analysis import (
+    _cohort_frame,
     _model_feature_candidate_columns_from_metadata,
     _profile_dataframe_column,
     _survival_outcome_like_columns,
@@ -47,7 +58,7 @@ from survival_toolkit.analysis import (
     profile_dataframe,
     suggest_columns,
 )
-from survival_toolkit.errors import NotFoundError, UserInputError
+from survival_toolkit.errors import InternalAnalysisError, NotFoundError, UserInputError
 from survival_toolkit.sample_data import (
     load_gbsg2_upload_ready_dataset,
     load_tcga_luad_example_dataset,
@@ -90,10 +101,254 @@ def _static_asset_version() -> str:
             digest.update(str(stat.st_mtime_ns).encode("utf-8"))
     return digest.hexdigest()[:12] if saw_asset else "0"
 
+
+# ── Local request guard (CSRF / DNS rebinding) ──────────────────
+
+BIND_HOST_ENV_VAR = "SURVSTUDIO_BIND_HOST"
+ALLOWED_HOSTS_ENV_VAR = "SURVSTUDIO_ALLOWED_HOSTS"
+_WILDCARD_BIND_HOSTS = frozenset({"0.0.0.0", "::"})
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _normalize_hostname(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    text = text.split("%", 1)[0].rstrip(".")
+    return text or None
+
+
+def _split_host_and_port(value: str) -> tuple[str, int | None] | None:
+    """Parse a Host-header style ``host[:port]`` value; ``None`` when malformed."""
+
+    text = str(value or "").strip()
+    if not text or any(character in text for character in "/?#@\\ \t"):
+        return None
+    try:
+        parsed = urlsplit(f"//{text}")
+        hostname = _normalize_hostname(parsed.hostname)
+        port = parsed.port
+    except ValueError:
+        return None
+    if hostname is None:
+        return None
+    return hostname, port
+
+
+def _is_loopback_hostname(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _primary_outbound_address() -> str | None:
+    """Best-effort LAN address of this machine (a UDP connect sends no packets)."""
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("10.255.255.255", 1))
+            return str(probe.getsockname()[0])
+    except OSError:  # pragma: no cover - platform dependent
+        return None
+
+
+def _local_interface_hostnames() -> set[str]:
+    names: set[str] = set()
+    outbound = _normalize_hostname(_primary_outbound_address())
+    if outbound:
+        names.add(outbound)
+    try:
+        candidates = {socket.gethostname(), socket.getfqdn()}
+    except OSError:  # pragma: no cover - platform dependent
+        return names
+    for candidate in candidates:
+        normalized = _normalize_hostname(candidate)
+        if normalized:
+            names.add(normalized)
+        try:
+            for info in socket.getaddrinfo(candidate, None):
+                address = _normalize_hostname(info[4][0])
+                if address:
+                    names.add(address)
+        except OSError:
+            continue
+    return names
+
+
+@functools.lru_cache(maxsize=16)
+def _configured_request_hosts(bind_host: str, allowed_hosts: str) -> tuple[frozenset[str], bool]:
+    """Return (extra allowed hostnames, allow_any) from the serve configuration."""
+
+    hosts: set[str] = set()
+    allow_any = False
+    for raw_item in str(allowed_hosts or "").split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if item == "*":
+            allow_any = True
+            continue
+        parsed = _split_host_and_port(item)
+        if parsed is not None:
+            hosts.add(parsed[0])
+    bind = _normalize_hostname(bind_host)
+    if bind in _WILDCARD_BIND_HOSTS:
+        hosts.update(_local_interface_hostnames())
+    elif bind:
+        hosts.add(bind)
+    return frozenset(hosts), allow_any
+
+
+def _request_hostname_is_allowed(hostname: str) -> bool:
+    if _is_loopback_hostname(hostname):
+        return True
+    configured_hosts, allow_any = _configured_request_hosts(
+        os.environ.get(BIND_HOST_ENV_VAR, ""),
+        os.environ.get(ALLOWED_HOSTS_ENV_VAR, ""),
+    )
+    return allow_any or hostname in configured_hosts
+
+
+def _default_port_for_scheme(scheme: str) -> int:
+    return 443 if scheme == "https" else 80
+
+
+def _request_origin_is_allowed(origin: str, host_header: str, *, source_is_referer: bool = False) -> bool:
+    """Allow loopback origins (any port) and same-origin requests to an allowed Host."""
+
+    text = str(origin or "").strip()
+    if not text or text.lower() == "null":
+        return False
+    try:
+        parsed = urlsplit(text)
+        origin_hostname = _normalize_hostname(parsed.hostname)
+        origin_port = parsed.port
+    except ValueError:
+        return False
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"} or origin_hostname is None:
+        return False
+    if not source_is_referer and (parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+        return False
+    if _is_loopback_hostname(origin_hostname):
+        return True
+    host = _split_host_and_port(host_header)
+    if host is None:
+        return False
+    host_hostname, host_port = host
+    return (
+        origin_hostname == host_hostname
+        and (origin_port or _default_port_for_scheme(scheme)) == (host_port or _default_port_for_scheme(scheme))
+    )
+
+
+def _local_request_rejection(method: str, headers: Headers) -> tuple[int, str] | None:
+    host_header = headers.get("host", "")
+    host = _split_host_and_port(host_header)
+    if host is None or not _request_hostname_is_allowed(host[0]):
+        return (
+            400,
+            "Invalid Host header. SurvStudio only answers requests addressed to localhost or to the host it was "
+            f"started with. Set {ALLOWED_HOSTS_ENV_VAR} to allow additional host names.",
+        )
+    if method.upper() not in _STATE_CHANGING_METHODS:
+        return None
+    origin = headers.get("origin")
+    if origin is not None:
+        allowed = _request_origin_is_allowed(origin, host_header)
+    else:
+        referer = headers.get("referer")
+        allowed = referer is None or _request_origin_is_allowed(referer, host_header, source_is_referer=True)
+    if not allowed:
+        return (
+            403,
+            "Cross-site request rejected. State-changing SurvStudio requests must come from the local SurvStudio page.",
+        )
+    return None
+
+
+class LocalRequestGuardMiddleware:
+    """Reject foreign Host headers (DNS rebinding) and cross-site state-changing requests (CSRF)."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            rejection = _local_request_rejection(str(scope.get("method", "GET")), Headers(scope=scope))
+            if rejection is not None:
+                status_code, detail = rejection
+                response = JSONResponse({"detail": detail}, status_code=status_code)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+_UPLOAD_PATH = "/api/upload"
+_UPLOAD_TOO_LARGE_DETAIL = "Upload exceeds the 200 MB limit."
+# Allowance for multipart boundaries and part headers on top of the file-size limit.
+_UPLOAD_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+
+
+def _max_upload_request_bytes() -> int:
+    return int(_MAX_UPLOAD_BYTES) + _UPLOAD_MULTIPART_OVERHEAD_BYTES
+
+
+class UploadSizeLimitMiddleware:
+    """Reject oversized uploads from Content-Length before the multipart body is read.
+
+    Chunked requests without Content-Length are cut off as soon as the streamed body passes the
+    limit, instead of being spooled to disk in full by the multipart parser first.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") != _UPLOAD_PATH or scope.get("method") != "POST":
+            await self.app(scope, receive, send)
+            return
+        limit = _max_upload_request_bytes()
+        content_length = Headers(scope=scope).get("content-length")
+        if content_length is not None:
+            try:
+                declared_bytes = int(content_length)
+            except ValueError:
+                declared_bytes = -1
+            if declared_bytes < 0:
+                response = JSONResponse({"detail": "Invalid Content-Length header."}, status_code=400)
+                await response(scope, receive, send)
+                return
+            if declared_bytes > limit:
+                response = JSONResponse({"detail": _UPLOAD_TOO_LARGE_DETAIL}, status_code=413)
+                await response(scope, receive, send)
+                return
+
+        received_bytes = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received_bytes
+            message = await receive()
+            if message.get("type") == "http.request":
+                received_bytes += len(message.get("body", b""))
+                if received_bytes > limit:
+                    # FastAPI re-raises HTTPExceptions raised while reading the body.
+                    raise HTTPException(status_code=413, detail=_UPLOAD_TOO_LARGE_DETAIL)
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+
 app = FastAPI(
     title="SurvStudio",
     description="Local survival analysis dashboard for exploratory and validation-oriented cohort work.",
 )
+app.add_middleware(UploadSizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[],
@@ -102,6 +357,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added last so it wraps CORS as the outermost user middleware.
+app.add_middleware(LocalRequestGuardMiddleware)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 store = DatasetStore()
@@ -109,9 +366,24 @@ _MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
 _MAX_UPLOAD_ROWS = 100_000
 _MAX_UPLOAD_COLUMNS = 5_000
 _MAX_UPLOAD_CELLS = 5_000_000
+# Decompression guards: an .xlsx is a zip of XML parts and Parquet pages are compressed, so a
+# small upload can expand to gigabytes. Check declared sizes before handing the file to a parser.
+_MAX_XLSX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+_MAX_PARQUET_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 _SHAP_SAFE_MODE_MAX_ENCODED_FEATURES = 80
 _SHAP_SAFE_MODE_MAX_RAW_FEATURES = 30
 _SIGNED_NUMERIC_CSV_LITERAL = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+# Characters that may follow a leading number in a "number-like" cell such as "-0.42 ± 1.00",
+# "-1.2 (-2.0 to -0.4)", "-12%", "-0.3–0.5" or a cohort summary "-0.42 ± 1.00 | -0.42 [-1.09, 0.28]".
+# Only digits and punctuation are allowed, so such a cell cannot spell a function call or DDE target.
+_NUMBER_LIKE_CELL_CHARS = re.compile(r"[0-9.\s±%()\[\],;:/|\u2013\u2212+\-]*")
+_NUMBER_LIKE_EXPONENT = re.compile(r"(?<=[0-9.])[eE][+\-]?(?=[0-9])")
+_NUMBER_LIKE_TO_WORD = re.compile(r"(?<=[\s0-9])to(?=[\s+\-\u22120-9])")
+_CSV_FORMULA_TRIGGER_CHARS = ("=", "@", "\t", "\r")
+_CSV_SIGN_CHARS = ("+", "-")
+# Characters that are illegal in XML 1.0 (DOCX/XLSX) plus DEL; replaced with a space in exports.
+_EXPORT_ILLEGAL_CHAR_PATTERN = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff\ufffe\uffff]")
+_CSV_UTF8_BOM = "\ufeff"
 _CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 _NOTE_CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _DATASET_PROFILE_CACHE_KEY = "_dataset_profile_cache"
@@ -127,6 +399,35 @@ _LATEX_ESCAPE_TABLE = str.maketrans(
         "}": r"\}",
         "~": r"\textasciitilde{}",
         "^": r"\textasciicircum{}",
+        # Under the default OT1 font encoding these print as other glyphs ("<" becomes "¡").
+        "<": r"\textless{}",
+        ">": r"\textgreater{}",
+        "|": r"\textbar{}",
+        '"': "''",
+        # Common statistics symbols mapped to macros that compile without extra packages.
+        "±": r"\ensuremath{\pm}",
+        "≤": r"\ensuremath{\leq}",
+        "≥": r"\ensuremath{\geq}",
+        "≠": r"\ensuremath{\neq}",
+        "≈": r"\ensuremath{\approx}",
+        "×": r"\ensuremath{\times}",
+        "−": r"\ensuremath{-}",
+        "–": "--",
+        "—": "---",
+        "…": r"\ldots{}",
+        "·": r"\ensuremath{\cdot}",
+        "°": r"\ensuremath{^{\circ}}",
+        "²": r"\ensuremath{^{2}}",
+        "³": r"\ensuremath{^{3}}",
+        "χ": r"\ensuremath{\chi}",
+        "α": r"\ensuremath{\alpha}",
+        "β": r"\ensuremath{\beta}",
+        "μ": r"\ensuremath{\mu}",
+        "µ": r"\ensuremath{\mu}",
+        "‘": "`",
+        "’": "'",
+        "“": "``",
+        "”": "''",
     }
 )
 
@@ -201,6 +502,9 @@ def _validate_subset_names(
 
 
 class _DatasetRequestModel(BaseModel):
+    # NaN/Infinity (accepted by Python's JSON parser) are never valid analysis settings.
+    model_config = ConfigDict(allow_inf_nan=False)
+
     @field_validator("dataset_id", mode="before", check_fields=False)
     @classmethod
     def validate_dataset_id(cls, value: Any) -> str:
@@ -304,8 +608,34 @@ class _MlArtifactCache:
                 return None
             return self._copy_result(result)
 
+    def purge_dataset(self, dataset_id: str) -> None:
+        """Drop every cached model/frames for a dataset that left the store."""
+
+        with self._lock:
+            for cache_key in [key for key in self._items if key[0] == dataset_id]:
+                del self._items[cache_key]
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._items)
+
 
 _ml_artifact_cache = _MlArtifactCache(max_items=8)
+# Fitted models hold deep-copied training frames; release them together with their dataset.
+store.add_eviction_listener(_ml_artifact_cache.purge_dataset)
+
+_T = TypeVar("_T")
+
+
+async def _run_dataset_job(dataset_id: str, job: Callable[[], _T]) -> _T:
+    """Run a blocking analysis job in the threadpool while leasing its dataset.
+
+    The lease keeps the dataset from expiring (idle TTL) or being LRU-evicted mid-run and
+    refreshes its TTL when the job finishes.
+    """
+
+    with store.lease(dataset_id):
+        return await run_in_threadpool(job)
 
 
 # ── Request models ──────────────────────────────────────────────
@@ -328,7 +658,9 @@ class DeriveGroupRequest(_EventPositiveValueRequestModel):
     upper_label: str = Field(default="High", max_length=100)
     time_column: str | None = None
     event_column: str | None = None
-    event_positive_value: Any = None
+    # Same default as the KM/Cox/ML endpoints, so an outcome-informed cutpoint uses the same
+    # event coding as the analyses it feeds (the UI always sends the selected value explicitly).
+    event_positive_value: Any = 1
     min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
     permutation_iterations: int = Field(default=500, ge=0, le=500)
     random_seed: int = 20260311
@@ -402,10 +734,26 @@ class CoxRequest(_EventPositiveValueRequestModel):
         return self
 
 
-class CohortTableRequest(_DatasetRequestModel):
+class CohortTableRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     variables: list[str] = Field(max_length=200)
     group_column: str | None = None
+    # Optional survival outcome: when both columns are given, the table summarizes the analysis
+    # cohort (rows with valid time/event and non-negative time) instead of the whole upload.
+    time_column: str | None = None
+    event_column: str | None = None
+    event_positive_value: Any = 1
+
+    @field_validator("time_column", "event_column", mode="before")
+    @classmethod
+    def validate_outcome_column(cls, value: Any, info: Any) -> str | None:
+        return _normalize_optional_text_field(value, field_name=info.field_name, allow_empty_as_none=True)
+
+    @model_validator(mode="after")
+    def validate_outcome_pair(self) -> "CohortTableRequest":
+        if (self.time_column is None) != (self.event_column is None):
+            raise ValueError("time_column and event_column must be provided together to restrict the cohort table.")
+        return self
 
 
 class SignatureSearchRequest(_EventPositiveValueRequestModel):
@@ -448,12 +796,15 @@ class MLModelRequest(_FeatureSelectionRequestModel):
     n_estimators: int = Field(default=100, ge=10, le=1000)
     max_depth: int | None = None
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
-    random_state: int = 42
+    random_state: int = Field(default=42, ge=0, le=2**32 - 1)
     compute_shap: bool = False
     shap_safe_mode: bool = True
     evaluation_strategy: Literal["holdout", "repeated_cv"] = "holdout"
     cv_folds: int = Field(default=5, ge=2, le=10)
     cv_repeats: int = Field(default=3, ge=1, le=20)
+    # Fraction of the cohort reserved as an untouched test set for repeated-CV
+    # comparisons (None disables it).
+    locked_test_fraction: float | None = Field(default=None, ge=0.05, le=0.5)
 
 
 class DeepModelRequest(_FeatureSelectionRequestModel):
@@ -469,10 +820,11 @@ class DeepModelRequest(_FeatureSelectionRequestModel):
     learning_rate: float = Field(default=0.001, gt=0.0, le=0.1)
     epochs: int = Field(default=100, ge=10, le=1000)
     batch_size: int = Field(default=64, ge=8, le=512)
-    random_seed: int = 42
+    random_seed: int = Field(default=42, ge=0, le=2**32 - 1)
     evaluation_strategy: Literal["holdout", "repeated_cv"] = "holdout"
     cv_folds: int = Field(default=5, ge=2, le=10)
     cv_repeats: int = Field(default=3, ge=1, le=20)
+    locked_test_fraction: float | None = Field(default=None, ge=0.05, le=0.5)
     early_stopping_patience: int | None = Field(default=10, ge=1, le=100)
     early_stopping_min_delta: float = Field(default=1e-4, ge=0.0, le=0.1)
     parallel_jobs: int = Field(default=1, ge=1, le=16)
@@ -844,8 +1196,9 @@ def _encoded_to_raw_feature_map(feature_encoder: dict[str, Any], requested_featu
         if column_name not in requested:
             continue
         meta = categorical_mappings.get(column_name, {})
+        level_columns = meta.get("level_columns") or {}
         for level in meta.get("retained_levels", []):
-            mapping[f"{column_name}_{level}"] = column_name
+            mapping[str(level_columns.get(level, f"{column_name}_{level}"))] = column_name
         unknown_column = meta.get("unknown_column")
         missing_column = meta.get("missing_column")
         if unknown_column:
@@ -964,6 +1317,86 @@ def _enforce_upload_shape_limits(dataframe: Any) -> None:
         )
 
 
+def _format_megabytes(n_bytes: int) -> str:
+    return f"{n_bytes / (1024 * 1024):,.0f} MB"
+
+
+def _guard_compressed_upload(path: Path, filename: str) -> None:
+    """Refuse workbooks/Parquet files whose decompressed size or shape exceeds the upload limits."""
+
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".xlsx":
+        try:
+            with zipfile.ZipFile(path) as archive:
+                uncompressed_bytes = sum(max(0, int(info.file_size)) for info in archive.infolist())
+        except (zipfile.BadZipFile, OSError) as exc:
+            raise UserInputError("Failed to read Excel file: the .xlsx container is not a valid workbook.") from exc
+        if uncompressed_bytes > _MAX_XLSX_UNCOMPRESSED_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"The Excel workbook expands to {_format_megabytes(uncompressed_bytes)} when decompressed. "
+                    f"SurvStudio accepts workbooks up to {_format_megabytes(_MAX_XLSX_UNCOMPRESSED_BYTES)} uncompressed; "
+                    "export the sheet as CSV instead."
+                ),
+            )
+        return
+    if suffix == ".parquet":
+        try:
+            import pyarrow.parquet as pq
+        except ImportError:  # pragma: no cover - pandas reports the missing engine itself
+            return
+        try:
+            parquet_file = pq.ParquetFile(path)
+            try:
+                metadata = parquet_file.metadata
+            finally:
+                parquet_file.close()
+        except Exception as exc:
+            raise UserInputError(f"Failed to read Parquet file: {exc}") from exc
+        _enforce_upload_shape_limits(SimpleNamespace(shape=(int(metadata.num_rows), int(metadata.num_columns))))
+        uncompressed_bytes = sum(
+            max(0, int(metadata.row_group(index).total_byte_size)) for index in range(metadata.num_row_groups)
+        )
+        if uncompressed_bytes > _MAX_PARQUET_UNCOMPRESSED_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"The Parquet file expands to {_format_megabytes(uncompressed_bytes)} when decompressed. "
+                    f"SurvStudio accepts Parquet data up to {_format_megabytes(_MAX_PARQUET_UNCOMPRESSED_BYTES)} uncompressed."
+                ),
+            )
+
+
+def _store_loaded_dataframe(
+    dataframe: Any,
+    *,
+    filename: str,
+    source: str,
+    metadata: dict[str, Any] | None = None,
+    copy_dataframe: bool = True,
+) -> dict[str, Any]:
+    """Validate, hash, store and profile a freshly loaded table (blocking; run in a worker thread)."""
+
+    _enforce_upload_shape_limits(dataframe)
+    ensure_model_feature_candidate_limit(dataframe)
+    stored = store.create(
+        dataframe,
+        filename=filename,
+        source=source,
+        metadata=metadata,
+        copy_dataframe=copy_dataframe,
+    )
+    return dataset_response(stored.dataset_id)
+
+
+def _ingest_uploaded_file(path: Path, filename: str) -> dict[str, Any]:
+    _guard_compressed_upload(path, filename)
+    dataframe = load_dataframe_from_path(path)
+    # The parsed frame is private to this request, so the store can keep it without a deep copy.
+    return _store_loaded_dataframe(dataframe, filename=filename, source="upload", copy_dataframe=False)
+
+
 def _replay_dataset_note(request_config: dict[str, Any], *, dataset_filename: str) -> str:
     return (
         "Replay dataset: "
@@ -992,7 +1425,7 @@ def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -
         (
             f"max_depth={request_config.get('max_depth')}"
             if request_config.get("max_depth") is not None
-            else "max_depth=auto"
+            else "max_depth=auto (RSF: unlimited; GBS: 3)"
         ),
     ]
     if request_config.get("learning_rate") is not None:
@@ -1001,6 +1434,8 @@ def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -
         settings.append(
             f"cv={request_config.get('cv_repeats', 1)}x{request_config.get('cv_folds', 1)}"
         )
+        if request_config.get("locked_test_fraction"):
+            settings.append(f"locked_test_fraction={request_config.get('locked_test_fraction')}")
 
     return [
         _replay_dataset_note(request_config, dataset_filename=dataset_filename),
@@ -1033,6 +1468,8 @@ def _dl_replay_notes(
         settings.append(
             f"cv={request_config.get('cv_repeats', 1)}x{request_config.get('cv_folds', 1)}"
         )
+        if request_config.get("locked_test_fraction"):
+            settings.append(f"locked_test_fraction={request_config.get('locked_test_fraction')}")
     if request_config.get("num_time_bins") is not None:
         settings.append(f"num_time_bins={request_config.get('num_time_bins')}")
     if request_config.get("d_model") is not None:
@@ -1107,6 +1544,21 @@ def _classify_runtime_request_error(exc: Exception) -> tuple[int, str] | None:
 
     raw_message = str(exc).strip()
     lowered = raw_message.lower()
+    if type(exc).__name__ == "ConvergenceError":
+        return (
+            400,
+            "The model did not converge. Reduce overlapping variables, sparse categories, or feature count and try again.",
+        )
+    if isinstance(exc, InternalAnalysisError):
+        cause_message = str(exc.__cause__ or "").lower()
+        if any(token in cause_message for token in ("nan", "infinity", "inf ", "non-finite", "too large for dtype")):
+            logger.warning("Analysis rejected non-finite internal values", exc_info=exc)
+            return (
+                400,
+                "The analysis encountered missing, infinite, or out-of-range values in the selected columns. "
+                "Check those columns for invalid values and try again.",
+            )
+        return None
     if isinstance(exc, ArithmeticError):
         return (
             400,
@@ -1149,6 +1601,12 @@ def fail_bad_request(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if isinstance(exc, UserInputError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, InternalAnalysisError):
+        logger.error(
+            "Unexpected internal analysis error",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     if isinstance(exc, (ValueError, TypeError)):
         raise HTTPException(
             status_code=400,
@@ -1161,17 +1619,56 @@ def fail_bad_request(exc: Exception) -> NoReturn:
     raise exc
 
 
-def _format_export_value(value: Any, style: str) -> str:
+_P_VALUE_LABEL_TOKENS = frozenset({"p", "pvalue", "pvalues", "pval", "qvalue", "qvalues"})
+_JOURNAL_P_VALUE_FLOOR = 0.001
+_JOURNAL_SIGNIFICANCE_THRESHOLD = 0.05
+
+
+def _is_p_value_column(column: Any) -> bool:
+    """Mirror the frontend's p-value label detection (P value, p-value, BH adjusted p, logrank_p, ...)."""
+
+    tokens = re.sub(r"[\s_\-.]+", " ", str(column or "").lower()).split()
+    if any(token in _P_VALUE_LABEL_TOKENS for token in tokens):
+        return True
+    return any(first == "q" and second.startswith("value") for first, second in zip(tokens, tokens[1:]))
+
+
+def _format_journal_p_value(value: float) -> str:
+    if value < _JOURNAL_P_VALUE_FLOOR:
+        return f"<{_JOURNAL_P_VALUE_FLOOR:.3f}"
+    below_threshold = value < _JOURNAL_SIGNIFICANCE_THRESHOLD
+    for decimals in range(3, 9):
+        text = f"{value:.{decimals}f}"
+        # Never let rounding move a p-value across the conventional 0.05 threshold (0.0496 -> "0.050").
+        if (float(text) < _JOURNAL_SIGNIFICANCE_THRESHOLD) == below_threshold:
+            return text
+    return f"{value:.3g}" if below_threshold else f"{value:.3f}"
+
+
+def _format_journal_number(value: float) -> str:
+    if value == 0:
+        return "0.000"
+    if abs(value) < 0.001:
+        # Tiny non-zero values would otherwise collapse to "0.000"/"-0.000".
+        return f"{value:.2e}"
+    return f"{value:.3f}"
+
+
+def _format_export_value(value: Any, style: str, column: Any = None) -> str:
     if value is None:
         return ""
     if isinstance(value, bool):
         return "Yes" if value else "No"
     if isinstance(value, (int, float)):
         if isinstance(value, float):
-            if value != value or value in {float("inf"), float("-inf")}:
+            if not math.isfinite(value):
                 return ""
+            if value == 0:
+                value = 0.0  # normalize -0.0
             if style == "journal":
-                return f"{value:.3f}".rstrip("0").rstrip(".")
+                if column is not None and _is_p_value_column(column) and 0.0 <= value <= 1.0:
+                    return _format_journal_p_value(value)
+                return _format_journal_number(value)
         return str(value)
     return str(value)
 
@@ -1212,8 +1709,9 @@ def _export_template_profile(template: str) -> dict[str, str]:
     return EXPORT_TEMPLATE_PROFILES.get(template, EXPORT_TEMPLATE_PROFILES["default"])
 
 
-def _normalize_export_text(value: Any, style: str) -> str:
-    return _format_export_value(value, style).replace("\r\n", " ").replace("\r", " ").replace("\n", " ").strip()
+def _normalize_export_text(value: Any, style: str, column: Any = None) -> str:
+    text = _format_export_value(value, style, column).replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    return _clean_export_characters(text).strip()
 
 
 def _default_export_caption(template: str) -> str:
@@ -1255,25 +1753,54 @@ def _export_columns(rows: list[dict[str, Any]], columns: Sequence[str] | None = 
     return resolved_columns
 
 
+def _clean_export_characters(text: str) -> str:
+    """Replace control characters (and lone surrogates) that break XML-based or UTF-8 exports."""
+
+    return _EXPORT_ILLEGAL_CHAR_PATTERN.sub(" ", text)
+
+
+def _is_number_like_cell(text: str) -> bool:
+    """True for signed numeric summaries like "-0.42 ± 1.00" or "-1.2 (-2.0 to -0.4)".
+
+    Linear-time check: the cell must start with an optionally signed number and contain only
+    digits and numeric punctuation afterwards, so it cannot spell a spreadsheet function call.
+    """
+
+    stripped = text.strip()
+    body = stripped[1:] if stripped[:1] in {"+", "-", "\u2212"} else stripped
+    if not body:
+        return False
+    if not (body[0].isdigit() or (body[0] == "." and body[1:2].isdigit())):
+        return False
+    reduced = _NUMBER_LIKE_TO_WORD.sub(" ", _NUMBER_LIKE_EXPONENT.sub("", stripped))
+    return _NUMBER_LIKE_CELL_CHARS.fullmatch(reduced) is not None
+
+
 def _sanitize_csv_cell(value: Any) -> str:
-    text = "" if value is None else str(value)
-    stripped = text.lstrip()
+    """Neutralize spreadsheet formula injection in CSV cells (CSV output only)."""
+
+    text = "" if value is None else _clean_export_characters(str(value))
+    stripped = text.lstrip(" ")
     if stripped.startswith("'") and _SIGNED_NUMERIC_CSV_LITERAL.fullmatch(stripped[1:]):
         prefix_len = len(text) - len(stripped)
         return text[:prefix_len] + stripped[1:]
-    if _SIGNED_NUMERIC_CSV_LITERAL.fullmatch(stripped):
-        return text
-    if stripped.startswith(("=", "+", "-", "@")):
+    if text.startswith(_CSV_FORMULA_TRIGGER_CHARS) or stripped.startswith(_CSV_FORMULA_TRIGGER_CHARS):
+        return f"'{text}"
+    if (
+        stripped.startswith(_CSV_SIGN_CHARS)
+        and stripped.strip("+- ")  # a bare "-" placeholder cannot form a formula
+        and not _is_number_like_cell(stripped)
+    ):
         return f"'{text}"
     return text
 
 
-def _sanitize_markdown_cell(value: Any, style: str) -> str:
-    return _sanitize_csv_cell(_normalize_export_text(value, style)).replace("|", "\\|")
+def _sanitize_markdown_cell(value: Any, style: str, column: Any = None) -> str:
+    return _normalize_export_text(value, style, column).replace("|", "\\|")
 
 
-def _sanitize_export_note(note: Any) -> str:
-    return _sanitize_csv_cell(_normalize_export_text(note, "plain"))
+def _clean_export_note(note: Any) -> str:
+    return _normalize_export_text(note, "plain")
 
 
 def _export_rows_to_csv(
@@ -1289,28 +1816,58 @@ def _export_rows_to_csv(
         raise UserInputError("No rows available for export.")
     resolved_columns = _export_columns(rows, columns)
     buffer = io.StringIO()
+    # A UTF-8 BOM lets Excel detect the encoding (otherwise "±" renders as mojibake).
+    buffer.write(_CSV_UTF8_BOM)
     writer = csv.writer(buffer)
-    clean_caption = _sanitize_export_note(caption) if caption else ""
-    clean_notes = [
-        sanitized_note
-        for note in (notes or [])
-        if (sanitized_note := _sanitize_export_note(note))
-    ]
+    clean_caption = _clean_export_note(caption) if caption else ""
+    clean_notes = [clean_note for note in (notes or []) if (clean_note := _clean_export_note(note))]
+    # Preamble lines are written through the CSV writer as one quoted cell each, so commas in
+    # captions/notes (for example filename-derived text) cannot open a new formula cell.
     if clean_caption:
-        buffer.write(f"# {clean_caption}\n")
+        writer.writerow([_sanitize_csv_cell(f"# {clean_caption}")])
     if clean_notes:
-        buffer.write(f"# {_export_template_profile(template)['notes_heading']}:\n")
+        writer.writerow([_sanitize_csv_cell(f"# {_export_template_profile(template)['notes_heading']}:")])
         for note in clean_notes:
-            buffer.write(f"# - {note}\n")
+            writer.writerow([_sanitize_csv_cell(f"# - {note}")])
     writer.writerow([_sanitize_csv_cell(column) for column in resolved_columns])
     for row in rows:
         writer.writerow(
             [
-                _sanitize_csv_cell(_format_export_value(row.get(column), style))
+                _sanitize_csv_cell(_format_export_value(row.get(column), style, column))
                 for column in resolved_columns
             ]
         )
     return buffer.getvalue()
+
+
+def _xlsx_text_cell(value: Any) -> tuple[str | None, None]:
+    text = _clean_export_characters("" if value is None else str(value))
+    return (text if text else None), None
+
+
+def _xlsx_cell(value: Any, style: str, column: Any) -> tuple[Any, str | None]:
+    """Return an XLSX cell value plus number format; numbers stay numeric cells."""
+
+    if value is None or isinstance(value, bool):
+        return _xlsx_text_cell(_format_export_value(value, style, column))
+    if isinstance(value, int):
+        return value, None
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None, None
+        numeric_value = 0.0 if value == 0 else value
+        if style != "journal":
+            return numeric_value, None
+        display = _format_export_value(numeric_value, style, column)
+        try:
+            float(display)
+        except ValueError:
+            return _xlsx_text_cell(display)  # e.g. "<0.001"
+        if "e" in display.lower():
+            return numeric_value, "0.00E+00"
+        decimals = len(display.split(".", 1)[1]) if "." in display else 0
+        return numeric_value, ("0." + "0" * decimals) if decimals else "0"
+    return _xlsx_text_cell(_format_export_value(value, style, column))
 
 
 def _export_rows_to_xlsx(
@@ -1335,31 +1892,38 @@ def _export_rows_to_xlsx(
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Table"
+    current_row = 1
+
+    def _write_row(values: Sequence[tuple[Any, str | None]]) -> None:
+        nonlocal current_row
+        for column_index, (value, number_format) in enumerate(values, start=1):
+            if value is None:
+                continue
+            cell = worksheet.cell(row=current_row, column=column_index)
+            cell.value = value
+            if isinstance(value, str) and value.startswith("="):
+                # openpyxl would store "=..." as a live formula; keep it literal text instead.
+                cell.data_type = "s"
+                cell.quotePrefix = True
+            if number_format:
+                cell.number_format = number_format
+        current_row += 1
 
     resolved_caption = (caption or "").strip()
     if resolved_caption:
-        worksheet.append([_sanitize_csv_cell(resolved_caption)])
-        worksheet.append([])
+        _write_row([_xlsx_text_cell(resolved_caption)])
+        current_row += 1
 
-    worksheet.append([_sanitize_csv_cell(column) for column in resolved_columns])
+    _write_row([_xlsx_text_cell(column) for column in resolved_columns])
     for row in rows:
-        worksheet.append(
-            [
-                _sanitize_csv_cell(_format_export_value(row.get(column), style))
-                for column in resolved_columns
-            ]
-        )
+        _write_row([_xlsx_cell(row.get(column), style, column) for column in resolved_columns])
 
-    clean_notes: list[str] = []
-    for note in notes or []:
-        sanitized_note = _sanitize_export_note(note)
-        if sanitized_note:
-            clean_notes.append(sanitized_note)
+    clean_notes = [clean_note for note in (notes or []) if (clean_note := _clean_export_note(note))]
     if clean_notes:
-        worksheet.append([])
-        worksheet.append([_export_template_profile(template)["notes_heading"]])
+        current_row += 1
+        _write_row([_xlsx_text_cell(_export_template_profile(template)["notes_heading"])])
         for note in clean_notes:
-            worksheet.append([note])
+            _write_row([_xlsx_text_cell(note)])
 
     buffer = io.BytesIO()
     workbook.save(buffer)
@@ -1380,16 +1944,12 @@ def _export_rows_to_markdown(
     resolved_columns = _export_columns(rows, columns)
     template_profile = _export_template_profile(template)
     resolved_caption = _resolve_export_caption(caption, template)
-    clean_notes: list[str] = []
-    for note in notes:
-        sanitized_note = _sanitize_export_note(note)
-        if sanitized_note:
-            clean_notes.append(sanitized_note)
+    clean_notes = [clean_note for note in notes if (clean_note := _clean_export_note(note))]
     header = f"| {' | '.join(_sanitize_markdown_cell(column, 'plain') for column in resolved_columns)} |"
     divider = f"| {' | '.join(['---'] * len(resolved_columns))} |"
     body = [
         "| "
-        + " | ".join(_sanitize_markdown_cell(row.get(column), style) for column in resolved_columns)
+        + " | ".join(_sanitize_markdown_cell(row.get(column), style, column) for column in resolved_columns)
         + " |"
         for row in rows
     ]
@@ -1425,7 +1985,8 @@ def _export_rows_to_latex(
     resolved_caption = _resolve_export_caption(caption, template)
     column_spec = "l" * len(resolved_columns)
     body = [
-        " & ".join(_latex_escape(_normalize_export_text(row.get(column), style)) for column in resolved_columns) + r" \\"
+        " & ".join(_latex_escape(_normalize_export_text(row.get(column), style, column)) for column in resolved_columns)
+        + r" \\"
         for row in rows
     ]
     lines = [
@@ -1458,7 +2019,13 @@ def _export_rows_to_latex(
                 ]
             )
     lines.append("\\end{table}")
-    return "\n".join(lines) + "\n"
+    preamble_hints = ["% Requires \\usepackage{booktabs} in the document preamble."]
+    if any(ord(character) > 127 for line in lines for character in line):
+        preamble_hints.append(
+            "% Contains UTF-8 characters: needs \\usepackage[utf8]{inputenc} on LaTeX releases before 2018 "
+            "(and \\usepackage[T1]{fontenc} for accented glyphs)."
+        )
+    return "\n".join([*preamble_hints, *lines]) + "\n"
 
 
 def _docx_run(text: str, *, bold: bool = False, italic: bool = False) -> str:
@@ -1468,7 +2035,7 @@ def _docx_run(text: str, *, bold: bool = False, italic: bool = False) -> str:
     if italic:
         properties.append("<w:i/>")
     props_xml = f"<w:rPr>{''.join(properties)}</w:rPr>" if properties else ""
-    safe_text = xml_escape(text.replace("\n", " "))
+    safe_text = xml_escape(_clean_export_characters(text.replace("\r", " ").replace("\n", " ")))
     return f'<w:r>{props_xml}<w:t xml:space="preserve">{safe_text}</w:t></w:r>'
 
 
@@ -1502,7 +2069,10 @@ def _docx_table(rows: list[dict[str, Any]], *, style: str, columns: Sequence[str
     header_row = "<w:tr>" + "".join(_docx_cell(column, width=cell_width, bold=True) for column in resolved_columns) + "</w:tr>"
     body_rows = [
         "<w:tr>"
-        + "".join(_docx_cell(_normalize_export_text(row.get(column), style), width=cell_width) for column in resolved_columns)
+        + "".join(
+            _docx_cell(_normalize_export_text(row.get(column), style, column), width=cell_width)
+            for column in resolved_columns
+        )
         + "</w:tr>"
         for row in rows
     ]
@@ -1534,11 +2104,7 @@ def _export_rows_to_docx(
         _docx_paragraph(resolved_caption, bold=caption_bold, italic=caption_italic),
         _docx_table(rows, style=style, columns=columns),
     ]
-    clean_notes: list[str] = []
-    for note in notes:
-        sanitized_note = _sanitize_export_note(note)
-        if sanitized_note:
-            clean_notes.append(sanitized_note)
+    clean_notes = [clean_note for note in notes if (clean_note := _clean_export_note(note))]
     if clean_notes:
         body_parts.append(_docx_paragraph(f"{template_profile['notes_heading']}:", italic=True))
         for note in clean_notes:
@@ -1588,6 +2154,28 @@ def _export_rows_to_docx(
 # ── Core endpoints ──────────────────────────────────────────────
 
 
+def _json_safe_error_payload(value: Any) -> Any:
+    """Replace non-finite floats (e.g. an echoed NaN input) so the 422 body can be serialized."""
+
+    if isinstance(value, float) and not math.isfinite(value):
+        if value != value:
+            return "NaN"
+        return "Infinity" if value > 0 else "-Infinity"
+    if isinstance(value, dict):
+        return {key: _json_safe_error_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_error_payload(item) for item in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _json_safe_error_payload(jsonable_encoder(exc.errors()))},
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     response = templates.TemplateResponse(request, "index.html", {"static_version": _static_asset_version()})
@@ -1629,11 +2217,28 @@ def _schedule_process_shutdown(delay_seconds: float = 0.35) -> None:
     threading.Thread(target=_shutdown, daemon=True).start()
 
 
+_SHUTDOWN_CUSTOM_HEADERS = ("x-requested-with", "x-survstudio-request")
+
+
+def _is_non_simple_shutdown_request(request: Request) -> bool:
+    """True when the request could not have been sent by a plain cross-site HTML form."""
+
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type == "application/json":
+        return True
+    return any(request.headers.get(header) for header in _SHUTDOWN_CUSTOM_HEADERS)
+
+
 @app.post("/api/shutdown")
 async def shutdown_server(request: Request) -> dict[str, str]:
     client_host = request.client.host if request.client else ""
     if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
         raise HTTPException(status_code=403, detail="Shutdown is allowed only from a local session.")
+    if not _is_non_simple_shutdown_request(request):
+        raise HTTPException(
+            status_code=415,
+            detail="Shutdown requests must be sent as JSON (Content-Type: application/json) from the SurvStudio page.",
+        )
     _schedule_process_shutdown()
     return {
         "status": "shutting_down",
@@ -1649,12 +2254,10 @@ async def _load_builtin_dataset_response(
     preset_name: str | None = None,
 ) -> dict[str, Any]:
     try:
-        dataframe = await run_in_threadpool(loader)
-        _enforce_upload_shape_limits(dataframe)
-        ensure_model_feature_candidate_limit(dataframe)
         metadata = {"preset_name": preset_name} if preset_name else None
-        stored = store.create(dataframe, filename=filename, source=source, metadata=metadata)
-        return await run_in_threadpool(dataset_response, stored.dataset_id)
+        return await run_in_threadpool(
+            lambda: _store_loaded_dataframe(loader(), filename=filename, source=source, metadata=metadata)
+        )
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -1674,13 +2277,9 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
                     break
                 total_bytes += len(chunk)
                 if total_bytes > _MAX_UPLOAD_BYTES:
-                    raise HTTPException(status_code=413, detail="Upload exceeds the 200 MB limit.")
+                    raise HTTPException(status_code=413, detail=_UPLOAD_TOO_LARGE_DETAIL)
                 temp_file.write(chunk)
-        dataframe = await run_in_threadpool(load_dataframe_from_path, temp_path)
-        _enforce_upload_shape_limits(dataframe)
-        ensure_model_feature_candidate_limit(dataframe)
-        stored = store.create(dataframe, filename=filename, source="upload")
-        return await run_in_threadpool(dataset_response, stored.dataset_id)
+        return await run_in_threadpool(_ingest_uploaded_file, temp_path, filename)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1726,7 +2325,8 @@ async def load_gbsg2_example() -> dict[str, Any]:
 @app.get("/api/dataset/{dataset_id}")
 async def get_dataset(dataset_id: str) -> dict[str, Any]:
     try:
-        return dataset_response(dataset_id)
+        # Profiling a large table is CPU-bound; keep it off the event loop.
+        return await run_in_threadpool(dataset_response, dataset_id)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -1734,54 +2334,41 @@ async def get_dataset(dataset_id: str) -> dict[str, Any]:
 @app.post("/api/export-table")
 async def export_table(request_model: TableExportRequest) -> Response:
     try:
-        export_notes = list(request_model.notes or [])
-        for provenance_note in _export_provenance_notes(request_model.provenance):
-            if provenance_note not in export_notes:
-                export_notes.append(provenance_note)
-        if request_model.format == "csv":
-            content = _export_rows_to_csv(
-                request_model.rows,
-                request_model.style,
-                columns=request_model.columns,
-                caption=request_model.caption,
-                notes=export_notes,
-                template=request_model.template,
-            )
-            return Response(content=content, media_type="text/csv; charset=utf-8")
-        if request_model.format == "xlsx":
-            content = _export_rows_to_xlsx(
-                request_model.rows,
-                request_model.style,
-                columns=request_model.columns,
-                caption=request_model.caption,
-                notes=export_notes,
-                template=request_model.template,
-            )
-            return Response(
-                content=content,
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        if request_model.format == "markdown":
-            content = _export_rows_to_markdown(
-                request_model.rows,
-                columns=request_model.columns,
-                caption=request_model.caption,
-                notes=export_notes,
-                style=request_model.style,
-                template=request_model.template,
-            )
-            return Response(content=content, media_type="text/markdown; charset=utf-8")
-        if request_model.format == "latex":
-            content = _export_rows_to_latex(
-                request_model.rows,
-                columns=request_model.columns,
-                caption=request_model.caption,
-                notes=export_notes,
-                style=request_model.style,
-                template=request_model.template,
-            )
-            return Response(content=content, media_type="text/x-tex; charset=utf-8")
-        content = _export_rows_to_docx(
+        return await run_in_threadpool(_render_table_export, request_model)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+def _render_table_export(request_model: TableExportRequest) -> Response:
+    export_notes = list(request_model.notes or [])
+    for provenance_note in _export_provenance_notes(request_model.provenance):
+        if provenance_note not in export_notes:
+            export_notes.append(provenance_note)
+    if request_model.format == "csv":
+        content = _export_rows_to_csv(
+            request_model.rows,
+            request_model.style,
+            columns=request_model.columns,
+            caption=request_model.caption,
+            notes=export_notes,
+            template=request_model.template,
+        )
+        return Response(content=content, media_type="text/csv; charset=utf-8")
+    if request_model.format == "xlsx":
+        content = _export_rows_to_xlsx(
+            request_model.rows,
+            request_model.style,
+            columns=request_model.columns,
+            caption=request_model.caption,
+            notes=export_notes,
+            template=request_model.template,
+        )
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    if request_model.format == "markdown":
+        content = _export_rows_to_markdown(
             request_model.rows,
             columns=request_model.columns,
             caption=request_model.caption,
@@ -1789,12 +2376,29 @@ async def export_table(request_model: TableExportRequest) -> Response:
             style=request_model.style,
             template=request_model.template,
         )
-        return Response(
-            content=content,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        return Response(content=content, media_type="text/markdown; charset=utf-8")
+    if request_model.format == "latex":
+        content = _export_rows_to_latex(
+            request_model.rows,
+            columns=request_model.columns,
+            caption=request_model.caption,
+            notes=export_notes,
+            style=request_model.style,
+            template=request_model.template,
         )
-    except Exception as exc:
-        fail_bad_request(exc)
+        return Response(content=content, media_type="text/x-tex; charset=utf-8")
+    content = _export_rows_to_docx(
+        request_model.rows,
+        columns=request_model.columns,
+        caption=request_model.caption,
+        notes=export_notes,
+        style=request_model.style,
+        template=request_model.template,
+    )
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
 @app.post("/api/derive-group")
@@ -1836,7 +2440,7 @@ async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
                 payload["cutpoint_figure"] = build_cutpoint_scan_figure(summary, variable_name=request_model.source_column)
             return payload
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -1878,7 +2482,7 @@ async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -1937,7 +2541,7 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -1978,7 +2582,7 @@ async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
             )
             return _attach_dataset_hash({"preview": preview, "request_config": request_config}, stored)
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -1996,19 +2600,54 @@ async def cohort_table(request_model: CohortTableRequest) -> dict[str, Any]:
             )
 
         def _run() -> dict[str, Any]:
+            dataframe = stored.dataframe
+            cohort_note: str | None = None
+            analysis_cohort: dict[str, Any] | None = None
+            if request_model.time_column and request_model.event_column:
+                # Same row rule as KM/Cox: valid time and event values and non-negative follow-up time.
+                survival_frame = _cohort_frame(
+                    dataframe,
+                    time_column=request_model.time_column,
+                    event_column=request_model.event_column,
+                    event_positive_value=request_model.event_positive_value,
+                )
+                keep_mask = dataframe.index.isin(pd.Index(survival_frame.attrs["source_row_index"]))
+                n_total = int(dataframe.shape[0])
+                dataframe = dataframe.loc[keep_mask]
+                n_kept = int(dataframe.shape[0])
+                analysis_cohort = {
+                    "time_column": request_model.time_column,
+                    "event_column": request_model.event_column,
+                    "event_positive_value": request_model.event_positive_value,
+                    "n_rows_total": n_total,
+                    "n_rows_analyzed": n_kept,
+                    "n_rows_excluded": n_total - n_kept,
+                    "dropped_missing_rows": int(survival_frame.attrs.get("dropped_missing_rows", 0)),
+                    "dropped_nonpositive_time_rows": int(survival_frame.attrs.get("dropped_nonpositive_time_rows", 0)),
+                }
+                cohort_note = (
+                    f"Restricted to the survival analysis cohort: {n_kept} of {n_total} rows with a valid "
+                    f"{request_model.time_column} time, a valid {request_model.event_column} status, and non-negative "
+                    "follow-up time (the same rows used by Kaplan-Meier and Cox analyses)."
+                )
+            analysis = compute_cohort_table(
+                dataframe,
+                variables=request_model.variables,
+                group_column=request_model.group_column,
+            )
+            if cohort_note is not None:
+                analysis["analysis_cohort"] = analysis_cohort
+                analysis["notes"] = [cohort_note]
+                analysis["overall_scope"] = f"{analysis.get('overall_scope', '')} {cohort_note}".strip()
             return _attach_dataset_hash(
                 {
-                    "analysis": compute_cohort_table(
-                        stored.dataframe,
-                        variables=request_model.variables,
-                        group_column=request_model.group_column,
-                    ),
+                    "analysis": analysis,
                     "request_config": request_config,
                 },
                 stored,
             )
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -2032,8 +2671,8 @@ async def discover_signature(request_model: SignatureSearchRequest) -> dict[str,
             context="signature discovery candidates",
         )
 
-        def _run() -> tuple:
-            return discover_feature_signature(
+        def _run() -> dict[str, Any]:
+            updated, column_name, analysis = discover_feature_signature(
                 stored.dataframe,
                 time_column=request_model.time_column,
                 event_column=request_model.event_column,
@@ -2052,26 +2691,29 @@ async def discover_signature(request_model: SignatureSearchRequest) -> dict[str,
                 random_seed=request_model.random_seed,
                 new_column_name=request_model.new_column_name,
             )
+            provenance = dict(stored.metadata.get("derived_column_provenance", {}))
+            signature_recipe = copy.deepcopy(
+                analysis.get("derived_group", {}).get("recipe")
+                or analysis.get("signature_recipe", {})
+            )
+            provenance[column_name] = {
+                "outcome_informed": True,
+                "recipe": signature_recipe,
+                "statistically_significant": bool(analysis.get("best_split", {}).get("Statistically significant")),
+            }
+            # Snapshot hashing/profiling is CPU-bound, so it stays in the worker thread too.
+            payload = _create_dataset_snapshot(stored, updated, metadata={
+                **stored.metadata,
+                "derived_column_provenance": provenance,
+            })
+            payload["derived_column"] = column_name
+            payload["signature_analysis"] = analysis
+            payload["signature_request_config"] = request_config
+            # dataset_response() already carries the new snapshot's dataset_hash; do not overwrite it
+            # with the parent dataset's hash.
+            return payload
 
-        updated, column_name, analysis = await run_in_threadpool(_run)
-        provenance = dict(stored.metadata.get("derived_column_provenance", {}))
-        signature_recipe = copy.deepcopy(
-            analysis.get("derived_group", {}).get("recipe")
-            or analysis.get("signature_recipe", {})
-        )
-        provenance[column_name] = {
-            "outcome_informed": True,
-            "recipe": signature_recipe,
-            "statistically_significant": bool(analysis.get("best_split", {}).get("Statistically significant")),
-        }
-        payload = _create_dataset_snapshot(stored, updated, metadata={
-            **stored.metadata,
-            "derived_column_provenance": provenance,
-        })
-        payload["derived_column"] = column_name
-        payload["signature_analysis"] = analysis
-        payload["signature_request_config"] = request_config
-        return _attach_dataset_hash(payload, stored)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -2100,7 +2742,7 @@ async def optimal_cutpoint(request_model: OptimalCutpointRequest) -> dict[str, A
             figure = build_cutpoint_scan_figure(result, variable_name=request_model.variable)
             return {"result": result, "figure": figure}
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -2155,6 +2797,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                         cv_folds=request_model.cv_folds,
                         cv_repeats=request_model.cv_repeats,
                         random_state=request_model.random_state,
+                        locked_test_fraction=request_model.locked_test_fraction,
                     )
                 else:
                     comparison = compare_survival_models(
@@ -2312,7 +2955,7 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -2375,6 +3018,11 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                     cv_folds=request_model.cv_folds,
                     cv_repeats=request_model.cv_repeats,
                     parallel_jobs=request_model.parallel_jobs,
+                    locked_test_fraction=(
+                        request_model.locked_test_fraction
+                        if request_model.evaluation_strategy == "repeated_cv"
+                        else None
+                    ),
                 )
                 _attach_manuscript_notes(
                     result,
@@ -2437,7 +3085,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -2469,7 +3117,7 @@ class CounterfactualRequest(_FeatureSelectionRequestModel):
     n_estimators: int = Field(default=100, ge=10, le=1000)
     max_depth: int | None = None
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
-    random_state: int = 42
+    random_state: int = Field(default=42, ge=0, le=2**32 - 1)
 
     @field_validator("target_feature", mode="before")
     @classmethod
@@ -2502,7 +3150,7 @@ class PDPRequest(_FeatureSelectionRequestModel):
     n_estimators: int = Field(default=100, ge=10, le=1000)
     max_depth: int | None = None
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
-    random_state: int = 42
+    random_state: int = Field(default=42, ge=0, le=2**32 - 1)
 
     @field_validator("target_feature", mode="before")
     @classmethod
@@ -2557,7 +3205,7 @@ async def time_dependent_importance(request_model: TimeDependentImportanceReques
             figure = build_time_dependent_importance_figure(result)
             return _attach_dataset_hash({"analysis": result, "figure": figure}, stored)
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -2613,7 +3261,7 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
             )
             return _attach_dataset_hash({"analysis": analysis, "request_config": request_config}, stored)
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -2696,6 +3344,6 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await run_in_threadpool(_run)
+        return await _run_dataset_job(request_model.dataset_id, _run)
     except Exception as exc:
         fail_bad_request(exc)

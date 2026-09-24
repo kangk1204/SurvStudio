@@ -31,6 +31,12 @@ from survival_toolkit.encoding import (
     transform_feature_encoder as _transform_shared_feature_encoder,
 )
 from survival_toolkit.errors import user_input_boundary
+from survival_toolkit.evaluation import (
+    DEFAULT_HOLDOUT_FRACTION,
+    evaluation_split_fingerprint,
+    locked_test_split,
+    stratified_holdout_indices,
+)
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
 
 try:
@@ -80,7 +86,7 @@ _DEEPHIT_RANKING_SIGMA = 1.0
 _DEEP_COMPARE_PARALLEL_MAX_INFLIGHT_BYTES = 512 * 1024 * 1024
 _DEEP_COMPARE_PARALLEL_WORKER_OVERHEAD_BYTES = 650 * 1024 * 1024
 _DEEP_COMPARE_PARALLEL_MEMORY_RESERVE_BYTES = 256 * 1024 * 1024
-_TRANSFORMER_MAX_ATTENTION_BYTES = 1024 * 1024 * 1024
+_TRANSFORMER_MAX_ATTENTION_BYTES = 2 * 1024 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -299,8 +305,9 @@ def _coerce_deep_frame(
     frame = frame.replace([np.inf, -np.inf], np.nan)
     frame[time_column] = pd.to_numeric(frame[time_column], errors="coerce")
 
-    from survival_toolkit.analysis import coerce_event
+    from survival_toolkit.analysis import coerce_event, reject_censoring_indicator_event_column
 
+    reject_censoring_indicator_event_column(frame, event_column)
     frame[event_column] = coerce_event(frame[event_column], event_positive_value=event_positive_value)
     for col in features:
         if col in categorical_features:
@@ -317,9 +324,13 @@ def _coerce_deep_frame(
             frame[col] = numeric_values
 
     frame = frame.dropna(subset=[time_column, event_column]).copy()
-    positive_mask = frame[time_column] > 0
-    frame = frame.loc[positive_mask].reset_index(drop=True)
+    # Time 0 is a valid follow-up time; only negative times are dropped.
+    positive_mask = frame[time_column] >= 0
+    frame = frame.loc[positive_mask]
+    source_row_index = frame.index.tolist()
+    frame = frame.reset_index(drop=True)
     frame.attrs["dropped_nonpositive_time_rows"] = int((~positive_mask).sum())
+    frame.attrs["source_row_index"] = source_row_index
 
     if frame.empty:
         raise ValueError("No analyzable rows remain after removing missing/invalid values.")
@@ -541,21 +552,33 @@ def _estimate_parallel_deep_compare_memory_bytes(*, payload_bytes: int, max_work
     )
 
 
+def _transformer_feedforward_dim(d_model: int) -> int:
+    return int(4 * max(1, int(d_model)))
+
+
 def _estimate_transformer_attention_bytes(
     *,
     training_samples: int,
     n_features: int,
     n_heads: int,
     n_layers: int,
+    d_model: int = 64,
 ) -> int:
-    return int(
-        max(1, training_samples)
-        * max(1, n_features)
-        * max(1, n_features)
-        * max(1, n_heads)
-        * max(1, n_layers)
-        * 4
+    """Rough full-batch activation footprint (float32) of the Survival Transformer.
+
+    Per layer and token it counts the attention weights (``heads x tokens``,
+    kept for backward plus softmax output), the feed-forward hidden layer
+    (activation, ReLU and dropout masks), and the ``d_model``-wide residual,
+    norm, projection and dropout buffers, with 50% headroom for autograd.
+    """
+    tokens = max(1, int(n_features))
+    per_token_per_layer = (
+        2 * max(1, int(n_heads)) * tokens
+        + 3 * _transformer_feedforward_dim(d_model)
+        + 12 * max(1, int(d_model))
     )
+    activations = max(1, int(training_samples)) * tokens * max(1, int(n_layers)) * per_token_per_layer * 4
+    return int(activations * 1.5)
 
 
 def _guard_transformer_attention_budget(
@@ -564,21 +587,23 @@ def _guard_transformer_attention_budget(
     n_features: int,
     n_heads: int,
     n_layers: int,
+    d_model: int = 64,
 ) -> None:
     estimated_bytes = _estimate_transformer_attention_bytes(
         training_samples=training_samples,
         n_features=n_features,
         n_heads=n_heads,
         n_layers=n_layers,
+        d_model=d_model,
     )
     if estimated_bytes <= _TRANSFORMER_MAX_ATTENTION_BYTES:
         return
     estimated_gib = estimated_bytes / (1024 ** 3)
     raise ValueError(
-        "Survival Transformer is disabled for this feature set because full-batch self-attention on "
-        f"the training split is estimated at {estimated_gib:.1f} GiB "
+        "Survival Transformer is disabled for this feature set because full-batch training on "
+        f"the training split is estimated at {estimated_gib:.1f} GiB of activations "
         f"({int(training_samples)} training samples x {int(n_features)} encoded features x "
-        f"{int(n_heads)} head(s) x {int(n_layers)} layer(s)). Reduce the shared feature set before "
+        f"{int(n_heads)} head(s) x {int(n_layers)} layer(s), width {int(d_model)}). Reduce the shared feature set before "
         "rerunning Compare All or testing Survival Transformer directly."
     )
 
@@ -597,7 +622,7 @@ def _prepare_deep_training_inputs(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Prepare deep-model tensors with holdout preprocessing fit on train rows only."""
     if prepared_data is not None:
-        resolved_split = evaluation_split if evaluation_split is not None else _build_evaluation_split(
+        resolved_split = evaluation_split if evaluation_split is not None else _build_holdout_split(
             prepared_data["event_tensor"].detach().cpu().numpy().astype(int).ravel(),
             random_seed,
         )
@@ -613,9 +638,10 @@ def _prepare_deep_training_inputs(
         categorical_features=categorical_features,
         event_positive_value=event_positive_value,
     )
-    resolved_split = dict(evaluation_split) if evaluation_split is not None else _build_evaluation_split(
+    resolved_split = dict(evaluation_split) if evaluation_split is not None else _build_holdout_split(
         clean_frame[event_column].astype(int).to_numpy(),
         random_seed,
+        source_rows=clean_frame.attrs.get("source_row_index"),
     )
 
     if str(resolved_split.get("evaluation_mode")) == "holdout":
@@ -636,6 +662,8 @@ def _prepare_deep_training_inputs(
             split_eval["evaluation_note"] = str(
                 resolved_split.get("evaluation_note", split_eval["evaluation_note"])
             )
+            if resolved_split.get("evaluation_split_fingerprint"):
+                split_eval["evaluation_split_fingerprint"] = resolved_split["evaluation_split_fingerprint"]
             split_data["dropped_nonpositive_time_rows"] = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
             return split_data, split_eval
         except ValueError:
@@ -647,6 +675,11 @@ def _prepare_deep_training_inputs(
                     "A deterministic holdout split was available, but the holdout subset did not "
                     "retain enough analyzable samples after preprocessing. Reported C-index falls "
                     "back to the analyzable cohort."
+                ),
+                "evaluation_split_fingerprint": evaluation_split_fingerprint(
+                    clean_frame.attrs.get("source_row_index"),
+                    [(np.arange(clean_frame.shape[0]), np.arange(clean_frame.shape[0]))],
+                    kind="apparent",
                 ),
             }
 
@@ -698,29 +731,12 @@ def _compute_c_index_torch(
                 stacklevel=2,
             )
 
-    # Fallback: pure-NumPy O(n²) implementation
-    if len(time_np) > 2000:
-        warnings.warn(
-            f"sksurv is not installed; falling back to an O(n\u00b2) concordance computation "
-            f"for n={len(time_np)} samples. This may be slow. "
-            "Install scikit-survival for O(n log n) performance: pip install scikit-survival",
-            RuntimeWarning,
-            stacklevel=3,
-        )
-    concordant = 0.0
-    comparable = 0.0
-    for idx in range(len(time_np)):
-        if event_np[idx] != 1:
-            continue
-        later = time_np > time_np[idx]
-        if not later.any():
-            continue
-        comparable += float(later.sum())
-        concordant += float(np.sum(risk_np[idx] > risk_np[later]))
-        concordant += 0.5 * float(np.sum(risk_np[idx] == risk_np[later]))
-    if comparable == 0:
-        return None
-    return float(concordant / comparable)
+    # Fallback without scikit-survival: the shared O(n log n) Harrell C, which
+    # uses the same tie convention as sksurv (event vs. censoring at the same
+    # time is a comparable pair).
+    from survival_toolkit.analysis import _harrell_c_index
+
+    return _harrell_c_index(time_np.astype(float), event_np.astype(int), risk_np.astype(float))
 
 
 def _logsumexp_numpy(values: np.ndarray) -> float:
@@ -828,6 +844,49 @@ def _build_evaluation_split(
     }
 
 
+def _build_holdout_split(
+    events: np.ndarray,
+    random_seed: int,
+    *,
+    source_rows: Sequence[Any] | None = None,
+) -> dict[str, Any]:
+    """External holdout shared with the classical ML models.
+
+    Uses the same stratified 70/30 split (``survival_toolkit.evaluation``) as
+    the ML comparison, so ML and DL rows scored with the same seed come from
+    identical evaluation patients.
+    """
+    event_array = np.asarray(events).astype(int).ravel()
+    train_positions, eval_positions, mode = stratified_holdout_indices(event_array, random_state=int(random_seed))
+    fingerprint = evaluation_split_fingerprint(
+        None if source_rows is None else list(source_rows),
+        [(train_positions, eval_positions)],
+        kind=mode,
+    )
+    if mode != "holdout":
+        return {
+            "train_idx": train_positions,
+            "eval_idx": eval_positions,
+            "evaluation_mode": "apparent",
+            "evaluation_note": (
+                "Holdout evaluation was skipped because the analyzable cohort was too small "
+                "or one outcome stratum was too sparse."
+            ),
+            "evaluation_split_fingerprint": fingerprint,
+        }
+    return {
+        "train_idx": np.asarray(train_positions, dtype=int),
+        "eval_idx": np.asarray(eval_positions, dtype=int),
+        "evaluation_mode": "holdout",
+        "evaluation_note": (
+            f"Reported C-index is computed on the shared stratified holdout split "
+            f"({train_positions.size} training and {eval_positions.size} evaluation samples; "
+            f"{DEFAULT_HOLDOUT_FRACTION:.0%} holdout, identical to the ML comparison for the same seed)."
+        ),
+        "evaluation_split_fingerprint": fingerprint,
+    }
+
+
 def _build_monitor_indices(
     train_idx: Sequence[int] | torch.Tensor,
     events: Sequence[int] | np.ndarray | torch.Tensor,
@@ -863,6 +922,23 @@ def _build_monitor_indices(
         return None
 
     return train_idx_np[np.asarray(local_split["eval_idx"], dtype=int)]
+
+
+def _reject_unaligned_monitor_indices(
+    monitor_indices: Sequence[int] | np.ndarray | torch.Tensor | None,
+    prepared_data: dict[str, Any] | None,
+) -> None:
+    """Caller-supplied monitor rows are only meaningful for caller-prepared tensors.
+
+    Raw-dataframe inputs are cleaned and (for holdout) re-ordered train-first
+    inside the trainer, so external row positions would silently point at the
+    wrong patients, possibly evaluation rows.
+    """
+    if monitor_indices is not None and prepared_data is None:
+        raise ValueError(
+            "monitor_indices can only be supplied together with prepared_data; "
+            "with a raw dataframe the trainer builds its own monitor subset."
+        )
 
 
 def _resolve_monitor_indices(
@@ -1033,6 +1109,12 @@ def _gradient_feature_importance(
         if grad is None:
             return [0.0] * x_tensor.shape[1]
         importance = grad.abs().mean(dim=0).detach().cpu().numpy()
+        # A column that never varies in these rows (for example an all-zero
+        # "__missing"/"__unknown" indicator) cannot drive any prediction here;
+        # its gradient only reflects untrained weights, so it gets no salience.
+        if x_tensor.shape[0] > 1:
+            column_spread = (x_tensor.max(dim=0).values - x_tensor.min(dim=0).values).detach().cpu().numpy()
+            importance = np.where(column_spread > 0.0, importance, 0.0)
         return [float(v) for v in importance]
     finally:
         if was_training:
@@ -1071,6 +1153,10 @@ def _scientific_summary_dl(
         status = "review"
     else:
         status = "caution"
+    # An apparent (resubstitution) C-index is optimistic by construction and
+    # can never earn a "robust" badge, however high it is.
+    if status == "robust" and evaluation_mode not in {"holdout", "repeated_cv"}:
+        status = "review"
 
     strengths: list[str] = [
         f"{model_name} trained for {epochs_trained or epochs} epoch(s) on {train_samples} sample(s)"
@@ -1091,7 +1177,7 @@ def _scientific_summary_dl(
         cautions.append(evaluation_note)
     if int(dropped_nonpositive_time_rows) > 0:
         cautions.append(
-            f"{int(dropped_nonpositive_time_rows)} row(s) with nonpositive survival time were excluded before deep-model preprocessing."
+            f"{int(dropped_nonpositive_time_rows)} row(s) with negative survival time were excluded before deep-model preprocessing."
         )
 
     if train_samples < 100:
@@ -1176,7 +1262,7 @@ def _scientific_summary_dl(
             {"label": "Evaluation mode", "value": evaluation_mode},
             {"label": "Training samples", "value": train_samples},
             {"label": "Training events", "value": train_events},
-            {"label": "Dropped for nonpositive time", "value": int(dropped_nonpositive_time_rows) or None},
+            {"label": "Dropped for negative time", "value": int(dropped_nonpositive_time_rows) or None},
             {"label": "Evaluation samples", "value": eval_samples},
             {"label": "Features", "value": n_features},
             {"label": "Epochs", "value": epochs_trained or epochs},
@@ -1223,30 +1309,63 @@ def _update_early_stopping(
     return best_value, wait_count, best_state, wait_count >= patience
 
 
+def _early_stopping_active(patience: int | None) -> bool:
+    return patience is not None and int(patience) > 0
+
+
+def _fit_rows_excluding_monitor(
+    train_idx: torch.Tensor,
+    monitor_idx: torch.Tensor | None,
+    events: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Rows used for gradient updates: the training partition minus the monitor subset.
+
+    The early-stopping monitor must be held out from fitting; otherwise the
+    monitored metric tracks training fit and never signals overfitting.
+    """
+    if monitor_idx is None or monitor_idx.numel() == 0:
+        return train_idx, None
+    keep = ~torch.isin(train_idx, monitor_idx)
+    fit_idx = train_idx[keep]
+    if fit_idx.numel() < 10 or float(events[fit_idx].sum().item()) <= 0.0:
+        return train_idx, None
+    return fit_idx, monitor_idx
+
+
 def _training_run_metadata(
     loss_history: list[float],
     monitor_loss_history: list[float] | None,
     requested_epochs: int,
     *,
     monitor_goal: str = "min",
+    patience: int | None = None,
+    min_delta: float = 0.0,
 ) -> dict[str, int | bool | None]:
     monitor_loss_history = list(monitor_loss_history or [])
     if monitor_goal not in {"min", "max"}:
         raise ValueError("Monitor goal must be 'min' or 'max'.")
     epochs_trained = int(len(loss_history))
-    best_monitor_epoch = (
-        (
-            int(np.argmin(np.asarray(monitor_loss_history, dtype=float))) + 1
-            if monitor_goal == "min"
-            else int(np.argmax(np.asarray(monitor_loss_history, dtype=float))) + 1
-        )
-        if monitor_loss_history
-        else None
-    )
+    # Replay the checkpoint rule of _update_early_stopping so the reported
+    # epoch is the one whose weights were restored (improvement > min_delta).
+    best_monitor_epoch: int | None = None
+    if monitor_loss_history and _early_stopping_active(patience):
+        best_value: float | None = None
+        for epoch_number, value in enumerate(monitor_loss_history, start=1):
+            if not math.isfinite(float(value)):
+                continue
+            improved = best_value is None or (
+                float(value) < best_value - float(min_delta)
+                if monitor_goal == "min"
+                else float(value) > best_value + float(min_delta)
+            )
+            if improved:
+                best_value = float(value)
+                best_monitor_epoch = epoch_number
     stopped_early = bool(monitor_loss_history) and epochs_trained < int(requested_epochs)
     return {
         "epochs_trained": epochs_trained,
         "best_monitor_epoch": best_monitor_epoch,
+        "restored_best_checkpoint": best_monitor_epoch is not None,
         "stopped_early": stopped_early,
         "max_epochs_requested": int(requested_epochs),
     }
@@ -1279,8 +1398,16 @@ def compare_deep_survival_models(
     early_stopping_min_delta: float = 1e-4,
     parallel_jobs: int = 1,
     included_models: Sequence[str] | None = None,
+    locked_test_fraction: float | None = None,
 ) -> dict[str, Any]:
-    """Train all deep survival models with shared inputs and compare them."""
+    """Train all deep survival models with shared inputs and compare them.
+
+    Holdout uses the same stratified split as the ML comparison. With
+    ``evaluation_strategy="repeated_cv"`` and ``locked_test_fraction`` set, a
+    stratified test set is reserved first, CV runs on the development set only,
+    and every model is refit on the development set and scored once on the
+    untouched test set.
+    """
     _require_torch()
 
     hidden_layers = hidden_layers if hidden_layers is not None else [64, 64]
@@ -1306,7 +1433,9 @@ def compare_deep_survival_models(
         evaluation_mode: str,
         fold_results: list[dict[str, Any]] | None = None,
         dropped_nonpositive_time_rows: int = 0,
+        cohort_counts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        cohort_counts = dict(cohort_counts or {})
         if not comparison:
             raise ValueError(
                 "All deep-learning models failed to train. Errors: "
@@ -1407,7 +1536,7 @@ def compare_deep_survival_models(
             cautions.append(f"{len(errors)} deep model fit(s) failed and were excluded from the ranking.")
         if int(dropped_nonpositive_time_rows) > 0:
             cautions.append(
-                f"{int(dropped_nonpositive_time_rows)} row(s) with nonpositive survival time were excluded before deep-model preprocessing."
+                f"{int(dropped_nonpositive_time_rows)} row(s) with negative survival time were excluded before deep-model preprocessing."
             )
         if evaluation_mode == "repeated_cv" and any(int(row.get("n_apparent_fallbacks", 0) or 0) > 0 for row in comparison):
             cautions.append(
@@ -1422,16 +1551,38 @@ def compare_deep_survival_models(
                 "The top-ranked model did not report a clean holdout C-index, so the ranking is optimistic."
             )
 
+        if cohort_counts.get("locked_test_note"):
+            strengths.append(str(cohort_counts["locked_test_note"]))
+            best_locked = best.get("locked_test_c_index")
+            if best_locked is not None:
+                strengths.append(
+                    f"The CV-selected model ({best['model']}) reached a locked-test C-index of {float(best_locked):.3f}; "
+                    "this single untouched-test estimate is the performance to report."
+                )
+            cautions.insert(
+                0,
+                "Models were ranked by development-set repeated CV; report the locked-test C-index of the CV-selected model as the independent performance estimate, not the best locked-test value across models.",
+            )
+        from survival_toolkit.analysis import duplicate_identifier_caution
+
+        duplicate_caution = duplicate_identifier_caution(df)
+        if duplicate_caution:
+            cautions.insert(0, duplicate_caution)
+
         next_steps = [
             "Use the ranking to narrow candidates, then rerun the strongest architecture with external validation or repeated resampling.",
             "Prefer simpler models if the best deep model only matches the apparent-performance range of classical methods.",
         ]
 
-        status = "robust"
-        if cautions:
+        best_c = None if best.get("c_index") is None else float(best["c_index"])
+        if best_c is None:
             status = "review"
-        if best.get("c_index") is not None and float(best["c_index"]) < 0.55:
+        elif best_c < 0.55:
             status = "caution"
+        elif best_c <= 0.65 or cautions or result_evaluation_mode not in {"holdout", "repeated_cv"}:
+            status = "review"
+        else:
+            status = "robust"
 
         summary = {
             "status": status,
@@ -1455,7 +1606,7 @@ def compare_deep_survival_models(
                 {"label": "Best model", "value": best["model"]},
                 {"label": metric_name, "value": best.get("c_index")},
                 {"label": "Evaluation mode", "value": result_evaluation_mode},
-                {"label": "Dropped for nonpositive time", "value": int(dropped_nonpositive_time_rows) or None},
+                {"label": "Dropped for negative time", "value": int(dropped_nonpositive_time_rows) or None},
                 {"label": "Failures", "value": len(errors)},
             ],
         }
@@ -1464,9 +1615,23 @@ def compare_deep_survival_models(
             "errors": errors,
             "ranking_complete": not errors and not unranked_rows and all(row.get("c_index") is not None for row in ranked_rows),
             "evaluation_mode": result_evaluation_mode,
+            "n_patients": cohort_counts.get("n_patients"),
+            "n_events": cohort_counts.get("n_events"),
+            "split_seed": int(random_seed),
+            "evaluation_split_fingerprint": cohort_counts.get("evaluation_split_fingerprint"),
             "scientific_summary": summary,
             "insight_board": summary,
         }
+        for key in (
+            "locked_test_fraction",
+            "n_development_patients",
+            "n_development_events",
+            "n_locked_test_patients",
+            "n_locked_test_events",
+            "locked_test_note",
+        ):
+            if key in cohort_counts:
+                result[key] = cohort_counts[key]
         if len(shared_training_seeds) == 1:
             result["shared_training_seed"] = next(iter(shared_training_seeds))
         shared_split_seeds = {
@@ -1511,12 +1676,27 @@ def compare_deep_survival_models(
             event_positive_value=event_positive_value,
         )
         dropped_nonpositive_time_rows = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
-        events = clean_frame[event_column].astype(int).to_numpy()
+        source_rows = clean_frame.attrs.get("source_row_index")
+        all_events = clean_frame[event_column].astype(int).to_numpy()
+        use_locked_test = locked_test_fraction is not None and float(locked_test_fraction) > 0.0
+        if use_locked_test:
+            dev_positions, test_positions = locked_test_split(
+                all_events,
+                random_state=random_seed,
+                test_fraction=float(locked_test_fraction),
+            )
+        else:
+            dev_positions = np.arange(clean_frame.shape[0], dtype=int)
+            test_positions = np.array([], dtype=int)
+        dev_frame = clean_frame.iloc[dev_positions].reset_index(drop=True)
+        events = dev_frame[event_column].astype(int).to_numpy()
         unique, counts = np.unique(events, return_counts=True)
         if len(unique) < 2 or counts.min() < cv_folds:
             raise ValueError(
-                f"Repeated CV requires at least {cv_folds} analyzable samples in each event stratum."
+                f"Repeated CV requires at least {cv_folds} analyzable samples in each event stratum"
+                + (" of the development set." if use_locked_test else ".")
             )
+        design_splits: list[tuple[np.ndarray, np.ndarray]] = []
 
         fold_results: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
@@ -1535,12 +1715,14 @@ def compare_deep_survival_models(
                 shuffle=True,
                 random_state=random_seed + repeat_idx,
             )
-            for fold_idx, (train_rows, eval_rows) in enumerate(splitter.split(clean_frame, events), start=1):
+            for fold_idx, (train_rows, eval_rows) in enumerate(splitter.split(dev_frame, events), start=1):
+                design_splits.append((dev_positions[train_rows], dev_positions[eval_rows]))
                 fold_splits.append({
                     "repeat": repeat_idx + 1,
                     "fold": fold_idx,
                     "seed_base": random_seed + repeat_idx * cv_folds + fold_idx,
-                    "split_seed": random_seed + repeat_idx * cv_folds + fold_idx,
+                    # The StratifiedKFold random_state that produced this fold.
+                    "split_seed": random_seed + repeat_idx,
                     "monitor_seed": random_seed + repeat_idx,
                     "train_rows": train_rows,
                     "eval_rows": eval_rows,
@@ -1548,8 +1730,8 @@ def compare_deep_survival_models(
 
         def _build_fold_task(split: dict[str, Any]) -> dict[str, Any] | None:
             """Build a single fold task (with tensors). Logs prep errors; returns None on failure."""
-            train_frame = clean_frame.iloc[split["train_rows"]].reset_index(drop=True)
-            eval_frame = clean_frame.iloc[split["eval_rows"]].reset_index(drop=True)
+            train_frame = dev_frame.iloc[split["train_rows"]].reset_index(drop=True)
+            eval_frame = dev_frame.iloc[split["eval_rows"]].reset_index(drop=True)
             try:
                 prepared_data, fold_split = _prepare_deep_split_data(
                     train_frame,
@@ -1737,9 +1919,90 @@ def compare_deep_survival_models(
                                     "Parallel repeated-CV execution was unavailable in this runtime; "
                                     f"SurvStudio fell back to sequential folds ({type(exc).__name__})."
                                 )
-                                _run_folds_sequentially(start_index=0)
+                                # Keep folds that already finished and rerun only the rest,
+                                # so no fold is counted twice.
+                                finished = {
+                                    (int(item["repeat"]), int(item["fold"]))
+                                    for item in [*fold_results, *errors]
+                                    if item.get("repeat") is not None and item.get("fold") is not None
+                                }
+                                remaining_splits = [
+                                    split
+                                    for split in fold_splits
+                                    if (int(split["repeat"]), int(split["fold"])) not in finished
+                                ]
+                                for split in remaining_splits:
+                                    task = _build_fold_task(split)
+                                    if task is None:
+                                        continue
+                                    try:
+                                        _collect_task_result(task, task_result=_run_deep_compare_fold_task(task))
+                                    except Exception as fold_exc:
+                                        _collect_task_result(task, exc=fold_exc)
+                                    finally:
+                                        del task
+                                        gc.collect()
         else:
             _run_folds_sequentially()
+
+        locked_results: dict[str, dict[str, Any]] = {}
+        locked_note: str | None = None
+        if use_locked_test:
+            design_splits.append((dev_positions, test_positions))
+            locked_test_frame = clean_frame.iloc[test_positions].reset_index(drop=True)
+            locked_note = (
+                f"A stratified locked test set ({int(locked_test_frame.shape[0])} patients, "
+                f"{int(locked_test_frame[event_column].sum())} events; {float(locked_test_fraction):.0%} of the cohort) "
+                "was reserved before any fitting. Repeated CV, preprocessing, and early stopping used only the development set "
+                f"({int(dev_frame.shape[0])} patients, {int(dev_frame[event_column].sum())} events); each model was then refit "
+                "once on the full development set and scored once on the locked test set."
+            )
+            try:
+                locked_data, locked_split = _prepare_deep_split_data(
+                    dev_frame,
+                    locked_test_frame,
+                    time_column=time_column,
+                    event_column=event_column,
+                    features=features,
+                    categorical_features=categorical_features,
+                    event_positive_value=event_positive_value,
+                )
+                locked_monitor = _build_monitor_indices(locked_split["train_idx"], locked_data["event_tensor"], random_seed)
+            except Exception as exc:
+                locked_data = None
+                for model_name, _, _ in trainer_specs:
+                    locked_results[model_name] = {"error": str(exc)}
+            if locked_data is not None:
+                for model_spec in model_specs:
+                    model_name = str(model_spec["model_name"])
+                    try:
+                        locked_results[model_name] = _run_deep_compare_task(
+                            {
+                                "model_name": model_name,
+                                "extra_kwargs": model_spec["extra_kwargs"],
+                                "repeat": None,
+                                "fold": None,
+                                "seed": int(random_seed),
+                                "split_seed": int(random_seed),
+                                "monitor_seed": int(random_seed),
+                                "time_column": time_column,
+                                "event_column": event_column,
+                                "features": list(features),
+                                "categorical_features": list(categorical_features or []),
+                                "event_positive_value": event_positive_value,
+                                "learning_rate": learning_rate,
+                                "epochs": epochs,
+                                "batch_size": batch_size,
+                                "early_stopping_patience": early_stopping_patience,
+                                "early_stopping_min_delta": early_stopping_min_delta,
+                                "prepared_data": locked_data,
+                                "evaluation_split": locked_split,
+                                "monitor_indices": locked_monitor,
+                                "require_holdout_evaluation": True,
+                            }
+                        )
+                    except Exception as exc:
+                        locked_results[model_name] = {"error": str(exc)}
 
         comparison: list[dict[str, Any]] = []
         from survival_toolkit.ml_models import _summarize_repeated_cv_rows
@@ -1796,12 +2059,39 @@ def compare_deep_survival_models(
                 "test_events": None if summary is None else summary["test_events"],
                 "repeat_results": [] if summary is None else summary["repeat_results"],
             })
+            if use_locked_test:
+                locked = locked_results.get(model_name) or {}
+                comparison[-1].update({
+                    "locked_test_c_index": None if locked.get("c_index") is None else float(locked["c_index"]),
+                    "locked_test_samples": locked.get("evaluation_samples"),
+                    "locked_test_training_samples": locked.get("training_samples"),
+                    "locked_test_error": locked.get("error"),
+                })
+        cohort_counts: dict[str, Any] = {
+            "n_patients": int(clean_frame.shape[0]),
+            "n_events": int(clean_frame[event_column].sum()),
+            "evaluation_split_fingerprint": evaluation_split_fingerprint(
+                source_rows,
+                design_splits,
+                kind="repeated_cv+locked_test" if use_locked_test else "repeated_cv",
+            ),
+        }
+        if use_locked_test:
+            cohort_counts.update({
+                "locked_test_fraction": float(locked_test_fraction),
+                "n_development_patients": int(dev_frame.shape[0]),
+                "n_development_events": int(dev_frame[event_column].sum()),
+                "n_locked_test_patients": int(test_positions.size),
+                "n_locked_test_events": int(all_events[test_positions].sum()),
+                "locked_test_note": locked_note,
+            })
         result = _finalize_result(
             comparison,
             errors,
             evaluation_mode="repeated_cv",
             fold_results=fold_results,
             dropped_nonpositive_time_rows=dropped_nonpositive_time_rows,
+            cohort_counts=cohort_counts,
         )
         if parallel_execution_note:
             result["parallel_execution_note"] = parallel_execution_note
@@ -1869,6 +2159,11 @@ def compare_deep_survival_models(
         errors,
         evaluation_mode="holdout",
         dropped_nonpositive_time_rows=dropped_nonpositive_time_rows,
+        cohort_counts={
+            "n_patients": int(shared_data["n_samples"]),
+            "n_events": int(float(shared_data["event_tensor"].sum().item())),
+            "evaluation_split_fingerprint": shared_eval_split.get("evaluation_split_fingerprint"),
+        },
     )
 
 @user_input_boundary
@@ -2207,6 +2502,7 @@ def train_deepsurv(
     _seed_torch(random_seed)
 
     hidden_layers = hidden_layers if hidden_layers is not None else [64, 64]
+    _reject_unaligned_monitor_indices(monitor_indices, prepared_data)
     data, eval_split = _prepare_deep_training_inputs(
         df,
         time_column=time_column,
@@ -2229,7 +2525,10 @@ def train_deepsurv(
     )
     evaluation_mode = str(eval_split["evaluation_mode"])
     evaluation_note = str(eval_split["evaluation_note"])
-    x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
+    if not _early_stopping_active(early_stopping_patience):
+        monitor_idx = None
+    fit_idx, monitor_idx = _fit_rows_excluding_monitor(train_idx, monitor_idx, e_all)
+    x_train, t_train, e_train = x_all[fit_idx], t_all[fit_idx], e_all[fit_idx]
 
     model = DeepSurvNet(data["n_features"], hidden_layers, dropout)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=_ADAM_WEIGHT_DECAY)
@@ -2276,7 +2575,8 @@ def train_deepsurv(
     model.eval()
     with torch.inference_mode():
         risk_scores_tensor = model(x_all)
-    apparent_c_index = _compute_c_index_torch(risk_scores_tensor, t_all, e_all)
+    # Apparent = resubstitution on the training partition only.
+    apparent_c_index = _compute_c_index_torch(risk_scores_tensor[train_idx], t_all[train_idx], e_all[train_idx])
     holdout_c_index = _compute_c_index_torch(risk_scores_tensor[eval_idx], t_all[eval_idx], e_all[eval_idx])
     c_index = holdout_c_index if holdout_c_index is not None else apparent_c_index
     if holdout_c_index is None and evaluation_mode == "holdout":
@@ -2365,13 +2665,20 @@ def train_deepsurv(
             "curve": _make_survival_curve(timeline, survival),
         })
 
-    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs, monitor_goal="max")
+    training_meta = _training_run_metadata(
+        loss_history,
+        monitor_loss_history,
+        epochs,
+        monitor_goal="max",
+        patience=early_stopping_patience,
+        min_delta=early_stopping_min_delta,
+    )
     insight = _scientific_summary_dl(
         "DeepSurv",
         c_index,
-        int(train_idx.numel()),
+        int(fit_idx.numel()),
         int(eval_idx.numel()),
-        int(e_all[train_idx].sum().item()),
+        int(e_all[fit_idx].sum().item()),
         data["n_features"],
         epochs,
         loss_history,
@@ -2381,7 +2688,7 @@ def train_deepsurv(
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
-        effective_batch_size=int(train_idx.numel()),
+        effective_batch_size=int(fit_idx.numel()),
         optimization_mode="full_batch_cox",
         note=(
             "DeepSurv uses the full training partition each epoch because the Cox risk set must be evaluated "
@@ -2417,6 +2724,8 @@ def train_deepsurv(
         "epochs_trained": training_meta["epochs_trained"],
         "n_samples": data["n_samples"],
         "training_samples": int(train_idx.numel()),
+        "fit_samples": int(fit_idx.numel()),
+        "monitor_samples": 0 if monitor_idx is None else int(monitor_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
         "n_features": data["n_features"],
         **batching_meta,
@@ -2482,7 +2791,9 @@ def _deephit_loss(
         ],
         dim=1,
     )
-    survival_at_edges = torch.exp(log_survival_at_edges)
+    # Cumulative incidence F(k) = sum_{j<=k} pmf[j], the quantity DeepHit
+    # (Lee et al., 2018) ranks at each event time.
+    cumulative_incidence = torch.cumsum(pmf, dim=1)
     # Likelihood:
     # - event in bin k: -log pmf[k]
     # - censored in bin k: -log S_start[k]
@@ -2505,12 +2816,18 @@ def _deephit_loss(
         for start in range(0, int(event_indices.shape[0]), chunk_size):
             chunk = event_indices[start:start + chunk_size]
             event_times = bin_idx[chunk]
-            later_mask = bin_idx.unsqueeze(1) > event_times.unsqueeze(0)
+            # Comparable pairs: subjects observed beyond the event's bin, plus
+            # subjects censored in the same bin (known to outlive the event).
+            later_mask = (bin_idx.unsqueeze(1) > event_times.unsqueeze(0)) | (
+                (bin_idx.unsqueeze(1) == event_times.unsqueeze(0)) & censor_mask.unsqueeze(1)
+            )
             if not torch.any(later_mask):
                 continue
-            subject_survival = survival_at_edges[:, event_times]
-            event_survival = survival_at_edges[chunk, event_times]
-            diff = event_survival.unsqueeze(0) - subject_survival
+            subject_cif = cumulative_incidence[:, event_times]
+            event_cif = cumulative_incidence[chunk, event_times]
+            # Penalize when a longer-surviving subject has at least as much
+            # predicted incidence by the event time as the subject who failed.
+            diff = subject_cif - event_cif.unsqueeze(0)
             scaled_diff = torch.clamp(diff / _DEEPHIT_RANKING_SIGMA, min=-20.0, max=20.0)
             ranking_terms.append(F.softplus(scaled_diff)[later_mask])
         ranking_loss = (
@@ -2555,6 +2872,7 @@ def train_deephit(
     _seed_torch(random_seed)
 
     hidden_layers = hidden_layers if hidden_layers is not None else [64, 64]
+    _reject_unaligned_monitor_indices(monitor_indices, prepared_data)
     data, eval_split = _prepare_deep_training_inputs(
         df,
         time_column=time_column,
@@ -2577,7 +2895,10 @@ def train_deephit(
     )
     evaluation_mode = str(eval_split["evaluation_mode"])
     evaluation_note = str(eval_split["evaluation_note"])
-    x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
+    if not _early_stopping_active(early_stopping_patience):
+        monitor_idx = None
+    fit_idx, monitor_idx = _fit_rows_excluding_monitor(train_idx, monitor_idx, e_all)
+    x_train, t_train, e_train = x_all[fit_idx], t_all[fit_idx], e_all[fit_idx]
 
     # Discretize time into bins
     time_np = t_train.numpy()
@@ -2674,7 +2995,8 @@ def train_deephit(
     survival_all, rmst_risk_all = _discrete_survival_from_pmf(pmf_all, bin_widths)
     risk_scores_tensor = rmst_risk_all
 
-    apparent_c_index = _compute_c_index_torch(risk_scores_tensor, t_all, e_all)
+    # Apparent = resubstitution on the training partition only.
+    apparent_c_index = _compute_c_index_torch(risk_scores_tensor[train_idx], t_all[train_idx], e_all[train_idx])
     holdout_c_index = _compute_c_index_torch(risk_scores_tensor[eval_idx], t_all[eval_idx], e_all[eval_idx])
     c_index = holdout_c_index if holdout_c_index is not None else apparent_c_index
     if holdout_c_index is None and evaluation_mode == "holdout":
@@ -2730,13 +3052,19 @@ def train_deephit(
             "curve": _make_survival_curve(timeline, surv_values),
         })
 
-    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs)
+    training_meta = _training_run_metadata(
+        loss_history,
+        monitor_loss_history,
+        epochs,
+        patience=early_stopping_patience,
+        min_delta=early_stopping_min_delta,
+    )
     insight = _scientific_summary_dl(
         "DeepHit",
         c_index,
-        int(train_idx.numel()),
+        int(fit_idx.numel()),
         int(eval_idx.numel()),
-        int(e_all[train_idx].sum().item()),
+        int(e_all[fit_idx].sum().item()),
         data["n_features"],
         epochs,
         loss_history,
@@ -2773,6 +3101,8 @@ def train_deephit(
         "epochs_trained": training_meta["epochs_trained"],
         "n_samples": data["n_samples"],
         "training_samples": int(train_idx.numel()),
+        "fit_samples": int(fit_idx.numel()),
+        "monitor_samples": 0 if monitor_idx is None else int(monitor_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
         "n_features": data["n_features"],
     }
@@ -2834,24 +3164,18 @@ def _mtlr_loss(
     censor_mask = ~event_mask
 
     log_pmf = torch.log_softmax(cumsum_logits, dim=1)
-    pmf = torch.exp(log_pmf)
 
-    # Survival at bin edges, with a tail bucket beyond the last observed horizon.
-    cdf = torch.cumsum(pmf, dim=1)
-    survival_at_edges = torch.cat(
-        [
-            torch.ones((n, 1), device=cumsum_logits.device, dtype=cumsum_logits.dtype),
-            1.0 - cdf[:, :-1],
-        ],
-        dim=1,
+    # log S_start[k] = log sum_{j>=k} pmf[j], computed in log space: 1 - cdf in
+    # float32 can go negative (NaN loss) or saturate when survival is tiny.
+    log_survival_at_edges = torch.flip(
+        torch.logcumsumexp(torch.flip(log_pmf, dims=[1]), dim=1),
+        dims=[1],
     )
     terms: list[torch.Tensor] = []
     if torch.any(event_mask):
         terms.append(-log_pmf[torch.arange(n, device=cumsum_logits.device), bin_idx][event_mask])
     if torch.any(censor_mask):
-        terms.append(
-            -torch.log(survival_at_edges[torch.arange(n, device=cumsum_logits.device), bin_idx][censor_mask] + 1e-12)
-        )
+        terms.append(-log_survival_at_edges[torch.arange(n, device=cumsum_logits.device), bin_idx][censor_mask])
     return torch.cat(terms).mean() if terms else torch.tensor(0.0, device=cumsum_logits.device)
 
 
@@ -2885,6 +3209,7 @@ def train_neural_mtlr(
     _seed_torch(random_seed)
 
     hidden_layers = hidden_layers if hidden_layers is not None else [64]
+    _reject_unaligned_monitor_indices(monitor_indices, prepared_data)
     data, eval_split = _prepare_deep_training_inputs(
         df,
         time_column=time_column,
@@ -2907,7 +3232,10 @@ def train_neural_mtlr(
     )
     evaluation_mode = str(eval_split["evaluation_mode"])
     evaluation_note = str(eval_split["evaluation_note"])
-    x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
+    if not _early_stopping_active(early_stopping_patience):
+        monitor_idx = None
+    fit_idx, monitor_idx = _fit_rows_excluding_monitor(train_idx, monitor_idx, e_all)
+    x_train, t_train, e_train = x_all[fit_idx], t_all[fit_idx], e_all[fit_idx]
 
     # Discretize time
     time_np = t_train.numpy()
@@ -3006,7 +3334,8 @@ def train_neural_mtlr(
     pmf = torch.exp(log_pmf)
     survival_all, rmst_risk_all = _discrete_survival_from_pmf(pmf, bin_widths)
 
-    apparent_c_index = _compute_c_index_torch(rmst_risk_all, t_all, e_all)
+    # Apparent = resubstitution on the training partition only.
+    apparent_c_index = _compute_c_index_torch(rmst_risk_all[train_idx], t_all[train_idx], e_all[train_idx])
     holdout_c_index = _compute_c_index_torch(rmst_risk_all[eval_idx], t_all[eval_idx], e_all[eval_idx])
     c_index = holdout_c_index if holdout_c_index is not None else apparent_c_index
     if holdout_c_index is None and evaluation_mode == "holdout":
@@ -3077,35 +3406,46 @@ def train_neural_mtlr(
         t_ref = min(t_ref, float(bin_edges[-1]))
         ref_bin = int(_digitize_time_bins(np.asarray([t_ref]), bin_edges, num_time_bins)[0])
 
-        predicted_event_prob = 1.0 - survival_np[artifact_idx_np, ref_bin + 1]
-        # Use evaluable subjects only: exclude those censored before t_ref
-        evaluable = (t_np > t_ref) | ((t_np <= t_ref) & (e_np == 1))
-        observed_event = ((t_np <= t_ref) & (e_np == 1)).astype(float)
+        # Predicted survival at t_ref: interpolate between the edges of the
+        # reference bin instead of taking the value at the end of the bin.
+        edge_low = float(timeline[ref_bin])
+        edge_high = float(timeline[min(ref_bin + 1, len(timeline) - 1)])
+        weight = 0.0 if edge_high <= edge_low else min(max((t_ref - edge_low) / (edge_high - edge_low), 0.0), 1.0)
+        survival_at_ref = (
+            (1.0 - weight) * survival_np[artifact_idx_np, ref_bin]
+            + weight * survival_np[artifact_idx_np, min(ref_bin + 1, survival_np.shape[1] - 1)]
+        )
+        predicted_event_prob = 1.0 - survival_at_ref
         decile_indices = np.argsort(predicted_event_prob)
         chunk_size = len(decile_indices) // n_deciles
         for d in range(n_deciles):
             start = d * chunk_size
             end = start + chunk_size if d < n_deciles - 1 else len(decile_indices)
             idx_slice = decile_indices[start:end]
-            eval_mask = evaluable[idx_slice]
             pred_mean = float(np.mean(predicted_event_prob[idx_slice]))
-            if eval_mask.sum() > 0:
-                obs_mean = float(np.sum(observed_event[idx_slice][eval_mask]) / eval_mask.sum())
-            else:
-                obs_mean = None
+            # Observed risk by t_ref from a Kaplan-Meier estimate within the
+            # decile, so patients censored before t_ref still contribute
+            # (dropping them biases the observed rate upward).
+            obs_mean = _km_event_probability(t_np[idx_slice], e_np[idx_slice], t_ref)
             calibration_data.append({
                 "decile": d + 1,
                 "predicted_event_rate": pred_mean,
                 "observed_event_rate": obs_mean,
             })
 
-    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs)
+    training_meta = _training_run_metadata(
+        loss_history,
+        monitor_loss_history,
+        epochs,
+        patience=early_stopping_patience,
+        min_delta=early_stopping_min_delta,
+    )
     insight = _scientific_summary_dl(
         "Neural MTLR",
         c_index,
-        int(train_idx.numel()),
+        int(fit_idx.numel()),
         int(eval_idx.numel()),
-        int(e_all[train_idx].sum().item()),
+        int(e_all[fit_idx].sum().item()),
         data["n_features"],
         epochs,
         loss_history,
@@ -3143,6 +3483,8 @@ def train_neural_mtlr(
         "epochs_trained": training_meta["epochs_trained"],
         "n_samples": data["n_samples"],
         "training_samples": int(train_idx.numel()),
+        "fit_samples": int(fit_idx.numel()),
+        "monitor_samples": 0 if monitor_idx is None else int(monitor_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
         "n_features": data["n_features"],
     }
@@ -3185,8 +3527,14 @@ class SurvivalTransformerNet(_TorchModuleBase):
         self.d_model = d_model
         self.feature_embed = nn.Linear(1, d_model)
         self.feature_identity = _FeatureIdentityEncoding(in_features, d_model)
+        # Standard 4x feed-forward width; the PyTorch default (2048) is far
+        # wider than a tabular token model needs and dominated memory use.
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=n_heads, dropout=dropout, batch_first=True
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=_transformer_feedforward_dim(d_model),
+            dropout=dropout,
+            batch_first=True,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         self.output_layer = nn.Linear(d_model, 1)
@@ -3308,6 +3656,7 @@ def train_survival_transformer(
     _require_torch()
     _seed_torch(random_seed)
 
+    _reject_unaligned_monitor_indices(monitor_indices, prepared_data)
     data, eval_split = _prepare_deep_training_inputs(
         df,
         time_column=time_column,
@@ -3330,12 +3679,16 @@ def train_survival_transformer(
     )
     evaluation_mode = str(eval_split["evaluation_mode"])
     evaluation_note = str(eval_split["evaluation_note"])
-    x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
+    if not _early_stopping_active(early_stopping_patience):
+        monitor_idx = None
+    fit_idx, monitor_idx = _fit_rows_excluding_monitor(train_idx, monitor_idx, e_all)
+    x_train, t_train, e_train = x_all[fit_idx], t_all[fit_idx], e_all[fit_idx]
     _guard_transformer_attention_budget(
-        training_samples=int(train_idx.numel()),
+        training_samples=int(fit_idx.numel()),
         n_features=int(data["n_features"]),
         n_heads=int(n_heads),
         n_layers=int(n_layers),
+        d_model=int(d_model),
     )
 
     if d_model % n_heads != 0:
@@ -3388,7 +3741,8 @@ def train_survival_transformer(
     model.eval()
     with torch.inference_mode():
         risk_scores_tensor = model(x_all)
-    apparent_c_index = _compute_c_index_torch(risk_scores_tensor, t_all, e_all)
+    # Apparent = resubstitution on the training partition only.
+    apparent_c_index = _compute_c_index_torch(risk_scores_tensor[train_idx], t_all[train_idx], e_all[train_idx])
     holdout_c_index = _compute_c_index_torch(risk_scores_tensor[eval_idx], t_all[eval_idx], e_all[eval_idx])
     c_index = holdout_c_index if holdout_c_index is not None else apparent_c_index
     if holdout_c_index is None and evaluation_mode == "holdout":
@@ -3440,13 +3794,20 @@ def train_survival_transformer(
             })
         feature_attention.sort(key=lambda d: d["attention_score"], reverse=True)
 
-    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs, monitor_goal="max")
+    training_meta = _training_run_metadata(
+        loss_history,
+        monitor_loss_history,
+        epochs,
+        monitor_goal="max",
+        patience=early_stopping_patience,
+        min_delta=early_stopping_min_delta,
+    )
     insight = _scientific_summary_dl(
         "Survival Transformer",
         c_index,
-        int(train_idx.numel()),
+        int(fit_idx.numel()),
         int(eval_idx.numel()),
-        int(e_all[train_idx].sum().item()),
+        int(e_all[fit_idx].sum().item()),
         data["n_features"],
         epochs,
         loss_history,
@@ -3456,7 +3817,7 @@ def train_survival_transformer(
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
-        effective_batch_size=int(train_idx.numel()),
+        effective_batch_size=int(fit_idx.numel()),
         optimization_mode="full_batch_cox",
         note=(
             "Survival Transformer uses the full training partition each epoch because the Cox risk set must "
@@ -3493,6 +3854,8 @@ def train_survival_transformer(
         "epochs_trained": training_meta["epochs_trained"],
         "n_samples": data["n_samples"],
         "training_samples": int(train_idx.numel()),
+        "fit_samples": int(fit_idx.numel()),
+        "monitor_samples": 0 if monitor_idx is None else int(monitor_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
         "n_features": data["n_features"],
         **batching_meta,
@@ -3648,6 +4011,22 @@ def _vae_combined_loss(
     return recon_weight * recon_loss + kl_weight * kl_loss + cox_weight * cox_loss
 
 
+def _km_event_probability(times: np.ndarray, events: np.ndarray, horizon: float) -> float | None:
+    """Kaplan-Meier estimate of P(T <= horizon) = 1 - S_KM(horizon)."""
+    times_arr = np.asarray(times, dtype=float).ravel()
+    events_arr = np.asarray(events, dtype=float).ravel() > 0
+    if times_arr.size == 0:
+        return None
+    survival = 1.0
+    for event_time in np.unique(times_arr[events_arr & (times_arr <= horizon)]):
+        at_risk = float(np.sum(times_arr >= event_time))
+        if at_risk <= 0.0:
+            break
+        deaths = float(np.sum(events_arr & (times_arr == event_time)))
+        survival *= 1.0 - deaths / at_risk
+    return float(1.0 - survival)
+
+
 def _simple_pca_2d(data: np.ndarray) -> np.ndarray:
     """Reduce data to 2D using PCA via SVD (no sklearn dependency)."""
     centered = data - data.mean(axis=0, keepdims=True)
@@ -3680,8 +4059,14 @@ def _simple_kmeans(data: np.ndarray, n_clusters: int, max_iter: int = 100, seed:
             np.sum((data[:, np.newaxis, :] - centers[:c][np.newaxis, :, :]) ** 2, axis=2),
             axis=1,
         )
-        probs = dists / max(dists.sum(), 1e-12)
-        idx = rng.choice(n, p=probs)
+        total = float(dists.sum())
+        if total <= 0.0 or not np.isfinite(total):
+            # Fewer distinct points than clusters: every point already sits on a
+            # center, so fall back to a uniform draw instead of an all-zero
+            # probability vector (which made rng.choice raise).
+            idx = int(rng.integers(0, n))
+        else:
+            idx = int(rng.choice(n, p=dists / total))
         centers[c] = data[idx]
 
     labels = np.zeros(n, dtype=int)
@@ -3736,6 +4121,7 @@ def train_survival_vae(
     _seed_torch(random_seed)
     hidden_layers = list(hidden_layers or ([hidden_dim] if hidden_dim is not None else [64]))
 
+    _reject_unaligned_monitor_indices(monitor_indices, prepared_data)
     data, eval_split = _prepare_deep_training_inputs(
         df,
         time_column=time_column,
@@ -3758,7 +4144,10 @@ def train_survival_vae(
     )
     evaluation_mode = str(eval_split["evaluation_mode"])
     evaluation_note = str(eval_split["evaluation_note"])
-    x_train, t_train, e_train = x_all[train_idx], t_all[train_idx], e_all[train_idx]
+    if not _early_stopping_active(early_stopping_patience):
+        monitor_idx = None
+    fit_idx, monitor_idx = _fit_rows_excluding_monitor(train_idx, monitor_idx, e_all)
+    x_train, t_train, e_train = x_all[fit_idx], t_all[fit_idx], e_all[fit_idx]
     categorical_feature_indices = list(data.get("categorical_feature_indices", []))
     numeric_feature_indices = list(data.get("numeric_feature_indices", []))
 
@@ -3821,7 +4210,8 @@ def train_survival_vae(
         x_recon_all, mu_all, log_var_all, risk_all = model(x_all)
         latent_all = mu_all  # get_latent returns mu; reuse from the forward pass above
 
-    apparent_c_index = _compute_c_index_torch(risk_all, t_all, e_all)
+    # Apparent = resubstitution on the training partition only.
+    apparent_c_index = _compute_c_index_torch(risk_all[train_idx], t_all[train_idx], e_all[train_idx])
     holdout_c_index = _compute_c_index_torch(risk_all[eval_idx], t_all[eval_idx], e_all[eval_idx])
     c_index = holdout_c_index if holdout_c_index is not None else apparent_c_index
     if holdout_c_index is None and evaluation_mode == "holdout":
@@ -3911,13 +4301,20 @@ def train_survival_vae(
         )
     ]
 
-    training_meta = _training_run_metadata(loss_history, monitor_loss_history, epochs, monitor_goal="max")
+    training_meta = _training_run_metadata(
+        loss_history,
+        monitor_loss_history,
+        epochs,
+        monitor_goal="max",
+        patience=early_stopping_patience,
+        min_delta=early_stopping_min_delta,
+    )
     insight = _scientific_summary_dl(
         "Survival VAE",
         c_index,
-        int(train_idx.numel()),
+        int(fit_idx.numel()),
         int(eval_idx.numel()),
-        int(e_all[train_idx].sum().item()),
+        int(e_all[fit_idx].sum().item()),
         data["n_features"],
         epochs,
         loss_history,
@@ -3927,7 +4324,7 @@ def train_survival_vae(
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
-        effective_batch_size=int(train_idx.numel()),
+        effective_batch_size=int(fit_idx.numel()),
         optimization_mode="full_batch_vae",
         note=(
             "Survival VAE currently uses the full training partition each epoch; the requested batch size is "
@@ -3965,6 +4362,8 @@ def train_survival_vae(
         "epochs_trained": training_meta["epochs_trained"],
         "n_samples": data["n_samples"],
         "training_samples": int(train_idx.numel()),
+        "fit_samples": int(fit_idx.numel()),
+        "monitor_samples": 0 if monitor_idx is None else int(monitor_idx.numel()),
         "evaluation_samples": int(eval_idx.numel()),
         "n_features": data["n_features"],
         "n_clusters": n_clusters,

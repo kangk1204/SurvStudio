@@ -100,6 +100,32 @@
       return Array.isArray(payload?.analysis?.comparison_table) ? payload.analysis.comparison_table : [];
     }
 
+    function comparePayloadSplitFingerprint(payload) {
+      return String(payload?.analysis?.evaluation_split_fingerprint ?? payload?.evaluation_split_fingerprint ?? "").trim();
+    }
+
+    function hasBackendRank(rank) {
+      return rank !== null && rank !== undefined && rank !== "" && Number.isFinite(Number(rank));
+    }
+
+    function familySplitMismatch(families, payloads) {
+      // Cross-family ranking is only valid when both families were scored on the same row partitions.
+      if (!Array.isArray(families) || families.length < 2) return null;
+      const fingerprints = families.map((goal) => comparePayloadSplitFingerprint(payloads?.[goal]));
+      if (fingerprints.some((fingerprint) => !fingerprint)) return "missing";
+      return new Set(fingerprints).size > 1 ? "differ" : null;
+    }
+
+    const SPLIT_NOTES = {
+      differ: "ML and DL rows were evaluated on different row partitions (split fingerprints differ); rerun both with the same seed and evaluation settings to rank them together.",
+      missing: "ML and DL rows cannot be confirmed to use the same row partitions (a split fingerprint is missing); rerun both with the same seed and evaluation settings to rank them together.",
+    };
+
+    function splitMismatchNote(board) {
+      return SPLIT_NOTES[board?.splitMismatchReason] || SPLIT_NOTES.differ;
+    }
+    const LOCKED_TEST_RANKING_NOTE = "Ranking uses development-set cross-validation; the locked-test C-index of the rank-1 model is the independent estimate to report.";
+
     function comparePayloadGroupId(payload) {
       return String(payload?._client_compare_group_id || payload?.analysis?._client_compare_group_id || "").trim();
     }
@@ -152,20 +178,27 @@
       const meta = benchmarkGoalMeta(goal);
       const status = statusOverride || benchmarkResultLabel(goal);
       const runGroupId = comparePayloadGroupId(payload);
-      return comparisonRowsFromPayload(payload).map((row, index) => ({
-        family: meta.label,
-        familyTab: meta.tab,
-        model: row.model,
-        c_index: row.c_index,
-        numericCIndex: benchmarkMetricNumber(row.c_index),
-        evaluation_mode: row.evaluation_mode || payload?.analysis?.evaluation_mode || "",
-        sourceRank: Number.isFinite(Number(row.rank)) ? Number(row.rank) : index + 1,
-        comparableForRanking: row.comparable_for_ranking !== false && benchmarkMetricNumber(row.c_index) !== null,
-        status,
-        sourceMode: "compare",
-        runGroupId,
-        paramsSource,
-      }));
+      return comparisonRowsFromPayload(payload).map((row, index) => {
+        // A null rank means the backend deliberately left this row unranked; never coerce it to 0.
+        const rankProvided = Object.prototype.hasOwnProperty.call(row || {}, "rank");
+        const ranked = rankProvided ? hasBackendRank(row.rank) : true;
+        return {
+          family: meta.label,
+          familyTab: meta.tab,
+          model: row.model,
+          c_index: row.c_index,
+          numericCIndex: benchmarkMetricNumber(row.c_index),
+          hasLockedTest: Object.prototype.hasOwnProperty.call(row || {}, "locked_test_c_index"),
+          locked_test_c_index: row.locked_test_c_index,
+          evaluation_mode: row.evaluation_mode || payload?.analysis?.evaluation_mode || "",
+          sourceRank: rankProvided ? (ranked ? Number(row.rank) : null) : index + 1,
+          comparableForRanking: ranked && row.comparable_for_ranking !== false && benchmarkMetricNumber(row.c_index) !== null,
+          status,
+          sourceMode: "compare",
+          runGroupId,
+          paramsSource,
+        };
+      });
     }
 
     function benchmarkExcludedRowsForPayload(goal, payload, { statusOverride = null, paramsSource = "current" } = {}) {
@@ -284,8 +317,11 @@
       return [...rows].sort((left, right) => {
         const familyDelta = left.family.localeCompare(right.family);
         if (familyDelta !== 0) return familyDelta;
-        if (left.sourceRank !== right.sourceRank) return left.sourceRank - right.sourceRank;
-        return left.model.localeCompare(right.model);
+        const leftRanked = left.sourceRank !== null && left.sourceRank !== undefined && !left.excluded;
+        const rightRanked = right.sourceRank !== null && right.sourceRank !== undefined && !right.excluded;
+        if (leftRanked !== rightRanked) return leftRanked ? -1 : 1;
+        if (leftRanked && left.sourceRank !== right.sourceRank) return left.sourceRank - right.sourceRank;
+        return String(left.model).localeCompare(String(right.model));
       });
     }
 
@@ -350,8 +386,16 @@
       const hasMixedRunGroups = currentFamilies.length > 1 && currentGroupIds.length > 1;
       const snapshotHasMixedEvaluation = snapshotEvaluationModes.length > 1;
       const snapshotHasMixedRunGroups = snapshotFamilies.length > 1 && snapshotGroupIds.length > 1;
-      const currentRows = (hasMixedEvaluation || hasMixedRunGroups) ? familyGroupedRows(rawCurrentRows) : rawCurrentRows;
-      const snapshotRows = (snapshotHasMixedEvaluation || snapshotHasMixedRunGroups) ? familyGroupedRows(snapshotRowsRaw) : snapshotRowsRaw;
+      const currentPayloads = {
+        ml: benchmarkComparePayload("ml", { currentOnly: true }),
+        dl: benchmarkComparePayload("dl", { currentOnly: true }),
+      };
+      const splitMismatchReason = familySplitMismatch(currentFamilies, currentPayloads);
+      const snapshotSplitMismatchReason = familySplitMismatch(snapshotFamilies, snapshotPayloads);
+      const hasSplitMismatch = Boolean(splitMismatchReason);
+      const snapshotHasSplitMismatch = Boolean(snapshotSplitMismatchReason);
+      const currentRows = (hasMixedEvaluation || hasMixedRunGroups || hasSplitMismatch) ? familyGroupedRows(rawCurrentRows) : rawCurrentRows;
+      const snapshotRows = (snapshotHasMixedEvaluation || snapshotHasMixedRunGroups || snapshotHasSplitMismatch) ? familyGroupedRows(snapshotRowsRaw) : snapshotRowsRaw;
       const showingStaleBoard = snapshotRows.length > 0 && hasUnifiedCoverage(snapshotFamilies) && (!hasUnifiedCoverage(currentFamilies) || hasMixedRunGroups);
       const hiddenStaleFamilies = showingStaleBoard ? [] : staleFamilies;
       const visibleRows = showingStaleBoard ? snapshotRows : currentRows;
@@ -360,11 +404,14 @@
       const visibleEvaluationModes = showingStaleBoard ? snapshotEvaluationModes : evaluationModes;
       const visibleHasMixedEvaluation = showingStaleBoard ? snapshotHasMixedEvaluation : hasMixedEvaluation;
       const visibleHasMixedRunGroups = showingStaleBoard ? snapshotHasMixedRunGroups : hasMixedRunGroups;
-      const rankingRows = (visibleHasMixedEvaluation || visibleHasMixedRunGroups) ? [] : visibleRows.filter((row) => row.comparableForRanking);
-      const plottableRows = (visibleHasMixedEvaluation || visibleHasMixedRunGroups) ? [] : visibleRows.filter((row) => row.numericCIndex !== null);
-      const tableRows = (visibleHasMixedEvaluation || visibleHasMixedRunGroups)
+      const visibleHasSplitMismatch = showingStaleBoard ? snapshotHasSplitMismatch : hasSplitMismatch;
+      const withholdCrossFamilyRanking = visibleHasMixedEvaluation || visibleHasMixedRunGroups || visibleHasSplitMismatch;
+      const rankingRows = withholdCrossFamilyRanking ? [] : visibleRows.filter((row) => row.comparableForRanking);
+      const plottableRows = withholdCrossFamilyRanking ? [] : visibleRows.filter((row) => row.numericCIndex !== null);
+      const tableRows = withholdCrossFamilyRanking
         ? familyGroupedRows([...visibleRows, ...visibleExcludedRows])
         : [...visibleRows, ...visibleExcludedRows];
+      const hasLockedTest = visibleRows.some((row) => row.hasLockedTest);
       const rawVisibleRows = showingStaleBoard ? snapshotRowsRaw : rawCurrentRows;
       const missingMetricCount = rawVisibleRows.filter((row) => row.numericCIndex === null).length;
       const nonComparableCount = rawVisibleRows.filter((row) => !row.comparableForRanking).length;
@@ -391,6 +438,11 @@
         hasMixedEvaluation: visibleHasMixedEvaluation,
         hasMixedRunGroups,
         visibleHasMixedRunGroups,
+        hasSplitMismatch,
+        visibleHasSplitMismatch,
+        splitMismatchReason: showingStaleBoard ? snapshotSplitMismatchReason : splitMismatchReason,
+        withholdCrossFamilyRanking,
+        hasLockedTest,
         missingMetricCount,
         nonComparableCount,
         predictiveBusy,
@@ -439,6 +491,12 @@
         clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>Unified chart is hidden until one Compare All run produces both ML and DL families together.</span></div>');
         return;
       }
+      if (board.visibleHasSplitMismatch) {
+        refs.benchmarkPlotNote.textContent = `${board.showingStaleBoard ? "Showing the last Compare All board as a stale reference. " : ""}Unified chart hidden because ${splitMismatchNote(board)}`;
+        refs.benchmarkComparisonPlot.classList.add("hidden");
+        clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>Unified chart is hidden until ML and DL are evaluated on the same row partitions.</span></div>');
+        return;
+      }
       if (!board.plottableRows.length) {
         refs.benchmarkPlotNote.textContent = `${board.showingStaleBoard ? "Showing the last Compare All board as a stale reference. " : ""}Visible comparison rows exist, but none reported a numeric C-index that can be charted. Review the table below.`;
         refs.benchmarkComparisonPlot.classList.add("hidden");
@@ -457,6 +515,7 @@
       if (board.hiddenStaleFamilies.length) {
         noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
       }
+      if (board.hasLockedTest) noteParts.push(LOCKED_TEST_RANKING_NOTE);
       noteParts.push(...benchmarkMethodologyNotes(board));
       if (board.missingMetricCount) {
         noteParts.push(`Omitted ${board.missingMetricCount} row(s) without a numeric C-index.`);
@@ -476,10 +535,11 @@
         const familyMeta = benchmarkRowFamilyMeta(row);
         return familyMeta.familyTab === "ml" ? "rgba(34, 72, 156, 1)" : "rgba(156, 86, 15, 1)";
       });
-      const customdata = board.plottableRows.map((row, index) => {
+      let plotRank = 0;
+      const customdata = board.plottableRows.map((row) => {
         const familyMeta = benchmarkRowFamilyMeta(row);
         return ([
-        index + 1,
+        row.comparableForRanking ? String(++plotRank) : "Not ranked",
         familyMeta.familyLabel,
         benchmarkEvaluationLabel(row.evaluation_mode),
         row.status,
@@ -590,6 +650,7 @@
       if (board.missingMetricCount) {
         cautionParts.push(`${board.missingMetricCount} row(s) have no numeric C-index.`);
       }
+      if (board.hasLockedTest && !board.withholdCrossFamilyRanking) cautionParts.push(LOCKED_TEST_RANKING_NOTE);
       cautionParts.push(...benchmarkMethodologyNotes(board));
       ["ml", "dl"].forEach((goal) => {
         const copy = excludedModelsCopy(goal, board.excludedByFamily?.[goal], {
@@ -685,6 +746,20 @@
         };
       }
 
+      if (board.visibleHasSplitMismatch) {
+        return {
+          chips: [
+            `Families represented: ${board.visibleFamilies.length}`,
+            `ML rows ready: ${currentMlRows}`,
+            `DL rows ready: ${currentDlRows}`,
+          ],
+          status: "Needs alignment",
+          title: board.splitMismatchReason === "missing" ? "ML and DL row partitions could not be verified" : "ML and DL used different row partitions",
+          text: `Current compare rows are grouped by family only. ${splitMismatchNote(board)} ${coverageText}${cautionSuffix}`,
+          tone: "warning",
+        };
+      }
+
       if (board.visibleHasMixedRunGroups) {
         return {
           chips: [
@@ -769,6 +844,8 @@
           ? "Visible compare rows are grouped by family because evaluation modes differ. No cross-family ranking is published."
           : board.visibleHasMixedRunGroups
             ? "Visible compare rows are grouped by family because ML and DL come from different compare runs. No cross-family ranking is published."
+          : board.visibleHasSplitMismatch
+            ? `Visible compare rows are grouped by family: ${splitMismatchNote(board)} No cross-family ranking is published.`
           : (presentFamilies.length === 2
             ? (board.showingStaleBoard
               ? `Showing ${board.visibleRows.length} stale screening rows from the last complete Compare All snapshot.`
@@ -790,6 +867,7 @@
       if (board.visibleHasMixedRunGroups) {
         noteParts.push("Visible ML and DL rows come from different compare runs, so no cross-family rank or shared chart is published.");
       }
+      if (board.hasLockedTest) noteParts.push(LOCKED_TEST_RANKING_NOTE);
       noteParts.push(...benchmarkMethodologyNotes(board));
       ["ml", "dl"].forEach((goal) => {
         const copy = excludedModelsCopy(goal, board.excludedByFamily?.[goal], {
@@ -800,7 +878,15 @@
       refs.benchmarkTableNote.textContent = noteParts.join(" ");
 
       const rankLabel = board.hasMixedEvaluation ? "Family rank" : "Screen rank";
-      const displayedRankLabel = board.visibleHasMixedRunGroups ? "Family rank" : rankLabel;
+      const displayedRankLabel = board.withholdCrossFamilyRanking ? "Family rank" : rankLabel;
+      let screenRank = 0;
+      const rankCells = board.tableRows.map((row) => {
+        if (row.excluded) return "—";
+        if (board.withholdCrossFamilyRanking) {
+          return row.comparableForRanking && row.sourceRank !== null && row.sourceRank !== undefined ? String(row.sourceRank) : "Not ranked";
+        }
+        return row.comparableForRanking ? String(++screenRank) : "Not ranked";
+      });
       refs.benchmarkComparisonShell.innerHTML = `
         <table class="benchmark-table">
           <thead>
@@ -808,7 +894,8 @@
               <th>${escapeHtml(displayedRankLabel)}</th>
               <th>Family</th>
               <th>Model</th>
-              <th>C-index</th>
+              <th>${board.hasLockedTest ? "CV C-index (development)" : "C-index"}</th>
+              ${board.hasLockedTest ? "<th>Locked-test C-index</th>" : ""}
               <th>Evaluation</th>
               <th>Status</th>
               <th class="benchmark-review-column">Review</th>
@@ -820,10 +907,11 @@
               const familyMeta = benchmarkRowFamilyMeta(row);
               return `
               <tr>
-                <td>${row.excluded ? "—" : ((board.hasMixedEvaluation || board.visibleHasMixedRunGroups) ? row.sourceRank : index + 1)}</td>
+                <td>${escapeHtml(rankCells[index])}</td>
                 <td><span class="benchmark-family-pill family-${escapeHtml(familyMeta.familyTab)}">${escapeHtml(familyMeta.familyLabel)}</span></td>
                 <td>${escapeHtml(formatValue(row.model))}</td>
                 <td>${escapeHtml(formatValue(row.c_index))}</td>
+                ${board.hasLockedTest ? `<td>${row.hasLockedTest ? escapeHtml(formatValue(row.locked_test_c_index)) : "—"}</td>` : ""}
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>
                 <td class="benchmark-review-column"><span class="benchmark-action-slot" data-benchmark-action-slot="${index}"></span></td>

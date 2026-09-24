@@ -53,7 +53,11 @@ def test_split_train_test_falls_back_to_apparent_when_stratified_split_raises(mo
     def _boom(*args, **kwargs):
         raise ValueError("forced stratified split failure")
 
-    monkeypatch.setattr(ml_models, "train_test_split", _boom)
+    import sklearn.model_selection
+
+    # The shared holdout helper (survival_toolkit.evaluation) imports
+    # train_test_split at call time, so patch it at the source.
+    monkeypatch.setattr(sklearn.model_selection, "train_test_split", _boom)
 
     train_frame, test_frame, evaluation_mode = ml_models._split_train_test(
         df,
@@ -312,59 +316,33 @@ def test_lasso_cox_reports_holdout_evaluation_on_large_cohort() -> None:
     assert any(metric["label"] == "Brier Skill Score" for metric in result["scientific_summary"]["metrics"])
 
 
-def test_select_lasso_alpha_prefers_sparser_model_within_one_se(monkeypatch) -> None:
+@pytest.mark.skipif(
+    not _sksurv_available(),
+    reason="scikit-survival not installed",
+)
+def test_select_lasso_alpha_uses_inner_cv_max_mean_c_index() -> None:
     import survival_toolkit.ml_models as ml_models
 
-    class _FakeCoxnet:
-        def __init__(self) -> None:
-            self.alphas_ = np.asarray([0.1, 1.0], dtype=float)
-            self.coef_ = np.asarray(
-                [
-                    [1.0, 1.0],
-                    [0.5, 0.0],
-                ],
-                dtype=float,
-            )
-
-        def fit(self, X, y) -> "_FakeCoxnet":
-            return self
-
-        def predict(self, X, alpha: float) -> np.ndarray:
-            return np.full(X.shape[0], 0.70 if float(alpha) < 0.5 else 0.69, dtype=float)
-
-    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
-    monkeypatch.setattr(ml_models, "_make_lasso_coxnet_model", lambda alpha=None: _FakeCoxnet())
-    monkeypatch.setattr(
-        ml_models,
-        "_estimate_c_index_standard_error",
-        lambda y_eval, risk_scores, random_state, n_bootstrap=30: 0.02,
-    )
-    monkeypatch.setattr(ml_models, "_sksurv_c_index", lambda y_eval, risk_scores: float(risk_scores[0]))
-
-    df = pd.DataFrame(
-        {
-            "os_months": np.linspace(1.0, 40.0, 40),
-            "os_event": [0, 1] * 20,
-        }
-    )
-    encoded = pd.DataFrame(
-        {
-            "f1": np.linspace(-1.0, 1.0, 40),
-            "f2": np.linspace(1.0, -1.0, 40),
-        }
-    )
+    df = pd.read_csv(Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "data" / "gbsg2_upload_ready.csv")
+    features = ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"]
+    frame = df[["rfs_days", "rfs_event", *features]].copy()
+    encoded, _, _ = ml_models._encode_train_test_features(frame, frame, features, ["horTh", "menostat", "tgrade"])
 
     result = ml_models._select_lasso_alpha(
-        df,
-        encoded,
-        time_column="os_months",
-        event_column="os_event",
+        frame.reset_index(drop=True),
+        encoded.reset_index(drop=True),
+        time_column="rfs_days",
+        event_column="rfs_event",
         random_state=11,
     )
 
-    assert result["alpha"] == pytest.approx(1.0)
-    assert result["selection_rule"] == "one_se_bootstrap"
-    assert result["n_nonzero_features"] == 1
+    assert result["selection_mode"] == "inner_cv"
+    assert result["selection_rule"] == "inner_cv_max_mean_c_index"
+    assert result["inner_cv_folds"] == 5
+    # The retired single-split 1-SE rule kept ~1-2 features on GBSG2 and lost
+    # ~0.03 C-index against unpenalized Cox; lambda.min-style CV keeps the signal.
+    assert result["n_nonzero_features"] >= 3
+    assert result["inner_selection_c_index"] > 0.62
 
 
 @pytest.mark.skipif(
@@ -461,7 +439,7 @@ def test_compare_models_handles_common_categorical_presets_without_cox_singulari
     not _sksurv_available(),
     reason="scikit-survival not installed",
 )
-def test_compare_models_keeps_cox_ph_on_tcga_xena_wide_feature_screen() -> None:
+def test_compare_models_excludes_nonconverged_cox_ph_on_sparse_tcga_categories() -> None:
     from survival_toolkit.ml_models import compare_survival_models
 
     dataset_path = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "data" / "tcga_luad_xena_example.csv"
@@ -503,8 +481,16 @@ def test_compare_models_keeps_cox_ph_on_tcga_xena_wide_feature_screen() -> None:
         random_state=42,
     )
 
-    assert "Cox PH" in {row["model"] for row in result["comparison_table"]}
-    assert not any(error["model"] == "Cox PH" for error in result["errors"])
+    # Rare histology levels cause quasi-separation in the unpenalized Cox fit on
+    # the deduplicated cohort; the benchmark must exclude it with an explicit
+    # reason instead of reporting a non-converged model.
+    assert "Cox PH" not in {row["model"] for row in result["comparison_table"]}
+    cox_errors = [error for error in result["errors"] if error["model"] == "Cox PH"]
+    assert cox_errors and "did not converge" in cox_errors[0]["error"]
+    assert result["ranking_complete"] is False
+    assert {"LASSO-Cox", "Random Survival Forest", "Gradient Boosted Survival"} <= {
+        row["model"] for row in result["comparison_table"]
+    }
 
 
 def test_compare_models_passes_requested_hyperparameters(monkeypatch) -> None:
@@ -779,11 +765,19 @@ def test_cross_validated_compare_models_returns_manuscript_tables() -> None:
     assert all(row["evaluation_mode"] == "repeated_cv" for row in result["comparison_table"])
     assert all("c_index_std" in row for row in result["comparison_table"])
     assert all(row["n_repeats"] == 2 for row in result["comparison_table"])
-    assert all(row["Repeat means, n"] == 2 for row in result["manuscript_tables"]["model_performance_table"])
+    assert all(row["Repeats, n"] == 2 for row in result["manuscript_tables"]["model_performance_table"])
     assert all(
-        "Empirical repeat interval (repeat means)" in row
+        "Fold-level 2.5th-97.5th percentile range" in row
         for row in result["manuscript_tables"]["model_performance_table"]
     )
+    for row in result["comparison_table"]:
+        fold_values = [
+            float(item["c_index"])
+            for item in result["fold_results"]
+            if item["model"] == row["model"] and item["c_index"] is not None
+        ]
+        # SD must describe fold-level variability, not the spread of repeat means.
+        assert row["c_index_std"] == pytest.approx(float(np.std(fold_values, ddof=1)))
 
 
 @pytest.mark.skipif(
@@ -2021,3 +2015,147 @@ def test_fit_feature_encoder_rejects_empty_feature_list() -> None:
 
     with pytest.raises(ValueError, match="Select at least one feature"):
         fit_feature_encoder(df, [])
+
+
+def _gbsg2_frame() -> pd.DataFrame:
+    return pd.read_csv(Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "data" / "gbsg2_upload_ready.csv")
+
+
+_GBSG2_FEATURES = ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"]
+_GBSG2_CATEGORICAL = ["horTh", "menostat", "tgrade"]
+
+
+def test_gbs_auto_depth_resolves_to_shallow_trees(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    assert ml_models._resolve_gbs_max_depth(None) == 3
+    assert ml_models._resolve_gbs_max_depth(5) == 5
+    specs = {name: kwargs for name, _fn, kwargs in ml_models._ml_model_specs(n_estimators=10, max_depth=None, learning_rate=0.1)}
+    if "Gradient Boosted Survival" in specs:
+        assert specs["Gradient Boosted Survival"]["max_depth"] == 3
+        # RSF keeps fully grown trees by default.
+        assert specs["Random Survival Forest"]["max_depth"] is None
+
+
+def test_optimal_cutpoint_labels_follow_logrank_direction_and_source_rows() -> None:
+    from survival_toolkit.analysis import derive_group_column
+    from survival_toolkit.ml_models import find_optimal_cutpoint
+
+    rng = np.random.default_rng(1)
+    n = 200
+    marker = rng.normal(size=n)
+    event_time = rng.exponential(1.0 / np.exp(0.8 * marker))
+    censor_time = rng.exponential(1.5, size=n)
+    df = pd.DataFrame(
+        {"t": np.minimum(event_time, censor_time), "e": (event_time <= censor_time).astype(int), "marker": marker}
+    )
+    df.loc[[3, 50, 120, 199], "marker"] = np.nan
+    result = find_optimal_cutpoint(df, "t", "e", "marker", event_positive_value=1, permutation_iterations=0)
+    assert result["label_above_cutpoint"] == "High"
+    derived, column, _ = derive_group_column(
+        df, "marker", method="optimal_cutpoint", time_column="t", event_column="e", event_positive_value=1,
+        permutation_iterations=0,
+    )
+    observed = derived[column]
+    valid = df["marker"].notna()
+    expected = np.where(df.loc[valid, "marker"] > result["optimal_cutpoint"], "High", "Low")
+    assert (observed[valid].to_numpy() == expected).all()
+    assert observed[~valid].isna().all()
+
+    # Protective marker in a low-event cohort where neither median is reached.
+    protective = rng.normal(size=n)
+    event_time = rng.exponential(8.0 / np.exp(-0.8 * protective))
+    censor_time = rng.uniform(0.0, 3.0, size=n)
+    protective_df = pd.DataFrame(
+        {"t": np.minimum(event_time, censor_time), "e": (event_time <= censor_time).astype(int), "m": protective}
+    )
+    protective_result = find_optimal_cutpoint(protective_df, "t", "e", "m", event_positive_value=1, permutation_iterations=0)
+    assert protective_result["label_above_cutpoint"] == "Low"
+
+
+@pytest.mark.skipif(not _sksurv_available(), reason="scikit-survival not installed")
+def test_cross_validation_with_locked_test_set_reports_untouched_test_metrics() -> None:
+    from survival_toolkit.ml_models import compare_survival_models, cross_validate_survival_models
+
+    df = _gbsg2_frame()
+    result = cross_validate_survival_models(
+        df, "rfs_days", "rfs_event", _GBSG2_FEATURES, _GBSG2_CATEGORICAL,
+        n_estimators=20, cv_folds=3, cv_repeats=1, random_state=42, locked_test_fraction=0.3,
+    )
+    assert result["n_development_patients"] + result["n_locked_test_patients"] == len(df)
+    assert result["n_locked_test_patients"] == 206
+    for row in result["comparison_table"]:
+        assert row["locked_test_samples"] == 206
+        assert row["locked_test_c_index"] is not None
+        assert row["training_samples"] < result["n_development_patients"]
+    table = result["manuscript_tables"]["model_performance_table"]
+    assert "Locked-test C-index" in table[0]
+    assert "locked" in result["manuscript_tables"]["caption"].lower()
+    # The locked test set equals the shared holdout of the same seed, so the
+    # holdout comparison and the locked-test refit agree exactly.
+    holdout = compare_survival_models(df, "rfs_days", "rfs_event", _GBSG2_FEATURES, _GBSG2_CATEGORICAL, n_estimators=20, random_state=42)
+    holdout_c = {row["model"]: row["c_index"] for row in holdout["comparison_table"]}
+    for row in result["comparison_table"]:
+        assert row["locked_test_c_index"] == pytest.approx(holdout_c[row["model"]])
+
+
+def test_counterfactual_risk_change_uses_hazard_ratio_scale_for_gbs() -> None:
+    pytest.importorskip("sksurv")
+    from survival_toolkit.ml_models import counterfactual_survival
+
+    result = counterfactual_survival(
+        _gbsg2_frame(), "rfs_days", "rfs_event", features=_GBSG2_FEATURES, categorical_features=_GBSG2_CATEGORICAL,
+        target_feature="pnodes", original_value=0, counterfactual_value=3, model_type="gbs", n_estimators=30,
+    )
+    assert "hazard ratio" in result["risk_change_method"]
+    # Three extra positive nodes cannot plausibly more than double the hazard.
+    assert -50.0 < result["risk_change_pct"] < 100.0
+
+
+def test_integrated_brier_score_matches_sksurv_on_default_grid() -> None:
+    pytest.importorskip("sksurv")
+    from sksurv.ensemble import RandomSurvivalForest
+    from sksurv.metrics import integrated_brier_score
+    from sksurv.util import Surv
+
+    from survival_toolkit.ml_models import _step_function_matrix, compute_integrated_brier_score
+
+    df = _gbsg2_frame()
+    X = df[["age", "pnodes", "tsize", "progrec", "estrec"]].to_numpy(dtype=float)
+    y = Surv.from_arrays(df["rfs_event"].astype(bool), df["rfs_days"])
+    train, test = np.arange(0, 480), np.arange(480, len(df))
+    model = RandomSurvivalForest(n_estimators=30, random_state=0, min_samples_leaf=6).fit(X[train], y[train])
+    predict = lambda times: _step_function_matrix(model.predict_survival_function(X[test]), times)  # noqa: E731
+    result = compute_integrated_brier_score(
+        df["rfs_days"].to_numpy()[test], df["rfs_event"].to_numpy()[test], predict,
+        support_times=df["rfs_days"].to_numpy()[train], support_events=df["rfs_event"].to_numpy()[train],
+    )
+    grid = np.asarray(result["eval_times"])
+    assert grid[0] > 0.0
+    assert grid[-1] < df["rfs_days"].to_numpy()[test].max()
+    assert result["ibs"] == pytest.approx(integrated_brier_score(y[train], y[test], predict(grid), grid), abs=1e-3)
+
+
+def test_cox_brier_predictions_use_right_continuous_breslow_baseline() -> None:
+    pytest.importorskip("sksurv")
+    from sksurv.linear_model import CoxPHSurvivalAnalysis
+    from sksurv.util import Surv
+    from statsmodels.duration.hazard_regression import PHReg
+
+    from survival_toolkit.ml_models import _cox_ph_survival_predictor
+
+    df = _gbsg2_frame()
+    X = df[["age", "pnodes", "tsize"]].to_numpy(dtype=float)
+    fit = PHReg(df["rfs_days"].to_numpy(), X, status=df["rfs_event"].to_numpy(), ties="breslow").fit()
+    reference = CoxPHSurvivalAnalysis(ties="breslow").fit(X, Surv.from_arrays(df["rfs_event"].astype(bool), df["rfs_days"]))
+    times = np.array([72.0, 500.0, 1000.0, 2000.0])
+    expected = np.array([[fn(t) for t in times] for fn in reference.predict_survival_function(X[:5])])
+    assert np.allclose(_cox_ph_survival_predictor(fit, X[:5])(times), expected, atol=1e-8)
+
+
+def test_unseen_categorical_levels_are_reported() -> None:
+    from survival_toolkit.ml_models import _unseen_category_rows
+
+    train = pd.DataFrame({"site": ["A", "A", "B"]})
+    evaluation = pd.DataFrame({"site": ["A", "C", None, "C"]})
+    assert _unseen_category_rows(train, evaluation, ["site"]) == 2

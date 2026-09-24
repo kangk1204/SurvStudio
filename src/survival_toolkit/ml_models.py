@@ -27,9 +27,9 @@ from statsmodels.duration.hazard_regression import PHReg
 from statsmodels.duration.survfunc import survdiff
 
 from survival_toolkit.analysis import (
+    duplicate_identifier_caution,
     _cohort_frame,
     _harrell_c_index,
-    _restricted_mean_survival_time,
     _safe_float,
 )
 from survival_toolkit.encoding import (
@@ -38,6 +38,12 @@ from survival_toolkit.encoding import (
     transform_feature_encoder as _transform_shared_feature_encoder,
 )
 from survival_toolkit.errors import user_input_boundary
+from survival_toolkit.evaluation import (
+    DEFAULT_HOLDOUT_FRACTION,
+    evaluation_split_fingerprint,
+    locked_test_split,
+    stratified_holdout_indices,
+)
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
 
 try:
@@ -90,6 +96,13 @@ _EXPECTED_CUTPOINT_SCAN_ERRORS = (
     np.linalg.LinAlgError,
 )
 _TREE_N_JOBS = -1
+# Gradient boosting relies on shallow base learners; "auto" (None) resolves to
+# this depth instead of fully grown trees.
+_GBS_DEFAULT_MAX_DEPTH = 3
+
+
+def _resolve_gbs_max_depth(max_depth: int | None) -> int:
+    return _GBS_DEFAULT_MAX_DEPTH if max_depth is None else int(max_depth)
 _SKLEARN_INSTALL_MSG = (
     "scikit-learn is required for ML model splitting and time-dependent importance. "
     "Install with: pip install 'survival-toolkit[ml]'"
@@ -215,7 +228,7 @@ def _scientific_summary_ml(
     c_index: float | None,
     n_patients: int,
     n_events: int,
-    n_features: int,
+    n_features: int | None,
     evaluation_mode: str = "apparent",
     n_evaluation_patients: int | None = None,
     n_evaluation_events: int | None = None,
@@ -233,8 +246,9 @@ def _scientific_summary_ml(
     eval_events = int(n_evaluation_events if n_evaluation_events is not None else n_events)
     fit_n = int(n_fit_patients if n_fit_patients is not None else n_patients)
     fit_events = int(n_fit_events if n_fit_events is not None else n_events)
+    feature_text = "an unknown number of" if n_features is None else str(int(n_features))
     strengths: list[str] = [
-        f"{model_name} was trained with {n_features} feature(s) on {fit_n} patients ({fit_events} events).",
+        f"{model_name} was trained with {feature_text} feature(s) on {fit_n} patients ({fit_events} events).",
         f"{metric_name} was estimated on {eval_n} patients ({eval_events} events).",
     ]
     cautions: list[str] = []
@@ -245,8 +259,8 @@ def _scientific_summary_ml(
     if extra_cautions:
         cautions.extend([item for item in extra_cautions if item])
 
-    epv = fit_events / max(n_features, 1)
-    if epv < 10:
+    epv = fit_events / max(int(n_features or 0), 1)
+    if n_features is not None and epv < 10:
         cautions.append(
             f"Event-to-feature ratio is {epv:.1f}; screening models can overfit when events are sparse relative to selected features."
         )
@@ -389,14 +403,21 @@ def _summarize_repeated_cv_rows(
     if not repeat_results:
         raise ValueError("No repeated-CV repeat summaries could be computed.")
 
+    # Fold-level estimates carry the real variability; the SD of repeat means
+    # only reflects partition noise and collapses to zero with one repeat.
+    fold_c_values = np.array(
+        [float(item["c_index"]) for item in model_rows if item.get("c_index") is not None],
+        dtype=float,
+    )
     repeat_c_values = np.array([float(item["c_index"]) for item in repeat_results], dtype=float)
-    mean_c = float(np.mean(repeat_c_values))
-    std_c = float(np.std(repeat_c_values, ddof=1)) if len(repeat_c_values) > 1 else 0.0
+    mean_c = float(np.mean(fold_c_values))
+    std_c = float(np.std(fold_c_values, ddof=1)) if len(fold_c_values) > 1 else None
+    repeat_std_c = float(np.std(repeat_c_values, ddof=1)) if len(repeat_c_values) > 1 else None
     interval_lower: float | None = None
     interval_upper: float | None = None
-    if len(repeat_c_values) > 1:
-        interval_lower = float(np.quantile(repeat_c_values, 0.025))
-        interval_upper = float(np.quantile(repeat_c_values, 0.975))
+    if len(fold_c_values) > 1:
+        interval_lower = float(np.quantile(fold_c_values, 0.025))
+        interval_upper = float(np.quantile(fold_c_values, 0.975))
 
     def _mean_repeat_field(field: str) -> int | None:
         values = [float(item[field]) for item in repeat_results if item.get(field) is not None]
@@ -404,23 +425,36 @@ def _summarize_repeated_cv_rows(
             return None
         return int(round(float(np.mean(values))))
 
-    def _mean_repeat_metric(field: str) -> float | None:
-        values = [float(item[field]) for item in repeat_results if item.get(field) is not None]
-        if not values:
-            return None
-        return _safe_float(float(np.mean(values)))
+    # Brier metrics: only report them when every counted fold produced them,
+    # and pool the skill score so it agrees with the mean IBS columns.
+    brier_rows = [
+        item
+        for item in model_rows
+        if item.get("c_index") is not None and item.get("ibs") is not None and item.get("null_ibs") is not None
+    ]
+    mean_ibs: float | None = None
+    mean_null_ibs: float | None = None
+    pooled_bss: float | None = None
+    if brier_rows and len(brier_rows) == len(fold_c_values):
+        mean_ibs = float(np.mean([float(item["ibs"]) for item in brier_rows]))
+        mean_null_ibs = float(np.mean([float(item["null_ibs"]) for item in brier_rows]))
+        if mean_null_ibs > 0.0:
+            pooled_bss = 1.0 - mean_ibs / mean_null_ibs
 
     return {
         "repeat_results": repeat_results,
         "c_index": mean_c,
-        "c_index_std": std_c,
-        "c_index_median": float(np.median(repeat_c_values)),
+        "c_index_std": _safe_float(std_c),
+        "c_index_std_label": "SD across fold-level estimates",
+        "c_index_repeat_std": _safe_float(repeat_std_c),
+        "c_index_median": float(np.median(fold_c_values)),
         "c_index_interval_lower": _safe_float(interval_lower),
         "c_index_interval_upper": _safe_float(interval_upper),
-        "c_index_interval_label": "Empirical repeat interval (repeat means)",
-        "ibs": _mean_repeat_metric("ibs"),
-        "null_ibs": _mean_repeat_metric("null_ibs"),
-        "brier_skill_score": _mean_repeat_metric("brier_skill_score"),
+        "c_index_interval_label": "Fold-level 2.5th-97.5th percentile range",
+        "ibs": _safe_float(mean_ibs),
+        "null_ibs": _safe_float(mean_null_ibs),
+        "brier_skill_score": _safe_float(pooled_bss),
+        "brier_evaluations": int(len(brier_rows)),
         "n_repeats": int(len(repeat_results)),
         "n_evaluations": int(sum(item["n_folds"] for item in repeat_results)),
         "training_time_ms": float(
@@ -490,13 +524,46 @@ def _sksurv_survival_predictor(model: Any, X: pd.DataFrame, *, alpha: float | No
     return _predict
 
 
+def _breslow_baseline_survival(
+    times: np.ndarray,
+    status: np.ndarray,
+    linear_predictor: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Breslow baseline survival S0(t) = exp(-H0(t)) at unique event times.
+
+    ``statsmodels``' ``baseline_cumulative_hazard`` reports H0(t-) (it
+    subtracts the jump at each event time), which lags survival predictions by
+    one event time; this helper returns the right-continuous H0(t).
+    """
+    times_arr = np.asarray(times, dtype=float).reshape(-1)
+    status_arr = np.asarray(status, dtype=float).reshape(-1) > 0
+    risk = np.exp(np.clip(np.asarray(linear_predictor, dtype=float).reshape(-1), -50.0, 50.0))
+    event_times = np.unique(times_arr[status_arr])
+    if event_times.size == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+    order = np.argsort(times_arr, kind="mergesort")
+    sorted_times = times_arr[order]
+    # Sum of exp(lp) over subjects with time >= t (risk set), via reverse cumsum.
+    reverse_cumsum = np.cumsum(risk[order][::-1])[::-1]
+    first_at_or_after = np.searchsorted(sorted_times, event_times, side="left")
+    risk_set_sums = reverse_cumsum[first_at_or_after]
+    deaths = np.array([np.sum(status_arr & (times_arr == value)) for value in event_times], dtype=float)
+    cumulative_hazard = np.cumsum(deaths / risk_set_sums)
+    return event_times, np.exp(-cumulative_hazard)
+
+
 def _cox_ph_survival_predictor(results: Any, exog: pd.DataFrame | np.ndarray) -> Any:
     baseline_hazard = getattr(results, "baseline_cumulative_hazard", None)
     if not baseline_hazard or len(baseline_hazard) != 1:
         raise ValueError("Cox PH Brier-score support currently requires a single-stratum baseline hazard.")
-    baseline_times = np.asarray(baseline_hazard[0][0], dtype=float).reshape(-1)
-    baseline_survival = np.asarray(baseline_hazard[0][2], dtype=float).reshape(-1)
-    linear_predictor = np.asarray(exog, dtype=float) @ np.asarray(results.params, dtype=float)
+    params = np.asarray(results.params, dtype=float)
+    model = results.model
+    baseline_times, baseline_survival = _breslow_baseline_survival(
+        np.asarray(model.endog, dtype=float),
+        np.asarray(model.status, dtype=float),
+        np.asarray(model.exog, dtype=float) @ params,
+    )
+    linear_predictor = np.asarray(exog, dtype=float) @ params
     hazard_ratio = np.exp(np.clip(linear_predictor, -50.0, 50.0))
 
     def _predict(eval_times: np.ndarray) -> np.ndarray:
@@ -620,36 +687,80 @@ def _require_predict_callable(model: Any, *, context: str) -> None:
         )
 
 
+def _split_train_test_positions(
+    frame: pd.DataFrame,
+    event_column: str,
+    random_state: int = 42,
+    test_size: float = DEFAULT_HOLDOUT_FRACTION,
+) -> tuple[np.ndarray, np.ndarray, str]:
+    """Positions of the shared stratified holdout used by every model family."""
+    _require_sklearn()
+    return stratified_holdout_indices(
+        frame[event_column].astype(int).to_numpy(),
+        random_state=random_state,
+        test_size=test_size,
+    )
+
+
 def _split_train_test(
     frame: pd.DataFrame,
     event_column: str,
     random_state: int = 42,
-    test_size: float = 0.3,
+    test_size: float = DEFAULT_HOLDOUT_FRACTION,
 ) -> tuple[pd.DataFrame, pd.DataFrame, str]:
     """Create a deterministic train/test split for model comparison.
 
     Returns the split frames and a short evaluation-mode label.
     """
-    _require_sklearn()
-    if len(frame) < 20:
+    train_positions, eval_positions, mode = _split_train_test_positions(
+        frame,
+        event_column,
+        random_state=random_state,
+        test_size=test_size,
+    )
+    if mode != "holdout":
         return frame.copy().reset_index(drop=True), frame.copy().reset_index(drop=True), "apparent"
+    return (
+        frame.iloc[train_positions].reset_index(drop=True),
+        frame.iloc[eval_positions].reset_index(drop=True),
+        "holdout",
+    )
 
-    events = frame[event_column].astype(int)
-    if events.nunique() < 2 or events.value_counts().min() < 4:
-        return frame.copy().reset_index(drop=True), frame.copy().reset_index(drop=True), "apparent"
 
-    try:
-        train_idx, test_idx = train_test_split(
-            frame.index.to_numpy(),
-            test_size=test_size,
-            random_state=random_state,
-            stratify=events.to_numpy(),
-        )
-    except ValueError:
-        return frame.copy().reset_index(drop=True), frame.copy().reset_index(drop=True), "apparent"
-    train_frame = frame.loc[train_idx].reset_index(drop=True)
-    test_frame = frame.loc[test_idx].reset_index(drop=True)
-    return train_frame, test_frame, "holdout"
+def _frame_source_rows(frame: pd.DataFrame) -> list[Any] | None:
+    source_rows = frame.attrs.get("source_row_index")
+    if source_rows is None or len(source_rows) != len(frame):
+        return None
+    return list(source_rows)
+
+
+def _unseen_category_rows(
+    train_frame: pd.DataFrame,
+    eval_frame: pd.DataFrame,
+    categorical_features: Sequence[str],
+) -> int:
+    """Evaluation rows carrying a categorical level never seen in training.
+
+    Their unknown-level indicator is constant (zero) in training, so it is
+    dropped and those rows are scored as if they had the reference level.
+    """
+    affected = pd.Series(False, index=eval_frame.index)
+    for feature in categorical_features:
+        if feature not in train_frame.columns or feature not in eval_frame.columns:
+            continue
+        train_levels = set(train_frame[feature].dropna().astype(str))
+        eval_values = eval_frame[feature]
+        affected |= eval_values.notna() & ~eval_values.astype(str).isin(train_levels)
+    return int(affected.sum())
+
+
+def _unseen_category_caution(n_rows: int, scope: str) -> str | None:
+    if n_rows <= 0:
+        return None
+    return (
+        f"{n_rows} {scope} row(s) had a categorical level that never occurs in the corresponding training data; "
+        "the models score those rows as the reference level. Merge rare levels before modeling."
+    )
 
 
 def _encode_train_test_features(
@@ -830,119 +941,130 @@ def _select_lasso_alpha(
     time_column: str,
     event_column: str,
     random_state: int,
+    inner_folds: int = 5,
 ) -> dict[str, Any]:
-    """Choose an L1 penalty using only the training split."""
+    """Choose an L1 penalty by inner stratified K-fold CV on the training split.
+
+    The alpha grid comes from a Coxnet path fit on the training split; each
+    inner fold refits the path on its own training part (with fold-specific
+    standardization) and scores Harrell's C on its held-out part. The alpha
+    with the highest mean inner C-index among non-empty models is selected
+    (ties -> sparser model), analogous to glmnet's ``lambda.min``.
+    """
     if not SKSURV_AVAILABLE:
         raise ImportError("scikit-survival is not installed.")
     _require_sklearn()
 
     n_train = int(train_frame.shape[0])
     train_events = train_frame[event_column].astype(int).to_numpy()
-    train_positions = np.arange(n_train)
-    selection_mode = "inner_holdout"
+    y_train = _prepare_sksurv_data(train_frame, time_column, event_column)
 
-    if n_train < 30 or len(np.unique(train_events)) < 2 or pd.Series(train_events).value_counts().min() < 4:
-        inner_train_idx = train_positions
-        inner_eval_idx = train_positions
-        selection_mode = "apparent"
-    else:
-        try:
-            inner_train_idx, inner_eval_idx = train_test_split(
-                train_positions,
-                test_size=0.25,
-                random_state=random_state,
-                stratify=train_events,
-            )
-        except ValueError:
-            inner_train_idx = train_positions
-            inner_eval_idx = train_positions
-            selection_mode = "apparent"
-
-    inner_train_frame = train_frame.iloc[inner_train_idx].reset_index(drop=True)
-    inner_eval_frame = train_frame.iloc[inner_eval_idx].reset_index(drop=True)
-    inner_train_encoded = train_encoded.iloc[inner_train_idx].reset_index(drop=True)
-    inner_eval_encoded = train_encoded.iloc[inner_eval_idx].reset_index(drop=True)
-    inner_train_encoded, inner_eval_encoded = _drop_constant_train_columns(
-        inner_train_encoded,
-        inner_eval_encoded,
-    )
-    inner_train_encoded, inner_eval_encoded, _, _ = _standardize_encoded_matrices(
-        inner_train_encoded,
-        inner_eval_encoded,
-    )
-
-    y_inner_train = _prepare_sksurv_data(inner_train_frame, time_column, event_column)
-    y_inner_eval = _prepare_sksurv_data(inner_eval_frame, time_column, event_column)
+    full_encoded, _ = _drop_constant_train_columns(train_encoded, train_encoded)
+    full_scaled, _, _, _ = _standardize_encoded_matrices(full_encoded, full_encoded)
     path_model = _make_lasso_coxnet_model()
-    path_model.fit(inner_train_encoded.to_numpy(), y_inner_train)
-
+    path_model.fit(full_scaled.to_numpy(), y_train)
     alphas = np.asarray(path_model.alphas_, dtype=float)
     coef_path = np.asarray(path_model.coef_, dtype=float)
     if coef_path.ndim == 1:
         coef_path = coef_path[:, np.newaxis]
+    n_nonzero_by_alpha = [
+        int(np.count_nonzero(np.abs(coef_path[:, min(idx, coef_path.shape[1] - 1)]) > 1e-10))
+        for idx in range(alphas.size)
+    ]
 
-    candidate_rows: list[dict[str, Any]] = []
-    for idx, alpha in enumerate(alphas.tolist()):
-        try:
-            risk_scores = np.asarray(
-                path_model.predict(inner_eval_encoded.to_numpy(), alpha=float(alpha)),
-                dtype=float,
+    _, stratum_counts = np.unique(train_events, return_counts=True)
+    min_stratum = int(stratum_counts.min()) if stratum_counts.size else 0
+    n_splits = min(int(inner_folds), min_stratum)
+    scores_by_alpha: list[list[float]] = [[] for _ in range(alphas.size)]
+    selection_mode = "inner_cv"
+    if n_train >= 30 and stratum_counts.size >= 2 and n_splits >= 2:
+        splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+        for inner_train_idx, inner_eval_idx in splitter.split(train_encoded, train_events):
+            try:
+                inner_train_encoded, inner_eval_encoded = _drop_constant_train_columns(
+                    train_encoded.iloc[inner_train_idx].reset_index(drop=True),
+                    train_encoded.iloc[inner_eval_idx].reset_index(drop=True),
+                )
+                inner_train_scaled, inner_eval_scaled, _, _ = _standardize_encoded_matrices(
+                    inner_train_encoded,
+                    inner_eval_encoded,
+                )
+                fold_model = CoxnetSurvivalAnalysis(
+                    alphas=alphas,
+                    l1_ratio=1.0,
+                    normalize=False,
+                    tol=1e-7,
+                    max_iter=100000,
+                )
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    fold_model.fit(
+                        inner_train_scaled.to_numpy(),
+                        _prepare_sksurv_data(
+                            train_frame.iloc[inner_train_idx].reset_index(drop=True),
+                            time_column,
+                            event_column,
+                        ),
+                    )
+            except Exception:
+                continue
+            y_inner_eval = _prepare_sksurv_data(
+                train_frame.iloc[inner_eval_idx].reset_index(drop=True),
+                time_column,
+                event_column,
             )
-        except Exception:
-            continue
-        c_index = _sksurv_c_index(y_inner_eval, risk_scores)
-        if c_index is None or not np.isfinite(float(c_index)):
-            continue
-        coef_vector = coef_path[:, idx] if idx < coef_path.shape[1] else coef_path[:, -1]
-        n_nonzero = int(np.count_nonzero(np.abs(coef_vector) > 1e-10))
-        candidate_rows.append({
-            "alpha": float(alpha),
-            "c_index": float(c_index),
-            "n_nonzero_features": n_nonzero,
-            "_risk_scores": risk_scores,
-        })
+            for idx, alpha in enumerate(alphas.tolist()):
+                try:
+                    risk_scores = np.asarray(
+                        fold_model.predict(inner_eval_scaled.to_numpy(), alpha=float(alpha)),
+                        dtype=float,
+                    )
+                except Exception:
+                    continue
+                c_index = _sksurv_c_index(y_inner_eval, risk_scores)
+                if c_index is not None and np.isfinite(float(c_index)):
+                    scores_by_alpha[idx].append(float(c_index))
+    if not any(scores_by_alpha):
+        # Too small for inner CV: fall back to apparent training concordance.
+        selection_mode = "apparent"
+        for idx, alpha in enumerate(alphas.tolist()):
+            try:
+                risk_scores = np.asarray(path_model.predict(full_scaled.to_numpy(), alpha=float(alpha)), dtype=float)
+            except Exception:
+                continue
+            c_index = _sksurv_c_index(y_train, risk_scores)
+            if c_index is not None and np.isfinite(float(c_index)):
+                scores_by_alpha[idx].append(float(c_index))
 
+    candidate_rows = [
+        {
+            "alpha": float(alphas[idx]),
+            "c_index": float(np.mean(scores)),
+            "c_index_se": float(np.std(scores, ddof=1) / math.sqrt(len(scores))) if len(scores) > 1 else None,
+            "n_scored_folds": len(scores),
+            "n_nonzero_features": n_nonzero_by_alpha[idx],
+        }
+        for idx, scores in enumerate(scores_by_alpha)
+        if scores
+    ]
     if not candidate_rows:
         raise ValueError("LASSO-Cox could not find a valid penalty along the fitted Coxnet path.")
-
-    for idx, row in enumerate(candidate_rows):
-        row["c_index_se"] = _estimate_c_index_standard_error(
-            y_inner_eval,
-            np.asarray(row["_risk_scores"], dtype=float),
-            random_state=random_state + 500 + idx,
-        )
-        row.pop("_risk_scores", None)
-
-    nonzero_rows = [row for row in candidate_rows if row["n_nonzero_features"] > 0]
-    search_rows = nonzero_rows or candidate_rows
-    best_c_index = max(float(row["c_index"]) for row in search_rows)
-    reference_row = max(search_rows, key=lambda row: float(row["c_index"]))
-    selection_rule = "max_c_index"
-    selection_threshold = best_c_index
-    reference_se = reference_row.get("c_index_se")
-    eligible_rows = search_rows
-    if reference_se is not None and np.isfinite(float(reference_se)) and float(reference_se) > 0.0:
-        selection_rule = "one_se_bootstrap"
-        selection_threshold = best_c_index - float(reference_se)
-        eligible_rows = [
-            row for row in search_rows
-            if float(row["c_index"]) >= selection_threshold - 1e-12
-        ]
+    max_folds = max(row["n_scored_folds"] for row in candidate_rows)
+    complete_rows = [row for row in candidate_rows if row["n_scored_folds"] == max_folds]
+    nonzero_rows = [row for row in complete_rows if row["n_nonzero_features"] > 0]
+    search_rows = nonzero_rows or complete_rows
     best = max(
-        eligible_rows,
-        key=lambda row: (
-            float(row["alpha"]),
-            -int(row["n_nonzero_features"]),
-            float(row["c_index"]),
-        ),
+        search_rows,
+        key=lambda row: (round(float(row["c_index"]), 12), float(row["alpha"])),
     )
     return {
         "alpha": float(best["alpha"]),
         "selection_mode": selection_mode,
-        "selection_rule": selection_rule,
-        "selection_threshold_c_index": float(selection_threshold),
+        "selection_rule": "inner_cv_max_mean_c_index" if selection_mode == "inner_cv" else "apparent_max_c_index",
+        "selection_threshold_c_index": float(best["c_index"]),
         "inner_selection_c_index": float(best["c_index"]),
         "inner_selection_c_index_se": _safe_float(best.get("c_index_se")),
+        "inner_cv_folds": int(max_folds) if selection_mode == "inner_cv" else 0,
         "n_nonzero_features": int(best["n_nonzero_features"]),
         "n_alpha_candidates": int(len(candidate_rows)),
     }
@@ -1019,6 +1141,27 @@ def _prepare_model_evaluation_split(
 # 1. Optimal cutpoint scanning
 # ===================================================================
 
+def _logrank_observed_expected(
+    time_values: np.ndarray,
+    event_values: np.ndarray,
+    group_mask: np.ndarray,
+) -> tuple[float, float]:
+    """Observed and log-rank expected event counts for the rows in ``group_mask``."""
+    times = np.asarray(time_values, dtype=float)
+    events = np.asarray(event_values, dtype=float) > 0
+    mask = np.asarray(group_mask, dtype=bool)
+    observed = float(events[mask].sum())
+    expected = 0.0
+    for event_time in np.unique(times[events]):
+        at_risk = times >= event_time
+        n_at_risk = float(at_risk.sum())
+        if n_at_risk <= 0.0:
+            continue
+        deaths = float((events & (times == event_time)).sum())
+        expected += deaths * float((at_risk & mask).sum()) / n_at_risk
+    return observed, expected
+
+
 @user_input_boundary
 def find_optimal_cutpoint(
     df: pd.DataFrame,
@@ -1053,8 +1196,17 @@ def find_optimal_cutpoint(
     )
 
     numeric_values = pd.to_numeric(frame[variable], errors="coerce")
-    frame = frame.loc[numeric_values.notna()].reset_index(drop=True)
+    source_rows = _frame_source_rows(frame)
+    keep_mask = numeric_values.notna().to_numpy(dtype=bool)
+    frame = frame.loc[keep_mask].reset_index(drop=True)
     numeric_values = pd.to_numeric(frame[variable], errors="coerce")
+    # Original row labels of the analysed rows, so the derived split can be
+    # mapped back onto the uploaded dataset row-for-row.
+    kept_source_rows = (
+        [label for label, keep in zip(source_rows, keep_mask) if keep]
+        if source_rows is not None
+        else None
+    )
 
     if frame.empty:
         raise ValueError(f"No valid numeric values in '{variable}' after cleaning.")
@@ -1119,53 +1271,11 @@ def find_optimal_cutpoint(
     optimal_cp = best_record["cutpoint"]
     high_mask = var_values > optimal_cp
 
-    def _rmst(times: np.ndarray, events: np.ndarray, horizon: float) -> float | None:
-        """Restricted mean survival time from a KM step curve."""
-        from statsmodels.duration.survfunc import SurvfuncRight as _SFR
-
-        try:
-            sf = _SFR(times, events)
-        except Exception:
-            return None
-        event_times = sf.surv_times.astype(float)
-        step_timeline = np.concatenate(([0.0], event_times))
-        step_survival = np.concatenate(([1.0], sf.surv_prob.astype(float)))
-        return _restricted_mean_survival_time(
-            step_timeline,
-            step_survival,
-            horizon=float(max(horizon, 1e-9)),
-        )
-
-    # Compare median survival (fallback to RMST if medians are not estimable).
-    from statsmodels.duration.survfunc import SurvfuncRight as _SFR
-
-    median_above = None
-    median_below = None
-    try:
-        sf_above = _SFR(time_values[high_mask], event_values[high_mask])
-        median_above = float(sf_above.quantile(0.5))
-    except Exception:
-        pass
-    try:
-        sf_below = _SFR(time_values[~high_mask], event_values[~high_mask])
-        median_below = float(sf_below.quantile(0.5))
-    except Exception:
-        pass
-
-    # If values > cutpoint have LONGER survival, swap labels
-    swap = False
-    if median_above is not None and median_below is not None:
-        swap = median_above > median_below
-    elif median_above is None and median_below is not None:
-        swap = True  # above group never reaches median → longer survival
-    elif median_above is not None and median_below is None:
-        swap = False  # below group lives longer (never reaches median), above = High is correct
-    elif median_above is None and median_below is None:
-        horizon = float(np.max(time_values))
-        rmst_above = _rmst(time_values[high_mask], event_values[high_mask], horizon=horizon)
-        rmst_below = _rmst(time_values[~high_mask], event_values[~high_mask], horizon=horizon)
-        if rmst_above is not None and rmst_below is not None:
-            swap = rmst_above > rmst_below
+    # Orient labels by the log-rank observed-minus-expected events of the
+    # above-cutpoint group: more events than expected under the null means
+    # higher risk. Median comparisons fail when medians are not reached.
+    above_observed, above_expected = _logrank_observed_expected(time_values, event_values, high_mask)
+    swap = above_observed < above_expected
 
     if swap:
         label_above, label_below = lower_label, upper_label
@@ -1177,7 +1287,7 @@ def find_optimal_cutpoint(
     if include_split_series:
         split_series = pd.Series(
             np.where(high_mask, label_above, label_below),
-            index=frame.index,
+            index=pd.Index(kept_source_rows) if kept_source_rows is not None else frame.index,
             dtype="string",
         )
 
@@ -1233,8 +1343,13 @@ def find_optimal_cutpoint(
                 "When available, p_value is the selection-adjusted value."
             ),
         },
-        "n_high": best_record["n_high"],
-        "n_low": best_record["n_low"],
+        "n_above_cutpoint": best_record["n_high"],
+        "n_below_cutpoint": best_record["n_low"],
+        "n_high": best_record["n_low"] if swap else best_record["n_high"],
+        "n_low": best_record["n_high"] if swap else best_record["n_low"],
+        "risk_direction_rule": "log-rank observed vs expected events in the above-cutpoint group",
+        "above_cutpoint_observed_events": _safe_float(above_observed),
+        "above_cutpoint_expected_events": _safe_float(above_expected),
         "label_above_cutpoint": label_above,
         "label_below_cutpoint": label_below,
         "scan_data": scan_data,
@@ -1533,7 +1648,7 @@ def train_gradient_boosted_survival(
         model = GradientBoostingSurvivalAnalysis(
             n_estimators=n_estimators,
             learning_rate=learning_rate,
-            max_depth=max_depth,
+            max_depth=_resolve_gbs_max_depth(max_depth),
             min_samples_leaf=effective_min_samples_leaf,
             random_state=random_state,
         )
@@ -1581,7 +1696,7 @@ def train_gradient_boosted_survival(
         n_fit_patients=int(train_frame.shape[0]),
         n_fit_events=int(train_frame[event_column].sum()),
         extra_strengths=[
-            f"Boosted ensemble with {n_estimators} stages, learning_rate={learning_rate}, max_depth={max_depth}, min_samples_leaf={effective_min_samples_leaf}.",
+            f"Boosted ensemble with {n_estimators} stages, learning_rate={learning_rate}, max_depth={_resolve_gbs_max_depth(max_depth)}, min_samples_leaf={effective_min_samples_leaf}.",
             "Non-parametric model; no proportional-hazards assumption required.",
         ],
     )
@@ -1598,7 +1713,7 @@ def train_gradient_boosted_survival(
             "evaluation_mode": evaluation_mode,
             "n_estimators": n_estimators,
             "learning_rate": learning_rate,
-            "max_depth": max_depth,
+            "max_depth": _resolve_gbs_max_depth(max_depth),
             "min_samples_leaf": effective_min_samples_leaf,
             "n_patients": n_patients,
             "n_events": n_events,
@@ -1761,10 +1876,10 @@ def train_lasso_cox(
                 f"with {n_active_features} non-zero coefficient(s)."
             ),
             (
-                "Penalty selection used a bootstrap 1-SE rule to prefer the sparsest alpha "
-                "whose inner-holdout C-index stayed within one standard error of the best candidate."
-                if alpha_meta.get("selection_rule") == "one_se_bootstrap"
-                else "Penalty selection used the highest inner-holdout C-index when a stable 1-SE band was not available."
+                f"Penalty selection used {alpha_meta.get('inner_cv_folds', 0)}-fold stratified inner cross-validation "
+                "on the training split and kept the alpha with the highest mean inner C-index (ties go to the sparser model)."
+                if alpha_meta.get("selection_rule") == "inner_cv_max_mean_c_index"
+                else "Penalty selection used apparent training concordance because the training split was too small for inner cross-validation."
             ),
         ],
         extra_cautions=[
@@ -1773,9 +1888,9 @@ def train_lasso_cox(
                 "Do not interpret its shrunk coefficients like inferential Cox PH hazard ratios."
             ),
             (
-                "Penalty selection used an inner training-only holdout split."
-                if alpha_meta["selection_mode"] == "inner_holdout"
-                else "Penalty selection fell back to apparent training performance because an inner holdout was not stable."
+                "Penalty selection used only the training split (inner cross-validation); evaluation rows were never used."
+                if alpha_meta["selection_mode"] == "inner_cv"
+                else "Penalty selection fell back to apparent training performance because inner cross-validation was not feasible."
             ),
         ],
     )
@@ -1862,34 +1977,21 @@ def compare_survival_models(
     n_events = int(frame[event_column].sum())
     comparison: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    train_frame, test_frame, evaluation_mode = _split_train_test(
+    train_positions, eval_positions, evaluation_mode = _split_train_test_positions(
         frame,
         event_column,
         random_state=random_state,
     )
+    train_frame = frame.iloc[train_positions].reset_index(drop=True)
+    test_frame = frame.iloc[eval_positions].reset_index(drop=True)
+    split_fingerprint = evaluation_split_fingerprint(
+        _frame_source_rows(frame),
+        [(train_positions, eval_positions)],
+        kind=evaluation_mode,
+    )
 
-    model_specs: list[tuple[str, Any, dict[str, Any]]] = [("Cox PH", _fit_evaluate_cox_split, {})]
-    if SKSURV_AVAILABLE:
-        model_specs.extend(
-            [
-                ("LASSO-Cox", _fit_evaluate_lasso_cox_split, {}),
-                (
-                    "Random Survival Forest",
-                    _fit_evaluate_rsf_split,
-                    {"n_estimators": n_estimators, "max_depth": max_depth},
-                ),
-                (
-                    "Gradient Boosted Survival",
-                    _fit_evaluate_gbs_split,
-                    {
-                        "n_estimators": n_estimators,
-                        "learning_rate": learning_rate,
-                        "max_depth": max_depth,
-                    },
-                ),
-            ]
-        )
-    else:
+    model_specs = _ml_model_specs(n_estimators=n_estimators, max_depth=max_depth, learning_rate=learning_rate)
+    if not SKSURV_AVAILABLE:
         errors.extend(
             [
                 {"model": "LASSO-Cox", "error": "scikit-survival is not installed."},
@@ -1917,6 +2019,7 @@ def compare_survival_models(
                 "null_ibs": _safe_float(result.get("null_ibs")),
                 "brier_skill_score": _safe_float(result.get("brier_skill_score")),
                 "n_features": result["n_features"],
+                "n_active_features": result.get("n_active_features"),
                 "training_time_ms": result["training_time_ms"],
                 "evaluation_mode": evaluation_mode,
                 "training_samples": result.get("train_n"),
@@ -1967,6 +2070,15 @@ def compare_survival_models(
             "brier_skill_score": best.get("brier_skill_score"),
         },
     )
+    duplicate_caution = duplicate_identifier_caution(df)
+    if duplicate_caution:
+        scientific_summary["cautions"].insert(0, duplicate_caution)
+    unseen_caution = _unseen_category_caution(
+        _unseen_category_rows(train_frame, test_frame, categorical_features) if evaluation_mode == "holdout" else 0,
+        "evaluation",
+    )
+    if unseen_caution:
+        scientific_summary["cautions"].append(unseen_caution)
 
     result = {
         "comparison_table": comparison,
@@ -1980,6 +2092,9 @@ def compare_survival_models(
         "n_evaluation_patients": int(test_frame.shape[0]),
         "n_evaluation_events": int(test_frame[event_column].sum()),
         "evaluation_mode": evaluation_mode,
+        "holdout_fraction": DEFAULT_HOLDOUT_FRACTION if evaluation_mode == "holdout" else None,
+        "split_seed": int(random_state),
+        "evaluation_split_fingerprint": split_fingerprint,
         "scientific_summary": scientific_summary,
     }
     result["manuscript_tables"] = build_manuscript_result_tables(result)
@@ -2018,8 +2133,17 @@ def _fit_evaluate_cox_split(
 
     t_start = time.monotonic()
     model = PHReg(train_times, train_encoded.to_numpy(dtype=float), status=train_status, ties="efron")
-    results = model.fit(disp=False)
+    with warnings.catch_warnings(record=True) as fit_warnings:
+        warnings.simplefilter("always")
+        results = model.fit(disp=False)
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
+    if any("converg" in str(item.message).lower() for item in fit_warnings):
+        # Same rule as the inferential Cox workflow: a non-converged
+        # partial-likelihood fit is not a valid benchmark entry.
+        raise ValueError(
+            "Cox PH did not converge on this training split (too many covariates for the number of events, "
+            "or separation). Use LASSO-Cox or reduce the feature set."
+        )
     param_vector = np.asarray(results.params, dtype=float)
     risk_score = (test_encoded.to_numpy(dtype=float) @ param_vector).astype(float)
     fit_components = [param_vector, risk_score]
@@ -2227,7 +2351,7 @@ def _fit_evaluate_gbs_split(
         model = GradientBoostingSurvivalAnalysis(
             n_estimators=n_estimators,
             learning_rate=learning_rate,
-            max_depth=max_depth,
+            max_depth=_resolve_gbs_max_depth(max_depth),
             min_samples_leaf=effective_min_samples_leaf,
             random_state=random_state,
         )
@@ -2279,8 +2403,17 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             return None
         return ", ".join(str(value) for value in ints) if ints else None
 
+    include_locked_test = any("locked_test_c_index" in row for row in comparison_table)
+    include_active_features = any(row.get("n_active_features") is not None for row in comparison_table)
+
+    def _features_cell(row: dict[str, Any]) -> Any:
+        active = row.get("n_active_features")
+        if active is None:
+            return row.get("n_features")
+        return f"{int(active)} active of {row.get('n_features')}"
+
     if repeated_cv_mode:
-        interval_label = "Empirical repeat interval (repeat means)"
+        interval_label = "Fold-level 2.5th-97.5th percentile range"
         include_provenance = any(
             row.get("training_seeds") or row.get("split_seeds") or row.get("monitor_seeds")
             for row in comparison_table
@@ -2299,8 +2432,8 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
                     else f"{row.get('cv_repeats', 1)}x{row.get('cv_folds', 1)} repeated stratified CV (incomplete)"
                 ),
                 "Mean C-index": _safe_float(row.get("c_index")),
-                "SD": _safe_float(row.get("c_index_std")),
-                "Repeat means, n": row.get("n_repeats"),
+                "SD (fold-level)": _safe_float(row.get("c_index_std")),
+                "Repeats, n": row.get("n_repeats"),
                 interval_label: (
                     f"{interval_lower:.3f} to {interval_upper:.3f}"
                     if interval_lower is not None and interval_upper is not None
@@ -2308,7 +2441,7 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "Evaluations, n": row.get("n_evaluations"),
                 "Failures, n": row.get("n_failures"),
-                "Features, n": row.get("n_features"),
+                "Features, n": _features_cell(row) if include_active_features else row.get("n_features"),
                 "Patients, n": result.get("n_patients"),
                 "Events, n": result.get("n_events"),
                 "Mean Training Patients, n": row.get("training_samples"),
@@ -2320,7 +2453,14 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             if include_brier_metrics:
                 manuscript_row["Mean IBS"] = _safe_float(row.get("ibs"))
                 manuscript_row["Mean Null IBS"] = _safe_float(row.get("null_ibs"))
-                manuscript_row["Mean Brier Skill Score"] = _safe_float(row.get("brier_skill_score"))
+                manuscript_row["Pooled Brier Skill Score"] = _safe_float(row.get("brier_skill_score"))
+            if include_locked_test:
+                manuscript_row["Locked-test C-index"] = _safe_float(row.get("locked_test_c_index"))
+                if include_brier_metrics:
+                    manuscript_row["Locked-test IBS"] = _safe_float(row.get("locked_test_ibs"))
+                    manuscript_row["Locked-test Brier Skill Score"] = _safe_float(row.get("locked_test_brier_skill_score"))
+                manuscript_row["Locked-test Patients, n"] = row.get("locked_test_samples")
+                manuscript_row["Locked-test Events, n"] = row.get("locked_test_events")
             if include_fallback_counts:
                 manuscript_row["Apparent fallback folds, n"] = int(row.get("n_apparent_fallbacks", 0) or 0)
             if include_provenance:
@@ -2329,11 +2469,21 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
                 manuscript_row["Monitor seeds"] = _format_seed_values(row.get("monitor_seeds"))
             rows.append(manuscript_row)
         table_notes = [
-            "C-index values summarize repeat-level means from repeated stratified cross-validation.",
-            "The empirical repeat interval reports the 2.5th to 97.5th percentiles of repeat mean C-index values.",
-            "The repeat interval is descriptive across repeats and should not be interpreted as a formal confidence interval.",
+            "Mean C-index averages all fold-level estimates from repeated stratified cross-validation; SD is the standard deviation across those fold-level estimates.",
+            "The fold-level percentile range reports the 2.5th to 97.5th percentiles of fold C-index values. Folds share training data, so neither the SD nor the range is a formal confidence interval.",
             "Blank C-index fields indicate incomplete repeated-CV evaluation because one or more folds failed or fell back to apparent evaluation.",
         ]
+        if include_locked_test:
+            table_notes.insert(
+                0,
+                str(
+                    result.get("locked_test_note")
+                    or "A stratified locked test set was reserved before any fitting; cross-validation used only the development set."
+                ),
+            )
+            table_notes.append(
+                "Models are ranked by development-set cross-validation. Report the locked-test C-index of the CV-selected (rank 1) model as the independent test performance."
+            )
         if evaluation_mode == "repeated_cv_incomplete":
             table_notes.append(
                 "This comparison is labeled repeated-CV incomplete because one or more apparent-fallback or failed folds were excluded from the aggregate."
@@ -2348,7 +2498,7 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             )
         if include_brier_metrics:
             table_notes.append(
-                "IBS columns summarize IPCW integrated Brier error, and Brier Skill Score is reported relative to a Kaplan-Meier null model fit on each training partition."
+                "IBS columns summarize IPCW integrated Brier error; the pooled Brier Skill Score is 1 - mean IBS / mean null IBS, with the Kaplan-Meier null model fit on each training partition."
             )
     else:
         row_modes = {str(row.get("evaluation_mode", evaluation_mode)) for row in comparison_table}
@@ -2359,7 +2509,7 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
                 "Model": row["model"],
                 "Validation Strategy": _manuscript_validation_strategy_label(str(row.get("evaluation_mode", evaluation_mode))),
                 "C-index": _safe_float(row.get("c_index")),
-                "Features, n": row.get("n_features"),
+                "Features, n": _features_cell(row) if include_active_features else row.get("n_features"),
                 "Patients, n": result.get("n_patients"),
                 "Events, n": result.get("n_events"),
                 "Evaluation Patients, n": row.get("evaluation_samples", result.get("n_evaluation_patients")),
@@ -2392,7 +2542,9 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
         "model_performance_table": rows,
         "table_notes": table_notes,
         "caption": (
-            "Table 1. Performance of survival models under repeated stratified cross-validation."
+            "Table 1. Performance of survival models: repeated stratified cross-validation on the development set and a single evaluation on a locked independent test set."
+            if include_locked_test and evaluation_mode == "repeated_cv"
+            else "Table 1. Performance of survival models under repeated stratified cross-validation."
             if evaluation_mode == "repeated_cv"
             else (
                 "Table 1. Performance of survival models under incomplete repeated stratified cross-validation."
@@ -2411,6 +2563,45 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ml_model_specs(
+    *,
+    n_estimators: int,
+    max_depth: int | None,
+    learning_rate: float,
+) -> list[tuple[str, Any, dict[str, Any]]]:
+    specs: list[tuple[str, Any, dict[str, Any]]] = [("Cox PH", _fit_evaluate_cox_split, {})]
+    if SKSURV_AVAILABLE:
+        specs.extend(
+            [
+                ("LASSO-Cox", _fit_evaluate_lasso_cox_split, {}),
+                (
+                    "Random Survival Forest",
+                    _fit_evaluate_rsf_split,
+                    {"n_estimators": n_estimators, "max_depth": max_depth},
+                ),
+                (
+                    "Gradient Boosted Survival",
+                    _fit_evaluate_gbs_split,
+                    {
+                        "n_estimators": n_estimators,
+                        "learning_rate": learning_rate,
+                        "max_depth": _resolve_gbs_max_depth(max_depth),
+                    },
+                ),
+            ]
+        )
+    return specs
+
+
+def _locked_test_note(n_dev: int, n_dev_events: int, n_test: int, n_test_events: int, fraction: float) -> str:
+    return (
+        f"A stratified locked test set ({n_test} patients, {n_test_events} events; {fraction:.0%} of the cohort) "
+        f"was reserved before any fitting. Repeated CV, preprocessing, and tuning used only the development set "
+        f"({n_dev} patients, {n_dev_events} events); each model was then refit once on the full development set "
+        "and scored once on the locked test set."
+    )
+
+
 @user_input_boundary
 def cross_validate_survival_models(
     df: pd.DataFrame,
@@ -2425,8 +2616,14 @@ def cross_validate_survival_models(
     cv_folds: int = 5,
     cv_repeats: int = 3,
     random_state: int = 42,
+    locked_test_fraction: float | None = None,
 ) -> dict[str, Any]:
-    """Evaluate Cox PH, LASSO-Cox, RSF, and GBS with repeated stratified cross-validation."""
+    """Evaluate Cox PH, LASSO-Cox, RSF, and GBS with repeated stratified cross-validation.
+
+    With ``locked_test_fraction`` set, a stratified test set is reserved first;
+    repeated CV runs on the remaining development set only, and every model is
+    refit on the development set and scored once on the untouched test set.
+    """
     _require_sklearn()
     categorical_features = list(categorical_features or [])
     if cv_folds < 2:
@@ -2447,43 +2644,41 @@ def cross_validate_survival_models(
     )
     n_patients = int(frame.shape[0])
     n_events = int(frame[event_column].sum())
-    events = frame[event_column].astype(int).to_numpy()
+    source_rows = _frame_source_rows(frame)
+    all_events = frame[event_column].astype(int).to_numpy()
+
+    use_locked_test = locked_test_fraction is not None and float(locked_test_fraction) > 0.0
+    if use_locked_test:
+        dev_positions, test_positions = locked_test_split(
+            all_events,
+            random_state=random_state,
+            test_fraction=float(locked_test_fraction),
+        )
+    else:
+        dev_positions = np.arange(n_patients, dtype=int)
+        test_positions = np.array([], dtype=int)
+    dev_frame = frame.iloc[dev_positions].reset_index(drop=True)
+    locked_test_frame = frame.iloc[test_positions].reset_index(drop=True) if use_locked_test else None
+
+    events = dev_frame[event_column].astype(int).to_numpy()
     unique, counts = np.unique(events, return_counts=True)
     if len(unique) < 2 or counts.min() < cv_folds:
         raise ValueError(
-            f"Repeated CV requires at least {cv_folds} samples in each event stratum after cleaning."
+            f"Repeated CV requires at least {cv_folds} samples in each event stratum after cleaning"
+            + (" in the development set." if use_locked_test else ".")
         )
 
-    model_specs: list[tuple[str, Any, dict[str, Any]]] = [("Cox PH", _fit_evaluate_cox_split, {})]
-    if SKSURV_AVAILABLE:
-        model_specs.extend(
-            [
-                ("LASSO-Cox", _fit_evaluate_lasso_cox_split, {}),
-                (
-                    "Random Survival Forest",
-                    _fit_evaluate_rsf_split,
-                    {"n_estimators": n_estimators, "max_depth": max_depth},
-                ),
-                (
-                    "Gradient Boosted Survival",
-                    _fit_evaluate_gbs_split,
-                    {
-                        "n_estimators": n_estimators,
-                        "learning_rate": learning_rate,
-                        "max_depth": max_depth,
-                    },
-                ),
-            ]
-        )
-    else:
+    model_specs = _ml_model_specs(n_estimators=n_estimators, max_depth=max_depth, learning_rate=learning_rate)
+    errors: list[dict[str, Any]] = []
+    if not SKSURV_AVAILABLE:
         errors = [
             {"model": "LASSO-Cox", "error": "scikit-survival is not installed."},
             {"model": "Random Survival Forest", "error": "scikit-survival is not installed."},
             {"model": "Gradient Boosted Survival", "error": "scikit-survival is not installed."},
         ]
     fold_results: list[dict[str, Any]] = []
-    if SKSURV_AVAILABLE:
-        errors = []
+    design_splits: list[tuple[np.ndarray, np.ndarray]] = []
+    unseen_fold_rows = 0
 
     for repeat_idx in range(cv_repeats):
         splitter = StratifiedKFold(
@@ -2491,9 +2686,11 @@ def cross_validate_survival_models(
             shuffle=True,
             random_state=random_state + repeat_idx,
         )
-        for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(frame, events), start=1):
-            train_frame = frame.iloc[train_idx].reset_index(drop=True)
-            test_frame = frame.iloc[test_idx].reset_index(drop=True)
+        for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(dev_frame, events), start=1):
+            design_splits.append((dev_positions[train_idx], dev_positions[test_idx]))
+            train_frame = dev_frame.iloc[train_idx].reset_index(drop=True)
+            test_frame = dev_frame.iloc[test_idx].reset_index(drop=True)
+            unseen_fold_rows += _unseen_category_rows(train_frame, test_frame, categorical_features)
             for model_name, fit_fn, extra_kwargs in model_specs:
                 try:
                     result = fit_fn(
@@ -2515,6 +2712,7 @@ def cross_validate_survival_models(
                         "null_ibs": result.get("null_ibs"),
                         "brier_skill_score": result.get("brier_skill_score"),
                         "n_features": result["n_features"],
+                        "n_active_features": result.get("n_active_features"),
                         "training_time_ms": result["training_time_ms"],
                         "train_n": result["train_n"],
                         "test_n": result["test_n"],
@@ -2529,6 +2727,24 @@ def cross_validate_survival_models(
                         "error": str(exc),
                     })
 
+    locked_results: dict[str, dict[str, Any]] = {}
+    if use_locked_test and locked_test_frame is not None:
+        design_splits.append((dev_positions, test_positions))
+        for model_name, fit_fn, extra_kwargs in model_specs:
+            try:
+                locked_results[model_name] = fit_fn(
+                    dev_frame,
+                    locked_test_frame,
+                    time_column=time_column,
+                    event_column=event_column,
+                    features=features,
+                    categorical_features=categorical_features,
+                    random_state=random_state,
+                    **extra_kwargs,
+                )
+            except Exception as exc:
+                locked_results[model_name] = {"error": str(exc)}
+
     comparison: list[dict[str, Any]] = []
     for model_name, _, _ in model_specs:
         model_rows = [row for row in fold_results if row["model"] == model_name and row["c_index"] is not None]
@@ -2538,10 +2754,13 @@ def cross_validate_survival_models(
         incomplete = (len(model_rows) + n_failures) < expected_evaluations or n_failures > 0
         if summary is None and n_failures == 0:
             continue
-        comparison.append({
+        active_counts = [float(row["n_active_features"]) for row in model_rows if row.get("n_active_features") is not None]
+        row_payload = {
             "model": model_name,
             "c_index": None if incomplete or summary is None else _safe_float(summary["c_index"]),
             "c_index_std": None if incomplete or summary is None else _safe_float(summary["c_index_std"]),
+            "c_index_std_label": None if summary is None else summary["c_index_std_label"],
+            "c_index_repeat_std": None if incomplete or summary is None else _safe_float(summary["c_index_repeat_std"]),
             "c_index_median": None if incomplete or summary is None else _safe_float(summary["c_index_median"]),
             "c_index_interval_lower": None if incomplete or summary is None else _safe_float(summary["c_index_interval_lower"]),
             "c_index_interval_upper": None if incomplete or summary is None else _safe_float(summary["c_index_interval_upper"]),
@@ -2549,7 +2768,8 @@ def cross_validate_survival_models(
             "ibs": None if incomplete or summary is None else _safe_float(summary.get("ibs")),
             "null_ibs": None if incomplete or summary is None else _safe_float(summary.get("null_ibs")),
             "brier_skill_score": None if incomplete or summary is None else _safe_float(summary.get("brier_skill_score")),
-            "n_features": None if summary is None else int(summary["n_features"]),
+            "n_features": None if summary is None or summary.get("n_features") is None else int(summary["n_features"]),
+            "n_active_features": int(round(float(np.mean(active_counts)))) if active_counts else None,
             "training_time_ms": None if summary is None else _safe_float(summary["training_time_ms"]),
             "n_evaluations": len(model_rows),
             "n_repeats": 0 if summary is None else int(summary["n_repeats"]),
@@ -2558,16 +2778,31 @@ def cross_validate_survival_models(
             "cv_repeats": cv_repeats,
             "evaluation_mode": "repeated_cv_incomplete" if incomplete else "repeated_cv",
             "repeat_results": [] if summary is None else summary["repeat_results"],
-            "training_samples": None if summary is None else int(summary["train_n"]),
-            "evaluation_samples": None if summary is None else int(summary["test_n"]),
-            "train_events": None if summary is None else int(summary["train_events"]),
-            "test_events": None if summary is None else int(summary["test_events"]),
-        })
+            "training_samples": None if summary is None or summary.get("train_n") is None else int(summary["train_n"]),
+            "evaluation_samples": None if summary is None or summary.get("test_n") is None else int(summary["test_n"]),
+            "train_events": None if summary is None or summary.get("train_events") is None else int(summary["train_events"]),
+            "test_events": None if summary is None or summary.get("test_events") is None else int(summary["test_events"]),
+        }
+        if use_locked_test:
+            locked = locked_results.get(model_name) or {}
+            row_payload.update({
+                "locked_test_c_index": _safe_float(locked.get("c_index")),
+                "locked_test_ibs": _safe_float(locked.get("ibs")),
+                "locked_test_null_ibs": _safe_float(locked.get("null_ibs")),
+                "locked_test_brier_skill_score": _safe_float(locked.get("brier_skill_score")),
+                "locked_test_samples": locked.get("test_n"),
+                "locked_test_events": locked.get("test_events"),
+                "locked_test_training_samples": locked.get("train_n"),
+                "locked_test_error": locked.get("error"),
+            })
+        comparison.append(row_payload)
 
     if not comparison:
         raise ValueError(
             "All repeated-CV model fits failed. Errors: "
-            + "; ".join(f"{e['model']} r{e['repeat']}f{e['fold']}: {e['error']}" for e in errors)
+            + "; ".join(
+                f"{e['model']} r{e.get('repeat', '?')}f{e.get('fold', '?')}: {e['error']}" for e in errors
+            )
         )
 
     comparison.sort(key=lambda row: row["c_index"] if row["c_index"] is not None else -1.0, reverse=True)
@@ -2581,20 +2816,38 @@ def cross_validate_survival_models(
         if errors or any(str(row.get("evaluation_mode")) == "repeated_cv_incomplete" for row in comparison)
         else "repeated_cv"
     )
+    extra_strengths = [
+        f"{len(comparison)} model(s) evaluated across {cv_repeats} repeat(s) of {cv_folds}-fold stratified CV"
+        + (" on the development set." if use_locked_test else "."),
+    ]
+    locked_note = None
+    if use_locked_test and locked_test_frame is not None:
+        locked_note = _locked_test_note(
+            int(dev_frame.shape[0]),
+            int(dev_frame[event_column].sum()),
+            int(locked_test_frame.shape[0]),
+            int(locked_test_frame[event_column].sum()),
+            float(locked_test_fraction),
+        )
+        extra_strengths.append(locked_note)
+        best_locked = best.get("locked_test_c_index")
+        if best_locked is not None:
+            extra_strengths.append(
+                f"The CV-selected model ({best['model']}) reached a locked-test C-index of {best_locked:.3f}; "
+                "this single untouched-test estimate is the performance to report."
+            )
     scientific_summary = _scientific_summary_ml(
         model_name=f"Repeated-CV Model Comparison Screening (top: {best['model']})",
         c_index=best["c_index"],
         n_patients=n_patients,
         n_events=n_events,
-        n_features=best["n_features"],
+        n_features=best.get("n_features"),
         evaluation_mode=aggregate_mode,
         n_evaluation_patients=mean_test_n,
         n_evaluation_events=mean_test_events,
         n_fit_patients=mean_train_n,
         n_fit_events=mean_train_events,
-        extra_strengths=[
-            f"{len(comparison)} model(s) evaluated across {cv_repeats} repeat(s) of {cv_folds}-fold stratified CV.",
-        ],
+        extra_strengths=extra_strengths,
         extra_cautions=[f"{len(errors)} fold-level fit(s) failed."] if errors else None,
     )
     scientific_summary = _augment_scientific_summary_with_brier(
@@ -2605,11 +2858,32 @@ def cross_validate_survival_models(
             "brier_skill_score": best.get("brier_skill_score"),
         },
     )
-    scientific_summary["cautions"].insert(
-        0,
-        "The top-ranked model was selected and scored within the same repeated-CV screening run; treat this as model screening rather than final external validation.",
-    )
+    if use_locked_test:
+        scientific_summary["cautions"].insert(
+            0,
+            "Models were ranked by development-set repeated CV; report the locked-test C-index of the CV-selected model as the independent performance estimate, not the best locked-test value across models.",
+        )
+    else:
+        scientific_summary["cautions"].insert(
+            0,
+            "The top-ranked model was selected and scored within the same repeated-CV screening run; treat this as model screening rather than final external validation. Reserve a locked test set or use an external cohort for the performance you report.",
+        )
+    duplicate_caution = duplicate_identifier_caution(df)
+    if duplicate_caution:
+        scientific_summary["cautions"].insert(0, duplicate_caution)
+    for caution in (
+        _unseen_category_caution(unseen_fold_rows, "cross-validation evaluation (summed over folds)"),
+        _unseen_category_caution(
+            _unseen_category_rows(dev_frame, locked_test_frame, categorical_features)
+            if locked_test_frame is not None
+            else 0,
+            "locked-test",
+        ),
+    ):
+        if caution:
+            scientific_summary["cautions"].append(caution)
 
+    fingerprint_kind = "repeated_cv+locked_test" if use_locked_test else "repeated_cv"
     result = {
         "comparison_table": comparison,
         "fold_results": fold_results,
@@ -2622,6 +2896,14 @@ def cross_validate_survival_models(
         "evaluation_mode": aggregate_mode,
         "cv_folds": cv_folds,
         "cv_repeats": cv_repeats,
+        "split_seed": int(random_state),
+        "locked_test_fraction": float(locked_test_fraction) if use_locked_test else None,
+        "n_development_patients": int(dev_frame.shape[0]),
+        "n_development_events": int(dev_frame[event_column].sum()),
+        "n_locked_test_patients": int(locked_test_frame.shape[0]) if locked_test_frame is not None else None,
+        "n_locked_test_events": int(locked_test_frame[event_column].sum()) if locked_test_frame is not None else None,
+        "locked_test_note": locked_note,
+        "evaluation_split_fingerprint": evaluation_split_fingerprint(source_rows, design_splits, kind=fingerprint_kind),
         "scientific_summary": scientific_summary,
     }
     result["manuscript_tables"] = build_manuscript_result_tables(result)
@@ -2769,6 +3051,25 @@ def compute_shap_values(
 
 
 @user_input_boundary
+def _apply_feature_scaler(encoded: pd.DataFrame, scaler: dict[str, Any] | None) -> pd.DataFrame:
+    """Re-apply training standardization (LASSO-Cox stores its design standardized)."""
+    if not scaler:
+        return encoded
+    means = pd.Series(scaler.get("mean")).reindex(encoded.columns).fillna(0.0).astype(float)
+    scales = pd.Series(scaler.get("scale")).reindex(encoded.columns).fillna(1.0).astype(float).replace(0.0, 1.0)
+    scaled = (encoded.astype(float) - means) / scales
+    return scaled.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+
+def _model_risk_scale(model: Any) -> str:
+    """How ``model.predict`` scores risk: log partial hazard or cumulative hazard."""
+    if GradientBoostingSurvivalAnalysis is not None and isinstance(model, GradientBoostingSurvivalAnalysis):
+        return "log_hazard"
+    if CoxnetSurvivalAnalysis is not None and isinstance(model, CoxnetSurvivalAnalysis):
+        return "log_hazard"
+    return "cumulative_hazard"
+
+
 def compute_partial_dependence(
     model: Any,
     X_encoded: pd.DataFrame,
@@ -2777,6 +3078,7 @@ def compute_partial_dependence(
     categorical_features: Sequence[str] | None = None,
     feature_encoder: dict[str, Any] | None = None,
     analysis_frame: pd.DataFrame | None = None,
+    feature_scaler: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compute partial dependence of the model's risk score on a single
     feature.
@@ -2802,7 +3104,7 @@ def compute_partial_dependence(
         if feature_encoder is not None:
             encoded = _transform_feature_encoder(frame_variant, feature_encoder)
             encoded = encoded.reindex(columns=X_encoded.columns, fill_value=0.0).fillna(0.0)
-            X_variant = encoded.to_numpy(dtype=float)
+            X_variant = _apply_feature_scaler(encoded, feature_scaler).to_numpy(dtype=float)
         else:
             if feature_name not in X_encoded.columns:
                 raise ValueError(
@@ -2812,6 +3114,10 @@ def compute_partial_dependence(
             X_variant = X_encoded.to_numpy(dtype=float, copy=True)
             col_idx = list(X_encoded.columns).index(feature_name)
             replacement = pd.to_numeric(frame_variant[feature_name], errors="coerce").to_numpy(dtype=float)
+            if feature_scaler:
+                mean = float(pd.Series(feature_scaler.get("mean")).get(feature_name, 0.0))
+                scale = float(pd.Series(feature_scaler.get("scale")).get(feature_name, 1.0)) or 1.0
+                replacement = (replacement - mean) / scale
             X_variant[:, col_idx] = replacement
         preds = model.predict(X_variant)
         return _safe_float(float(np.mean(preds)))
@@ -2986,8 +3292,9 @@ def compute_integrated_brier_score(
         probabilities for every patient at the requested time points.
     eval_times
         Optional array of time points at which to evaluate the Brier score.
-        If *None*, 100 equally-spaced points from 0 to the largest
-        event time in the IPCW support set are used.
+        If *None*, 100 equally-spaced points between the 10th and 90th
+        percentiles of the evaluation-cohort times are used (capped at the
+        last event time in the IPCW support set).
     support_times, support_events
         Optional follow-up times and event indicators used to define the
         IPCW censoring weights and the default evaluation-time support.
@@ -3018,15 +3325,24 @@ def compute_integrated_brier_score(
         else float(np.max(support_times_arr))
     )
 
-    # Default evaluation grid
+    # Default evaluation grid: the 10th-90th percentile range of the observed
+    # evaluation-cohort times (the usual sksurv practice). It stays inside the
+    # evaluation follow-up, where the censoring distribution G(t) is still
+    # well estimated, and skips t ~ 0 where every model is trivially right.
+    eval_upper = min(support_time_upper, float(np.max(times_arr)) if times_arr.size else support_time_upper)
     if eval_times is None:
-        eval_times_arr = np.linspace(0.0, support_time_upper, 100)
+        grid_lower, grid_upper = (
+            np.percentile(times_arr, [10.0, 90.0]) if times_arr.size else (0.0, support_time_upper)
+        )
+        grid_upper = min(float(grid_upper), eval_upper)
+        grid_lower = min(float(grid_lower), grid_upper)
+        eval_times_arr = np.linspace(grid_lower, grid_upper, 100)
     else:
         eval_times_arr = np.asarray(eval_times, dtype=float)
 
-    # Keep evaluation times within the IPCW support window to avoid
-    # extrapolation beyond the last event used for weighting support.
-    eval_times_arr = eval_times_arr[(eval_times_arr >= 0.0) & (eval_times_arr <= support_time_upper)]
+    # Keep evaluation times within the IPCW support window and the evaluation
+    # follow-up to avoid extrapolation beyond observed data.
+    eval_times_arr = eval_times_arr[(eval_times_arr >= 0.0) & (eval_times_arr <= eval_upper)]
     if len(eval_times_arr) == 0:
         raise ValueError(
             "No evaluation time points fall within the IPCW support range."
@@ -3772,6 +4088,7 @@ def counterfactual_survival(
     _require_predict_callable(model, context="Counterfactual survival analysis")
     X_original = result["_X_encoded"]
     encoder = result.get("_feature_encoder")
+    feature_scaler = result.get("_feature_scaler")
     analysis_frame = result.get("_analysis_frame")
     if analysis_frame is None or not set(features).issubset(set(analysis_frame.columns)):
         analysis_frame = frame
@@ -3797,10 +4114,16 @@ def counterfactual_survival(
 
         if encoder is not None:
             encoded = _transform_feature_encoder(frame_variant, encoder)
-            return encoded.reindex(columns=X_original.columns, fill_value=0.0).fillna(0.0)
+            return _apply_feature_scaler(
+                encoded.reindex(columns=X_original.columns, fill_value=0.0).fillna(0.0),
+                feature_scaler,
+            )
 
         encoded = _encode_features(frame_variant, features, cat_feats)
-        return encoded.reindex(columns=X_original.columns, fill_value=0.0).fillna(0.0)
+        return _apply_feature_scaler(
+            encoded.reindex(columns=X_original.columns, fill_value=0.0).fillna(0.0),
+            feature_scaler,
+        )
 
     original_label = _scenario_label(original_value)
     counterfactual_label = _scenario_label(counterfactual_value)
@@ -3815,11 +4138,23 @@ def counterfactual_survival(
     cf_risk = model.predict(X_cf.to_numpy())
     cf_median_risk = float(np.median(cf_risk))
 
-    # Percentage change
-    if original_median_risk != 0.0:
-        risk_change_pct = ((cf_median_risk - original_median_risk) / abs(original_median_risk)) * 100.0
+    # Relative change on a ratio scale. Cox-type scores (GBS, LASSO-Cox) are
+    # log partial hazards, so a percentage of the raw score is meaningless;
+    # compare per-patient hazard ratios exp(cf - original) instead. RSF scores
+    # are cumulative hazards (positive), so per-patient ratios apply directly.
+    risk_scale = _model_risk_scale(model)
+    original_arr = np.asarray(original_risk, dtype=float)
+    cf_arr = np.asarray(cf_risk, dtype=float)
+    if risk_scale == "log_hazard":
+        per_patient_ratio = np.exp(np.clip(cf_arr - original_arr, -50.0, 50.0))
     else:
-        risk_change_pct = 0.0 if cf_median_risk == 0.0 else None
+        with np.errstate(divide="ignore", invalid="ignore"):
+            per_patient_ratio = np.where(original_arr > 0.0, cf_arr / original_arr, np.nan)
+    finite_ratio = per_patient_ratio[np.isfinite(per_patient_ratio)]
+    if finite_ratio.size:
+        risk_change_pct = (float(np.median(finite_ratio)) - 1.0) * 100.0
+    else:
+        risk_change_pct = 0.0 if np.allclose(cf_arr, original_arr) else None
 
     n_patients = int(frame.shape[0])
     n_events = int(frame[event_column].sum())
@@ -3839,16 +4174,17 @@ def counterfactual_survival(
         direction_label = "similar risk"
 
     if risk_change_pct is None:
-        risk_change_text = "is not well-defined because the baseline median risk is zero"
+        risk_change_text = "is not well-defined because the baseline predicted risk is zero"
         headline_effect = (
             f"Under a model-based scenario that sets '{target_feature}' from {original_label} to {counterfactual_label}, "
-            "median predicted risk changed, but the relative percentage change is undefined because the baseline median risk is zero."
+            "predicted risk changed, but the relative change is undefined because the baseline predicted risk is zero."
         )
     else:
         risk_change_text = f"{direction} by {abs(risk_change_pct):.1f}% ({direction_label})"
         headline_effect = (
             f"Under a model-based scenario that sets '{target_feature}' from {original_label} to {counterfactual_label}, "
-            f"median predicted risk {direction} by {abs(risk_change_pct):.1f}%."
+            f"the median per-patient relative {'hazard' if risk_scale == 'log_hazard' else 'cumulative hazard'} "
+            f"{direction} by {abs(risk_change_pct):.1f}%."
         )
 
     strengths: list[str] = [
@@ -3897,6 +4233,11 @@ def counterfactual_survival(
         "original_median_risk": _safe_float(original_median_risk),
         "counterfactual_median_risk": _safe_float(cf_median_risk),
         "risk_change_pct": _safe_float(risk_change_pct),
+        "risk_change_method": (
+            "median per-patient hazard ratio exp(counterfactual - original) on the log partial hazard scale"
+            if risk_scale == "log_hazard"
+            else "median per-patient cumulative-hazard ratio"
+        ),
         "model_type": model_type,
         "scientific_summary": scientific_summary,
     }

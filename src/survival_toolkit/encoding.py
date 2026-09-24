@@ -71,6 +71,19 @@ def fit_feature_encoder(
     categorical_missing_columns: dict[str, str] = {}
     feature_names: list[str] = []
     categorical_feature_indices: list[int] = []
+    # Numeric features keep their raw names, so generated dummy names must avoid them (and each
+    # other): a categorical "tgrade" with level "III" next to a numeric "tgrade_III" column would
+    # otherwise produce two encoded columns with the same name.
+    used_names: set[str] = {str(column) for column in numeric_features}
+
+    def _allocate_name(base_name: str) -> str:
+        candidate = base_name
+        suffix = 2
+        while candidate in used_names:
+            candidate = f"{base_name}__{suffix}"
+            suffix += 1
+        used_names.add(candidate)
+        return candidate
 
     for column in resolved_categorical:
         levels = sorted(
@@ -78,12 +91,14 @@ def fit_feature_encoder(
             for level in selected[column].dropna().astype("string").unique().tolist()
         )
         retained_levels = levels[1:] if len(levels) > 1 else []
-        unknown_column = f"{column}__unknown"
-        missing_column = f"{column}__missing"
+        level_columns = {level: _allocate_name(f"{column}_{level}") for level in retained_levels}
+        unknown_column = _allocate_name(f"{column}__unknown")
+        missing_column = _allocate_name(f"{column}__missing")
         categorical_mappings[column] = {
             "all_levels": levels,
             "baseline_level": levels[0] if levels else None,
             "retained_levels": retained_levels,
+            "level_columns": level_columns,
             "unknown_column": unknown_column,
             "missing_column": missing_column,
         }
@@ -92,7 +107,7 @@ def fit_feature_encoder(
         categorical_unknown_columns[column] = unknown_column
         categorical_missing_columns[column] = missing_column
         start_index = len(feature_names)
-        feature_names.extend([f"{column}_{level}" for level in retained_levels])
+        feature_names.extend(level_columns[level] for level in retained_levels)
         feature_names.append(unknown_column)
         feature_names.append(missing_column)
         categorical_feature_indices.extend(range(start_index, len(feature_names)))
@@ -101,7 +116,13 @@ def fit_feature_encoder(
     scaler_params: dict[str, dict[str, float]] = {}
     numeric_feature_indices: list[int] = []
     if numeric_features:
-        numeric_frame = selected[numeric_features].apply(pd.to_numeric, errors="coerce")
+        # Treat +/-inf as missing so a single infinite value cannot make the mean infinite and the
+        # standard deviation NaN (which would zero the whole feature after scaling).
+        numeric_frame = (
+            selected[numeric_features]
+            .apply(pd.to_numeric, errors="coerce")
+            .replace([np.inf, -np.inf], np.nan)
+        )
         medians = numeric_frame.median(skipna=True).fillna(0.0)
         numeric_array = numeric_frame.fillna(medians).to_numpy(dtype=np.float64)
         means = np.mean(numeric_array, axis=0) if standardize_numeric else np.zeros(len(numeric_features), dtype=float)
@@ -162,15 +183,17 @@ def transform_feature_encoder(
         mapping = encoder["categorical_mappings"][column]
         values = selected[column].astype("string")
         all_levels = pd.Index(mapping["all_levels"], dtype="string")
+        level_columns = mapping.get("level_columns") or {}
         for level in mapping["retained_levels"]:
-            encoded_columns[f"{column}_{level}"] = values.eq(level).fillna(False).astype(float)
+            encoded_name = level_columns.get(level, f"{column}_{level}")
+            encoded_columns[encoded_name] = values.eq(level).fillna(False).astype(float)
         missing_mask = values.isna()
         unknown_mask = values.notna() & ~values.isin(all_levels)
         encoded_columns[mapping["unknown_column"]] = unknown_mask.astype(float)
         encoded_columns[mapping["missing_column"]] = missing_mask.astype(float)
 
     for column in encoder.get("numeric_features", []):
-        numeric_series = pd.to_numeric(selected[column], errors="coerce")
+        numeric_series = pd.to_numeric(selected[column], errors="coerce").replace([np.inf, -np.inf], np.nan)
         impute_value = float(encoder.get("numeric_impute_values", {}).get(column, 0.0))
         numeric_series = numeric_series.fillna(impute_value).astype(float)
         if encoder.get("standardize_numeric"):

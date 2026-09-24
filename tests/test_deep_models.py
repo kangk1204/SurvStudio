@@ -185,10 +185,10 @@ def test_deep_trainers_report_nonpositive_time_exclusions_in_summary() -> None:
     )
 
     assert any(
-        metric["label"] == "Dropped for nonpositive time" and metric["value"] == 3
+        metric["label"] == "Dropped for negative time" and metric["value"] == 1
         for metric in result["scientific_summary"]["metrics"]
     )
-    assert any("nonpositive survival time" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    assert any("negative survival time" in caution.lower() for caution in result["scientific_summary"]["cautions"])
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -881,7 +881,10 @@ def test_deepsurv_reports_full_batch_metadata_and_monitor_c_index() -> None:
 
     assert result["c_index"] is not None
     assert result["requested_batch_size"] == 3
-    assert result["effective_batch_size"] == result["training_samples"]
+    # Full batch = the rows actually fitted: the training partition minus the
+    # held-out early-stopping monitor subset.
+    assert result["effective_batch_size"] == result["fit_samples"]
+    assert result["fit_samples"] + result["monitor_samples"] == result["training_samples"]
     assert result["optimization_mode"] == "full_batch_cox"
     assert result["tie_method"] == "breslow"
     assert result["monitor_metric_label"] == "Monitor C-index"
@@ -2398,3 +2401,112 @@ def test_discrete_time_models_report_eval_tail_bucket_overflow(
 
     assert "tail bucket" in result["evaluation_note"].lower()
     assert any("tail bucket" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+
+
+
+def _gbsg2_deep_frame() -> pd.DataFrame:
+    from pathlib import Path
+
+    return pd.read_csv(Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "data" / "gbsg2_upload_ready.csv")
+
+
+def test_early_stopping_monitor_rows_are_not_used_for_fitting() -> None:
+    torch = pytest.importorskip("torch")
+    import survival_toolkit.deep_models as deep_models
+
+    train_idx = torch.arange(0, 50)
+    monitor_idx = torch.tensor([3, 7, 11, 20, 33])
+    events = torch.ones(60)
+    fit_idx, kept_monitor = deep_models._fit_rows_excluding_monitor(train_idx, monitor_idx, events)
+    assert kept_monitor is not None
+    assert not bool(torch.isin(fit_idx, monitor_idx).any())
+    assert int(fit_idx.numel()) == 45
+
+
+def test_mtlr_loss_stays_finite_for_extreme_logits() -> None:
+    torch = pytest.importorskip("torch")
+    from survival_toolkit.deep_models import _mtlr_loss
+
+    torch.manual_seed(0)
+    logits = torch.randn(200, 51) * 8.0
+    bins = torch.randint(0, 51, (200,))
+    events = torch.randint(0, 2, (200,)).float()
+    loss32 = _mtlr_loss(logits.float(), bins, events)
+    loss64 = _mtlr_loss(logits.double(), bins, events)
+    assert torch.isfinite(loss32)
+    assert float(loss32) == pytest.approx(float(loss64), rel=1e-5)
+
+
+def test_deephit_ranking_uses_cumulative_incidence_including_event_bin() -> None:
+    torch = pytest.importorskip("torch")
+    from survival_toolkit.deep_models import _deephit_loss
+
+    logits = torch.zeros(3, 5, requires_grad=True)
+    pmf = torch.softmax(logits, dim=1)
+    # Event in bin 0 must still produce a ranking gradient (it had none when the
+    # ranking compared survival at the start of the event bin).
+    loss = _deephit_loss(pmf, torch.tensor([0, 2, 3]), torch.tensor([1.0, 0.0, 1.0]), alpha=0.0)
+    loss.backward()
+    assert float(logits.grad.abs().sum()) > 0.0
+
+
+def test_simple_kmeans_handles_fewer_distinct_points_than_clusters() -> None:
+    torch = pytest.importorskip("torch")
+    from survival_toolkit.deep_models import _simple_kmeans
+
+    data = np.array([[0.0, 0.0]] * 10 + [[1.0, 1.0]] * 10)
+    labels = _simple_kmeans(data, n_clusters=3, seed=1)
+    assert labels.shape == (20,)
+
+
+def test_gradient_salience_is_zero_for_constant_columns() -> None:
+    torch = pytest.importorskip("torch")
+    from survival_toolkit.deep_models import DeepSurvNet, _gradient_feature_importance
+
+    torch.manual_seed(0)
+    x = torch.randn(30, 3)
+    x[:, 2] = 0.0
+    importance = _gradient_feature_importance(DeepSurvNet(3, [8], 0.0), x)
+    assert importance[2] == 0.0
+    assert importance[0] > 0.0
+
+
+def test_deep_and_ml_holdout_share_evaluation_rows_and_fingerprint() -> None:
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("sksurv")
+    from survival_toolkit.deep_models import compare_deep_survival_models
+    from survival_toolkit.ml_models import compare_survival_models
+
+    df = _gbsg2_deep_frame()
+    features = ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"]
+    categorical = ["horTh", "menostat", "tgrade"]
+    ml = compare_survival_models(df, "rfs_days", "rfs_event", features, categorical, n_estimators=10, random_state=7)
+    dl = compare_deep_survival_models(
+        df, "rfs_days", "rfs_event", features, categorical, epochs=3, random_seed=7, included_models=["DeepSurv"],
+    )
+    assert ml["evaluation_split_fingerprint"] == dl["evaluation_split_fingerprint"]
+    assert dl["comparison_table"][0]["evaluation_samples"] == ml["n_evaluation_patients"]
+    assert dl["n_patients"] == ml["n_patients"]
+
+
+def test_deep_repeated_cv_locked_test_matches_ml_design() -> None:
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("sksurv")
+    from survival_toolkit.deep_models import compare_deep_survival_models
+    from survival_toolkit.ml_models import cross_validate_survival_models
+
+    df = _gbsg2_deep_frame()
+    features = ["age", "pnodes", "tsize"]
+    ml = cross_validate_survival_models(
+        df, "rfs_days", "rfs_event", features, [], n_estimators=10, cv_folds=3, cv_repeats=1,
+        random_state=5, locked_test_fraction=0.3,
+    )
+    dl = compare_deep_survival_models(
+        df, "rfs_days", "rfs_event", features, [], epochs=3, random_seed=5, evaluation_strategy="repeated_cv",
+        cv_folds=3, cv_repeats=1, included_models=["DeepSurv"], locked_test_fraction=0.3,
+    )
+    assert ml["evaluation_split_fingerprint"] == dl["evaluation_split_fingerprint"]
+    row = dl["comparison_table"][0]
+    assert row["locked_test_samples"] == ml["n_locked_test_patients"]
+    assert row["locked_test_c_index"] is not None
+    assert dl["n_development_patients"] == ml["n_development_patients"]

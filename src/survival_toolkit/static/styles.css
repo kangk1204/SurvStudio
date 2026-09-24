@@ -486,6 +486,11 @@ body {
   background: rgba(var(--accent-rgb), 0.06);
 }
 
+.dataset-integrity-warning {
+  margin-top: 8px;
+  font-weight: 600;
+}
+
 .runtime-banner-success {
   border-color: rgba(37, 115, 135, 0.2);
   background: rgba(37, 115, 135, 0.06);
@@ -2592,6 +2597,28 @@ h3 {
   margin: 10px 0 0;
 }
 
+.control-section-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.locked-test-toggle {
+  justify-content: flex-start;
+}
+
+.comparison-table-note {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  background: rgba(var(--accent-rgb), 0.05);
+  color: var(--ink);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 @media (max-width: 900px) {
   .guided-actions-dual {
     grid-template-columns: 1fr;
@@ -2972,7 +2999,32 @@ h3 {
   background: var(--surface);
   margin-bottom: 16px;
   overflow: hidden;
-  box-sizing: border-box;
+  /* Plotly autosizes to getComputedStyle(gd).width/height. With border-box that value includes
+     padding and border, so every chart overflowed its shell by 18px (and importance plots gained a
+     scrollbar). content-box makes the measured size exactly the drawable area. */
+  box-sizing: content-box;
+}
+
+.plot-shell.is-refreshing {
+  position: relative;
+}
+
+.plot-shell.is-refreshing > * {
+  opacity: 0.35;
+  transition: opacity 0.2s ease;
+}
+
+.plot-shell.is-refreshing::after {
+  content: "Updating…";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  pointer-events: none;
 }
 
 .plot-shell .js-plotly-plot,
