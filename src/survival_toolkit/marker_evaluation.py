@@ -1013,6 +1013,11 @@ def evaluate_markers(
         "signature": {
             "markers": [] if signature is None else [cohort.marker_names[int(column)] for column in signature.columns],
             "apparent_c": apparent_c,
+            # Harrell-style correction: the full-cohort signature's apparent C minus the
+            # mean in-subsample vs left-out gap of the whole selection procedure.
+            "optimism_corrected_c": None
+            if apparent_c is None or resampling.optimism["signature_optimism"] is None
+            else float(apparent_c - resampling.optimism["signature_optimism"]),
             **resampling.optimism,
         },
         "nonlinear_lens": None

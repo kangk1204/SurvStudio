@@ -92,6 +92,7 @@ def test_signature_and_winners_curse_are_reported_from_left_out_rows() -> None:
     # With real signals the selected signature generalises: left-out C stays close to the
     # in-subsample C and beats the clinical-only model on the same left-out rows.
     assert abs(signature["signature_optimism"]) < 0.05
+    assert signature["optimism_corrected_c"] == pytest.approx(signature["apparent_c"] - signature["signature_optimism"])
     assert signature["signature_c_left_out"] > signature["clinical_c_left_out"]
     assert signature["apparent_c"] >= signature["signature_c_left_out"] - 0.05
     assert 0.0 < signature["top_marker_shrinkage"] <= 1.5
