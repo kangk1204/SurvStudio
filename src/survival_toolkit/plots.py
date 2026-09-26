@@ -1275,3 +1275,189 @@ def build_pdp_figure(pdp_data: dict[str, Any]) -> dict[str, Any]:
     fig.update_xaxes(title=feature_text, **_COMMON_AXES)
     fig.update_yaxes(title="Mean predicted risk", **_COMMON_AXES)
     return figure_to_json(fig)
+
+
+# ── Marker evaluation ─────────────────────────────────────────
+
+MARKER_TIER_COLORS = {
+    "robust": SAGE,
+    "suggestive": GOLD,
+    "marginal only": PLUM,
+    "not supported": "rgba(148,163,184,0.75)",
+}
+
+
+def _marker_layout(fig: go.Figure, title: str, *, height: int, left: int = 70) -> None:
+    fig.update_layout(
+        **_COMMON_LAYOUT,
+        margin={"l": left, "r": 30, "t": 80, "b": 70},
+        title={"text": title, "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK}, "x": 0.02},
+        height=height,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.0, "xanchor": "right", "x": 1.0},
+    )
+
+
+def build_marker_stability_figure(result: dict[str, Any]) -> dict[str, Any]:
+    """Each marker's selection frequency against its direction consistency over the subsamples (primary
+    lens), coloured by tier, with the robust-tier thresholds."""
+    primary = str(result.get("primary_lens", "marginal"))
+    settings = result.get("settings") or {}
+    fig = go.Figure()
+    for tier, color in MARKER_TIER_COLORS.items():
+        members = [
+            row
+            for row in result.get("marker_table", [])
+            if row.get("tier") == tier
+            and isinstance(row.get(primary), dict)
+            and row[primary].get("selection_frequency") is not None
+            and row[primary].get("direction_consistency") is not None
+        ]
+        if not members:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=[row[primary]["selection_frequency"] for row in members],
+                y=[row[primary]["direction_consistency"] for row in members],
+                mode="markers",
+                name=tier,
+                marker={"size": 9, "color": color, "line": {"width": 0.6, "color": INK}},
+                customdata=[[escape_plotly_text(row["marker"]), escape_plotly_text(_format_p_value(row[primary].get("p_fwer")))] for row in members],
+                hovertemplate="%{customdata[0]}<br>Selected in %{x:.0%} of subsamples<br>Same direction in %{y:.0%}<br>Family-wise p = %{customdata[1]}<extra></extra>",
+            )
+        )
+    frequency = float(settings.get("robust_frequency", 0.5))
+    direction = float(settings.get("robust_direction", 0.9))
+    fig.add_vline(x=frequency, line_dash="dash", line_color=INK, line_width=1, opacity=0.5)
+    fig.add_hline(y=direction, line_dash="dash", line_color=INK, line_width=1, opacity=0.5)
+    fig.add_annotation(
+        text=f"Robust: family-wise p ≤ {float(settings.get('alpha', 0.05)):g}, selected in ≥ {frequency:.0%}, same direction in ≥ {direction:.0%}",
+        xref="paper",
+        yref="paper",
+        x=0.99,
+        y=0.02,
+        showarrow=False,
+        xanchor="right",
+        yanchor="bottom",
+        font={"size": 12, "color": INK},
+        bgcolor="rgba(255,255,255,0.85)",
+        borderpad=4,
+    )
+    _marker_layout(fig, "Marker Stability Across Subsamples", height=460)
+    fig.update_xaxes(title="Selection frequency", range=[-0.02, 1.02], tickformat=".0%", **_COMMON_AXES)
+    fig.update_yaxes(title="Direction consistency", range=[-0.02, 1.02], tickformat=".0%", **_COMMON_AXES)
+    return figure_to_json(fig)
+
+
+def build_marker_rank_figure(result: dict[str, Any], *, top: int = 25) -> dict[str, Any]:
+    """Median rank and 95% rank interval over the subsamples for the strongest markers (primary lens)."""
+    primary = str(result.get("primary_lens", "marginal"))
+    rows = [
+        row
+        for row in result.get("marker_table", [])
+        if isinstance(row.get(primary), dict)
+        and row[primary].get("median_rank") is not None
+        and None not in (row[primary].get("rank_interval") or [None])
+    ]
+    rows = sorted(rows, key=lambda row: row[primary]["median_rank"])[:top]
+    rows.reverse()
+    labels = [str(row["marker"]) for row in rows]
+    display_labels, axis_layout = _feature_plot_axis_layout(labels, width=30, max_lines=2)
+    fig = go.Figure()
+    for tier, color in MARKER_TIER_COLORS.items():
+        members = [row for row in rows if row.get("tier") == tier]
+        if not members:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=[row[primary]["median_rank"] for row in members],
+                y=[str(row["marker"]) for row in members],
+                mode="markers",
+                name=tier,
+                marker={"size": 10, "color": color, "line": {"width": 0.8, "color": INK}},
+                error_x={
+                    "type": "data",
+                    "array": [row[primary]["rank_interval"][1] - row[primary]["median_rank"] for row in members],
+                    "arrayminus": [row[primary]["median_rank"] - row[primary]["rank_interval"][0] for row in members],
+                    "thickness": 1.5,
+                    "width": 0,
+                    "color": color,
+                },
+                customdata=[
+                    [escape_plotly_text(row["marker"]), row[primary]["rank_interval"][0], row[primary]["rank_interval"][1]]
+                    for row in members
+                ],
+                hovertemplate="%{customdata[0]}<br>Median rank %{x:.0f} (95%: %{customdata[1]:.0f} to %{customdata[2]:.0f})<extra></extra>",
+            )
+        )
+    if not rows:
+        fig.add_annotation(
+            text="Rank intervals need at least one subsample.",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font={"size": 14, "color": INK},
+        )
+    _marker_layout(fig, "Rank Uncertainty of the Strongest Markers", height=max(420, axis_layout["height"]), left=axis_layout["l"])
+    fig.update_xaxes(title="Rank across subsamples (1 = strongest)", **_COMMON_AXES)
+    fig.update_yaxes(automargin=True, tickmode="array", tickvals=labels, ticktext=display_labels, **_COMMON_AXES)
+    return figure_to_json(fig)
+
+
+def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any]:
+    """External hazard ratio of each locked marker, coloured by whether it replicated."""
+    rows = []
+    for row in validation.get("markers", []):
+        tested = row.get("adjusted") or row.get("marginal")
+        if tested and all(isinstance(tested.get(key), (int, float)) and tested[key] > 0 for key in ("hazard_ratio", "ci_lower", "ci_upper")):
+            rows.append((row, tested))
+    rows.reverse()
+    labels = [str(row["marker"]) for row, _ in rows]
+    display_labels, axis_layout = _feature_plot_axis_layout(labels, width=30, max_lines=2)
+    groups = (
+        ("replicated", SAGE, lambda row: row.get("replicated")),
+        ("same direction, not significant", GOLD, lambda row: not row.get("replicated") and row.get("same_direction")),
+        ("opposite direction", ACCENT, lambda row: not row.get("same_direction")),
+    )
+    fig = go.Figure()
+    fig.add_vline(x=1.0, line_color=INK, line_width=1.5, opacity=0.75)
+    for name, color, belongs in groups:
+        members = [(row, tested) for row, tested in rows if belongs(row)]
+        if not members:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=[tested["hazard_ratio"] for _, tested in members],
+                y=[str(row["marker"]) for row, _ in members],
+                mode="markers",
+                name=name,
+                marker={"size": 11, "color": color, "line": {"width": 1, "color": INK}},
+                error_x={
+                    "type": "data",
+                    "array": [tested["ci_upper"] - tested["hazard_ratio"] for _, tested in members],
+                    "arrayminus": [tested["hazard_ratio"] - tested["ci_lower"] for _, tested in members],
+                    "thickness": 1.5,
+                    "width": 0,
+                },
+                customdata=[
+                    [escape_plotly_text(row["marker"]), escape_plotly_text(_format_p_value(row.get("replication_p_holm")))]
+                    for row, _ in members
+                ],
+                hovertemplate="%{customdata[0]}<br>HR %{x:.3f}<br>Replication p (Holm) = %{customdata[1]}<extra></extra>",
+            )
+        )
+    if not rows:
+        fig.add_annotation(
+            text="No finite external hazard ratios to plot.",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font={"size": 14, "color": INK},
+        )
+    _marker_layout(fig, "Marker Replication in the External Cohort", height=max(380, axis_layout["height"]), left=axis_layout["l"])
+    fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_COMMON_AXES)
+    fig.update_yaxes(automargin=True, tickmode="array", tickvals=labels, ticktext=display_labels, **_COMMON_AXES)
+    return figure_to_json(fig)

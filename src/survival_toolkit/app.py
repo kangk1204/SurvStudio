@@ -61,7 +61,9 @@ from survival_toolkit.analysis import (
 )
 from survival_toolkit import __version__ as SURVSTUDIO_VERSION
 from survival_toolkit.concurrency import cancellation_scope, raise_if_cancelled
+from survival_toolkit.design_audit import audit_design, design_from_dict
 from survival_toolkit.errors import InternalAnalysisError, JobCancelledError, NotFoundError, UserInputError
+from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
 from survival_toolkit.sample_data import (
     load_gbsg2_upload_ready_dataset,
     load_tcga_luad_example_dataset,
@@ -974,6 +976,95 @@ class OptimalCutpointRequest(_EventPositiveValueRequestModel):
     variable: str
     min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
     permutation_iterations: int = Field(default=500, ge=0, le=500)
+
+
+class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
+    dataset_id: str
+    time_column: str
+    event_column: str
+    event_positive_value: Any = 1
+    marker_columns: list[str] = Field(min_length=1, max_length=_MAX_UPLOAD_COLUMNS)
+    clinical_columns: list[str] = Field(default_factory=list, max_length=200)
+    categorical_clinical: list[str] = Field(default_factory=list, max_length=200)
+    strata_columns: list[str] = Field(default_factory=list, max_length=20)
+    alpha: float = Field(default=0.05, gt=0.0, lt=0.5)
+    fdr_level: float = Field(default=0.10, gt=0.0, lt=0.5)
+    n_permutations: int = Field(default=1000, ge=0, le=10_000)
+    n_resamples: int = Field(default=200, ge=0, le=1_000)
+    resample_fraction: float = Field(default=0.632, ge=0.3, le=0.9)
+    max_missing_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
+    max_signature_markers: int = Field(default=10, ge=1, le=50)
+    nonlinear_lens: Literal["off", "gbs", "rsf"] = "off"
+    random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
+
+    @field_validator("marker_columns", "clinical_columns", "categorical_clinical", "strata_columns", mode="before")
+    @classmethod
+    def validate_name_lists(cls, value: Any, info: Any) -> list[str]:
+        return _normalize_unique_name_list(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def validate_categorical_subset(self) -> "MarkerEvaluationRequest":
+        _validate_subset_names(
+            self.categorical_clinical,
+            self.clinical_columns,
+            subset_name="categorical_clinical",
+            superset_name="clinical_columns",
+        )
+        return self
+
+    def marker_settings(self) -> MarkerSettings:
+        return MarkerSettings(
+            alpha=self.alpha,
+            fdr_level=self.fdr_level,
+            n_permutations=self.n_permutations,
+            n_resamples=self.n_resamples,
+            resample_fraction=self.resample_fraction,
+            max_missing_fraction=self.max_missing_fraction,
+            max_signature_markers=self.max_signature_markers,
+            nonlinear_lens=self.nonlinear_lens,
+            random_seed=self.random_seed,
+        )
+
+
+class MarkerValidationRequest(_EventPositiveValueRequestModel):
+    # The external cohort; the recipe comes from a marker evaluation of another dataset.
+    dataset_id: str
+    recipe: dict[str, Any]
+    column_mapping: dict[str, str] = Field(default_factory=dict, max_length=_MAX_UPLOAD_COLUMNS)
+    # None applies the recipe's own event coding.
+    event_positive_value: Any = None
+    horizon: float | None = Field(default=None, gt=0.0)
+    alpha: float = Field(default=0.05, gt=0.0, lt=0.5)
+    n_bootstrap: int = Field(default=200, ge=0, le=2_000)
+    random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
+
+
+class DesignAuditCohort(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(default="", max_length=120)
+    n: int = Field(ge=2, le=10_000_000)
+    events: int | None = Field(default=None, ge=1)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> str:
+        return _normalize_optional_text_field(value, field_name="cohort name", allow_empty_as_none=True) or ""
+
+
+class DesignAuditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_models: int = Field(ge=2, le=1_000_000)
+    gene_only: bool
+    selection_cohorts: list[DesignAuditCohort] = Field(min_length=1, max_length=200)
+    training_in_selection: bool = False
+    sealed_cohorts: list[DesignAuditCohort] = Field(default_factory=list, max_length=200)
+    headline: Literal["validation", "average including training", "training", "sealed"] = "validation"
+    prefilter_used_validation_outcomes: bool = False
+    refit_in_validation: bool = False
+    cutoff_per_cohort: bool = False
+    compared_with_clinical: bool = False
 
 
 class TableExportRequest(BaseModel):
@@ -3527,5 +3618,134 @@ async def pdp(request_model: PDPRequest, request: Request) -> dict[str, Any]:
             )
 
         return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+# ── Marker evaluation and design audit endpoints ────────────────
+
+
+def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """The marker table as flat rows on the primary lens, for display and export."""
+    primary = result["primary_lens"]
+    exact_lens = "adjusted" if primary == "added_value" else "marginal"
+    rows: list[dict[str, Any]] = []
+    for row in result["marker_table"]:
+        stats = row[primary]
+        exact = (row.get("exact") or {}).get(exact_lens) or {}
+        low, high = stats["rank_interval"]
+        display = {
+            "Marker": row["marker"],
+            "Tier": row["tier"],
+            "Evidence": row["pattern"],
+            "Direction": row["direction"],
+            "HR per unit": exact.get("hazard_ratio"),
+            "CI lower": exact.get("ci_lower"),
+            "CI upper": exact.get("ci_upper"),
+            "P value": stats["p_value"],
+            "Family-wise P": stats["p_fwer"],
+            "Permutation q value": stats["q_perm"],
+            "Selection frequency": stats["selection_frequency"],
+            "Direction consistency": stats["direction_consistency"],
+            "Median rank": stats["median_rank"],
+            "Rank 95% interval": None if low is None or high is None else f"{low:.0f}-{high:.0f}",
+        }
+        if primary == "added_value":
+            display["LR test P"] = exact.get("lr_p")
+            display["Apparent C gain"] = exact.get("delta_c_apparent")
+        rows.append(display)
+    return rows
+
+
+@app.post("/api/marker-evaluation")
+async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Request) -> dict[str, Any]:
+    try:
+        from survival_toolkit.plots import build_marker_rank_figure, build_marker_stability_figure
+
+        stored = _get_stored_dataset(request_model.dataset_id)
+        request_config = request_model.model_dump()
+        inputs = [*request_model.marker_columns, *request_model.clinical_columns, *request_model.strata_columns]
+
+        def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                inputs,
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="marker evaluation",
+            )
+            _reject_outcome_informed_columns(stored, inputs, context="marker evaluation")
+            result = evaluate_markers(
+                stored.dataframe,
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                marker_columns=request_model.marker_columns,
+                clinical_columns=request_model.clinical_columns,
+                categorical_clinical=request_model.categorical_clinical,
+                strata_columns=request_model.strata_columns,
+                event_positive_value=request_model.event_positive_value,
+                settings=request_model.marker_settings(),
+            )
+            return _attach_dataset_hash(
+                {
+                    "analysis": result,
+                    "display_table": _marker_display_rows(result),
+                    "stability_figure": build_marker_stability_figure(result),
+                    "rank_figure": build_marker_rank_figure(result),
+                    "request_config": request_config,
+                },
+                stored,
+            )
+
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+@app.post("/api/marker-validation")
+async def marker_validation(request_model: MarkerValidationRequest, request: Request) -> dict[str, Any]:
+    try:
+        from survival_toolkit.plots import build_marker_replication_figure
+
+        stored = _get_stored_dataset(request_model.dataset_id)
+        request_config = request_model.model_dump(exclude={"recipe"})
+
+        def _run() -> dict[str, Any]:
+            try:
+                validation = validate_locked_recipe(
+                    stored.dataframe,
+                    request_model.recipe,
+                    column_mapping=request_model.column_mapping,
+                    event_positive_value=request_model.event_positive_value,
+                    horizon=request_model.horizon,
+                    alpha=request_model.alpha,
+                    n_bootstrap=request_model.n_bootstrap,
+                    random_seed=request_model.random_seed,
+                )
+            except KeyError as exc:
+                raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
+            return _attach_dataset_hash(
+                {
+                    "validation": validation,
+                    "figure": build_marker_replication_figure(validation),
+                    "request_config": request_config,
+                },
+                stored,
+            )
+
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+@app.post("/api/design-audit")
+async def design_audit(request_model: DesignAuditRequest) -> dict[str, Any]:
+    try:
+        request_config = request_model.model_dump()
+        design = design_from_dict(request_config)
+        result = await run_in_threadpool(audit_design, design)
+        return {**result, "request_config": request_config}
     except Exception as exc:
         fail_bad_request(exc)
