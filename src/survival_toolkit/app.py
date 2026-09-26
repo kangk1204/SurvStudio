@@ -64,6 +64,14 @@ from survival_toolkit.concurrency import cancellation_scope, raise_if_cancelled
 from survival_toolkit.design_audit import audit_design, design_from_dict
 from survival_toolkit.errors import InternalAnalysisError, JobCancelledError, NotFoundError, UserInputError
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
+from survival_toolkit.reporting import (
+    CHECKLIST_COLUMNS,
+    checklist_intro,
+    checklist_markdown,
+    checklist_rows,
+    remark_checklist,
+    tripod_ai_checklist,
+)
 from survival_toolkit.sample_data import (
     load_gbsg2_upload_ready_dataset,
     load_tcga_luad_example_dataset,
@@ -1065,6 +1073,44 @@ class DesignAuditRequest(BaseModel):
     refit_in_validation: bool = False
     cutoff_per_cohort: bool = False
     compared_with_clinical: bool = False
+
+
+class ChecklistItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item: str = Field(max_length=8)
+    section: str = Field(max_length=80)
+    topic: str = Field(max_length=200)
+    status: Literal["reported", "partly", "author"]
+    text: str = Field(max_length=8000)
+
+
+class ChecklistExportRequest(BaseModel):
+    """A REMARK or TRIPOD+AI checklist, as returned by the marker evaluation or the TRIPOD+AI endpoint."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    format: Literal["markdown", "docx"]
+    guideline: Literal["REMARK", "TRIPOD+AI"]
+    reference: str = Field(max_length=400)
+    software: str = Field(max_length=80)
+    methods: str = Field(default="", max_length=12000)
+    results: str = Field(default="", max_length=4000)
+    items: list[ChecklistItem] = Field(min_length=1, max_length=40)
+
+
+class ComparisonForReport(BaseModel):
+    family: Literal["ml", "dl"]
+    analysis: dict[str, Any]
+    request_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class TripodChecklistRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # The dataset the comparisons ran on, for the data-source item; optional because it may have expired.
+    dataset_id: str | None = None
+    comparisons: list[ComparisonForReport] = Field(min_length=1, max_length=2)
 
 
 class TableExportRequest(BaseModel):
@@ -2273,10 +2319,18 @@ def _docx_cell(text: str, *, width: int, bold: bool = False) -> str:
     )
 
 
-def _docx_table(rows: list[dict[str, Any]], *, style: str, columns: Sequence[str] | None = None) -> str:
+def _docx_table(
+    rows: list[dict[str, Any]],
+    *,
+    style: str,
+    columns: Sequence[str] | None = None,
+    widths: Sequence[int] | None = None,
+) -> str:
     resolved_columns = _export_columns(rows, columns)
     cell_width = max(1200, int(9000 / max(len(resolved_columns), 1)))
-    grid = "".join(f'<w:gridCol w:w="{cell_width}"/>' for _ in resolved_columns)
+    # Column widths in twentieths of a point; equal unless the caller gives one per column.
+    column_widths = list(widths) if widths is not None and len(widths) == len(resolved_columns) else [cell_width] * len(resolved_columns)
+    grid = "".join(f'<w:gridCol w:w="{width}"/>' for width in column_widths)
     borders = (
         "<w:tblBorders>"
         '<w:top w:val="single" w:sz="8" w:space="0" w:color="auto"/>'
@@ -2287,12 +2341,16 @@ def _docx_table(rows: list[dict[str, Any]], *, style: str, columns: Sequence[str
         '<w:insideV w:val="single" w:sz="6" w:space="0" w:color="auto"/>'
         "</w:tblBorders>"
     )
-    header_row = "<w:tr>" + "".join(_docx_cell(column, width=cell_width, bold=True) for column in resolved_columns) + "</w:tr>"
+    header_row = (
+        "<w:tr>"
+        + "".join(_docx_cell(column, width=width, bold=True) for column, width in zip(resolved_columns, column_widths))
+        + "</w:tr>"
+    )
     body_rows = [
         "<w:tr>"
         + "".join(
-            _docx_cell(_normalize_export_text(row.get(column), style, column), width=cell_width)
-            for column in resolved_columns
+            _docx_cell(_normalize_export_text(row.get(column), style, column), width=width)
+            for column, width in zip(resolved_columns, column_widths)
         )
         + "</w:tr>"
         for row in rows
@@ -2330,6 +2388,12 @@ def _export_rows_to_docx(
         body_parts.append(_docx_paragraph(f"{template_profile['notes_heading']}:", italic=True))
         for note in clean_notes:
             body_parts.append(_docx_paragraph(note, italic=True))
+    return _docx_package(body_parts)
+
+
+def _docx_package(body_parts: list[str]) -> bytes:
+    """A minimal Word document (Letter page, 1-inch margins) holding these body paragraphs and tables."""
+    body_parts = [*body_parts]
     body_parts.append(
         "<w:sectPr>"
         '<w:pgSz w:w="12240" w:h="15840"/>'
@@ -3660,6 +3724,8 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
         if primary == "added_value":
             display["LR test P"] = exact.get("lr_p")
             display["Apparent C gain"] = exact.get("delta_c_apparent")
+            display["Unadjusted HR"] = ((row.get("exact") or {}).get("marginal") or {}).get("hazard_ratio")
+            display["Unadjusted P"] = row["marginal"]["p_value"]
         rows.append(display)
     return rows
 
@@ -3701,6 +3767,7 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
                     "display_table": _marker_display_rows(result),
                     "stability_figure": build_marker_stability_figure(result),
                     "rank_figure": build_marker_rank_figure(result),
+                    "report": remark_checklist(result, request=request_config, dataset=_report_dataset(stored)),
                     "request_config": request_config,
                 },
                 stored,
@@ -3743,6 +3810,64 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
             )
 
         return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+def _report_dataset(stored: Any) -> dict[str, Any]:
+    return {
+        "filename": stored.filename,
+        "n_rows": int(stored.dataframe.shape[0]),
+        "dataset_hash": str(stored.metadata.get("dataset_hash") or ""),
+    }
+
+
+@app.post("/api/tripod-ai-checklist")
+async def tripod_ai_report(request_model: TripodChecklistRequest) -> dict[str, Any]:
+    try:
+        dataset = None
+        if request_model.dataset_id:
+            try:
+                dataset = _report_dataset(_get_stored_dataset(request_model.dataset_id))
+            except NotFoundError:
+                dataset = None
+        comparisons = [
+            {**item.analysis, "family": item.family, "request_config": item.request_config}
+            for item in request_model.comparisons
+        ]
+        return await run_in_threadpool(tripod_ai_checklist, comparisons, dataset=dataset)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+def _checklist_docx(report: dict[str, Any]) -> bytes:
+    rows = checklist_rows(report)
+    return _docx_package(
+        [
+            _docx_paragraph(f"{report['guideline']} checklist", bold=True),
+            _docx_paragraph(checklist_intro(report), italic=True),
+            _docx_paragraph("Methods", bold=True),
+            _docx_paragraph(report.get("methods", "")),
+            _docx_paragraph("Results", bold=True),
+            _docx_paragraph(report.get("results", "")),
+            _docx_paragraph("Checklist", bold=True),
+            # Item, Section, Topic, Status, Text across a 6.5-inch text width.
+            _docx_table(rows, style="plain", columns=list(CHECKLIST_COLUMNS), widths=[600, 1300, 1900, 1300, 4260]),
+        ]
+    )
+
+
+@app.post("/api/checklist-export")
+async def checklist_export(request_model: ChecklistExportRequest) -> Response:
+    try:
+        report = request_model.model_dump(exclude={"format"})
+        if request_model.format == "markdown":
+            return Response(content=checklist_markdown(report), media_type="text/markdown; charset=utf-8")
+        content = await run_in_threadpool(_checklist_docx, report)
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
     except Exception as exc:
         fail_bad_request(exc)
 

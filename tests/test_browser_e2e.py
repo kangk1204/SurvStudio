@@ -182,7 +182,7 @@ def test_browser_downloads_km_summary_csv_and_png(browser_server: str, tmp_path:
         raise
 
 
-def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser_server: str) -> None:
+def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser_server: str, tmp_path: Path) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
     def _mock_ml_compare(route) -> None:
@@ -324,6 +324,17 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
             first_row_text = page.locator("#benchmarkComparisonShell tbody tr").nth(0).inner_text()
             assert "DeepHit" in first_row_text
             assert "Deep Learning" in first_row_text
+
+            leaderboard_card = page.locator("#benchmarkComparisonShell").locator("xpath=ancestor::div[contains(@class,'table-card')]")
+            leaderboard_card.locator(".export-menu > summary").click()
+            with page.expect_download() as tripod_info:
+                page.locator("#downloadTripodMarkdownButton").click()
+            tripod_path = tmp_path / (tripod_info.value.suggested_filename or "tripod_ai_checklist.md")
+            tripod_info.value.save_as(tripod_path)
+            tripod_text = tripod_path.read_text(encoding="utf-8")
+            assert tripod_text.startswith("# TRIPOD+AI checklist")
+            assert "Random Survival Forest" in tripod_text and "DeepHit" in tripod_text
+            assert "split fingerprint holdout-seed42-shared" in tripod_text
 
             page.locator('#benchmarkComparisonShell tbody tr').nth(0).locator('[data-benchmark-model]').click()
             _assert_tab_active(page, "benchmark")
@@ -1634,7 +1645,7 @@ def test_browser_cohort_table_sends_outcome_columns_and_shows_notes(browser_serv
         raise
 
 
-def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str) -> None:
+def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str, tmp_path: Path) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
     try:
@@ -1662,6 +1673,16 @@ def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str) 
             assert page.locator('[data-run-status="markers"]').inner_text() == "Up to date"
             assert page.locator("#markerValidationSection").is_visible()
             assert page.locator("#runMarkerValidationButton").is_enabled()
+
+            page.locator("#panel-markers .export-menu > summary").click()
+            with page.expect_download() as remark_info:
+                page.locator("#downloadMarkerRemarkMarkdownButton").click()
+            remark_path = tmp_path / (remark_info.value.suggested_filename or "remark_checklist.md")
+            remark_info.value.save_as(remark_path)
+            remark_text = remark_path.read_text(encoding="utf-8")
+            assert remark_path.suffix == ".md"
+            assert remark_text.startswith("# REMARK checklist")
+            assert "biomarker_score" in remark_text and "99 permutations" in remark_text
 
             page.locator("#markerChecklist input[value='immune_index']").uncheck()
             page.wait_for_function("document.querySelector('[data-run-status=\"markers\"]').textContent === 'Settings changed'")

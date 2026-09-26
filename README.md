@@ -892,9 +892,9 @@ Architecture note:
 - Deep-model summaries currently report discrimination (`C-index`) only. SurvStudio does not yet compute IBS for deep-model outputs, so calibration/error comparisons are not directly symmetric with the ML module.
 - Cox-style DL paths (`DeepSurv`, `Survival Transformer`) optimize a Breslow-ties partial-likelihood objective, while the classical Cox PH workflow reports Efron-ties estimates; this difference is intentional and should be documented in manuscript Methods if you compare those paths directly.
 
-### Prognostic Marker Evaluation (Python API)
+### Prognostic Marker Evaluation
 
-Use this when you screen many candidate markers (for example gene-expression columns) for association with survival and want the claim checked the way a careful reviewer would check it. It is available from Python; the web interface does not expose it yet.
+Use this when you screen many candidate markers (for example gene-expression columns) for association with survival and want the claim checked the way a careful reviewer would check it. It runs in the Markers tab and from Python.
 
 For every marker it reports:
 - two Cox score-test lenses: marginal association, and added value over the clinical covariates you name (the primary lens whenever clinical covariates are given)
@@ -929,6 +929,8 @@ external = pd.read_csv("external.csv")
 report = validate_locked_recipe(external, result["locked_recipe"], horizon=60)
 print(report["metrics"]["c_index"])
 ```
+
+In the Markers tab, `Export` also gives a REMARK checklist (Word or Markdown): the methods and results paragraphs of the run and the 20 REMARK items, each marked as filled in by SurvStudio, partly filled in, or for the authors to complete (study design, specimens, assay, interpretation). From Python, `survival_toolkit.reporting.remark_checklist(result)` returns the same checklist.
 
 External validation reports Harrell's C with a bootstrap CI, the C-index gain over the locked clinical-only model, the calibration slope, observed/expected risk, the Brier score and Brier skill at the horizon, and each marker's external hazard ratio with a Holm-adjusted one-sided replication test. A recipe that was edited after it was locked is rejected.
 
@@ -1035,7 +1037,10 @@ Available exports (each tab's `Export` menu):
 - Markers:
   - marker table as `CSV`
   - locked model as `JSON` (for `validate_locked_recipe` or the in-app validation)
+  - REMARK checklist as `DOCX` or `Markdown`
   - stability and rank plots as `PNG`
+- Prediction models leaderboard:
+  - TRIPOD+AI checklist as `DOCX` or `Markdown`, covering the latest ML and DL comparisons: data preparation, missing data, the evaluation design and shared splits, performance, and the winner's-curse caution when the best of several models is chosen on the same data
 - ML and DL comparison:
   - comparison table as `CSV`
   - comparison plot as `PNG`

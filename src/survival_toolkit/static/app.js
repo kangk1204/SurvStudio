@@ -40,11 +40,76 @@ const benchmarkBoardState = benchmarkBoardApi.benchmarkBoardState;
 const renderUnifiedBenchmarkPlot = benchmarkBoardApi.renderUnifiedBenchmarkPlot;
 const renderUnifiedBenchmarkSummary = benchmarkBoardApi.renderUnifiedBenchmarkSummary;
 const renderUnifiedBenchmarkTable = benchmarkBoardApi.renderUnifiedBenchmarkTable;
-const renderBenchmarkBoard = benchmarkBoardApi.renderBenchmarkBoard;
+
+function renderBenchmarkBoard() {
+  benchmarkBoardApi.renderBenchmarkBoard();
+  syncTripodDownloadButtons();
+}
+
+// The comparison fields the TRIPOD+AI checklist reads; per-fold and per-repeat detail stays in the browser.
+const TRIPOD_ANALYSIS_KEYS = [
+  "comparison_table",
+  "errors",
+  "excluded_models",
+  "n_patients",
+  "n_events",
+  "evaluation_mode",
+  "cv_folds",
+  "cv_repeats",
+  "split_seed",
+  "locked_test_fraction",
+  "n_development_patients",
+  "n_development_events",
+  "n_locked_test_patients",
+  "n_locked_test_events",
+  "n_fit_patients",
+  "n_fit_events",
+  "n_evaluation_patients",
+  "n_evaluation_events",
+  "evaluation_split_fingerprint",
+];
+
+function tripodComparisons() {
+  return ["ml", "dl"].flatMap((family) => {
+    const payload = currentCompareGoalPayload(family);
+    const table = payload?.analysis?.comparison_table;
+    if (!Array.isArray(table) || !table.length) return [];
+    const analysis = Object.fromEntries(
+      TRIPOD_ANALYSIS_KEYS.filter((key) => key in payload.analysis).map((key) => [key, payload.analysis[key]]),
+    );
+    analysis.comparison_table = table.map(({ repeat_results, fold_results, ...row }) => row);
+    return [{ family, analysis, request_config: payload.request_config || {} }];
+  });
+}
+
+function syncTripodDownloadButtons() {
+  const ready = tripodComparisons().length > 0;
+  refs.downloadTripodDocxButton.disabled = !ready;
+  refs.downloadTripodMarkdownButton.disabled = !ready;
+}
+
+async function downloadTripodChecklist(format) {
+  const comparisons = tripodComparisons();
+  if (!comparisons.length) {
+    showToast("Run Compare All Models first.", "warning", 3600);
+    return;
+  }
+  try {
+    const report = await fetchJSON("/api/tripod-ai-checklist", {
+      method: "POST",
+      body: JSON.stringify({ dataset_id: state.dataset?.dataset_id || null, comparisons }),
+    });
+    await downloadChecklist(report, format, "tripod_ai_checklist");
+  } catch (error) {
+    showError(error?.message || "Checklist export failed.");
+  }
+}
 
 // ── Downloads ──────────────────────────────────────────────────
 
 function wireDownloads() {
+  refs.downloadTripodDocxButton.addEventListener("click", () => downloadTripodChecklist("docx"));
+  refs.downloadTripodMarkdownButton.addEventListener("click", () => downloadTripodChecklist("markdown"));
   refs.downloadKmSummaryButton.addEventListener("click", () => {
     const payload = currentGoalResult("km");
     if (!requireCurrentResultForExport("km", { payload })) return;

@@ -12,6 +12,9 @@
 - New Markers tab: the honest marker evaluation with stability and rank-uncertainty plots, the marker table, export of the locked model as JSON, and validation of the locked model on another cohort file. The outcome-informed cut-point combination search moved here as an exploratory option and now searches the selected markers and clinical covariates.
 - New design-check page (`/design-check`, no data needed) for studies that fit many models and keep the best.
 - Prediction models: a "Train one model" entry next to Compare All, results hidden until a run, and the Survival Transformer and VAE labelled experimental.
+- Reporting checklists: the Markers tab exports a REMARK checklist and the prediction-model leaderboard a TRIPOD+AI checklist, as Word or Markdown. Each holds the run's methods and results paragraphs and every guideline item, marked as filled in by SurvStudio, partly filled in, or for the authors to complete.
+- The marker table adds each marker's unadjusted hazard ratio and p-value when markers are judged on added value, as REMARK asks for univariable results.
+- Hazard-ratio axes are labelled with round values (0.5, 1, 2, 5); the landing page shows one card per analysis tab.
 
 ### New
 
@@ -21,7 +24,8 @@
 - README: a Prognostic Marker Evaluation section with a runnable example.
 
 - `survival_toolkit.design_audit.audit_design`: places a multi-algorithm study design (number and size of selection cohorts, genes only or with clinical covariates, number of candidates, training C-index in the choice, headline C-index) on the benchmark pilot's simulation map and returns the expected optimism of the presented C-index, the expected regret of the choice, and flagged practices with remedies.
-- API: `POST /api/marker-evaluation`, `POST /api/marker-validation` and `POST /api/design-audit`.
+- `survival_toolkit.reporting`: `remark_checklist` and `tripod_ai_checklist` build the checklists from a marker evaluation or model comparisons; `checklist_markdown` renders one.
+- API: `POST /api/marker-evaluation` (now with a `report` field), `POST /api/marker-validation`, `POST /api/design-audit`, `POST /api/tripod-ai-checklist` and `POST /api/checklist-export`.
 
 ## 0.2.0 — 2026-09-26 — Full code review
 

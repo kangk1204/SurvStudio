@@ -513,6 +513,26 @@ async function downloadServerTable(filename, payload, fallbackMimeType = "text/p
   });
 }
 
+async function downloadChecklist(report, format, stem) {
+  // A REMARK or TRIPOD+AI checklist from the server, as a Word or Markdown file.
+  const response = await fetch(apiUrl("/api/checklist-export"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...report, format }),
+  });
+  if (!response.ok) {
+    let message = "Checklist export failed.";
+    try {
+      const detail = (await response.json())?.detail;
+      if (typeof detail === "string" && detail.trim()) message = detail.trim();
+    } catch {
+      // Keep the generic message when the error body is not JSON.
+    }
+    throw new Error(message);
+  }
+  triggerBlobDownload(buildDownloadFilename(stem, format === "docx" ? "docx" : "md"), await response.blob());
+}
+
 function buildMarkdownTable(rows, { caption = "", notes = [] } = {}) {
   return downloadHelpers.buildMarkdownTable(rows, { caption, notes, formatValue });
 }

@@ -919,6 +919,13 @@
             <div class="table-card-head">
               <h3>Leaderboard</h3>
               <span class="benchmark-table-note" id="benchmarkTableNote">Run Compare All on ML or DL to build a shared leaderboard.</span>
+              <details class="export-menu">
+                <summary class="button ghost">Export</summary>
+                <div class="export-menu-items">
+                  <button class="button ghost" id="downloadTripodDocxButton" type="button" disabled>TRIPOD+AI checklist (Word)</button>
+                  <button class="button ghost" id="downloadTripodMarkdownButton" type="button" disabled>TRIPOD+AI checklist (Markdown)</button>
+                </div>
+              </details>
             </div>
             <div class="table-shell" id="benchmarkComparisonShell"><div class="empty-state">Run Compare All on ML or DL to build a shared leaderboard.</div></div>
           </div>
@@ -960,6 +967,8 @@
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadMarkersCsvButton" type="button" disabled>Marker table (CSV)</button>
                   <button class="button ghost" id="downloadMarkerRecipeButton" type="button" disabled>Locked model (JSON)</button>
+                  <button class="button ghost" id="downloadMarkerRemarkDocxButton" type="button" disabled>REMARK checklist (Word)</button>
+                  <button class="button ghost" id="downloadMarkerRemarkMarkdownButton" type="button" disabled>REMARK checklist (Markdown)</button>
                   <button class="button ghost" id="downloadMarkersStabilityPngButton" type="button" disabled>Stability plot (PNG)</button>
                   <button class="button ghost" id="downloadMarkersRankPngButton" type="button" disabled>Rank plot (PNG)</button>
                 </div>

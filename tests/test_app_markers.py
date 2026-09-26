@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import io
+import zipfile
 
 from fastapi.testclient import TestClient
 
@@ -113,3 +115,65 @@ def test_design_audit_validates_its_input():
     sealed_headline = client.post("/api/design-audit", json={**base, "headline": "sealed"})
     assert sealed_headline.status_code == 400
     assert "sealed" in sealed_headline.json()["detail"]
+
+
+def test_marker_evaluation_attaches_a_remark_checklist_and_unadjusted_estimates():
+    dataset = client.post("/api/load-example").json()
+    payload = client.post("/api/marker-evaluation", json=_marker_request(dataset["dataset_id"])).json()
+
+    report = payload["report"]
+    assert report["guideline"] == "REMARK"
+    assert [item["item"] for item in report["items"]] == [str(number) for number in range(1, 21)]
+    assert "example_survival_cohort" in report["items"][1]["text"]
+    assert {"Unadjusted HR", "Unadjusted P"} <= set(payload["display_table"][0])
+
+
+def test_checklist_export_writes_markdown_and_word():
+    dataset = client.post("/api/load-example").json()
+    report = client.post("/api/marker-evaluation", json=_marker_request(dataset["dataset_id"])).json()["report"]
+
+    markdown = client.post("/api/checklist-export", json={**report, "format": "markdown"})
+    assert markdown.status_code == 200, markdown.text
+    assert markdown.text.startswith("# REMARK checklist")
+    assert markdown.headers["content-type"].startswith("text/markdown")
+
+    word = client.post("/api/checklist-export", json={**report, "format": "docx"})
+    assert word.status_code == 200, word.text
+    with zipfile.ZipFile(io.BytesIO(word.content)) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert "REMARK checklist" in document and "Authors to complete" in document and "Westfall-Young" in document
+
+
+def test_checklist_export_validates_the_checklist():
+    item = {"item": "1", "section": "Introduction", "topic": "Markers", "status": "author", "text": "Describe."}
+    base = {"format": "markdown", "guideline": "REMARK", "reference": "Ref", "software": "SurvStudio", "items": [item]}
+    assert client.post("/api/checklist-export", json=base).status_code == 200
+    for changes in ({"guideline": "CONSORT"}, {"items": []}, {"items": [{**item, "status": "done"}]}, {"format": "pdf"}):
+        assert client.post("/api/checklist-export", json={**base, **changes}).status_code == 422
+
+
+def test_tripod_ai_checklist_endpoint_reads_comparisons_and_the_dataset():
+    dataset = client.post("/api/load-example").json()
+    comparison = {
+        "family": "ml",
+        "analysis": {
+            "comparison_table": [{"model": "LASSO-Cox", "c_index": 0.7}],
+            "n_patients": 360,
+            "n_events": 259,
+            "evaluation_mode": "holdout",
+        },
+        "request_config": {"time_column": "os_months", "event_column": "os_event", "features": ["age", "stage"]},
+    }
+
+    response = client.post("/api/tripod-ai-checklist", json={"dataset_id": dataset["dataset_id"], "comparisons": [comparison]})
+
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["guideline"] == "TRIPOD+AI" and len(report["items"]) == 27
+    assert "example_survival_cohort" in report["items"][4]["text"]
+    assert "0.700 (LASSO-Cox)" in report["results"]
+    expired = client.post("/api/tripod-ai-checklist", json={"dataset_id": "gone", "comparisons": [comparison]})
+    assert expired.status_code == 200
+    assert expired.json()["items"][4]["text"].startswith("The analysed table")
+    assert client.post("/api/tripod-ai-checklist", json={"comparisons": []}).status_code == 422
+

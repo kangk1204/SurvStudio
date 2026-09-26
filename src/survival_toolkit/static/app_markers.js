@@ -305,10 +305,22 @@ function downloadMarkerTable() {
   });
 }
 
+function downloadMarkerChecklist(format) {
+  const payload = currentGoalResult("markers");
+  if (!requireCurrentResultForExport("markers", { payload })) return;
+  if (!payload.report) {
+    showToast("Run the evaluation again to build the REMARK checklist.", "warning", 3600);
+    return;
+  }
+  downloadChecklist(payload.report, format, "remark_checklist").catch((error) => showError(error?.message || "Checklist export failed."));
+}
+
 function syncMarkerDownloadButtons() {
   const current = currentGoalResult("markers");
   if (refs.downloadMarkersCsvButton) refs.downloadMarkersCsvButton.disabled = !current;
   if (refs.downloadMarkerRecipeButton) refs.downloadMarkerRecipeButton.disabled = !current?.analysis?.locked_recipe;
+  if (refs.downloadMarkerRemarkDocxButton) refs.downloadMarkerRemarkDocxButton.disabled = !current?.report;
+  if (refs.downloadMarkerRemarkMarkdownButton) refs.downloadMarkerRemarkMarkdownButton.disabled = !current?.report;
   const stabilityCurrent = plotShowsResult(refs.markersStabilityPlot, current);
   if (refs.downloadMarkersStabilityPngButton) refs.downloadMarkersStabilityPngButton.disabled = !stabilityCurrent;
   if (refs.downloadMarkersRankPngButton) refs.downloadMarkersRankPngButton.disabled = !plotShowsResult(refs.markersRankPlot, current);
@@ -341,6 +353,8 @@ function wireMarkerControls() {
   });
   refs.downloadMarkersCsvButton?.addEventListener("click", downloadMarkerTable);
   refs.downloadMarkerRecipeButton?.addEventListener("click", downloadMarkerRecipe);
+  refs.downloadMarkerRemarkDocxButton?.addEventListener("click", () => downloadMarkerChecklist("docx"));
+  refs.downloadMarkerRemarkMarkdownButton?.addEventListener("click", () => downloadMarkerChecklist("markdown"));
   refs.downloadMarkersStabilityPngButton?.addEventListener("click", () => {
     const payload = currentGoalResult("markers");
     if (!requireCurrentPlotForExport(refs.markersStabilityPlot, payload)) return;
