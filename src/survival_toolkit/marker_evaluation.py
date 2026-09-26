@@ -134,6 +134,8 @@ def _validated_settings(settings: MarkerSettings) -> MarkerSettings:
         raise ValueError("max_missing_fraction must be at least 0 and below 1.")
     if settings.lens2_null not in {"freedman_lane", "raw"}:
         raise ValueError('lens2_null must be "freedman_lane" or "raw".')
+    if not all(0.0 <= value <= 1.0 for value in (settings.robust_frequency, settings.robust_direction, settings.nonlinear_frequency)):
+        raise ValueError("robust_frequency, robust_direction and nonlinear_frequency must be between 0 and 1.")
     if settings.max_signature_markers < 1 or settings.shortlist_size < 0:
         raise ValueError("max_signature_markers must be at least 1 and shortlist_size at least 0.")
     if settings.nonlinear_lens not in {"off", "gbs", "rsf"}:
