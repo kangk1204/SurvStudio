@@ -536,7 +536,13 @@
       });
       const referenceMax = Math.max(0.72, ...y.filter((value) => Number.isFinite(value)).map((value) => value + 0.04));
       const layout = {
-        title: { text: "Unified C-index Screening Board", x: 0.02, xanchor: "left" },
+        title: {
+          text: "C-index on the same patient splits",
+          x: 0.02,
+          xanchor: "left",
+          font: { family: "Source Serif 4, serif", size: 22, color: "#1a2332" },
+        },
+        font: { family: "Sora, sans-serif", size: 13, color: "#1a2332" },
         height: 420,
         margin: { l: 72, r: 24, t: 54, b: 92 },
         paper_bgcolor: "#ffffff",

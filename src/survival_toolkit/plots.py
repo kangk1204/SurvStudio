@@ -183,6 +183,36 @@ def _feature_plot_axis_layout(
     return wrapped, {"l": left_margin, "r": 30, "t": 80, "b": 60, "height": height}
 
 
+def _log_axis_ticks(values: list[Any]) -> dict[str, Any]:
+    """Tick values for a hazard-ratio axis on a log scale.
+
+    Plotly labels only the leading digit of minor log ticks ("4 5 6 ... 1 2 3"), which reads badly on a
+    forest plot; this picks round values (1-2-5, or finer for narrow ranges) and labels them in full.
+    """
+    finite = [float(value) for value in values if isinstance(value, (int, float)) and np.isfinite(value) and value > 0]
+    if not finite:
+        return {}
+    low, high = min(finite), max(finite)
+    decades = float(np.log10(high / low))
+    if decades > 3:
+        mantissas: tuple[float, ...] = (1,)
+    elif decades > 1.2:
+        mantissas = (1, 2, 5)
+    elif decades > 0.4:
+        mantissas = (1, 1.5, 2, 3, 5, 7)
+    else:
+        mantissas = (1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 7, 8, 9)
+    ticks = []
+    for exponent in range(int(np.floor(np.log10(low))) - 1, int(np.ceil(np.log10(high))) + 1):
+        for mantissa in mantissas:
+            value = float(f"{mantissa * 10.0 ** exponent:.6g}")
+            if low / 1.25 <= value <= high * 1.25:
+                ticks.append(value)
+    if sum(low <= tick <= high for tick in ticks) < 3:
+        return {}  # a narrow range: Plotly's own ticks are labelled in full there
+    return {"tickmode": "array", "tickvals": ticks, "ticktext": [f"{tick:g}" for tick in ticks]}
+
+
 def _diagnostic_residual_axis_range(
     residual_values: list[float],
     trend_values: list[float],
@@ -404,7 +434,12 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             font={"size": 14, "color": INK},
             align="center",
         )
-    fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_COMMON_AXES)
+    fig.update_xaxes(
+        title="Hazard ratio (log scale)",
+        type="log",
+        **_log_axis_ticks([1.0, *(row["CI lower"] for row in rows), *(row["CI upper"] for row in rows)]),
+        **_COMMON_AXES,
+    )
     fig.update_yaxes(
         automargin=True,
         tickmode="array",
@@ -834,27 +869,34 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
             hovertemplate="%{customdata}: mean|SHAP| = %{x:.4f}<extra></extra>",
         )
     )
-    fig.update_layout(
-        **_COMMON_LAYOUT,
-        margin={
-            **{k: v for k, v in axis_layout.items() if k != "height"},
-            "t": max(108, int(axis_layout.get("t", 32)) + 72 + ((subtitle_lines - 1) * 18 if subtitle_lines else 0)),
-        },
-        height=axis_layout["height"],
-    )
-    fig.add_annotation(
-        text=title_text,
-        xref="paper",
-        yref="paper",
-        x=0.02,
-        y=1.15 + ((subtitle_lines - 1) * 0.03 if subtitle_lines else 0),
-        showarrow=False,
-        font={"family": "Source Serif 4, serif", "size": 22, "color": INK},
-        align="left",
-        xanchor="left",
-        yanchor="bottom",
-    )
-    if subtitle_text:
+    if not subtitle_text:
+        fig.update_layout(
+            **_COMMON_LAYOUT,
+            margin={k: v for k, v in axis_layout.items() if k != "height"},
+            title={"text": title_text, "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK}, "x": 0.02},
+            height=axis_layout["height"],
+        )
+    else:
+        fig.update_layout(
+            **_COMMON_LAYOUT,
+            margin={
+                **{k: v for k, v in axis_layout.items() if k != "height"},
+                "t": max(108, int(axis_layout.get("t", 32)) + 72 + (subtitle_lines - 1) * 18),
+            },
+            height=axis_layout["height"],
+        )
+        fig.add_annotation(
+            text=title_text,
+            xref="paper",
+            yref="paper",
+            x=0.02,
+            y=1.15 + ((subtitle_lines - 1) * 0.03 if subtitle_lines else 0),
+            showarrow=False,
+            font={"family": "Source Serif 4, serif", "size": 22, "color": INK},
+            align="left",
+            xanchor="left",
+            yanchor="bottom",
+        )
         fig.add_annotation(
             text=subtitle_text,
             xref="paper",
@@ -1459,6 +1501,7 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
             font={"size": 14, "color": INK},
         )
     _marker_layout(fig, "Marker Replication in the External Cohort", height=max(380, axis_layout["height"]), left=axis_layout["l"])
-    fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_COMMON_AXES)
+    bounds = [tested[key] for _, tested in rows for key in ("ci_lower", "ci_upper")]
+    fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_log_axis_ticks([1.0, *bounds]), **_COMMON_AXES)
     fig.update_yaxes(automargin=True, tickmode="array", tickvals=labels, ticktext=display_labels, **_COMMON_AXES)
     return figure_to_json(fig)
