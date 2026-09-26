@@ -65,8 +65,11 @@ class MarkerSettings(NamedTuple):
     n_resamples: int = 200
     resample_fraction: float = 0.632
     max_missing_fraction: float = 0.2
-    robust_frequency: float = 0.8
-    robust_direction: float = 0.95
+    # In the benchmark pilot a 0.8 frequency kept 6% of true markers robust against 21% at
+    # 0.5, with family-wise error at most 1% either way; direction 0.9 vs 0.95 made no difference.
+    robust_frequency: float = 0.5
+    robust_direction: float = 0.9
+    nonlinear_frequency: float = 0.8
     max_signature_markers: int = 10
     shortlist_size: int = 50
     lens2_null: str = "freedman_lane"
@@ -914,7 +917,7 @@ def evaluate_markers(
     if nonlinear_ready:
         for index in range(len(patterns)):
             consistent = (
-                float(np.nan_to_num(nonlinear["positive_fraction"][index], nan=0.0)) >= settings.robust_frequency
+                float(np.nan_to_num(nonlinear["positive_fraction"][index], nan=0.0)) >= settings.nonlinear_frequency
                 and float(np.nan_to_num(nonlinear["sign_test_p_holm"][index], nan=1.0)) <= settings.alpha
                 and float(np.nan_to_num(nonlinear["mean_importance"][index], nan=0.0)) > 0.0
             )
