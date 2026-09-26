@@ -191,3 +191,63 @@ def test_family_wise_error_is_controlled_under_the_global_null() -> None:
         rejections += any((row["added_value"]["p_fwer"] or 1.0) <= 0.05 for row in result["marker_table"])
     # Markers correlate with the prognostic clinical covariate but add nothing to it.
     assert rejections / n_datasets <= 0.05 + 2.33 * np.sqrt(0.05 * 0.95 / n_datasets)
+
+
+def _development_result(seed: int = 1) -> dict:
+    frame = _simulated_cohort(seed)
+    return evaluate_markers(
+        frame,
+        time_column="os_time",
+        event_column="os_event",
+        marker_columns=_markers(frame),
+        clinical_columns=["age", "grade"],
+        settings=_FAST,
+    )
+
+
+def test_locked_recipe_replicates_true_markers_in_an_independent_cohort() -> None:
+    from survival_toolkit.marker_evaluation import validate_locked_recipe
+
+    recipe = _development_result()["locked_recipe"]
+    assert {"true_up_1", "true_down"} <= set(recipe["markers"])
+    assert "confounded" not in recipe["markers"]
+    external = _simulated_cohort(11, n=300)
+    report = validate_locked_recipe(external, recipe)
+    metrics = report["metrics"]
+    assert report["recipe_hash"] == recipe["recipe_hash"]
+    assert metrics["c_index"] > metrics["clinical_only_c_index"]
+    assert metrics["delta_c_index_ci"][0] is not None and metrics["delta_c_index_ci"][0] > 0.0
+    assert 0.6 < metrics["calibration_slope"] < 1.4
+    assert 0.7 < metrics["observed_expected_ratio"] < 1.3
+    assert 0.0 < metrics["brier_skill"] < 1.0
+    replicated = {row["marker"]: row["replicated"] for row in report["markers"]}
+    assert replicated["true_up_1"] and replicated["true_down"]
+
+
+def test_locked_recipe_rejects_edits_and_survives_json() -> None:
+    import json
+
+    from survival_toolkit.marker_evaluation import validate_locked_recipe
+
+    recipe = _development_result()["locked_recipe"]
+    restored = json.loads(json.dumps(recipe))
+    external = _simulated_cohort(12, n=200)
+    assert validate_locked_recipe(external, restored)["recipe_hash"] == recipe["recipe_hash"]
+    tampered = json.loads(json.dumps(recipe))
+    tampered["model"]["coefficients"][0] += 0.1
+    with pytest.raises(ValueError, match="edited after it was locked"):
+        validate_locked_recipe(external, tampered)
+
+
+def test_locked_recipe_maps_external_column_names_and_notes_imputation() -> None:
+    from survival_toolkit.marker_evaluation import validate_locked_recipe
+
+    recipe = _development_result()["locked_recipe"]
+    external = _simulated_cohort(13, n=200).rename(columns={"os_time": "follow_up", "os_event": "died", "true_up_1": "gene_a"})
+    external.loc[external.index[:5], "gene_a"] = np.nan
+    mapping = {"os_time": "follow_up", "os_event": "died", "true_up_1": "gene_a"}
+    report = validate_locked_recipe(external, recipe, column_mapping=mapping)
+    assert report["cohort"]["n"] == 200
+    assert any("5 missing true_up_1 value(s) imputed" in note for note in report["notes"])
+    with pytest.raises(ValueError, match="lacks columns"):
+        validate_locked_recipe(external, recipe)

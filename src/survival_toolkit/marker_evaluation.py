@@ -19,6 +19,8 @@ Nothing here dichotomizes markers; every statistic uses the continuous values.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, NamedTuple, Sequence
 
 import numpy as np
@@ -43,6 +45,7 @@ from survival_toolkit.marker_screen import (
     ScoreStats,
     bh_vector,
     fit_cox_null,
+    harrell_c_many,
     residualize,
     stratified_permutation,
 )
@@ -672,6 +675,102 @@ def _finite_or_none(value: Any) -> float | None:
     return number if np.isfinite(number) else None
 
 
+RECIPE_VERSION = 1
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_json_ready(item) for item in value.tolist()]
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        number = float(value)
+        return number if np.isfinite(number) else None
+    if isinstance(value, np.bool_):
+        return bool(value)
+    return value
+
+
+def recipe_hash(recipe: dict[str, Any]) -> str:
+    """SHA-256 of the recipe's canonical JSON, excluding the stored hash itself."""
+    payload = {key: value for key, value in recipe.items() if key != "recipe_hash"}
+    text = json.dumps(_json_ready(payload), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def freeze_recipe(
+    cohort: MarkerCohort,
+    full: ProcedureFit,
+    signature: _SignatureFit,
+    primary: str,
+    *,
+    time_column: str,
+    event_column: str,
+    event_positive_value: Any,
+    categorical_clinical: Sequence[str],
+) -> dict[str, Any]:
+    """Everything needed to apply the selected signature, unchanged, to another cohort."""
+    from survival_toolkit import __version__
+    from survival_toolkit.ml_models import _breslow_baseline_survival
+
+    all_rows = np.arange(cohort.time.shape[0])
+    clinical_terms = [cohort.clinical_names[int(index)] for index in signature.design_columns] if cohort.clinical is not None else []
+    marker_terms = [cohort.marker_names[int(column)] for column in signature.columns]
+    linear_predictor = _signature_risk(cohort, all_rows, signature)
+    baseline = None
+    if cohort.strata is None:
+        event_times, baseline_survival = _breslow_baseline_survival(cohort.time, cohort.event, linear_predictor)
+        baseline = {"times": event_times, "survival": baseline_survival}
+    clinical_only = None
+    if clinical_terms and marker_terms:
+        clinical_only = {
+            "terms": clinical_terms,
+            "coefficients": _clinical_params(cohort, all_rows, signature.design_columns),
+        }
+    primary_beta = full.lenses[primary].beta_one_step
+    recipe: dict[str, Any] = {
+        "recipe_version": RECIPE_VERSION,
+        "created_with": f"SurvStudio {__version__}",
+        "outcome": {
+            "time_column": time_column,
+            "event_column": event_column,
+            "event_positive_value": event_positive_value,
+        },
+        "clinical": {
+            "columns": list(cohort.clinical_columns),
+            "categorical": [str(column) for column in categorical_clinical],
+            "encoder": cohort.clinical_encoder,
+        },
+        "strata_columns": list(cohort.strata_columns),
+        "markers": marker_terms,
+        "marker_medians": {cohort.marker_names[int(column)]: float(signature.medians[int(column)]) for column in signature.columns},
+        "marker_development_log_hr": {
+            cohort.marker_names[int(column)]: float(primary_beta[int(column)]) for column in signature.columns
+        },
+        "primary_lens": primary,
+        "model": {
+            "terms": [*clinical_terms, *marker_terms],
+            "coefficients": signature.params,
+            "ties": "efron",
+            "baseline": baseline,
+            "default_horizon": float(np.median(cohort.time[cohort.event == 1])),
+        },
+        "clinical_only_model": clinical_only,
+        "development": {
+            "n": int(cohort.time.shape[0]),
+            "events": int(cohort.event.sum()),
+            "row_mask_hash": cohort.row_mask_hash,
+        },
+    }
+    recipe = _json_ready(recipe)
+    recipe["recipe_hash"] = recipe_hash(recipe)
+    return recipe
+
+
 @user_input_boundary
 def evaluate_markers(
     df: pd.DataFrame,
@@ -713,8 +812,19 @@ def evaluate_markers(
     exact = _exact_fits(cohort, full, np.asarray(shortlist, dtype=np.int64))
     signature = _fit_signature(cohort, all_rows, full, primary, settings.max_signature_markers)
     apparent_c = None
+    recipe = None
     if signature is not None:
         apparent_c = _pooled_c_index(cohort.time, cohort.event, _signature_risk(cohort, all_rows, signature), cohort.strata)
+        recipe = freeze_recipe(
+            cohort,
+            full,
+            signature,
+            primary,
+            time_column=time_column,
+            event_column=event_column,
+            event_positive_value=event_positive_value,
+            categorical_clinical=categorical_clinical,
+        )
 
     rows: list[dict[str, Any]] = []
     for index, name in enumerate(cohort.marker_names):
@@ -783,5 +893,222 @@ def evaluate_markers(
             "apparent_c": apparent_c,
             **resampling.optimism,
         },
+        "locked_recipe": recipe,
         "settings": settings._asdict(),
+    }
+
+
+def _km_survival_at(time: np.ndarray, event: np.ndarray, horizon: float) -> float:
+    survival = 1.0
+    for value in np.unique(time[(event == 1) & (time <= horizon)]):
+        at_risk = float(np.sum(time >= value))
+        deaths = float(np.sum((time == value) & (event == 1)))
+        survival *= 1.0 - deaths / at_risk
+    return survival
+
+
+def _external_cox(time: np.ndarray, event: np.ndarray, exog: np.ndarray, strata: np.ndarray | None) -> dict[str, float] | None:
+    results, converged = fit_phreg(PHReg(time, exog, status=event, strata=strata, ties="efron"))
+    beta = float(np.asarray(results.params)[-1])
+    se = float(np.asarray(results.bse)[-1])
+    if not converged or not np.isfinite(beta) or not np.isfinite(se) or se <= 0:
+        return None
+    z_value = float(stats.norm.ppf(0.975))
+    return {
+        "log_hr": beta,
+        "hazard_ratio": float(np.exp(beta)),
+        "ci_lower": float(np.exp(beta - z_value * se)),
+        "ci_upper": float(np.exp(beta + z_value * se)),
+        "wald_p": float(2.0 * stats.norm.sf(abs(beta / se))),
+    }
+
+
+def _holm(p_values: Sequence[float]) -> list[float]:
+    values = np.asarray(p_values, dtype=float)
+    adjusted = np.full(values.shape, np.nan)
+    valid = np.flatnonzero(np.isfinite(values))
+    order = valid[np.argsort(values[valid], kind="mergesort")]
+    running = 0.0
+    for rank, index in enumerate(order):
+        running = max(running, min(1.0, (valid.size - rank) * values[index]))
+        adjusted[index] = running
+    return adjusted.tolist()
+
+
+@user_input_boundary
+def validate_locked_recipe(
+    df: pd.DataFrame,
+    recipe: dict[str, Any],
+    *,
+    column_mapping: dict[str, str] | None = None,
+    event_positive_value: Any = None,
+    horizon: float | None = None,
+    alpha: float = 0.05,
+    n_bootstrap: int = 200,
+    random_seed: int = 20260926,
+) -> dict[str, Any]:
+    """Apply a locked marker recipe, unchanged, to an external cohort and score it.
+
+    Reports the locked model's discrimination (Harrell's C with a bootstrap CI), its
+    calibration slope, observed/expected risk, Brier score and Brier skill at the
+    horizon, the C-index gain over the locked clinical-only model, and each marker's
+    external hazard ratio with a Holm-adjusted one-sided replication test in the
+    development direction. ``column_mapping`` maps recipe column names to the
+    external dataset's names when they differ.
+    """
+    from survival_toolkit.ml_models import _brier_scores_from_weights, _ipcw_brier_weights
+
+    if int(recipe.get("recipe_version", 0)) != RECIPE_VERSION:
+        raise ValueError("This recipe was written by an incompatible SurvStudio version.")
+    if recipe.get("recipe_hash") != recipe_hash(recipe):
+        raise ValueError("The recipe does not match its hash; it was edited after it was locked.")
+    mapping = {str(key): str(value) for key, value in (column_mapping or {}).items()}
+
+    def external(name: str) -> str:
+        return mapping.get(name, name)
+
+    outcome = recipe["outcome"]
+    time_column = external(outcome["time_column"])
+    event_column = external(outcome["event_column"])
+    positive = outcome["event_positive_value"] if event_positive_value is None else event_positive_value
+    clinical_columns = list(recipe["clinical"]["columns"])
+    strata_columns = list(recipe.get("strata_columns") or [])
+    markers = list(recipe["markers"])
+    needed = [external(column) for column in [*clinical_columns, *strata_columns, *markers]]
+    missing = [column for column in needed if column not in df.columns]
+    if missing:
+        raise ValueError("The external dataset lacks columns the recipe needs: " + ", ".join(missing[:6]) + ".")
+
+    frame = _cohort_frame(
+        df,
+        time_column=time_column,
+        event_column=event_column,
+        event_positive_value=positive,
+        extra_columns=[external(column) for column in [*clinical_columns, *strata_columns]],
+    )
+    frame = frame.rename(columns={external(column): column for column in [*clinical_columns, *strata_columns]})
+    time = frame[time_column].to_numpy(dtype=float)
+    event = frame[event_column].to_numpy(dtype=int)
+    source_rows = list(frame.attrs["source_row_index"])
+    strata = _build_cox_strata_payload(frame, strata_columns)["codes"] if strata_columns else None
+
+    notes: list[str] = []
+    columns: dict[str, np.ndarray] = {}
+    encoder = recipe["clinical"]["encoder"]
+    if clinical_columns:
+        design = transform_feature_encoder(frame, encoder, output="dataframe")
+        for name in design.columns:
+            columns[str(name)] = design[name].to_numpy(dtype=float)
+        for column in encoder.get("categorical_features", []):
+            known = set(encoder["categorical_mappings"][column]["all_levels"])
+            unseen = frame[column].astype("string").dropna()
+            unseen_count = int((~unseen.isin(known)).sum())
+            if unseen_count:
+                notes.append(f"{unseen_count} external row(s) have a {column} level not seen in development; scored as the reference level.")
+    for name in markers:
+        raw = df.loc[source_rows, external(name)]
+        numeric = pd.to_numeric(raw, errors="coerce")
+        if bool((raw.notna() & numeric.isna()).any()):
+            raise ValueError(f'Marker "{external(name)}" contains text in the external dataset.')
+        values = numeric.to_numpy(dtype=float, copy=True)
+        values[~np.isfinite(values)] = np.nan
+        imputed = int(np.isnan(values).sum())
+        if imputed:
+            notes.append(f"{imputed} missing {name} value(s) imputed with the development median.")
+        columns[name] = np.where(np.isnan(values), float(recipe["marker_medians"][name]), values)
+
+    model = recipe["model"]
+    linear_predictor = np.column_stack([columns[term] for term in model["terms"]]) @ np.asarray(model["coefficients"], dtype=float)
+    c_index = _pooled_c_index(time, event, linear_predictor, strata)
+    rng = np.random.default_rng(int(random_seed))
+    clinical_model = recipe.get("clinical_only_model")
+    clinical_predictor = None
+    if clinical_model:
+        clinical_predictor = np.column_stack([columns[term] for term in clinical_model["terms"]]) @ np.asarray(
+            clinical_model["coefficients"], dtype=float
+        )
+    c_draws: list[float] = []
+    delta_draws: list[float] = []
+    for _ in range(int(n_bootstrap) if strata is None else 0):
+        rows = rng.integers(0, time.shape[0], size=time.shape[0])
+        if not event[rows].any():
+            continue
+        risks = linear_predictor[rows][:, None] if clinical_predictor is None else np.column_stack([linear_predictor[rows], clinical_predictor[rows]])
+        draws = harrell_c_many(time[rows], event[rows], risks)
+        c_draws.append(float(draws[0]))
+        if clinical_predictor is not None:
+            delta_draws.append(float(draws[0] - draws[1]))
+
+    def interval(draws: list[float]) -> list[float | None]:
+        finite = [value for value in draws if np.isfinite(value)]
+        if len(finite) < 20:
+            return [None, None]
+        return [float(np.quantile(finite, 0.025)), float(np.quantile(finite, 0.975))]
+
+    slope_fit = _external_cox(time, event, linear_predictor[:, None], strata)
+    metrics: dict[str, Any] = {
+        "c_index": _finite_or_none(c_index),
+        "c_index_ci": interval(c_draws),
+        "calibration_slope": None if slope_fit is None else slope_fit["log_hr"],
+        "calibration_slope_ci": None if slope_fit is None else [float(np.log(slope_fit["ci_lower"])), float(np.log(slope_fit["ci_upper"]))],
+    }
+    if clinical_predictor is not None:
+        clinical_c = _pooled_c_index(time, event, clinical_predictor, strata)
+        metrics["clinical_only_c_index"] = _finite_or_none(clinical_c)
+        metrics["delta_c_index"] = _finite_or_none(c_index - clinical_c)
+        metrics["delta_c_index_ci"] = interval(delta_draws)
+    target = float(model["default_horizon"] if horizon is None else horizon)
+    baseline = model.get("baseline")
+    if baseline and target > 0:
+        times = np.asarray(baseline["times"], dtype=float)
+        position = int(np.searchsorted(times, target, side="right")) - 1
+        baseline_survival = 1.0 if position < 0 else float(np.asarray(baseline["survival"], dtype=float)[position])
+        predicted = np.power(baseline_survival, np.exp(np.clip(linear_predictor, -50.0, 50.0)))
+        observed_survival = _km_survival_at(time, event, target)
+        weights, alive = _ipcw_brier_weights(time, event, np.array([target]), support_times=time, support_events=event)
+        brier = float(_brier_scores_from_weights(weights, alive, predicted[:, None])[0])
+        null_brier = float(_brier_scores_from_weights(weights, alive, np.full((time.shape[0], 1), observed_survival))[0])
+        expected_risk = float(np.mean(1.0 - predicted))
+        metrics.update(
+            {
+                "horizon": target,
+                "observed_risk": float(1.0 - observed_survival),
+                "expected_risk": expected_risk,
+                "observed_expected_ratio": float((1.0 - observed_survival) / expected_risk) if expected_risk > 0 else None,
+                "brier": brier,
+                "brier_skill": float(1.0 - brier / null_brier) if null_brier > 0 else None,
+            }
+        )
+    elif strata is not None:
+        notes.append("The recipe's model is stratified, so absolute risks and calibration at a horizon are not available.")
+
+    primary = recipe.get("primary_lens", "marginal")
+    base_design = None
+    if clinical_columns:
+        base_design = np.column_stack([columns[str(name)] for name in encoder["feature_names"]])
+        base_design = base_design[:, np.ptp(base_design, axis=0) > 0]
+    marker_rows = []
+    one_sided: list[float] = []
+    for name in markers:
+        marginal = _external_cox(time, event, columns[name][:, None], strata)
+        adjusted = None if base_design is None else _external_cox(time, event, np.column_stack([base_design, columns[name]]), strata)
+        tested = adjusted if primary == "added_value" and adjusted is not None else marginal
+        development_sign = float(np.sign(recipe["marker_development_log_hr"][name]))
+        same_direction = tested is not None and np.sign(tested["log_hr"]) == development_sign
+        if tested is None:
+            one_sided.append(float("nan"))
+        else:
+            half = tested["wald_p"] / 2.0
+            one_sided.append(half if same_direction else 1.0 - half)
+        marker_rows.append({"marker": name, "marginal": marginal, "adjusted": adjusted, "same_direction": bool(same_direction)})
+    for row, adjusted_p in zip(marker_rows, _holm(one_sided)):
+        row["replication_p_holm"] = _finite_or_none(adjusted_p)
+        row["replicated"] = bool(row["same_direction"] and adjusted_p is not None and np.isfinite(adjusted_p) and adjusted_p <= alpha)
+
+    return {
+        "recipe_hash": recipe["recipe_hash"],
+        "cohort": {"n": int(time.shape[0]), "events": int(event.sum()), "row_mask_hash": str(frame.attrs.get("row_mask_hash") or "")},
+        "metrics": metrics,
+        "markers": marker_rows,
+        "notes": notes,
     }
