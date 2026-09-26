@@ -912,7 +912,7 @@ Architecture note:
 - Confidence intervals crossing `1` mean the estimate is compatible with no effect
 - The current Cox discrimination summary is an `Apparent C-index` on the analyzable cohort, not an externally validated performance estimate.
 - PH diagnostics use the Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time: one 1-df test per model term plus a global test (the classic `cox.zph` statistic of R `survival` < 3.0, also used by lifelines' `proportional_hazard_test` with a log transform).
-- Schoenfeld and martingale residuals are computed with the Efron tie correction within each stratum, as R's `residuals.coxph` does, so the PH test and residual plots stay correct with tied event times and in stratified models. The test suite checks them against R `survival` 3.8 reference values.
+- Schoenfeld and martingale residuals are computed with the Efron tie correction within each stratum, as R's `residuals.coxph` does, so the PH test and residual plots stay correct when event times are tied, in stratified and unstratified models alike. The test suite checks them against R `survival` 3.8 reference values.
 - Continuous covariates also expose Martingale residual trend plots as a visual linearity screen; strong curvature suggests splines, transforms, or recoding before locking the Cox specification.
 - AIC and BIC are reported for the fitted model; BIC uses the number of events as the sample size, as R's `BIC(coxph)` does.
 - A Cox `C-index = 0.65` means the fitted model ranks about `65%` of comparable patient pairs in the observed risk order; it is not "65% accuracy."
@@ -1030,6 +1030,7 @@ Analysis exports end with provenance notes: the SurvStudio version that produced
 - Each comparison result carries an `evaluation_split_fingerprint` (a hash of which source rows were trained and scored in each split). The unified ML+DL leaderboard ranks the two families together only when the fingerprints match.
 - For manuscript benchmarks, use repeated CV with a locked test set: the development set is used for all fitting, preprocessing, tuning, early stopping, and model selection; the locked test set is used once. Describe the training-set composition, the CV procedure, and the locked test set in the Methods or Supplement.
 - Datasets with repeated subject identifiers (for example several tumour samples per patient) are flagged: row-level splits would place one subject in both training and test data. Keep one row per subject before benchmarking.
+- Journals often require a supplementary section on how the training data, cross-validation sets, and independent test set were built. [docs/reporting/training_dataset_composition.md](docs/reporting/training_dataset_composition.md) is a fill-in template that maps each required item to the SurvStudio setting or result field that records it.
 
 ### Download File Names
 

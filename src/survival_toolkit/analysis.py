@@ -2380,10 +2380,10 @@ def _efron_schoenfeld_residuals(
     """Schoenfeld residuals of an Efron-tie Cox fit, computed as R's ``residuals.coxph`` does.
 
     statsmodels' ``PHRegResults.schoenfeld_residuals`` subtracts Breslow risk-set means
-    even from an Efron fit, and in a stratified model it carries one stratum's risk-set
-    sums into the next; both distort the proportional-hazards test. Here each stratum is
-    handled on its own, and for d events tied at time t the expected covariate is the
-    mean over k = 0..d-1 of (S1 - k/d * S1_tied) / (S0 - k/d * S0_tied), where S1 sums
+    even from an Efron fit, which shifts the proportional-hazards test whenever event
+    times are tied (with Breslow ties it matches R, stratified or not). Here, within each
+    stratum, the expected covariate for d events tied at time t is the mean over
+    k = 0..d-1 of (S1 - k/d * S1_tied) / (S0 - k/d * S0_tied), where S1 sums
     exp(eta) * x over the risk set and S1_tied over the tied events (S0 as in
     ``_efron_tie_groups``). Rows without an event are NaN.
     """
