@@ -123,7 +123,6 @@ async function runMlModel() {
     );
   }
   renderBenchmarkBoard();
-  updateStepIndicator(3);
   revealCompletedResultIfCurrent("ml", {
     mode: "single",
     successMessage: `${modelLabel} model trained`,
@@ -235,7 +234,7 @@ async function runPredictiveSelectedModel() {
   runtime.predictiveWorkbenchIntent = "train";
   const selectedModel = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey());
   setPredictiveModel(selectedModel.key, { syncHistory: false });
-  activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });
+  activateTab("benchmark", { historyMode: "replace", syncHistory: false });
   if (selectedModel.family === "ml") {
     await runMlModel();
     return;
@@ -294,7 +293,7 @@ async function runUnifiedPredictiveComparison() {
       };
     }
     setPredictiveWorkbenchFamily(startFamily, { syncHistory: false });
-    activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });
+    activateTab("benchmark", { historyMode: "replace", syncHistory: false });
     renderBenchmarkBoard();
     if (familyCount === 2) {
       showToast("Unified predictive comparison complete.", "success", 3200);
@@ -442,7 +441,6 @@ async function runDlModel() {
     const trainedModelTag = trainedModelType.toUpperCase();
     refs.dlMetaBanner.textContent = `${trainedModelTag}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlBestMonitorSuffix}${dlTrainingStatus}${dlSeedSuffix}, time=${elapsedSeconds}s`;
     renderBenchmarkBoard();
-    updateStepIndicator(3);
     revealCompletedResultIfCurrent("dl", {
       mode: repeatedCvLike ? "compare" : "single",
       successMessage: `${modelLabel} model trained`,
@@ -553,7 +551,6 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
     if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !plotShowsResult(refs.dlComparisonPlot, payload);
     setDlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
     renderBenchmarkBoard();
-    updateStepIndicator(3);
     if (!suppressCompletionToast) {
       revealCompletedResultIfCurrent("dl", {
         mode: "compare",

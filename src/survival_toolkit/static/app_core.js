@@ -16,9 +16,6 @@ const appState = {
   historySyncTimer: null,
   lastDerivedGroup: null,
   deriveDraftTouched: false,
-  uiMode: "guided",
-  guidedGoal: null,
-  guidedStep: 1,
   historyRestoreToken: 0,
   derivedColumnProvenance: {},
   busyScopes: {},
@@ -76,50 +73,18 @@ const refs = {
   workspace: document.getElementById("workspace"),
   datasetBadge: document.getElementById("datasetBadge"),
   datasetFile: document.getElementById("datasetFile"),
-  guidedModeButton: document.getElementById("guidedModeButton"),
-  expertModeButton: document.getElementById("expertModeButton"),
   uploadButton: document.getElementById("uploadButton"),
   shutdownButton: document.getElementById("shutdownButton"),
   loadTcgaUploadReadyButton: document.getElementById("loadTcgaUploadReadyButton"),
-  loadTcgaButton: document.getElementById("loadTcgaButton"),
   loadGbsg2Button: document.getElementById("loadGbsg2Button"),
   loadExampleButton: document.getElementById("loadExampleButton"),
   datasetPreviewShell: document.getElementById("datasetPreviewShell"),
   datasetIntegrityWarning: document.getElementById("datasetIntegrityWarning"),
-  guidedShell: document.getElementById("guidedShell"),
-  stepIndicator: document.getElementById("stepIndicator"),
-  guidedSummaryBar: document.getElementById("guidedSummaryBar"),
-  guidedSummaryTitle: document.getElementById("guidedSummaryTitle"),
-  guidedSummaryText: document.getElementById("guidedSummaryText"),
-  guidedSummaryChips: document.getElementById("guidedSummaryChips"),
-  guidedRailStatus: document.getElementById("guidedRailStatus"),
-  guidedRailStatusLabel: document.getElementById("guidedRailStatusLabel"),
-  guidedRailStatusTitle: document.getElementById("guidedRailStatusTitle"),
-  guidedRailStatusText: document.getElementById("guidedRailStatusText"),
-  guidedRailActions: document.getElementById("guidedRailActions"),
-  guidedRailPanelMount: document.getElementById("guidedRailPanelMount"),
-  guidedConfigMount: document.getElementById("guidedConfigMount"),
-  guidedPanel: document.getElementById("guidedPanel"),
-  guidedActivePanelMount: document.getElementById("guidedActivePanelMount"),
-  configStripHome: document.getElementById("configStripHome"),
   tabPanelsHome: document.getElementById("tabPanelsHome"),
   outcomeConfigBlock: document.getElementById("outcomeConfigBlock"),
   groupingConfigBlock: document.getElementById("groupingConfigBlock"),
-  smartBanner: document.getElementById("smartBanner"),
-  smartBannerText: document.getElementById("smartBannerText"),
-  smartBannerClose: document.getElementById("smartBannerClose"),
-  datasetPresetBar: document.getElementById("datasetPresetBar"),
-  datasetPresetTitle: document.getElementById("datasetPresetTitle"),
-  datasetPresetText: document.getElementById("datasetPresetText"),
-  datasetPresetStatusTitle: document.getElementById("datasetPresetStatusTitle"),
-  datasetPresetStatusText: document.getElementById("datasetPresetStatusText"),
-  datasetPresetChips: document.getElementById("datasetPresetChips"),
   groupingDetails: document.getElementById("groupingDetails"),
   groupingSummaryText: document.getElementById("groupingSummaryText"),
-  configTitleText: document.getElementById("configTitleText"),
-  configHint: document.getElementById("configHint"),
-  applyBasicPresetButton: document.getElementById("applyBasicPresetButton"),
-  applyModelPresetButton: document.getElementById("applyModelPresetButton"),
   tooltipPopup: document.getElementById("tooltipPopup"),
   configStrip: document.getElementById("configStrip"),
   tabStrip: document.getElementById("tabStrip"),
@@ -175,8 +140,6 @@ const refs = {
   kmInsightBoard: document.getElementById("kmInsightBoard"),
   kmPlot: document.getElementById("kmPlot"),
   kmMetaBanner: document.getElementById("kmMetaBanner"),
-  kmDependencyText: document.getElementById("kmDependencyText"),
-  kmDependencyChips: document.getElementById("kmDependencyChips"),
   kmSummaryShell: document.getElementById("kmSummaryShell"),
   kmRiskShell: document.getElementById("kmRiskShell"),
   kmPairwiseShell: document.getElementById("kmPairwiseShell"),
@@ -211,8 +174,7 @@ const refs = {
   coxInsightBoard: document.getElementById("coxInsightBoard"),
   coxPlot: document.getElementById("coxPlot"),
   coxMetaBanner: document.getElementById("coxMetaBanner"),
-  coxDependencyText: document.getElementById("coxDependencyText"),
-  coxDependencyChips: document.getElementById("coxDependencyChips"),
+  coxPreviewLine: document.getElementById("coxPreviewLine"),
   coxResultsShell: document.getElementById("coxResultsShell"),
   coxDiagnosticsPlot: document.getElementById("coxDiagnosticsPlot"),
   coxDiagnosticsShell: document.getElementById("coxDiagnosticsShell"),
@@ -230,8 +192,6 @@ const refs = {
   runCohortTableButton: document.getElementById("runCohortTableButton"),
   runCohortTableButtonLabel: document.getElementById("runCohortTableButtonLabel"),
   cohortTableShell: document.getElementById("cohortTableShell"),
-  tableDependencyText: document.getElementById("tableDependencyText"),
-  tableDependencyChips: document.getElementById("tableDependencyChips"),
   tableOutputStatusText: document.getElementById("tableOutputStatusText"),
   downloadCohortTableButton: document.getElementById("downloadCohortTableButton"),
   downloadCohortTableXlsxButton: document.getElementById("downloadCohortTableXlsxButton"),
@@ -339,7 +299,6 @@ const refs = {
   predictiveActionStatusText: document.getElementById("predictiveActionStatusText"),
   benchmarkActionCard: document.getElementById("benchmarkActionCard"),
   benchmarkSummaryGrid: document.getElementById("benchmarkSummaryGrid"),
-  benchmarkGuidedFeatureSummary: document.getElementById("benchmarkGuidedFeatureSummary"),
   benchmarkComparisonPlot: document.getElementById("benchmarkComparisonPlot"),
   benchmarkPlotNote: document.getElementById("benchmarkPlotNote"),
   benchmarkComparisonShell: document.getElementById("benchmarkComparisonShell"),
@@ -374,10 +333,6 @@ assertRequiredRefs();
 
 const DEFAULT_MODEL_FEATURE_SELECTION_LIMIT = 20;
 const AUTO_CATEGORICAL_UNIQUE_THRESHOLD = 6;
-const GUIDED_FEATURESET_WARNING_COUNT = 100;
-const GUIDED_FEATURESET_WARNING_WIDTH = 256;
-const GUIDED_FEATURESET_HIGH_COUNT = 250;
-const GUIDED_FEATURESET_HIGH_WIDTH = 500;
 const COX_STAGE_VARIABLE_PREFERENCE = ["stage_group", "pathologic_stage", "stage"];
 const DEFAULT_TIME_UNIT_LABEL = "Time";
 const DEFAULT_LOCKED_TEST_PERCENT = 30;
@@ -601,7 +556,7 @@ function preferredResultMode(goal) {
   return "single";
 }
 
-const GUIDED_GOALS = ["km", "cox", "predictive", "tables", "ml", "dl"];
+const ANALYSIS_GOALS = ["km", "cox", "predictive", "tables", "ml", "dl"];
 
 function predictiveFamilyGoal() {
   return normalizedPredictiveFamily(runtime.predictiveFamily);
@@ -622,45 +577,6 @@ function goalLabel(goal) {
   }[goal] || "Choose analysis";
 }
 
-function guidedGoalMeta(goal) {
-  return {
-    km: {
-      badge: "Start here",
-      description: "See survival curves first. This is the easiest first check for most datasets.",
-      note: "Best first run for beginners",
-    },
-    cox: {
-      badge: "Good next step",
-      description: "Estimate which variables are linked to higher or lower risk over time.",
-      note: "Use after Kaplan-Meier makes sense",
-    },
-    tables: {
-      badge: "Useful summary",
-      description: "Make a cohort summary table for baseline characteristics and reporting.",
-      note: "Good for manuscripts and QC",
-    },
-    predictive: {
-      badge: "Advanced",
-      description: "Compare classical ML and deep survival models from one predictive workspace.",
-      note: "Start with ML for a faster baseline, then switch to DL if needed",
-    },
-    ml: {
-      badge: "Advanced",
-      description: "Compare Cox, random survival forest, and gradient boosting models.",
-      note: "Use after the classical analysis looks right",
-    },
-    dl: {
-      badge: "Advanced",
-      description: "Train deep survival models such as DeepSurv, DeepHit, and Transformer.",
-      note: "Slowest option and easiest to misuse",
-    },
-  }[goal] || {
-    badge: "Analysis",
-    description: "Choose the analysis you want to run next.",
-    note: "",
-  };
-}
-
 function goalFeatureCount(goal) {
   if (goal === "cox") return currentCoxSelections().covariates.length;
   if (goal === "ml" || goal === "dl" || goal === "predictive") return selectedCheckboxValues(refs.modelFeatureChecklist).length;
@@ -679,17 +595,6 @@ function evaluationModeLabel(goal) {
     return refs.dlEvaluationStrategy?.selectedOptions?.[0]?.textContent || refs.dlEvaluationStrategy?.value || "Holdout";
   }
   return null;
-}
-
-function guidedResultModeLabel(goal) {
-  if (goal === "predictive") {
-    if (runtime.predictiveWorkbenchIntent === "train" && Boolean(selectedPredictiveSingleResult(predictiveFamilyGoal()))) return "Run Analysis";
-    if (guidedPredictiveCompareReady()) return "Compare all";
-    if (guidedPredictiveHasLeaderboardReference()) return "Compare all";
-    return guidedResultModeLabel(predictiveFamilyGoal());
-  }
-  if (goal !== "ml" && goal !== "dl") return null;
-  return (runtime.resultPreference?.[goal] || "single") === "compare" ? "Compare all" : "Run Analysis";
 }
 
 function numberOrDefault(value, fallback) {
@@ -911,9 +816,7 @@ function resetCoxPreview({ rerender = true } = {}) {
     payload: null,
     error: "",
   };
-  if (rerender && runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
-    if (!syncGuidedCoxPanelMounts()) renderGuidedChrome();
-  }
+  if (rerender) renderCoxPreviewLine();
 }
 
 async function refreshCoxPreview({ force = false } = {}) {
@@ -931,16 +834,12 @@ async function refreshCoxPreview({ force = false } = {}) {
       payload: null,
       error: error.message || "Cox preview is unavailable until the endpoint is configured.",
     };
-    if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
-      if (!syncGuidedCoxPanelMounts()) renderGuidedChrome();
-    }
+    renderCoxPreviewLine();
     return;
   }
   if (!requestConfig) {
     resetCoxPreview({ rerender: false });
-    if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
-      if (!syncGuidedCoxPanelMounts()) renderGuidedChrome();
-    }
+    renderCoxPreviewLine();
     return;
   }
   const requestKey = coxPreviewRequestKey(requestConfig);
@@ -952,9 +851,7 @@ async function refreshCoxPreview({ force = false } = {}) {
     payload: null,
     error: "",
   };
-  if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
-    syncGuidedCoxPanelMounts();
-  }
+  renderCoxPreviewLine();
   try {
     const payload = await fetchJSON("/api/cox-preview", {
       method: "POST",
@@ -976,9 +873,7 @@ async function refreshCoxPreview({ force = false } = {}) {
       error: error.message || "Cox preview is unavailable.",
     };
   }
-  if (runtime.uiMode === "guided" && runtime.guidedGoal === "cox") {
-    if (!syncGuidedCoxPanelMounts()) renderGuidedChrome();
-  }
+  renderCoxPreviewLine();
 }
 
 function scheduleCoxPreview({ delay = 180, force = false } = {}) {

@@ -315,7 +315,8 @@ async function withLoading(button, action, scopeOverride = null, { swallowErrors
 }
 
 async function initializeRuntime() {
-  setUiMode(runtime.uiMode, { syncHistory: false });
+  updateGroupingDetailsVisibility(activeTabName(), { force: true });
+  renderWorkspaceChrome();
   syncHistoryState("replace");
   if (!runtime.isFilePreview) { setRuntimeBanner(""); return; }
   try {
@@ -358,24 +359,10 @@ function getActiveRunAction() {
   return null;
 }
 
-function focusStudyDesignSection() {
-  refs.configStrip?.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-function focusTabWorkspace(tabName, { historyMode = "push" } = {}) {
-  activateTab(tabName, { historyMode });
-  requestAnimationFrame(() => {
-    document.querySelector(`.tab-panel[data-panel="${tabName}"] .workspace-card`)?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  });
-}
-
 function reviewBenchmarkSourceTab(tabName, mode = null) {
   const nextMode = mode || (tabName === "ml" ? benchmarkPanelMode("ml") : benchmarkPanelMode("dl"));
   setPredictiveWorkbenchFamily(tabName, { syncHistory: false });
-  activateTab("benchmark", { historyMode: "push", setGuidedGoal: false });
+  activateTab("benchmark", { historyMode: "push" });
   requestAnimationFrame(() => {
     const sectionTarget = tabName === "ml" ? (refs.benchmarkMlMount || refs.mlWorkspaceCard) : (refs.benchmarkDlMount || refs.dlWorkspaceCard);
     if (sectionTarget) {
@@ -391,9 +378,6 @@ function reviewBenchmarkModel(modelKey, mode = null) {
   runtime.predictiveWorkbenchIntent = "train";
   const meta = predictiveModelMeta(modelKey);
   setPredictiveModel(meta.key, { syncHistory: false });
-  if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive") {
-    setGuidedStep(4, { syncHistory: false, scroll: false, historyMode: "replace" });
-  }
   reviewBenchmarkSourceTab(meta.family, mode);
 }
 
@@ -401,26 +385,12 @@ function closePredictiveWorkbench() {
   if (!runtime.workbenchRevealed) return;
   runtime.workbenchRevealed = false;
   runtime.predictiveWorkbenchIntent = null;
-  const returnToPredictiveLeaderboard = runtime.uiMode === "guided"
-    && runtime.guidedGoal === "predictive"
-    && guidedPredictiveHasLeaderboardReference();
-  if (returnToPredictiveLeaderboard) {
-    activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });
-    setGuidedStep(5, { syncHistory: false, scroll: false, historyMode: "replace" });
-  }
   renderBenchmarkBoard();
   syncPredictiveWorkbenchSingleResultVisibility();
-  if (!returnToPredictiveLeaderboard) {
-    renderGuidedChrome();
-  }
+  renderWorkspaceChrome();
   if (state.dataset) syncHistoryState("push");
   requestAnimationFrame(() => {
-    const closeTarget = returnToPredictiveLeaderboard
-      ? (refs.benchmarkComparisonShell?.closest(".table-card")
-        || refs.benchmarkComparisonPlot?.closest(".table-card")
-        || refs.benchmarkSummaryGrid)
-      : refs.benchmarkActionCard;
-    closeTarget?.scrollIntoView({ behavior: "smooth", block: "start" });
+    refs.benchmarkActionCard?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 }
 
@@ -452,140 +422,68 @@ function hasPlotMessage(plot) {
   );
 }
 
-function setGuidedResultNodeVisible(node, visible) {
+function setResultNodeVisible(node, visible) {
   if (!node) return;
-  node.classList.toggle("guided-result-hidden", !visible);
+  node.classList.toggle("result-hidden", !visible);
 }
 
-function updateGuidedResultVisibility() {
-  const trackedNodes = [
-    refs.kmPlot,
-    refs.kmMetaBanner,
-    refs.kmInsightBoard,
-    refs.kmSummaryShell?.closest(".table-card"),
-    refs.kmRiskShell?.closest(".table-card"),
-    refs.kmPairwiseShell?.closest(".table-card"),
-    refs.signatureInsightBoard?.closest(".table-card"),
-    refs.signatureShell?.closest(".table-card"),
-    refs.coxPlot,
-    refs.coxMetaBanner,
-    refs.coxInsightBoard,
-    refs.coxResultsShell?.closest(".table-card"),
-    refs.coxDiagnosticsPlot,
-    refs.coxDiagnosticsShell?.closest(".table-card"),
-    refs.coxMartingalePlot,
-    refs.coxMartingalePlot?.closest(".table-card"),
-    refs.mlImportancePlot,
-    refs.mlShapPlot,
-    refs.mlImportancePlot?.closest(".ml-plots-grid"),
-    refs.mlComparisonPlot,
-    refs.mlMetaBanner,
-    refs.mlInsightBoard,
-    refs.mlComparisonShell?.closest(".table-card"),
-    refs.mlManuscriptShell?.closest(".table-card"),
-    refs.dlImportancePlot,
-    refs.dlLossPlot,
-    refs.dlImportancePlot?.closest(".ml-plots-grid"),
-    refs.dlComparisonPlot,
-    refs.dlMetaBanner,
-    refs.dlInsightBoard,
-    refs.dlComparisonShell?.closest(".table-card"),
-    refs.dlManuscriptShell?.closest(".table-card"),
-    refs.cohortTableShell?.closest(".table-card"),
-  ];
-  trackedNodes.forEach((node) => setGuidedResultNodeVisible(node, true));
+// Result sections stay hidden until they hold a result, so a tab shows its settings, its main plot area
+// and nothing else before the first run.
+function updateResultVisibility() {
+  const reveal = setResultNodeVisible;
 
-  const guidedReview = runtime.uiMode === "guided" && currentGuidedStep() === 5 && Boolean(runtime.guidedGoal);
-  if (!guidedReview) return;
+  const kmInsight = hasRenderedInsight(refs.kmInsightBoard);
+  const kmSummary = hasRenderedTable(refs.kmSummaryShell);
+  const kmRisk = hasRenderedTable(refs.kmRiskShell);
+  const kmPairwise = hasRenderedTable(refs.kmPairwiseShell);
+  const signatureInsight = hasRenderedInsight(refs.signatureInsightBoard);
+  const signatureTable = hasRenderedTable(refs.signatureShell);
+  reveal(refs.kmMetaBanner, hasRenderedPlot(refs.kmPlot) || kmInsight || kmSummary);
+  reveal(refs.kmInsightBoard, kmInsight);
+  reveal(refs.kmSummaryShell?.closest(".table-card"), kmSummary);
+  reveal(refs.kmRiskShell?.closest(".table-card"), kmRisk);
+  reveal(refs.kmPairwiseShell?.closest(".table-card"), kmPairwise);
+  reveal(refs.signatureInsightBoard?.closest(".table-card"), signatureInsight);
+  reveal(refs.signatureShell?.closest(".table-card"), signatureTable);
 
-  const goal = runtime.guidedGoal === "predictive" ? predictiveFamilyGoal() : runtime.guidedGoal;
-  const reveal = (node, visible) => setGuidedResultNodeVisible(node, visible);
+  const coxDiagnosticsPlot = hasRenderedPlot(refs.coxDiagnosticsPlot);
+  const coxMartingalePlot = hasRenderedPlot(refs.coxMartingalePlot);
+  const coxInsight = hasRenderedInsight(refs.coxInsightBoard);
+  const coxResults = hasRenderedTable(refs.coxResultsShell);
+  const coxDiagnostics = hasRenderedTable(refs.coxDiagnosticsShell);
+  reveal(refs.coxMetaBanner, hasRenderedPlot(refs.coxPlot) || coxInsight || coxResults);
+  reveal(refs.coxInsightBoard, coxInsight);
+  reveal(refs.coxResultsShell?.closest(".table-card"), coxResults);
+  reveal(refs.coxDiagnosticsPlot, coxDiagnosticsPlot);
+  reveal(refs.coxDiagnosticsShell?.closest(".table-card"), coxDiagnosticsPlot || coxDiagnostics);
+  reveal(refs.coxMartingalePlot, coxMartingalePlot);
+  reveal(refs.coxMartingalePlot?.closest(".table-card"), coxMartingalePlot);
 
-  if (goal === "km") {
-    const hasPlot = hasRenderedPlot(refs.kmPlot);
-    const hasInsight = hasRenderedInsight(refs.kmInsightBoard);
-    const hasSummary = hasRenderedTable(refs.kmSummaryShell);
-    const hasRisk = hasRenderedTable(refs.kmRiskShell);
-    const hasPairwise = hasRenderedTable(refs.kmPairwiseShell);
-    const hasSignatureInsight = hasRenderedInsight(refs.signatureInsightBoard);
-    const hasSignatureTable = hasRenderedTable(refs.signatureShell);
-    const hasAny = hasPlot || hasInsight || hasSummary || hasRisk || hasPairwise || hasSignatureInsight || hasSignatureTable;
-
-    reveal(refs.kmPlot, hasPlot);
-    reveal(refs.kmMetaBanner, hasAny);
-    reveal(refs.kmInsightBoard, hasInsight);
-    reveal(refs.kmSummaryShell?.closest(".table-card"), hasSummary);
-    reveal(refs.kmRiskShell?.closest(".table-card"), hasRisk);
-    reveal(refs.kmPairwiseShell?.closest(".table-card"), hasPairwise);
-    reveal(refs.signatureInsightBoard?.closest(".table-card"), hasSignatureInsight);
-    reveal(refs.signatureShell?.closest(".table-card"), hasSignatureTable);
-  }
-
-  if (goal === "cox") {
-    const hasPlot = hasRenderedPlot(refs.coxPlot);
-    const hasDiagnosticsPlot = hasRenderedPlot(refs.coxDiagnosticsPlot);
-    const hasMartingalePlot = hasRenderedPlot(refs.coxMartingalePlot);
-    const hasInsight = hasRenderedInsight(refs.coxInsightBoard);
-    const hasResults = hasRenderedTable(refs.coxResultsShell);
-    const hasDiagnostics = hasRenderedTable(refs.coxDiagnosticsShell);
-    const hasDiagnosticsCard = hasDiagnosticsPlot || hasDiagnostics;
-    const hasAny = hasPlot || hasDiagnosticsCard || hasMartingalePlot || hasInsight || hasResults;
-
-    reveal(refs.coxPlot, hasPlot);
-    reveal(refs.coxDiagnosticsPlot, hasDiagnosticsPlot);
-    reveal(refs.coxMartingalePlot, hasMartingalePlot);
-    reveal(refs.coxMetaBanner, hasAny);
-    reveal(refs.coxInsightBoard, hasInsight);
-    reveal(refs.coxResultsShell?.closest(".table-card"), hasResults);
-    reveal(refs.coxDiagnosticsShell?.closest(".table-card"), hasDiagnosticsCard);
-    reveal(refs.coxMartingalePlot?.closest(".table-card"), hasMartingalePlot);
-  }
-
-  if (goal === "tables") {
-    reveal(refs.cohortTableShell?.closest(".table-card"), hasRenderedTable(refs.cohortTableShell));
-  }
-
-  if (goal === "ml") {
-    const resultMode = runtime.resultPreference?.ml || "single";
-    const hasSingleImportance = resultMode === "single" && (hasRenderedPlot(refs.mlImportancePlot) || hasPlotMessage(refs.mlImportancePlot));
-    const hasSingleShap = resultMode === "single" && (hasRenderedPlot(refs.mlShapPlot) || hasPlotMessage(refs.mlShapPlot));
-    const hasSingleGrid = hasSingleImportance || hasSingleShap;
-    const hasComparePlot = resultMode === "compare" && hasRenderedPlot(refs.mlComparisonPlot);
-    const hasCompareTable = resultMode === "compare" && hasRenderedTable(refs.mlComparisonShell);
-    const hasManuscript = resultMode === "compare" && hasRenderedTable(refs.mlManuscriptShell);
-    const hasInsight = hasRenderedInsight(refs.mlInsightBoard);
-    const hasAny = hasSingleGrid || hasComparePlot || hasCompareTable || hasManuscript || hasInsight;
-
-    reveal(refs.mlImportancePlot, hasSingleImportance);
-    reveal(refs.mlShapPlot, hasSingleShap);
-    reveal(refs.mlImportancePlot?.closest(".ml-plots-grid"), hasSingleGrid);
-    reveal(refs.mlComparisonPlot, hasComparePlot);
-    reveal(refs.mlComparisonShell?.closest(".table-card"), hasCompareTable);
-    reveal(refs.mlManuscriptShell?.closest(".table-card"), hasManuscript);
-    reveal(refs.mlInsightBoard, hasInsight);
-    reveal(refs.mlMetaBanner, hasAny);
-  }
-
-  if (goal === "dl") {
-    const resultMode = runtime.resultPreference?.dl || "single";
-    const hasSingleImportance = resultMode === "single" && (hasRenderedPlot(refs.dlImportancePlot) || hasPlotMessage(refs.dlImportancePlot));
-    const hasSingleLoss = resultMode === "single" && (hasRenderedPlot(refs.dlLossPlot) || hasPlotMessage(refs.dlLossPlot));
-    const hasSingleGrid = hasSingleImportance || hasSingleLoss;
-    const hasComparePlot = resultMode === "compare" && hasRenderedPlot(refs.dlComparisonPlot);
-    const hasCompareTable = resultMode === "compare" && hasRenderedTable(refs.dlComparisonShell);
-    const hasManuscript = resultMode === "compare" && hasRenderedTable(refs.dlManuscriptShell);
-    const hasInsight = hasRenderedInsight(refs.dlInsightBoard);
-    const hasAny = hasSingleGrid || hasComparePlot || hasCompareTable || hasManuscript || hasInsight;
-
-    reveal(refs.dlImportancePlot, hasSingleImportance);
-    reveal(refs.dlLossPlot, hasSingleLoss);
-    reveal(refs.dlImportancePlot?.closest(".ml-plots-grid"), hasSingleGrid);
-    reveal(refs.dlComparisonPlot, hasComparePlot);
-    reveal(refs.dlComparisonShell?.closest(".table-card"), hasCompareTable);
-    reveal(refs.dlManuscriptShell?.closest(".table-card"), hasManuscript);
-    reveal(refs.dlInsightBoard, hasInsight);
-    reveal(refs.dlMetaBanner, hasAny);
-  }
+  ["ml", "dl"].forEach((goal) => {
+    const isMl = goal === "ml";
+    const resultMode = runtime.resultPreference?.[goal] || "single";
+    const importancePlot = isMl ? refs.mlImportancePlot : refs.dlImportancePlot;
+    const secondPlot = isMl ? refs.mlShapPlot : refs.dlLossPlot;
+    const comparisonPlot = isMl ? refs.mlComparisonPlot : refs.dlComparisonPlot;
+    const comparisonShell = isMl ? refs.mlComparisonShell : refs.dlComparisonShell;
+    const manuscriptShell = isMl ? refs.mlManuscriptShell : refs.dlManuscriptShell;
+    const insightBoard = isMl ? refs.mlInsightBoard : refs.dlInsightBoard;
+    const metaBanner = isMl ? refs.mlMetaBanner : refs.dlMetaBanner;
+    const hasImportance = resultMode === "single" && (hasRenderedPlot(importancePlot) || hasPlotMessage(importancePlot));
+    const hasSecond = resultMode === "single" && (hasRenderedPlot(secondPlot) || hasPlotMessage(secondPlot));
+    const hasComparePlot = resultMode === "compare" && hasRenderedPlot(comparisonPlot);
+    const hasCompareTable = resultMode === "compare" && hasRenderedTable(comparisonShell);
+    const hasManuscript = resultMode === "compare" && hasRenderedTable(manuscriptShell);
+    const hasInsight = hasRenderedInsight(insightBoard);
+    reveal(importancePlot, hasImportance);
+    reveal(secondPlot, hasSecond);
+    reveal(importancePlot?.closest(".ml-plots-grid"), hasImportance || hasSecond);
+    reveal(comparisonPlot, hasComparePlot);
+    reveal(comparisonShell?.closest(".table-card"), hasCompareTable);
+    reveal(manuscriptShell?.closest(".table-card"), hasManuscript);
+    reveal(insightBoard, hasInsight);
+    reveal(metaBanner, hasImportance || hasSecond || hasComparePlot || hasCompareTable || hasManuscript || hasInsight);
+  });
 
   scheduleVisiblePlotResize(40);
 }
@@ -615,23 +513,16 @@ function scrollToAnalysisResult(tabName, { mode = "single" } = {}) {
 }
 
 function shouldRevealCompletedResult(goal) {
-  if (goal === "predictive") {
-    if (activeTabName() !== "benchmark") return false;
-    if (runtime.uiMode === "guided") return runtime.guidedGoal === "predictive";
-    return true;
-  }
-  if (runtime.uiMode !== "guided" && activeTabName() === "benchmark" && ["ml", "dl"].includes(goal)) return true;
-  if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive" && ["ml", "dl"].includes(goal)) return true;
-  if (activeTabName() !== goal) return false;
-  if (runtime.uiMode === "guided") return runtime.guidedGoal === goal;
-  return true;
+  if (goal === "predictive") return activeTabName() === "benchmark";
+  if (activeTabName() === "benchmark" && ["ml", "dl"].includes(goal)) return true;
+  return activeTabName() === goal;
 }
 
 function revealCompletedResultIfCurrent(goal, { mode = "single", successMessage = "", backgroundMessage = "" } = {}) {
   const shouldReveal = shouldRevealCompletedResult(goal);
   if (shouldReveal) {
     activateTab(goal);
-    updateGuidedResultVisibility();
+    updateResultVisibility();
     scrollToAnalysisResult(goal, { mode });
   }
   showToast(
@@ -642,189 +533,6 @@ function revealCompletedResultIfCurrent(goal, { mode = "single", successMessage 
     shouldReveal ? 3000 : 3600,
   );
   return shouldReveal;
-}
-
-function guidedPredictiveCompareReady() {
-  return benchmarkCompareRows("ml", { currentOnly: true }).length > 0
-    && benchmarkCompareRows("dl", { currentOnly: true }).length > 0;
-}
-
-function guidedPredictiveHasLeaderboardReference() {
-  if (typeof benchmarkBoardState !== "function") return false;
-  const board = benchmarkBoardState();
-  return Boolean(
-    !board?.predictiveBusy
-    && !board?.guidedPredictiveIncomplete
-    && Array.isArray(board?.visibleFamilies)
-    && board.visibleFamilies.length === 2
-    && !board?.hasMixedEvaluation
-    && !board?.visibleHasMixedRunGroups
-    && !board?.visibleHasSplitMismatch
-    && (board?.visibleRows?.length || 0) > 0,
-  );
-}
-
-function guidedPredictiveSelectedModelReady({ family = predictiveFamilyGoal(), modelKey = currentPredictiveModelKey(), previousPayload = null } = {}) {
-  const payload = goalPayload(family);
-  if (!payload || payloadRepresentsCompareRun(payload) || (previousPayload && payload === previousPayload)) return false;
-  const requestConfig = payload.request_config || payload.analysis?.request_config || null;
-  if (!requestConfig) return false;
-  const normalizedModelKey = String(modelKey || "").trim().toLowerCase();
-  const normalizedRequestModel = String(requestConfig.model_type || "").trim().toLowerCase();
-  if (normalizedRequestModel !== normalizedModelKey) return false;
-  return matchesRequestConfig(family, requestConfig, { expectsCompareOverride: false });
-}
-
-async function runGuidedGoal(tabName, button, action, { resultMode = "single", successCheck = null } = {}) {
-  activateTab(tabName, { historyMode: "replace" });
-  const runStatus = await withLoading(button, action, tabName);
-  if (!runStatus?.ok) return;
-  const resolveHasResult = () => (typeof successCheck === "function" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName)));
-  let hasResult = resolveHasResult();
-  if (!hasResult) {
-    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
-    hasResult = resolveHasResult();
-  }
-  if (hasResult && shouldRevealCompletedResult(tabName)) {
-    setGuidedStep(5, { scroll: false, historyMode: "push" });
-    scrollToAnalysisResult(tabName, { mode: resultMode });
-    if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive" && ["ml", "dl"].includes(tabName)) {
-      window.requestAnimationFrame(() => {
-        if (!resolveHasResult() || currentGuidedStep() === 5) return;
-        setGuidedStep(5, { syncHistory: false, scroll: false, historyMode: "replace" });
-        if (state.dataset) syncHistoryState("replace");
-      });
-    }
-  }
-}
-
-function handleGuidedPanelAction(target) {
-  const action = target.dataset.guidedAction;
-  if (!action) return;
-  if (action === "go-home") {
-    goHome({ historyMode: "push" });
-    return;
-  }
-  if (action === "next-step") {
-    setGuidedStep(currentGuidedStep() + 1, { historyMode: "push" });
-    return;
-  }
-  if (action === "previous-step") {
-    setGuidedStep(currentGuidedStep() - 1, { historyMode: "push" });
-    return;
-  }
-  if (action === "close-predictive-workbench") {
-    closePredictiveWorkbench();
-    return;
-  }
-  if (action === "focus-study-design") {
-    focusStudyDesignSection();
-    return;
-  }
-  if (action === "choose-another-analysis") {
-    runtime.guidedGoal = null;
-    runtime.guidedStep = normalizedGuidedStep(3);
-    if (document.body) document.body.dataset.guidedGoal = "";
-    activateTab("km", { setGuidedGoal: false, historyMode: "push" });
-    return;
-  }
-  if (action === "choose-goal") {
-    setGuidedGoal(target.dataset.goal || null, { historyMode: "push" });
-    return;
-  }
-  if (action === "open-km") { focusTabWorkspace("km", { historyMode: "push" }); return; }
-  if (action === "open-cox") { focusTabWorkspace("cox", { historyMode: "push" }); return; }
-  if (action === "open-ml") { focusTabWorkspace("ml", { historyMode: "push" }); return; }
-  if (action === "open-dl") { focusTabWorkspace("dl", { historyMode: "push" }); return; }
-  if (action === "open-tables") { focusTabWorkspace("tables", { historyMode: "push" }); return; }
-  if (action === "review-shared-features") {
-    const reviewTab = runtime.guidedGoal === "dl"
-      ? "dl"
-      : (runtime.guidedGoal === "ml" ? "ml" : predictiveFamilyGoal());
-    focusModelFeatureEditor(reviewTab);
-    return;
-  }
-  if (action === "run-km") { void runGuidedGoal("km", target, runGuidedKaplanMeier); return; }
-  if (action === "run-cox") { void runGuidedGoal("cox", target, runCox); return; }
-  if (action === "run-ml") { void runGuidedGoal("ml", target, runMlModel, { resultMode: "single" }); return; }
-  if (action === "run-ml-compare") { void runGuidedGoal("ml", target, runCompareModels, { resultMode: "compare" }); return; }
-  if (action === "run-dl") { void runGuidedGoal("dl", target, runDlModel, { resultMode: "single" }); return; }
-  if (action === "run-dl-compare") { void runGuidedGoal("dl", target, runDlCompareModels, { resultMode: "compare" }); return; }
-  if (action === "run-predictive-selected") {
-    const family = predictiveFamilyGoal();
-    const modelKey = currentPredictiveModelKey();
-    const previousPayload = goalPayload(family);
-    runtime.workbenchRevealed = true;
-    runtime.predictiveWorkbenchIntent = "train";
-    void runGuidedGoal(family, target, runPredictiveSelectedModel, {
-      resultMode: "single",
-      successCheck: () => guidedPredictiveSelectedModelReady({ family, modelKey, previousPayload }),
-    });
-    return;
-  }
-  if (action === "run-predictive-compare-all") {
-    runtime.workbenchRevealed = false;
-    runtime.predictiveWorkbenchIntent = null;
-    void runGuidedGoal("predictive", target, runUnifiedPredictiveComparison, {
-      resultMode: "compare",
-      successCheck: guidedPredictiveCompareReady,
-    });
-    return;
-  }
-  if (action === "return-trained-predictive-model") {
-    if (!selectedPredictiveSingleResult(predictiveFamilyGoal())) return;
-    runtime.workbenchRevealed = true;
-    runtime.predictiveWorkbenchIntent = "train";
-    activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });
-    setGuidedStep(5, { syncHistory: false, scroll: false, historyMode: "replace" });
-    renderBenchmarkBoard();
-    requestAnimationFrame(() => {
-      refs.benchmarkWorkbench?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-    if (state.dataset) syncHistoryState("replace");
-    return;
-  }
-  if (action === "run-tables") {
-    void runGuidedGoal("tables", target, runCohortTable, {
-      successCheck: () => Boolean(state.cohort?.analysis),
-    });
-  }
-}
-
-function updateStepIndicator(step = currentGuidedStep()) {
-  if (!refs.stepIndicator) return;
-  const activeStep = step;
-  const reachableStep = maxReachableGuidedStep();
-  const steps = refs.stepIndicator.querySelectorAll(".step");
-  const connectors = refs.stepIndicator.querySelectorAll(".step-connector");
-  steps.forEach((el) => {
-    const s = Number(el.dataset.step);
-    const circle = el.querySelector(".step-circle");
-    const label = el.querySelector(".step-label")?.textContent?.trim() || `Step ${s}`;
-    el.classList.remove("active", "completed");
-    if (circle) circle.textContent = String(s);
-    if (s < activeStep) {
-      el.classList.add("completed");
-      if (circle) circle.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-    } else if (s === activeStep) {
-      el.classList.add("active");
-    }
-    if ("disabled" in el) el.disabled = s > reachableStep;
-    el.setAttribute("aria-disabled", String(s > reachableStep));
-    el.setAttribute("aria-label", `Step ${s}: ${label}`);
-    if (s === activeStep) {
-      el.setAttribute("aria-current", "step");
-    } else {
-      el.removeAttribute("aria-current");
-    }
-  });
-  connectors.forEach((c, i) => c.classList.toggle("completed", i < activeStep - 1));
-}
-
-function showSmartBanner(text) {
-  if (!refs.smartBanner || !refs.smartBannerText) return;
-  refs.smartBannerText.textContent = text;
-  refs.smartBanner.classList.remove("hidden");
 }
 
 function initTabKeyboard() {
@@ -924,7 +632,7 @@ function goHome({ syncHistory = true, historyMode = "replace" } = {}) {
     historyMode,
     resetCoxPreview,
     renderSharedFeatureSummary,
-    renderGuidedChrome,
+    renderWorkspaceChrome,
     setRuntimeBanner,
     syncHistoryState,
   });
@@ -941,8 +649,6 @@ function initListeners() {
   if (brandHome) {
     brandHome.addEventListener("click", (e) => { e.preventDefault(); goHome({ historyMode: "push" }); });
   }
-  refs.guidedModeButton?.addEventListener("click", () => setUiMode("guided", { historyMode: "push" }));
-  refs.expertModeButton?.addEventListener("click", () => setUiMode("expert", { historyMode: "push" }));
   refs.predictiveModelSelector?.addEventListener("change", () => {
     runtime.workbenchRevealed = true;
     setPredictiveModel(refs.predictiveModelSelector.value, { historyMode: "push" });
@@ -950,46 +656,18 @@ function initListeners() {
     syncAnalysisRunButtonAvailability();
   });
   refs.runPredictiveCompareAllButton?.addEventListener("click", () => {
-    if (runtime.uiMode === "guided") {
-      runtime.guidedGoal = "predictive";
-      void runGuidedGoal("predictive", refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, {
-        resultMode: "compare",
-        successCheck: guidedPredictiveCompareReady,
-      });
-      return;
-    }
     withLoading(refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, "predictive");
   });
   refs.runPredictiveSelectedButton?.addEventListener("click", () => {
     runtime.workbenchRevealed = true;
     runtime.predictiveWorkbenchIntent = "train";
     const selectedFamily = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey()).family;
-    const modelKey = refs.predictiveModelSelector?.value || currentPredictiveModelKey();
-    const previousPayload = goalPayload(selectedFamily);
-    if (runtime.uiMode === "guided") {
-      runtime.guidedGoal = "predictive";
-      void runGuidedGoal(selectedFamily, refs.runPredictiveSelectedButton, runPredictiveSelectedModel, {
-        resultMode: "single",
-        successCheck: () => guidedPredictiveSelectedModelReady({ family: selectedFamily, modelKey, previousPayload }),
-      });
-      return;
-    }
     withLoading(refs.runPredictiveSelectedButton, runPredictiveSelectedModel, selectedFamily);
   });
   refs.runPredictiveWorkbenchButton?.addEventListener("click", () => {
     runtime.workbenchRevealed = true;
     runtime.predictiveWorkbenchIntent = "train";
     const selectedFamily = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey()).family;
-    const modelKey = refs.predictiveModelSelector?.value || currentPredictiveModelKey();
-    const previousPayload = goalPayload(selectedFamily);
-    if (runtime.uiMode === "guided") {
-      runtime.guidedGoal = "predictive";
-      void runGuidedGoal(selectedFamily, refs.runPredictiveWorkbenchButton, runPredictiveSelectedModel, {
-        resultMode: "single",
-        successCheck: () => guidedPredictiveSelectedModelReady({ family: selectedFamily, modelKey, previousPayload }),
-      });
-      return;
-    }
     withLoading(refs.runPredictiveWorkbenchButton, runPredictiveSelectedModel, selectedFamily);
   });
   refs.closePredictiveWorkbenchButton?.addEventListener("click", () => {
@@ -1024,38 +702,6 @@ function initListeners() {
     if (!button) return;
     reviewBenchmarkSourceTab(button.dataset.benchmarkTab || "ml", button.dataset.benchmarkMode || null);
   });
-  refs.guidedPanel?.addEventListener("click", (event) => {
-    const button = closestFromEvent(event, "[data-guided-action]");
-    if (!button) return;
-    handleGuidedPanelAction(button);
-  });
-  refs.guidedRailActions?.addEventListener("click", (event) => {
-    const button = closestFromEvent(event, "[data-guided-action]");
-    if (!button) return;
-    handleGuidedPanelAction(button);
-  });
-  refs.guidedPanel?.addEventListener("change", (event) => {
-    const select = closestFromEvent(event, "[data-guided-predictive-model-selector]");
-    if (!select) return;
-    setPredictiveModel(select.value, { historyMode: "push" });
-    renderBenchmarkBoard();
-    syncAnalysisRunButtonAvailability();
-  });
-  refs.stepIndicator?.addEventListener("click", (event) => {
-    const button = closestFromEvent(event, ".step");
-    if (!button) return;
-    const requestedStep = Number(button.dataset.step || 0);
-    if (!requestedStep || !canNavigateToGuidedStep(requestedStep)) return;
-    if (requestedStep === 1) {
-      goHome({ historyMode: "push" });
-      return;
-    }
-    if (requestedStep === currentGuidedStep()) return;
-    setGuidedStep(requestedStep, { historyMode: "push" });
-    if (requestedStep >= 4 && runtime.guidedGoal) {
-      activateTab(runtime.guidedGoal, { setGuidedGoal: false, historyMode: "replace" });
-    }
-  });
   window.addEventListener("popstate", (event) => {
     void restoreHistoryState(event.state);
   });
@@ -1073,11 +719,8 @@ function initListeners() {
     void withLoading(refs.shutdownButton, shutdownServer);
   });
   refs.loadTcgaUploadReadyButton.addEventListener("click", () => withLoading(refs.loadTcgaUploadReadyButton, loadTcgaUploadReadyDataset));
-  refs.loadTcgaButton.addEventListener("click", () => withLoading(refs.loadTcgaButton, loadTcgaDataset));
   refs.loadGbsg2Button.addEventListener("click", () => withLoading(refs.loadGbsg2Button, loadGbsg2Dataset));
   refs.loadExampleButton.addEventListener("click", () => withLoading(refs.loadExampleButton, loadExampleDataset));
-  refs.applyBasicPresetButton?.addEventListener("click", () => applyDatasetPreset("basic"));
-  refs.applyModelPresetButton?.addEventListener("click", () => applyDatasetPreset("models"));
   refs.timeColumn.addEventListener("change", () => {
     clearAnalysisOutputs();
     applyAutomaticTimeUnitLabel();
@@ -1134,7 +777,6 @@ function initListeners() {
       autoCategoricalValues: input?.checked ? [input.value] : [],
     });
     renderSharedFeatureSummary();
-    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview();
   });
@@ -1143,7 +785,6 @@ function initListeners() {
   });
   refs.categoricalChecklist?.addEventListener("change", () => {
     renderSharedFeatureSummary();
-    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview();
   });
@@ -1158,7 +799,6 @@ function initListeners() {
       notify: Boolean(input?.checked),
     });
     renderSharedFeatureSummary();
-    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview();
   });
@@ -1170,7 +810,6 @@ function initListeners() {
     setCheckedValues(refs.covariateChecklist, covariates);
     syncCoxCovariateSelection({ preferredScope: "covariate", autoCategoricalValues: covariates });
     renderSharedFeatureSummary();
-    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Selected all Cox covariates.", "success", 2200);
@@ -1180,7 +819,6 @@ function initListeners() {
     setCheckedValues(refs.categoricalChecklist, []);
     syncCoxCovariateSelection();
     renderSharedFeatureSummary();
-    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Cleared all Cox covariates and categorical flags.", "success", 2200);
@@ -1192,7 +830,6 @@ function initListeners() {
       covariates.length ? covariates : allCheckboxValues(refs.categoricalChecklist, { visibleOnly: true }),
     );
     renderSharedFeatureSummary();
-    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Marked the current Cox covariates as categorical.", "success", 2200);
@@ -1200,7 +837,6 @@ function initListeners() {
   refs.clearCoxCategoricalsButton?.addEventListener("click", () => {
     setCheckedValues(refs.categoricalChecklist, []);
     renderSharedFeatureSummary();
-    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Cleared Cox categorical flags.", "success", 2200);
@@ -1210,7 +846,6 @@ function initListeners() {
     setCheckedValues(refs.strataChecklist, strata);
     syncCoxCovariateSelection({ preferredScope: "strata" });
     renderSharedFeatureSummary();
-    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Selected visible Cox strata. Matching covariates were cleared automatically.", "success", 2400);
@@ -1219,7 +854,6 @@ function initListeners() {
     setCheckedValues(refs.strataChecklist, []);
     syncCoxCovariateSelection();
     renderSharedFeatureSummary();
-    syncGuidedCoxPanelMounts();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
     showToast("Cleared Cox strata.", "success", 2200);
@@ -1338,123 +972,16 @@ function initListeners() {
     queueHistorySync();
   });
   refs.deriveButton.addEventListener("click", () => withLoading(refs.deriveButton, deriveGroup));
-  refs.runKmButton.addEventListener("click", () => {
-    if (runtime.uiMode === "guided") {
-      runtime.guidedGoal = "km";
-      void runGuidedGoal("km", refs.runKmButton, runGuidedKaplanMeier);
-      return;
-    }
-    withLoading(refs.runKmButton, runKaplanMeier);
-  });
+  refs.runKmButton.addEventListener("click", () => withLoading(refs.runKmButton, runKaplanMeier));
   refs.runSignatureSearchButton.addEventListener("click", () => withLoading(refs.runSignatureSearchButton, runSignatureSearch, "km"));
-  refs.runCoxButton.addEventListener("click", () => {
-    if (runtime.uiMode === "guided") {
-      runtime.guidedGoal = "cox";
-      void runGuidedGoal("cox", refs.runCoxButton, runCox);
-      return;
-    }
-    withLoading(refs.runCoxButton, runCox);
-  });
-  refs.runCohortTableButton.addEventListener("click", () => {
-    if (runtime.uiMode === "guided") {
-      runtime.guidedGoal = "tables";
-      void runGuidedGoal("tables", refs.runCohortTableButton, runCohortTable, {
-        successCheck: () => Boolean(state.cohort?.analysis),
-      });
-      return;
-    }
-    withLoading(refs.runCohortTableButton, runCohortTable);
-  });
-  refs.runMlButton.addEventListener("click", () => {
-    if (runtime.uiMode === "guided") {
-      if (runtime.guidedGoal === "predictive") {
-        void runGuidedGoal("ml", refs.runMlButton, runMlModel, {
-          resultMode: "single",
-          successCheck: () => Boolean(currentGoalResult("ml")),
-        });
-        return;
-      }
-      runtime.guidedGoal = "ml";
-      void runGuidedGoal("ml", refs.runMlButton, runMlModel);
-      return;
-    }
-    withLoading(refs.runMlButton, runMlModel);
-  });
-  refs.runCompareButton.addEventListener("click", () => {
-    if (runtime.uiMode === "guided") {
-      if (runtime.guidedGoal === "predictive") {
-        void runGuidedGoal("ml", refs.runCompareButton, runCompareModels, {
-          resultMode: "compare",
-          successCheck: () => benchmarkCompareRows("ml", { currentOnly: true }).length > 0,
-        });
-        return;
-      }
-      runtime.guidedGoal = "ml";
-      void runGuidedGoal("ml", refs.runCompareButton, runCompareModels);
-      return;
-    }
-    withLoading(refs.runCompareButton, runCompareModels);
-  });
-  refs.runCompareInlineButton?.addEventListener("click", () => {
-    if (runtime.uiMode === "guided") {
-      if (runtime.guidedGoal === "predictive") {
-        void runGuidedGoal("ml", refs.runCompareInlineButton, runCompareModels, {
-          resultMode: "compare",
-          successCheck: () => benchmarkCompareRows("ml", { currentOnly: true }).length > 0,
-        });
-        return;
-      }
-      runtime.guidedGoal = "ml";
-      void runGuidedGoal("ml", refs.runCompareInlineButton, runCompareModels);
-      return;
-    }
-    withLoading(refs.runCompareInlineButton, runCompareModels);
-  });
-  refs.runDlButton.addEventListener("click", () => {
-    if (runtime.uiMode === "guided") {
-      if (runtime.guidedGoal === "predictive") {
-        void runGuidedGoal("dl", refs.runDlButton, runDlModel, {
-          resultMode: "single",
-          successCheck: () => Boolean(currentGoalResult("dl")),
-        });
-        return;
-      }
-      runtime.guidedGoal = "dl";
-      void runGuidedGoal("dl", refs.runDlButton, runDlModel);
-      return;
-    }
-    withLoading(refs.runDlButton, runDlModel);
-  });
-  refs.runDlCompareButton.addEventListener("click", () => {
-    if (runtime.uiMode === "guided") {
-      if (runtime.guidedGoal === "predictive") {
-        void runGuidedGoal("dl", refs.runDlCompareButton, runDlCompareModels, {
-          resultMode: "compare",
-          successCheck: () => benchmarkCompareRows("dl", { currentOnly: true }).length > 0,
-        });
-        return;
-      }
-      runtime.guidedGoal = "dl";
-      void runGuidedGoal("dl", refs.runDlCompareButton, runDlCompareModels);
-      return;
-    }
-    withLoading(refs.runDlCompareButton, runDlCompareModels);
-  });
-  refs.runDlCompareInlineButton?.addEventListener("click", () => {
-    if (runtime.uiMode === "guided") {
-      if (runtime.guidedGoal === "predictive") {
-        void runGuidedGoal("dl", refs.runDlCompareInlineButton, runDlCompareModels, {
-          resultMode: "compare",
-          successCheck: () => benchmarkCompareRows("dl", { currentOnly: true }).length > 0,
-        });
-        return;
-      }
-      runtime.guidedGoal = "dl";
-      void runGuidedGoal("dl", refs.runDlCompareInlineButton, runDlCompareModels);
-      return;
-    }
-    withLoading(refs.runDlCompareInlineButton, runDlCompareModels);
-  });
+  refs.runCoxButton.addEventListener("click", () => withLoading(refs.runCoxButton, runCox));
+  refs.runCohortTableButton.addEventListener("click", () => withLoading(refs.runCohortTableButton, runCohortTable));
+  refs.runMlButton.addEventListener("click", () => withLoading(refs.runMlButton, runMlModel));
+  refs.runCompareButton.addEventListener("click", () => withLoading(refs.runCompareButton, runCompareModels));
+  refs.runCompareInlineButton?.addEventListener("click", () => withLoading(refs.runCompareInlineButton, runCompareModels));
+  refs.runDlButton.addEventListener("click", () => withLoading(refs.runDlButton, runDlModel));
+  refs.runDlCompareButton.addEventListener("click", () => withLoading(refs.runDlCompareButton, runDlCompareModels));
+  refs.runDlCompareInlineButton?.addEventListener("click", () => withLoading(refs.runDlCompareInlineButton, runDlCompareModels));
   refs.tabButtons.forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab, { historyMode: "replace" })));
   const changeTrackedControls = [
     refs.eventPositiveValue,
@@ -1511,7 +1038,7 @@ function initListeners() {
     refs.dlLockedTestToggle,
     refs.dlLockedTestFraction,
   ];
-  // Every control that feeds a request must also refresh result currency (guided status, downloads,
+  // Every control that feeds a request must also refresh result currency (run status, downloads,
   // leaderboard), not just the history snapshot.
   const onTrackedControlChange = () => {
     scheduleResultCurrencySync();
@@ -1522,6 +1049,22 @@ function initListeners() {
     if (["text", "number"].includes(control.type)) control.addEventListener("input", onTrackedControlChange);
   });
   wireDownloads();
+  initExportMenus();
+}
+
+// Export menus close after a download is chosen and when the user clicks elsewhere.
+function initExportMenus() {
+  const menus = () => [...document.querySelectorAll(".export-menu")];
+  document.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    menus().forEach((menu) => {
+      if (!menu.open) return;
+      if (!target || !menu.contains(target) || target.closest(".export-menu-items button")) menu.open = false;
+    });
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") menus().forEach((menu) => { menu.open = false; });
+  });
 }
 
 initListeners();
@@ -1538,7 +1081,3 @@ updateDlEvaluationControls();
 syncDeriveToggleButton();
 initPlotResizeObserver();
 initializeRuntime();
-
-if (refs.smartBannerClose) {
-  refs.smartBannerClose.addEventListener("click", () => refs.smartBanner.classList.add("hidden"));
-}

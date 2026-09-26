@@ -117,11 +117,8 @@ def _assert_tab_active(page, tab_name: str) -> None:
     assert page.locator(f"#panel-{tab_name}").evaluate("(node) => node.classList.contains('active')")
 
 
-def _switch_to_expert(page) -> None:
+def _wait_for_workspace(page) -> None:
     page.locator("#workspace").wait_for(state="visible")
-    if page.locator("#guidedShell").is_visible():
-        page.evaluate("() => document.getElementById('expertModeButton')?.click()")
-        page.wait_for_function("document.body.dataset.uiMode === 'expert'")
 
 
 def _open_predictive_workbench(page, model_key: str | None = None) -> None:
@@ -151,13 +148,9 @@ def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_ser
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
-            page.locator("#workspace").wait_for(state="visible")
-            page.locator("#guidedShell").wait_for(state="visible")
-            _switch_to_expert(page)
+            _wait_for_workspace(page)
 
-            assert "Current Group by: overall only." in page.locator("#groupingSummaryText").inner_text()
-            assert "current Group by field" in page.locator("#kmDependencyText").inner_text()
-            assert "covariates selected in this tab" in page.locator("#coxDependencyText").inner_text()
+            assert "Choose a column to compare groups" in page.locator("#groupingSummaryText").inner_text()
             assert "ML and DL share this model feature list" in page.locator("#mlFeatureSummaryText").inner_text()
             assert "shared ML/DL model feature selections" in page.locator("#dlFeatureSummaryText").inner_text()
 
@@ -216,44 +209,26 @@ def test_beginner_real_dataset_preset_keeps_group_by_and_model_inputs_separate(b
 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadGbsg2Button").click()
-            page.locator("#workspace").wait_for(state="visible")
-            page.locator("#guidedShell").wait_for(state="visible")
-            assert page.locator("#datasetPresetBar").is_hidden()
-            _switch_to_expert(page)
-            page.locator("#datasetPresetBar").wait_for(state="visible")
+            _wait_for_workspace(page)
+            assert page.locator("#datasetPresetBar").count() == 0
 
-            assert "No preset applied yet." in page.locator("#datasetPresetStatusTitle").inner_text()
-            assert "updates recommended columns and checkbox selections only" in page.locator("#datasetPresetStatusText").inner_text()
-
-            page.locator("#applyBasicPresetButton").click()
-            page.wait_for_function(
-                "document.getElementById('datasetPresetStatusTitle').textContent.includes('GBSG2 preset applied')"
-            )
+            # The GBSG2 sample opens with its recommended outcome, grouping and model inputs.
+            page.wait_for_function("document.getElementById('groupColumn').value === 'horTh'")
             assert page.locator("#timeColumn").input_value() == "rfs_days"
             assert page.locator("#eventColumn").input_value() == "rfs_event"
-            assert page.locator("#groupColumn").input_value() == "horTh"
-            assert "Current Group by: horTh." in page.locator("#groupingSummaryText").inner_text()
-            assert "Study Design outcome definition" in page.locator("#kmDependencyText").inner_text()
-            assert "current Group by" in page.locator("#kmDependencyText").inner_text()
-            assert "Study Design outcome definition" in page.locator("#coxDependencyText").inner_text()
-            assert "covariates selected in this tab" in page.locator("#coxDependencyText").inner_text()
-
-            page.locator("#applyModelPresetButton").click()
-            page.wait_for_function(
-                "document.getElementById('datasetPresetStatusText').textContent.includes('feature checklists used by ML and DL')"
-            )
+            assert "Curves and Table 1 are split by horTh." in page.locator("#groupingSummaryText").inner_text()
             selected_feature_count = page.eval_on_selector_all(
                 "#modelFeatureChecklist input",
                 "els => els.filter(e => e.checked).length",
             )
-            selected_categorical_count = page.eval_on_selector_all(
-                "#modelCategoricalChecklist input",
-                "els => els.filter(e => e.checked).length",
-            )
+            assert selected_feature_count > 0
             assert "ML and DL share this model feature list" in page.locator("#mlFeatureSummaryText").inner_text()
-            assert "shared ML/DL model feature selections" in page.locator("#datasetPresetStatusText").inner_text() or "feature checklists used by ML and DL" in page.locator("#datasetPresetStatusText").inner_text()
-            assert f"Model features: {selected_feature_count}" in page.locator("#datasetPresetChips").inner_text()
-            assert f"Categorical: {selected_categorical_count}" in page.locator("#datasetPresetChips").inner_text()
+
+            # Group by belongs to survival curves and Table 1; the Cox model keeps its own covariates.
+            page.locator('[data-tab="cox"]').click()
+            _assert_tab_active(page, "cox")
+            assert page.locator("#groupingConfigBlock").is_hidden()
+            assert page.locator("#groupColumn").input_value() == "horTh"
 
             _open_predictive_workbench(page)
             assert "Machine Learning Survival Models" in page.locator("#benchmarkMlMount").inner_text()
@@ -287,7 +262,7 @@ def test_beginner_ml_compare_options_toggle_cv_inputs_and_finish_with_visible_fe
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             page.locator("#workspace").wait_for(state="visible")
-            _switch_to_expert(page)
+            _wait_for_workspace(page)
 
             _open_predictive_workbench(page)
 
@@ -334,7 +309,7 @@ def test_beginner_dl_single_run_keeps_feedback_visible_and_hides_cv_controls(bro
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             page.locator("#workspace").wait_for(state="visible")
-            _switch_to_expert(page)
+            _wait_for_workspace(page)
 
             _open_predictive_workbench(page, "deepsurv")
 

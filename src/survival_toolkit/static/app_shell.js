@@ -1,13 +1,10 @@
 (function registerSurvStudioShell() {
   function currentHistoryState({ state, runtime, activeTabName, captureControlSnapshot }) {
-    if (!state.dataset) return { view: "home", uiMode: runtime.uiMode };
+    if (!state.dataset) return { view: "home" };
     return {
       view: "workspace",
       datasetId: state.dataset.dataset_id,
       tab: activeTabName(),
-      uiMode: runtime.uiMode,
-      guidedGoal: runtime.guidedGoal,
-      guidedStep: runtime.guidedStep,
       predictiveFamily: runtime.predictiveFamily,
       workbenchRevealed: runtime.workbenchRevealed,
       predictiveWorkbenchIntent: runtime.predictiveWorkbenchIntent,
@@ -61,7 +58,7 @@
     historyMode = "replace",
     resetCoxPreview,
     renderSharedFeatureSummary,
-    renderGuidedChrome,
+    renderWorkspaceChrome,
     setRuntimeBanner,
     syncHistoryState: syncHistoryStateFn,
   }) {
@@ -76,8 +73,6 @@
     refs.landing.classList.remove("hidden", "fade-out");
     refs.datasetBadge.classList.add("hidden");
     refs.datasetFile.value = "";
-    runtime.guidedGoal = null;
-    runtime.guidedStep = 1;
     runtime.deriveDraftTouched = false;
     runtime.predictiveFamily = "ml";
     runtime.workbenchRevealed = false;
@@ -89,7 +84,7 @@
     runtime.resultPreference.dl = "single";
     resetCoxPreview({ rerender: false });
     renderSharedFeatureSummary();
-    renderGuidedChrome();
+    renderWorkspaceChrome();
     setRuntimeBanner("");
     if (syncHistory) syncHistoryStateFn(historyMode);
   }
