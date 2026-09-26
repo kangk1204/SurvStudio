@@ -34,6 +34,10 @@ class DependencyError(SurvStudioError, ImportError):
     """Optional dependency required for the requested workflow is unavailable."""
 
 
+class JobCancelledError(SurvStudioError):
+    """The request that started a running analysis went away, so the analysis stopped early."""
+
+
 class InternalAnalysisError(SurvStudioError, ValueError):
     """Unexpected internal failure whose raw message must not be shown to users.
 
@@ -75,6 +79,30 @@ def _is_numerical_library_error(exc: BaseException) -> bool:
     if isinstance(exc, np.linalg.LinAlgError):
         return True
     return type(exc).__name__ == "ConvergenceError"
+
+
+def is_programming_error(exc: BaseException) -> bool:
+    """True for exceptions that signal a bug in SurvStudio rather than a data or numerical failure.
+
+    Per-model and per-fold fallbacks record data-driven failures (singular designs, too few
+    events, non-convergence) and carry on; they must re-raise these instead of reporting a
+    coding error as "model failed on fold k". A ``TypeError`` raised inside a third-party
+    library usually reflects unusable input (for example mixed-type columns) and is not
+    treated as a bug here.
+    """
+
+    if isinstance(exc, (AttributeError, KeyError, NameError, AssertionError)):
+        return True
+    return isinstance(exc, TypeError) and _raised_by_survstudio(exc)
+
+
+def must_propagate(exc: BaseException) -> bool:
+    """True when a per-model or per-fold fallback must re-raise instead of recording a failure.
+
+    Covers programming errors and cancellation of the whole analysis.
+    """
+
+    return isinstance(exc, JobCancelledError) or is_programming_error(exc)
 
 
 def user_input_boundary(func: Callable[P, T]) -> Callable[P, T]:

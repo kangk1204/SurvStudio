@@ -66,8 +66,26 @@ def _configure_request_host_guard(host: str, allowed_hosts: Sequence[str] = ()) 
         os.environ[_ALLOWED_HOSTS_ENV_VAR] = ",".join(dict.fromkeys([*existing, *extra_hosts]))
 
 
+_LOOPBACK_BIND_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _warn_if_reachable_from_network(host: str) -> None:
+    """SurvStudio has no login, so binding beyond loopback exposes it to the network."""
+
+    normalized = str(host).strip().strip("[]").lower()
+    if normalized in _LOOPBACK_BIND_HOSTS:
+        return
+    print(
+        f"WARNING: SurvStudio is listening on {host}. It has no login: anyone who can reach this address can "
+        "upload data, run analyses (including long model training), and open datasets whose IDs they know. "
+        "Use 127.0.0.1 unless every machine on this network is trusted.",
+        file=sys.stderr,
+    )
+
+
 def _run_serve(host: str, port: int, reload: bool, allowed_hosts: Sequence[str] = ()) -> int:
     _configure_request_host_guard(host, allowed_hosts)
+    _warn_if_reachable_from_network(host)
     uvicorn.run(
         "survival_toolkit.app:app",
         host=host,

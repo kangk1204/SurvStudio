@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import csv
 import functools
@@ -58,7 +59,9 @@ from survival_toolkit.analysis import (
     profile_dataframe,
     suggest_columns,
 )
-from survival_toolkit.errors import InternalAnalysisError, NotFoundError, UserInputError
+from survival_toolkit import __version__ as SURVSTUDIO_VERSION
+from survival_toolkit.concurrency import cancellation_scope, raise_if_cancelled
+from survival_toolkit.errors import InternalAnalysisError, JobCancelledError, NotFoundError, UserInputError
 from survival_toolkit.sample_data import (
     load_gbsg2_upload_ready_dataset,
     load_tcga_luad_example_dataset,
@@ -368,7 +371,9 @@ _MAX_UPLOAD_COLUMNS = 5_000
 _MAX_UPLOAD_CELLS = 5_000_000
 # Decompression guards: an .xlsx is a zip of XML parts and Parquet pages are compressed, so a
 # small upload can expand to gigabytes. Check declared sizes before handing the file to a parser.
-_MAX_XLSX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+# openpyxl keeps the shared-strings table of a workbook in memory, so the workbook cap is lower
+# than the Parquet one; larger sheets should be exported as CSV.
+_MAX_XLSX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 _MAX_PARQUET_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 _SHAP_SAFE_MODE_MAX_ENCODED_FEATURES = 80
 _SHAP_SAFE_MODE_MAX_RAW_FEATURES = 30
@@ -543,10 +548,48 @@ class _FeatureSelectionRequestModel(_EventPositiveValueRequestModel):
         return self
 
 
+def _estimate_model_bytes(model: Any) -> int:
+    """Approximate memory held by a fitted tree ensemble (RSF/GBS), 0 for other objects.
+
+    Random survival forest trees store a survival curve per node, so a large forest on a
+    large cohort can hold gigabytes; the node arrays dominate the footprint.
+    """
+    estimators = getattr(model, "estimators_", None)
+    if estimators is None:
+        return 0
+    total = 0
+    for estimator in np.ravel(np.asarray(estimators, dtype=object)):
+        tree = getattr(estimator, "tree_", None)
+        if tree is None:
+            continue
+        for attribute in ("value", "threshold", "feature", "children_left", "children_right", "impurity", "n_node_samples"):
+            array = getattr(tree, attribute, None)
+            if isinstance(array, np.ndarray):
+                total += int(array.nbytes)
+    return total
+
+
+def _estimate_artifact_bytes(result: dict[str, Any]) -> int:
+    total = _estimate_model_bytes(result.get("_model"))
+    for key in ("_X_encoded", "_analysis_frame"):
+        frame = result.get(key)
+        if isinstance(frame, pd.DataFrame):
+            total += int(frame.memory_usage(deep=True).sum())
+    return total
+
+
 class _MlArtifactCache:
-    def __init__(self, *, max_items: int) -> None:
+    """Fitted single-model artifacts reused by counterfactual and partial-dependence requests.
+
+    Bounded by entry count and by estimated memory; an artifact larger than the whole
+    budget is not cached (those requests then refit the model).
+    """
+
+    def __init__(self, *, max_items: int, max_bytes: int = 1024 * 1024 * 1024) -> None:
         self._max_items = int(max_items)
+        self._max_bytes = int(max_bytes)
         self._items: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+        self._sizes: dict[tuple[str, str], int] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -578,16 +621,30 @@ class _MlArtifactCache:
         signature: dict[str, Any],
         result: dict[str, Any],
     ) -> None:
+        artifact_bytes = _estimate_artifact_bytes(result)
+        cache_key = (dataset_id, model_type)
+        if artifact_bytes > self._max_bytes:
+            with self._lock:
+                # Never serve an older artifact for a key whose latest fit was not cached.
+                self._items.pop(cache_key, None)
+                self._sizes.pop(cache_key, None)
+            return
         artifact = {
             "signature": copy.deepcopy(signature),
             "result": self._copy_result(result),
         }
         with self._lock:
-            cache_key = (dataset_id, model_type)
             self._items[cache_key] = artifact
+            self._sizes[cache_key] = artifact_bytes
             self._items.move_to_end(cache_key)
-            while len(self._items) > self._max_items:
-                self._items.popitem(last=False)
+            while len(self._items) > self._max_items or sum(self._sizes.values()) > self._max_bytes:
+                evicted_key, _ = self._items.popitem(last=False)
+                self._sizes.pop(evicted_key, None)
+
+    @property
+    def total_bytes(self) -> int:
+        with self._lock:
+            return int(sum(self._sizes.values()))
 
     def get(
         self,
@@ -614,28 +671,83 @@ class _MlArtifactCache:
         with self._lock:
             for cache_key in [key for key in self._items if key[0] == dataset_id]:
                 del self._items[cache_key]
+                self._sizes.pop(cache_key, None)
 
     def __len__(self) -> int:
         with self._lock:
             return len(self._items)
 
 
-_ml_artifact_cache = _MlArtifactCache(max_items=8)
+_ML_ARTIFACT_CACHE_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB
+_ml_artifact_cache = _MlArtifactCache(max_items=8, max_bytes=_ML_ARTIFACT_CACHE_MAX_BYTES)
 # Fitted models hold deep-copied training frames; release them together with their dataset.
 store.add_eviction_listener(_ml_artifact_cache.purge_dataset)
 
 _T = TypeVar("_T")
 
 
-async def _run_dataset_job(dataset_id: str, job: Callable[[], _T]) -> _T:
+MAX_HEAVY_JOBS_ENV_VAR = "SURVSTUDIO_MAX_HEAVY_JOBS"
+
+
+def _max_heavy_jobs() -> int:
+    try:
+        configured = int(os.environ.get(MAX_HEAVY_JOBS_ENV_VAR, "") or 0)
+    except ValueError:
+        configured = 0
+    return configured if configured > 0 else 2
+
+
+# Model training, signature search, cutpoint permutation, and XAI jobs each use several
+# cores (and deep-learning comparisons can start worker processes), so only a few run at
+# once; later ones wait for a slot inside their worker thread.
+_HEAVY_JOB_SLOTS = threading.BoundedSemaphore(_max_heavy_jobs())
+_DISCONNECT_POLL_SECONDS = 0.5
+
+
+async def _watch_for_disconnect(request: Request, cancel_event: threading.Event) -> None:
+    while not cancel_event.is_set():
+        if await request.is_disconnected():
+            cancel_event.set()
+            return
+        await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
+
+
+async def _run_dataset_job(
+    dataset_id: str,
+    job: Callable[[], _T],
+    *,
+    request: Request | None = None,
+    heavy: bool = False,
+) -> _T:
     """Run a blocking analysis job in the threadpool while leasing its dataset.
 
     The lease keeps the dataset from expiring (idle TTL) or being LRU-evicted mid-run and
-    refreshes its TTL when the job finishes.
+    refreshes its TTL when the job finishes. Heavy jobs wait for one of a few shared slots.
+    When ``request`` is given and its client disconnects (for example the page cancelled
+    the request), the job stops at its next cancellation checkpoint or never starts.
     """
 
-    with store.lease(dataset_id):
-        return await run_in_threadpool(job)
+    cancel_event = threading.Event()
+
+    def _guarded() -> _T:
+        with cancellation_scope(cancel_event):
+            if not heavy:
+                return job()
+            while not _HEAVY_JOB_SLOTS.acquire(timeout=_DISCONNECT_POLL_SECONDS):
+                raise_if_cancelled()
+            try:
+                raise_if_cancelled()
+                return job()
+            finally:
+                _HEAVY_JOB_SLOTS.release()
+
+    watcher = asyncio.create_task(_watch_for_disconnect(request, cancel_event)) if request is not None else None
+    try:
+        with store.lease(dataset_id):
+            return await run_in_threadpool(_guarded)
+    finally:
+        if watcher is not None:
+            watcher.cancel()
 
 
 # ── Request models ──────────────────────────────────────────────
@@ -1392,7 +1504,14 @@ def _store_loaded_dataframe(
 
 def _ingest_uploaded_file(path: Path, filename: str) -> dict[str, Any]:
     _guard_compressed_upload(path, filename)
-    dataframe = load_dataframe_from_path(path)
+    # Text and Excel inputs are checked against the shape limits from their header and a
+    # bounded read, so an oversized table is refused before it is fully parsed.
+    dataframe = load_dataframe_from_path(
+        path,
+        max_rows=_MAX_UPLOAD_ROWS,
+        max_columns=_MAX_UPLOAD_COLUMNS,
+        max_cells=_MAX_UPLOAD_CELLS,
+    )
     # The parsed frame is private to this request, so the store can keep it without a deep copy.
     return _store_loaded_dataframe(dataframe, filename=filename, source="upload", copy_dataframe=False)
 
@@ -1513,10 +1632,18 @@ def _attach_manuscript_notes(
 
 
 def _export_provenance_notes(provenance: dict[str, Any] | None) -> list[str]:
+    """Replay notes for an exported table, stamped with the SurvStudio version and dataset hash.
+
+    Results changed between releases (for example the 0.2.0 statistical fixes), so every
+    analysis export records which version produced it and, when known, which stored
+    dataset. Plain table exports without provenance stay data-only.
+    """
     if not provenance:
         return []
-
-    notes: list[str] = []
+    notes: list[str] = [f"Generated with SurvStudio {SURVSTUDIO_VERSION}."]
+    dataset_hash = str(provenance.get("dataset_hash") or "").strip()
+    if dataset_hash:
+        notes.append(f"Dataset fingerprint: {dataset_hash}.")
     request_config = provenance.get("request_config")
     if isinstance(request_config, dict) and request_config:
         notes.append(
@@ -1586,6 +1713,9 @@ def _classify_runtime_request_error(exc: Exception) -> tuple[int, str] | None:
 def fail_bad_request(exc: Exception) -> NoReturn:
     if isinstance(exc, HTTPException):
         raise exc
+    if isinstance(exc, JobCancelledError):
+        # 499 (client closed request): the page abandoned this request, nobody reads the body.
+        raise HTTPException(status_code=499, detail=str(exc)) from exc
     if isinstance(exc, MemoryError):
         raise HTTPException(
             status_code=500,
@@ -2188,7 +2318,7 @@ async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "python_version": platform.python_version(),
-        "app_version": _package_version_or_unknown("survival-toolkit"),
+        "app_version": SURVSTUDIO_VERSION,
         "dependency_versions": {
             "fastapi": _package_version_or_unknown("fastapi"),
             "numpy": _package_version_or_unknown("numpy"),
@@ -2232,7 +2362,11 @@ def _is_non_simple_shutdown_request(request: Request) -> bool:
 @app.post("/api/shutdown")
 async def shutdown_server(request: Request) -> dict[str, str]:
     client_host = request.client.host if request.client else ""
-    if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+    # Behind a reverse proxy on the same machine every client looks like 127.0.0.1, so the
+    # page must also have been opened through a loopback address.
+    host = _split_host_and_port(request.headers.get("host", ""))
+    host_is_loopback = host is not None and _is_loopback_hostname(host[0])
+    if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"} or not host_is_loopback:
         raise HTTPException(status_code=403, detail="Shutdown is allowed only from a local session.")
     if not _is_non_simple_shutdown_request(request):
         raise HTTPException(
@@ -2262,12 +2396,25 @@ async def _load_builtin_dataset_response(
         fail_bad_request(exc)
 
 
+_ALLOWED_UPLOAD_SUFFIXES = frozenset({".csv", ".txt", ".tsv", ".xlsx", ".xls", ".parquet"})
+
+
 @app.post("/api/upload")
 async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
     temp_path: Path | None = None
     filename = file.filename or "uploaded_dataset.csv"
     try:
-        suffix = Path(filename).suffix or ".csv"
+        # Check the type before anything is written: the temp file's suffix comes from the
+        # client's filename and must never carry path or stream syntax (for example "x.c:sv").
+        suffix = (Path(filename).suffix or ".csv").lower()
+        if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unsupported input file extension '{suffix}' for '{filename}'. "
+                    "Supported formats are CSV, TSV, TXT, XLSX, XLS, and Parquet."
+                ),
+            )
         total_bytes = 0
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_path = Path(temp_file.name)
@@ -2327,6 +2474,16 @@ async def get_dataset(dataset_id: str) -> dict[str, Any]:
     try:
         # Profiling a large table is CPU-bound; keep it off the event loop.
         return await run_in_threadpool(dataset_response, dataset_id)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+@app.delete("/api/dataset/{dataset_id}")
+async def delete_dataset(dataset_id: str) -> dict[str, str]:
+    """Free a stored dataset (and its cached models) before its idle expiry."""
+    try:
+        await run_in_threadpool(store.delete, dataset_id)
+        return {"status": "deleted", "dataset_id": dataset_id}
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -2402,7 +2559,7 @@ def _render_table_export(request_model: TableExportRequest) -> Response:
 
 
 @app.post("/api/derive-group")
-async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
+async def derive_group(request_model: DeriveGroupRequest, request: Request) -> dict[str, Any]:
     try:
         from survival_toolkit.plots import build_cutpoint_scan_figure
 
@@ -2440,13 +2597,13 @@ async def derive_group(request_model: DeriveGroupRequest) -> dict[str, Any]:
                 payload["cutpoint_figure"] = build_cutpoint_scan_figure(summary, variable_name=request_model.source_column)
             return payload
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=request_model.method == "optimal_cutpoint")
     except Exception as exc:
         fail_bad_request(exc)
 
 
 @app.post("/api/kaplan-meier")
-async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
+async def kaplan_meier(request_model: KaplanMeierRequest, request: Request) -> dict[str, Any]:
     try:
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
@@ -2482,13 +2639,13 @@ async def kaplan_meier(request_model: KaplanMeierRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request)
     except Exception as exc:
         fail_bad_request(exc)
 
 
 @app.post("/api/cox")
-async def cox(request_model: CoxRequest) -> dict[str, Any]:
+async def cox(request_model: CoxRequest, request: Request) -> dict[str, Any]:
     try:
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
@@ -2497,21 +2654,22 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
             *request_model.categorical_covariates,
             *request_model.strata_columns,
         ]
-        _reject_survival_outcome_feature_columns(
-            stored,
-            selected_cox_inputs,
-            time_column=request_model.time_column,
-            event_column=request_model.event_column,
-            event_positive_value=request_model.event_positive_value,
-            context="Cox covariates",
-        )
-        _reject_outcome_informed_columns(
-            stored,
-            selected_cox_inputs,
-            context="Cox covariates",
-        )
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                selected_cox_inputs,
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="Cox covariates",
+            )
+            _reject_outcome_informed_columns(
+                stored,
+                selected_cox_inputs,
+                context="Cox covariates",
+            )
             from survival_toolkit.plots import (
                 build_cox_diagnostics_figure,
                 build_cox_forest_figure,
@@ -2541,13 +2699,13 @@ async def cox(request_model: CoxRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request)
     except Exception as exc:
         fail_bad_request(exc)
 
 
 @app.post("/api/cox-preview")
-async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
+async def cox_preview(request_model: CoxRequest, request: Request) -> dict[str, Any]:
     try:
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
@@ -2556,21 +2714,22 @@ async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
             *request_model.categorical_covariates,
             *request_model.strata_columns,
         ]
-        _reject_survival_outcome_feature_columns(
-            stored,
-            selected_cox_inputs,
-            time_column=request_model.time_column,
-            event_column=request_model.event_column,
-            event_positive_value=request_model.event_positive_value,
-            context="Cox covariates",
-        )
-        _reject_outcome_informed_columns(
-            stored,
-            selected_cox_inputs,
-            context="Cox covariates",
-        )
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                selected_cox_inputs,
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="Cox covariates",
+            )
+            _reject_outcome_informed_columns(
+                stored,
+                selected_cox_inputs,
+                context="Cox covariates",
+            )
             preview = preview_cox_analysis_inputs(
                 stored.dataframe,
                 time_column=request_model.time_column,
@@ -2582,24 +2741,25 @@ async def cox_preview(request_model: CoxRequest) -> dict[str, Any]:
             )
             return _attach_dataset_hash({"preview": preview, "request_config": request_config}, stored)
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request)
     except Exception as exc:
         fail_bad_request(exc)
 
 
 @app.post("/api/cohort-table")
-async def cohort_table(request_model: CohortTableRequest) -> dict[str, Any]:
+async def cohort_table(request_model: CohortTableRequest, request: Request) -> dict[str, Any]:
     try:
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
-        if request_model.group_column:
-            _reject_outcome_informed_columns(
-                stored,
-                [request_model.group_column],
-                context="grouped cohort tables",
-            )
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            if request_model.group_column:
+                _reject_outcome_informed_columns(
+                    stored,
+                    [request_model.group_column],
+                    context="grouped cohort tables",
+                )
             dataframe = stored.dataframe
             cohort_note: str | None = None
             analysis_cohort: dict[str, Any] | None = None
@@ -2647,31 +2807,32 @@ async def cohort_table(request_model: CohortTableRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request)
     except Exception as exc:
         fail_bad_request(exc)
 
 
 @app.post("/api/discover-signature")
-async def discover_signature(request_model: SignatureSearchRequest) -> dict[str, Any]:
+async def discover_signature(request_model: SignatureSearchRequest, request: Request) -> dict[str, Any]:
     try:
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
-        _reject_survival_outcome_feature_columns(
-            stored,
-            request_model.candidate_columns,
-            time_column=request_model.time_column,
-            event_column=request_model.event_column,
-            event_positive_value=request_model.event_positive_value,
-            context="signature discovery candidates",
-        )
-        _reject_outcome_informed_columns(
-            stored,
-            request_model.candidate_columns,
-            context="signature discovery candidates",
-        )
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                request_model.candidate_columns,
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="signature discovery candidates",
+            )
+            _reject_outcome_informed_columns(
+                stored,
+                request_model.candidate_columns,
+                context="signature discovery candidates",
+            )
             updated, column_name, analysis = discover_feature_signature(
                 stored.dataframe,
                 time_column=request_model.time_column,
@@ -2713,7 +2874,7 @@ async def discover_signature(request_model: SignatureSearchRequest) -> dict[str,
             # with the parent dataset's hash.
             return payload
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -2722,7 +2883,7 @@ async def discover_signature(request_model: SignatureSearchRequest) -> dict[str,
 
 
 @app.post("/api/optimal-cutpoint")
-async def optimal_cutpoint(request_model: OptimalCutpointRequest) -> dict[str, Any]:
+async def optimal_cutpoint(request_model: OptimalCutpointRequest, request: Request) -> dict[str, Any]:
     try:
         from survival_toolkit.ml_models import find_optimal_cutpoint
         from survival_toolkit.plots import build_cutpoint_scan_figure
@@ -2742,13 +2903,13 @@ async def optimal_cutpoint(request_model: OptimalCutpointRequest) -> dict[str, A
             figure = build_cutpoint_scan_figure(result, variable_name=request_model.variable)
             return {"result": result, "figure": figure}
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
 
 @app.post("/api/ml-model")
-async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
+async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str, Any]:
     try:
         from survival_toolkit.ml_models import (
             train_random_survival_forest,
@@ -2767,21 +2928,22 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
         stored = _get_stored_dataset(request_model.dataset_id)
         df = stored.dataframe
         request_config = request_model.model_dump()
-        _reject_survival_outcome_feature_columns(
-            stored,
-            [*request_model.features, *request_model.categorical_features],
-            time_column=request_model.time_column,
-            event_column=request_model.event_column,
-            event_positive_value=request_model.event_positive_value,
-            context="machine-learning model inputs",
-        )
-        _reject_outcome_informed_columns(
-            stored,
-            [*request_model.features, *request_model.categorical_features],
-            context="machine-learning model inputs",
-        )
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                [*request_model.features, *request_model.categorical_features],
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="machine-learning model inputs",
+            )
+            _reject_outcome_informed_columns(
+                stored,
+                [*request_model.features, *request_model.categorical_features],
+                context="machine-learning model inputs",
+            )
             if request_model.model_type == "compare":
                 if request_model.evaluation_strategy == "repeated_cv":
                     comparison = cross_validate_survival_models(
@@ -2955,13 +3117,13 @@ async def ml_model(request_model: MLModelRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
 
 @app.post("/api/deep-model")
-async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
+async def deep_model(request_model: DeepModelRequest, request: Request) -> dict[str, Any]:
     try:
         from survival_toolkit import deep_models
         from survival_toolkit.plots import (
@@ -2973,21 +3135,22 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
         stored = _get_stored_dataset(request_model.dataset_id)
         df = stored.dataframe
         request_config = request_model.model_dump()
-        _reject_survival_outcome_feature_columns(
-            stored,
-            [*request_model.features, *request_model.categorical_features],
-            time_column=request_model.time_column,
-            event_column=request_model.event_column,
-            event_positive_value=request_model.event_positive_value,
-            context="deep-learning model inputs",
-        )
-        _reject_outcome_informed_columns(
-            stored,
-            [*request_model.features, *request_model.categorical_features],
-            context="deep-learning model inputs",
-        )
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                [*request_model.features, *request_model.categorical_features],
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="deep-learning model inputs",
+            )
+            _reject_outcome_informed_columns(
+                stored,
+                [*request_model.features, *request_model.categorical_features],
+                context="deep-learning model inputs",
+            )
             base = dict(
                 df=df,
                 time_column=request_model.time_column,
@@ -3053,6 +3216,11 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                 cv_folds=request_model.cv_folds,
                 cv_repeats=request_model.cv_repeats,
                 parallel_jobs=request_model.parallel_jobs,
+                locked_test_fraction=(
+                    request_model.locked_test_fraction
+                    if request_model.evaluation_strategy == "repeated_cv"
+                    else None
+                ),
             )
 
             figures = {}
@@ -3085,7 +3253,7 @@ async def deep_model(request_model: DeepModelRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -3101,6 +3269,12 @@ class TimeDependentImportanceRequest(_FeatureSelectionRequestModel):
     features: list[str] = Field(max_length=1000)
     categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     eval_times: list[float] | None = Field(default=None, max_length=100)
+    # The survival model whose reliance on each feature is measured over time.
+    model_type: Literal["rsf", "gbs"] = "rsf"
+    n_estimators: int = Field(default=100, ge=10, le=1000)
+    max_depth: int | None = Field(default=None, ge=1, le=64)
+    learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
+    random_state: int = Field(default=42, ge=0, le=2**32 - 1)
 
 
 class CounterfactualRequest(_FeatureSelectionRequestModel):
@@ -3172,27 +3346,28 @@ class PDPRequest(_FeatureSelectionRequestModel):
 
 
 @app.post("/api/time-dependent-importance")
-async def time_dependent_importance(request_model: TimeDependentImportanceRequest) -> dict[str, Any]:
+async def time_dependent_importance(request_model: TimeDependentImportanceRequest, request: Request) -> dict[str, Any]:
     try:
         from survival_toolkit.ml_models import compute_time_dependent_importance
         from survival_toolkit.plots import build_time_dependent_importance_figure
 
         stored = _get_stored_dataset(request_model.dataset_id)
-        _reject_survival_outcome_feature_columns(
-            stored,
-            [*request_model.features, *request_model.categorical_features],
-            time_column=request_model.time_column,
-            event_column=request_model.event_column,
-            event_positive_value=request_model.event_positive_value,
-            context="time-dependent importance inputs",
-        )
-        _reject_outcome_informed_columns(
-            stored,
-            [*request_model.features, *request_model.categorical_features],
-            context="time-dependent importance inputs",
-        )
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                [*request_model.features, *request_model.categorical_features],
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="time-dependent importance inputs",
+            )
+            _reject_outcome_informed_columns(
+                stored,
+                [*request_model.features, *request_model.categorical_features],
+                context="time-dependent importance inputs",
+            )
             result = compute_time_dependent_importance(
                 stored.dataframe,
                 time_column=request_model.time_column,
@@ -3201,37 +3376,43 @@ async def time_dependent_importance(request_model: TimeDependentImportanceReques
                 features=request_model.features,
                 categorical_features=request_model.categorical_features,
                 eval_times=request_model.eval_times,
+                model_type=request_model.model_type,
+                n_estimators=request_model.n_estimators,
+                max_depth=request_model.max_depth,
+                learning_rate=request_model.learning_rate,
+                random_state=request_model.random_state,
             )
             figure = build_time_dependent_importance_figure(result)
             return _attach_dataset_hash({"analysis": result, "figure": figure}, stored)
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
 
 @app.post("/api/counterfactual")
-async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]:
+async def counterfactual(request_model: CounterfactualRequest, request: Request) -> dict[str, Any]:
     try:
         from survival_toolkit.ml_models import counterfactual_survival
 
         stored = _get_stored_dataset(request_model.dataset_id)
-        _reject_survival_outcome_feature_columns(
-            stored,
-            [*request_model.features, *request_model.categorical_features, request_model.target_feature],
-            time_column=request_model.time_column,
-            event_column=request_model.event_column,
-            event_positive_value=request_model.event_positive_value,
-            context="counterfactual analysis",
-        )
-        _reject_outcome_informed_columns(
-            stored,
-            [*request_model.features, *request_model.categorical_features, request_model.target_feature],
-            context="counterfactual analysis",
-        )
         request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                [*request_model.features, *request_model.categorical_features, request_model.target_feature],
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="counterfactual analysis",
+            )
+            _reject_outcome_informed_columns(
+                stored,
+                [*request_model.features, *request_model.categorical_features, request_model.target_feature],
+                context="counterfactual analysis",
+            )
             artifact = _get_ml_artifact(request_model.dataset_id, request_config)
             analysis = counterfactual_survival(
                 stored.dataframe,
@@ -3261,13 +3442,13 @@ async def counterfactual(request_model: CounterfactualRequest) -> dict[str, Any]
             )
             return _attach_dataset_hash({"analysis": analysis, "request_config": request_config}, stored)
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
 
 @app.post("/api/pdp")
-async def pdp(request_model: PDPRequest) -> dict[str, Any]:
+async def pdp(request_model: PDPRequest, request: Request) -> dict[str, Any]:
     try:
         from survival_toolkit.ml_models import (
             compute_partial_dependence,
@@ -3278,22 +3459,23 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
 
         stored = _get_stored_dataset(request_model.dataset_id)
         df = stored.dataframe
-        _reject_survival_outcome_feature_columns(
-            stored,
-            [*request_model.features, *request_model.categorical_features, request_model.target_feature],
-            time_column=request_model.time_column,
-            event_column=request_model.event_column,
-            event_positive_value=request_model.event_positive_value,
-            context="partial dependence analysis",
-        )
-        _reject_outcome_informed_columns(
-            stored,
-            [*request_model.features, *request_model.categorical_features, request_model.target_feature],
-            context="partial dependence analysis",
-        )
         request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                [*request_model.features, *request_model.categorical_features, request_model.target_feature],
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="partial dependence analysis",
+            )
+            _reject_outcome_informed_columns(
+                stored,
+                [*request_model.features, *request_model.categorical_features, request_model.target_feature],
+                context="partial dependence analysis",
+            )
             trained = _get_ml_artifact(request_model.dataset_id, request_config)
             artifact_reused = trained is not None
             if trained is None:
@@ -3344,6 +3526,6 @@ async def pdp(request_model: PDPRequest) -> dict[str, Any]:
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run)
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)

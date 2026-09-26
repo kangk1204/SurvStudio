@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "survival-toolkit"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local-first survival analysis dashboard with optional ML/DL tools"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -38,6 +38,8 @@ dl = [
 e2e = [
   "playwright>=1.52.0",
 ]
+# Every runtime feature (formats, ML, DL, and kaleido for rendering figures to PNG/SVG
+# from Python). Test tools live in dev / e2e.
 all = [
   "openpyxl>=3.1.5",
   "pyarrow>=17.0.0",
@@ -45,12 +47,8 @@ all = [
   "scikit-learn>=1.4.0",
   "scikit-survival>=0.23.0",
   "shap>=0.45.0",
-  "tomli>=2.0.1; python_version < '3.11'",
   "torch>=2.0.0",
-  "httpx>=0.28.1",
   "kaleido>=0.2.1",
-  "playwright>=1.52.0",
-  "pytest>=8.3.5",
 ]
 dev = [
   "httpx>=0.28.1",
@@ -60,13 +58,15 @@ dev = [
   "pytest>=8.3.5",
   "scikit-survival>=0.23.0",
   "shap>=0.45.0",
-  "tomli>=2.0.1; python_version < '3.11'",
   "torch>=2.0.0",
   "xlrd>=2.0.1",
 ]
 
 [project.scripts]
 survival-toolkit = "survival_toolkit.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "survival_toolkit.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
