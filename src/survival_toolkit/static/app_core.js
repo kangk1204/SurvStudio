@@ -10,6 +10,8 @@ const appState = {
   signature: null,
   ml: null,
   dl: null,
+  markers: null,
+  markerValidation: null,
   isFilePreview: window.location.protocol === "file:",
   apiBase: window.location.protocol === "file:" ? "http://127.0.0.1:8000" : "",
   historySyncPaused: false,
@@ -36,6 +38,8 @@ const appState = {
     signature: 0,
     ml: 0,
     dl: 0,
+    markers: 0,
+    markerValidation: 0,
     dataset: 0,
     derive: 0,
   },
@@ -175,6 +179,34 @@ const refs = {
   coxPlot: document.getElementById("coxPlot"),
   coxMetaBanner: document.getElementById("coxMetaBanner"),
   coxPreviewLine: document.getElementById("coxPreviewLine"),
+  runMarkersButton: document.getElementById("runMarkersButton"),
+  downloadMarkersCsvButton: document.getElementById("downloadMarkersCsvButton"),
+  downloadMarkerRecipeButton: document.getElementById("downloadMarkerRecipeButton"),
+  downloadMarkersStabilityPngButton: document.getElementById("downloadMarkersStabilityPngButton"),
+  downloadMarkersRankPngButton: document.getElementById("downloadMarkersRankPngButton"),
+  selectAllMarkersButton: document.getElementById("selectAllMarkersButton"),
+  clearMarkersButton: document.getElementById("clearMarkersButton"),
+  markerSearchInput: document.getElementById("markerSearchInput"),
+  markerChecklist: document.getElementById("markerChecklist"),
+  markerClinicalSearchInput: document.getElementById("markerClinicalSearchInput"),
+  markerClinicalChecklist: document.getElementById("markerClinicalChecklist"),
+  markerSelectionLine: document.getElementById("markerSelectionLine"),
+  markerPermutations: document.getElementById("markerPermutations"),
+  markerResamples: document.getElementById("markerResamples"),
+  markerRandomSeed: document.getElementById("markerRandomSeed"),
+  markerNonlinearLens: document.getElementById("markerNonlinearLens"),
+  markersStabilityPlot: document.getElementById("markersStabilityPlot"),
+  markersMetaBanner: document.getElementById("markersMetaBanner"),
+  markersInsightBoard: document.getElementById("markersInsightBoard"),
+  markersRankPlot: document.getElementById("markersRankPlot"),
+  markersTableNote: document.getElementById("markersTableNote"),
+  markersTableShell: document.getElementById("markersTableShell"),
+  markerValidationSection: document.getElementById("markerValidationSection"),
+  markerValidationFile: document.getElementById("markerValidationFile"),
+  runMarkerValidationButton: document.getElementById("runMarkerValidationButton"),
+  markerValidationSummary: document.getElementById("markerValidationSummary"),
+  markerValidationPlot: document.getElementById("markerValidationPlot"),
+  markerValidationShell: document.getElementById("markerValidationShell"),
   coxResultsShell: document.getElementById("coxResultsShell"),
   coxDiagnosticsPlot: document.getElementById("coxDiagnosticsPlot"),
   coxDiagnosticsShell: document.getElementById("coxDiagnosticsShell"),
@@ -293,6 +325,7 @@ const refs = {
   dlMetaBanner: document.getElementById("dlMetaBanner"),
   dlInsightBoard: document.getElementById("dlInsightBoard"),
   runPredictiveCompareAllButton: document.getElementById("runPredictiveCompareAllButton"),
+  openPredictiveWorkbenchButton: document.getElementById("openPredictiveWorkbenchButton"),
   predictiveModelSelector: document.getElementById("predictiveModelSelector"),
   runPredictiveSelectedButton: document.getElementById("runPredictiveSelectedButton"),
   runPredictiveWorkbenchButton: document.getElementById("runPredictiveWorkbenchButton"),
@@ -556,7 +589,7 @@ function preferredResultMode(goal) {
   return "single";
 }
 
-const ANALYSIS_GOALS = ["km", "cox", "predictive", "tables", "ml", "dl"];
+const ANALYSIS_GOALS = ["km", "cox", "markers", "predictive", "tables", "ml", "dl"];
 
 function predictiveFamilyGoal() {
   return normalizedPredictiveFamily(runtime.predictiveFamily);
@@ -570,6 +603,7 @@ function goalLabel(goal) {
   return {
     km: "Kaplan-Meier",
     cox: "Cox PH",
+    markers: "Marker evaluation",
     predictive: "ML/DL Models",
     ml: "ML Models",
     dl: "Deep Learning",

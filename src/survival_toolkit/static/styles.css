@@ -2735,6 +2735,219 @@ tbody tr:hover td {
   margin-top: 8px;
 }
 
+/* ─── Markers tab ─── */
+
+.options-details {
+  margin: 0 0 16px;
+}
+
+.options-details > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--teal);
+}
+
+.options-details .toolbar-grid {
+  margin-top: 10px;
+}
+
+.marker-validation-section {
+  margin: 18px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--surface-info-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-info);
+}
+
+.marker-validation-section h3 {
+  margin: 0 0 4px;
+}
+
+.marker-validation-section .button-row {
+  align-items: center;
+  margin: 10px 0;
+}
+
+.marker-validation-section input[type="file"] {
+  width: auto;
+  height: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.marker-validation-headline {
+  margin: 8px 0;
+  font-weight: 600;
+}
+
+.design-check-link {
+  margin: 18px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+/* ─── Design check page ─── */
+
+.design-check {
+  display: grid;
+  gap: 16px;
+  max-width: 980px;
+  margin: 24px auto;
+  padding: 0 16px;
+}
+
+.design-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.design-cohorts,
+.design-practices {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.design-cohorts legend,
+.design-practices legend {
+  padding: 0 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.design-cohorts legend small {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.cohort-rows {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cohort-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.design-practices {
+  display: grid;
+  gap: 4px;
+}
+
+.design-practices .toggle {
+  padding: 4px 8px;
+  font-size: 0.82rem;
+}
+
+.design-error {
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.design-estimates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.design-estimate {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--surface-subtle-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.design-estimate span {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.design-estimate strong {
+  font-family: "Fraunces", serif;
+  font-size: 1.6rem;
+}
+
+.design-estimate small {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.design-flags-title {
+  margin: 18px 0 8px;
+}
+
+.design-flags {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.design-flag {
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.design-flag p {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.design-flag-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.design-flag-remedy {
+  color: var(--state-ready-text);
+}
+
+.design-flag-high {
+  border-color: rgba(var(--accent-rgb), 0.3);
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+.design-flag-high .design-flag-badge {
+  color: var(--accent);
+}
+
+.design-flag-moderate {
+  border-color: var(--state-warning-border);
+  background: var(--state-warning-bg);
+}
+
+.design-flag-moderate .design-flag-badge {
+  color: var(--state-warning-text);
+}
+
+.design-flag-info .design-flag-badge {
+  color: var(--muted);
+}
+
+.design-map-note {
+  margin-top: 12px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 /* ─── Utility ─── */
 
 .hidden {

@@ -111,6 +111,7 @@ function refreshVariableSelections() {
   renderChecklist(refs.cohortVariableChecklist, availableCovariates, previousTableVars.length ? previousTableVars : availableCovariates.slice(0, 6));
   const numericOptions = state.dataset.numeric_columns.filter((c) => !isSurvivalOutcomeLikeColumn(c));
   renderSelect(refs.deriveSource, numericOptions, { selected: numericOptions.includes(refs.deriveSource.value) ? refs.deriveSource.value : numericOptions[0] || null });
+  refreshMarkerSelections();
   renderSharedFeatureSummary();
   renderCoxPreviewLine();
 }
@@ -235,8 +236,8 @@ function dlModelLabel(modelType) {
     deepsurv: "DeepSurv",
     deephit: "DeepHit",
     mtlr: "Neural MTLR",
-    transformer: "Survival Transformer",
-    vae: "Survival VAE",
+    transformer: "Survival Transformer (experimental)",
+    vae: "Survival VAE (experimental)",
   };
   return labels[String(modelType || "").toLowerCase()] || String(modelType || "deep model");
 }
@@ -584,6 +585,7 @@ function syncDownloadButtonAvailability() {
   if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !dlComparisonPlotCurrent;
   if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !dlComparisonPlotCurrent;
   setDlManuscriptDownloadsEnabled(Boolean(currentDl?.analysis?.manuscript_tables?.model_performance_table?.length));
+  syncMarkerDownloadButtons();
 }
 
 function endpointReadinessMessage() {
@@ -612,7 +614,9 @@ function syncAnalysisRunButtonAvailability() {
   const hasCoxCovariates = coxCovariateCount > 0;
   const hasSharedFeatures = sharedFeatureCount > 0;
   const hasTableVariables = tableVariableCount > 0;
-  const signatureFeatureMessage = "Select at least one covariate to search for signatures.";
+  const signatureFeatureMessage = "Select at least one marker to search for cut-point combinations.";
+  const markerCount = selectedCheckboxValues(refs.markerChecklist).length;
+  const hasMarkers = markerCount > 0;
   const coxFeatureMessage = "Select at least one covariate for the Cox model.";
   const sharedFeatureMessage = "Select at least one shared ML/DL model feature.";
   const tableVariableMessage = "Select at least one variable for the cohort table.";
@@ -628,8 +632,13 @@ function syncAnalysisRunButtonAvailability() {
   );
   setActionDisabledState(
     refs.runSignatureSearchButton,
-    !endpointReady || !hasCoxCovariates || isScopeBusy("km"),
-    !endpointReady ? readyMessage : (!hasCoxCovariates ? signatureFeatureMessage : ""),
+    !endpointReady || !hasMarkers || isScopeBusy("km"),
+    !endpointReady ? readyMessage : (!hasMarkers ? signatureFeatureMessage : ""),
+  );
+  setActionDisabledState(
+    refs.runMarkersButton,
+    !endpointReady || !hasMarkers || isScopeBusy("markers"),
+    !endpointReady ? readyMessage : (!hasMarkers ? "Choose at least one marker." : ""),
   );
   setActionDisabledState(
     refs.runCoxButton,
@@ -806,6 +815,7 @@ function syncBenchmarkWorkbenchVisibility() {
   refs.benchmarkComparisonShell?.closest(".table-card")?.classList.toggle("hidden", workbenchOpen);
   refs.benchmarkWorkbench?.classList.toggle("hidden", !workbenchOpen);
   refs.runPredictiveCompareAllButton?.classList.toggle("hidden", workbenchOpen);
+  refs.openPredictiveWorkbenchButton?.classList.toggle("hidden", workbenchOpen);
   refs.mlModelType?.closest(".model-choice-field")?.classList.toggle("hidden", workbenchOpen);
   refs.dlModelType?.closest(".model-choice-field")?.classList.toggle("hidden", workbenchOpen);
   refs.runCompareButton?.classList.toggle("hidden", workbenchOpen);
@@ -843,7 +853,7 @@ function renderPredictiveWorkbench() {
   if (refs.predictiveActionStatusText) {
     refs.predictiveActionStatusText.textContent = runtime.workbenchRevealed
       ? `Train ${selectedModel.label} directly with the controls below.`
-      : "Runs all 8 models (RSF, GBS, LASSO-Cox, DeepSurv, DeepHit, MTLR, Transformer, VAE) and ranks them by C-index. Results appear in the Unified Leaderboard below. Click any result to open that model\u2019s controls.";
+      : "Fits every model on the same splits and ranks them by C-index. Click a result to tune that model.";
   }
   if (refs.runPredictiveSelectedButton) {
     refs.runPredictiveSelectedButton.textContent = `Train ${selectedModel.label}`;

@@ -288,7 +288,8 @@ async function withLoading(button, action, scopeOverride = null, { swallowErrors
         : button === refs.runKmButton ? "km"
           : button === refs.runCoxButton ? "cox"
             : button === refs.runCohortTableButton ? "tables"
-              : null
+              : button === refs.runMarkersButton ? "markers"
+                : null
   );
   if (scope && isScopeBusy(scope)) return;
   if (scope) {
@@ -332,6 +333,7 @@ function getActiveRunButton() {
   if (tab === "km") return refs.runKmButton;
   if (tab === "cox") return refs.runCoxButton;
   if (tab === "tables") return refs.runCohortTableButton;
+  if (tab === "markers") return refs.runMarkersButton;
   if (tab === "ml") return refs.runMlButton;
   if (tab === "dl") return refs.runDlButton;
   if (tab === "benchmark") {
@@ -348,6 +350,7 @@ function getActiveRunAction() {
   if (tab === "km") return runKaplanMeier;
   if (tab === "cox") return runCox;
   if (tab === "tables") return runCohortTable;
+  if (tab === "markers") return runMarkerEvaluation;
   if (tab === "ml") return runMlModel;
   if (tab === "dl") return runDlModel;
   if (tab === "benchmark") {
@@ -459,6 +462,20 @@ function updateResultVisibility() {
   reveal(refs.coxMartingalePlot, coxMartingalePlot);
   reveal(refs.coxMartingalePlot?.closest(".table-card"), coxMartingalePlot);
 
+  // The prediction board appears once a model has run or a comparison is in progress.
+  const board = state.dataset && typeof benchmarkBoardState === "function" ? benchmarkBoardState() : null;
+  const hasPredictiveOutput = Boolean(state.ml || state.dl || board?.predictiveBusy || board?.visibleRows?.length || board?.staleFamilies?.length);
+  reveal(refs.benchmarkSummaryGrid, hasPredictiveOutput);
+  reveal(refs.benchmarkComparisonPlot?.closest(".table-card"), hasPredictiveOutput);
+  reveal(refs.benchmarkComparisonShell?.closest(".table-card"), hasPredictiveOutput);
+
+  const markerInsight = hasRenderedInsight(refs.markersInsightBoard);
+  const markerTable = hasRenderedTable(refs.markersTableShell);
+  reveal(refs.markersMetaBanner, markerInsight);
+  reveal(refs.markersInsightBoard, markerInsight);
+  reveal(refs.markersRankPlot, hasRenderedPlot(refs.markersRankPlot));
+  reveal(refs.markersTableShell?.closest(".table-card"), markerTable);
+
   ["ml", "dl"].forEach((goal) => {
     const isMl = goal === "ml";
     const resultMode = runtime.resultPreference?.[goal] || "single";
@@ -494,6 +511,7 @@ function resultAnchorFor(tabName, { mode = "single" } = {}) {
     cox: [refs.coxPlot, refs.coxDiagnosticsPlot, refs.coxMartingalePlot, refs.coxResultsShell],
     predictive: [refs.benchmarkSummaryGrid, refs.benchmarkComparisonPlot, refs.benchmarkComparisonShell, refs.benchmarkWorkbench],
     tables: [refs.cohortTableShell],
+    markers: [refs.markersStabilityPlot, refs.markersInsightBoard],
     ml: mode === "compare"
       ? [refs.mlComparisonPlot, refs.mlComparisonShell, refs.mlMetaBanner]
       : [refs.mlImportancePlot, refs.mlMetaBanner, refs.mlInsightBoard],
@@ -669,6 +687,9 @@ function initListeners() {
     runtime.predictiveWorkbenchIntent = "train";
     const selectedFamily = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey()).family;
     withLoading(refs.runPredictiveWorkbenchButton, runPredictiveSelectedModel, selectedFamily);
+  });
+  refs.openPredictiveWorkbenchButton?.addEventListener("click", () => {
+    reviewBenchmarkModel(currentPredictiveModelKey(), "single");
   });
   refs.closePredictiveWorkbenchButton?.addEventListener("click", () => {
     closePredictiveWorkbench();
@@ -1049,6 +1070,7 @@ function initListeners() {
     if (["text", "number"].includes(control.type)) control.addEventListener("input", onTrackedControlChange);
   });
   wireDownloads();
+  wireMarkerControls();
   initExportMenus();
 }
 

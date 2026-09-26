@@ -169,6 +169,8 @@
       `;
     }
 
+    const EXPERIMENTAL_MODELS = new Set(["Survival Transformer", "Survival VAE"]);
+
     function showBenchmarkStarterAction() {
       return true;
     }
@@ -884,7 +886,7 @@
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>
                 <td class="benchmark-review-column"><span class="benchmark-action-slot" data-benchmark-action-slot="${index}"></span></td>
-                <td class="benchmark-notes-column">${row.excluded && row.exclusionReason ? `<div class="benchmark-row-note">${escapeHtml(row.exclusionReason)}</div>` : ""}</td>
+                <td class="benchmark-notes-column">${row.excluded && row.exclusionReason ? `<div class="benchmark-row-note">${escapeHtml(row.exclusionReason)}</div>` : ""}${EXPERIMENTAL_MODELS.has(String(row.model)) ? '<div class="benchmark-row-note">Experimental architecture</div>' : ""}</td>
               </tr>
             `;
             }).join("")}

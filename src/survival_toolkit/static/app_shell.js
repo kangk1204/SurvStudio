@@ -69,6 +69,8 @@
     state.signature = null;
     state.ml = null;
     state.dl = null;
+    state.markers = null;
+    state.markerValidation = null;
     refs.workspace.classList.add("hidden");
     refs.landing.classList.remove("hidden", "fade-out");
     refs.datasetBadge.classList.add("hidden");

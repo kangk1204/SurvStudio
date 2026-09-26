@@ -46,6 +46,7 @@ _APP_JS_PARTS = (
     "app_predictive.js",
     "app_analyses.js",
     "app_models.js",
+    "app_markers.js",
     "app.js",
 )
 
@@ -249,7 +250,7 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert "Validation and runtime" in response.text
     assert 'class="table-card-head"' in response.text
     assert 'option value="lasso_cox"' in response.text
-    assert "screening comparison across Cox PH and, when available, LASSO-Cox, RSF, and GBS" in response.text
+    assert "screens Cox PH, LASSO-Cox, RSF and GBS on one shared evaluation" in response.text
     # The workspace has no partial-dependence/counterfactual UI, so the page must not advertise it.
     assert "Partial dependence and counterfactual analysis are available" not in response.text
     assert "Fresh datasets preselect up to 20 eligible model features for a faster first run." in response.text
@@ -266,10 +267,13 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'id="benchmarkWorkbench"' in response.text
     assert 'id="benchmarkWorkbenchCaption"' in response.text
     assert "Prediction models" in response.text
-    assert "Runs all 8 models" in response.text
+    assert "Fits every model on the same splits and ranks them by C-index." in response.text
+    assert 'id="openPredictiveWorkbenchButton"' in response.text
+    assert "Survival Transformer (experimental)" in response.text
+    assert "Survival VAE (experimental)" in response.text
     assert "Compare All Models" in response.text
     assert "Test one model" in response.text
-    assert "Unified C-index Chart" in response.text
+    assert "C-index by model" in response.text
 
 
 def test_frontend_tracks_workspace_controls_in_history_state() -> None:
@@ -352,7 +356,7 @@ def test_readme_states_current_scope_and_validation_limitations() -> None:
     assert "right-censored data" in readme
     assert "no left-truncated entry-time handling" in readme
     assert "no competing-risks analysis" in readme
-    assert 'no built-in "apply the locked model directly to an external cohort" workflow yet' in readme
+    assert "external validation in the interface covers locked marker models" in readme
     assert "Apparent C-index" in readme
     assert "Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time" in readme
     assert "Martingale residual trend plots" in readme
@@ -789,10 +793,11 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
     assert 'updateTimeColumnGuidance();' in text
     assert 'const coxCovariateCount = goalFeatureCount("cox");' in text
     assert 'const tableVariableCount = goalFeatureCount("tables");' in text
-    assert 'Select at least one covariate to search for signatures.' in text
+    assert 'Select at least one marker to search for cut-point combinations.' in text
     assert 'Select at least one covariate for the Cox model.' in text
     assert 'Select at least one variable for the cohort table.' in text
-    assert '!endpointReady || !hasCoxCovariates || isScopeBusy("km")' in text
+    assert '!endpointReady || !hasMarkers || isScopeBusy("km")' in text
+    assert '!endpointReady || !hasMarkers || isScopeBusy("markers")' in text
     assert '!endpointReady || !hasCoxCovariates || isScopeBusy("cox")' in text
     assert '!endpointReady || !hasTableVariables || isScopeBusy("tables")' in text
     assert 'cohortVariableSearchInput: document.getElementById("cohortVariableSearchInput"),' in text
@@ -6616,7 +6621,8 @@ def test_benchmark_frontend_normalizes_missing_family_labels_before_rendering() 
     assert 'const presentFamilies = [...new Set(board.visibleRows.map((row) => benchmarkRowFamilyMeta(row).familyLabel))];' in text
     assert '<td><span class="benchmark-family-pill family-${escapeHtml(familyMeta.familyTab)}">${escapeHtml(familyMeta.familyLabel)}</span></td>' in text
     assert '<td>${escapeHtml(formatValue(row.model))}</td>' in text
-    assert '<td class="benchmark-notes-column">${row.excluded && row.exclusionReason ? `<div class="benchmark-row-note">${escapeHtml(row.exclusionReason)}</div>` : ""}</td>' in text
+    assert '<td class="benchmark-notes-column">${row.excluded && row.exclusionReason ? `<div class="benchmark-row-note">${escapeHtml(row.exclusionReason)}</div>` : ""}${EXPERIMENTAL_MODELS.has(String(row.model)) ? \'<div class="benchmark-row-note">Experimental architecture</div>\' : ""}</td>' in text
+    assert 'const EXPERIMENTAL_MODELS = new Set(["Survival Transformer", "Survival VAE"]);' in text
 
 
 def test_runs_use_scope_override_for_loading_locks() -> None:
@@ -7092,3 +7098,66 @@ def test_exports_record_the_version_and_dataset_fingerprint() -> None:
     # Plain table exports without provenance stay data-only.
     assert app_module._export_provenance_notes(None) == []
     assert client.get("/api/health").json()["app_version"] == __version__
+
+
+def test_index_exposes_the_markers_tab_with_validation_and_exploratory_search() -> None:
+    response = client.get("/")
+    html = response.text
+
+    assert response.status_code == 200
+    assert '<script src="../static/app_markers.js?v=' in html
+    assert html.index("app_models.js") < html.index("app_markers.js") < html.index('src="../static/app.js')
+    assert 'data-tab="markers"' in html and 'id="panel-markers"' in html
+    for element_id in (
+        "runMarkersButton",
+        "markerChecklist",
+        "markerClinicalChecklist",
+        "markersStabilityPlot",
+        "markersRankPlot",
+        "markersTableShell",
+        "markerValidationFile",
+        "runMarkerValidationButton",
+        "downloadMarkerRecipeButton",
+    ):
+        assert f'id="{element_id}"' in html
+    assert 'data-run-status="markers"' in html
+    markers_panel = html[html.index('id="panel-markers"'):html.index("<!-- Cohort Table Panel -->")]
+    assert "Exploratory: cut-point combinations" in markers_panel
+    assert 'id="runSignatureSearchButton"' in markers_panel
+    assert 'href="/design-check"' in markers_panel
+    km_panel = html[html.index('id="panel-km"'):html.index('id="panel-cox"')]
+    assert "runSignatureSearchButton" not in km_panel
+
+
+def test_marker_frontend_runs_the_evaluation_and_validates_the_locked_model() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
+
+    assert "async function runMarkerEvaluation() {" in text
+    assert 'fetchJSON("/api/marker-evaluation", {' in text
+    assert 'fetchJSON("/api/marker-validation", {' in text
+    assert "body: JSON.stringify({ dataset_id: external.dataset_id, recipe })," in text
+    assert 'withLoading(refs.runMarkersButton, runMarkerEvaluation, "markers")' in text
+    assert 'if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];' in text
+    assert 'if (goal === "markers") {' in text
+    assert "markers: state.markers," in text
+    assert "refreshMarkerSelections();" in text
+    assert "syncMarkerDownloadButtons();" in text
+    assert "clearMarkerOutputs();" in text
+    assert 'invalidateRequestTokens(["markers", "markerValidation"]);' in text
+    assert "const candidateColumns = [...markers, ...clinical];" in text
+    assert "MARKER_TABLE_DISPLAY_LIMIT" in text
+
+
+def test_design_check_page_is_served_without_a_dataset() -> None:
+    response = client.get("/design-check")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+    assert '<script src="../static/design_check.js?v=' in response.text
+    for element_id in ("designForm", "candidateModels", "geneOnly", "headline", "selectionCohorts", "sealedCohorts", "designResult", "designFlags"):
+        assert f'id="{element_id}"' in response.text
+    script = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "design_check.js").read_text(encoding="utf-8")
+    assert 'fetch("/api/design-audit", {' in script
+    assert "textContent = flag.message;" in script
+    assert "innerHTML = `" not in script.split("function renderResult", 1)[1]
+

@@ -1400,7 +1400,8 @@ def build_marker_rank_figure(result: dict[str, Any], *, top: int = 25) -> dict[s
             font={"size": 14, "color": INK},
         )
     _marker_layout(fig, "Rank Uncertainty of the Strongest Markers", height=max(420, axis_layout["height"]), left=axis_layout["l"])
-    fig.update_xaxes(title="Rank across subsamples (1 = strongest)", **_COMMON_AXES)
+    highest = max((row[primary]["rank_interval"][1] for row in rows), default=1.0)
+    fig.update_xaxes(title="Rank across subsamples (1 = strongest)", range=[0.5, highest + 0.5], **_COMMON_AXES)
     fig.update_yaxes(automargin=True, tickmode="array", tickvals=labels, ticktext=display_labels, **_COMMON_AXES)
     return figure_to_json(fig)
 

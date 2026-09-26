@@ -1,33 +1,33 @@
 # SurvStudio
 
 SurvStudio is a local-first survival analysis workbench for single-event right-censored tabular data.
-The public UI is a guided five-step workflow: load data, confirm the endpoint, choose one analysis path, run it, then review the result.
+The interface is one workspace: set the outcome once, then use the tabs for survival curves, Cox models, marker evaluation, prediction models and Table 1. Results appear only after a run, each tab says whether its result still matches the settings, and exports sit in one menu per tab.
 
 It supports:
 - Kaplan-Meier curves and weighted log-rank tests
-- Cox proportional hazards models
-- optional machine-learning survival models
-- optional deep-learning survival models
+- Cox proportional hazards models with a preview of usable patients and events per parameter
+- honest marker evaluation: family-wise error control, stability across subsamples, added value over clinical covariates, and validation of the locked model in another cohort
+- a design check for studies that fit many models and keep the best, with no data needed
+- optional machine-learning and deep-learning survival models, compared on the same patient splits (the Transformer and VAE are experimental)
 - manuscript-oriented table export
-- one unified Predictive Models workspace for ML and DL screening
 
 ## Interface Preview
 
-These screenshots match the current guided UI in this repository and show the main manuscript-facing workflows.
+These screenshots show the main manuscript-facing workflows.
 
 <table>
   <tr>
     <td width="50%">
-      <img src="github_images/01_survstudio_main.png" alt="SurvStudio guided main screen" />
+      <img src="github_images/01_survstudio_main.png" alt="SurvStudio start screen" />
       <br />
-      <strong>Guided entry point</strong><br />
-      Load a cohort, confirm the endpoint, choose one analysis path, then review one result view at a time.
+      <strong>Start</strong><br />
+      Upload a cohort or open a sample; sample cohorts open with recommended settings.
     </td>
     <td width="50%">
-      <img src="github_images/02_analysis.png" alt="SurvStudio analysis selection screen" />
+      <img src="github_images/02_analysis.png" alt="SurvStudio marker evaluation screenshot" />
       <br />
-      <strong>Analysis selection</strong><br />
-      Classical workflows and the unified predictive workspace are separated so the UI stays focused.
+      <strong>Marker evaluation</strong><br />
+      Which candidate markers hold up after error control, resampling and adjustment for clinical covariates.
     </td>
   </tr>
   <tr>
@@ -81,7 +81,7 @@ This project is for users who have cohort data in a spreadsheet-like table and w
 - run standard survival analyses without writing much code
 - compare classical, ML, and DL survival models
 - export figures and tables for reports or manuscripts
-- keep one analysis visible at a time instead of juggling multiple panels
+- check which candidate markers hold up before claiming a signature
 
 This project is **not** a general survival-analysis platform for every survival setting.
 The current scope is:
@@ -90,34 +90,29 @@ The current scope is:
 - tabular cohorts
 - no left-truncated entry-time handling
 - no competing-risks analysis
-- no built-in "apply the locked model directly to an external cohort" workflow yet
+- external validation in the interface covers locked marker models; other models are validated by rerunning them on the external cohort
 
 ## What The Built-In Example Data Is
 
-The app includes four built-in example datasets:
+The start screen offers three sample cohorts; each opens with its recommended outcome, grouping and variable selections:
 
-1. `Synthetic Example`
-- a synthetic cohort generated inside the package
-- includes `os_months`, `os_event`, `pfs_months`, `pfs_event`
-- includes demographic, treatment, stage, and biomarker variables
-- useful for quick demos and testing
+1. `Lung cancer (TCGA-LUAD)`
+- a compact TCGA LUAD overall-survival table (489 patients) with clinical covariates
+- useful for a realistic demo with a real public dataset
 
-2. `TCGA LUAD (Real)`
-- a bundled public TCGA LUAD cohort curated from UCSC Xena
-- useful for a more realistic demo with a real public dataset
-
-3. `Upload-Ready TCGA`
-- a compact TCGA LUAD overall-survival table intended for immediate upload-style testing
-- useful when you want a smaller real cohort without the extra clinical columns
-
-4. `GBSG2 (Real)`
-- a real public breast-cancer recurrence dataset
+2. `Breast cancer (GBSG2)`
+- a real public breast-cancer recurrence dataset (686 patients)
 - useful for a fast end-to-end Kaplan-Meier, Cox, and ML smoke test with no missing values
 
+3. `Synthetic demo`
+- a synthetic cohort generated inside the package (360 patients)
+- includes `os_months`, `os_event`, `pfs_months`, `pfs_event`, demographic, treatment and stage variables, and two biomarkers for the Markers tab
+
+The fuller UCSC Xena TCGA LUAD table is still available from the API (`POST /api/load-tcga-example`).
+
 Real-data provenance:
-- `TCGA LUAD (Real)` is a bundled public LUAD cohort curated from UCSC Xena / TCGA for survival-workflow demonstration
-- `Upload-Ready TCGA` and the RNA top-100/top-500 upload files are compact derivatives of that same public TCGA LUAD workflow dataset
-- `GBSG2 (Real)` is a bundled public breast-cancer recurrence cohort aligned to the classic GBSG2 study workflow
+- the bundled TCGA LUAD tables are curated from UCSC Xena / TCGA for survival-workflow demonstration; the lung-cancer sample and the RNA top-100/top-500 upload files are compact derivatives of that public dataset
+- the breast-cancer sample is the public GBSG2 recurrence cohort aligned to the classic GBSG2 study workflow
 - study citations and file-level provenance notes are listed in [examples/README.md](examples/README.md)
 - users remain responsible for following the original data-source citation and reuse terms when redistributing derived outputs
 
@@ -453,7 +448,7 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-The app opens in the guided workflow by default. For predictive modeling, use the unified `Predictive Models` workspace to compare ML and DL models together or test one selected model at a time.
+The app opens on the start screen; after loading a cohort, set the outcome in the bar at the top and pick a tab. For predictive modeling, the `Prediction models` tab compares ML and DL models together or trains one selected model at a time. The design check for multi-algorithm signature studies is at `http://127.0.0.1:8000/design-check` and needs no data.
 
 Local-only request guard:
 - the server answers only requests addressed to `localhost`, `127.x.x.x`, `[::1]`, or the `--host` bind address, and refuses state-changing requests (uploads, analyses, shutdown) sent from other websites
@@ -488,22 +483,22 @@ If `python -m survival_toolkit` does not start the server, check:
 
 If this is your first time:
 
-1. Click `Synthetic Example` or `TCGA LUAD (Real)`
-2. Set:
-   - time column: for example `os_months`
-   - event column: for example `os_event`
-3. Start with:
-   - Kaplan-Meier
-   - Cohort Table
-   - Cox PH
-4. If needed, derive a group from a biomarker using:
+1. Click `Synthetic demo` or `Lung cancer (TCGA-LUAD)`; the outcome and a sensible grouping are filled in
+2. Check the outcome bar at the top:
+   - time: for example `os_months`
+   - event: for example `os_event`, with event value `1`
+3. Start with the tabs:
+   - Survival curves
+   - Table 1
+   - Cox model
+4. If needed, make groups from a numeric variable (Groups, Make groups) using:
    - median split
    - tertile split
    - quartile split
    - percentile split
    - extreme split
    - optimal cutpoint
-5. Move to ML or DL comparison only after the classical analysis makes sense
+5. Use the Markers tab to see which candidate markers hold up, and the Prediction models tab only after the classical analysis makes sense
 6. If you want to validate a file before opening the UI, run:
 
 ```bash
@@ -514,9 +509,8 @@ survival-toolkit inspect path/to/data.csv
 
 ### TCGA LUAD Workflow
 
-Best starting dataset choices:
-- `Upload-Ready TCGA`
-- `TCGA LUAD (Real)`
+Best starting dataset choice:
+- `Lung cancer (TCGA-LUAD)`
 
 Recommended study columns:
 - time column: `os_months`
@@ -525,12 +519,12 @@ Recommended study columns:
 - group column: `stage_group`
 
 Recommended first figures and tables:
-1. Kaplan-Meier by `stage_group`
-2. Cohort Table grouped by `stage_group`
-3. Cox PH with:
+1. Survival curves by `stage_group`
+2. Table 1 grouped by `stage_group`
+3. Cox model with:
    - covariates: `age`, `sex`, `stage_group`, `smoking_status`
    - categorical covariates: `sex`, `stage_group`, `smoking_status`
-4. ML comparison with:
+4. Prediction models comparison with:
    - features: `age`, `sex`, `stage_group`, `smoking_status`
    - categorical features: `sex`, `stage_group`, `smoking_status`
 5. DL smoke or comparison with the same feature set
@@ -544,7 +538,7 @@ Recommended manuscript outputs:
 ### GBSG2 Workflow
 
 Best starting dataset choice:
-- `GBSG2 (Real)`
+- `Breast cancer (GBSG2)`
 
 Recommended study columns:
 - time column: `rfs_days`
@@ -553,13 +547,13 @@ Recommended study columns:
 - group column: `horTh`
 
 Recommended first figures and tables:
-1. Kaplan-Meier by `horTh`
-2. Kaplan-Meier by `menostat`
-3. Cohort Table grouped by `horTh`
-4. Cox PH with:
+1. Survival curves by `horTh`
+2. Survival curves by `menostat`
+3. Table 1 grouped by `horTh`
+4. Cox model with:
    - covariates: `age`, `horTh`, `menostat`, `pnodes`, `tgrade`, `tsize`
    - categorical covariates: `horTh`, `menostat`, `tgrade`
-5. ML comparison with:
+5. Prediction models comparison with:
    - features: `age`, `horTh`, `menostat`, `pnodes`, `tgrade`, `tsize`
    - categorical features: `horTh`, `menostat`, `tgrade`
 
@@ -581,13 +575,14 @@ Recommended study columns:
 - group column: `stage` or `treatment`
 
 Recommended first figures and tables:
-1. Kaplan-Meier by `stage`
-2. Kaplan-Meier by `treatment`
-3. Cohort Table grouped by `stage`
-4. Cox PH with:
+1. Survival curves by `stage`
+2. Survival curves by `treatment`
+3. Table 1 grouped by `stage`
+4. Cox model with:
    - covariates: `age`, `sex`, `stage`, `treatment`, `biomarker_score`, `immune_index`
    - categorical covariates: `sex`, `stage`, `treatment`
-5. ML comparison with:
+5. Markers tab: `biomarker_score` and `immune_index` as markers, adjusted for `age`, `sex`, `stage` and `treatment`
+6. Prediction models comparison with:
    - features: `age`, `sex`, `stage`, `treatment`, `biomarker_score`, `immune_index`
    - categorical features: `sex`, `stage`, `treatment`
 
@@ -1023,20 +1018,24 @@ These outputs are useful, but should be interpreted carefully:
 
 You can save results directly from the dashboard.
 
-Available exports:
-- Kaplan-Meier:
+Available exports (each tab's `Export` menu):
+- Survival curves:
   - summary table as `CSV`
   - pairwise table as `CSV`
   - curve as `PNG`
   - curve as `SVG`
-- Cox PH:
+- Cox model:
   - results table as `CSV`
   - diagnostics table as `CSV`
   - forest plot as `PNG`
   - forest plot as `SVG`
-- Cohort Table:
+- Table 1:
   - table as `CSV`
   - table as `XLSX`
+- Markers:
+  - marker table as `CSV`
+  - locked model as `JSON` (for `validate_locked_recipe` or the in-app validation)
+  - stability and rank plots as `PNG`
 - ML and DL comparison:
   - comparison table as `CSV`
   - comparison plot as `PNG`
@@ -1095,13 +1094,13 @@ This makes it easier to keep multiple cohorts and endpoints organized in the sam
 ### Practical Save Check
 
 If you want to verify saving on your machine:
-1. load `GBSG2 (Real)` or `Upload-Ready TCGA`
-2. run Kaplan-Meier once
-3. click `PNG` or `SVG`
-4. run Cox PH once
-5. click `Results`
-6. run ML `Compare All`
-7. click one of the manuscript export buttons
+1. load `Breast cancer (GBSG2)` or `Lung cancer (TCGA-LUAD)`
+2. run Survival curves once
+3. open `Export` and choose `Plot (PNG)` or `Plot (SVG)`
+4. run the Cox model once
+5. open `Export` and choose `Hazard ratios (CSV)`
+6. in Prediction models, run `Compare All Models`
+7. open a model's `Export` menu and choose one of the manuscript tables
 
 If the browser download dialog is blocked, allow downloads for `http://127.0.0.1:8000`.
 
@@ -1156,7 +1155,7 @@ Then increase epochs or switch to repeated CV only after the single-run workflow
 
 - Cox PH currently reports an apparent C-index only. If you need bootstrap optimism correction or cross-validated Cox discrimination, run that validation outside the current dashboard workflow.
 - Standard unpenalized Cox PH is not the right tool for very wide `p >> n` settings. Use the ML-panel `LASSO-Cox` path for penalized predictive screening instead of forcing a classical Cox PH fit.
-- External-cohort validation in the web interface is currently a manual workflow: load the separate cohort, reproduce the endpoint and covariate specification, and rerun the analysis. Marker signatures can be validated on an external cohort from Python with `validate_locked_recipe` (see Prognostic Marker Evaluation).
+- External-cohort validation in the web interface covers the locked marker model (Markers tab, Validate in another cohort; the file needs the same column names). For Cox and prediction models, load the separate cohort, reproduce the endpoint and covariate specification, and rerun the analysis. From Python, `validate_locked_recipe` validates a locked marker model (see Prognostic Marker Evaluation).
 - Left truncation and competing risks are outside the current scope. In manuscript Methods, state explicitly that these workflows assume standard cause-specific survival with independent censoring and do not estimate cumulative incidence under competing events.
 - Martingale residual plots are available as a visual screening aid for continuous covariates, but SurvStudio does not yet implement richer Cox linearity tooling such as spline recommendation or automated term selection.
 

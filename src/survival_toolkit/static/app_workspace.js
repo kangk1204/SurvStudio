@@ -50,6 +50,19 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
     };
   }
 
+  if (goal === "markers") {
+    return {
+      ...base,
+      marker_columns: sortedStrings(requestConfig.marker_columns || []),
+      clinical_columns: sortedStrings(requestConfig.clinical_columns || []),
+      categorical_clinical: sortedStrings(requestConfig.categorical_clinical || []),
+      n_permutations: numberOrDefault(requestConfig.n_permutations, 1000),
+      n_resamples: numberOrDefault(requestConfig.n_resamples, 200),
+      random_seed: numberOrDefault(requestConfig.random_seed, 20260926),
+      nonlinear_lens: String(requestConfig.nonlinear_lens || "off"),
+    };
+  }
+
   if (goal === "ml") {
     const compareRun = String(requestConfig.model_type || "") === "compare";
     if (compareRun !== expectsCompare) return null;
@@ -157,6 +170,10 @@ function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) 
     });
   }
 
+  if (goal === "markers") {
+    return normalizedRequestConfig(goal, { ...base, ...markerRequestFields() });
+  }
+
   if (goal === "cox") {
     const { covariates, categoricalCovariates, strataColumns } = currentCoxSelections();
     return normalizedRequestConfig(goal, {
@@ -260,6 +277,7 @@ function currentGoalResult(goal) {
   const payload = {
     km: state.km,
     cox: state.cox,
+    markers: state.markers,
     ml: state.ml,
     dl: state.dl,
     tables: state.cohort,
@@ -298,6 +316,7 @@ function goalPayload(goal) {
   return {
     km: state.km,
     cox: state.cox,
+    markers: state.markers,
     ml: state.ml,
     dl: state.dl,
     tables: state.cohort,
@@ -550,6 +569,9 @@ function resizeVisiblePlotsNow() {
 function allPlotRefs() {
   return [
     refs.kmPlot,
+    refs.markersStabilityPlot,
+    refs.markersRankPlot,
+    refs.markerValidationPlot,
     refs.coxPlot,
     refs.coxDiagnosticsPlot,
     refs.coxMartingalePlot,
@@ -685,6 +707,12 @@ function captureControlSnapshot() {
     modelCategoricals: selectedCheckboxValues(refs.modelCategoricalChecklist),
     dlModelCategoricals: selectedCheckboxValues(refs.dlModelCategoricalChecklist),
     cohortVariables: selectedCheckboxValues(refs.cohortVariableChecklist),
+    markers: selectedCheckboxValues(refs.markerChecklist),
+    markerClinical: selectedCheckboxValues(refs.markerClinicalChecklist),
+    markerPermutations: refs.markerPermutations?.value || "",
+    markerResamples: refs.markerResamples?.value || "",
+    markerRandomSeed: refs.markerRandomSeed?.value || "",
+    markerNonlinearLens: refs.markerNonlinearLens?.value || "",
     mlModelType: refs.mlModelType?.value || "",
     mlNEstimators: refs.mlNEstimators?.value || "",
     mlLearningRate: refs.mlLearningRate?.value || "",
@@ -852,6 +880,13 @@ function applyControlSnapshot(snapshot) {
   syncModelCategoricalMirrors(refs.modelCategoricalChecklist);
   syncModelCategoricalMirrors(refs.dlModelCategoricalChecklist);
   setCheckedValues(refs.cohortVariableChecklist, snapshot.cohortVariables || []);
+  if (snapshot.markers) setCheckedValues(refs.markerChecklist, snapshot.markers);
+  if (snapshot.markerClinical) setCheckedValues(refs.markerClinicalChecklist, snapshot.markerClinical);
+  setInputValue(refs.markerPermutations, snapshot.markerPermutations || undefined);
+  setInputValue(refs.markerResamples, snapshot.markerResamples || undefined);
+  setInputValue(refs.markerRandomSeed, snapshot.markerRandomSeed || undefined);
+  setSelectValueIfPresent(refs.markerNonlinearLens, snapshot.markerNonlinearLens || undefined);
+  renderMarkerSelectionLine();
   syncCoxCovariateSelection();
   renderSharedFeatureSummary();
   updateDatasetBadge();

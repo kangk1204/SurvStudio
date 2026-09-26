@@ -312,6 +312,11 @@ function activateTab(tabName, { historyMode = "replace", focusTabButton = false,
       resizePlotIfDisplayed(refs.dlComparisonPlot);
     }
     if (resolvedTabName === "benchmark") resizePlotIfDisplayed(refs.benchmarkComparisonPlot);
+    if (resolvedTabName === "markers" && state.markers) {
+      resizePlotIfDisplayed(refs.markersStabilityPlot);
+      resizePlotIfDisplayed(refs.markersRankPlot);
+      resizePlotIfDisplayed(refs.markerValidationPlot);
+    }
   });
 }
 
@@ -344,6 +349,8 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
 
 function clearAnalysisOutputs() {
   invalidateRequestTokens(["km", "cox", "tables", "signature", "ml", "dl"]);
+  invalidateRequestTokens(["markers", "markerValidation"]);
+  clearMarkerOutputs();
   state.km = null;
   state.cox = null;
   state.cohort = null;
@@ -451,7 +458,7 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
     ? snapshot.groupColumn
     : null;
 
-  const discardedScopes = ["cox", "tables", "ml", "dl"].filter((scope) => isScopeBusy(scope));
+  const discardedScopes = ["cox", "markers", "tables", "ml", "dl"].filter((scope) => isScopeBusy(scope));
 
   state.dataset = payload;
   clearAnalysisOutputs();
@@ -482,7 +489,7 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
 }
 
 function hasCompletedResults() {
-  return Boolean(state.km || state.cox || state.cohort || state.signature || state.ml || state.dl);
+  return Boolean(state.km || state.cox || state.cohort || state.signature || state.markers || state.ml || state.dl);
 }
 
 function uploadEncodingNote(payload) {
@@ -865,8 +872,9 @@ function renderSignatureResult(analysis) {
 async function runSignatureSearch() {
   const base = currentBaseConfig();
   const requestToken = beginRequestToken("signature");
-  const candidateColumns = selectedCheckboxValues(refs.covariateChecklist);
-  if (!candidateColumns.length) throw new Error("Select at least one covariate to search for signatures.");
+  const { markers, clinical } = currentMarkerSelections();
+  const candidateColumns = [...markers, ...clinical];
+  if (!markers.length) throw new Error("Select at least one marker to search for cut-point combinations.");
   const requestedColumnName = validateDerivedColumnName(refs.deriveColumnName.value);
   validateMinGroupFraction(refs.signatureMinFraction);
   const preservedGroup = String(refs.groupColumn?.value || "");

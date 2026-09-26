@@ -90,8 +90,7 @@ def _open_predictive_workbench(page, model_key: str | None = None) -> None:
     page.locator('[data-tab="benchmark"]').click()
     _assert_tab_active(page, "benchmark")
     if page.locator("#benchmarkWorkbench").is_hidden():
-        page.locator("#benchmarkComparisonShell [data-benchmark-model]").wait_for(state="visible")
-        page.locator("#benchmarkComparisonShell [data-benchmark-model]").first.click()
+        page.locator("#openPredictiveWorkbenchButton").click()
         page.wait_for_function(
             "() => document.getElementById('benchmarkWorkbench') && !document.getElementById('benchmarkWorkbench').classList.contains('hidden')"
         )
@@ -156,14 +155,17 @@ def test_browser_downloads_km_summary_csv_and_png(browser_server: str, tmp_path:
                 "!document.getElementById('downloadKmSummaryButton').disabled && !document.getElementById('downloadKmPngButton').disabled"
             )
 
+            page.locator("#panel-km .export-menu > summary").click()
             with page.expect_download() as summary_info:
                 page.locator("#downloadKmSummaryButton").click()
+            page.wait_for_function("!document.querySelector('#panel-km .export-menu').open")
             summary_download = summary_info.value
             summary_path = tmp_path / (summary_download.suggested_filename or "km_summary.csv")
             summary_download.save_as(summary_path)
             assert summary_path.exists()
             assert summary_path.stat().st_size > 0
 
+            page.locator("#panel-km .export-menu > summary").click()
             with page.expect_download() as png_info:
                 page.locator("#downloadKmPngButton").click()
             png_download = png_info.value
@@ -997,6 +999,9 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadGbsg2Button").click()
             _wait_for_workspace(page)
+            # The sample opens grouped by hormone therapy; derived groups start from Overall only.
+            page.wait_for_function("document.getElementById('groupColumn').value === 'horTh'")
+            page.locator("#groupColumn").select_option("")
             page.locator('[data-tab="km"]').click()
             page.wait_for_function(
                 "document.querySelector('[data-tab=\"km\"]').getAttribute('aria-selected') === 'true'"
@@ -1045,7 +1050,8 @@ def test_browser_optimal_cutpoint_summary_wraps_long_derived_column(browser_serv
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("pack_years_smoked")
             page.locator("#deriveMethod").select_option("optimal_cutpoint")
-            page.locator("#deriveButton").click(force=True)
+            # The workspace scrolls smoothly after loading, so click the element itself rather than a screen position.
+            page.evaluate("() => document.getElementById('deriveButton').click()")
             page.wait_for_function(
                 "document.getElementById('deriveSummary').textContent.includes('Derived column')"
             )
@@ -1440,6 +1446,9 @@ def test_browser_late_derive_response_does_not_replace_newer_dataset(browser_ser
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadGbsg2Button").click()
             _wait_for_workspace(page)
+            # The sample opens grouped by hormone therapy; derived groups start from Overall only.
+            page.wait_for_function("document.getElementById('groupColumn').value === 'horTh'")
+            page.locator("#groupColumn").select_option("")
             page.evaluate(
                 """() => {
                   const originalFetch = window.fetch;
@@ -1623,3 +1632,73 @@ def test_browser_cohort_table_sends_outcome_columns_and_shows_notes(browser_serv
         if _is_playwright_environment_error(exc):
             pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
         raise
+
+
+def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _wait_for_workspace(page)
+            page.locator('[data-tab="markers"]').click()
+            _assert_tab_active(page, "markers")
+            assert page.locator("#markerChecklist input[value='biomarker_score']").is_checked()
+            assert page.locator("#markerClinicalChecklist input[value='age']").is_checked()
+            assert "judged on added value" in page.locator("#markerSelectionLine").inner_text()
+            assert page.locator("#markersTableShell").locator("xpath=ancestor::div[contains(@class,'table-card')]").is_hidden()
+
+            page.locator("#panel-markers .options-details > summary").click()
+            page.locator("#markerPermutations").fill("99")
+            page.locator("#markerResamples").fill("10")
+            page.locator("#runMarkersButton").click()
+            page.wait_for_function("!document.getElementById('downloadMarkersCsvButton').disabled", timeout=120000)
+
+            assert "biomarker_score" in page.locator("#markersTableShell").inner_text()
+            assert page.locator('[data-run-status="markers"]').inner_text() == "Up to date"
+            assert page.locator("#markerValidationSection").is_visible()
+            assert page.locator("#runMarkerValidationButton").is_enabled()
+
+            page.locator("#markerChecklist input[value='immune_index']").uncheck()
+            page.wait_for_function("document.querySelector('[data-run-status=\"markers\"]').textContent === 'Settings changed'")
+            assert page.locator("#downloadMarkersCsvButton").is_disabled()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_design_check_page_flags_a_single_cohort_best_of_101_design(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1280, "height": 1000})
+
+            page.goto(f"{browser_server}/design-check", wait_until="networkidle")
+            page.locator("#trainingInSelection").check()
+            page.locator("#checkDesignButton").click()
+            page.locator("#designResult").wait_for(state="visible")
+
+            flags = page.locator("#designFlags").inner_text()
+            assert "No cohort was kept out of the choice" in flags
+            assert "The training cohort's apparent C-index entered the choice" in flags
+            assert page.locator("#optimismValue").inner_text().startswith("+0.")
+
+            page.locator("[data-remove-cohort]").click()
+            page.locator("#checkDesignButton").click()
+            page.wait_for_function("document.getElementById('designError').textContent.includes('Add at least one cohort')")
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+

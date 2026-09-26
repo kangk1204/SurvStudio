@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SurvStudio · Design check</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23c94e33'/><text x='50' y='68' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='44' fill='white'>SA</text></svg>" />
+    <meta name="description" content="Check how much a best-of-many-models prognostic signature study is likely to overstate its C-index, and which practices make it unreliable." />
+    <link rel="stylesheet" href="../static/styles.css?v={{ static_version }}" />
+    <script src="../static/design_check.js?v={{ static_version }}" defer></script>
+  </head>
+  <body class="design-check-page">
+    <header class="shell-header">
+      <a class="brand-line" href="/" style="text-decoration:none;color:inherit;">
+        <div class="brand-mark">S</div>
+        <h1>SurvStudio</h1>
+      </a>
+      <div class="header-right">
+        <a class="button ghost compact-btn" href="/">Back to analysis</a>
+      </div>
+    </header>
+
+    <main class="design-check">
+      <section class="workspace-card">
+        <div class="card-head">
+          <div class="card-head-left">
+            <h2>Design check for multi-algorithm signatures</h2>
+            <p class="card-subtitle">Many signatures are the best of tens to 101 fitted models. Describe how yours was chosen and reported to see how much its C-index is likely overstated, and what to change.</p>
+          </div>
+        </div>
+
+        <form id="designForm" class="design-form" novalidate>
+          <div class="design-form-grid">
+            <label class="config-field">
+              <span>Candidate models compared</span>
+              <input id="candidateModels" type="number" min="2" step="1" value="101" required />
+            </label>
+            <label class="config-field">
+              <span>Model inputs</span>
+              <select id="geneOnly">
+                <option value="true" selected>Genes only</option>
+                <option value="false">Genes and clinical covariates</option>
+              </select>
+            </label>
+            <label class="config-field">
+              <span>C-index presented as the result</span>
+              <select id="headline">
+                <option value="validation" selected>Mean over the cohorts used to choose the model</option>
+                <option value="average including training">Mean including the training cohort</option>
+                <option value="training">Training cohort</option>
+                <option value="sealed">A cohort never used for the choice</option>
+              </select>
+            </label>
+          </div>
+
+          <fieldset class="design-cohorts">
+            <legend>Cohorts whose C-index was used to choose the model <small>(not the training cohort)</small></legend>
+            <div id="selectionCohorts" class="cohort-rows"></div>
+            <button class="button ghost compact-btn" type="button" data-add-cohort="selectionCohorts">Add cohort</button>
+          </fieldset>
+
+          <fieldset class="design-cohorts">
+            <legend>Sealed cohorts <small>(never used to choose, pre-select or tune anything)</small></legend>
+            <div id="sealedCohorts" class="cohort-rows"></div>
+            <button class="button ghost compact-btn" type="button" data-add-cohort="sealedCohorts">Add cohort</button>
+          </fieldset>
+
+          <fieldset class="design-practices">
+            <legend>Practices</legend>
+            <label class="toggle"><input id="trainingInSelection" type="checkbox" /> <span>The training cohort's C-index was part of the choice</span></label>
+            <label class="toggle"><input id="prefilterLeak" type="checkbox" /> <span>Validation-cohort outcomes were used to pre-select genes</span></label>
+            <label class="toggle"><input id="refitInValidation" type="checkbox" /> <span>Coefficients or cut-offs were re-estimated in validation cohorts</span></label>
+            <label class="toggle"><input id="cutoffPerCohort" type="checkbox" /> <span>Risk-group cut-offs were chosen within each cohort</span></label>
+            <label class="toggle"><input id="comparedWithClinical" type="checkbox" /> <span>The signature was compared with a clinical-only model</span></label>
+          </fieldset>
+
+          <div class="button-row">
+            <button class="button primary" id="checkDesignButton" type="submit">Check design</button>
+          </div>
+          <p class="design-error hidden" id="designError" role="alert"></p>
+        </form>
+      </section>
+
+      <section class="workspace-card hidden" id="designResult" aria-live="polite">
+        <div class="design-estimates">
+          <div class="design-estimate">
+            <span>Expected overstatement of the presented C-index</span>
+            <strong id="optimismValue"></strong>
+            <small id="optimismNote"></small>
+          </div>
+          <div class="design-estimate">
+            <span>Expected loss from picking the wrong model</span>
+            <strong id="regretValue"></strong>
+            <small id="regretNote"></small>
+          </div>
+        </div>
+        <h3 class="design-flags-title">What to change</h3>
+        <ul class="design-flags" id="designFlags"></ul>
+        <p class="design-map-note" id="designMapNote"></p>
+      </section>
+    </main>
+  </body>
+</html>

@@ -17,7 +17,7 @@ function setPanelResultMode(panel, mode = "idle") {
 
 function runScopeForGoal(goal) {
   if (goal === "predictive") return isScopeBusy("predictive") ? "predictive" : predictiveFamilyGoal();
-  if (["km", "cox", "ml", "dl", "tables"].includes(goal)) return goal;
+  if (["km", "cox", "markers", "ml", "dl", "tables"].includes(goal)) return goal;
   return null;
 }
 
@@ -58,6 +58,7 @@ function buttonsForScope(scope) {
     ];
   }
   if (scope === "tables") return [refs.runCohortTableButton];
+  if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];
   return [];
 }
 
@@ -689,6 +690,8 @@ function searchControlForChecklist(container) {
   if (container === refs.categoricalChecklist) return refs.categoricalSearchInput;
   if (container === refs.strataChecklist) return refs.strataSearchInput;
   if (container === refs.cohortVariableChecklist) return refs.cohortVariableSearchInput;
+  if (container === refs.markerChecklist) return refs.markerSearchInput;
+  if (container === refs.markerClinicalChecklist) return refs.markerClinicalSearchInput;
   return null;
 }
 

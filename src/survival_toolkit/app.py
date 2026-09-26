@@ -2404,6 +2404,13 @@ async def index(request: Request) -> HTMLResponse:
     return response
 
 
+@app.get("/design-check", response_class=HTMLResponse)
+async def design_check_page(request: Request) -> HTMLResponse:
+    response = templates.TemplateResponse(request, "design_check.html", {"static_version": _static_asset_version()})
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return response
+
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     return {

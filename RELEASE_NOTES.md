@@ -1,6 +1,17 @@
 # Release Notes
 
-## Unreleased — Prognostic marker evaluation (Python API)
+## Unreleased — Prognostic marker evaluation, design check, and a simpler interface
+
+### Interface
+
+- One workspace replaces the guided and expert modes. The outcome is set once in a one-line bar; grouping settings appear only on the Survival curves and Table 1 tabs; tab names are plain (Survival curves, Cox model, Markers, Prediction models, Table 1, Data).
+- Sample cohorts open with their recommended outcome, grouping and variable selections, so the preset bar and the auto-detection banner are gone. The landing page offers three samples (lung cancer, breast cancer, synthetic).
+- Result sections stay hidden until a run, each tab exports from one menu, and a status next to each Run button says whether the result is up to date, running, or out of date after a settings change.
+- Interpretation panels show the headline, key numbers and the first two cautions; the rest folds under "More detail".
+- The Cox tab previews usable patients, dropped rows, parameters and events per parameter before fitting.
+- New Markers tab: the honest marker evaluation with stability and rank-uncertainty plots, the marker table, export of the locked model as JSON, and validation of the locked model on another cohort file. The outcome-informed cut-point combination search moved here as an exploratory option and now searches the selected markers and clinical covariates.
+- New design-check page (`/design-check`, no data needed) for studies that fit many models and keep the best.
+- Prediction models: a "Train one model" entry next to Compare All, results hidden until a run, and the Survival Transformer and VAE labelled experimental.
 
 ### New
 
@@ -9,7 +20,8 @@
 - `survival_toolkit.marker_evaluation.validate_locked_recipe`: applies a SHA-256-locked signature unchanged to an external cohort. It reports the C-index with a bootstrap CI, the gain over the clinical-only model, the calibration slope, observed/expected risk, the Brier score and skill, and a Holm-adjusted replication test per marker.
 - README: a Prognostic Marker Evaluation section with a runnable example.
 
-The web interface does not expose the marker evaluation yet.
+- `survival_toolkit.design_audit.audit_design`: places a multi-algorithm study design (number and size of selection cohorts, genes only or with clinical covariates, number of candidates, training C-index in the choice, headline C-index) on the benchmark pilot's simulation map and returns the expected optimism of the presented C-index, the expected regret of the choice, and flagged practices with remedies.
+- API: `POST /api/marker-evaluation`, `POST /api/marker-validation` and `POST /api/design-audit`.
 
 ## 0.2.0 — 2026-09-26 — Full code review
 

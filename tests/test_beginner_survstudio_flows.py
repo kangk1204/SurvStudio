@@ -125,8 +125,7 @@ def _open_predictive_workbench(page, model_key: str | None = None) -> None:
     page.locator('[data-tab="benchmark"]').click()
     _assert_tab_active(page, "benchmark")
     if page.locator("#benchmarkWorkbench").is_hidden():
-        page.locator("#benchmarkSummaryGrid [data-benchmark-model]").wait_for(state="visible")
-        page.locator("#benchmarkSummaryGrid [data-benchmark-model]").click()
+        page.locator("#openPredictiveWorkbenchButton").click()
         page.wait_for_function(
             "() => document.getElementById('benchmarkWorkbench') && !document.getElementById('benchmarkWorkbench').classList.contains('hidden')"
         )

@@ -18,6 +18,7 @@
     <script src="../static/app_predictive.js?v={{ static_version }}" defer></script>
     <script src="../static/app_analyses.js?v={{ static_version }}" defer></script>
     <script src="../static/app_models.js?v={{ static_version }}" defer></script>
+    <script src="../static/app_markers.js?v={{ static_version }}" defer></script>
     <script src="../static/app.js?v={{ static_version }}" defer></script>
   </head>
   <body>
@@ -108,6 +109,13 @@
             </div>
             <strong>Cox + ML/DL</strong>
             <span>Cox PH, Random Forest, Gradient Boosting, DeepSurv, Transformers</span>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon fc-cox">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="9" cy="17" r="2"/><path d="M8 7l8 1M10 15l7-6"/></svg>
+            </div>
+            <strong>Marker evaluation</strong>
+            <span>Which markers hold up, with error control, stability and external validation. <a href="/design-check">Check a study design</a> without data.</span>
           </div>
           <div class="feature-card">
             <div class="feature-icon fc-table">
@@ -244,6 +252,11 @@
           Cox model
           <span class="tab-desc">Risk factors</span>
         </button>
+        <button class="tab-button" type="button" data-tab="markers" role="tab" id="tab-markers" aria-selected="false" aria-controls="panel-markers" tabindex="-1">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="9" cy="17" r="2"/><path d="M8 7l8 1M10 15l7-6"/></svg></span>
+          Markers
+          <span class="tab-desc">Honest marker evaluation</span>
+        </button>
         <button class="tab-button" type="button" data-tab="ml" role="tab" id="tab-ml" aria-selected="false" aria-controls="panel-ml" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg></span>
           ML Models
@@ -321,34 +334,6 @@
             </label>
           </div>
 
-          <details class="signature-details">
-            <summary class="signature-toggle">
-              <span>Auto-discover Signature</span>
-              <small>Feature combination search with bootstrap &amp; permutation validation</small>
-            </summary>
-            <div class="toolbar-grid signature-toolbar">
-              <label><span>Max depth</span><input id="signatureMaxDepth" type="number" min="1" max="4" step="1" value="3" /></label>
-              <label><span>Min group frac</span><input id="signatureMinFraction" type="number" min="0.03" max="0.44" step="0.01" value="0.1" /></label>
-              <label><span>Top K</span><input id="signatureTopK" type="number" min="3" max="50" step="1" value="15" /></label>
-              <label><span>Bootstrap iter</span><input id="signatureBootstrapIterations" type="number" min="0" max="120" step="1" value="30" /></label>
-              <label><span>Permutation iter</span><input id="signaturePermutationIterations" type="number" min="0" max="400" step="10" value="120" /></label>
-              <label><span>Validation iter</span><input id="signatureValidationIterations" type="number" min="0" max="80" step="1" value="12" /></label>
-              <label><span>Validation frac</span><input id="signatureValidationFraction" type="number" min="0.2" max="0.6" step="0.05" value="0.35" /></label>
-              <label><span>Alpha</span><input id="signatureSignificanceLevel" type="number" min="0.005" max="0.2" step="0.005" value="0.05" /></label>
-              <label><span>Operator</span>
-                <select id="signatureOperator">
-                  <option value="mixed">Mixed (AND + OR)</option>
-                  <option value="and">AND only</option>
-                  <option value="or">OR only</option>
-                </select>
-              </label>
-              <label><span>Seed</span><input id="signatureRandomSeed" type="number" min="0" step="1" value="20260311" /></label>
-              <div class="button-row compact">
-                <button class="button ghost" id="runSignatureSearchButton">Discover</button>
-                <button class="button ghost" id="downloadSignatureButton" disabled>Signature CSV</button>
-              </div>
-            </div>
-          </details>
 
           <div class="plot-shell" id="kmPlot">
             <div class="empty-state plot-empty">
@@ -365,8 +350,6 @@
             <div class="table-card"><h3>KM Summary</h3><div class="table-shell" id="kmSummaryShell"><div class="empty-state">Run KM analysis.</div></div></div>
             <div class="table-card"><h3>Risk Table</h3><div class="table-shell" id="kmRiskShell"><div class="empty-state">Risk counts will appear here.</div></div></div>
             <div class="table-card full-width"><h3>Pairwise Comparisons</h3><div class="table-shell" id="kmPairwiseShell"><div class="empty-state">Pairwise tests appear with 2+ groups.</div></div></div>
-            <div class="table-card full-width"><h3>Signature Interpretation</h3><div class="insight-board compact" id="signatureInsightBoard"><div class="empty-state">Run auto-discovery to assess robustness.</div></div></div>
-            <div class="table-card full-width"><h3>Signature Ranking</h3><div class="table-shell" id="signatureShell"><div class="empty-state">Run auto-discovery to find feature combinations.</div></div></div>
           </div>
         </article>
       </section>
@@ -587,8 +570,7 @@
               <p class="control-section-note">Evaluation mode, CV folds/repeats, seed, and the locked test set are shared with Deep Learning so Compare All Models evaluates both families on the same row partitions.</p>
             </section>
           </div>
-          <div class="toolbar-note"><strong>Compare All</strong> is a screening comparison across Cox PH and, when available, LASSO-Cox, RSF, and GBS on one shared evaluation path. <strong>Run Analysis</strong> fits one RSF, GBS, or LASSO-Cox model and reports its own holdout/apparent evaluation mode in the result banner. <strong>Fast mode</strong> skips SHAP so RSF and GBS return faster on larger cohorts. If TreeExplainer is unavailable, SHAP falls back to an approximate screening view rather than a manuscript-ready attribution. <strong>SHAP safe mode</strong> can refit a reduced companion tree model when the encoded feature matrix is too wide, and that companion run is labeled explicitly.</div>
-          <div class="toolbar-note">As a rough interpretation guide, a C-index near <strong>0.50</strong> is chance-level ranking. Values above about <strong>0.70</strong> can be useful for screening, but external validation matters more than thresholds.</div>
+          <div class="toolbar-note"><strong>Compare All</strong> screens Cox PH, LASSO-Cox, RSF and GBS on one shared evaluation; <strong>Run Analysis</strong> fits one model. <strong>Fast mode</strong> skips SHAP. A C-index of <strong>0.50</strong> is chance; external validation matters more than any threshold.</div>
           <div class="shared-feature-card" id="mlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>Model inputs</strong>
@@ -698,8 +680,8 @@
                     <option value="deepsurv">DeepSurv (Neural Cox)</option>
                     <option value="deephit">DeepHit (Discrete-time)</option>
                     <option value="mtlr">Neural MTLR</option>
-                    <option value="transformer">Survival Transformer</option>
-                    <option value="vae">Survival VAE (Clustering)</option>
+                    <option value="transformer">Survival Transformer (experimental)</option>
+                    <option value="vae">Survival VAE (experimental)</option>
                   </select>
                 </label>
                 <label class="toolbar-field">
@@ -813,7 +795,7 @@
               </div>
             </section>
           </div>
-          <div class="toolbar-note">Evaluation Mode applies to both <strong>Run Analysis</strong> and <strong>Compare All</strong>. <strong>Holdout</strong> is the fastest default and returns one fitted model with plots. <strong>Repeated CV</strong> is slower, returns aggregate performance, and skips single-fit plots such as one loss curve or one feature-importance chart. Evaluation mode, CV folds/repeats, the seed, and the locked test set (Compare All with repeated CV only) are shared with Classical ML so both families are scored on the same row partitions.</div>
+          <div class="toolbar-note">Evaluation Mode applies to both <strong>Run Analysis</strong> and <strong>Compare All</strong>. <strong>Holdout</strong> is fastest; <strong>Repeated CV</strong> is slower and reports averaged performance. Folds, seed and the locked test set are shared with the ML models, so both are scored on the same patients. The Transformer and VAE are experimental.</div>
           <div class="shared-feature-card" id="dlFeatureSummaryCard">
             <div class="shared-feature-copy">
               <strong>Model inputs</strong>
@@ -884,16 +866,18 @@
         <article class="workspace-card">
           <div class="card-head">
             <div class="card-head-left">
-              <h2>Predictive Models</h2>
+              <h2>Prediction models</h2>
+              <p class="card-subtitle">Machine-learning and deep-learning survival models, compared on the same patient splits</p>
             </div>
           </div>
           <div class="benchmark-action-card" id="benchmarkActionCard">
             <div class="benchmark-action-copy">
-              <strong>Compare All Models</strong>
-              <span id="predictiveActionStatusText">Runs all 8 models (RSF, GBS, LASSO-Cox, DeepSurv, DeepHit, MTLR, Transformer, VAE) and ranks them by C-index. Results appear in the Unified Leaderboard below. Click any result to open that model's controls.</span>
+              <strong>Compare all models</strong>
+              <span id="predictiveActionStatusText">Fits every model on the same splits and ranks them by C-index. Click a result to tune that model.</span>
             </div>
             <div class="button-row benchmark-action-row">
               <button class="button primary" id="runPredictiveCompareAllButton" type="button">Compare All Models</button>
+              <button class="button ghost" id="openPredictiveWorkbenchButton" type="button">Train one model</button>
               <label class="toolbar-field compact-inline predictive-model-picker hidden">
                 <span>Test one model</span>
                 <select id="predictiveModelSelector">
@@ -906,8 +890,8 @@
                     <option value="deepsurv">DeepSurv</option>
                     <option value="deephit">DeepHit</option>
                     <option value="mtlr">Neural MTLR</option>
-                    <option value="transformer">Survival Transformer</option>
-                    <option value="vae">Survival VAE</option>
+                    <option value="transformer">Survival Transformer (experimental)</option>
+                    <option value="vae">Survival VAE (experimental)</option>
                   </optgroup>
                 </select>
               </label>
@@ -919,14 +903,14 @@
           </div>
           <div class="table-card full-width">
             <div class="table-card-head">
-              <h3>Unified C-index Chart</h3>
+              <h3>C-index by model</h3>
               <span class="benchmark-table-note" id="benchmarkPlotNote">Run Compare All Models to chart ML and DL together on one board.</span>
             </div>
             <div class="plot-shell hidden" id="benchmarkComparisonPlot"></div>
           </div>
           <div class="table-card full-width">
             <div class="table-card-head">
-              <h3>Unified Leaderboard</h3>
+              <h3>Leaderboard</h3>
               <span class="benchmark-table-note" id="benchmarkTableNote">Run Compare All on ML or DL to build a shared leaderboard.</span>
             </div>
             <div class="table-shell" id="benchmarkComparisonShell"><div class="empty-state">Run Compare All on ML or DL to build a shared leaderboard.</div></div>
@@ -947,6 +931,131 @@
               <div class="benchmark-workspace-family hidden" data-benchmark-family="dl" id="benchmarkDlMount"></div>
             </div>
           </div>
+        </article>
+      </section>
+
+      <!-- Markers Panel -->
+      <section class="tab-panel" data-panel="markers" id="panel-markers" role="tabpanel" aria-labelledby="tab-markers">
+        <article class="workspace-card">
+          <div class="card-head">
+            <div class="card-head-left">
+              <h2>Marker evaluation</h2>
+              <p class="card-subtitle">Which candidate markers hold up: family-wise error control, stability across subsamples and added value over clinical covariates</p>
+            </div>
+            <div class="button-row compact">
+              <span class="run-status hidden" data-run-status="markers" aria-live="polite"></span>
+              <button class="button primary" id="runMarkersButton" type="button">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run Analysis
+              </button>
+              <details class="export-menu">
+                <summary class="button ghost">Export</summary>
+                <div class="export-menu-items">
+                  <button class="button ghost" id="downloadMarkersCsvButton" type="button" disabled>Marker table (CSV)</button>
+                  <button class="button ghost" id="downloadMarkerRecipeButton" type="button" disabled>Locked model (JSON)</button>
+                  <button class="button ghost" id="downloadMarkersStabilityPngButton" type="button" disabled>Stability plot (PNG)</button>
+                  <button class="button ghost" id="downloadMarkersRankPngButton" type="button" disabled>Rank plot (PNG)</button>
+                </div>
+              </details>
+            </div>
+          </div>
+          <div class="checklist-grid">
+            <div class="selection-card">
+              <div class="selection-card-head">
+                <h3>Markers <button class="help-dot" type="button" data-tooltip="Numeric candidate markers, for example gene expression or protein levels.">?</button></h3>
+                <div class="selection-card-actions">
+                  <button class="button ghost compact-btn" id="selectAllMarkersButton" type="button">Select all</button>
+                  <button class="button ghost compact-btn" id="clearMarkersButton" type="button">Clear</button>
+                </div>
+              </div>
+              <input class="selection-search" id="markerSearchInput" type="search" placeholder="Search markers" aria-label="Search markers" />
+              <div class="checklist" id="markerChecklist"></div>
+            </div>
+            <div class="selection-card">
+              <div class="selection-card-head">
+                <h3>Adjust for <button class="help-dot" type="button" data-tooltip="Clinical covariates. Markers are then judged on what they add beyond them.">?</button></h3>
+              </div>
+              <input class="selection-search" id="markerClinicalSearchInput" type="search" placeholder="Search clinical covariates" aria-label="Search clinical covariates" />
+              <div class="checklist" id="markerClinicalChecklist"></div>
+            </div>
+          </div>
+          <p class="cox-preview-line" id="markerSelectionLine" aria-live="polite"></p>
+          <details class="options-details">
+            <summary>More options</summary>
+            <div class="toolbar-grid">
+              <label><span>Permutations</span><input id="markerPermutations" type="number" min="0" max="10000" step="100" value="1000" /></label>
+              <label><span>Subsamples</span><input id="markerResamples" type="number" min="0" max="1000" step="10" value="200" /></label>
+              <label><span>Seed</span><input id="markerRandomSeed" type="number" min="0" step="1" value="20260926" /></label>
+              <label><span>Non-linear check</span>
+                <select id="markerNonlinearLens">
+                  <option value="off" selected>Off</option>
+                  <option value="gbs">Gradient boosting</option>
+                  <option value="rsf">Random survival forest</option>
+                </select>
+              </label>
+            </div>
+          </details>
+
+          <div class="plot-shell" id="markersStabilityPlot">
+            <div class="empty-state plot-empty"><span>Choose markers and click <strong>Run Analysis</strong>.</span></div>
+          </div>
+          <div class="analysis-banner" id="markersMetaBanner"></div>
+          <div class="insight-board" id="markersInsightBoard"><div class="empty-state">Run the evaluation to see which markers hold up.</div></div>
+          <div class="plot-shell" id="markersRankPlot"></div>
+          <div class="table-card full-width">
+            <div class="table-card-head">
+              <h3>Marker table</h3>
+              <span class="benchmark-table-note" id="markersTableNote"></span>
+            </div>
+            <div class="table-shell" id="markersTableShell"><div class="empty-state">Run the evaluation to fill the marker table.</div></div>
+          </div>
+
+          <section class="marker-validation-section hidden" id="markerValidationSection">
+            <h3>Validate in another cohort</h3>
+            <p class="card-subtitle">Applies the locked model unchanged to a cohort file with the same column names, then reports discrimination, calibration and which markers replicate.</p>
+            <div class="button-row">
+              <input id="markerValidationFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" aria-label="External cohort file" />
+              <button class="button ghost" id="runMarkerValidationButton" type="button" disabled>Validate</button>
+            </div>
+            <div id="markerValidationSummary"></div>
+            <div class="plot-shell hidden" id="markerValidationPlot"></div>
+            <div class="table-shell" id="markerValidationShell"></div>
+          </section>
+
+          <details class="signature-details">
+            <summary class="signature-toggle">
+              <span>Exploratory: cut-point combinations</span>
+              <small>Searches thresholds of the selected markers and clinical covariates using the outcome; treat any result as a hypothesis</small>
+            </summary>
+            <div class="toolbar-grid signature-toolbar">
+              <label><span>Max depth</span><input id="signatureMaxDepth" type="number" min="1" max="4" step="1" value="3" /></label>
+              <label><span>Min group frac</span><input id="signatureMinFraction" type="number" min="0.03" max="0.44" step="0.01" value="0.1" /></label>
+              <label><span>Top K</span><input id="signatureTopK" type="number" min="3" max="50" step="1" value="15" /></label>
+              <label><span>Bootstrap iter</span><input id="signatureBootstrapIterations" type="number" min="0" max="120" step="1" value="30" /></label>
+              <label><span>Permutation iter</span><input id="signaturePermutationIterations" type="number" min="0" max="400" step="10" value="120" /></label>
+              <label><span>Validation iter</span><input id="signatureValidationIterations" type="number" min="0" max="80" step="1" value="12" /></label>
+              <label><span>Validation frac</span><input id="signatureValidationFraction" type="number" min="0.2" max="0.6" step="0.05" value="0.35" /></label>
+              <label><span>Alpha</span><input id="signatureSignificanceLevel" type="number" min="0.005" max="0.2" step="0.005" value="0.05" /></label>
+              <label><span>Operator</span>
+                <select id="signatureOperator">
+                  <option value="mixed">Mixed (AND + OR)</option>
+                  <option value="and">AND only</option>
+                  <option value="or">OR only</option>
+                </select>
+              </label>
+              <label><span>Seed</span><input id="signatureRandomSeed" type="number" min="0" step="1" value="20260311" /></label>
+              <div class="button-row compact">
+                <button class="button ghost" id="runSignatureSearchButton">Discover</button>
+                <button class="button ghost" id="downloadSignatureButton" disabled>Signature CSV</button>
+              </div>
+            </div>
+          </details>
+          <div class="table-grid">
+            <div class="table-card full-width"><h3>Signature Interpretation</h3><div class="insight-board compact" id="signatureInsightBoard"><div class="empty-state">Run auto-discovery to assess robustness.</div></div></div>
+            <div class="table-card full-width"><h3>Signature Ranking</h3><div class="table-shell" id="signatureShell"><div class="empty-state">Run auto-discovery to find feature combinations.</div></div></div>
+          </div>
+
+          <p class="design-check-link">Planning a study that fits many models and keeps the best? <a href="/design-check">Check its design</a> for the expected overstatement of the C-index.</p>
         </article>
       </section>
 
