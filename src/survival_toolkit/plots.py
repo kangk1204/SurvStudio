@@ -38,6 +38,21 @@ def figure_to_json(fig: go.Figure) -> dict[str, Any]:
     return json.loads(pio.to_json(fig, pretty=False))
 
 
+def escape_plotly_text(value: Any) -> str:
+    """Escape user-supplied text shown in Plotly titles, legends, ticks, or hover values.
+
+    Plotly renders a subset of HTML (``<br>``, ``<b>``, ``<a href>`` ...) in any text,
+    so a group label such as ``"<b>High</b>"`` or ``"<a href=...>"`` would change the
+    figure. Plotly decodes these entities back to the literal characters.
+    """
+    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def escape_plotly_template_text(value: Any) -> str:
+    """Escape user text embedded in a ``hovertemplate``, where ``%{...}`` is also special."""
+    return escape_plotly_text(value).replace("%", "&#37;")
+
+
 def _format_p_value(value: Any) -> str:
     if not isinstance(value, (int, float)) or not np.isfinite(float(value)):
         return "NA"
@@ -87,7 +102,7 @@ def _truncate_label_fragment(text: str, width: int) -> str:
 def _wrap_feature_axis_label(label: Any, *, width: int = 26, max_lines: int = 2) -> tuple[str, int]:
     raw = str(label)
     if len(raw) <= width:
-        return raw, 1
+        return escape_plotly_text(raw), 1
 
     tokens: list[str] = []
     cursor = 0
@@ -118,7 +133,7 @@ def _wrap_feature_axis_label(label: Any, *, width: int = 26, max_lines: int = 2)
     lines = [_truncate_label_fragment(line.strip(), width) for line in lines if line.strip()]
     if not lines:
         lines = [_truncate_label_fragment(raw, width)]
-    return "<br>".join(lines), len(lines)
+    return "<br>".join(escape_plotly_text(line) for line in lines), len(lines)
 
 
 def _wrap_annotation_text(text: Any, *, width: int = 84, max_lines: int = 3) -> tuple[str, int]:
@@ -220,9 +235,12 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
     fig = go.Figure()
     confidence_level = float(km_result.get("confidence_level", 0.95) or 0.95)
     confidence_percent = max(1, round(confidence_level * 100))
+    unit_template = escape_plotly_template_text(time_unit_label)
     for idx, curve in enumerate(km_result["curves"]):
         label = curve["group"]
         color = _km_group_color(label, idx)
+        display_label = escape_plotly_text(label)
+        template_label = escape_plotly_template_text(label)
         if show_confidence_bands:
             upper_x, upper_y = _step_polyline(list(curve["timeline"]), list(curve["ci_upper"]))
             lower_x, lower_y = _step_polyline(list(curve["timeline"]), list(curve["ci_lower"]))
@@ -236,7 +254,7 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
                     hoverinfo="skip",
                     opacity=0.12,
                     showlegend=False,
-                    name=f"{label} CI",
+                    name=f"{display_label} CI",
                 )
             )
         fig.add_trace(
@@ -244,9 +262,9 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
                 x=curve["timeline"],
                 y=curve["survival"],
                 mode="lines",
-                name=label,
+                name=display_label,
                 line={"shape": "hv", "width": 3, "color": color, "dash": _km_group_dash(label, idx)},
-                hovertemplate=f"{label}<br>{time_unit_label}: %{{x:.2f}}<br>Survival: %{{y:.1%}}<extra></extra>",
+                hovertemplate=f"{template_label}<br>{unit_template}: %{{x:.2f}}<br>Survival: %{{y:.1%}}<extra></extra>",
             )
         )
         if curve["censor_times"]:
@@ -255,9 +273,9 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
                     x=curve["censor_times"],
                     y=curve["censor_survival"],
                     mode="markers",
-                    name=f"{label} censored",
+                    name=f"{display_label} censored",
                     marker={"symbol": "line-ns-open", "size": 10, "color": color, "line": {"width": 2}},
-                    hovertemplate=f"{label} censored<br>{time_unit_label}: %{{x:.2f}}<extra></extra>",
+                    hovertemplate=f"{template_label} censored<br>{unit_template}: %{{x:.2f}}<extra></extra>",
                     showlegend=False,
                 )
             )
@@ -305,7 +323,7 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
             bgcolor="rgba(255,255,255,0.85)",
             borderpad=4,
         )
-    fig.update_xaxes(title=f"Time ({time_unit_label})", **_COMMON_AXES, range=[0, km_result["display_horizon"]])
+    fig.update_xaxes(title=f"Time ({escape_plotly_text(time_unit_label)})", **_COMMON_AXES, range=[0, km_result["display_horizon"]])
     fig.update_yaxes(title="Survival probability", tickformat=".0%", range=[0, 1.02], **_COMMON_AXES)
     return figure_to_json(fig)
 
@@ -344,7 +362,7 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
             x=hazard_ratios,
             y=labels,
             mode="markers",
-            customdata=labels,
+            customdata=[escape_plotly_text(label) for label in labels],
             marker={"size": 12, "color": colors, "line": {"width": 1, "color": INK}},
             error_x={"type": "data", "array": error_plus, "arrayminus": error_minus, "thickness": 1.5, "width": 0},
             hovertemplate="%{customdata}<br>Hazard ratio: %{x:.3f}<extra></extra>",
@@ -449,10 +467,10 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
                 x=x_values,
                 y=y_values,
                 mode="markers",
-                name=str(panel.get("term") or "Residuals"),
+                name=escape_plotly_text(panel.get("term") or "Residuals"),
                 marker={"size": 6, "color": marker_color, "opacity": 0.55},
                 hovertemplate=(
-                    f"{panel.get('term') or 'Term'}<br>log(time): %{{x:.3f}}<br>Scaled Schoenfeld residual: %{{y:.3f}}"
+                    f"{escape_plotly_template_text(panel.get('term') or 'Term')}<br>log(time): %{{x:.3f}}<br>Scaled Schoenfeld residual: %{{y:.3f}}"
                     + (f"<br>rho={float(rho):.3f}" if isinstance(rho, (int, float)) and np.isfinite(float(rho)) else "")
                     + (f"<br>{_p_value_expression(p_value)}" if isinstance(p_value, (int, float)) and np.isfinite(float(p_value)) else "")
                     + "<extra></extra>"
@@ -566,10 +584,10 @@ def build_cox_martingale_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
                 x=x_values,
                 y=y_values,
                 mode="markers",
-                name=str(panel.get("term") or "Residuals"),
+                name=escape_plotly_text(panel.get("term") or "Residuals"),
                 marker={"size": 6, "color": TEAL, "opacity": 0.55},
                 hovertemplate=(
-                    f"{panel.get('term') or 'Covariate'}<br>Value: %{{x:.3f}}<br>Martingale residual: %{{y:.3f}}<extra></extra>"
+                    f"{escape_plotly_template_text(panel.get('term') or 'Covariate')}<br>Value: %{{x:.3f}}<br>Martingale residual: %{{y:.3f}}<extra></extra>"
                 ),
                 showlegend=False,
             ),
@@ -592,7 +610,7 @@ def build_cox_martingale_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         fig.add_hline(y=0.0, line_width=1, line_dash="dot", line_color="rgba(90, 103, 118, 0.7)", row=row, col=col)
         robust_range = _diagnostic_residual_axis_range(y_values, trend_y)
         clipped_for_readability = clipped_for_readability or (robust_range is not None)
-        fig.update_xaxes(title=str(panel.get("term") or "Covariate"), row=row, col=col, **_COMMON_AXES)
+        fig.update_xaxes(title=escape_plotly_text(panel.get("term") or "Covariate"), row=row, col=col, **_COMMON_AXES)
         fig.update_yaxes(
             title="Martingale residual",
             row=row,
@@ -653,7 +671,7 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
             mode="lines",
             line={"width": 2.5, "color": SLATE},
             name="Log-rank statistic",
-            hovertemplate=f"{variable_name} = %{{x:.3f}}<br>Chi-square = %{{y:.3f}}<extra></extra>",
+            hovertemplate=f"{escape_plotly_template_text(variable_name)} = %{{x:.3f}}<br>Chi-square = %{{y:.3f}}<extra></extra>",
         )
     )
     if optimal is not None:
@@ -681,7 +699,7 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
         **_COMMON_LAYOUT,
         margin={"l": 70, "r": 30, "t": 110, "b": 70},
         title={
-            "text": f"Optimal Cutpoint Scan: {variable_name}",
+            "text": f"Optimal Cutpoint Scan: {escape_plotly_text(variable_name)}",
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
             "x": 0.02,
         },
@@ -697,9 +715,9 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
         label_below = result.get("label_below_cutpoint")
         label_above = result.get("label_above_cutpoint")
         if label_below is not None:
-            group_parts.append(f"<= cutpoint: {label_below}")
+            group_parts.append(f"&lt;= cutpoint: {escape_plotly_text(label_below)}")
         if label_above is not None:
-            group_parts.append(f"> cutpoint: {label_above}")
+            group_parts.append(f"&gt; cutpoint: {escape_plotly_text(label_above)}")
         if group_parts:
             fig.add_annotation(
                 text=" | ".join(group_parts),
@@ -716,7 +734,7 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
                 align="right", xanchor="right", yanchor="top",
                 bgcolor="rgba(255,255,255,0.92)", borderpad=5,
             )
-    fig.update_xaxes(title=variable_name, **_COMMON_AXES)
+    fig.update_xaxes(title=escape_plotly_text(variable_name), **_COMMON_AXES)
     fig.update_yaxes(title="Log-rank chi-square statistic", **_COMMON_AXES)
     return figure_to_json(fig)
 
@@ -745,7 +763,7 @@ def build_feature_importance_figure(
             x=values,
             y=labels,
             orientation="h",
-            customdata=labels,
+            customdata=[escape_plotly_text(label) for label in labels],
             marker={"color": SLATE, "line": {"width": 0}},
             hovertemplate="%{customdata}: %{x:.4f}<extra></extra>",
         )
@@ -811,7 +829,7 @@ def build_shap_figure(shap_result: dict[str, Any]) -> dict[str, Any]:
             x=values,
             y=labels,
             orientation="h",
-            customdata=labels,
+            customdata=[escape_plotly_text(label) for label in labels],
             marker={"color": ACCENT, "line": {"width": 0}},
             hovertemplate="%{customdata}: mean|SHAP| = %{x:.4f}<extra></extra>",
         )
@@ -1084,7 +1102,7 @@ def build_time_dependent_importance_figure(
 
     ranked_idx = sorted(range(len(features)), key=lambda idx: means[idx], reverse=True)
     selected_idx = ranked_idx[: min(top_n, len(ranked_idx))]
-    selected_features = [features[idx] for idx in selected_idx]
+    selected_features = [escape_plotly_text(features[idx]) for idx in selected_idx]
     z = [
         [
             None
@@ -1105,13 +1123,19 @@ def build_time_dependent_importance_figure(
     else:
         time_labels = [f"{float(t):.6g} [{idx + 1}]" for idx, t in enumerate(eval_times)]
 
+    importance_label = str(result.get("importance_label") or "Importance")
     fig = go.Figure(
         data=go.Heatmap(
             z=z,
             x=time_labels,
             y=selected_features,
             colorscale=[[0, SLATE], [1, ACCENT]],
-            hovertemplate="Feature: %{y}<br>Time: %{x}<br>Importance: %{z:.4f}<extra></extra>",
+            colorbar={"title": {"text": escape_plotly_text(importance_label)}},
+            hovertemplate=(
+                "Feature: %{y}<br>Time: %{x}<br>"
+                + escape_plotly_template_text(importance_label)
+                + ": %{z:.4f}<extra></extra>"
+            ),
         )
     )
     fig.update_layout(
@@ -1208,7 +1232,9 @@ def build_pdp_figure(pdp_data: dict[str, Any]) -> dict[str, Any]:
     pdp_data : dict
         Output with keys ``feature``, ``values``, ``mean_risk``.
     """
-    feature: str = pdp_data.get("feature", "Feature")
+    feature: str = str(pdp_data.get("feature", "Feature"))
+    feature_text = escape_plotly_text(feature)
+    feature_template = escape_plotly_template_text(feature)
     values: list[Any] = pdp_data.get("values", [])
     mean_risk: list[float] = pdp_data.get("mean_risk", [])
     feature_type = str(pdp_data.get("feature_type", "numeric"))
@@ -1220,10 +1246,10 @@ def build_pdp_figure(pdp_data: dict[str, Any]) -> dict[str, Any]:
     if feature_type == "categorical":
         fig.add_trace(
             go.Bar(
-                x=values,
+                x=[escape_plotly_text(value) for value in values],
                 y=mean_risk,
                 marker={"color": SLATE, "line": {"color": INK, "width": 0.4}},
-                hovertemplate=f"{feature} = %{{x}}<br>Mean risk = %{{y:.4f}}<extra></extra>",
+                hovertemplate=f"{feature_template} = %{{x}}<br>Mean risk = %{{y:.4f}}<extra></extra>",
             )
         )
     else:
@@ -1233,19 +1259,19 @@ def build_pdp_figure(pdp_data: dict[str, Any]) -> dict[str, Any]:
                 y=mean_risk,
                 mode="lines",
                 line={"width": 2.5, "color": SLATE},
-                hovertemplate=f"{feature} = %{{x:.3f}}<br>Mean risk = %{{y:.4f}}<extra></extra>",
+                hovertemplate=f"{feature_template} = %{{x:.3f}}<br>Mean risk = %{{y:.4f}}<extra></extra>",
             )
         )
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 70, "r": 30, "t": 80, "b": 70},
         title={
-            "text": f"Partial Dependence: {feature}",
+            "text": f"Partial Dependence: {feature_text}",
             "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
             "x": 0.02,
         },
         height=420,
     )
-    fig.update_xaxes(title=feature, **_COMMON_AXES)
+    fig.update_xaxes(title=feature_text, **_COMMON_AXES)
     fig.update_yaxes(title="Mean predicted risk", **_COMMON_AXES)
     return figure_to_json(fig)

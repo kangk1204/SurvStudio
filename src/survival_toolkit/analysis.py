@@ -9,7 +9,7 @@ import re
 import warnings
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, NamedTuple, Sequence
 
 import numpy as np
 import pandas as pd
@@ -22,11 +22,13 @@ from pandas.api.types import (
 )
 from scipy.special import ndtri
 from scipy import stats
-from statsmodels.duration.hazard_regression import PHReg
+from statsmodels.base.model import LikelihoodModel
+from statsmodels.duration.hazard_regression import PHReg, PHRegResults
 from statsmodels.duration.survfunc import SurvfuncRight, survdiff
 from statsmodels.nonparametric.smoothers_lowess import lowess
-from statsmodels.tools.sm_exceptions import ConvergenceWarning
 
+from survival_toolkit.concurrency import raise_if_cancelled, suppressed_warnings
+from survival_toolkit.encoding import reject_numeric_text_features
 from survival_toolkit.errors import ColumnNotFoundError, user_input_boundary
 
 TRUE_TOKENS = {
@@ -206,26 +208,74 @@ def make_unique_columns(columns: Iterable[Any]) -> list[str]:
 
 _CSV_DELIMITER_CANDIDATES = ",;\t|"
 _DECIMAL_COMMA_PATTERN = re.compile(r"^-?\d{1,3}(\.\d{3})*,\d+$|^-?\d+,\d+$")
+# Bytes inspected to pick the text encoding and the delimiter; the full file is then
+# parsed by pandas in streaming mode instead of being decoded into one Python string.
+_TEXT_SNIFF_BYTES = 1024 * 1024
+# Share of non-ASCII characters that must be Hangul syllables before a byte stream that
+# is not UTF-8 is read as Korean CP949 (the default "CSV" export of Korean Excel).
+_CP949_HANGUL_SHARE = 0.5
+TEXT_ENCODING_LABELS = {
+    "utf-8": "UTF-8",
+    "utf-8-sig": "UTF-8",
+    "utf-16": "UTF-16",
+    "utf-16-le": "UTF-16 (little-endian)",
+    "utf-16-be": "UTF-16 (big-endian)",
+    "cp949": "Korean CP949 (EUC-KR)",
+    "cp1252": "Windows-1252 (Western European)",
+    "latin-1": "Latin-1 (ISO-8859-1)",
+}
 
 
-def _decode_text_bytes(raw: bytes) -> str:
-    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return raw.decode("utf-16")
-    sample = raw[:4096]
+class UploadShapeError(ValueError):
+    """The upload exceeds a row, column, or cell limit (raised before the full parse)."""
+
+
+def _trim_to_line_boundary(sample: bytes, *, complete: bool) -> bytes:
+    """Cut a byte sample after its last newline so no multibyte character is split."""
+    if complete:
+        return sample
+    cut = sample.rfind(b"\n")
+    return sample[: cut + 1] if cut >= 0 else sample
+
+
+def _hangul_share(text: str) -> float:
+    non_ascii = [char for char in text if ord(char) > 127]
+    if not non_ascii:
+        return 0.0
+    hangul = sum(1 for char in non_ascii if "가" <= char <= "힣" or "ㄱ" <= char <= "ㆎ")
+    return hangul / len(non_ascii)
+
+
+def _text_encoding_candidates(sample: bytes, *, complete: bool) -> list[str]:
+    """Ordered encodings to try for a text upload, judged from its first bytes.
+
+    UTF-8 (with or without BOM) and UTF-16 are recognised directly. Other byte streams
+    are read as Korean CP949 when the sample decodes as mostly Hangul, and otherwise as
+    Windows-1252 with Latin-1 as the final fallback (Latin-1 accepts any byte).
+    """
+    if sample.startswith(b"\xef\xbb\xbf"):
+        return ["utf-8-sig", "cp949", "cp1252", "latin-1"]
+    if sample.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return ["utf-16"]
+    probe = sample[:4096]
     # UTF-16 without a BOM shows up as many NUL bytes; latin-1 would "decode"
     # it into garbage without an error.
-    if sample and sample.count(b"\x00") > len(sample) // 4:
-        for encoding in ("utf-16-le", "utf-16-be"):
-            try:
-                return raw.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-    for encoding in ("utf-8-sig", "latin-1"):
-        try:
-            return raw.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    raise ValueError("Could not decode the file. Supported encodings: UTF-8, UTF-16, Latin-1.")
+    if probe and probe.count(b"\x00") > len(probe) // 4:
+        nul_at_odd = probe[1::2].count(b"\x00") >= probe[0::2].count(b"\x00")
+        return ["utf-16-le", "utf-16-be"] if nul_at_odd else ["utf-16-be", "utf-16-le"]
+    trimmed = _trim_to_line_boundary(sample, complete=complete)
+    try:
+        trimmed.decode("utf-8")
+        return ["utf-8", "cp949", "cp1252", "latin-1"]
+    except UnicodeDecodeError:
+        pass
+    try:
+        decoded = trimmed.decode("cp949")
+    except UnicodeDecodeError:
+        decoded = None
+    if decoded is not None and _hangul_share(decoded) >= _CP949_HANGUL_SHARE:
+        return ["cp949", "cp1252", "latin-1"]
+    return ["cp1252", "latin-1"]
 
 
 def _sniff_delimiter(text: str, default: str) -> str:
@@ -242,27 +292,140 @@ def _is_text_series(series: pd.Series) -> bool:
     return is_object_dtype(series) or is_string_dtype(series)
 
 
-def _read_csv_with_fallback(source: io.BytesIO | str | Path, *, default_delimiter: str = ",") -> pd.DataFrame:
+def _reject_upload_shape(
+    *,
+    n_rows: int | None = None,
+    n_columns: int | None = None,
+    max_rows: int | None = None,
+    max_columns: int | None = None,
+    max_cells: int | None = None,
+) -> None:
+    if max_columns is not None and n_columns is not None and n_columns > max_columns:
+        raise UploadShapeError(
+            f"Upload has {n_columns:,} columns. SurvStudio currently supports at most {max_columns:,} columns per uploaded cohort."
+        )
+    if n_rows is None:
+        return
+    if max_rows is not None and n_rows > max_rows:
+        raise UploadShapeError(
+            f"Upload has more than {max_rows:,} rows. SurvStudio currently supports at most {max_rows:,} rows per uploaded cohort."
+        )
+    if max_cells is not None and n_columns is not None and n_rows * n_columns > max_cells:
+        raise UploadShapeError(
+            f"Upload expands to more than {max_cells:,} cells after parsing. SurvStudio currently supports at most "
+            f"{max_cells:,} parsed cells per uploaded cohort."
+        )
+
+
+def _row_read_limit(
+    n_columns: int,
+    *,
+    max_rows: int | None,
+    max_cells: int | None,
+) -> int | None:
+    """Rows to parse so that one row beyond any limit is seen without reading the rest."""
+    limits = []
+    if max_rows is not None:
+        limits.append(int(max_rows))
+    if max_cells is not None and n_columns > 0:
+        limits.append(int(max_cells) // int(n_columns))
+    return (min(limits) + 1) if limits else None
+
+
+def _read_csv_with_fallback(
+    source: io.BytesIO | str | Path,
+    *,
+    default_delimiter: str = ",",
+    max_rows: int | None = None,
+    max_columns: int | None = None,
+    max_cells: int | None = None,
+) -> pd.DataFrame:
     if hasattr(source, "read"):
         if hasattr(source, "seek"):
             source.seek(0)
-        raw = source.read()
+        content = source.read()
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+        sample = content[:_TEXT_SNIFF_BYTES]
+        complete = len(content) <= _TEXT_SNIFF_BYTES
+
+        def _open() -> Any:
+            return io.BytesIO(content)
     else:
-        raw = Path(source).read_bytes()
-    if isinstance(raw, str):
-        raw = raw.encode("utf-8")
-    text = _decode_text_bytes(raw)
-    if not text.strip():
+        path = Path(source)
+        with path.open("rb") as handle:
+            sample = handle.read(_TEXT_SNIFF_BYTES + 1)
+        complete = len(sample) <= _TEXT_SNIFF_BYTES
+        sample = sample[:_TEXT_SNIFF_BYTES]
+
+        def _open() -> Any:
+            return path.open("rb")
+
+    if not sample.strip():
         raise ValueError("The uploaded file is empty. Add a header row and at least one data row.")
-    delimiter = _sniff_delimiter(text, default_delimiter)
+
+    last_error: Exception | None = None
+    for encoding in _text_encoding_candidates(sample, complete=complete):
+        try:
+            sample_text = _trim_to_line_boundary(sample, complete=complete).decode(encoding)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+        if not sample_text.strip():
+            raise ValueError("The uploaded file is empty. Add a header row and at least one data row.")
+        delimiter = _sniff_delimiter(sample_text, default_delimiter)
+        try:
+            frame = _parse_delimited_text(
+                _open,
+                encoding=encoding,
+                delimiter=delimiter,
+                max_rows=max_rows,
+                max_columns=max_columns,
+                max_cells=max_cells,
+            )
+        except UnicodeDecodeError as exc:
+            # A later part of the file does not fit this encoding; try the next one.
+            last_error = exc
+            continue
+        frame.attrs["source_encoding"] = encoding
+        return frame
+    raise ValueError(
+        "Could not decode the file. Supported encodings: UTF-8, UTF-16, CP949, Windows-1252, Latin-1."
+    ) from last_error
+
+
+def _parse_delimited_text(
+    open_source: Any,
+    *,
+    encoding: str,
+    delimiter: str,
+    max_rows: int | None,
+    max_columns: int | None,
+    max_cells: int | None,
+) -> pd.DataFrame:
+    def _read(**kwargs: Any) -> pd.DataFrame:
+        with open_source() as handle:
+            return pd.read_csv(handle, sep=delimiter, encoding=encoding, encoding_errors="strict", **kwargs)
+
     try:
-        frame = pd.read_csv(io.StringIO(text), sep=delimiter)
+        header = _read(nrows=0)
+        n_columns = int(header.shape[1])
+        _reject_upload_shape(n_columns=n_columns, max_columns=max_columns)
+        nrows = _row_read_limit(n_columns, max_rows=max_rows, max_cells=max_cells)
+        frame = _read(nrows=nrows)
     except pd.errors.EmptyDataError as exc:
         raise ValueError("The uploaded file is empty. Add a header row and at least one data row.") from exc
     except (csv.Error, pd.errors.ParserError) as exc:
         raise ValueError(
             "The uploaded text file is empty or malformed. Add a header row and at least one data row."
         ) from exc
+    _reject_upload_shape(
+        n_rows=int(frame.shape[0]),
+        n_columns=int(frame.shape[1]),
+        max_rows=max_rows,
+        max_columns=max_columns,
+        max_cells=max_cells,
+    )
     if delimiter != ",":
         # European-style exports (";" separated) often use decimal commas; if
         # text columns are mostly decimal-comma numbers, read them as numbers.
@@ -273,21 +436,54 @@ def _read_csv_with_fallback(source: io.BytesIO | str | Path, *, default_delimite
             if frame[column].dropna().astype(str).str.strip().str.match(_DECIMAL_COMMA_PATTERN).mean() > 0.8
         ]
         if decimal_like:
-            frame = pd.read_csv(io.StringIO(text), sep=delimiter, decimal=",", thousands=".")
+            frame = _read(nrows=nrows, decimal=",", thousands=".")
     return frame
 
 
-def _load_dataframe_source(source: io.BytesIO | str | Path, filename: str) -> pd.DataFrame:
+def _read_excel_limited(
+    source: io.BytesIO | str | Path,
+    *,
+    max_rows: int | None,
+    max_columns: int | None,
+    max_cells: int | None,
+) -> pd.DataFrame:
+    try:
+        if max_rows is None and max_columns is None and max_cells is None:
+            return pd.read_excel(source)
+        header = pd.read_excel(source, nrows=0)
+        n_columns = int(header.shape[1])
+        _reject_upload_shape(n_columns=n_columns, max_columns=max_columns)
+        if hasattr(source, "seek"):
+            source.seek(0)
+        frame = pd.read_excel(source, nrows=_row_read_limit(n_columns, max_rows=max_rows, max_cells=max_cells))
+    except (MemoryError, UploadShapeError):
+        raise
+    except Exception as exc:
+        raise ValueError(f"Failed to read Excel file: {exc}") from exc
+    _reject_upload_shape(
+        n_rows=int(frame.shape[0]),
+        n_columns=int(frame.shape[1]),
+        max_rows=max_rows,
+        max_columns=max_columns,
+        max_cells=max_cells,
+    )
+    return frame
+
+
+def _load_dataframe_source(
+    source: io.BytesIO | str | Path,
+    filename: str,
+    *,
+    max_rows: int | None = None,
+    max_columns: int | None = None,
+    max_cells: int | None = None,
+) -> pd.DataFrame:
     suffix = Path(filename).suffix.lower()
+    limits = {"max_rows": max_rows, "max_columns": max_columns, "max_cells": max_cells}
     if suffix in {".csv", ".txt", ".tsv"}:
-        df = _read_csv_with_fallback(source, default_delimiter="\t" if suffix == ".tsv" else ",")
+        df = _read_csv_with_fallback(source, default_delimiter="\t" if suffix == ".tsv" else ",", **limits)
     elif suffix in {".xlsx", ".xls"}:
-        try:
-            df = pd.read_excel(source)
-        except MemoryError:
-            raise
-        except Exception as exc:
-            raise ValueError(f"Failed to read Excel file: {exc}") from exc
+        df = _read_excel_limited(source, **limits)
     elif suffix == ".parquet":
         try:
             df = pd.read_parquet(source)
@@ -303,22 +499,56 @@ def _load_dataframe_source(source: io.BytesIO | str | Path, filename: str) -> pd
 
     if df.empty:
         raise ValueError("The uploaded file contains no data rows.")
+    source_encoding = df.attrs.get("source_encoding")
     df.columns = make_unique_columns(df.columns)
+    if source_encoding:
+        df.attrs["source_encoding"] = source_encoding
     return df
 
 
-def load_dataframe(file_bytes: bytes, filename: str) -> pd.DataFrame:
-    return _load_dataframe_source(io.BytesIO(file_bytes), filename)
+def load_dataframe(
+    file_bytes: bytes,
+    filename: str,
+    *,
+    max_rows: int | None = None,
+    max_columns: int | None = None,
+    max_cells: int | None = None,
+) -> pd.DataFrame:
+    return _load_dataframe_source(
+        io.BytesIO(file_bytes),
+        filename,
+        max_rows=max_rows,
+        max_columns=max_columns,
+        max_cells=max_cells,
+    )
 
 
 @user_input_boundary
-def load_dataframe_from_path(path: str | Path) -> pd.DataFrame:
+def load_dataframe_from_path(
+    path: str | Path,
+    *,
+    max_rows: int | None = None,
+    max_columns: int | None = None,
+    max_cells: int | None = None,
+) -> pd.DataFrame:
+    """Load a CSV/TSV/Excel/Parquet table.
+
+    With ``max_rows`` / ``max_columns`` / ``max_cells`` set, text and Excel inputs are
+    checked against the limits from the header and a bounded read (one row past the
+    limit) instead of parsing the whole file first.
+    """
     path_obj = Path(path)
     if not path_obj.exists():
         raise FileNotFoundError(f"Input file not found: {path_obj}")
     if not path_obj.is_file():
         raise ValueError(f"Input path is not a file: {path_obj}")
-    return _load_dataframe_source(path_obj, path_obj.name)
+    return _load_dataframe_source(
+        path_obj,
+        path_obj.name,
+        max_rows=max_rows,
+        max_columns=max_columns,
+        max_cells=max_cells,
+    )
 
 
 def serialize_value(value: Any) -> Any:
@@ -712,6 +942,115 @@ def _reject_other_cause_deaths_for_cause_specific_endpoint(series: pd.Series) ->
             )
 
 
+_MULTIPLE_EVENT_STATES_MESSAGE = (
+    "The event column contains more than one recognized event state. "
+    "Recode it to a binary event indicator before survival analysis."
+)
+
+
+def _explicit_event_token(value: Any) -> str | None:
+    """Normalize one event value for matching against a user-chosen event label."""
+    if pd.isna(value):
+        return None
+    if isinstance(value, (bool, np.bool_)):
+        return "1" if bool(value) else "0"
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        if not np.isfinite(value):
+            return None
+        float_value = float(value)
+        if float_value.is_integer():
+            return str(int(float_value))
+        return str(float_value).strip().lower()
+    return str(value).strip().lower()
+
+
+def _numeric_event_indicator(
+    numeric_series: pd.Series,
+    valid: pd.Series,
+    target: Any,
+    target_numeric: float,
+) -> pd.Series:
+    """Code a fully numeric event column against a numeric event-positive value.
+
+    Only truly binary coding is allowed: multi-state numeric status columns are
+    rejected rather than silently collapsing extra states into censoring.
+    """
+    if _normalize_token(target) in FALSE_TOKENS:
+        raise ValueError(
+            f"The selected event-positive value '{target}' maps to censoring, not the event."
+        )
+    observed_numeric = sorted({float(value) for value in numeric_series.loc[valid].astype(float).tolist()})
+    if target_numeric not in observed_numeric:
+        raise ValueError(
+            f"The selected event-positive value '{target}' is not present in the numeric event column."
+        )
+    if len(observed_numeric) > 2:
+        raise ValueError(
+            "The numeric event column has more than two distinct states. "
+            "Provide a pre-binarized event indicator before survival analysis."
+        )
+    return (numeric_series.loc[valid] == target_numeric).astype(float)
+
+
+def _raise_if_unrecognized_event_tokens(observed_family_map: dict[str, str | None]) -> None:
+    unknown = [token for token, family in observed_family_map.items() if family is None]
+    if unknown:
+        raise ValueError(
+            "Event coding contains unrecognized tokens alongside standard event/censor labels: "
+            + ", ".join(unknown[:6])
+            + (" ..." if len(unknown) > 6 else "")
+        )
+
+
+def _event_tokens_for_label(target: Any, target_token: str, observed_tokens: list[str]) -> set[str]:
+    """The observed tokens that mean "event" when the user picked the label `target`."""
+    if _has_ambiguous_competing_event_tokens(observed_tokens):
+        raise ValueError(_MULTIPLE_EVENT_STATES_MESSAGE)
+    observed_family_map = {token: _outcome_status_family_match(token)[0] for token in observed_tokens}
+    observed_families = {family for family in observed_family_map.values() if family is not None}
+
+    if target_token in TRUE_TOKENS:
+        # A standard event label: decode the column with the full token vocabulary.
+        _raise_if_unrecognized_event_tokens(observed_family_map)
+        target_family = _outcome_status_value_family(target_token)
+        if target_family is None:
+            raise ValueError("The selected event-positive value could not be mapped to a supported event family.")
+        if target_family == "event_generic":
+            concrete_event_families = sorted(observed_families - {"censor"})
+            if len(concrete_event_families) == 1:
+                target_family = concrete_event_families[0]
+        if observed_families - {target_family, "censor"}:
+            raise ValueError(_MULTIPLE_EVENT_STATES_MESSAGE)
+        return {token for token, family in observed_family_map.items() if family == target_family}
+
+    if target_token in FALSE_TOKENS:
+        _raise_if_unrecognized_event_tokens(observed_family_map)
+        raise ValueError(
+            f"The selected event-positive value '{target}' maps to censoring, not the event. "
+            "Choose the value that means the event happened."
+        )
+
+    # Custom label: allow mapping only for true binary columns to avoid masking typos.
+    target_family_match, _ = _outcome_status_family_match(target_token)
+    if target_family_match == "censor":
+        raise ValueError(
+            f"The selected event-positive value '{target}' means no event (censoring), not the event. "
+            "Choose the value that means the event happened."
+        )
+    if target_token not in observed_tokens:
+        raise ValueError(
+            f"The selected event-positive value '{target}' is not present in the event column."
+        )
+    if len(observed_tokens) > 2:
+        raise ValueError(
+            "The event column has more than two distinct values after normalization. "
+            "For multi-class status columns, please recode to a binary event indicator."
+        )
+    return {target_token}
+
+
 def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Series:
     out = pd.Series(np.nan, index=series.index, dtype=float)
     valid = series.notna()
@@ -726,132 +1065,20 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
             target_numeric = float(target)
         except (TypeError, ValueError):
             target_numeric = None
-
-        # If the column is fully numeric-coercible, only allow truly binary
-        # coding. Multi-state numeric status columns must be rejected rather
-        # than silently collapsing extra states into censoring.
         if target_numeric is not None and numeric_series.notna().sum() == valid.sum():
-            target_token = _normalize_token(target)
-            if target_token in FALSE_TOKENS:
-                raise ValueError(
-                    f"The selected event-positive value '{target}' maps to censoring, not the event."
-                )
-            observed_numeric = sorted({float(value) for value in numeric_series.loc[valid].astype(float).tolist()})
-            if target_numeric not in observed_numeric:
-                raise ValueError(
-                    f"The selected event-positive value '{target}' is not present in the numeric event column."
-                )
-            if len(observed_numeric) > 2:
-                raise ValueError(
-                    "The numeric event column has more than two distinct states. "
-                    "Provide a pre-binarized event indicator before survival analysis."
-                )
-            out.loc[valid] = (numeric_series.loc[valid] == target_numeric).astype(float)
+            out.loc[valid] = _numeric_event_indicator(numeric_series, valid, target, target_numeric)
             return out
 
-        def _explicit_token(value: Any) -> str | None:
-            if pd.isna(value):
-                return None
-            if isinstance(value, (bool, np.bool_)):
-                return "1" if bool(value) else "0"
-            if isinstance(value, (int, np.integer)):
-                return str(int(value))
-            if isinstance(value, (float, np.floating)):
-                if not np.isfinite(value):
-                    return None
-                float_value = float(value)
-                if float_value.is_integer():
-                    return str(int(float_value))
-                return str(float_value).strip().lower()
-            return str(value).strip().lower()
-
-        target_token = _explicit_token(target)
+        target_token = _explicit_event_token(target)
         if target_token is None:
             raise ValueError("The selected event-positive value could not be parsed.")
-
-        value_tokens = series.map(_explicit_token)
+        value_tokens = series.map(_explicit_event_token)
         if value_tokens.loc[valid].isna().any():
             raise ValueError(
                 "The event column contains non-missing values that cannot be normalized for event coding."
             )
-
         observed_tokens = sorted(set(value_tokens.loc[valid].astype(str).tolist()))
-        observed_family_details = {
-            token: _outcome_status_family_match(token)
-            for token in observed_tokens
-        }
-        if _has_ambiguous_competing_event_tokens(observed_tokens):
-            raise ValueError(
-                "The event column contains more than one recognized event state. "
-                "Recode it to a binary event indicator before survival analysis."
-            )
-        observed_family_map = {
-            token: family
-            for token, (family, _exact_match) in observed_family_details.items()
-        }
-        observed_families = {family for family in observed_family_map.values() if family is not None}
-
-        def _raise_if_multistate_family(target_family: str) -> None:
-            disallowed = sorted(observed_families - {target_family, "censor"})
-            if disallowed:
-                raise ValueError(
-                    "The event column contains more than one recognized event state. "
-                    "Recode it to a binary event indicator before survival analysis."
-                )
-
-        # If the target is a known event/censor token, decode using the full token vocabulary.
-        if target_token in TRUE_TOKENS:
-            unknown = [tok for tok, family in observed_family_map.items() if family is None]
-            if unknown:
-                raise ValueError(
-                    "Event coding contains unrecognized tokens alongside standard event/censor labels: "
-                    + ", ".join(unknown[:6])
-                    + (" ..." if len(unknown) > 6 else "")
-                )
-            target_family = _outcome_status_value_family(target_token)
-            if target_family is None:
-                raise ValueError("The selected event-positive value could not be mapped to a supported event family.")
-            if target_family == "event_generic":
-                concrete_event_families = sorted(observed_families - {"censor"})
-                if len(concrete_event_families) == 1:
-                    target_family = concrete_event_families[0]
-            _raise_if_multistate_family(target_family)
-            event_tokens = {
-                token
-                for token, family in observed_family_map.items()
-                if family == target_family
-            }
-        elif target_token in FALSE_TOKENS:
-            unknown = [tok for tok, family in observed_family_map.items() if family is None]
-            if unknown:
-                raise ValueError(
-                    "Event coding contains unrecognized tokens alongside standard event/censor labels: "
-                    + ", ".join(unknown[:6])
-                    + (" ..." if len(unknown) > 6 else "")
-                )
-            raise ValueError(
-                f"The selected event-positive value '{target}' maps to censoring, not the event. "
-                "Choose the value that means the event happened."
-            )
-        else:
-            # Custom label: allow mapping only for true binary columns to avoid masking typos.
-            target_family_match, _ = _outcome_status_family_match(target_token)
-            if target_family_match == "censor":
-                raise ValueError(
-                    f"The selected event-positive value '{target}' means no event (censoring), not the event. "
-                    "Choose the value that means the event happened."
-                )
-            if target_token not in observed_tokens:
-                raise ValueError(
-                    f"The selected event-positive value '{target}' is not present in the event column."
-                )
-            if len(observed_tokens) > 2:
-                raise ValueError(
-                    "The event column has more than two distinct values after normalization. "
-                    "For multi-class status columns, please recode to a binary event indicator."
-                )
-            event_tokens = {target_token}
-
+        event_tokens = _event_tokens_for_label(target, target_token, observed_tokens)
         out.loc[valid] = value_tokens.loc[valid].isin(event_tokens).astype(float)
         return out
 
@@ -859,10 +1086,7 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
     if inferred is not None:
         return inferred
     if inference_error == "multistate":
-        raise ValueError(
-            "The event column contains more than one recognized event state. "
-            "Recode it to a binary event indicator before survival analysis."
-        )
+        raise ValueError(_MULTIPLE_EVENT_STATES_MESSAGE)
 
     raise ValueError(
         "Could not infer event coding. Select the value that represents the event in the dashboard."
@@ -1114,11 +1338,16 @@ def profile_dataframe(df: pd.DataFrame, dataset_id: str, filename: str) -> dict[
         binary_candidate_columns=binary_candidate_columns,
     )
 
+    source_encoding = df.attrs.get("source_encoding")
     return {
         "dataset_id": dataset_id,
         "filename": filename,
         "n_rows": int(df.shape[0]),
         "n_columns": int(df.shape[1]),
+        # Text uploads record the encoding used to read them, so a legacy encoding
+        # (Korean CP949, Windows-1252) is visible instead of silently guessed.
+        "text_encoding": source_encoding,
+        "text_encoding_label": TEXT_ENCODING_LABELS.get(str(source_encoding)) if source_encoding else None,
         "columns": column_profiles,
         "preview": preview_rows(df),
         "numeric_columns": numeric_columns,
@@ -1195,8 +1424,7 @@ def _reject_calendar_date_time_column(series: pd.Series, time_column: str) -> No
         sample = series.dropna().astype(str).head(200)
         if sample.empty or pd.to_numeric(sample, errors="coerce").notna().mean() > 0.5:
             return
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with suppressed_warnings():
             parsed = pd.to_datetime(sample, errors="coerce")
         if parsed.notna().mean() > 0.8:
             raise ValueError(message)
@@ -1310,6 +1538,8 @@ def _cohort_frame(
             numeric_values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
             inf_row_mask |= np.isinf(numeric_values)
     frame = frame.replace([np.inf, -np.inf], np.nan)
+    # +/-Inf values were just coerced to missing, so rows_with_infinite_values is a
+    # subset of dropped_missing_rows (summaries report it as "including ...").
     missing_row_mask = frame[drop_subset].isna().any(axis=1).to_numpy(dtype=bool)
     if drop_missing_extra_columns:
         frame = frame.dropna()
@@ -1370,9 +1600,11 @@ def _canonical_level_strings(series: pd.Series) -> pd.Series:
     if is_numeric_dtype(series):
         numeric = pd.to_numeric(series, errors="coerce")
         finite = numeric[np.isfinite(numeric.astype(float))] if numeric.notna().any() else numeric.dropna()
+        # Absolute tolerance only: np.isclose's default relative tolerance (1e-5 * |x|)
+        # treats 100000.5 as integer-like and would merge distinct large values.
         if (
             not finite.empty
-            and bool(np.all(np.isclose(finite.astype(float), np.round(finite.astype(float)))))
+            and bool(np.all(np.isclose(finite.astype(float), np.round(finite.astype(float)), rtol=0.0, atol=1e-9)))
             and float(np.abs(finite.astype(float)).max()) < 1e15
         ):
             return numeric.where(np.isfinite(numeric.astype(float))).round().astype("Int64").astype("string")
@@ -1446,21 +1678,6 @@ def _step_values(event_times: np.ndarray, survival: np.ndarray, query_times: np.
     valid = indices >= 0
     output[valid] = survival[indices[valid]]
     return output
-
-
-def _restricted_mean_survival_time(timeline: np.ndarray, survival: np.ndarray, horizon: float) -> float:
-    timeline = np.asarray(timeline, dtype=float)
-    survival = np.asarray(survival, dtype=float)
-    if timeline.size == 0 or survival.size == 0:
-        return 0.0
-    horizon = float(max(horizon, 0.0))
-    clipped_timeline = np.clip(timeline, 0.0, horizon)
-    widths = np.maximum(np.diff(clipped_timeline), 0.0)
-    area = float(np.dot(survival[:-1], widths)) if widths.size else 0.0
-    tail_width = max(horizon - float(clipped_timeline[-1]), 0.0)
-    if tail_width > 0.0:
-        area += float(survival[-1]) * tail_width
-    return float(area)
 
 
 def _restricted_mean_survival_time_delta_stats(
@@ -1569,6 +1786,26 @@ def _restricted_mean_survival_time_delta_stats(
     }
 
 
+def _diagnostic_lowess_trend(y_sorted: np.ndarray, x_sorted: np.ndarray) -> np.ndarray:
+    """LOWESS trend line for a residual panel whose x values are sorted ascending.
+
+    With heavily tied x (tied event times on the log scale, or a covariate with few
+    values) a local window can hold a single distinct x, where LOWESS divides by zero;
+    those points fall back to the mean residual at the same x.
+    """
+    if x_sorted.shape[0] < 4:
+        return y_sorted
+    frac = min(0.8, max(0.35, 6.0 / float(x_sorted.shape[0])))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        trend = np.asarray(lowess(y_sorted, x_sorted, frac=frac, it=0, return_sorted=False), dtype=float)
+    undefined = ~np.isfinite(trend)
+    if undefined.any():
+        _, inverse = np.unique(x_sorted, return_inverse=True)
+        means_at_x = np.bincount(inverse, weights=y_sorted) / np.bincount(inverse)
+        trend[undefined] = means_at_x[inverse[undefined]]
+    return trend
+
+
 def _cox_martingale_plot_data(
     frame: pd.DataFrame,
     martingale_residuals: np.ndarray,
@@ -1604,10 +1841,7 @@ def _cox_martingale_plot_data(
         order = np.argsort(x_valid, kind="mergesort")
         x_sorted = x_valid[order]
         y_sorted = y_valid[order]
-        trend_y = y_sorted
-        if x_sorted.shape[0] >= 4:
-            frac = min(0.8, max(0.35, 6.0 / float(x_sorted.shape[0])))
-            trend_y = np.asarray(lowess(y_sorted, x_sorted, frac=frac, it=0, return_sorted=False), dtype=float)
+        trend_y = _diagnostic_lowess_trend(y_sorted, x_sorted)
         panels.append(
             {
                 "term": covariate,
@@ -2009,28 +2243,178 @@ def _cox_fit_failure_message(exc: Exception, stability_snapshot: dict[str, Any])
     return _cox_nonfinite_estimate_message(stability_snapshot)
 
 
+def fit_phreg(model: PHReg) -> tuple[PHRegResults, bool]:
+    """Fit ``model`` exactly like ``PHReg.fit()`` and return ``(results, converged)``.
+
+    ``PHReg.fit`` discards the optimizer's return values, so convergence used to be read
+    from a ConvergenceWarning captured with ``warnings.catch_warnings``. That swaps
+    process-wide state, so concurrent analyses in the server's thread pool could miss or
+    steal each other's warning. The optimizer's own ``converged`` flag is thread-safe.
+    Objects that only expose a statsmodels-style ``fit()`` are fitted as-is and treated
+    as converged.
+    """
+    if not isinstance(model, PHReg):
+        return model.fit(disp=False), True
+    model.groups = None
+    raw = LikelihoodModel.fit(model, disp=False, warn_convergence=False)
+    converged = bool((getattr(raw, "mle_retvals", None) or {}).get("converged", True))
+    return PHRegResults(model, raw.params, raw.cov_params()), converged
+
+
 def _fit_cox_model(model: PHReg, stability_snapshot: dict[str, Any]):
     try:
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            results = model.fit(disp=False)
+        results, converged = fit_phreg(model)
     except MemoryError:
         raise
     except Exception as exc:
         raise ValueError(_cox_fit_failure_message(exc, stability_snapshot)) from exc
-
-    convergence_warnings = [
-        warning
-        for warning in caught
-        if (
-            issubclass(warning.category, ConvergenceWarning)
-            or "converg" in str(warning.message).lower()
+    if not converged:
+        raise ValueError(
+            _cox_fit_failure_message(RuntimeError("Cox PH fit did not converge cleanly."), stability_snapshot)
         )
-    ]
-    if convergence_warnings:
-        message = str(convergence_warnings[0].message).strip() or "Cox PH fit did not converge cleanly."
-        raise ValueError(_cox_fit_failure_message(RuntimeError(message), stability_snapshot))
     return results
+
+
+class _EfronTieGroups(NamedTuple):
+    """One stratum's rows sorted by time, with the Efron bookkeeping of its tied events."""
+
+    order: np.ndarray
+    sorted_time: np.ndarray
+    risk: np.ndarray
+    dead_pos: np.ndarray
+    tie_starts: np.ndarray
+    tie_index: np.ndarray
+    deaths: np.ndarray
+    fraction: np.ndarray
+    denominator: np.ndarray
+
+
+def _efron_tie_groups(
+    rows: np.ndarray,
+    time: np.ndarray,
+    event: np.ndarray,
+    linear_predictor: np.ndarray,
+) -> _EfronTieGroups | None:
+    """Sort one stratum and compute the Efron risk-set denominators of its events.
+
+    For d events tied at time t, event k = 0..d-1 of the tie uses the denominator
+    S0 - k/d * S0_tied, where S0 sums exp(eta) over the risk set (time >= t) and
+    S0_tied over the tied events. Returns None for a stratum without events.
+    """
+    order = rows[np.argsort(time[rows], kind="mergesort")]
+    dead_pos = np.flatnonzero(event[order])
+    if dead_pos.size == 0:
+        return None
+    sorted_time = time[order]
+    lp = linear_predictor[order]
+    # Shifting eta by a constant cancels in every quantity built from these sums.
+    risk = np.exp(lp - lp.max())
+    s0_from = np.cumsum(risk[::-1])[::-1]
+    # Tied events share the first sorted position of their time as the risk-set start.
+    tie_start = np.searchsorted(sorted_time, sorted_time[dead_pos], side="left")
+    tie_starts, tie_index, deaths = np.unique(tie_start, return_inverse=True, return_counts=True)
+    tied_s0 = np.bincount(tie_index, weights=risk[dead_pos])
+    step = np.arange(dead_pos.size) - np.searchsorted(tie_index, tie_index, side="left")
+    fraction = step / deaths[tie_index]
+    denominator = s0_from[tie_starts][tie_index] - fraction * tied_s0[tie_index]
+    return _EfronTieGroups(
+        order=order,
+        sorted_time=sorted_time,
+        risk=risk,
+        dead_pos=dead_pos,
+        tie_starts=tie_starts,
+        tie_index=tie_index,
+        deaths=deaths,
+        fraction=fraction,
+        denominator=denominator,
+    )
+
+
+def _efron_martingale_residuals(
+    exog: np.ndarray,
+    time: np.ndarray,
+    event: np.ndarray,
+    params: np.ndarray,
+    strata: np.ndarray | None = None,
+) -> np.ndarray:
+    """Martingale residuals of an Efron-tie Cox fit, computed as R's ``residuals.coxph`` does.
+
+    statsmodels' ``PHRegResults.martingale_residuals`` evaluates the cumulative hazard
+    just before each subject's time, which leaves out the jump at the subject's own
+    event and biases event residuals upward. Here the cumulative hazard includes it:
+    each event time adds sum_k 1 / (S0 - k/d * S0_tied) for everyone at risk, and each
+    of the d tied events itself receives the Efron share sum_k (1 - k/d) / (...).
+    """
+    exog = np.asarray(exog, dtype=float)
+    if exog.ndim == 1:
+        exog = exog.reshape(-1, 1)
+    time = np.asarray(time, dtype=float).reshape(-1)
+    event = np.asarray(event).reshape(-1).astype(bool)
+    linear_predictor = exog @ np.asarray(params, dtype=float).reshape(-1)
+    strata_codes = np.zeros(time.shape[0], dtype=np.int64) if strata is None else np.asarray(strata).reshape(-1)
+    # A stratum without events has zero cumulative hazard, so its residuals are 0.
+    residuals = np.zeros(time.shape[0], dtype=float)
+    for code in np.unique(strata_codes):
+        groups = _efron_tie_groups(np.flatnonzero(strata_codes == code), time, event, linear_predictor)
+        if groups is None:
+            continue
+        hazard = np.bincount(groups.tie_index, weights=1.0 / groups.denominator)
+        event_hazard = np.bincount(groups.tie_index, weights=(1.0 - groups.fraction) / groups.denominator)
+        cumulative = np.cumsum(hazard)
+        event_times = groups.sorted_time[groups.tie_starts]
+        n_passed = np.searchsorted(event_times, groups.sorted_time, side="right")
+        subject_hazard = np.where(n_passed > 0, cumulative[np.maximum(n_passed - 1, 0)], 0.0)
+        own = groups.tie_index
+        subject_hazard[groups.dead_pos] = cumulative[own] - hazard[own] + event_hazard[own]
+        residuals[groups.order] = event[groups.order].astype(float) - groups.risk * subject_hazard
+    return residuals
+
+
+def _efron_schoenfeld_residuals(
+    exog: np.ndarray,
+    time: np.ndarray,
+    event: np.ndarray,
+    params: np.ndarray,
+    strata: np.ndarray | None = None,
+) -> np.ndarray:
+    """Schoenfeld residuals of an Efron-tie Cox fit, computed as R's ``residuals.coxph`` does.
+
+    statsmodels' ``PHRegResults.schoenfeld_residuals`` subtracts Breslow risk-set means
+    even from an Efron fit, and in a stratified model it carries one stratum's risk-set
+    sums into the next; both distort the proportional-hazards test. Here each stratum is
+    handled on its own, and for d events tied at time t the expected covariate is the
+    mean over k = 0..d-1 of (S1 - k/d * S1_tied) / (S0 - k/d * S0_tied), where S1 sums
+    exp(eta) * x over the risk set and S1_tied over the tied events (S0 as in
+    ``_efron_tie_groups``). Rows without an event are NaN.
+    """
+    exog = np.asarray(exog, dtype=float)
+    if exog.ndim == 1:
+        exog = exog.reshape(-1, 1)
+    time = np.asarray(time, dtype=float).reshape(-1)
+    event = np.asarray(event).reshape(-1).astype(bool)
+    linear_predictor = exog @ np.asarray(params, dtype=float).reshape(-1)
+    strata_codes = np.zeros(time.shape[0], dtype=np.int64) if strata is None else np.asarray(strata).reshape(-1)
+    n_terms = exog.shape[1]
+    residuals = np.full(exog.shape, np.nan)
+    for code in np.unique(strata_codes):
+        groups = _efron_tie_groups(np.flatnonzero(strata_codes == code), time, event, linear_predictor)
+        if groups is None:
+            continue
+        x = exog[groups.order]
+        weighted_x = groups.risk[:, None] * x
+        # Covariate sums over everyone at risk from each sorted position on (time >= t).
+        s1_from = np.cumsum(weighted_x[::-1], axis=0)[::-1]
+        dead_pos, tie_index = groups.dead_pos, groups.tie_index
+        tied_s1 = np.column_stack(
+            [np.bincount(tie_index, weights=weighted_x[dead_pos, term]) for term in range(n_terms)]
+        )
+        numerator = s1_from[groups.tie_starts][tie_index] - groups.fraction[:, None] * tied_s1[tie_index]
+        efron_terms = numerator / groups.denominator[:, None]
+        expected = np.column_stack(
+            [np.bincount(tie_index, weights=efron_terms[:, term]) for term in range(n_terms)]
+        ) / groups.deaths[:, None]
+        residuals[groups.order[dead_pos]] = x[dead_pos] - expected[tie_index]
+    return residuals
 
 
 def _cox_grambsch_therneau_test(
@@ -2329,143 +2713,134 @@ def _km_scientific_summary(
     }
 
 
-def _cox_scientific_summary(
+class _SummaryNotes(NamedTuple):
+    """The ordered strengths, cautions, and next steps of a scientific summary."""
+
+    strengths: list[str]
+    cautions: list[str]
+    next_steps: list[str]
+
+
+class _CoxTermAlerts(NamedTuple):
+    significant: list[str]
+    proportional_hazards: list[str]
+    reference_levels: list[str]
+    sparse_levels: list[str]
+    wide_ci: list[str]
+    non_estimable: list[str]
+
+
+def _nonempty_strings(values: Any) -> list[str]:
+    return [str(value) for value in values or [] if value]
+
+
+def _cox_term_alerts(
     model_rows: Sequence[dict[str, Any]],
     diagnostic_rows: Sequence[dict[str, Any]],
-    model_stats: dict[str, Any],
-    *,
-    categorical_alerts: dict[str, list[str]] | None = None,
-) -> dict[str, Any]:
-    significant_terms = [
-        row["Label"]
-        for row in model_rows
-        if row["P value"] is not None
-        and row["CI lower"] is not None
-        and row["CI upper"] is not None
-        and float(row["P value"]) < 0.05
-        and not (float(row["CI lower"]) <= 1.0 <= float(row["CI upper"]))
-    ]
-    ph_alert_terms = [
-        str(row["Term"])
-        for row in diagnostic_rows
-        if row.get("_kind") != "global"
-        if row["P value"] is not None and float(row["P value"]) < 0.05
-    ]
+    categorical_alerts: dict[str, list[str]] | None,
+) -> _CoxTermAlerts:
     categorical_alerts = categorical_alerts or {"reference_levels": [], "sparse_levels": []}
-    reference_alerts = [str(item) for item in categorical_alerts.get("reference_levels", []) if item]
-    sparse_level_alerts = [str(item) for item in categorical_alerts.get("sparse_levels", []) if item]
-    wide_ci_terms = _cox_wide_ci_alert_terms(model_rows)
-    non_estimable_terms = [
-        str(row.get("Label", row.get("Variable", "")))
-        for row in model_rows
-        if row.get("Hazard ratio") is None or row.get("CI lower") is None or row.get("CI upper") is None
-    ]
+    return _CoxTermAlerts(
+        significant=[
+            row["Label"]
+            for row in model_rows
+            if row["P value"] is not None
+            and row["CI lower"] is not None
+            and row["CI upper"] is not None
+            and float(row["P value"]) < 0.05
+            and not (float(row["CI lower"]) <= 1.0 <= float(row["CI upper"]))
+        ],
+        proportional_hazards=[
+            str(row["Term"])
+            for row in diagnostic_rows
+            if row.get("_kind") != "global"
+            if row["P value"] is not None and float(row["P value"]) < 0.05
+        ],
+        reference_levels=_nonempty_strings(categorical_alerts.get("reference_levels", [])),
+        sparse_levels=_nonempty_strings(categorical_alerts.get("sparse_levels", [])),
+        wide_ci=_cox_wide_ci_alert_terms(model_rows),
+        non_estimable=[
+            str(row.get("Label", row.get("Variable", "")))
+            for row in model_rows
+            if row.get("Hazard ratio") is None or row.get("CI lower") is None or row.get("CI upper") is None
+        ],
+    )
 
-    complete_case_n = int(model_stats["n"])
-    outcome_rows_raw = model_stats.get("outcome_rows")
-    dropped_rows_raw = model_stats.get("dropped_rows")
-    dropped_nonpositive_time_rows = int(model_stats.get("dropped_nonpositive_time_rows") or 0)
-    rows_with_infinite_values = int(model_stats.get("rows_with_infinite_values") or 0)
-    outcome_rows = int(outcome_rows_raw) if outcome_rows_raw is not None else None
-    dropped_rows = int(dropped_rows_raw) if dropped_rows_raw is not None else None
-    dropped_fraction = None
-    if outcome_rows is not None and outcome_rows > 0 and dropped_rows is not None:
-        dropped_fraction = float(dropped_rows / outcome_rows)
 
-    cohort_statement = f"Model estimates use the analyzable cohort after dropping rows with missing selected Cox inputs (N = {complete_case_n})."
-    if outcome_rows is not None:
-        cohort_statement = (
-            "Model estimates use the analyzable cohort after dropping rows with missing selected Cox inputs "
-            f"(N = {complete_case_n} of {int(outcome_rows)} outcome-valid rows)."
-        )
-
-    strata_columns = [str(column) for column in model_stats.get("strata_columns") or [] if column]
-    c_index_label = str(model_stats.get("c_index_label") or "Apparent C-index (training cohort)")
-    strengths = [
-        "Cox regression was fit with the Efron tie method.",
-        cohort_statement,
-        "Proportional-hazards checks use the Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time (per term, 1 df, plus a global test); the plot overlay uses LOWESS smoothing for visual inspection only.",
-    ]
-    if strata_columns:
-        strengths.append(
-            "Discrimination was not reported for the stratified Cox fit because pooled cross-stratum ranking is not directly interpretable."
-        )
-    else:
-        strengths.append(
-            "The reported discrimination metric is an apparent C-index on the fitted cohort, so it reflects training-cohort ranking only."
-        )
-    cautions: list[str] = []
-    next_steps: list[str] = []
-
-    epv = _safe_float(model_stats.get("events_per_parameter"))
-    c_index = _safe_float(model_stats.get("c_index"))
-    lr_statistic = _safe_float(model_stats.get("lr_statistic"))
-    lr_pvalue = _safe_float(model_stats.get("lr_pvalue"))
-    lr_note = str(model_stats.get("lr_note") or "").strip()
-    global_ph_statistic = _safe_float(model_stats.get("global_ph_statistic"))
-    global_ph_df = _safe_float(model_stats.get("global_ph_df"))
-    global_ph_pvalue = _safe_float(model_stats.get("global_ph_pvalue"))
-    global_ph_terms_tested = int(model_stats.get("global_ph_terms_tested") or 0)
+def _cox_ill_conditioned_number(model_stats: dict[str, Any]) -> float | None:
+    """The design-matrix condition number when it exceeds the warning threshold, else None."""
     design_condition_number = _safe_float(model_stats.get("design_condition_number"))
-    design_condition_warning_threshold = _safe_float(
+    warning_threshold = _safe_float(
         model_stats.get("design_condition_warning_threshold") or COX_CONDITION_NUMBER_WARN_THRESHOLD
     )
-    martingale_terms = [str(term) for term in model_stats.get("martingale_terms") or [] if term]
-    martingale_note = str(model_stats.get("martingale_note") or "").strip()
+    if (
+        design_condition_number is not None
+        and warning_threshold is not None
+        and design_condition_number > warning_threshold
+    ):
+        return design_condition_number
+    return None
+
+
+def _cox_strata_notes(model_stats: dict[str, Any], strata_columns: list[str], notes: _SummaryNotes) -> None:
+    strengths, cautions, next_steps = notes
+    if not strata_columns:
+        cautions.append("Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.")
+        return
     n_strata = _safe_float(model_stats.get("n_strata"))
     zero_event_strata_count = int(model_stats.get("zero_event_strata_count") or 0)
     sparse_event_strata_count = int(model_stats.get("sparse_event_strata_count") or 0)
-    high_cardinality_strata_columns = [
-        str(item) for item in model_stats.get("high_cardinality_strata_columns") or [] if item
-    ]
-    high_cardinality_numeric_strata_columns = [
-        str(item) for item in model_stats.get("high_cardinality_numeric_strata_columns") or [] if item
-    ]
-    if epv is not None and epv < 10:
-        cautions.append("Events per parameter is below 10, so coefficients may be unstable or overfit.")
-        next_steps.append("Reduce model complexity or increase the event count before treating estimates as final.")
-    if strata_columns:
+    high_cardinality_strata_columns = _nonempty_strings(model_stats.get("high_cardinality_strata_columns"))
+    high_cardinality_numeric_strata_columns = _nonempty_strings(
+        model_stats.get("high_cardinality_numeric_strata_columns")
+    )
+    cautions.append(
+        "Changing the covariate set or strata set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected inputs."
+    )
+    strengths.append(
+        f"Baseline hazards were stratified by {_summarize_labels(strata_columns, max_items=3)}, so those variables are not reported as hazard-ratio terms."
+    )
+    if n_strata is not None:
+        strengths.append(f"The fitted stratified Cox specification used {int(n_strata)} observed strata combination(s).")
+    cautions.append("Stratified variables are used only for stratum-specific baseline hazards and do not receive hazard-ratio estimates.")
+    if zero_event_strata_count:
         cautions.append(
-            "Changing the covariate set or strata set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected inputs."
+            f"{zero_event_strata_count} observed stratum/strata had zero events, so the stratified Cox fit can look more stable than the within-stratum information actually supports."
         )
-        strengths.append(
-            f"Baseline hazards were stratified by {_summarize_labels(strata_columns, max_items=3)}, so those variables are not reported as hazard-ratio terms."
+        next_steps.append("Collapse sparse strata before treating a stratified Cox fit as manuscript-ready.")
+    if sparse_event_strata_count:
+        cautions.append(
+            f"{sparse_event_strata_count} observed stratum/strata had only one event, which makes within-stratum information thin for a stratified Cox fit."
         )
-        if n_strata is not None:
-            strengths.append(f"The fitted stratified Cox specification used {int(n_strata)} observed strata combination(s).")
-        cautions.append("Stratified variables are used only for stratum-specific baseline hazards and do not receive hazard-ratio estimates.")
-        if zero_event_strata_count:
-            cautions.append(
-                f"{zero_event_strata_count} observed stratum/strata had zero events, so the stratified Cox fit can look more stable than the within-stratum information actually supports."
-            )
-            next_steps.append("Collapse sparse strata before treating a stratified Cox fit as manuscript-ready.")
-        if sparse_event_strata_count:
-            cautions.append(
-                f"{sparse_event_strata_count} observed stratum/strata had only one event, which makes within-stratum information thin for a stratified Cox fit."
-            )
-        if high_cardinality_numeric_strata_columns:
-            cautions.append(
-                "Selected strata include numeric/high-cardinality columns: "
-                f"{_summarize_labels(high_cardinality_numeric_strata_columns, max_items=3)}."
-            )
-            next_steps.append("Recode continuous strata into a small number of clinically meaningful levels before fitting stratified Cox.")
-        elif high_cardinality_strata_columns:
-            cautions.append(
-                "Selected strata include many observed levels: "
-                f"{_summarize_labels(high_cardinality_strata_columns, max_items=3)}."
-            )
-    else:
-        cautions.append("Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.")
-    cautions.append("All Cox outputs assume non-informative (independent) censoring.")
-    cautions.append(
-        "Competing risks are not modeled in this Cox workflow, so cause-specific questions need dedicated competing-risk methods rather than treating other event types as ordinary censoring."
-    )
-    cautions.append(
-        "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, coefficient estimates and survival summaries can be biased."
-    )
+    if high_cardinality_numeric_strata_columns:
+        cautions.append(
+            "Selected strata include numeric/high-cardinality columns: "
+            f"{_summarize_labels(high_cardinality_numeric_strata_columns, max_items=3)}."
+        )
+        next_steps.append("Recode continuous strata into a small number of clinically meaningful levels before fitting stratified Cox.")
+    elif high_cardinality_strata_columns:
+        cautions.append(
+            "Selected strata include many observed levels: "
+            f"{_summarize_labels(high_cardinality_strata_columns, max_items=3)}."
+        )
+
+
+def _cox_input_quality_notes(
+    model_stats: dict[str, Any],
+    *,
+    outcome_rows: int | None,
+    dropped_rows: int | None,
+    alerts: _CoxTermAlerts,
+    ill_conditioned_number: float | None,
+    notes: _SummaryNotes,
+) -> None:
+    _, cautions, next_steps = notes
+    dropped_nonpositive_time_rows = int(model_stats.get("dropped_nonpositive_time_rows") or 0)
+    rows_with_infinite_values = int(model_stats.get("rows_with_infinite_values") or 0)
     if dropped_rows:
         drop_message = f"{int(dropped_rows)} outcome-valid rows were excluded because at least one selected Cox input was missing."
-        if dropped_fraction is not None:
+        if outcome_rows is not None and outcome_rows > 0:
+            dropped_fraction = float(dropped_rows / outcome_rows)
             drop_message = (
                 f"{int(dropped_rows)} outcome-valid rows ({dropped_fraction:.1%}) were excluded "
                 "because at least one selected Cox input was missing."
@@ -2480,48 +2855,63 @@ def _cox_scientific_summary(
         cautions.append(
             f"{rows_with_infinite_values} outcome-valid row(s) contained +/-Inf values in selected Cox inputs; those values were coerced to missing before complete-case filtering."
         )
-    if (
-        design_condition_number is not None
-        and design_condition_warning_threshold is not None
-        and design_condition_number > design_condition_warning_threshold
-    ):
+    if ill_conditioned_number is not None:
         cautions.append(
-            f"The Cox design matrix is poorly conditioned (condition number {design_condition_number:.2e}), "
+            f"The Cox design matrix is poorly conditioned (condition number {ill_conditioned_number:.2e}), "
             "so hazard ratios can become numerically unstable when selected inputs vary on very different scales or are nearly collinear."
         )
         next_steps.append(
             "Standardize extreme-scale continuous covariates and review collinearity before treating Cox coefficients as stable."
         )
-    if ph_alert_terms:
+    if alerts.proportional_hazards:
         cautions.append(
-            f"Possible proportional-hazards violations detected for: {', '.join(ph_alert_terms)}."
+            f"Possible proportional-hazards violations detected for: {', '.join(alerts.proportional_hazards)}."
         )
         next_steps.append("Consider stratification or time-varying effects for PH-violating terms.")
-    if reference_alerts:
+    if alerts.reference_levels:
         cautions.append(
-            f"Some Cox reference levels are very small after missing-value filtering: {_summarize_labels(reference_alerts, max_items=4)}."
+            f"Some Cox reference levels are very small after missing-value filtering: {_summarize_labels(alerts.reference_levels, max_items=4)}."
         )
         next_steps.append("Use a more stable reference level or collapse sparse categories before interpreting reference-based contrasts.")
-    if sparse_level_alerts:
+    if alerts.sparse_levels:
         cautions.append(
-            f"Sparse categorical levels remain in the analyzable cohort: {_summarize_labels(sparse_level_alerts, max_items=4)}."
+            f"Sparse categorical levels remain in the analyzable cohort: {_summarize_labels(alerts.sparse_levels, max_items=4)}."
         )
         next_steps.append("Collapse rare categorical levels before treating term-specific hazard ratios as stable.")
-    if wide_ci_terms:
+    if alerts.wide_ci:
         cautions.append(
-            f"Some hazard-ratio intervals are very wide, which suggests unstable estimates: {_summarize_labels(wide_ci_terms, max_items=4)}."
+            f"Some hazard-ratio intervals are very wide, which suggests unstable estimates: {_summarize_labels(alerts.wide_ci, max_items=4)}."
         )
         next_steps.append("Treat wide-interval terms as unstable unless the category encoding or cohort size is improved.")
-    if non_estimable_terms:
+    if alerts.non_estimable:
         cautions.append(
-            f"Some Cox contrasts produced non-estimable hazard ratios or confidence intervals: {_summarize_labels(non_estimable_terms, max_items=4)}."
+            f"Some Cox contrasts produced non-estimable hazard ratios or confidence intervals: {_summarize_labels(alerts.non_estimable, max_items=4)}."
         )
         next_steps.append("Collapse sparse categories or remove quasi-separated terms before interpreting those contrasts.")
-    if c_index is not None and c_index < 0.6:
-        cautions.append("Apparent model discrimination is modest (C-index below 0.60).")
+
+
+def _cox_fit_statistic_notes(
+    model_stats: dict[str, Any],
+    *,
+    c_index: float | None,
+    c_index_label: str,
+    notes: _SummaryNotes,
+) -> None:
+    strengths, cautions, next_steps = notes
+    lr_statistic = _safe_float(model_stats.get("lr_statistic"))
+    lr_pvalue = _safe_float(model_stats.get("lr_pvalue"))
+    lr_note = str(model_stats.get("lr_note") or "").strip()
+    global_ph_statistic = _safe_float(model_stats.get("global_ph_statistic"))
+    global_ph_df = _safe_float(model_stats.get("global_ph_df"))
+    global_ph_pvalue = _safe_float(model_stats.get("global_ph_pvalue"))
+    global_ph_terms_tested = int(model_stats.get("global_ph_terms_tested") or 0)
+    martingale_terms = _nonempty_strings(model_stats.get("martingale_terms"))
+    martingale_note = str(model_stats.get("martingale_note") or "").strip()
+
     if c_index is not None:
+        if c_index < 0.6:
+            cautions.append("Apparent model discrimination is modest (C-index below 0.60).")
         cautions.append("The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.")
-    if c_index is not None:
         strengths.append(
             f"A C-index of {c_index:.3f} means the fitted model correctly orders approximately {c_index * 100:.1f}% of evaluable patient pairs by predicted risk."
         )
@@ -2569,37 +2959,20 @@ def _cox_scientific_summary(
         cautions.append(
             "The reported C-index confidence interval is a bootstrap interval on the same cohort using fixed fitted risk scores, so it understates full model-building uncertainty and does not replace external validation."
         )
-    cautions.append(
-        "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; validate the final specification on a separate cohort outside this run."
-    )
-    if not significant_terms:
-        cautions.append("No model term shows clear nominal evidence at p < 0.05.")
 
-    structural_instability = bool(
-        (epv is not None and epv < 10)
-        or reference_alerts
-        or sparse_level_alerts
-        or wide_ci_terms
-        or non_estimable_terms
-        or zero_event_strata_count
-        or high_cardinality_numeric_strata_columns
-        or (
-            design_condition_number is not None
-            and design_condition_warning_threshold is not None
-            and design_condition_number > design_condition_warning_threshold
-        )
-    )
 
+def _cox_summary_headline(alerts: _CoxTermAlerts, structural_instability: bool, next_steps: list[str]) -> str:
+    significant_terms = alerts.significant
     if significant_terms:
         if structural_instability:
             headline = (
                 f"Model fit shows {len(significant_terms)} term(s) with nominal hazard association, "
                 f"but some estimates appear unstable: {_summarize_labels(significant_terms)}."
             )
-        elif ph_alert_terms:
+        elif alerts.proportional_hazards:
             headline = (
                 f"Model fit shows {len(significant_terms)} term(s) with nominal hazard association, "
-                f"but some terms need closer proportional-hazards review: {_summarize_labels(ph_alert_terms)}."
+                f"but some terms need closer proportional-hazards review: {_summarize_labels(alerts.proportional_hazards)}."
             )
         else:
             headline = (
@@ -2607,36 +2980,44 @@ def _cox_scientific_summary(
                 f"{_summarize_labels(significant_terms)}."
             )
         next_steps.append("Interpret hazard ratios together with confidence intervals, not p-values alone.")
+        return headline
+    if structural_instability:
+        headline = (
+            "Model fit completed, but no term shows clear nominal hazard association and some estimates remain unstable under the current specification."
+        )
+    elif alerts.proportional_hazards:
+        headline = (
+            "Model fit completed, but no term shows clear nominal hazard association and some terms still need closer proportional-hazards review under the current specification."
+        )
     else:
-        if structural_instability:
-            headline = (
-                "Model fit completed, but no term shows clear nominal hazard association and some estimates remain unstable under the current specification."
-            )
-        elif ph_alert_terms:
-            headline = (
-                "Model fit completed, but no term shows clear nominal hazard association and some terms still need closer proportional-hazards review under the current specification."
-            )
-        else:
-            headline = "Model fit completed, but no term shows clear nominal hazard association under the current specification."
-        next_steps.append("Revisit covariate selection, encoding, and cohort size before forcing interpretation.")
+        headline = "Model fit completed, but no term shows clear nominal hazard association under the current specification."
+    next_steps.append("Revisit covariate selection, encoding, and cohort size before forcing interpretation.")
+    return headline
 
-    status = "robust"
-    if cautions:
-        status = "review"
-    if (
-        (epv is not None and epv < 5)
-        or len(ph_alert_terms) >= 2
-        or reference_alerts
-        or sparse_level_alerts
-        or zero_event_strata_count
-        or high_cardinality_numeric_strata_columns
-    ):
-        status = "caution"
 
+def _cox_summary_metrics(
+    model_stats: dict[str, Any],
+    *,
+    outcome_rows: int | None,
+    dropped_rows: int | None,
+    epv: float | None,
+    c_index: float | None,
+    c_index_label: str,
+    strata_columns: list[str],
+    ill_conditioned_number: float | None,
+) -> list[dict[str, Any]]:
+    n_strata = _safe_float(model_stats.get("n_strata"))
+    zero_event_strata_count = int(model_stats.get("zero_event_strata_count") or 0)
+    sparse_event_strata_count = int(model_stats.get("sparse_event_strata_count") or 0)
+    lr_statistic = _safe_float(model_stats.get("lr_statistic"))
+    lr_pvalue = _safe_float(model_stats.get("lr_pvalue"))
+    ci_low = _safe_float(model_stats.get("c_index_ci_lower"))
+    ci_high = _safe_float(model_stats.get("c_index_ci_upper"))
+    ci_level = _safe_float(model_stats.get("c_index_ci_level"))
     metrics = [
         {"label": "Outcome-valid rows", "value": outcome_rows},
         {"label": "Dropped for missing Cox inputs", "value": dropped_rows},
-        {"label": "Dropped for negative time", "value": int(dropped_nonpositive_time_rows)},
+        {"label": "Dropped for negative time", "value": int(model_stats.get("dropped_nonpositive_time_rows") or 0)},
         {"label": "Events", "value": int(model_stats["events"])},
         {"label": "Parameters", "value": int(model_stats["parameters"])},
         {"label": "EPV", "value": epv},
@@ -2645,12 +3026,8 @@ def _cox_scientific_summary(
         metrics.append({"label": c_index_label, "value": c_index})
     if strata_columns:
         metrics.append({"label": "Strata variables", "value": len(strata_columns)})
-    if (
-        design_condition_number is not None
-        and design_condition_warning_threshold is not None
-        and design_condition_number > design_condition_warning_threshold
-    ):
-        metrics.append({"label": "Condition number", "value": f"{design_condition_number:.2e}"})
+    if ill_conditioned_number is not None:
+        metrics.append({"label": "Condition number", "value": f"{ill_conditioned_number:.2e}"})
     if n_strata is not None:
         metrics.append({"label": "Observed strata", "value": int(n_strata)})
     if zero_event_strata_count:
@@ -2674,14 +3051,120 @@ def _cox_scientific_summary(
                 "value": f"{float(ci_low):.3f} to {float(ci_high):.3f}",
             }
         )
+    return metrics
+
+
+def _cox_scientific_summary(
+    model_rows: Sequence[dict[str, Any]],
+    diagnostic_rows: Sequence[dict[str, Any]],
+    model_stats: dict[str, Any],
+    *,
+    categorical_alerts: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    alerts = _cox_term_alerts(model_rows, diagnostic_rows, categorical_alerts)
+    complete_case_n = int(model_stats["n"])
+    outcome_rows_raw = model_stats.get("outcome_rows")
+    dropped_rows_raw = model_stats.get("dropped_rows")
+    outcome_rows = int(outcome_rows_raw) if outcome_rows_raw is not None else None
+    dropped_rows = int(dropped_rows_raw) if dropped_rows_raw is not None else None
+    strata_columns = _nonempty_strings(model_stats.get("strata_columns"))
+    c_index_label = str(model_stats.get("c_index_label") or "Apparent C-index (training cohort)")
+    epv = _safe_float(model_stats.get("events_per_parameter"))
+    c_index = _safe_float(model_stats.get("c_index"))
+    ill_conditioned_number = _cox_ill_conditioned_number(model_stats)
+    zero_event_strata_count = int(model_stats.get("zero_event_strata_count") or 0)
+    high_cardinality_numeric_strata_columns = _nonempty_strings(
+        model_stats.get("high_cardinality_numeric_strata_columns")
+    )
+
+    if outcome_rows is None:
+        cohort_statement = f"Model estimates use the analyzable cohort after dropping rows with missing selected Cox inputs (N = {complete_case_n})."
+    else:
+        cohort_statement = (
+            "Model estimates use the analyzable cohort after dropping rows with missing selected Cox inputs "
+            f"(N = {complete_case_n} of {int(outcome_rows)} outcome-valid rows)."
+        )
+    notes = _SummaryNotes(
+        strengths=[
+            "Cox regression was fit with the Efron tie method.",
+            cohort_statement,
+            "Proportional-hazards checks use the Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time (per term, 1 df, plus a global test); the plot overlay uses LOWESS smoothing for visual inspection only.",
+            (
+                "Discrimination was not reported for the stratified Cox fit because pooled cross-stratum ranking is not directly interpretable."
+                if strata_columns
+                else "The reported discrimination metric is an apparent C-index on the fitted cohort, so it reflects training-cohort ranking only."
+            ),
+        ],
+        cautions=[],
+        next_steps=[],
+    )
+    if epv is not None and epv < 10:
+        notes.cautions.append("Events per parameter is below 10, so coefficients may be unstable or overfit.")
+        notes.next_steps.append("Reduce model complexity or increase the event count before treating estimates as final.")
+    _cox_strata_notes(model_stats, strata_columns, notes)
+    notes.cautions.extend(
+        [
+            "All Cox outputs assume non-informative (independent) censoring.",
+            "Competing risks are not modeled in this Cox workflow, so cause-specific questions need dedicated competing-risk methods rather than treating other event types as ordinary censoring.",
+            "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, coefficient estimates and survival summaries can be biased.",
+        ]
+    )
+    _cox_input_quality_notes(
+        model_stats,
+        outcome_rows=outcome_rows,
+        dropped_rows=dropped_rows,
+        alerts=alerts,
+        ill_conditioned_number=ill_conditioned_number,
+        notes=notes,
+    )
+    _cox_fit_statistic_notes(model_stats, c_index=c_index, c_index_label=c_index_label, notes=notes)
+    notes.cautions.append(
+        "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; validate the final specification on a separate cohort outside this run."
+    )
+    if not alerts.significant:
+        notes.cautions.append("No model term shows clear nominal evidence at p < 0.05.")
+
+    structural_instability = bool(
+        (epv is not None and epv < 10)
+        or alerts.reference_levels
+        or alerts.sparse_levels
+        or alerts.wide_ci
+        or alerts.non_estimable
+        or zero_event_strata_count
+        or high_cardinality_numeric_strata_columns
+        or ill_conditioned_number is not None
+    )
+    headline = _cox_summary_headline(alerts, structural_instability, notes.next_steps)
+
+    status = "robust"
+    if notes.cautions:
+        status = "review"
+    if (
+        (epv is not None and epv < 5)
+        or len(alerts.proportional_hazards) >= 2
+        or alerts.reference_levels
+        or alerts.sparse_levels
+        or zero_event_strata_count
+        or high_cardinality_numeric_strata_columns
+    ):
+        status = "caution"
 
     return {
         "status": status,
         "headline": headline,
-        "strengths": strengths,
-        "cautions": cautions,
-        "next_steps": next_steps,
-        "metrics": metrics,
+        "strengths": notes.strengths,
+        "cautions": notes.cautions,
+        "next_steps": notes.next_steps,
+        "metrics": _cox_summary_metrics(
+            model_stats,
+            outcome_rows=outcome_rows,
+            dropped_rows=dropped_rows,
+            epv=epv,
+            c_index=c_index,
+            c_index_label=c_index_label,
+            strata_columns=strata_columns,
+            ill_conditioned_number=ill_conditioned_number,
+        ),
     }
 
 
@@ -2946,6 +3429,248 @@ def _percentile_threshold_label(percentile: float, direction: str) -> str:
     raise ValueError(f"Unsupported percentile-threshold direction: {direction}")
 
 
+def _quantile_split(
+    numeric_series: pd.Series,
+    source_column: str,
+    *,
+    n_bins: int,
+    prefix: str,
+    method: str,
+) -> tuple[pd.Series, dict[str, Any]]:
+    try:
+        split_raw, bin_edges = pd.qcut(numeric_series, n_bins, retbins=True, duplicates="drop")
+    except ValueError as exc:
+        raise ValueError(f"{source_column} cannot be split with {method}: {exc}") from exc
+    if not hasattr(split_raw, "cat"):
+        raise ValueError(f"{source_column} cannot be split with {method}.")
+    n_groups = int(len(split_raw.cat.categories))
+    if n_groups < n_bins:
+        # Tied values collapse quantile bins; silently renumbering the
+        # survivors (e.g. calling the top third "T2") is misleading.
+        raise ValueError(
+            f"{source_column} does not have enough unique values for a {n_bins}-group {method}: "
+            f"tied values leave only {n_groups} distinct quantile bin(s). Use a median or percentile split, "
+            "or a variable with more distinct values."
+        )
+    labels = [f"{prefix}{idx}" for idx in range(1, n_groups + 1)]
+    codes = split_raw.cat.codes.to_numpy()
+    label_values = np.array(labels, dtype=object)
+    mapped = np.where(codes >= 0, label_values[codes], pd.NA)
+    split = pd.Series(mapped, index=numeric_series.index, dtype="string")
+    # Exact bin edges (the interval labels pandas displays are rounded).
+    cutoffs = [float(edge) for edge in np.asarray(bin_edges, dtype=float)[1:-1]]
+    return split, {
+        "method": method,
+        "cutoffs": cutoffs,
+        "n_groups": n_groups,
+        "assignment_rule": (
+            f"{source_column} is cut at the exact quantile edges {', '.join(f'{value:.6g}' for value in cutoffs)} "
+            f"(right-closed bins) into {', '.join(labels)}."
+        ),
+    }
+
+
+def _median_split(
+    numeric_series: pd.Series,
+    usable: pd.Series,
+    source_column: str,
+    *,
+    lower_label: str,
+    upper_label: str,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    split_point = float(usable.median())
+    labels = np.where(numeric_series <= split_point, lower_label, upper_label)
+    return labels, {
+        "method": "median_split",
+        "cutoff": split_point,
+        "assignment_rule": f"{source_column} <= median ({split_point:.6g}) -> {lower_label}, else -> {upper_label}.",
+    }
+
+
+def _percentile_split(
+    numeric_series: pd.Series,
+    usable: pd.Series,
+    source_column: str,
+    *,
+    cutoff: str | float | None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    method = "percentile_split"
+    percentiles = _parse_percentile_values(cutoff, mode=method)
+    cutoff_spec = ",".join(_format_percent_value(value) for value in percentiles)
+    if len(percentiles) == 1:
+        top_percent = percentiles[0]
+        split_point = float(usable.quantile(1 - (top_percent / 100.0)))
+        threshold_percent = 100.0 - top_percent
+        rest_label = "Rest"
+        # Match median_split at 50th percentile so ties at the threshold stay in the lower/rest group.
+        if math.isclose(top_percent, 50.0):
+            top_label = _percentile_threshold_label(threshold_percent, "strict_above")
+            rest_label = _percentile_threshold_label(threshold_percent, "below")
+            labels = np.where(numeric_series <= split_point, rest_label, top_label)
+            assignment_rule = (
+                f"{source_column} > percentile threshold ({split_point:.3f}) -> {top_label}, else -> {rest_label}"
+            )
+        else:
+            top_label = _percentile_threshold_label(threshold_percent, "above")
+            labels = np.where(numeric_series >= split_point, top_label, rest_label)
+            assignment_rule = (
+                f"{source_column} >= percentile threshold ({split_point:.3f}) -> {top_label}, else -> {rest_label}"
+            )
+        return labels, {
+            "method": method,
+            "cutoff_spec": cutoff_spec,
+            "percentiles": percentiles,
+            "cutoffs": [split_point],
+            "n_groups": 2,
+            "assignment_rule": assignment_rule,
+        }
+
+    bottom_percent, top_percent = percentiles
+    low_threshold = float(usable.quantile(bottom_percent / 100.0))
+    high_threshold = float(usable.quantile(1 - (top_percent / 100.0)))
+    if not low_threshold < high_threshold:
+        raise ValueError("Percentile split thresholds overlap. Choose less aggressive percentiles or a variable with more distinct values.")
+    bottom_label = _percentile_threshold_label(bottom_percent, "below")
+    middle_label = "Between percentile thresholds"
+    top_label = _percentile_threshold_label(100.0 - top_percent, "above")
+    labels = np.where(
+        numeric_series <= low_threshold,
+        bottom_label,
+        np.where(numeric_series >= high_threshold, top_label, middle_label),
+    )
+    return labels, {
+        "method": method,
+        "cutoff_spec": cutoff_spec,
+        "percentiles": percentiles,
+        "cutoffs": [low_threshold, high_threshold],
+        "n_groups": 3,
+        "assignment_rule": (
+            f"{source_column} <= lower percentile threshold ({low_threshold:.3f}) -> {bottom_label}; "
+            f"{source_column} >= upper percentile threshold ({high_threshold:.3f}) -> {top_label}; "
+            f"else -> {middle_label}"
+        ),
+    }
+
+
+def _extreme_split(
+    numeric_series: pd.Series,
+    usable: pd.Series,
+    source_column: str,
+    *,
+    cutoff: str | float | None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    method = "extreme_split"
+    percentiles = _parse_percentile_values(cutoff, mode=method)
+    tail_percent = percentiles[0]
+    low_threshold = float(usable.quantile(tail_percent / 100.0))
+    high_threshold = float(usable.quantile(1 - (tail_percent / 100.0)))
+    if not low_threshold < high_threshold:
+        raise ValueError("Extreme split thresholds overlap. Choose a smaller percentile or a variable with more distinct values.")
+    bottom_label = _percentile_threshold_label(tail_percent, "below")
+    top_label = _percentile_threshold_label(100.0 - tail_percent, "above")
+    labels = np.full(len(numeric_series), pd.NA, dtype=object)
+    low_mask = (numeric_series <= low_threshold).fillna(False).to_numpy()
+    high_mask = (numeric_series >= high_threshold).fillna(False).to_numpy()
+    labels[low_mask] = bottom_label
+    labels[high_mask] = top_label
+    excluded_middle_count = int((numeric_series.notna() & ~pd.Series(low_mask | high_mask, index=numeric_series.index)).sum())
+    return labels, {
+        "method": method,
+        "cutoff_spec": _format_percent_value(tail_percent),
+        "percentiles": percentiles,
+        "cutoffs": [low_threshold, high_threshold],
+        "n_groups": 2,
+        "excluded_count": excluded_middle_count,
+        "assignment_rule": (
+            f"{source_column} <= lower percentile threshold ({low_threshold:.3f}) -> {bottom_label}; "
+            f"{source_column} >= upper percentile threshold ({high_threshold:.3f}) -> {top_label}; "
+            "else -> excluded middle range"
+        ),
+    }
+
+
+def _optimal_cutpoint_split(
+    df: pd.DataFrame,
+    numeric_series: pd.Series,
+    source_column: str,
+    *,
+    time_column: str | None,
+    event_column: str | None,
+    event_positive_value: Any,
+    min_group_fraction: float,
+    lower_label: str,
+    upper_label: str,
+    permutation_iterations: int,
+    random_seed: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    if not time_column or not event_column:
+        raise ValueError("optimal_cutpoint requires time_column and event_column.")
+    from survival_toolkit.ml_models import find_optimal_cutpoint
+
+    result = find_optimal_cutpoint(
+        df,
+        time_column=time_column,
+        event_column=event_column,
+        variable=source_column,
+        event_positive_value=event_positive_value,
+        min_group_fraction=min_group_fraction,
+        lower_label=lower_label,
+        upper_label=upper_label,
+        permutation_iterations=permutation_iterations,
+        random_seed=random_seed,
+    )
+    split_point = result["optimal_cutpoint"]
+    label_above = result["label_above_cutpoint"]
+    label_below = result["label_below_cutpoint"]
+    # The chosen cutpoint is a fixed rule on the marker, so it labels every row with a
+    # usable marker value, as the median/quantile/percentile splits do. Rows whose
+    # survival outcome is missing did not help choose the cutpoint but still get a group.
+    labels = np.where(numeric_series > split_point, label_above, label_below)
+    n_scanned = int(result["n_above_cutpoint"]) + int(result["n_below_cutpoint"])
+    return labels, {
+        "method": "optimal_cutpoint",
+        "cutoff": split_point,
+        "label_above_cutpoint": label_above,
+        "label_below_cutpoint": label_below,
+        "assignment_rule": f"{source_column} > cutoff -> {label_above}, else -> {label_below}",
+        "n_rows_scanned": n_scanned,
+        "n_rows_labelled_without_outcome": max(int(numeric_series.notna().sum()) - n_scanned, 0),
+        "statistic": result["statistic"],
+        "p_value": result["p_value"],
+        "p_value_label": result.get("p_value_label"),
+        "raw_p_value": result.get("raw_p_value"),
+        "selection_adjusted_p_value": result.get("selection_adjusted_p_value"),
+        "selection_adjustment": result.get("selection_adjustment"),
+        "min_group_fraction": float(min_group_fraction),
+        "permutation_iterations": int(permutation_iterations),
+        "random_seed": int(random_seed),
+        "scan_data": result["scan_data"],
+        "candidate_grid": result.get("candidate_grid"),
+    }
+
+
+def _derived_group_column_name(df: pd.DataFrame, new_column_name: str | None, default_name: str) -> str:
+    requested_name = (new_column_name or "").strip() or None
+    if requested_name is None:
+        return _next_available_column_name(df.columns, default_name)
+    if requested_name in df.columns:
+        raise ValueError(
+            f'"{requested_name}" already exists. Choose a new derived-column name instead of overwriting an existing field.'
+        )
+    return requested_name
+
+
+def _group_counts(labels: pd.Series) -> list[dict[str, Any]]:
+    return (
+        labels.fillna("Missing")
+        .value_counts(dropna=False)
+        .sort_index()
+        .rename_axis("group")
+        .reset_index(name="n")
+        .to_dict(orient="records")
+    )
+
+
 @user_input_boundary
 def derive_group_column(
     df: pd.DataFrame,
@@ -2977,191 +3702,39 @@ def derive_group_column(
     if usable.empty:
         raise ValueError(f"{source_column} does not contain numeric values that can be split.")
 
-    def quantile_split(n_bins: int, prefix: str, method_name: str) -> tuple[pd.Series, dict[str, Any]]:
-        try:
-            split_raw, bin_edges = pd.qcut(numeric_series, n_bins, retbins=True, duplicates="drop")
-        except ValueError as exc:
-            raise ValueError(f"{source_column} cannot be split with {method_name}: {exc}") from exc
-        if not hasattr(split_raw, "cat"):
-            raise ValueError(f"{source_column} cannot be split with {method_name}.")
-        n_groups = int(len(split_raw.cat.categories))
-        if n_groups < n_bins:
-            # Tied values collapse quantile bins; silently renumbering the
-            # survivors (e.g. calling the top third "T2") is misleading.
-            raise ValueError(
-                f"{source_column} does not have enough unique values for a {n_bins}-group {method_name}: "
-                f"tied values leave only {n_groups} distinct quantile bin(s). Use a median or percentile split, "
-                "or a variable with more distinct values."
-            )
-        labels = [f"{prefix}{idx}" for idx in range(1, n_groups + 1)]
-        codes = split_raw.cat.codes.to_numpy()
-        label_values = np.array(labels, dtype=object)
-        mapped = np.where(codes >= 0, label_values[codes], pd.NA)
-        split = pd.Series(mapped, index=numeric_series.index, dtype="string")
-        # Exact bin edges (the interval labels pandas displays are rounded).
-        cutoffs = [float(edge) for edge in np.asarray(bin_edges, dtype=float)[1:-1]]
-        return split, {
-            "method": method_name,
-            "cutoffs": cutoffs,
-            "n_groups": n_groups,
-            "assignment_rule": (
-                f"{source_column} is cut at the exact quantile edges {', '.join(f'{value:.6g}' for value in cutoffs)} "
-                f"(right-closed bins) into {', '.join(labels)}."
-            ),
-        }
-
-    outcome_informed = False
-
     if method == "optimal_cutpoint":
-        if not time_column or not event_column:
-            raise ValueError("optimal_cutpoint requires time_column and event_column.")
-        from survival_toolkit.ml_models import find_optimal_cutpoint
-
-        result = find_optimal_cutpoint(
+        labels, summary = _optimal_cutpoint_split(
             df,
+            numeric_series,
+            source_column,
             time_column=time_column,
             event_column=event_column,
-            variable=source_column,
             event_positive_value=event_positive_value,
             min_group_fraction=min_group_fraction,
             lower_label=lower_label,
             upper_label=upper_label,
             permutation_iterations=permutation_iterations,
             random_seed=random_seed,
-            include_split_series=True,
         )
-        split_point = result["optimal_cutpoint"]
-        lbl_above = result["label_above_cutpoint"]
-        lbl_below = result["label_below_cutpoint"]
-        split_series = result.get("split_series")
-        if isinstance(split_series, pd.Series):
-            labels = split_series.reindex(df.index).astype("string")
-        else:
-            labels = np.where(numeric_series > split_point, lbl_above, lbl_below)
-        summary = {
-            "method": method,
-            "cutoff": split_point,
-            "label_above_cutpoint": lbl_above,
-            "label_below_cutpoint": lbl_below,
-            "assignment_rule": f"{source_column} > cutoff -> {lbl_above}, else -> {lbl_below}",
-            "statistic": result["statistic"],
-            "p_value": result["p_value"],
-            "p_value_label": result.get("p_value_label"),
-            "raw_p_value": result.get("raw_p_value"),
-            "selection_adjusted_p_value": result.get("selection_adjusted_p_value"),
-            "selection_adjustment": result.get("selection_adjustment"),
-            "min_group_fraction": float(min_group_fraction),
-            "permutation_iterations": int(permutation_iterations),
-            "random_seed": int(random_seed),
-            "scan_data": result["scan_data"],
-        }
-        outcome_informed = True
     elif method == "median_split":
-        split_point = float(usable.median())
-        labels = np.where(numeric_series <= split_point, lower_label, upper_label)
-        summary = {
-            "method": method,
-            "cutoff": split_point,
-            "assignment_rule": f"{source_column} <= median ({split_point:.6g}) -> {lower_label}, else -> {upper_label}.",
-        }
+        labels, summary = _median_split(
+            numeric_series, usable, source_column, lower_label=lower_label, upper_label=upper_label
+        )
     elif method == "tertile_split":
-        labels, summary = quantile_split(n_bins=3, prefix="T", method_name=method)
+        labels, summary = _quantile_split(numeric_series, source_column, n_bins=3, prefix="T", method=method)
     elif method == "quartile_split":
-        labels, summary = quantile_split(n_bins=4, prefix="Q", method_name=method)
+        labels, summary = _quantile_split(numeric_series, source_column, n_bins=4, prefix="Q", method=method)
     elif method == "percentile_split":
-        percentiles = _parse_percentile_values(cutoff, mode=method)
-        cutoff_spec = ",".join(_format_percent_value(value) for value in percentiles)
-        if len(percentiles) == 1:
-            top_percent = percentiles[0]
-            quantile = 1 - (top_percent / 100.0)
-            split_point = float(usable.quantile(quantile))
-            threshold_percent = 100.0 - top_percent
-            rest_label = "Rest"
-            # Match median_split at 50th percentile so ties at the threshold stay in the lower/rest group.
-            if math.isclose(top_percent, 50.0):
-                top_label = _percentile_threshold_label(threshold_percent, "strict_above")
-                rest_label = _percentile_threshold_label(threshold_percent, "below")
-                labels = np.where(numeric_series <= split_point, rest_label, top_label)
-                assignment_rule = (
-                    f"{source_column} > percentile threshold ({split_point:.3f}) -> {top_label}, else -> {rest_label}"
-                )
-            else:
-                top_label = _percentile_threshold_label(threshold_percent, "above")
-                labels = np.where(numeric_series >= split_point, top_label, rest_label)
-                assignment_rule = (
-                    f"{source_column} >= percentile threshold ({split_point:.3f}) -> {top_label}, else -> {rest_label}"
-                )
-            summary = {
-                "method": method,
-                "cutoff_spec": cutoff_spec,
-                "percentiles": percentiles,
-                "cutoffs": [split_point],
-                "n_groups": 2,
-                "assignment_rule": assignment_rule,
-            }
-        else:
-            bottom_percent, top_percent = percentiles
-            middle_percent = 100.0 - bottom_percent - top_percent
-            low_threshold = float(usable.quantile(bottom_percent / 100.0))
-            high_threshold = float(usable.quantile(1 - (top_percent / 100.0)))
-            if not low_threshold < high_threshold:
-                raise ValueError("Percentile split thresholds overlap. Choose less aggressive percentiles or a variable with more distinct values.")
-            bottom_label = _percentile_threshold_label(bottom_percent, "below")
-            middle_label = "Between percentile thresholds"
-            top_label = _percentile_threshold_label(100.0 - top_percent, "above")
-            labels = np.where(
-                numeric_series <= low_threshold,
-                bottom_label,
-                np.where(numeric_series >= high_threshold, top_label, middle_label),
-            )
-            summary = {
-                "method": method,
-                "cutoff_spec": cutoff_spec,
-                "percentiles": percentiles,
-                "cutoffs": [low_threshold, high_threshold],
-                "n_groups": 3,
-                "assignment_rule": (
-                    f"{source_column} <= lower percentile threshold ({low_threshold:.3f}) -> {bottom_label}; "
-                    f"{source_column} >= upper percentile threshold ({high_threshold:.3f}) -> {top_label}; "
-                    f"else -> {middle_label}"
-                ),
-            }
+        labels, summary = _percentile_split(numeric_series, usable, source_column, cutoff=cutoff)
     elif method == "extreme_split":
-        percentiles = _parse_percentile_values(cutoff, mode=method)
-        tail_percent = percentiles[0]
-        cutoff_spec = _format_percent_value(tail_percent)
-        low_threshold = float(usable.quantile(tail_percent / 100.0))
-        high_threshold = float(usable.quantile(1 - (tail_percent / 100.0)))
-        if not low_threshold < high_threshold:
-            raise ValueError("Extreme split thresholds overlap. Choose a smaller percentile or a variable with more distinct values.")
-        bottom_label = _percentile_threshold_label(tail_percent, "below")
-        top_label = _percentile_threshold_label(100.0 - tail_percent, "above")
-        labels = np.full(len(numeric_series), pd.NA, dtype=object)
-        low_mask = (numeric_series <= low_threshold).fillna(False).to_numpy()
-        high_mask = (numeric_series >= high_threshold).fillna(False).to_numpy()
-        labels[low_mask] = bottom_label
-        labels[high_mask] = top_label
-        excluded_middle_count = int((numeric_series.notna() & ~pd.Series(low_mask | high_mask, index=numeric_series.index)).sum())
-        summary = {
-            "method": method,
-            "cutoff_spec": cutoff_spec,
-            "percentiles": percentiles,
-            "cutoffs": [low_threshold, high_threshold],
-            "n_groups": 2,
-            "excluded_count": excluded_middle_count,
-            "assignment_rule": (
-                f"{source_column} <= lower percentile threshold ({low_threshold:.3f}) -> {bottom_label}; "
-                f"{source_column} >= upper percentile threshold ({high_threshold:.3f}) -> {top_label}; "
-                "else -> excluded middle range"
-            ),
-        }
+        labels, summary = _extreme_split(numeric_series, usable, source_column, cutoff=cutoff)
     else:
         raise ValueError(f"Unsupported derive-group method: {method}")
+    outcome_informed = method == "optimal_cutpoint"
 
     label_series = pd.Series(labels, index=df.index, dtype="string")
     label_series.loc[numeric_series.isna()] = pd.NA
     observed_groups = int(label_series.dropna().nunique())
-    expected_groups = summary.get("n_groups")
     if method == "median_split" and observed_groups < 2:
         raise ValueError(
             f"Median split of {source_column} produced a single group (too many values tied at the median). "
@@ -3174,32 +3747,16 @@ def derive_group_column(
         input_notes.append(f"{non_finite_count} infinite value(s) in {source_column} were treated as missing.")
     if input_notes:
         summary["input_notes"] = input_notes
-    if method == "percentile_split" and expected_groups == 3 and observed_groups < 3:
+    if method == "percentile_split" and summary.get("n_groups") == 3 and observed_groups < 3:
         raise ValueError("Percentile split did not produce three distinct groups. Choose a less aggressive percentile setting or another variable.")
     if method in {"percentile_split", "extreme_split"} and observed_groups < 2:
         raise ValueError("Selected percentile thresholds did not produce at least two non-empty groups.")
 
-    requested_name = (new_column_name or "").strip() or None
-    if requested_name is not None:
-        column_name = requested_name
-    else:
-        column_name = _next_available_column_name(df.columns, f"{source_column}__{method}")
-    if requested_name is not None and column_name in df.columns:
-        raise ValueError(
-            f'"{column_name}" already exists. Choose a new derived-column name instead of overwriting an existing field.'
-        )
+    column_name = _derived_group_column_name(df, new_column_name, f"{source_column}__{method}")
     updated = df.copy()
     updated[column_name] = label_series
 
-    counts = (
-        updated[column_name]
-        .fillna("Missing")
-        .value_counts(dropna=False)
-        .sort_index()
-        .rename_axis("group")
-        .reset_index(name="n")
-        .to_dict(orient="records")
-    )
+    counts = _group_counts(updated[column_name])
     summary["column_name"] = column_name
     summary["outcome_informed"] = outcome_informed
     summary["counts"] = counts
@@ -3455,6 +4012,7 @@ def _bootstrap_signature_metrics(
     hazard_ratios: list[float] = []
 
     for _ in range(n_iterations):
+        raise_if_cancelled()
         sampled_idx = rng.integers(0, n_obs, size=sample_size)
         sampled = frame.iloc[sampled_idx].reset_index(drop=True)
 
@@ -3575,6 +4133,96 @@ def _vectorized_logrank_chisq(
     return np.asarray(statistic, dtype=float)
 
 
+class ThresholdLogrankScan:
+    """Two-group log-rank chi-square for every split "marker > c" over many cutpoints c.
+
+    Equivalent to calling ``statsmodels.duration.survfunc.survdiff`` once per cutpoint
+    (unweighted log-rank, hypergeometric variance), but the outcome structure is built
+    once and each marker ordering is scored with histograms and cumulative sums, so an
+    exhaustive cutpoint scan and its permutation null are cheap enough to run together.
+    """
+
+    # Upper bound on event-time x cutpoint cells materialised at once.
+    _MAX_BLOCK_CELLS = 2_000_000
+
+    def __init__(self, times: np.ndarray, events: np.ndarray) -> None:
+        times_arr = np.asarray(times, dtype=float).reshape(-1)
+        event_mask = np.asarray(events, dtype=float).reshape(-1) > 0
+        self.n = int(times_arr.size)
+        self.event_times = np.unique(times_arr[event_mask])
+        n_event_times = int(self.event_times.size)
+        # Subject i is at risk at event times 0..risk_index[i] (times >= that event time).
+        self._risk_index = np.searchsorted(self.event_times, times_arr, side="right") - 1
+        self._event_rows = np.flatnonzero(event_mask)
+        self._event_index = np.searchsorted(self.event_times, times_arr[self._event_rows], side="left")
+        at_risk_rows = self._risk_index >= 0
+        at_risk = np.bincount(self._risk_index[at_risk_rows], minlength=n_event_times)[::-1].cumsum()[::-1]
+        deaths = np.bincount(self._event_index, minlength=n_event_times)
+        self._n_at_risk = at_risk.astype(float)
+        self._deaths = deaths.astype(float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            self._variance_factor = np.where(
+                self._n_at_risk > 1.0,
+                self._deaths * (self._n_at_risk - self._deaths) / (self._n_at_risk - 1.0),
+                0.0,
+            )
+        self.total_events = int(self._event_rows.size)
+
+    def scan(self, marker: np.ndarray, cutpoints: np.ndarray) -> dict[str, np.ndarray]:
+        """Statistics, group sizes, and event counts of "marker > c" for each cutpoint.
+
+        ``cutpoints`` must be sorted ascending. Returns arrays of length ``len(cutpoints)``:
+        ``statistic`` (chi-square, 0 where the variance is zero), ``n_high`` and
+        ``events_high`` (rows and events above the cutpoint).
+        """
+        marker_arr = np.asarray(marker, dtype=float).reshape(-1)
+        cut_arr = np.asarray(cutpoints, dtype=float).reshape(-1)
+        n_cut = int(cut_arr.size)
+        # rank_i = number of cutpoints strictly below marker_i, so marker_i > c_j iff j < rank_i.
+        rank = np.searchsorted(cut_arr, marker_arr, side="left")
+        rank_counts = np.bincount(rank, minlength=n_cut + 1)
+        n_high = rank_counts[::-1].cumsum()[::-1][1:]
+        event_rank_counts = np.bincount(rank[self._event_rows], minlength=n_cut + 1)
+        events_high = event_rank_counts[::-1].cumsum()[::-1][1:]
+        statistic = np.zeros(n_cut, dtype=float)
+        n_event_times = int(self.event_times.size)
+        if n_event_times == 0 or n_cut == 0:
+            return {"statistic": statistic, "n_high": n_high, "events_high": events_high}
+
+        at_risk_rows = self._risk_index >= 0
+        risk_index = self._risk_index[at_risk_rows]
+        risk_rank = rank[at_risk_rows]
+        event_rank = rank[self._event_rows]
+        n_total = self._n_at_risk[:, np.newaxis]
+        deaths = self._deaths[:, np.newaxis]
+        variance_factor = self._variance_factor[:, np.newaxis]
+        block = max(1, min(n_cut, self._MAX_BLOCK_CELLS // max(n_event_times, 1) - 1))
+        for start in range(0, n_cut, block):
+            stop = min(start + block, n_cut)
+            width = stop - start
+            # Ranks clipped into block coordinates; a reverse cumulative sum over the rank
+            # axis then counts subjects with rank >= start + m at column m.
+            local_rank = np.clip(risk_rank - start, 0, width)
+            histogram = np.bincount(
+                risk_index * (width + 1) + local_rank,
+                minlength=n_event_times * (width + 1),
+            ).reshape(n_event_times, width + 1)
+            at_risk_high = histogram[::-1].cumsum(axis=0)[::-1]
+            at_risk_high = at_risk_high[:, ::-1].cumsum(axis=1)[:, ::-1][:, 1:].astype(float)
+            local_event_rank = np.clip(event_rank - start, 0, width)
+            event_histogram = np.bincount(
+                self._event_index * (width + 1) + local_event_rank,
+                minlength=n_event_times * (width + 1),
+            ).reshape(n_event_times, width + 1)
+            deaths_high = event_histogram[:, ::-1].cumsum(axis=1)[:, ::-1][:, 1:].astype(float)
+            share = at_risk_high / n_total
+            numerator = np.sum(deaths_high - deaths * share, axis=0) ** 2
+            denominator = np.sum(variance_factor * share * (1.0 - share), axis=0)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                statistic[start:stop] = np.where(denominator > 0.0, numerator / denominator, 0.0)
+        return {"statistic": statistic, "n_high": n_high, "events_high": events_high}
+
+
 def _search_adjusted_permutation_p_values(
     times: np.ndarray,
     events: np.ndarray,
@@ -3603,6 +4251,7 @@ def _search_adjusted_permutation_p_values(
     rng = np.random.default_rng(random_seed)
     max_stats: list[float] = []
     for _ in range(int(n_iterations)):
+        raise_if_cancelled()
         permutation = rng.permutation(times_arr.size)
         perm_times = times_arr[permutation]
         perm_events = events_arr[permutation]
@@ -3669,6 +4318,7 @@ def _validation_signature_metrics(
     hazard_ratios: list[float] = []
 
     for _ in range(n_iterations):
+        raise_if_cancelled()
         holdout_idx = rng.choice(n_obs, size=holdout_size, replace=False)
         sampled = frame.iloc[holdout_idx].reset_index(drop=True)
         mask_values = _signature_mask(sampled, combo, operator=combo_operator)
@@ -3736,29 +4386,29 @@ def _validation_signature_metrics(
     }
 
 
-@user_input_boundary
-def discover_feature_signature(
-    df: pd.DataFrame,
-    time_column: str,
-    event_column: str,
-    candidate_columns: Sequence[str],
-    event_positive_value: Any = None,
-    max_combination_size: int = 3,
-    top_k: int = 15,
-    min_group_fraction: float = 0.1,
-    bootstrap_iterations: int = 30,
-    bootstrap_sample_fraction: float = 0.8,
-    permutation_iterations: int = 0,
-    validation_iterations: int = 0,
-    validation_fraction: float = 0.35,
-    significance_level: float = 0.05,
-    combination_operator: str = "mixed",
-    random_seed: int = 20260311,
-    new_column_name: str | None = None,
-) -> tuple[pd.DataFrame, str, dict[str, Any]]:
-    max_tested_combinations = 5000
-    unique_candidates = list(dict.fromkeys(candidate_columns))
-    if not unique_candidates:
+_SIGNATURE_MAX_TESTED_COMBINATIONS = 5000
+_SIGNATURE_OPERATORS = {
+    "and": ["AND"],
+    "or": ["OR"],
+    "mixed": ["AND", "OR"],
+}
+
+
+def _validate_signature_search_settings(
+    candidates: Sequence[str],
+    *,
+    max_combination_size: int,
+    bootstrap_iterations: int,
+    bootstrap_sample_fraction: float,
+    permutation_iterations: int,
+    validation_iterations: int,
+    validation_fraction: float,
+    significance_level: float,
+    combination_operator: str,
+    random_seed: int,
+) -> str:
+    """Check the signature-search settings and return the normalized combination operator."""
+    if not candidates:
         raise ValueError("Select at least one candidate feature for signature discovery.")
     if max_combination_size < 1:
         raise ValueError("max_combination_size must be at least 1.")
@@ -3775,57 +4425,96 @@ def discover_feature_signature(
     if significance_level <= 0.0 or significance_level > 0.2:
         raise ValueError("significance_level must be within (0, 0.2].")
     normalized_operator = str(combination_operator).strip().lower()
-    if normalized_operator not in {"and", "or", "mixed"}:
+    if normalized_operator not in _SIGNATURE_OPERATORS:
         raise ValueError("combination_operator must be one of: and, or, mixed.")
     if random_seed < 0:
         raise ValueError("random_seed must be >= 0.")
+    return normalized_operator
 
-    frame = _cohort_frame(
-        df,
-        time_column=time_column,
-        event_column=event_column,
-        event_positive_value=event_positive_value,
-        extra_columns=unique_candidates,
-    )
 
+def _signature_result_row(
+    combo: Sequence[dict[str, Any]],
+    combo_operator: str,
+    mask: np.ndarray,
+    times: np.ndarray,
+    events: np.ndarray,
+    chisq: float,
+    p_value: float,
+) -> dict[str, Any]:
+    """One screened signature, with robustness metrics left empty until they are computed."""
+    n_high = int(mask.sum())
+    return {
+        "Signature": f" {combo_operator} ".join(part["label"] for part in combo),
+        "Combination operator": combo_operator,
+        "Features": [part["column"] for part in combo],
+        "Rule count": int(len(combo)),
+        "N signature+": n_high,
+        "N signature-": int(mask.shape[0]) - n_high,
+        "Events signature+": int(events[mask].sum()),
+        "Events signature-": int(events[~mask].sum()),
+        "Chi-square": float(chisq),
+        "P value": float(p_value),
+        "Hazard ratio (signature+ vs -)": None,
+        "HR CI lower": None,
+        "HR CI upper": None,
+        "Median signature+": _km_median_time(times[mask], events[mask]),
+        "Median signature-": _km_median_time(times[~mask], events[~mask]),
+        "Bootstrap support (p<alpha)": None,
+        "Bootstrap median HR": None,
+        "Bootstrap median p": None,
+        "Bootstrap HR direction consistency": None,
+        "Bootstrap valid resamples": 0,
+        "Bootstrap skipped resamples": 0,
+        "Permutation p": None,
+        "Permutation valid resamples": 0,
+        "Permutation skipped resamples": 0,
+        "Validation support (p<alpha)": None,
+        "Validation median HR": None,
+        "Validation median p": None,
+        "Validation valid folds": 0,
+        "Validation skipped folds": 0,
+        "Stability score": None,
+        "Statistically significant": False,
+    }
+
+
+def _screen_signature_combinations(
+    frame: pd.DataFrame,
+    indicators: Sequence[dict[str, Any]],
+    *,
+    time_column: str,
+    event_column: str,
+    max_size: int,
+    operator: str,
+    min_group_size: int,
+    min_events_per_group: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    """Log-rank screen of every indicator combination up to max_size.
+
+    Returns the result rows, the (combo, operator) pair behind each row, and whether
+    the search stopped at the tested-combination cap.
+    """
     n_obs = int(frame.shape[0])
-    min_group_size = max(8, int(math.ceil(n_obs * min_group_fraction)))
-    min_events_per_group = max(3, int(math.ceil(n_obs * 0.03)))
-    indicators = _build_candidate_indicators(frame, unique_candidates, min_group_size=min_group_size)
-    if not indicators:
-        raise ValueError("No valid binary indicators could be generated from the selected features.")
-
-    max_size = min(max_combination_size, len(indicators))
+    times = frame[time_column].to_numpy(dtype=float)
+    events = frame[event_column].to_numpy(dtype=int)
     rows: list[dict[str, Any]] = []
     valid_combinations: list[dict[str, Any]] = []
-    truncated = False
-    operators_for_size = {
-        "and": ["AND"],
-        "or": ["OR"],
-        "mixed": ["AND", "OR"],
-    }
     for size in range(1, max_size + 1):
+        # A single rule reads the same under AND and OR, so mixed mode tests it once.
+        operator_list = ["AND"] if size == 1 and operator == "mixed" else _SIGNATURE_OPERATORS[operator]
         for combo in itertools.combinations(indicators, size):
-            if len(rows) >= max_tested_combinations:
-                truncated = True
-                break
+            raise_if_cancelled()
+            if len(rows) >= _SIGNATURE_MAX_TESTED_COMBINATIONS:
+                return rows, valid_combinations, True
             if len({part["column"] for part in combo}) != len(combo):
                 continue
-            operator_list = operators_for_size[normalized_operator]
-            if size == 1 and normalized_operator == "mixed":
-                operator_list = ["AND"]
             for combo_operator in operator_list:
-                if len(rows) >= max_tested_combinations:
-                    truncated = True
-                    break
+                if len(rows) >= _SIGNATURE_MAX_TESTED_COMBINATIONS:
+                    return rows, valid_combinations, True
                 mask = _signature_mask(frame, combo, operator=combo_operator)
                 n_high = int(mask.sum())
-                n_low = n_obs - n_high
-                if n_high < min_group_size or n_low < min_group_size:
+                if n_high < min_group_size or n_obs - n_high < min_group_size:
                     continue
-
-                events = frame[event_column].to_numpy(dtype=int)
-                times = frame[time_column].to_numpy(dtype=float)
                 if events[mask].sum() < min_events_per_group or events[~mask].sum() < min_events_per_group:
                     continue
                 try:
@@ -3834,58 +4523,22 @@ def discover_feature_signature(
                     raise
                 except Exception:
                     continue
-
-                median_high = _km_median_time(times[mask], events[mask])
-                median_low = _km_median_time(times[~mask], events[~mask])
-
                 valid_combinations.append({"combo": combo, "operator": combo_operator})
-                rows.append(
-                    {
-                        "Signature": f" {combo_operator} ".join(part["label"] for part in combo),
-                        "Combination operator": combo_operator,
-                        "Features": [part["column"] for part in combo],
-                        "Rule count": int(len(combo)),
-                        "N signature+": n_high,
-                        "N signature-": n_low,
-                        "Events signature+": int(events[mask].sum()),
-                        "Events signature-": int(events[~mask].sum()),
-                        "Chi-square": float(chisq),
-                        "P value": float(p_value),
-                        "Hazard ratio (signature+ vs -)": None,
-                        "HR CI lower": None,
-                        "HR CI upper": None,
-                        "Median signature+": median_high,
-                        "Median signature-": median_low,
-                        "Bootstrap support (p<alpha)": None,
-                        "Bootstrap median HR": None,
-                        "Bootstrap median p": None,
-                        "Bootstrap HR direction consistency": None,
-                        "Bootstrap valid resamples": 0,
-                        "Bootstrap skipped resamples": 0,
-                        "Permutation p": None,
-                        "Permutation valid resamples": 0,
-                        "Permutation skipped resamples": 0,
-                        "Validation support (p<alpha)": None,
-                        "Validation median HR": None,
-                        "Validation median p": None,
-                        "Validation valid folds": 0,
-                        "Validation skipped folds": 0,
-                        "Stability score": None,
-                        "Statistically significant": False,
-                    }
-                )
-            if truncated:
-                break
-        if truncated:
-            break
+                rows.append(_signature_result_row(combo, combo_operator, mask, times, events, chisq, p_value))
+    return rows, valid_combinations, False
 
-    if not rows:
-        raise ValueError("No analyzable feature combinations passed minimum group/event requirements.")
 
-    adjusted = _bh_adjust([row["P value"] for row in rows])
-    for row, adj in zip(rows, adjusted, strict=True):
-        row["BH adjusted p"] = adj
+def _signature_metric_candidates(
+    rows: Sequence[dict[str, Any]],
+    *,
+    top_k: int,
+    significance_level: float,
+) -> list[int]:
+    """Rows that get the expensive robustness metrics.
 
+    These are (a) the output candidates and (b) any combination that could plausibly
+    meet the configured significance rules.
+    """
     primary_ranked_idx = sorted(
         range(len(rows)),
         key=lambda idx: (
@@ -3894,18 +4547,38 @@ def discover_feature_signature(
             -float(rows[idx]["Chi-square"]),
         ),
     )
-    # Compute expensive robustness metrics for (a) output candidates and (b)
-    # any combination that could plausibly meet the configured significance rules.
-    metric_candidate_idx: set[int] = set(primary_ranked_idx[: min(len(primary_ranked_idx), max(80, top_k * 4))])
-    metric_candidate_idx.update(
+    candidates: set[int] = set(primary_ranked_idx[: min(len(primary_ranked_idx), max(80, top_k * 4))])
+    candidates.update(
         idx for idx, row in enumerate(rows)
         if float(row.get("BH adjusted p", 1.0)) <= float(significance_level)
         or float(row.get("P value", 1.0)) <= float(significance_level)
     )
+    return sorted(candidates)
+
+
+def _add_signature_robustness_metrics(
+    frame: pd.DataFrame,
+    rows: list[dict[str, Any]],
+    valid_combinations: Sequence[dict[str, Any]],
+    metric_candidates: Sequence[int],
+    *,
+    time_column: str,
+    event_column: str,
+    min_group_size: int,
+    min_events_per_group: int,
+    bootstrap_iterations: int,
+    bootstrap_sample_fraction: float,
+    permutation_iterations: int,
+    validation_iterations: int,
+    validation_fraction: float,
+    significance_level: float,
+    random_seed: int,
+) -> None:
+    """Fill in the Cox, bootstrap, permutation, and validation metrics of the screened rows."""
     times = frame[time_column].to_numpy(dtype=float)
     events = frame[event_column].to_numpy(dtype=int)
 
-    for idx in sorted(metric_candidate_idx):
+    for idx in metric_candidates:
         combo = valid_combinations[idx]
         mask = _signature_mask(frame, combo["combo"], operator=combo["operator"])
         try:
@@ -3920,7 +4593,7 @@ def discover_feature_signature(
             continue
 
     if bootstrap_iterations > 0:
-        for idx in sorted(metric_candidate_idx):
+        for idx in metric_candidates:
             bootstrap_metrics = _bootstrap_signature_metrics(
                 frame=frame,
                 time_column=time_column,
@@ -3958,7 +4631,7 @@ def discover_feature_signature(
             row["Permutation skipped resamples"] = max(0, int(permutation_iterations) - int(valid_perm))
 
     if validation_iterations > 0:
-        for idx in sorted(metric_candidate_idx):
+        for idx in metric_candidates:
             validation_metrics = _validation_signature_metrics(
                 frame=frame,
                 time_column=time_column,
@@ -3986,6 +4659,115 @@ def discover_feature_signature(
             min_bootstrap_consistency=0.6,
         )
 
+
+def _apply_signature_column(
+    df: pd.DataFrame,
+    column_name: str,
+    combo: Sequence[dict[str, Any]],
+    operator: str,
+) -> pd.DataFrame:
+    """Copy of df with a Signature+/Signature- column; rows missing any rule input stay missing."""
+    output_df = df.copy()
+    indicator_values_list = [_evaluate_indicator(output_df, indicator) for indicator in combo]
+    missing = pd.Series(False, index=output_df.index, dtype=bool)
+    for indicator_values in indicator_values_list:
+        missing = missing | indicator_values.isna().to_numpy(dtype=bool)
+    bool_arrays = [item.fillna(False).to_numpy(dtype=bool) for item in indicator_values_list]
+    if operator == "OR":
+        combined = np.logical_or.reduce(bool_arrays)
+    else:
+        combined = np.logical_and.reduce(bool_arrays)
+    labels = pd.Series(np.where(combined, "Signature+", "Signature-"), index=output_df.index, dtype="string")
+    labels.loc[missing] = pd.NA
+    output_df[column_name] = labels
+    return output_df
+
+
+@user_input_boundary
+def discover_feature_signature(
+    df: pd.DataFrame,
+    time_column: str,
+    event_column: str,
+    candidate_columns: Sequence[str],
+    event_positive_value: Any = None,
+    max_combination_size: int = 3,
+    top_k: int = 15,
+    min_group_fraction: float = 0.1,
+    bootstrap_iterations: int = 30,
+    bootstrap_sample_fraction: float = 0.8,
+    permutation_iterations: int = 0,
+    validation_iterations: int = 0,
+    validation_fraction: float = 0.35,
+    significance_level: float = 0.05,
+    combination_operator: str = "mixed",
+    random_seed: int = 20260311,
+    new_column_name: str | None = None,
+) -> tuple[pd.DataFrame, str, dict[str, Any]]:
+    unique_candidates = list(dict.fromkeys(candidate_columns))
+    normalized_operator = _validate_signature_search_settings(
+        unique_candidates,
+        max_combination_size=max_combination_size,
+        bootstrap_iterations=bootstrap_iterations,
+        bootstrap_sample_fraction=bootstrap_sample_fraction,
+        permutation_iterations=permutation_iterations,
+        validation_iterations=validation_iterations,
+        validation_fraction=validation_fraction,
+        significance_level=significance_level,
+        combination_operator=combination_operator,
+        random_seed=random_seed,
+    )
+
+    frame = _cohort_frame(
+        df,
+        time_column=time_column,
+        event_column=event_column,
+        event_positive_value=event_positive_value,
+        extra_columns=unique_candidates,
+    )
+
+    n_obs = int(frame.shape[0])
+    min_group_size = max(8, int(math.ceil(n_obs * min_group_fraction)))
+    min_events_per_group = max(3, int(math.ceil(n_obs * 0.03)))
+    indicators = _build_candidate_indicators(frame, unique_candidates, min_group_size=min_group_size)
+    if not indicators:
+        raise ValueError("No valid binary indicators could be generated from the selected features.")
+
+    max_size = min(max_combination_size, len(indicators))
+    rows, valid_combinations, truncated = _screen_signature_combinations(
+        frame,
+        indicators,
+        time_column=time_column,
+        event_column=event_column,
+        max_size=max_size,
+        operator=normalized_operator,
+        min_group_size=min_group_size,
+        min_events_per_group=min_events_per_group,
+    )
+    if not rows:
+        raise ValueError("No analyzable feature combinations passed minimum group/event requirements.")
+
+    adjusted = _bh_adjust([row["P value"] for row in rows])
+    for row, adj in zip(rows, adjusted, strict=True):
+        row["BH adjusted p"] = adj
+
+    _add_signature_robustness_metrics(
+        frame,
+        rows,
+        valid_combinations,
+        _signature_metric_candidates(rows, top_k=top_k, significance_level=significance_level),
+        time_column=time_column,
+        event_column=event_column,
+        min_group_size=min_group_size,
+        min_events_per_group=min_events_per_group,
+        bootstrap_iterations=bootstrap_iterations,
+        bootstrap_sample_fraction=bootstrap_sample_fraction,
+        permutation_iterations=permutation_iterations,
+        validation_iterations=validation_iterations,
+        validation_fraction=validation_fraction,
+        significance_level=significance_level,
+        random_seed=random_seed,
+    )
+
     ranked_idx = sorted(
         range(len(rows)),
         key=lambda idx: (
@@ -3997,41 +4779,16 @@ def discover_feature_signature(
     )
     ranked_rows = [rows[idx] for idx in ranked_idx][:top_k]
     best_idx = ranked_idx[0]
-    best_combo = valid_combinations[best_idx]["combo"]
-    best_operator = valid_combinations[best_idx]["operator"]
+    best_row = rows[best_idx]
 
-    output_df = df.copy()
-    requested_name = (new_column_name or "").strip() or None
-    if requested_name is not None:
-        best_column_name = requested_name
-    else:
-        best_column_name = _next_available_column_name(output_df.columns, "auto_signature_group")
-    if requested_name is not None and best_column_name in output_df.columns:
-        raise ValueError(
-            f'"{best_column_name}" already exists. Choose a new derived-column name instead of overwriting an existing field.'
-        )
-    indicator_values_list = [_evaluate_indicator(output_df, indicator) for indicator in best_combo]
-    missing = pd.Series(False, index=output_df.index, dtype=bool)
-    for indicator_values in indicator_values_list:
-        missing = missing | indicator_values.isna().to_numpy(dtype=bool)
-    bool_arrays = [item.fillna(False).to_numpy(dtype=bool) for item in indicator_values_list]
-    if best_operator == "OR":
-        combined = np.logical_or.reduce(bool_arrays)
-    else:
-        combined = np.logical_and.reduce(bool_arrays)
-    labels = pd.Series(np.where(combined, "Signature+", "Signature-"), index=output_df.index, dtype="string")
-    labels.loc[missing] = pd.NA
-    output_df[best_column_name] = labels
-
-    counts = (
-        output_df[best_column_name]
-        .fillna("Missing")
-        .value_counts(dropna=False)
-        .sort_index()
-        .rename_axis("group")
-        .reset_index(name="n")
-        .to_dict(orient="records")
+    best_column_name = _derived_group_column_name(df, new_column_name, "auto_signature_group")
+    output_df = _apply_signature_column(
+        df,
+        best_column_name,
+        valid_combinations[best_idx]["combo"],
+        valid_combinations[best_idx]["operator"],
     )
+    counts = _group_counts(output_df[best_column_name])
     search_space = {
         "n_rows_analyzed": n_obs,
         "row_mask_hash": str(frame.attrs.get("row_mask_hash") or ""),
@@ -4076,13 +4833,12 @@ def discover_feature_signature(
         "significant_signatures": int(sum(1 for row in rows if row["Statistically significant"])),
     }
     scientific_summary = _signature_scientific_summary(
-        best_split=rows[best_idx],
+        best_split=best_row,
         search_space=search_space,
     )
-    best_row = rows[best_idx]
     signature_recipe = {
         "column_name": best_column_name,
-        "operator": str(best_operator),
+        "operator": str(valid_combinations[best_idx]["operator"]),
         "features": list(best_row.get("Features", [])),
         "signature": str(best_row.get("Signature", "")),
         "positive_label": "Signature+",
@@ -4109,6 +4865,218 @@ def discover_feature_signature(
     return output_df, best_column_name, payload
 
 
+def _risk_tick_labels(ticks: Sequence[float]) -> list[str]:
+    """Readable, unique column labels for risk-table tick times.
+
+    Labels use two decimals when that keeps them distinct and more digits otherwise, so
+    ticks on a very short horizon never collapse onto one column key.
+    """
+    values = [float(tick) for tick in ticks]
+    for decimals in range(2, 16):
+        labels = [f"{round(value, decimals):g}" for value in values]
+        if len(set(labels)) == len(labels):
+            return labels
+    return [f"{value:.17g}" for value in values]
+
+
+def _km_group_estimates(
+    group_frame: pd.DataFrame,
+    label: str,
+    *,
+    time_column: str,
+    event_column: str,
+    alpha: float,
+    display_horizon: float,
+    rmst_horizon: float,
+    risk_ticks: Sequence[float],
+    risk_tick_labels: Sequence[str],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, float]]:
+    """One group's summary row, risk-table row, plotted curve, and RMST statistics."""
+    t_group = group_frame[time_column].to_numpy(dtype=float)
+    e_group = group_frame[event_column].to_numpy(dtype=int)
+    sf = SurvfuncRight(t_group, e_group)
+
+    event_times = sf.surv_times.astype(float)
+    step_timeline = np.concatenate(([0.0], event_times))
+    step_survival = np.concatenate(([1.0], sf.surv_prob.astype(float)))
+    lower, upper = _pointwise_km_ci(sf.surv_prob.astype(float), sf.surv_prob_se.astype(float), alpha=alpha)
+    lower = np.concatenate(([1.0], lower))
+    upper = np.concatenate(([1.0], upper))
+    censor_times = group_frame.loc[group_frame[event_column] == 0, time_column].to_numpy(dtype=float)
+    censor_survival = _step_values(event_times, sf.surv_prob.astype(float), censor_times) if censor_times.size else np.array([])
+
+    # Carry the last KM level only to this group's own last follow-up time;
+    # extending it to the pooled horizon would draw survival where the
+    # group has no observations.
+    group_curve_end = float(min(display_horizon, float(np.max(t_group))))
+    if step_timeline[-1] < group_curve_end:
+        step_timeline = np.concatenate((step_timeline, [group_curve_end]))
+        step_survival = np.concatenate((step_survival, [step_survival[-1]]))
+        lower = np.concatenate((lower, [lower[-1]]))
+        upper = np.concatenate((upper, [upper[-1]]))
+
+    with suppressed_warnings(RuntimeWarning):
+        median_ci = sf.quantile_ci(0.5, alpha=alpha)
+    rmst_stats = _restricted_mean_survival_time_delta_stats(
+        event_times,
+        sf.surv_prob.astype(float),
+        sf.n_risk.astype(float),
+        sf.n_events.astype(float),
+        rmst_horizon,
+        alpha=alpha,
+    )
+    summary_row = {
+        "Group": label,
+        "N": int(group_frame.shape[0]),
+        "Events": int(group_frame[event_column].sum()),
+        "Censored": int((group_frame[event_column] == 0).sum()),
+        "Median survival": _km_median_time(t_group, e_group),
+        "Median CI lower": _safe_float(median_ci[0]) if isinstance(median_ci, tuple) else None,
+        "Median CI upper": _safe_float(median_ci[1]) if isinstance(median_ci, tuple) else None,
+        "RMST": _safe_float(rmst_stats["rmst"]),
+        "RMST SE": _safe_float(rmst_stats["se"]),
+        "RMST CI lower": _safe_float(rmst_stats["ci_lower"]),
+        "RMST CI upper": _safe_float(rmst_stats["ci_upper"]),
+    }
+    risk_row = OrderedDict({"Group": label})
+    for tick, tick_label in zip(risk_ticks, risk_tick_labels, strict=True):
+        risk_row[tick_label] = int((group_frame[time_column] >= tick).sum())
+    curve = {
+        "group": label,
+        "timeline": step_timeline.tolist(),
+        "survival": step_survival.tolist(),
+        "ci_lower": lower.tolist(),
+        "ci_upper": upper.tolist(),
+        "censor_times": censor_times.tolist(),
+        "censor_survival": censor_survival.tolist(),
+    }
+    return summary_row, dict(risk_row), curve, rmst_stats
+
+
+def _km_group_tests(
+    frame: pd.DataFrame,
+    group_labels: Sequence[str],
+    *,
+    time_column: str,
+    event_column: str,
+    group_column: str,
+    logrank_weight: str,
+    fh_p: float,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The global weighted log-rank test plus BH-adjusted pairwise tests."""
+    time_values = frame[time_column].to_numpy(dtype=float)
+    event_values = frame[event_column].to_numpy(dtype=int)
+    weight_type = KM_WEIGHT_MAP[logrank_weight]
+    kwargs: dict[str, Any] = {"fh_p": fh_p} if weight_type == "fh" else {}
+
+    def _weighted_test(mask: np.ndarray | None) -> tuple[float, float]:
+        rows = slice(None) if mask is None else mask
+        # Fleming-Harrington weights take log(1 - d/n); when everyone still at risk has the
+        # event that is log(0) = -inf, so S is 0 from then on, as intended.
+        with np.errstate(divide="ignore"):
+            return survdiff(
+                time_values[rows],
+                event_values[rows],
+                frame.loc[rows, group_column].astype(str).to_numpy(),
+                weight_type=weight_type,
+                **kwargs,
+            )
+
+    chisq, p_value = _weighted_test(None)
+    test_payload = {
+        "test": logrank_weight,
+        "chisq": float(chisq),
+        "p_value": float(p_value),
+    }
+    pairwise_rows: list[dict[str, Any]] = []
+    for left, right in itertools.combinations(group_labels, 2):
+        chisq_pair, p_pair = _weighted_test(frame[group_column].isin([left, right]).to_numpy())
+        pairwise_rows.append(
+            {
+                "Comparison": f"{left} vs {right}",
+                "Chi-square": float(chisq_pair),
+                "P value": float(p_pair),
+            }
+        )
+    adjusted = _bh_adjust([row["P value"] for row in pairwise_rows])
+    for row, adjusted_p in zip(pairwise_rows, adjusted, strict=True):
+        row["BH adjusted p"] = adjusted_p
+    return test_payload, pairwise_rows
+
+
+def _km_cohort_summary(frame: pd.DataFrame, *, time_column: str, event_column: str) -> dict[str, Any]:
+    return {
+        "n": int(frame.shape[0]),
+        "events": int(frame[event_column].sum()),
+        "censored": int((1 - frame[event_column]).sum()),
+        "median_follow_up": _median_follow_up(frame[time_column], frame[event_column]),
+        "time_max": float(np.nanmax(frame[time_column])),
+        "row_mask_hash": str(frame.attrs.get("row_mask_hash") or ""),
+        "dropped_missing_rows": int(frame.attrs.get("dropped_missing_rows", 0)),
+        "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
+        "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_values", 0)),
+    }
+
+
+def _km_rmst_contrast(
+    summary_rows: Sequence[dict[str, Any]],
+    rmst_stats_by_group: Sequence[dict[str, float]],
+    *,
+    rmst_horizon: float,
+    alpha: float,
+    outcome_informed_group: bool,
+) -> dict[str, Any] | None:
+    """Two-group RMST difference with a delta-method CI and Wald test (None otherwise).
+
+    The Wald test is withheld for outcome-informed groups, whose split was chosen on the
+    same outcome.
+    """
+    if len(summary_rows) != 2 or len(rmst_stats_by_group) != 2:
+        return None
+    left_row, right_row = summary_rows
+    left_stats, right_stats = rmst_stats_by_group
+    estimate = float(left_stats["rmst"] - right_stats["rmst"])
+    rmst_contrast: dict[str, Any] = {
+        "comparison": f"{left_row['Group']} minus {right_row['Group']}",
+        "estimate": _safe_float(estimate),
+        "se": None,
+        "z_statistic": None,
+        "p_value": None,
+        "p_value_method": None,
+        "ci_lower": None,
+        "ci_upper": None,
+        "horizon": _safe_float(rmst_horizon),
+    }
+    left_variance = left_stats.get("variance")
+    right_variance = right_stats.get("variance")
+    if (
+        left_variance is not None
+        and right_variance is not None
+        and np.isfinite(left_variance)
+        and np.isfinite(right_variance)
+    ):
+        variance = float(left_variance + right_variance)
+        se = math.sqrt(max(variance, 0.0))
+        z_value = float(ndtri(1.0 - alpha / 2.0))
+        rmst_contrast["se"] = _safe_float(se)
+        if se > 0.0 and np.isfinite(se):
+            z_statistic = float(estimate / se)
+            rmst_contrast["z_statistic"] = _safe_float(z_statistic)
+            rmst_contrast["p_value"] = _safe_float(2.0 * stats.norm.sf(abs(z_statistic)))
+            rmst_contrast["p_value_method"] = "wald_normal"
+        elif estimate == 0.0:
+            rmst_contrast["z_statistic"] = 0.0
+            rmst_contrast["p_value"] = 1.0
+            rmst_contrast["p_value_method"] = "wald_normal"
+        rmst_contrast["ci_lower"] = _safe_float(estimate - z_value * se)
+        rmst_contrast["ci_upper"] = _safe_float(estimate + z_value * se)
+    if outcome_informed_group:
+        rmst_contrast["z_statistic"] = None
+        rmst_contrast["p_value"] = None
+        rmst_contrast["p_value_method"] = None
+    return rmst_contrast
+
+
 @user_input_boundary
 def compute_km_analysis(
     df: pd.DataFrame,
@@ -4130,6 +5098,11 @@ def compute_km_analysis(
         raise ValueError("max_time must be positive when provided.")
     if int(risk_table_points) < 1:
         raise ValueError("risk_table_points must be at least 1.")
+    if logrank_weight not in KM_WEIGHT_MAP:
+        # A typo would otherwise run a plain log-rank test labelled with the typo.
+        raise ValueError(
+            f"Unknown logrank_weight '{logrank_weight}'. Choose one of: {', '.join(KM_WEIGHT_MAP)}."
+        )
 
     extra_columns = [group_column] if group_column else []
     frame = _cohort_frame(
@@ -4155,7 +5128,6 @@ def compute_km_analysis(
         )
 
     time_values = frame[time_column].to_numpy(dtype=float)
-    event_values = frame[event_column].to_numpy(dtype=int)
     alpha = 1.0 - confidence_level
     display_horizon = float(np.nanmax(time_values) if max_time is None else min(max_time, np.nanmax(time_values)))
     display_horizon = max(display_horizon, 1e-6)
@@ -4168,184 +5140,54 @@ def compute_km_analysis(
         rmst_horizon = max(min(display_horizon, common_group_horizon), 1e-6)
     else:
         rmst_horizon = display_horizon
-    risk_ticks = np.round(np.linspace(0, display_horizon, risk_table_points), 2).tolist()
+    # At-risk counts use the exact tick times; only the column labels are rounded (a
+    # rounded last tick above the horizon would report 0 patients at risk).
+    risk_ticks = np.linspace(0, display_horizon, risk_table_points).tolist()
+    risk_tick_labels = _risk_tick_labels(risk_ticks)
 
     summary_rows: list[dict[str, Any]] = []
     risk_rows: list[dict[str, Any]] = []
     curve_payloads: list[dict[str, Any]] = []
     rmst_stats_by_group: list[dict[str, float]] = []
-
     for label in group_labels:
         group_frame = frame if label == "Overall" and not group_column else frame.loc[frame[group_column] == label].copy()
-        t_group = group_frame[time_column].to_numpy(dtype=float)
-        e_group = group_frame[event_column].to_numpy(dtype=int)
-        sf = SurvfuncRight(t_group, e_group)
-
-        event_times = sf.surv_times.astype(float)
-        step_timeline = np.concatenate(([0.0], event_times))
-        step_survival = np.concatenate(([1.0], sf.surv_prob.astype(float)))
-        lower, upper = _pointwise_km_ci(sf.surv_prob.astype(float), sf.surv_prob_se.astype(float), alpha=alpha)
-        lower = np.concatenate(([1.0], lower))
-        upper = np.concatenate(([1.0], upper))
-        censor_times = group_frame.loc[group_frame[event_column] == 0, time_column].to_numpy(dtype=float)
-        censor_survival = _step_values(event_times, sf.surv_prob.astype(float), censor_times) if censor_times.size else np.array([])
-
-        # Carry the last KM level only to this group's own last follow-up time;
-        # extending it to the pooled horizon would draw survival where the
-        # group has no observations.
-        group_curve_end = float(min(display_horizon, float(np.max(t_group))))
-        if step_timeline[-1] < group_curve_end:
-            step_timeline = np.concatenate((step_timeline, [group_curve_end]))
-            step_survival = np.concatenate((step_survival, [step_survival[-1]]))
-            lower = np.concatenate((lower, [lower[-1]]))
-            upper = np.concatenate((upper, [upper[-1]]))
-
-        median_survival = _km_median_time(t_group, e_group)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            median_ci = sf.quantile_ci(0.5, alpha=alpha)
-        median_ci_low = _safe_float(median_ci[0]) if isinstance(median_ci, tuple) else None
-        median_ci_high = _safe_float(median_ci[1]) if isinstance(median_ci, tuple) else None
-        rmst_stats = _restricted_mean_survival_time_delta_stats(
-            event_times,
-            sf.surv_prob.astype(float),
-            sf.n_risk.astype(float),
-            sf.n_events.astype(float),
-            rmst_horizon,
+        summary_row, risk_row, curve, rmst_stats = _km_group_estimates(
+            group_frame,
+            label,
+            time_column=time_column,
+            event_column=event_column,
             alpha=alpha,
+            display_horizon=display_horizon,
+            rmst_horizon=rmst_horizon,
+            risk_ticks=risk_ticks,
+            risk_tick_labels=risk_tick_labels,
         )
+        summary_rows.append(summary_row)
+        risk_rows.append(risk_row)
+        curve_payloads.append(curve)
         rmst_stats_by_group.append(rmst_stats)
-
-        summary_rows.append(
-            {
-                "Group": label,
-                "N": int(group_frame.shape[0]),
-                "Events": int(group_frame[event_column].sum()),
-                "Censored": int((group_frame[event_column] == 0).sum()),
-                "Median survival": median_survival,
-                "Median CI lower": median_ci_low,
-                "Median CI upper": median_ci_high,
-                "RMST": _safe_float(rmst_stats["rmst"]),
-                "RMST SE": _safe_float(rmst_stats["se"]),
-                "RMST CI lower": _safe_float(rmst_stats["ci_lower"]),
-                "RMST CI upper": _safe_float(rmst_stats["ci_upper"]),
-            }
-        )
-        risk_row = OrderedDict({"Group": label})
-        for tick in risk_ticks:
-            risk_row[f"{tick:g}"] = int((group_frame[time_column] >= tick).sum())
-        risk_rows.append(dict(risk_row))
-        curve_payloads.append(
-            {
-                "group": label,
-                "timeline": step_timeline.tolist(),
-                "survival": step_survival.tolist(),
-                "ci_lower": lower.tolist(),
-                "ci_upper": upper.tolist(),
-                "censor_times": censor_times.tolist(),
-                "censor_survival": censor_survival.tolist(),
-            }
-        )
-
-    # If any group has non-estimable RMST uncertainty (e.g. exhausted risk set),
-    # null SE and CI for all groups so the summary table is internally consistent.
-    if any(s.get("variance") is None for s in rmst_stats_by_group):
-        for row in summary_rows:
-            row["RMST SE"] = None
-            row["RMST CI lower"] = None
-            row["RMST CI upper"] = None
 
     test_payload = None
     pairwise_rows: list[dict[str, Any]] = []
-    weight_type = KM_WEIGHT_MAP.get(logrank_weight)
     if group_column and len(group_labels) >= 2 and not suppress_group_inference:
-        kwargs: dict[str, Any] = {}
-        if weight_type == "fh":
-            kwargs["fh_p"] = fh_p
-        chisq, p_value = survdiff(time_values, event_values, frame[group_column].astype(str).to_numpy(), weight_type=weight_type, **kwargs)
-        test_payload = {
-            "test": logrank_weight,
-            "chisq": float(chisq),
-            "p_value": float(p_value),
-        }
-        raw_p_values: list[float] = []
-        pair_ids: list[tuple[str, str]] = []
-        for left, right in itertools.combinations(group_labels, 2):
-            mask = frame[group_column].isin([left, right]).to_numpy()
-            chisq_pair, p_pair = survdiff(
-                time_values[mask],
-                event_values[mask],
-                frame.loc[mask, group_column].astype(str).to_numpy(),
-                weight_type=weight_type,
-                **kwargs,
-            )
-            raw_p_values.append(float(p_pair))
-            pair_ids.append((left, right))
-            pairwise_rows.append(
-                {
-                    "Comparison": f"{left} vs {right}",
-                    "Chi-square": float(chisq_pair),
-                    "P value": float(p_pair),
-                }
-            )
-        adjusted = _bh_adjust(raw_p_values)
-        for row, adjusted_p in zip(pairwise_rows, adjusted, strict=True):
-            row["BH adjusted p"] = adjusted_p
+        test_payload, pairwise_rows = _km_group_tests(
+            frame,
+            group_labels,
+            time_column=time_column,
+            event_column=event_column,
+            group_column=group_column,
+            logrank_weight=logrank_weight,
+            fh_p=fh_p,
+        )
 
-    cohort_summary = {
-        "n": int(frame.shape[0]),
-        "events": int(frame[event_column].sum()),
-        "censored": int((1 - frame[event_column]).sum()),
-        "median_follow_up": _median_follow_up(frame[time_column], frame[event_column]),
-        "time_max": float(np.nanmax(frame[time_column])),
-        "row_mask_hash": str(frame.attrs.get("row_mask_hash") or ""),
-        "dropped_missing_rows": int(frame.attrs.get("dropped_missing_rows", 0)),
-        "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
-        "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_values", 0)),
-    }
-    rmst_contrast: dict[str, Any] | None = None
-    if len(summary_rows) == 2 and len(rmst_stats_by_group) == 2:
-        left_row, right_row = summary_rows
-        left_stats, right_stats = rmst_stats_by_group
-        estimate = float(left_stats["rmst"] - right_stats["rmst"])
-        rmst_contrast = {
-            "comparison": f"{left_row['Group']} minus {right_row['Group']}",
-            "estimate": _safe_float(estimate),
-            "se": None,
-            "z_statistic": None,
-            "p_value": None,
-            "p_value_method": None,
-            "ci_lower": None,
-            "ci_upper": None,
-            "horizon": _safe_float(rmst_horizon),
-        }
-        left_variance = left_stats.get("variance")
-        right_variance = right_stats.get("variance")
-        if (
-            left_variance is not None
-            and right_variance is not None
-            and np.isfinite(left_variance)
-            and np.isfinite(right_variance)
-        ):
-            variance = float(left_variance + right_variance)
-            se = math.sqrt(max(variance, 0.0))
-            z_value = float(ndtri(1.0 - alpha / 2.0))
-            rmst_contrast["se"] = _safe_float(se)
-            if se > 0.0 and np.isfinite(se):
-                z_statistic = float(estimate / se)
-                rmst_contrast["z_statistic"] = _safe_float(z_statistic)
-                rmst_contrast["p_value"] = _safe_float(2.0 * stats.norm.sf(abs(z_statistic)))
-                rmst_contrast["p_value_method"] = "wald_normal"
-            elif estimate == 0.0:
-                rmst_contrast["z_statistic"] = 0.0
-                rmst_contrast["p_value"] = 1.0
-                rmst_contrast["p_value_method"] = "wald_normal"
-            rmst_contrast["ci_lower"] = _safe_float(estimate - z_value * se)
-            rmst_contrast["ci_upper"] = _safe_float(estimate + z_value * se)
-        if outcome_informed_group:
-            rmst_contrast["z_statistic"] = None
-            rmst_contrast["p_value"] = None
-            rmst_contrast["p_value_method"] = None
+    cohort_summary = _km_cohort_summary(frame, time_column=time_column, event_column=event_column)
+    rmst_contrast = _km_rmst_contrast(
+        summary_rows,
+        rmst_stats_by_group,
+        rmst_horizon=rmst_horizon,
+        alpha=alpha,
+        outcome_informed_group=outcome_informed_group,
+    )
 
     scientific_summary = _km_scientific_summary(
         summary_rows=summary_rows,
@@ -4379,7 +5221,7 @@ def compute_km_analysis(
             else float(test_payload["p_value"])
         ),
         "risk_table": {
-            "columns": ["Group", *[f"{tick:g}" for tick in risk_ticks]],
+            "columns": ["Group", *risk_tick_labels],
             "rows": risk_rows,
         },
         "pairwise_table": pairwise_rows,
@@ -4404,6 +5246,25 @@ def _categorical_candidates(df: pd.DataFrame, columns: Sequence[str]) -> list[st
         if not is_numeric_dtype(series):
             candidates.append(column)
     return candidates
+
+
+def _resolve_cox_categorical_covariates(
+    df: pd.DataFrame,
+    covariates: Sequence[str],
+    categorical_covariates: Sequence[str] | None,
+) -> list[str]:
+    """Explicitly marked categorical covariates plus every covariate that is not numeric.
+
+    Text covariates are always categorical: coercing them to numbers would silently turn
+    every label into a missing value and drop those rows from the complete-case fit.
+    Continuous numbers with a few stray text values are refused instead of becoming a
+    categorical term with one level per distinct number.
+    """
+    # Missing columns are reported together with the outcome columns by _cohort_frame.
+    present = [column for column in covariates if column in df.columns]
+    reject_numeric_text_features(df, present)
+    explicit = list(dict.fromkeys(categorical_covariates or []))
+    return explicit + [column for column in _categorical_candidates(df, present) if column not in explicit]
 
 
 def _prepare_cox_frame(
@@ -4499,10 +5360,6 @@ def _build_cox_formula(time_column: str, covariates: Sequence[str], categorical_
         else:
             terms.append(quote_name(column))
     return f"{quote_name(time_column)} ~ {' + '.join(terms)}"
-
-
-def _build_cox_strata_labels(frame: pd.DataFrame, strata_columns: Sequence[str]) -> np.ndarray | None:
-    return _build_cox_strata_payload(frame, strata_columns)["codes"]
 
 
 def _cox_design_condition_number(exog: Any) -> float | None:
@@ -4758,71 +5615,35 @@ def _harrell_c_index_bootstrap_ci(
     }
 
 
-@user_input_boundary
-def compute_cox_analysis(
-    df: pd.DataFrame,
-    time_column: str,
-    event_column: str,
-    covariates: Sequence[str],
-    categorical_covariates: Sequence[str] | None = None,
-    strata_columns: Sequence[str] | None = None,
-    event_positive_value: Any = None,
-) -> dict[str, Any]:
-    _validate_cox_covariates(covariates)
-    categorical_covariates = list(dict.fromkeys(categorical_covariates or _categorical_candidates(df, covariates)))
-    strata_columns = _normalize_cox_strata_columns(strata_columns, covariates, categorical_covariates)
-    preview_frame = _prepare_cox_frame(
-        df,
-        time_column=time_column,
-        event_column=event_column,
-        covariates=covariates,
-        categorical_covariates=categorical_covariates,
-        strata_columns=strata_columns,
-        event_positive_value=event_positive_value,
-        drop_missing_covariates=False,
-    )
-    complete_case_columns = list(dict.fromkeys([*covariates, *strata_columns]))
-    preview_source_row_index = _frame_source_row_index(preview_frame)
-    complete_case_mask = ~preview_frame[complete_case_columns].isna().any(axis=1).to_numpy(dtype=bool)
+def _cox_complete_case_frame(preview_frame: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
+    """Rows with every selected Cox input present, keeping the source-row bookkeeping."""
+    columns = list(dict.fromkeys(columns))
+    complete_case_mask = ~preview_frame[columns].isna().any(axis=1).to_numpy(dtype=bool)
     frame = preview_frame.loc[complete_case_mask].copy().reset_index(drop=True)
     frame.attrs.update(dict(preview_frame.attrs))
-    complete_case_source_rows = preview_source_row_index[complete_case_mask]
+    complete_case_source_rows = _frame_source_row_index(preview_frame)[complete_case_mask]
     frame.attrs["source_row_index"] = complete_case_source_rows.tolist()
     frame.attrs["row_mask_hash"] = _row_mask_hash(complete_case_source_rows)
     if frame.empty:
         raise ValueError("No rows remain after removing missing values for the Cox model.")
-    for column in categorical_covariates:
-        string_values = frame[column].astype("string")
-        categories = _ordered_reference_categories(string_values.dropna().unique().tolist(), column)
-        frame[column] = pd.Categorical(string_values, categories=categories)
-    formula = _build_cox_formula(time_column, covariates, categorical_covariates)
-    status = frame[event_column].astype(int).to_numpy()
-    strata_payload = _build_cox_strata_payload(frame, strata_columns)
-    strata_codes = strata_payload["codes"]
-    strata_row_labels = strata_payload["row_labels"]
-    stability_snapshot = _cox_stability_snapshot(
-        frame,
-        event_column,
-        covariates,
-        categorical_covariates,
-        strata_columns=strata_columns,
-        strata_row_labels=strata_row_labels,
-    )
-    constant_design_message = _cox_constant_design_message(stability_snapshot)
-    if constant_design_message:
-        raise ValueError(constant_design_message)
-    model = PHReg.from_formula(formula, data=frame, status=status, strata=strata_codes, ties="efron")
-    design_condition_number = _cox_design_condition_number(getattr(model, "exog", None))
-    results = _fit_cox_model(model, stability_snapshot)
+    return frame
 
+
+def _cox_coefficient_rows(
+    results: Any,
+    reference_levels: dict[str, str],
+    stability_snapshot: dict[str, Any],
+) -> tuple[list[dict[str, Any]], np.ndarray, float]:
+    """Hazard-ratio table rows, fitted risk scores, and the partial log-likelihood.
+
+    A fit with any non-finite estimate is rejected with a stability explanation.
+    """
     conf_int = np.asarray(results.conf_int(), dtype=float)
     param_vector = np.asarray(results.params, dtype=float)
     bse_vector = np.asarray(results.bse, dtype=float)
     z_vector = np.asarray(results.tvalues, dtype=float)
     p_vector = np.asarray(results.pvalues, dtype=float)
     llf_value = float(results.llf) if results.llf is not None else np.nan
-
-    reference_levels = _reference_levels(frame, categorical_covariates)
     risk_score = np.asarray(results.model.exog @ results.params, dtype=float)
     fit_components = [param_vector, conf_int.reshape(-1), bse_vector, z_vector, p_vector, risk_score]
     if (not np.isfinite(llf_value)) or any(not np.isfinite(component).all() for component in fit_components):
@@ -4832,31 +5653,45 @@ def compute_cox_analysis(
     for idx, term in enumerate(results.model.exog_names):
         variable, label, reference = _clean_term(term, reference_levels)
         beta = float(param_vector[idx])
-        hr = _safe_exp_or_none(beta)
-        ci_low = _safe_exp_or_none(conf_int[idx, 0])
-        ci_high = _safe_exp_or_none(conf_int[idx, 1])
         model_rows.append(
             {
                 "Variable": variable,
                 "Label": label,
                 "Reference": reference,
                 "Beta": beta,
-                "Hazard ratio": hr,
-                "CI lower": ci_low,
-                "CI upper": ci_high,
+                "Hazard ratio": _safe_exp_or_none(beta),
+                "CI lower": _safe_exp_or_none(conf_int[idx, 0]),
+                "CI upper": _safe_exp_or_none(conf_int[idx, 1]),
                 "SE": float(bse_vector[idx]),
                 "Z": float(z_vector[idx]),
                 "P value": float(p_vector[idx]),
             }
         )
+    return model_rows, risk_score, llf_value
 
-    schoenfeld = np.asarray(results.schoenfeld_residuals, dtype=float)
-    if schoenfeld.ndim == 1:
-        schoenfeld = schoenfeld.reshape(-1, 1)
+
+def _cox_ph_diagnostics(
+    results: Any,
+    frame: pd.DataFrame,
+    *,
+    time_column: str,
+    event_column: str,
+    strata_codes: np.ndarray | None,
+    reference_levels: dict[str, str],
+    stability_snapshot: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Grambsch-Therneau PH tests (per term and global) and scaled Schoenfeld residual panels."""
+    raw_times = frame[time_column].to_numpy(dtype=float)
+    schoenfeld = _efron_schoenfeld_residuals(
+        np.asarray(results.model.exog, dtype=float),
+        raw_times,
+        frame[event_column].to_numpy(dtype=int),
+        np.asarray(results.params, dtype=float),
+        strata_codes,
+    )
     cov_matrix = np.atleast_2d(np.asarray(results.cov_params(), dtype=float))
     if schoenfeld.shape[1] != cov_matrix.shape[0] or not np.isfinite(cov_matrix).all():
         raise ValueError(_cox_nonfinite_estimate_message(stability_snapshot))
-    raw_times = frame[time_column].to_numpy(dtype=float)
     positive_times = raw_times[raw_times > 0]
     # log(0) is undefined; place time-0 events just below the smallest positive time.
     floor_time = float(positive_times.min()) / 2.0 if positive_times.size else 1.0
@@ -4886,10 +5721,7 @@ def compute_cox_analysis(
             order = np.argsort(x_values, kind="mergesort")
             x_sorted = x_values[order]
             y_sorted = y_values[order]
-            trend_y = y_sorted
-            if x_sorted.shape[0] >= 4:
-                frac = min(0.8, max(0.35, 6.0 / float(x_sorted.shape[0])))
-                trend_y = np.asarray(lowess(y_sorted, x_sorted, frac=frac, it=0, return_sorted=False), dtype=float)
+            trend_y = _diagnostic_lowess_trend(y_sorted, x_sorted)
             diagnostic_plot_data.append(
                 {
                     "term": label,
@@ -4901,49 +5733,60 @@ def compute_cox_analysis(
                     "trend_residual": [_safe_float(value) for value in np.asarray(trend_y, dtype=float).tolist()],
                 }
             )
-    global_ph_screen = ph_test
-    if global_ph_screen.get("p_value") is not None:
+    if ph_test.get("p_value") is not None:
         diagnostic_rows.append(
             {
                 "Term": "Global PH test (Grambsch-Therneau)",
                 "Schoenfeld rho": None,
-                "Chi-square": _safe_float(global_ph_screen.get("statistic")),
-                "P value": _safe_float(global_ph_screen["p_value"]),
+                "Chi-square": _safe_float(ph_test.get("statistic")),
+                "P value": _safe_float(ph_test["p_value"]),
                 "_kind": "global",
             }
         )
-    martingale_note = None
-    martingale_candidate_terms = [
+    return diagnostic_rows, diagnostic_plot_data, ph_test
+
+
+def _cox_martingale_screen(
+    results: Any,
+    frame: pd.DataFrame,
+    covariates: Sequence[str],
+    categorical_covariates: Sequence[str],
+    *,
+    time_column: str,
+    event_column: str,
+    strata_codes: np.ndarray | None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Martingale residual panels for continuous covariates, or a note on why there are none."""
+    categorical_names = {str(value) for value in categorical_covariates}
+    candidate_terms = [
         str(covariate)
         for covariate in covariates
-        if covariate not in {str(value) for value in categorical_covariates}
+        if covariate not in categorical_names
         and covariate in frame.columns
         and pd.api.types.is_numeric_dtype(frame[covariate])
     ]
-    try:
-        martingale_residuals = np.asarray(getattr(results, "martingale_residuals", np.array([])), dtype=float)
-    except Exception:
-        martingale_residuals = np.array([])
-        martingale_note = "Martingale residual screening was unavailable for this fit."
-    martingale_plot_data = _cox_martingale_plot_data(
+    martingale_residuals = _efron_martingale_residuals(
+        np.asarray(results.model.exog, dtype=float),
+        frame[time_column].to_numpy(dtype=float),
+        frame[event_column].to_numpy(dtype=int),
+        np.asarray(results.params, dtype=float),
+        strata_codes,
+    )
+    plot_data = _cox_martingale_plot_data(
         frame,
         martingale_residuals,
         covariates,
         categorical_covariates,
     )
-    if not martingale_plot_data:
-        if martingale_note is None and martingale_candidate_terms:
-            martingale_note = "Martingale residual screening was unavailable for this fit."
-        elif martingale_note is None:
-            martingale_note = "No continuous covariates were eligible for martingale screening."
+    if plot_data:
+        return plot_data, None
+    if candidate_terms:
+        return plot_data, "Martingale residual screening was unavailable for this fit."
+    return plot_data, "No continuous covariates were eligible for martingale screening."
 
-    n_obs = int(frame.shape[0])
-    outcome_rows = int(preview_frame.shape[0])
-    dropped_rows = int(outcome_rows - n_obs)
-    n_events = int(frame[event_column].sum())
-    k_params = len(results.params)
-    strata_snapshot = dict(stability_snapshot.get("strata_snapshot") or {})
-    n_strata = strata_snapshot.get("n_strata")
+
+def _cox_likelihood_ratio_test(results: Any, llf_value: float, k_params: int) -> dict[str, Any]:
+    """Overall likelihood-ratio test of the fitted model against the null model."""
     llnull_raw = getattr(results, "llnull", None)
     if llnull_raw is None:
         try:
@@ -4968,28 +5811,129 @@ def compute_cox_analysis(
             )
     elif llnull_value is None:
         lr_note = "Overall likelihood-ratio test was not reportable because the null-model log-likelihood was unavailable."
-    c_index = None
-    c_index_ci = {"c_index_std": None, "c_index_ci_lower": None, "c_index_ci_upper": None}
-    c_index_label = "C-index not reported for stratified Cox"
-    evaluation_mode = "stratified_not_reported"
-    if not strata_columns:
-        c_index = _harrell_c_index(
-            frame[time_column].to_numpy(dtype=float),
-            frame[event_column].to_numpy(dtype=int),
-            risk_score.astype(float),
-        )
-        c_index_ci = _harrell_c_index_bootstrap_ci(
-            frame[time_column].to_numpy(dtype=float),
-            frame[event_column].to_numpy(dtype=int),
-            risk_score.astype(float),
-        )
-        c_index_label = "Apparent C-index (training cohort)"
-        evaluation_mode = "apparent"
+    return {
+        "null_log_likelihood": llnull_value,
+        "lr_statistic": _safe_float(lr_statistic),
+        "lr_pvalue": _safe_float(lr_pvalue),
+        "lr_note": lr_note,
+    }
+
+
+def _cox_apparent_c_index(
+    frame: pd.DataFrame,
+    risk_score: np.ndarray,
+    *,
+    time_column: str,
+    event_column: str,
+    stratified: bool,
+) -> dict[str, Any]:
+    """Apparent Harrell C-index with a bootstrap CI; not reported for a stratified fit."""
+    if stratified:
+        return {
+            "c_index": None,
+            "c_index_std": None,
+            "c_index_ci_lower": None,
+            "c_index_ci_upper": None,
+            "c_index_label": "C-index not reported for stratified Cox",
+            "evaluation_mode": "stratified_not_reported",
+        }
+    time_values = frame[time_column].to_numpy(dtype=float)
+    event_values = frame[event_column].to_numpy(dtype=int)
+    c_index = _harrell_c_index(time_values, event_values, risk_score.astype(float))
+    c_index_ci = _harrell_c_index_bootstrap_ci(time_values, event_values, risk_score.astype(float))
+    return {
+        "c_index": c_index,
+        **c_index_ci,
+        "c_index_label": "Apparent C-index (training cohort)",
+        "evaluation_mode": "apparent",
+    }
+
+
+@user_input_boundary
+def compute_cox_analysis(
+    df: pd.DataFrame,
+    time_column: str,
+    event_column: str,
+    covariates: Sequence[str],
+    categorical_covariates: Sequence[str] | None = None,
+    strata_columns: Sequence[str] | None = None,
+    event_positive_value: Any = None,
+) -> dict[str, Any]:
+    _validate_cox_covariates(covariates)
+    categorical_covariates = _resolve_cox_categorical_covariates(df, covariates, categorical_covariates)
+    strata_columns = _normalize_cox_strata_columns(strata_columns, covariates, categorical_covariates)
+    preview_frame = _prepare_cox_frame(
+        df,
+        time_column=time_column,
+        event_column=event_column,
+        covariates=covariates,
+        categorical_covariates=categorical_covariates,
+        strata_columns=strata_columns,
+        event_positive_value=event_positive_value,
+        drop_missing_covariates=False,
+    )
+    frame = _cox_complete_case_frame(preview_frame, [*covariates, *strata_columns])
+    for column in categorical_covariates:
+        string_values = frame[column].astype("string")
+        categories = _ordered_reference_categories(string_values.dropna().unique().tolist(), column)
+        frame[column] = pd.Categorical(string_values, categories=categories)
+    formula = _build_cox_formula(time_column, covariates, categorical_covariates)
+    status = frame[event_column].astype(int).to_numpy()
+    strata_payload = _build_cox_strata_payload(frame, strata_columns)
+    stability_snapshot = _cox_stability_snapshot(
+        frame,
+        event_column,
+        covariates,
+        categorical_covariates,
+        strata_columns=strata_columns,
+        strata_row_labels=strata_payload["row_labels"],
+    )
+    constant_design_message = _cox_constant_design_message(stability_snapshot)
+    if constant_design_message:
+        raise ValueError(constant_design_message)
+    model = PHReg.from_formula(formula, data=frame, status=status, strata=strata_payload["codes"], ties="efron")
+    design_condition_number = _cox_design_condition_number(getattr(model, "exog", None))
+    results = _fit_cox_model(model, stability_snapshot)
+
+    reference_levels = _reference_levels(frame, categorical_covariates)
+    model_rows, risk_score, llf_value = _cox_coefficient_rows(results, reference_levels, stability_snapshot)
+    diagnostic_rows, diagnostic_plot_data, global_ph_screen = _cox_ph_diagnostics(
+        results,
+        frame,
+        time_column=time_column,
+        event_column=event_column,
+        strata_codes=strata_payload["codes"],
+        reference_levels=reference_levels,
+        stability_snapshot=stability_snapshot,
+    )
+    martingale_plot_data, martingale_note = _cox_martingale_screen(
+        results,
+        frame,
+        covariates,
+        categorical_covariates,
+        time_column=time_column,
+        event_column=event_column,
+        strata_codes=strata_payload["codes"],
+    )
+
+    n_obs = int(frame.shape[0])
+    outcome_rows = int(preview_frame.shape[0])
+    n_events = int(frame[event_column].sum())
+    k_params = len(results.params)
+    strata_snapshot = dict(stability_snapshot.get("strata_snapshot") or {})
+    c_index_fields = _cox_apparent_c_index(
+        frame,
+        risk_score,
+        time_column=time_column,
+        event_column=event_column,
+        stratified=bool(strata_columns),
+    )
+    c_index = c_index_fields["c_index"]
 
     model_stats = {
         "n": n_obs,
         "outcome_rows": outcome_rows,
-        "dropped_rows": dropped_rows,
+        "dropped_rows": int(outcome_rows - n_obs),
         "row_mask_hash": str(frame.attrs.get("row_mask_hash") or ""),
         "outcome_row_mask_hash": str(preview_frame.attrs.get("row_mask_hash") or ""),
         "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
@@ -4998,10 +5942,7 @@ def compute_cox_analysis(
         "parameters": k_params,
         "events_per_parameter": float(n_events / k_params) if k_params else None,
         "partial_log_likelihood": _safe_float(llf_value),
-        "null_log_likelihood": llnull_value,
-        "lr_statistic": _safe_float(lr_statistic),
-        "lr_pvalue": _safe_float(lr_pvalue),
-        "lr_note": lr_note,
+        **_cox_likelihood_ratio_test(results, llf_value, k_params),
         "global_ph_statistic": _safe_float(global_ph_screen.get("statistic")),
         "global_ph_df": _safe_float(global_ph_screen.get("df")),
         "global_ph_pvalue": _safe_float(global_ph_screen.get("p_value")),
@@ -5010,18 +5951,21 @@ def compute_cox_analysis(
         "martingale_terms": [panel["term"] for panel in martingale_plot_data],
         "martingale_note": martingale_note,
         "aic": _safe_float(-2 * llf_value + 2 * k_params),
-        "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_obs, 1))),
+        # For a partial likelihood the effective sample size is the number of events,
+        # as in R's BIC(coxph) (survival >= 2.41) and Volinsky & Raftery (2000).
+        "bic": _safe_float(-2 * llf_value + k_params * np.log(max(n_events, 1))),
+        "bic_sample_size": "events",
         "c_index": _safe_float(c_index),
-        "c_index_std": _safe_float(c_index_ci["c_index_std"]),
-        "c_index_ci_lower": _safe_float(c_index_ci["c_index_ci_lower"]),
-        "c_index_ci_upper": _safe_float(c_index_ci["c_index_ci_upper"]),
+        "c_index_std": _safe_float(c_index_fields["c_index_std"]),
+        "c_index_ci_lower": _safe_float(c_index_fields["c_index_ci_lower"]),
+        "c_index_ci_upper": _safe_float(c_index_fields["c_index_ci_upper"]),
         "c_index_ci_level": 0.95 if c_index is not None else None,
         "c_index_ci_method": "bootstrap_percentile_fixed_score" if c_index is not None else None,
-        "c_index_label": c_index_label,
-        "evaluation_mode": evaluation_mode,
+        "c_index_label": c_index_fields["c_index_label"],
+        "evaluation_mode": c_index_fields["evaluation_mode"],
         "tie_method": "efron",
         "strata_columns": list(strata_columns),
-        "n_strata": n_strata,
+        "n_strata": strata_snapshot.get("n_strata"),
         "zero_event_strata_count": int(strata_snapshot.get("zero_event_strata_count") or 0),
         "sparse_event_strata_count": int(strata_snapshot.get("sparse_event_strata_count") or 0),
         "high_cardinality_strata_columns": list(strata_snapshot.get("high_cardinality_columns") or []),
@@ -5068,7 +6012,7 @@ def preview_cox_analysis_inputs(
     if not covariates:
         raise ValueError("Select at least one covariate for the Cox model.")
     _validate_cox_covariates(covariates)
-    categorical_covariates = list(dict.fromkeys(categorical_covariates or _categorical_candidates(df, covariates)))
+    categorical_covariates = _resolve_cox_categorical_covariates(df, covariates, categorical_covariates)
     strata_columns = _normalize_cox_strata_columns(strata_columns, covariates, categorical_covariates)
     preview_frame = _prepare_cox_frame(
         df,
@@ -5080,20 +6024,13 @@ def preview_cox_analysis_inputs(
         event_positive_value=event_positive_value,
         drop_missing_covariates=False,
     )
+    input_columns = list(dict.fromkeys([*covariates, *strata_columns]))
     missing_by_covariate: list[dict[str, Any]] = []
-    for column in list(dict.fromkeys([*covariates, *strata_columns])):
+    for column in input_columns:
         missing_count = int(preview_frame[column].isna().sum())
         if missing_count > 0:
             missing_by_covariate.append({"column": column, "missing_rows": missing_count})
-    complete_case = preview_frame.dropna(subset=list(dict.fromkeys([*covariates, *strata_columns]))).reset_index(drop=True)
-    complete_case_source_rows = _frame_source_row_index(preview_frame)[
-        ~preview_frame[list(dict.fromkeys([*covariates, *strata_columns]))].isna().any(axis=1).to_numpy(dtype=bool)
-    ]
-    complete_case.attrs.update(dict(preview_frame.attrs))
-    complete_case.attrs["source_row_index"] = complete_case_source_rows.tolist()
-    complete_case.attrs["row_mask_hash"] = _row_mask_hash(complete_case_source_rows)
-    if complete_case.empty:
-        raise ValueError("No rows remain after removing missing values for the Cox model.")
+    complete_case = _cox_complete_case_frame(preview_frame, input_columns)
     strata_payload = _build_cox_strata_payload(complete_case, strata_columns)
     stability_snapshot = _cox_stability_snapshot(
         complete_case,

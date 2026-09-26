@@ -6,12 +6,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tomllib
 import zipfile
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback for local QA runs
-    import tomli as tomllib
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -37,6 +33,26 @@ from survival_toolkit.sample_data import make_example_dataset
 # The local request guard only answers loopback Host headers, so address the app as 127.0.0.1
 # instead of TestClient's default "testserver" host.
 client = TestClient(app, base_url="http://127.0.0.1")
+
+
+_STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static"
+# The front end is split into classic-script parts that index.html loads in this order.
+# Source checks read them as one text, so they do not depend on which part holds a function.
+_APP_JS_PARTS = (
+    "app_core.js",
+    "app_workspace.js",
+    "app_columns.js",
+    "app_render.js",
+    "app_predictive.js",
+    "app_analyses.js",
+    "app_models.js",
+    "app.js",
+)
+
+
+class _AppJsSource:
+    def read_text(self, encoding: str = "utf-8") -> str:
+        return "\n".join((_STATIC_DIR / name).read_text(encoding=encoding) for name in _APP_JS_PARTS)
 
 
 def _torch_available() -> bool:
@@ -276,10 +292,10 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
 
 
 def test_frontend_tracks_workspace_controls_in_history_state() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    app_js = _AppJsSource()
     shell_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_shell.js"
-    text = app_js.read_text()
-    shell_text = shell_js.read_text()
+    text = app_js.read_text(encoding="utf-8")
+    shell_text = shell_js.read_text(encoding="utf-8")
 
     assert "captureControlSnapshot()" in text
     assert "controls: captureControlSnapshot()" in shell_text
@@ -296,9 +312,9 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
 
 def test_guided_step_indicator_exposes_navigation_a11y_labels() -> None:
     index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
-    html = index_html.read_text()
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    html = index_html.read_text(encoding="utf-8")
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'id="stepIndicator" role="navigation" aria-label="Guided workflow steps"' in html
     assert 'aria-label="Step 1: Load data"' in html
@@ -308,8 +324,8 @@ def test_guided_step_indicator_exposes_navigation_a11y_labels() -> None:
 
 
 def test_frontend_surfaces_upload_success_feedback_and_allows_reselecting_same_file() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function hasCompletedResults()" in text
     assert "function uploadFeedbackMessages(payload" in text
@@ -320,8 +336,8 @@ def test_frontend_surfaces_upload_success_feedback_and_allows_reselecting_same_f
 
 
 def test_frontend_disables_expert_run_buttons_until_endpoint_is_ready() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function syncAnalysisRunButtonAvailability()" in text
     assert 'const readyMessage = endpointReadinessMessage();' in text
@@ -333,8 +349,8 @@ def test_frontend_disables_expert_run_buttons_until_endpoint_is_ready() -> None:
 
 
 def test_frontend_limits_fresh_model_feature_defaults_and_marks_dl_batch_size_scope() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "const DEFAULT_MODEL_FEATURE_SELECTION_LIMIT = 20;" in text
     assert "const defaultModelFeatures = availableCovariates.slice(0, DEFAULT_MODEL_FEATURE_SELECTION_LIMIT);" in text
@@ -344,7 +360,7 @@ def test_frontend_limits_fresh_model_feature_defaults_and_marks_dl_batch_size_sc
 
 
 def test_readme_states_current_scope_and_validation_limitations() -> None:
-    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
 
     assert "single-event survival analysis" in readme
     assert "right-censored data" in readme
@@ -359,19 +375,44 @@ def test_readme_states_current_scope_and_validation_limitations() -> None:
     assert "0.50` is chance-level ranking" in readme
 
 
-def test_app_uses_threadpool_for_builtin_loaders_and_derive_group() -> None:
-    app_py = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "app.py").read_text()
+def test_input_checks_and_analysis_jobs_run_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The survival-outcome column check scans every column; it must not stall the event loop.
+    observed: dict[str, list[bool]] = {}
 
-    assert "async def _load_builtin_dataset_response(" in app_py
-    assert "_store_loaded_dataframe(loader(), filename=filename" in app_py
-    assert "return await run_in_threadpool(job)" in app_py
-    assert "return await _run_dataset_job(request_model.dataset_id, _run)" in app_py
+    def _record(name: str, func):
+        def wrapper(*args, **kwargs):
+            observed.setdefault(name, []).append(_event_loop_is_running_in_this_thread())
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(
+        app_module,
+        "_reject_survival_outcome_feature_columns",
+        _record("outcome_check", app_module._reject_survival_outcome_feature_columns),
+    )
+    monkeypatch.setattr(app_module, "compute_cox_analysis", _record("cox", app_module.compute_cox_analysis))
+    dataset = client.post("/api/load-example").json()
+    response = client.post(
+        "/api/cox",
+        json={
+            "dataset_id": dataset["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "covariates": ["age", "stage"],
+            "categorical_covariates": ["stage"],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert set(observed) == {"outcome_check", "cox"}
+    assert not any(flag for flags in observed.values() for flag in flags), observed
 
 
 def test_frontend_exposes_analysis_consistency_banner_and_row_hash_checks() -> None:
     root = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit"
     index_html = (root / "templates" / "index.html").read_text(encoding="utf-8")
-    app_js = (root / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'id="analysisConsistencyBanner"' in index_html
     assert 'analysisConsistencyBanner: document.getElementById("analysisConsistencyBanner")' in app_js
@@ -382,10 +423,10 @@ def test_frontend_exposes_analysis_consistency_banner_and_row_hash_checks() -> N
 
 
 def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    app_js = _AppJsSource()
     shell_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_shell.js"
-    text = app_js.read_text()
-    shell_text = shell_js.read_text()
+    text = app_js.read_text(encoding="utf-8")
+    shell_text = shell_js.read_text(encoding="utf-8")
 
     assert 'uiMode: "guided"' in text
     assert "guidedGoal: null" in text
@@ -430,9 +471,9 @@ def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
 
 def test_frontend_hides_dataset_preset_bar_in_guided_mode() -> None:
     index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    index_text = index_html.read_text()
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    index_text = index_html.read_text(encoding="utf-8")
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'id="datasetPresetBarHome"' not in index_text
     assert 'refs.datasetPresetBar?.classList.toggle("hidden", guidedActive || !datasetPresetForCurrentDataset());' in text
@@ -443,8 +484,8 @@ def test_frontend_hides_dataset_preset_bar_in_guided_mode() -> None:
 
 
 def test_frontend_uses_server_side_preset_metadata_and_validates_dom_refs() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "const appState = {" in text
     assert "const state = appState;" in text
@@ -459,11 +500,11 @@ def test_frontend_uses_server_side_preset_metadata_and_validates_dom_refs() -> N
 
 def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
     index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    app_js = _AppJsSource()
     benchmark_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_benchmark.js"
-    html = index_html.read_text()
-    text = app_js.read_text()
-    benchmark_text = benchmark_js.read_text()
+    html = index_html.read_text(encoding="utf-8")
+    text = app_js.read_text(encoding="utf-8")
+    benchmark_text = benchmark_js.read_text(encoding="utf-8")
 
     assert 'data-tab="benchmark"' in html
     assert 'id="panel-benchmark"' in html
@@ -500,16 +541,16 @@ def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
     assert "function syncPredictiveWorkbenchCompareVisibility()" in text
     assert "function reviewBenchmarkSourceTab(tabName, mode = null)" in text
     assert 'if (runtime.uiMode === "expert" && (resolvedTabName === "ml" || resolvedTabName === "dl")) {' in text
-    assert 'body[data-ui-mode="expert"] #tab-ml,' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text()
+    assert 'body[data-ui-mode="expert"] #tab-ml,' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text(encoding="utf-8")
     assert 'runtime.guidedGoal = runtime.guidedGoal || "km";' in text
     assert 'activateTab(runtime.guidedGoal, { setGuidedGoal: false, historyMode: "replace", syncHistory: false });' in text
 
 
 def test_frontend_persists_predictive_workbench_visibility_in_history_state() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    app_js = _AppJsSource()
     shell_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_shell.js"
-    text = app_js.read_text()
-    shell_text = shell_js.read_text()
+    text = app_js.read_text(encoding="utf-8")
+    shell_text = shell_js.read_text(encoding="utf-8")
 
     assert "workbenchRevealed: runtime.workbenchRevealed" in shell_text
     assert "runtime.workbenchRevealed = Boolean(historyState?.workbenchRevealed);" in text
@@ -580,7 +621,7 @@ def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None
 
 
 def test_frontend_shared_model_features_auto_mark_categorical_candidates() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    app_js = _AppJsSource()
     text = app_js.read_text(encoding="utf-8")
 
     assert "const AUTO_CATEGORICAL_UNIQUE_THRESHOLD = 6;" in text
@@ -597,7 +638,7 @@ def test_frontend_shared_model_features_auto_mark_categorical_candidates() -> No
 
 
 def test_predictive_workbench_hides_stale_single_result_panels_until_rerun() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    app_js = _AppJsSource()
     text = app_js.read_text(encoding="utf-8")
 
     assert "function selectedPredictiveSingleResult(goal)" in text
@@ -616,8 +657,8 @@ def test_predictive_workbench_hides_stale_single_result_panels_until_rerun() -> 
 
 
 def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selection() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function isEventLikeColumnName(columnName)" in text
     assert "function looksLikeBaselineStatusColumn(columnName)" in text
@@ -637,14 +678,14 @@ def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selec
     assert 'updateEventValueGuidance(eventColumnWarning?.blocking ? null : inferred.warning);' in text
     assert "function currentGroupColumnWarning()" in text
     assert "high-cardinality numeric column" in text
-    styles = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text()
+    styles = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text(encoding="utf-8")
     assert 'body[data-ui-mode="guided"][data-guided-step="2"] #guidedRailPanelMount #eventColumnWarning' in styles
     assert 'body[data-ui-mode="guided"][data-guided-step="2"] #guidedRailPanelMount #eventValueWarning' in styles
 
 
 def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function updateMlModelControlVisibility()" in text
     assert 'const treeCountApplies = selectedModelType === "rsf" || selectedModelType === "gbs";' in text
@@ -656,8 +697,8 @@ def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
 
 
 def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'function extractErrorMessage(payload, fallbackText = "") {' in text
     assert 'function errorMessageText(error, fallbackText = "Request failed.") {' in text
@@ -691,8 +732,8 @@ def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
 
 
 def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function mlPendingBannerText(" in text
     assert "This can take longer on a local CPU for real cohorts." in text
@@ -717,8 +758,8 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
 
 
 def test_frontend_labels_incomplete_repeated_cv_compare_as_mean_c_index() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'const repeatedCvLike = evaluationMode === "repeated_cv" || evaluationMode === "repeated_cv_incomplete";' in text
     assert 'const mlMetricLabel = repeatedCvLike ? "Mean C-index" : "C-index";' in text
@@ -727,18 +768,21 @@ def test_frontend_labels_incomplete_repeated_cv_compare_as_mean_c_index() -> Non
 
 
 def test_frontend_warns_that_large_full_batch_dl_runs_can_hit_memory_limits() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function dlPendingBannerText(" in text
     assert 'This full-batch objective can run out of memory on larger cohorts, so start smaller if local RAM is limited.' in text
 
 
 def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repeated_cv() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
-    assert 'const rawText = await response.text();' in text
+    assert 'rawText = await response.text();' in text
+    # Aborted (superseded) requests surface as a SupersededRequestError that is not shown.
+    assert 'if (error?.name === "AbortError") throw new SupersededRequestError();' in text
+    assert 'if (isSupersededRequestError(error)) return { ok: false, error, superseded: true };' in text
     assert 'The server returned an invalid JSON response.' in text
     assert 'if (response.status === 404 && /Unknown dataset id:/i.test(message) && state.dataset) {' in text
     assert 'goHome({ syncHistory: true, historyMode: "replace" });' in text
@@ -752,10 +796,10 @@ def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repea
 
 
 def test_plot_config_removes_box_and_lasso_select_tools() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    app_js = _AppJsSource()
     helper_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_downloads.js"
-    text = app_js.read_text()
-    helper_text = helper_js.read_text()
+    text = app_js.read_text(encoding="utf-8")
+    helper_text = helper_js.read_text(encoding="utf-8")
 
     assert "function plotConfig(filename)" in text
     assert 'function isReadonlyPlot(filename) {' in text
@@ -772,8 +816,8 @@ def test_plot_config_removes_box_and_lasso_select_tools() -> None:
 
 
 def test_frontend_guards_identical_outcome_columns_and_preserves_boundary_precision() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function identicalOutcomeColumnMessage()" in text
     assert 'if (!state.dataset || !timeColumn || !eventColumn || timeColumn !== eventColumn) return null;' in text
@@ -784,8 +828,8 @@ def test_frontend_guards_identical_outcome_columns_and_preserves_boundary_precis
 
 
 def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'const matchingOutcomeWarning = identicalOutcomeColumnMessage();' in text
     assert 'refs.eventColumn.addEventListener("change", () => {' in text
@@ -808,8 +852,8 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
 
 
 def test_cohort_table_variable_picker_supports_search_and_bulk_actions() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "if (container === refs.cohortVariableChecklist) return refs.cohortVariableSearchInput;" in text
     assert 'refs.cohortVariableSearchInput?.addEventListener("input", () => {' in text
@@ -822,8 +866,8 @@ def test_cohort_table_variable_picker_supports_search_and_bulk_actions() -> None
 
 
 def test_analysis_banners_surface_competing_risk_cautions() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function summaryHasCaution(summary, phrase) {" in text
     assert 'const kmCompetingRiskPrefix = summaryHasCaution(kmSummary, "competing risk")' in text
@@ -833,8 +877,8 @@ def test_analysis_banners_surface_competing_risk_cautions() -> None:
 
 
 def test_guided_ml_results_keep_shap_message_cards_visible() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function setPlotShellState(el, state) {" in text
     assert 'function clearPlotShell(el, emptyHtml, { state = "message" } = {}) {' in text
@@ -847,9 +891,9 @@ def test_guided_ml_results_keep_shap_message_cards_visible() -> None:
 
 def test_benchmark_leaderboard_exposes_params_actions() -> None:
     root = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static"
-    app_js = (root / "app.js").read_text()
-    benchmark_js = (root / "app_benchmark.js").read_text()
-    styles = (root / "styles.css").read_text()
+    app_js = _AppJsSource().read_text(encoding="utf-8")
+    benchmark_js = (root / "app_benchmark.js").read_text(encoding="utf-8")
+    styles = (root / "styles.css").read_text(encoding="utf-8")
 
     assert 'function benchmarkParamsPayload(goal, source = "current") {' in app_js
     assert 'function benchmarkParamsSummary(goal, modelLabel, source = "current") {' in app_js
@@ -865,8 +909,8 @@ def test_benchmark_leaderboard_exposes_params_actions() -> None:
 
 
 def test_cox_plot_reset_axes_restores_initial_layout() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function stabilizePlotShellHeight(plotEl) {" in text
     assert 'plotEl.style.height = `${Math.ceil(height)}px`;' in text
@@ -884,8 +928,8 @@ def test_cox_plot_reset_axes_restores_initial_layout() -> None:
 
 
 def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'const expectsCompare = expectsCompareOverride == null' in text
     assert '? preferredResultMode("ml") === "compare"' in text
@@ -908,7 +952,7 @@ def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() 
 
 def test_benchmark_module_hides_unified_board_when_evaluation_modes_do_not_match() -> None:
     benchmark_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_benchmark.js"
-    text = benchmark_js.read_text()
+    text = benchmark_js.read_text(encoding="utf-8")
 
     assert "function pendingFamilyText(board) {" in text
     assert "const pending = (board?.pendingFamilies ?? []).map((goal) => benchmarkGoalMeta(goal).label);" in text
@@ -921,7 +965,7 @@ def test_benchmark_module_hides_unified_board_when_evaluation_modes_do_not_match
     assert "Unified chart is hidden until ML and DL compare rows use the same evaluation mode." in text
     assert 'Visible compare rows are grouped by family because evaluation modes differ. No cross-family ranking is published.' in text
     assert 'const rankLabel = board.hasMixedEvaluation ? "Family rank" : "Screen rank";' in text
-    assert 'throw new Error("SurvStudio benchmark module failed to load.");' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js").read_text()
+    assert 'throw new Error("SurvStudio benchmark module failed to load.");' in _AppJsSource().read_text(encoding="utf-8")
 
 
 def test_frontend_includes_skip_link_and_base_table_tabular_numbers() -> None:
@@ -940,8 +984,8 @@ def test_frontend_includes_skip_link_and_base_table_tabular_numbers() -> None:
 
 
 def test_cox_ui_wires_graphical_diagnostics_plot() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'coxDiagnosticsPlot: document.getElementById("coxDiagnosticsPlot"),' in text
     assert 'coxMartingaleVariableSelect: document.getElementById("coxMartingaleVariableSelect"),' in text
@@ -961,8 +1005,8 @@ def test_cox_ui_wires_graphical_diagnostics_plot() -> None:
 
 
 def test_cox_ui_includes_strata_controls_and_auto_exclusion_rules() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'strataChecklist: document.getElementById("strataChecklist"),' in text
     assert 'strataSearchInput: document.getElementById("strataSearchInput"),' in text
@@ -975,8 +1019,8 @@ def test_cox_ui_includes_strata_controls_and_auto_exclusion_rules() -> None:
 
 
 def test_cox_ui_banner_includes_c_index_ci_when_available() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'const hasReportedCoxMetric = stats.c_index != null && stats.evaluation_mode !== "stratified_not_reported";' in text
     assert "const hasCoxMetricCi = hasReportedCoxMetric && stats.c_index_ci_lower != null && stats.c_index_ci_upper != null;" in text
@@ -985,22 +1029,22 @@ def test_cox_ui_banner_includes_c_index_ci_when_available() -> None:
 
 
 def test_guided_ml_inline_compare_uses_clicked_button_as_loading_target() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'void runGuidedGoal("ml", refs.runCompareInlineButton, runCompareModels);' in text
 
 
 def test_guided_dl_inline_compare_uses_clicked_button_as_loading_target() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'void runGuidedGoal("dl", refs.runDlCompareInlineButton, runDlCompareModels);' in text
 
 
 def test_review_shared_features_buttons_keep_the_user_on_matching_model_tab() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'function focusModelFeatureEditor(tabName = "ml") {' in text
     assert 'const featureChecklist = tabName === "dl" ? refs.dlModelFeatureChecklist : refs.modelFeatureChecklist;' in text
@@ -1009,8 +1053,8 @@ def test_review_shared_features_buttons_keep_the_user_on_matching_model_tab() ->
 
 
 def test_shared_feature_controls_lock_while_ml_or_dl_scope_is_busy() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function setChecklistDisabled(container, isDisabled) {" in text
     assert 'const isBusy = isScopeBusy("ml") || isScopeBusy("dl");' in text
@@ -1024,8 +1068,8 @@ def test_shared_feature_controls_lock_while_ml_or_dl_scope_is_busy() -> None:
 
 
 def test_guided_rail_status_tracks_running_ready_and_stale_states() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function guidedRailStatusState() {" in text
     assert 'label: "Running"' in text
@@ -1039,8 +1083,8 @@ def test_guided_rail_status_tracks_running_ready_and_stale_states() -> None:
 
 
 def test_refresh_cox_preview_does_not_rerender_guided_chrome_during_loading_state() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
     refresh_body = text.split("async function refreshCoxPreview({ force = false } = {}) {", 1)[1].split("function scheduleCoxPreview(", 1)[0]
 
     assert 'status: "loading"' in refresh_body
@@ -1049,8 +1093,8 @@ def test_refresh_cox_preview_does_not_rerender_guided_chrome_during_loading_stat
 
 
 def test_cox_checklist_search_select_all_is_limited_to_visible_rows() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function allCheckboxValues(container, { visibleOnly = false } = {}) {" in text
     assert '!input.closest(".check-item")?.classList.contains("hidden-by-filter")' in text
@@ -1059,8 +1103,8 @@ def test_cox_checklist_search_select_all_is_limited_to_visible_rows() -> None:
 
 
 def test_dataset_refresh_clears_cox_search_filters() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     update_body = text.split("function updateControlsFromDataset({ scrollToTop = false } = {}) {", 1)[1].split("function updateAfterDataset(", 1)[0]
     assert 'refs.covariateSearchInput.value = "";' in update_body
@@ -1068,8 +1112,8 @@ def test_dataset_refresh_clears_cox_search_filters() -> None:
 
 
 def test_legacy_derive_restore_only_reuses_cutoff_when_method_is_still_available() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "const restoredDeriveMethod = setSelectValueIfPresent(refs.deriveMethod, snapshot.deriveMethod);" in text
     assert 'refs.deriveCutoff.value = "";' in text
@@ -1077,16 +1121,16 @@ def test_legacy_derive_restore_only_reuses_cutoff_when_method_is_still_available
 
 
 def test_dl_guided_review_hides_compare_tables_when_single_mode_is_active() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'const hasCompareTable = resultMode === "compare" && hasRenderedTable(refs.dlComparisonShell);' in text
     assert 'const hasManuscript = resultMode === "compare" && hasRenderedTable(refs.dlManuscriptShell);' in text
 
 
 def test_guided_cox_preview_summary_surfaces_parameter_count_and_epv() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function renderGuidedCoxPreviewSummary() {" in text
     assert "<strong>Parameters</strong>" in text
@@ -1094,12 +1138,12 @@ def test_guided_cox_preview_summary_surfaces_parameter_count_and_epv() -> None:
 
 
 def test_frontend_removes_expert_surface_status_banner() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    app_js = _AppJsSource()
     index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
-    styles = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text()
-    text = app_js.read_text()
+    styles = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text(encoding="utf-8")
+    text = app_js.read_text(encoding="utf-8")
 
-    assert 'id="expertSurfaceLabel"' not in index_html.read_text()
+    assert 'id="expertSurfaceLabel"' not in index_html.read_text(encoding="utf-8")
     assert "function expertSurfaceStatusState() {" not in text
     assert "function renderExpertSurfaceStatus() {" not in text
     assert "expert-surface-label" not in styles
@@ -1107,8 +1151,8 @@ def test_frontend_removes_expert_surface_status_banner() -> None:
 
 
 def test_mode_switch_busy_guard_and_tab_focus_scroll_protection() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'Object.values(runtime.busyScopes || {}).some(Boolean)' in text
     assert "Wait for the current analysis run to finish before switching views." in text
@@ -1118,8 +1162,8 @@ def test_mode_switch_busy_guard_and_tab_focus_scroll_protection() -> None:
 
 
 def test_reparenting_preserves_focus_scroll_and_schedules_extra_plot_resize() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function captureReparentUiState() {" in text
     assert "function restoreReparentUiState(snapshot) {" in text
@@ -1130,8 +1174,8 @@ def test_reparenting_preserves_focus_scroll_and_schedules_extra_plot_resize() ->
 
 
 def test_ml_dl_result_reveal_is_conditional_on_current_view() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert "function shouldRevealCompletedResult(goal) {" in text
     assert "function revealCompletedResultIfCurrent(goal" in text
@@ -1141,10 +1185,10 @@ def test_ml_dl_result_reveal_is_conditional_on_current_view() -> None:
 
 
 def test_frontend_exposes_shutdown_button_and_stop_flow_copy() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
+    app_js = _AppJsSource()
     shell_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_shell.js"
-    text = app_js.read_text()
-    shell_text = shell_js.read_text()
+    text = app_js.read_text(encoding="utf-8")
+    shell_text = shell_js.read_text(encoding="utf-8")
 
     assert 'shutdownButton: document.getElementById("shutdownButton")' in text
     assert "async function shutdownServer() {" in text
@@ -1195,13 +1239,7 @@ def test_frontend_uses_teal_primary_actions_and_visible_active_step_descriptions
 
 
 def test_frontend_guards_km_and_cox_result_payload_accesses() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'const kmFigure = payload?.figure || { data: [], layout: {} };' in app_js
     assert "const kmAnalysis = payload?.analysis || {};" in app_js
@@ -1501,16 +1539,16 @@ def test_cli_serve_exports_bind_host_for_request_guard(monkeypatch: pytest.Monke
 
 
 def test_guided_grouping_context_only_uses_guided_goal_inside_guided_mode() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert '|| (runtime.uiMode === "guided" && (runtime.guidedGoal === "km" || runtime.guidedGoal === "tables"))' in text
     assert 'const guidedKmRefresh = runtime.uiMode === "guided" && runtime.guidedGoal === "km";' in text
 
 
 def test_change_analysis_clears_guided_goal_before_pushing_history() -> None:
-    app_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app.js"
-    text = app_js.read_text()
+    app_js = _AppJsSource()
+    text = app_js.read_text(encoding="utf-8")
 
     assert 'runtime.guidedGoal = null;' in text
     assert 'activateTab("km", { setGuidedGoal: false, historyMode: "push" });' in text
@@ -2291,7 +2329,7 @@ def test_get_ml_artifact_returns_isolated_copy() -> None:
 
 def test_readme_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -> None:
     readme = Path(__file__).resolve().parents[1] / "README.md"
-    text = readme.read_text()
+    text = readme.read_text(encoding="utf-8")
 
     assert "Synthetic Example Workflow" in text
     assert "This synthetic dataset does **not** use `stage_group` or `treatment_group`." in text
@@ -4473,13 +4511,7 @@ def test_ml_model_compare_endpoint_supports_repeated_cv_export() -> None:
 
 
 def test_frontend_ml_compare_forwards_visible_hyperparameters() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     run_compare_start = app_js.index("async function runCompareModels({ suppressCompletionToast = false, compareGroupId = null, compareSource = \"single_family_compare\" } = {})")
     run_compare_end = app_js.index("state.ml = payload;", run_compare_start)
@@ -4498,13 +4530,7 @@ def test_frontend_exposes_real_dataset_loader_buttons() -> None:
         / "templates"
         / "index.html"
     ).read_text(encoding="utf-8")
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'id="loadTcgaUploadReadyButton"' in index_html
     assert 'Upload-Ready TCGA' in index_html
@@ -4521,13 +4547,7 @@ def test_frontend_exposes_real_dataset_loader_buttons() -> None:
 
 
 def test_frontend_uses_dataset_aware_download_filenames() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
     downloads_js = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -4583,13 +4603,7 @@ def test_frontend_csv_download_sanitizes_formula_like_cells() -> None:
 
 
 def test_frontend_format_value_keeps_tiny_p_values_nonzero() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     start = app_js.index("function formatValue(value, options = {}) {")
     end = app_js.index("\n\nfunction formatPercent", start)
@@ -4615,13 +4629,7 @@ def test_frontend_format_value_keeps_tiny_p_values_nonzero() -> None:
 
 
 def test_frontend_format_value_keeps_ordinary_magnitudes_out_of_scientific_notation() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     start = app_js.index("function formatValue(value, options = {}) {")
     end = app_js.index("\n\nfunction normalizeValueLabel", start)
@@ -4660,13 +4668,7 @@ def test_frontend_csv_sanitizer_keeps_signed_display_numbers() -> None:
 
 
 def test_frontend_format_p_value_uses_journal_thresholds() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     start = app_js.index("function formatPValue(value) {")
     end = app_js.index("\n\nfunction formatDisplayValue", start)
@@ -4690,38 +4692,20 @@ def test_frontend_format_p_value_uses_journal_thresholds() -> None:
 
 
 def test_frontend_uses_p_value_formatter_for_km_banner_and_tables() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "p=${formatPValue(test.p_value)}" in app_js
     assert "td.textContent = formatDisplayValue(row[column], column);" in app_js
 
 
 def test_frontend_covariate_picker_keeps_all_unique_continuous_columns() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "col.n_unique === state.dataset.n_rows" not in app_js
 
 
 def test_frontend_uses_inline_cutpoint_figure_without_refetch() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
@@ -4731,13 +4715,7 @@ def test_frontend_uses_inline_cutpoint_figure_without_refetch() -> None:
 
 
 def test_frontend_derive_group_explains_that_dl_features_do_not_change() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {' in app_js
     assert "Current grouping now uses" in app_js
@@ -4756,13 +4734,7 @@ def test_frontend_derive_group_explains_that_dl_features_do_not_change() -> None
 
 
 def test_frontend_derive_group_auto_applies_only_when_group_is_overall_only() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
@@ -4775,13 +4747,7 @@ def test_frontend_derive_group_auto_applies_only_when_group_is_overall_only() ->
 
 
 def test_frontend_signature_search_auto_applies_only_when_recommended_and_group_is_blank() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     signature_start = app_js.index("async function runSignatureSearch() {")
     signature_end = app_js.index("async function runCox()", signature_start)
@@ -4792,13 +4758,7 @@ def test_frontend_signature_search_auto_applies_only_when_recommended_and_group_
 
 
 def test_frontend_locks_derive_controls_when_group_by_is_active() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function syncDeriveControlsState() {" in app_js
     assert "refs.deriveButton.disabled = deriveLocked;" in app_js
@@ -4819,13 +4779,7 @@ def test_frontend_locks_derive_controls_when_group_by_is_active() -> None:
 
 
 def test_frontend_derive_summary_tracks_current_session_derived_columns() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function currentDerivedSummaryPayload() {" in app_js
     assert "runtime.derivedColumnProvenance?.[currentGroup]" in app_js
@@ -4835,13 +4789,7 @@ def test_frontend_derive_summary_tracks_current_session_derived_columns() -> Non
 
 
 def test_frontend_request_matching_uses_normalized_stable_config_comparison() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function stableStringify(value) {" in app_js
     assert "function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false } = {}) {" in app_js
@@ -4855,13 +4803,7 @@ def test_frontend_request_matching_uses_normalized_stable_config_comparison() ->
 
 
 def test_frontend_refreshes_km_after_creating_and_applying_a_new_group() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
@@ -4874,13 +4816,7 @@ def test_frontend_refreshes_km_after_creating_and_applying_a_new_group() -> None
 
 
 def test_frontend_preserves_existing_group_when_creating_a_new_derived_column() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
@@ -4890,13 +4826,7 @@ def test_frontend_preserves_existing_group_when_creating_a_new_derived_column() 
 
 
 def test_frontend_guided_km_uses_single_run_button_for_pending_derive() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function guidedKmHasPendingDerivedGroup()" in app_js
     assert "async function runGuidedKaplanMeier()" in app_js
@@ -4907,13 +4837,7 @@ def test_frontend_guided_km_uses_single_run_button_for_pending_derive() -> None:
 
 
 def test_frontend_derive_group_uses_lightweight_dataset_refresh() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function updateAfterDerivedDataset(payload, { deferChrome = false } = {})" in app_js
     assert "clearAnalysisOutputs();" in app_js
@@ -4929,26 +4853,14 @@ def test_frontend_derive_group_uses_lightweight_dataset_refresh() -> None:
 
 
 def test_guided_confirm_outcome_shows_ready_status_when_event_value_is_set() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'const issueHeading = canContinue ? "Ready to continue" : "What still needs attention";' in app_js
     assert '`SurvStudio is ready to use ${refs.timeColumn?.value || "time"}, ${refs.eventColumn?.value || "event"}, and ${refs.eventPositiveValue?.value || "event value"}.`' in app_js
 
 
 def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
     styles = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -4986,13 +4898,7 @@ def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
 
 
 def test_guided_choose_analysis_uses_single_predictive_card() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'const GUIDED_GOALS = ["km", "cox", "predictive", "tables", "ml", "dl"];' in app_js
     assert 'predictive: "ML/DL Models"' in app_js
@@ -5003,13 +4909,7 @@ def test_guided_choose_analysis_uses_single_predictive_card() -> None:
 
 
 def test_guided_predictive_configure_panel_surfaces_shared_feature_summary() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function estimateEncodedFeatureWidth(features = [], categoricalFeatures = []) {" in app_js
     assert "function guidedPredictiveFeatureSummaryState() {" in app_js
@@ -5026,13 +4926,7 @@ def test_guided_predictive_configure_panel_surfaces_shared_feature_summary() -> 
 
 
 def test_guided_review_shared_features_action_opens_model_editor() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'if (action === "review-shared-features") {' in app_js
     assert 'const reviewTab = runtime.guidedGoal === "dl"' in app_js
@@ -5056,13 +4950,7 @@ def test_benchmark_panel_hosts_guided_predictive_feature_summary_mount() -> None
         / "templates"
         / "index.html"
     ).read_text(encoding="utf-8")
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
     styles = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -5126,13 +5014,7 @@ def test_benchmark_board_warns_about_cross_family_tie_methods_and_ibs_asymmetry(
 
 
 def test_predictive_current_result_requires_both_current_compare_payloads() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'const currentMl = currentCompareGoalPayload("ml");' in app_js
     assert 'const currentDl = currentCompareGoalPayload("dl");' in app_js
@@ -5169,13 +5051,7 @@ def test_replay_note_helpers_deduplicate_common_copy() -> None:
 
 
 def test_guided_chrome_rerenders_benchmark_starter_visibility() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function syncBenchmarkBoardChrome() {" in app_js
     assert "renderUnifiedBenchmarkSummary(board);" in app_js
@@ -5184,13 +5060,7 @@ def test_guided_chrome_rerenders_benchmark_starter_visibility() -> None:
 
 
 def test_guided_predictive_workbench_uses_navigation_actions_instead_of_run_button() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'const guidedPredictiveWorkbenchOpen = goal === "predictive" && runtime.workbenchRevealed;' in app_js
     assert "const showGuidedPrimaryAction = !predictiveWorkbenchTrainMode;" in app_js
@@ -5204,13 +5074,7 @@ def test_guided_predictive_workbench_uses_navigation_actions_instead_of_run_butt
 
 
 def test_guided_predictive_preserves_reviewable_leaderboard_after_single_model_tuning() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function guidedPredictiveHasLeaderboardReference() {" in app_js
     assert "&& !board?.hasMixedEvaluation" in app_js
@@ -5248,13 +5112,7 @@ def test_guided_predictive_preserves_reviewable_leaderboard_after_single_model_t
 
 
 def test_frontend_download_helpers_accept_fallback_mime_type() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
     downloads_js = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -5275,13 +5133,7 @@ def test_frontend_download_helpers_accept_fallback_mime_type() -> None:
 
 
 def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "busyScopes: {}" in app_js
     assert "function buttonsForScope(scope)" in app_js
@@ -5296,13 +5148,7 @@ def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
 
 
 def test_frontend_invalidates_stale_analysis_responses_with_request_tokens() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "requestTokens: {" in app_js
     assert "function beginRequestToken(scope) {" in app_js
@@ -5317,13 +5163,7 @@ def test_frontend_invalidates_stale_analysis_responses_with_request_tokens() -> 
 
 
 def test_frontend_predictive_compare_uses_unified_scope_and_honest_review_actions() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function guidedPredictiveCompareReady()" in app_js
     assert 'successCheck: guidedPredictiveCompareReady,' in app_js
@@ -5350,13 +5190,7 @@ def test_frontend_predictive_compare_uses_unified_scope_and_honest_review_action
 
 
 def test_frontend_locks_predictive_picker_during_busy_runs_and_hides_guided_action_card() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
     styles = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -5375,13 +5209,7 @@ def test_frontend_locks_predictive_picker_during_busy_runs_and_hides_guided_acti
 
 
 def test_frontend_scrolls_to_results_after_runs_finish() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function resultAnchorFor(tabName, { mode = \"single\" } = {})" in app_js
     assert "function scrollToAnalysisResult(tabName, { mode = \"single\" } = {})" in app_js
@@ -5395,13 +5223,7 @@ def test_frontend_scrolls_to_results_after_runs_finish() -> None:
 
 
 def test_compare_results_hide_single_model_plot_sections() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
     styles = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -5443,13 +5265,7 @@ def test_index_exposes_optimal_cutpoint_controls_and_non_ai_empty_states() -> No
 
 
 def test_frontend_exports_require_current_results_and_signature_scope_guard() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function currentSignatureResult()" in app_js
     assert 'if (!requireCurrentResultForExport("km", { payload })) return;' in app_js
@@ -5463,13 +5279,7 @@ def test_frontend_exports_require_current_results_and_signature_scope_guard() ->
 
 
 def test_frontend_signature_search_preserves_controls_and_syncs_group_state() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     signature_start = app_js.index("async function runSignatureSearch() {")
     signature_end = app_js.index("async function runCox()", signature_start)
@@ -5483,13 +5293,7 @@ def test_frontend_signature_search_preserves_controls_and_syncs_group_state() ->
 
 
 def test_frontend_syncs_bulk_model_feature_actions_across_ml_and_dl() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function setSharedModelFeatureSelection(nextFeatures = [], { clearCategoricals = false } = {})" in app_js
     assert 'setCheckedValues(refs.modelFeatureChecklist, normalizedFeatures);' in app_js
@@ -5563,10 +5367,7 @@ def test_predictive_workbench_keeps_model_action_row_left_aligned() -> None:
         root
         / "styles.css"
     ).read_text(encoding="utf-8")
-    app_js = (
-        root
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'refs.mlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);' in app_js
     assert 'refs.dlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);' in app_js
@@ -7042,20 +6843,18 @@ def test_optional_extras_include_format_ml_dl_and_export_dependencies() -> None:
     assert {"openpyxl>=3.1.5", "pyarrow>=17.0.0", "xlrd>=2.0.1"}.issubset(dev_dependencies)
     assert {"scikit-survival>=0.23.0", "shap>=0.45.0", "torch>=2.0.0"}.issubset(dev_dependencies)
     assert {"httpx>=0.28.1", "pytest>=8.3.5", "kaleido>=0.2.1"}.issubset(dev_dependencies)
-    assert {"tomli>=2.0.1; python_version < '3.11'"}.issubset(dev_dependencies)
     assert {"openpyxl>=3.1.5", "pyarrow>=17.0.0", "xlrd>=2.0.1"}.issubset(all_dependencies)
-    assert {"kaleido>=0.2.1", "playwright>=1.52.0"}.issubset(all_dependencies)
-    assert {"tomli>=2.0.1; python_version < '3.11'"}.issubset(all_dependencies)
+    assert {"scikit-survival>=0.23.0", "shap>=0.45.0", "torch>=2.0.0", "kaleido>=0.2.1"}.issubset(all_dependencies)
+    # "all" means every runtime feature; test tooling stays in dev / e2e.
+    assert not {"pytest>=8.3.5", "httpx>=0.28.1", "playwright>=1.52.0"} & all_dependencies
+    # requires-python is >=3.11, so a Python < 3.11 marker could never apply.
+    assert not any("python_version < '3.11'" in dependency for dependency in dev_dependencies | all_dependencies)
+    assert pyproject["project"]["dynamic"] == ["version"]
+    assert pyproject["tool"]["setuptools"]["dynamic"]["version"] == {"attr": "survival_toolkit.__version__"}
 
 
 def test_guided_tables_hide_cutpoint_scan_when_goal_is_not_km() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "const showCutpointPlot = hasCutpointPlot && (!guidedActive || goal === \"km\");" in app_js
 
@@ -7079,13 +6878,7 @@ def test_guided_tables_use_single_column_builder_layout() -> None:
 
 
 def test_guided_tables_run_uses_clicked_button_and_state_based_success_check() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'async function runGuidedGoal(tabName, button, action, { resultMode = "single", successCheck = null } = {})' in app_js
     assert 'const resolveHasResult = () => (typeof successCheck === "function" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName)));' in app_js
@@ -7096,13 +6889,7 @@ def test_guided_tables_run_uses_clicked_button_and_state_based_success_check() -
 
 
 def test_cohort_table_frontend_exposes_csv_xlsx_downloads_and_guided_header_override() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
     styles = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -7145,13 +6932,7 @@ def test_benchmark_frontend_normalizes_missing_family_labels_before_rendering() 
 
 
 def test_guided_runs_use_scope_override_for_loading_locks() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "async function withLoading(button, action, scopeOverride = null, { swallowErrors = true } = {}) {" in app_js
     assert "const scope = scopeOverride || (" in app_js
@@ -7162,13 +6943,7 @@ def test_guided_runs_use_scope_override_for_loading_locks() -> None:
 
 
 def test_loading_helpers_publish_busy_state_and_repeat_cv_blocked_ml_run_does_not_spin() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'button.setAttribute("aria-busy", loading ? "true" : "false");' in app_js
     assert 'button.setAttribute("aria-busy", "false");' in app_js
@@ -7179,13 +6954,7 @@ def test_loading_helpers_publish_busy_state_and_repeat_cv_blocked_ml_run_does_no
 
 
 def test_compare_all_actions_surface_pending_feedback() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
     assert "function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
@@ -7198,13 +6967,7 @@ def test_compare_all_actions_surface_pending_feedback() -> None:
 
 
 def test_guided_run_tips_use_polished_analysis_specific_copy() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'text: "Run the curve once with the current endpoint. Open Group by only if you need subgroup curves or grouped tables."' in app_js
     assert 'text: "Review the settings here, then fit the model once."' in app_js
@@ -7216,13 +6979,7 @@ def test_guided_run_tips_use_polished_analysis_specific_copy() -> None:
 
 
 def test_guided_tables_configure_panel_uses_stacked_layout() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
     styles = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -7249,13 +7006,7 @@ def test_guided_tables_configure_panel_uses_stacked_layout() -> None:
 
 
 def test_cohort_table_dependency_copy_marks_stale_output_and_rebuild_label() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function currentCohortTableOutputState() {" in app_js
     assert "if (!hasDataset || !tableState.hasOutput || tableState.isCurrent) {" in app_js
@@ -7272,13 +7023,7 @@ def test_cohort_table_dependency_copy_marks_stale_output_and_rebuild_label() -> 
 
 
 def test_window_resize_schedules_plot_resizing() -> None:
-    app_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "plotResizeTimer: null," in app_js
     assert "function scheduleVisiblePlotResize(delay = 80) {" in app_js
@@ -7549,3 +7294,158 @@ def test_locked_test_fraction_is_validated() -> None:
         },
     )
     assert response.status_code == 422
+
+
+def test_upload_reads_a_korean_cp949_csv_and_reports_the_encoding() -> None:
+    content = "환자,생존기간,사망\n김,12.5,1\n이,7,0\n박,3,1\n".encode("cp949")
+    response = client.post("/api/upload", files={"file": ("korean.csv", content, "text/csv")})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [column["name"] for column in payload["columns"]] == ["환자", "생존기간", "사망"]
+    assert payload["text_encoding"] == "cp949"
+    assert payload["text_encoding_label"] == "Korean CP949 (EUC-KR)"
+
+
+def test_upload_rejects_unsupported_file_types_before_writing_a_temp_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _no_temp_file(*args, **kwargs):
+        raise AssertionError("an unsupported upload must not be written to disk")
+
+    monkeypatch.setattr(app_module.tempfile, "NamedTemporaryFile", _no_temp_file)
+    for filename in ("payload.exe", "cohort.c:sv", "notes.json"):
+        response = client.post("/api/upload", files={"file": (filename, b"time,event\n1,1\n", "application/octet-stream")})
+        assert response.status_code == 400, filename
+        assert "Unsupported input file extension" in response.json()["detail"]
+
+
+def test_upload_shape_limits_are_enforced_through_the_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_module, "_MAX_UPLOAD_ROWS", 5)
+    content = ("time,event\n" + "1,0\n" * 6).encode()
+    response = client.post("/api/upload", files={"file": ("rows.csv", content, "text/csv")})
+    assert response.status_code == 400
+    assert "more than 5 rows" in response.json()["detail"]
+
+
+def test_cancelled_jobs_map_to_client_closed_request() -> None:
+    from survival_toolkit.errors import JobCancelledError
+
+    with pytest.raises(HTTPException) as excinfo:
+        fail_bad_request(JobCancelledError("The analysis was stopped because its request was cancelled."))
+    assert excinfo.value.status_code == 499
+
+
+def test_dataset_job_stops_when_its_client_disconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import threading
+    import time
+
+    from survival_toolkit.concurrency import raise_if_cancelled
+    from survival_toolkit.errors import JobCancelledError
+
+    monkeypatch.setattr(app_module, "_DISCONNECT_POLL_SECONDS", 0.02)
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    started = threading.Event()
+    checkpoints = {"count": 0}
+
+    class _ClosedRequest:
+        async def is_disconnected(self) -> bool:
+            return started.is_set()
+
+    def _job() -> str:
+        started.set()
+        for _ in range(500):
+            checkpoints["count"] += 1
+            raise_if_cancelled()
+            time.sleep(0.01)
+        return "finished"
+
+    with pytest.raises(JobCancelledError):
+        asyncio.run(app_module._run_dataset_job(dataset_id, _job, request=_ClosedRequest(), heavy=True))
+    assert checkpoints["count"] < 500
+
+
+def test_heavy_jobs_share_a_bounded_number_of_slots(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import threading
+    import time
+
+    monkeypatch.setattr(app_module, "_HEAVY_JOB_SLOTS", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(app_module, "_DISCONNECT_POLL_SECONDS", 0.02)
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    lock = threading.Lock()
+    state = {"active": 0, "peak": 0}
+
+    def _job() -> bool:
+        with lock:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        time.sleep(0.1)
+        with lock:
+            state["active"] -= 1
+        return True
+
+    async def _run_three() -> list[bool]:
+        return await asyncio.gather(
+            *(app_module._run_dataset_job(dataset_id, _job, heavy=True) for _ in range(3))
+        )
+
+    assert asyncio.run(_run_three()) == [True, True, True]
+    assert state["peak"] == 1
+
+
+def test_ml_artifact_cache_stays_within_its_memory_budget() -> None:
+    frame = pd.DataFrame({"x": np.arange(100, dtype=float)})
+    frame_bytes = int(frame.memory_usage(deep=True).sum())
+    cache = app_module._MlArtifactCache(max_items=10, max_bytes=3 * frame_bytes + 10)
+
+    def _result(encoded: pd.DataFrame) -> dict:
+        return {"_model": None, "_X_encoded": encoded, "_feature_encoder": {}, "_analysis_frame": None}
+
+    for index in range(4):
+        cache.remember(dataset_id=f"d{index}", model_type="rsf", signature={"i": index}, result=_result(frame))
+    assert len(cache) == 3
+    assert cache.total_bytes <= 3 * frame_bytes + 10
+    assert cache.get(dataset_id="d0", model_type="rsf", signature={"i": 0}) is None
+    assert cache.get(dataset_id="d3", model_type="rsf", signature={"i": 3}) is not None
+
+    # An artifact larger than the whole budget is not cached and never leaves the older fit behind.
+    oversized = pd.DataFrame({"x": np.arange(1000, dtype=float)})
+    cache.remember(dataset_id="d3", model_type="rsf", signature={"i": 4}, result=_result(oversized))
+    assert cache.get(dataset_id="d3", model_type="rsf", signature={"i": 3}) is None
+    assert cache.get(dataset_id="d3", model_type="rsf", signature={"i": 4}) is None
+
+
+def test_shutdown_requires_a_loopback_host_even_from_a_local_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = {"count": 0}
+    monkeypatch.setattr(app_module, "_schedule_process_shutdown", lambda *args, **kwargs: called.update(count=1))
+    monkeypatch.setenv(app_module.ALLOWED_HOSTS_ENV_VAR, "survstudio.lan")
+
+    # Behind a reverse proxy on the same machine every client looks local; the page's
+    # own address must be loopback too.
+    response = client.post("/api/shutdown", json={}, headers={"Host": "survstudio.lan"})
+    assert response.status_code == 403
+    assert called["count"] == 0
+
+
+def test_delete_dataset_endpoint_frees_the_dataset() -> None:
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+
+    response = client.delete(f"/api/dataset/{dataset_id}")
+    assert response.status_code == 200
+    assert response.json() == {"status": "deleted", "dataset_id": dataset_id}
+    assert client.get(f"/api/dataset/{dataset_id}").status_code == 404
+    assert client.delete(f"/api/dataset/{dataset_id}").status_code == 404
+
+
+def test_exports_record_the_version_and_dataset_fingerprint() -> None:
+    from survival_toolkit import __version__
+
+    notes = app_module._export_provenance_notes(
+        {"dataset_hash": "abc123", "request_config": {"time_column": "os_months"}}
+    )
+    assert notes[0] == f"Generated with SurvStudio {__version__}."
+    assert notes[1] == "Dataset fingerprint: abc123."
+    assert notes[2] == 'Replay request_config: {"time_column": "os_months"}'
+    # Plain table exports without provenance stay data-only.
+    assert app_module._export_provenance_notes(None) == []
+    assert client.get("/api/health").json()["app_version"] == __version__

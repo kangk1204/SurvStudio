@@ -1,5 +1,64 @@
 # Release Notes
 
+## 0.2.0 — 2026-09-26 — Full code review
+
+Several fixes below change reported numbers (marked **changes results**). Exports now record the SurvStudio version that produced them, so re-run analyses exported by 0.1.0 before comparing them with new output.
+
+### Statistics
+
+- **Changes results.** Cox proportional-hazards tests: Schoenfeld residuals are now computed with the Efron tie correction within each stratum, as R's `residuals.coxph` does. statsmodels subtracts Breslow risk-set means even from an Efron fit and, in stratified models, carries one stratum's risk-set sums into the next, so the Grambsch-Therneau statistics were wrong whenever event times were tied or strata were used (for example a single-term statistic of 0.044 where R gives 0.011). Per-term and global statistics now match R `survival` 3.8 to about 1e-8.
+- **Changes results.** Martingale residuals include the hazard jump at each patient's own event time (with the Efron share for tied events). statsmodels evaluated the cumulative hazard just before that time, which biased event residuals upward by up to 1.1 on tied data; the residuals now match R.
+- **Changes results.** Cox BIC uses the number of events as the sample size (R `BIC(coxph)`, Volinsky & Raftery 2000) instead of the number of rows.
+- **Changes results.** IPCW Brier scores and the IBS weight events by `1 / G(t_i-)` (Gerds & Schumacher 2006, as in `pec` and `riskRegression`), with a reverse Kaplan-Meier estimate that counts events before censorings at tied times. The summary states the actual evaluation window.
+- **Changes results.** Calibration bins whose patients were not followed up to the evaluation time are reported as not estimable; the last Kaplan-Meier value was previously carried forward past the bin's follow-up.
+- **Changes results.** The per-repeat Brier Skill Score in repeated CV is pooled (1 - mean IBS / mean null IBS) like the overall score, instead of averaging per-fold ratios.
+- **Changes results.** Large non-integer group values (for example 100000.5 and 100000) are no longer merged into one Kaplan-Meier group.
+- Kaplan-Meier: an unknown `logrank_weight` is refused (a typo used to run a plain log-rank test labelled with the typo); risk-table counts use the exact tick times and tick labels stay unique on short time scales.
+- The Kaplan-Meier, log-rank, Fleming-Harrington, RMST, median-CI, Cox, C-index, proportional-hazards, and martingale values are now regression-tested against R `survival` 3.8.6 reference numbers.
+
+### Cutpoints and derived groups
+
+- **Changes results.** The optimal-cutpoint column labels every row with a usable marker value, including rows whose survival outcome is missing, as the median and percentile splits do; the summary reports how many rows were scanned and how many were labelled without an outcome.
+- The maximally selected log-rank scan is vectorised (identical to `survdiff` to 1e-15, about 30 ms per permutation at n = 2000). Very large scans use an evenly spaced subset of candidate cutpoints, reported in `candidate_grid`; the permutation p-value is exact for the scanned set, and ties with the observed maximum are counted as at least as extreme.
+
+### Machine learning and deep learning
+
+- **Changes results.** Categorical encoding uses the same reference ordering as the Cox workflow (stage I before II, `2` before `10`), and no longer emits indicator columns that are constant in the training data (unknown-level columns always, missing-value columns when the training data have no missing values).
+- **Changes results.** Random Survival Forest and Gradient Boosted Survival feature importance is out-of-sample permutation importance with all one-hot columns of a feature shuffled together, reported per raw feature.
+- **Changes results.** Time-dependent importance now fits the selected RSF or GBS model and measures, per raw feature and time point, the increase in the IPCW Brier score when the feature is shuffled. It previously fitted separate random-forest classifiers on "event before t" labels (dropping patients censored before t) and ignored the selected model.
+- **Changes results.** Deep models are refit on the whole training partition for the early-stopping epoch count, so they use the same rows as the classical models they are ranked against (the 20% monitor subset was previously never trained on).
+- Deep models no longer fail or fall back to apparent evaluation when the event column uses text labels such as `Dead` / `Alive`.
+- Deep models treat text feature columns as categorical, as the ML models and Cox PH do; a numeric column with a few stray text values is refused with the same message in every module.
+- `evaluate_single_deep_survival_model` accepts `locked_test_fraction` for repeated CV.
+- Programming errors inside a fold (for example a `KeyError`) now stop the run instead of being recorded as a failed fold.
+- Parallel deep-learning folds estimate available memory on Windows as well.
+
+### Data input
+
+- Text uploads are read as UTF-8, UTF-16, Korean CP949/EUC-KR, Windows-1252, or Latin-1, and the detected encoding is shown after upload. Korean Excel "CSV" files were previously decoded as Latin-1, which garbled every Korean header and label.
+- Row, column, and cell limits are checked from the header and a bounded read before the whole file is parsed; unsupported file extensions are refused before anything is written to disk.
+
+### Server and security
+
+- Blocking work runs in the thread pool, heavy jobs share a small number of slots (`SURVSTUDIO_MAX_HEAVY_JOBS`, default 2), and a job whose request was abandoned stops at its next checkpoint (HTTP 499).
+- Cox convergence is read from the optimizer instead of process-wide warning filters, which concurrent requests could miss or steal.
+- The cache of fitted models is limited by memory (1 GiB) as well as by count.
+- `DELETE /api/dataset/{dataset_id}` frees a dataset and its cached models; shutdown also requires a loopback Host header; `serve` warns when bound to a non-loopback address because there is no login.
+- Exports record the SurvStudio version and the dataset fingerprint; `/api/health` reports the package version.
+
+### Front end
+
+- `app.js` is split into eight classic scripts loaded in order by `index.html`.
+- A newer request of the same kind cancels the older one, so the server stops working on results nobody will read.
+- Group labels and other dataset text are escaped before they reach Plotly, so labels such as `<b>High</b>` or `%{y}` render literally.
+
+### Packaging and CI
+
+- The package version (0.2.0) has one source, `survival_toolkit.__version__`.
+- The `all` extra now contains runtime features only (format readers, ML, DL, `kaleido`); test tools live in `dev` and `e2e`.
+- CI adds Python 3.12 and 3.13, Windows, a wheel build with a clean-install smoke test, a front-end syntax check, and manual runs.
+- Long analysis functions (Kaplan-Meier, Cox, signature search, derived groups, event coding) were split into smaller helpers without changing their output; this was checked on 24,537 input combinations.
+
 ## 2026-09-23 — Statistical and evaluation-design audit
 
 These changes alter reported numbers; results produced before this release should be re-run.

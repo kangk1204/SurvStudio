@@ -6,6 +6,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+from scipy import stats
 import pandas as pd
 import pytest
 
@@ -139,81 +140,107 @@ def test_find_optimal_cutpoint_can_return_split_series_for_internal_callers() ->
     )
 
 
-def test_find_optimal_cutpoint_excludes_invalid_permutation_resamples_from_denominator(monkeypatch) -> None:
+def _brute_force_cutpoint_scan(times, events, marker, *, min_group_fraction, permutation_iterations, random_seed):
+    """Reference implementation: one survdiff call per cutpoint and per permutation."""
+    from statsmodels.duration.survfunc import survdiff
+
+    times = np.asarray(times, dtype=float)
+    events = np.asarray(events, dtype=float)
+    marker = np.asarray(marker, dtype=float)
+    n = marker.size
+    min_size = max(int(np.ceil(n * min_group_fraction)), 1)
+    unique = np.unique(marker)
+    candidates = 0.5 * (unique[:-1] + unique[1:])
+
+    def best_statistic(values):
+        best = -1.0
+        for cutpoint in candidates:
+            high = values > cutpoint
+            if high.sum() < min_size or (n - high.sum()) < min_size:
+                continue
+            if events[high].sum() == 0 or events[~high].sum() == 0:
+                continue
+            statistic, _ = survdiff(times, events, np.where(high, "A", "B"))
+            best = max(best, float(statistic))
+        return best
+
+    observed = best_statistic(marker)
+    rng = np.random.default_rng(random_seed)
+    valid = extreme = 0
+    for _ in range(permutation_iterations):
+        permuted = best_statistic(rng.permutation(marker))
+        if permuted >= 0.0:
+            valid += 1
+            if permuted >= observed - 1e-9 * max(1.0, abs(observed)):
+                extreme += 1
+    return observed, valid, (extreme + 1) / (valid + 1) if valid else None
+
+
+def test_find_optimal_cutpoint_matches_a_brute_force_survdiff_scan() -> None:
     import survival_toolkit.ml_models as ml_models
 
+    rng = np.random.default_rng(11)
+    n = 60
+    marker = np.round(rng.normal(size=n), 1)
+    times = np.round(rng.exponential(10.0, size=n))  # heavy ties
+    events = (rng.random(n) < 0.35).astype(int)
+    df = pd.DataFrame({"time": times + 1.0, "event": events, "marker": marker})
+
+    result = ml_models.find_optimal_cutpoint(
+        df, "time", "event", "marker", event_positive_value=1,
+        min_group_fraction=0.2, permutation_iterations=40, random_seed=5,
+    )
+    observed, valid, p_value = _brute_force_cutpoint_scan(
+        df["time"], df["event"], df["marker"], min_group_fraction=0.2, permutation_iterations=40, random_seed=5,
+    )
+
+    assert result["statistic"] == pytest.approx(observed, rel=1e-9)
+    assert result["selection_adjustment"]["permutation_valid_resamples"] == valid
+    assert result["selection_adjusted_p_value"] == pytest.approx(p_value)
+    assert result["candidate_grid"]["method"] == "all_midpoints"
+    for record in result["scan_data"]:
+        assert record["p_value"] == pytest.approx(float(stats.chi2.sf(record["statistic"], 1)))
+
+
+def test_find_optimal_cutpoint_counts_only_permutations_with_a_feasible_split() -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    # Two events among ten patients: a permutation that puts both events on the same
+    # side of every size-feasible cutpoint has no valid split and is not counted.
     df = pd.DataFrame(
         {
-            "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            "event": [1, 0, 1, 0, 1, 0],
-            "marker": [0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
+            "time": np.arange(1.0, 11.0),
+            "event": [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            "marker": np.arange(10.0),
         }
     )
-
-    class _FixedRng:
-        def permutation(self, values):
-            return np.asarray(values, dtype=float)
-
-    call_count = 0
-
-    def _fake_survdiff(times, events, groups):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return 5.0, 0.01
-        if call_count == 2:
-            return 4.0, 0.02
-        if call_count in {3, 4}:
-            return 4.0, 0.20
-        raise ValueError("invalid permutation split")
-
-    monkeypatch.setattr(ml_models, "survdiff", _fake_survdiff)
-    monkeypatch.setattr(ml_models.np.random, "default_rng", lambda seed: _FixedRng())
-
     result = ml_models.find_optimal_cutpoint(
-        df,
-        time_column="time",
-        event_column="event",
-        variable="marker",
-        event_positive_value=1,
-        min_group_fraction=0.2,
-        permutation_iterations=2,
-        random_seed=7,
+        df, "time", "event", "marker", event_positive_value=1,
+        min_group_fraction=0.4, permutation_iterations=60, random_seed=3,
+    )
+    _, valid, p_value = _brute_force_cutpoint_scan(
+        df["time"], df["event"], df["marker"], min_group_fraction=0.4, permutation_iterations=60, random_seed=3,
     )
 
-    assert result["selection_adjustment"]["permutation_valid_resamples"] == 1
-    assert result["selection_adjusted_p_value"] == pytest.approx(0.5)
+    assert 0 < valid < 60
+    assert result["selection_adjustment"]["permutation_valid_resamples"] == valid
+    assert result["selection_adjusted_p_value"] == pytest.approx(p_value)
 
 
-def test_find_optimal_cutpoint_counts_only_valid_permutation_resamples(monkeypatch) -> None:
+def test_find_optimal_cutpoint_thins_candidates_only_beyond_the_work_budget(monkeypatch) -> None:
     import survival_toolkit.ml_models as ml_models
 
-    df = make_example_dataset(seed=19, n_patients=120)
-    observed_calls = {"count": 0}
-
-    def _fake_survdiff(times, events, groups):
-        observed_calls["count"] += 1
-        if observed_calls["count"] == 1:
-            return 5.0, 0.01
-        raise ValueError("permutation split failed")
-
-    monkeypatch.setattr(ml_models, "survdiff", _fake_survdiff)
-    monkeypatch.setattr(ml_models, "_EXPECTED_CUTPOINT_SCAN_ERRORS", (ValueError,))
-
-    result = ml_models.find_optimal_cutpoint(
-        df,
-        time_column="os_months",
-        event_column="os_event",
-        variable="biomarker_score",
-        event_positive_value=1,
-        min_group_fraction=0.1,
-        permutation_iterations=3,
-        random_seed=7,
+    df = make_example_dataset(seed=4, n_patients=200)
+    monkeypatch.setattr(ml_models, "_CUTPOINT_SCAN_CELL_BUDGET", 10_000)
+    monkeypatch.setattr(ml_models, "_MIN_CUTPOINT_GRID", 20)
+    thinned = ml_models.find_optimal_cutpoint(
+        df, "os_months", "os_event", "biomarker_score", event_positive_value=1, permutation_iterations=20,
     )
-
-    assert result["selection_adjustment"]["permutation_valid_resamples"] == 0
-    assert result["selection_adjusted_p_value"] is None
-    assert result["p_value"] == result["raw_p_value"]
+    grid = thinned["candidate_grid"]
+    assert grid["method"] == "quantile_spaced_subset"
+    assert grid["n_candidates"] < grid["n_feasible_candidates"]
+    assert len(thinned["scan_data"]) <= grid["n_candidates"]
+    assert "exact for this scanned set" in grid["note"]
 
 
 def test_scientific_summary_ml_filters_empty_extra_cautions() -> None:
@@ -971,7 +998,7 @@ def test_cross_validated_compare_models_blanks_aggregate_if_any_fold_fails(monke
     assert manuscript_row["Mean C-index"] is None
 
 
-def test_encode_train_test_features_preserves_unknown_bucket_for_unseen_levels() -> None:
+def test_encode_train_test_features_scores_unseen_levels_as_the_reference_level() -> None:
     import pandas as pd
 
     from survival_toolkit.ml_models import _encode_train_test_features
@@ -989,17 +1016,19 @@ def test_encode_train_test_features_preserves_unknown_bucket_for_unseen_levels()
         }
     )
 
-    train_encoded, test_encoded, _ = _encode_train_test_features(
+    train_encoded, test_encoded, encoder = _encode_train_test_features(
         train,
         test,
         features=["stage", "age"],
         categorical_features=["stage"],
     )
 
-    assert "stage__unknown" in train_encoded.columns
-    assert float(train_encoded["stage__unknown"].sum()) == pytest.approx(0.0)
-    assert float(test_encoded.iloc[0]["stage__unknown"]) == pytest.approx(1.0)
-    assert float(test_encoded.iloc[1]["stage__unknown"]) == pytest.approx(0.0)
+    # An unseen-level indicator is constant (zero) in the training data and cannot
+    # inform any model, so it is not emitted; unseen levels map to the baseline.
+    assert list(train_encoded.columns) == ["stage_II", "age"]
+    assert encoder["categorical_mappings"]["stage"]["baseline_level"] == "I"
+    assert encoder["categorical_mappings"]["stage"]["unknown_column"] is None
+    assert test_encoded["stage_II"].tolist() == [0.0, 0.0]
 
 
 def test_time_dependent_importance_returns_time_major_matrix() -> None:
@@ -1171,7 +1200,7 @@ def test_partial_dependence_supports_categorical_raw_feature() -> None:
     assert all(isinstance(value, str) for value in pdp["values"])
 
 
-def test_partial_dependence_preserves_observed_categorical_order() -> None:
+def test_partial_dependence_orders_categories_like_the_reference_levels() -> None:
     import pandas as pd
 
     from survival_toolkit.ml_models import compute_partial_dependence
@@ -1191,7 +1220,8 @@ def test_partial_dependence_preserves_observed_categorical_order() -> None:
         analysis_frame=analysis_frame,
     )
 
-    assert pdp["values"] == ["Stage I", "Stage III", "Stage II"]
+    # Same clinical ordering as the encoder baseline and the Cox reference level.
+    assert pdp["values"] == ["Stage I", "Stage II", "Stage III"]
 
 
 def test_partial_dependence_raises_on_internal_prediction_failure() -> None:
@@ -1442,85 +1472,55 @@ def test_compute_shap_values_requires_predict_callable(monkeypatch) -> None:
         ml_models.compute_shap_values(object(), encoded, feature_names=list(encoded.columns))
 
 
-def test_rsf_permutation_importance_caps_rows_and_repeats(monkeypatch) -> None:
-    import numpy as np
-    import pandas as pd
+def test_grouped_permutation_importance_shuffles_one_hot_columns_together_and_caps_rows() -> None:
     import survival_toolkit.ml_models as ml_models
-    import sklearn.inspection
 
-    seen: dict[str, object] = {}
-
-    train_encoded = pd.DataFrame(
-        np.linspace(0.0, 1.0, 160 * 24, dtype=float).reshape(160, 24),
-        columns=[f"f{i}" for i in range(24)],
+    rng = np.random.default_rng(0)
+    n = 500
+    stage = rng.choice(["I", "II", "III"], size=n)
+    encoded = pd.DataFrame(
+        {
+            "age": rng.normal(size=n),
+            "stage_II": (stage == "II").astype(float),
+            "stage_III": (stage == "III").astype(float),
+            "noise": rng.normal(size=n),
+        }
     )
-    eval_encoded = pd.DataFrame(
-        np.linspace(1.0, 2.0, 180 * 24, dtype=float).reshape(180, 24),
-        columns=[f"f{i}" for i in range(24)],
-    )
-    full_encoded = pd.concat([train_encoded, eval_encoded], ignore_index=True)
-    frame = pd.DataFrame({
-        "os_months": np.linspace(1, 340, 340),
-        "os_event": np.tile([0, 1], 170),
-    })
-    train_frame = frame.iloc[:160].reset_index(drop=True)
-    eval_frame = frame.iloc[160:].reset_index(drop=True)
-    full_frame = frame.reset_index(drop=True)
-    y_train = np.zeros(train_frame.shape[0], dtype=float)
-    y_eval = np.zeros(eval_frame.shape[0], dtype=float)
+    risk = 1.5 * encoded["age"] + 1.0 * encoded["stage_II"] + 2.0 * encoded["stage_III"]
+    y = np.empty(n, dtype=[("event", bool), ("time", float)])
+    y["event"] = True
+    y["time"] = rng.exponential(1.0 / np.exp(risk.to_numpy()))
+    encoder = {
+        "numeric_features": ["age", "noise"],
+        "categorical_features": ["stage"],
+        "categorical_mappings": {
+            "stage": {
+                "retained_levels": ["II", "III"],
+                "level_columns": {"II": "stage_II", "III": "stage_III"},
+                "unknown_column": None,
+                "missing_column": None,
+            }
+        },
+    }
+    predicted_rows: list[int] = []
 
-    class _DummyRSF:
-        def __init__(self, **kwargs) -> None:
-            pass
-
-        @property
-        def feature_importances_(self):
-            raise NotImplementedError
-
-        def fit(self, X, y):
-            seen["fit_shape"] = X.shape
-            return self
-
+    class _LinearModel:
         def predict(self, X):
-            return np.zeros(X.shape[0], dtype=float)
+            predicted_rows.append(int(X.shape[0]))
+            # A stage row with both dummies set would be impossible data; joint
+            # shuffling of the stage block never creates one.
+            assert not np.any((X[:, 1] == 1.0) & (X[:, 2] == 1.0))
+            return 1.5 * X[:, 0] + 1.0 * X[:, 1] + 2.0 * X[:, 2]
 
-    def _fake_perm(model, X, y, n_repeats, random_state, n_jobs):
-        seen["perm_shape"] = X.shape
-        seen["perm_y_shape"] = y.shape
-        seen["n_repeats"] = n_repeats
-        return type("PermResult", (), {"importances_mean": np.zeros(X.shape[1], dtype=float)})()
+    records = ml_models._grouped_permutation_importance(_LinearModel(), encoded, y, encoder, random_state=0)
 
-    monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
-    monkeypatch.setattr(ml_models, "RandomSurvivalForest", _DummyRSF)
-    monkeypatch.setattr(ml_models, "_prepare_model_evaluation_split", lambda *args, **kwargs: {
-        "train_frame": train_frame,
-        "eval_frame": eval_frame,
-        "full_frame": full_frame,
-        "train_encoded": train_encoded,
-        "eval_encoded": eval_encoded,
-        "full_encoded": full_encoded,
-        "evaluation_mode": "holdout",
-        "metric_name": "Holdout C-index",
-        "feature_encoder": None,
-    })
-    monkeypatch.setattr(ml_models, "_prepare_sksurv_data", lambda frame, time_column, event_column: y_train if len(frame) == len(train_frame) else y_eval)
-    monkeypatch.setattr(ml_models, "_sksurv_c_index", lambda y, scores: 0.61)
-    monkeypatch.setattr(sklearn.inspection, "permutation_importance", _fake_perm)
-
-    result = ml_models.train_random_survival_forest(
-        full_frame.assign(age=np.linspace(40, 80, full_frame.shape[0])),
-        time_column="os_months",
-        event_column="os_event",
-        features=["age"],
-        n_estimators=20,
-        random_state=42,
-    )
-
-    assert result["feature_importance"]
-    assert seen["fit_shape"] == (160, 24)
-    assert seen["perm_shape"] == (120, 24)
-    assert seen["perm_y_shape"] == (120,)
-    assert seen["n_repeats"] == 2
+    assert [record["feature"] for record in records][:2] == ["age", "stage"]
+    assert {record["feature"] for record in records} == {"age", "stage", "noise"}
+    stage_record = next(record for record in records if record["feature"] == "stage")
+    assert stage_record["encoded_columns"] == ["stage_II", "stage_III"]
+    noise_record = next(record for record in records if record["feature"] == "noise")
+    assert abs(noise_record["importance"]) < 0.01
+    assert max(predicted_rows) == ml_models._PERMUTATION_IMPORTANCE_MAX_ROWS
 
 
 @pytest.mark.parametrize(
@@ -1654,94 +1654,51 @@ def test_sksurv_c_index_reraises_memory_error(monkeypatch) -> None:
         ml_models._sksurv_c_index(y_true, np.array([0.2, 0.1], dtype=float))
 
 
-def test_time_dependent_importance_raises_on_internal_classifier_failure(monkeypatch) -> None:
+@pytest.mark.skipif(not _sksurv_available(), reason="scikit-survival not installed")
+def test_time_dependent_importance_uses_the_requested_model_and_seed() -> None:
     import survival_toolkit.ml_models as ml_models
 
-    class _BrokenRF:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
+    df = make_example_dataset(seed=14, n_patients=160)
+    kwargs = dict(
+        time_column="os_months",
+        event_column="os_event",
+        features=["age", "biomarker_score", "stage"],
+        categorical_features=["stage"],
+        eval_times=[12.0, 24.0],
+        n_estimators=20,
+    )
+    gbs_first = ml_models.compute_time_dependent_importance(df, model_type="gbs", random_state=3, **kwargs)
+    gbs_again = ml_models.compute_time_dependent_importance(df, model_type="gbs", random_state=3, **kwargs)
+    rsf = ml_models.compute_time_dependent_importance(df, model_type="rsf", random_state=3, **kwargs)
 
-        def fit(self, X, y):
-            raise RuntimeError("classifier failed")
-
-    monkeypatch.setattr(ml_models, "RandomForestClassifier", _BrokenRF)
-
-    df = make_example_dataset(seed=14, n_patients=80)
-    with pytest.raises(ValueError, match="Time-dependent importance failed"):
-        ml_models.compute_time_dependent_importance(
-            df,
-            time_column="os_months",
-            event_column="os_event",
-            features=["age", "biomarker_score"],
-            eval_times=[12.0],
-        )
+    assert gbs_first["model_type"] == "gbs" and rsf["model_type"] == "rsf"
+    assert gbs_first["importance_matrix"] == gbs_again["importance_matrix"]
+    assert gbs_first["importance_matrix"] != rsf["importance_matrix"]
+    # One row per raw feature: the stage dummies are shuffled together.
+    assert sorted(gbs_first["features"]) == ["age", "biomarker_score", "stage"]
+    assert gbs_first["evaluation_mode"] == "holdout"
+    with pytest.raises(ValueError, match="model_type"):
+        ml_models.compute_time_dependent_importance(df, model_type="svm", **kwargs)
 
 
-def test_find_optimal_cutpoint_does_not_swallow_unexpected_errors(monkeypatch) -> None:
+@pytest.mark.skipif(not _sksurv_available(), reason="scikit-survival not installed")
+def test_time_dependent_importance_describes_the_permutation_method() -> None:
     import survival_toolkit.ml_models as ml_models
 
-    df = make_example_dataset(seed=8, n_patients=80)
-    raised = False
-
-    def _boom(*args, **kwargs):
-        nonlocal raised
-        if not raised:
-            raised = True
-            raise AssertionError("unexpected failure")
-        return (1.0, 0.05)
-
-    monkeypatch.setattr(ml_models, "survdiff", _boom)
-
-    with pytest.raises(AssertionError, match="unexpected failure"):
-        ml_models.find_optimal_cutpoint(
-            df,
-            time_column="os_months",
-            event_column="os_event",
-            variable="age",
-            event_positive_value=1,
-        )
-
-
-def test_find_optimal_cutpoint_permutation_loop_does_not_swallow_unexpected_errors(monkeypatch) -> None:
-    import survival_toolkit.ml_models as ml_models
-
-    df = make_example_dataset(seed=18, n_patients=80)
-    call_count = 0
-
-    def _boom(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count > 1:
-            raise AssertionError("unexpected permutation failure")
-        return (1.0, 0.05)
-
-    monkeypatch.setattr(ml_models, "survdiff", _boom)
-
-    with pytest.raises(AssertionError, match="unexpected permutation failure"):
-        ml_models.find_optimal_cutpoint(
-            df,
-            time_column="os_months",
-            event_column="os_event",
-            variable="age",
-            event_positive_value=1,
-            permutation_iterations=1,
-        )
-
-
-def test_time_dependent_importance_uses_proxy_language() -> None:
-    import survival_toolkit.ml_models as ml_models
-
-    df = make_example_dataset(seed=61, n_patients=60)
+    df = make_example_dataset(seed=61, n_patients=120)
     result = ml_models.compute_time_dependent_importance(
         df,
         time_column="os_months",
         event_column="os_event",
         features=["age", "biomarker_score", "immune_index"],
+        n_estimators=20,
     )
 
     summary = result["scientific_summary"]
-    assert "proxy" in summary["headline"].lower()
-    assert any("not be described as formal survshap" in caution.lower() for caution in summary["cautions"])
+    assert "permutation importance" in summary["headline"].lower()
+    assert any("not survshap(t)" in caution.lower() for caution in summary["cautions"])
+    assert any("inverse-probability-of-censoring" in strength.lower() for strength in summary["strengths"])
+    assert result["importance_label"] == "Brier score increase"
 
 
 def test_cross_validate_survival_models_flags_incomplete_screening_when_a_fold_fails(monkeypatch) -> None:
@@ -1849,7 +1806,11 @@ def test_integrated_brier_score_restricts_eval_times_to_support_event_window() -
     )
 
     assert result["eval_times"] == [2.0, 6.0]
-    assert any("support window" in strength.lower() for strength in result["scientific_summary"]["strengths"])
+    # The summary states the window actually used, not a [0, upper] support window.
+    assert any(
+        "[2, 6] (the requested evaluation times, capped at the last support event time 8" in strength
+        for strength in result["scientific_summary"]["strengths"]
+    )
     assert result["null_ibs"] is not None
     assert result["brier_skill_score"] == pytest.approx(1.0 - result["ibs"] / result["null_ibs"])
     assert any(metric["label"] == "Brier Skill Score" for metric in result["scientific_summary"]["metrics"])
@@ -2159,3 +2120,181 @@ def test_unseen_categorical_levels_are_reported() -> None:
     train = pd.DataFrame({"site": ["A", "A", "B"]})
     evaluation = pd.DataFrame({"site": ["A", "C", None, "C"]})
     assert _unseen_category_rows(train, evaluation, ["site"]) == 2
+
+
+def test_ipcw_brier_weights_follow_the_events_first_convention() -> None:
+    from survival_toolkit.ml_models import (
+        _brier_scores_from_weights,
+        _censoring_survival_function,
+        _ipcw_brier_weights,
+    )
+
+    times = np.array([1.0, 2.0, 2.0, 3.0, 4.0])
+    events = np.array([1, 1, 0, 0, 1])
+    grid, censoring_survival = _censoring_survival_function(times, events)
+    assert grid.tolist() == [1.0, 2.0, 3.0, 4.0]
+    # Censoring hazard c / (n - d): the event at t=2 is not at risk of censoring then.
+    assert censoring_survival == pytest.approx([1.0, 2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0])
+
+    weights, alive = _ipcw_brier_weights(times, events, np.array([2.5]), support_times=times, support_events=events)
+    # Still at risk: 1 / G(2.5); events: 1 / G(t_i-); censored before t: 0.
+    assert weights[:, 0] == pytest.approx([1.0, 1.0, 0.0, 1.5, 1.5])
+    assert alive[:, 0].tolist() == [0.0, 0.0, 0.0, 1.0, 1.0]
+    survival = np.array([[0.2], [0.3], [0.5], [0.8], [0.9]])
+    # (0.2^2 + 0.3^2 + 1.5 * 0.2^2 + 1.5 * 0.1^2) / 5
+    assert _brier_scores_from_weights(weights, alive, survival) == pytest.approx([0.041])
+
+
+@pytest.mark.skipif(not _sksurv_available(), reason="scikit-survival is not installed")
+def test_ipcw_brier_scores_match_sksurv_when_no_censoring_ties_an_event() -> None:
+    from sksurv.metrics import brier_score
+    from sksurv.util import Surv
+
+    from survival_toolkit.ml_models import _brier_scores_from_weights, _ipcw_brier_weights
+
+    rng = np.random.default_rng(4)
+    times = rng.exponential(10.0, size=80)
+    events = rng.integers(0, 2, size=80)
+    eval_times = np.quantile(times[events == 1], [0.2, 0.5, 0.8])
+    survival = rng.uniform(0.05, 0.95, size=(80, 3))
+
+    weights, alive = _ipcw_brier_weights(times, events, eval_times, support_times=times, support_events=events)
+    outcome = Surv.from_arrays(event=events.astype(bool), time=times)
+    _, reference = brier_score(outcome, outcome, survival, eval_times)
+    assert _brier_scores_from_weights(weights, alive, survival) == pytest.approx(reference, rel=1e-10)
+
+
+@pytest.mark.skipif(not _sksurv_available(), reason="scikit-survival is not installed")
+def test_harrell_c_index_matches_sksurv_with_tied_times_and_scores() -> None:
+    from sksurv.metrics import concordance_index_censored
+
+    from survival_toolkit.analysis import _harrell_c_index
+
+    rng = np.random.default_rng(8)
+    times = rng.integers(1, 12, size=120).astype(float)
+    events = rng.integers(0, 2, size=120)
+    risk = np.round(rng.normal(size=120), 1)
+    expected = concordance_index_censored(events.astype(bool), times, risk)[0]
+    assert _harrell_c_index(times, events, risk) == pytest.approx(expected, abs=1e-12)
+    # Without any event no pair is comparable.
+    assert _harrell_c_index(times, np.zeros(120, dtype=int), risk) is None
+
+
+def test_find_optimal_cutpoint_skips_rows_without_follow_up() -> None:
+    from survival_toolkit.ml_models import find_optimal_cutpoint
+
+    df = make_example_dataset(seed=33, n_patients=150)
+    df.loc[[0, 5, 9], "os_months"] = np.nan
+    result = find_optimal_cutpoint(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        variable="biomarker_score",
+        permutation_iterations=0,
+        include_split_series=True,
+    )
+    assert result["n_above_cutpoint"] + result["n_below_cutpoint"] == 147
+    split = result["split_series"]
+    assert len(split) == 147
+    assert not set(split.index) & {0, 5, 9}
+
+
+def test_calibration_leaves_bins_without_follow_up_at_t_unestimated() -> None:
+    from survival_toolkit.ml_models import compute_calibration_data
+
+    # Low-prediction bin: followed only to t=4, with survival still 0.75 there.
+    # High-prediction bin: followed well past t.
+    times = np.array([1.0, 2.0, 3.0, 4.0, 10.0, 11.0, 12.0, 13.0])
+    events = np.array([1, 0, 0, 0, 1, 0, 1, 0])
+    predicted = np.array([0.1, 0.1, 0.1, 0.1, 0.9, 0.9, 0.9, 0.9])
+    result = compute_calibration_data(times, events, predicted, t=5.0, n_bins=2)
+
+    assert result["bins"][0]["observed"] is None
+    assert result["bins"][1]["observed"] == pytest.approx(1.0)
+    assert result["observed"] == [pytest.approx(1.0)]
+    assert any("1 bin(s) had no follow-up reaching t=5.0" in caution for caution in result["scientific_summary"]["cautions"])
+
+
+def test_repeated_cv_repeat_rows_pool_the_brier_skill_score() -> None:
+    from survival_toolkit.ml_models import _summarize_repeated_cv_rows
+
+    common = {"n_features": 3, "train_n": 80, "test_n": 20, "training_time_ms": 5.0}
+    rows = [
+        {"repeat": 1, "c_index": 0.70, "ibs": 0.10, "null_ibs": 0.20, **common},
+        {"repeat": 1, "c_index": 0.60, "ibs": 0.30, "null_ibs": 0.25, **common},
+    ]
+    summary = _summarize_repeated_cv_rows(rows)
+    # 1 - mean(IBS) / mean(null IBS), not the mean of the per-fold ratios (0.15).
+    assert summary["repeat_results"][0]["brier_skill_score"] == pytest.approx(1.0 - 0.20 / 0.225)
+    assert summary["brier_skill_score"] == pytest.approx(summary["repeat_results"][0]["brier_skill_score"])
+
+
+def test_feature_encoder_uses_reference_baselines_and_skips_constant_indicators() -> None:
+    from survival_toolkit.encoding import fit_feature_encoder, transform_feature_encoder
+
+    frame = pd.DataFrame(
+        {
+            "stage": ["Stage III", "Stage I", "Stage II", "Stage I", "Stage III", "Stage II"],
+            "grade": ["10", "2", "2", "10", "2", "10"],
+            "age": [50.0, 60.0, 70.0, 55.0, 65.0, 75.0],
+        }
+    )
+    encoder = fit_feature_encoder(frame, ["stage", "grade", "age"])
+    assert encoder["categorical_mappings"]["stage"]["baseline_level"] == "Stage I"
+    # Numeric-looking levels sort numerically, so "2" (not "10") is the baseline.
+    assert encoder["categorical_mappings"]["grade"]["baseline_level"] == "2"
+    # No unknown-level or missing indicators: both would be constant in the fitting data.
+    assert encoder["feature_names"] == ["stage_Stage II", "stage_Stage III", "grade_10", "age"]
+
+    with_missing = frame.assign(stage=[None, *frame["stage"].tolist()[1:]])
+    encoder = fit_feature_encoder(with_missing, ["stage"])
+    assert encoder["feature_names"] == ["stage_Stage II", "stage_Stage III", "stage__missing"]
+    encoded = transform_feature_encoder(pd.DataFrame({"stage": ["Stage IV", None, "Stage II"]}), encoder)
+    # An unseen level scores as the baseline level.
+    assert encoded.to_numpy().tolist() == [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]
+
+
+def test_feature_encoder_rejects_numeric_columns_with_stray_text() -> None:
+    from survival_toolkit.encoding import fit_feature_encoder
+
+    frame = pd.DataFrame({"marker": [f"{value:.2f}" for value in np.linspace(1.0, 5.0, 30)] + ["n/a"]})
+    with pytest.raises(ValueError, match='Feature "marker" looks numeric but contains 1 non-numeric value'):
+        fit_feature_encoder(frame, ["marker"])
+    # A genuinely categorical text column with few numeric-looking codes is fine.
+    fit_feature_encoder(pd.DataFrame({"grade": ["1", "2", "3", "unknown"] * 5}), ["grade"])
+
+
+@pytest.mark.skipif(not _sksurv_available(), reason="scikit-survival is not installed")
+def test_concurrent_fits_reproduce_sequential_results() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from survival_toolkit.analysis import compute_cox_analysis
+    from survival_toolkit.ml_models import train_random_survival_forest
+
+    df = make_example_dataset(seed=71, n_patients=180)
+    features = ["age", "biomarker_score", "stage"]
+
+    def _forest() -> tuple:
+        result = train_random_survival_forest(df, "os_months", "os_event", features, n_estimators=15, random_state=3)
+        importances = [(row["feature"], row["importance"]) for row in result["feature_importance"]]
+        return result["model_stats"]["c_index"], result["predicted_risk_scores"], importances
+
+    def _cox() -> tuple:
+        result = compute_cox_analysis(df, "os_months", "os_event", features)
+        stats = result["model_stats"]
+        return [row["Beta"] for row in result["results_table"]], stats["c_index_ci_lower"], stats["global_ph_statistic"]
+
+    expected_forest, expected_cox = _forest(), _cox()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_forest), pool.submit(_cox), pool.submit(_forest), pool.submit(_cox)]
+        results = [future.result() for future in futures]
+    # The forest sums its trees on worker threads, so only the last floating-point digit
+    # may differ between runs; anything larger would mean fits interfered.
+    for c_index, risk_scores, importances in results[0::2]:
+        assert c_index == pytest.approx(expected_forest[0], rel=1e-12)
+        assert risk_scores == pytest.approx(expected_forest[1], rel=1e-12)
+        assert dict(importances) == pytest.approx(dict(expected_forest[2]), rel=1e-9, abs=1e-12)
+    for betas, c_index_ci_lower, global_ph in results[1::2]:
+        assert betas == pytest.approx(expected_cox[0], rel=1e-12)
+        assert c_index_ci_lower == pytest.approx(expected_cox[1], rel=1e-12)
+        assert global_ph == pytest.approx(expected_cox[2], rel=1e-12)

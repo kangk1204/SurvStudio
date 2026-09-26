@@ -568,9 +568,11 @@ def test_deep_encoder_records_categorical_and_numeric_reconstruction_indices() -
         encoder=encoder,
     )
 
-    assert transformed["feature_names"] == ["sex_male", "sex__unknown", "sex__missing", "age"]
-    assert transformed["categorical_feature_indices"] == [0, 1, 2]
-    assert transformed["numeric_feature_indices"] == [3]
+    # The missing-value indicator is kept because the fitting rows contain a missing
+    # value; an unseen-level indicator would be all zero while fitting and is not emitted.
+    assert transformed["feature_names"] == ["sex_male", "sex__missing", "age"]
+    assert transformed["categorical_feature_indices"] == [0, 1]
+    assert transformed["numeric_feature_indices"] == [2]
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -881,10 +883,13 @@ def test_deepsurv_reports_full_batch_metadata_and_monitor_c_index() -> None:
 
     assert result["c_index"] is not None
     assert result["requested_batch_size"] == 3
-    # Full batch = the rows actually fitted: the training partition minus the
-    # held-out early-stopping monitor subset.
+    # Early stopping fits the training partition minus the held-out monitor subset;
+    # the reported weights are then refit on the whole training partition.
+    assert result["early_stopping_fit_samples"] + result["monitor_samples"] == result["training_samples"]
+    assert result["refit_on_training_partition"] is True
+    assert result["fit_samples"] == result["training_samples"]
     assert result["effective_batch_size"] == result["fit_samples"]
-    assert result["fit_samples"] + result["monitor_samples"] == result["training_samples"]
+    assert result["refit_epochs"] == result["best_monitor_epoch"]
     assert result["optimization_mode"] == "full_batch_cox"
     assert result["tie_method"] == "breslow"
     assert result["monitor_metric_label"] == "Monitor C-index"
@@ -1213,7 +1218,7 @@ def test_deepsurv_uses_internal_monitor_subset_not_eval_fold(monkeypatch) -> Non
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
-def test_deep_encoder_preserves_unknown_bucket_for_unseen_levels() -> None:
+def test_deep_encoder_scores_unseen_levels_as_the_reference_level() -> None:
     import survival_toolkit.deep_models as deep_models
 
     train = pd.DataFrame(
@@ -1241,10 +1246,12 @@ def test_deep_encoder_preserves_unknown_bucket_for_unseen_levels() -> None:
         encoder=encoder,
     )
 
-    unknown_idx = transformed["feature_names"].index("stage__unknown")
+    assert "stage__unknown" not in transformed["feature_names"]
+    level_idx = transformed["feature_names"].index("stage_II")
     X = transformed["X_tensor"].detach().cpu().numpy()
-    assert X[0, unknown_idx] == pytest.approx(1.0)
-    assert X[1, unknown_idx] == pytest.approx(0.0)
+    # The unseen level "III" and the baseline "I" both encode as all-zero dummies.
+    assert X[0, level_idx] == pytest.approx(0.0)
+    assert X[1, level_idx] == pytest.approx(0.0)
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -1959,7 +1966,10 @@ def test_compare_deep_survival_models_disables_parallel_cv_when_available_memory
 def test_available_system_memory_bytes_returns_zero_when_vm_stat_reports_no_free_pages(monkeypatch) -> None:
     import survival_toolkit.deep_models as deep_models
 
-    monkeypatch.setattr(deep_models.os, "name", "posix")
+    # Only the macOS vm_stat probe answers, whatever platform runs the test.
+    monkeypatch.setattr(deep_models, "_proc_meminfo_available_bytes", lambda: None)
+    monkeypatch.setattr(deep_models, "_windows_available_memory_bytes", lambda: None)
+    monkeypatch.setattr(deep_models, "_sysconf_available_bytes", lambda: None)
     monkeypatch.setattr(
         deep_models.subprocess,
         "check_output",
@@ -1970,13 +1980,21 @@ def test_available_system_memory_bytes_returns_zero_when_vm_stat_reports_no_free
             "Pages purgeable:                          0.\n"
         ),
     )
-    monkeypatch.setattr(
-        deep_models.os,
-        "sysconf",
-        lambda name: (_ for _ in ()).throw(OSError("sysconf unavailable")),
-    )
 
     assert deep_models._available_system_memory_bytes() == 0
+
+
+def test_available_system_memory_bytes_is_none_when_no_probe_answers(monkeypatch) -> None:
+    import survival_toolkit.deep_models as deep_models
+
+    for probe in (
+        "_proc_meminfo_available_bytes",
+        "_windows_available_memory_bytes",
+        "_sysconf_available_bytes",
+        "_vm_stat_available_bytes",
+    ):
+        monkeypatch.setattr(deep_models, probe, lambda: None)
+    assert deep_models._available_system_memory_bytes() is None
 
 
 def test_evaluate_single_deep_survival_model_repeated_cv_reuses_compare_path(monkeypatch) -> None:
@@ -2510,3 +2528,33 @@ def test_deep_repeated_cv_locked_test_matches_ml_design() -> None:
     assert row["locked_test_samples"] == ml["n_locked_test_patients"]
     assert row["locked_test_c_index"] is not None
     assert dl["n_development_patients"] == ml["n_development_patients"]
+
+
+@pytest.mark.skipif(not _torch_available(), reason="PyTorch is not installed")
+@pytest.mark.parametrize("strategy", ["holdout", "repeated_cv"])
+def test_deep_comparison_gives_the_same_result_for_text_event_labels(strategy: str) -> None:
+    from survival_toolkit.deep_models import compare_deep_survival_models
+
+    # "stage" is text and not listed as categorical: like the ML encoder, the deep models
+    # treat it as a categorical variable.
+    numeric = make_example_dataset(seed=61, n_patients=160)
+    text = numeric.assign(os_event=numeric["os_event"].map({1: "Dead", 0: "Alive"}))
+    common = {
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "features": ["age", "biomarker_score", "stage"],
+        "epochs": 3,
+        "included_models": ["DeepSurv"],
+        "evaluation_strategy": strategy,
+        "cv_folds": 2,
+        "cv_repeats": 1,
+        "random_seed": 7,
+    }
+    numeric_result = compare_deep_survival_models(numeric, event_positive_value=1, **common)
+    text_result = compare_deep_survival_models(text, event_positive_value="Dead", **common)
+
+    assert text_result["evaluation_mode"] == numeric_result["evaluation_mode"]
+    assert not text_result["evaluation_mode"].endswith(("fallback_apparent", "incomplete"))
+    numeric_row = numeric_result["comparison_table"][0]
+    text_row = text_result["comparison_table"][0]
+    assert text_row["c_index"] == pytest.approx(numeric_row["c_index"])

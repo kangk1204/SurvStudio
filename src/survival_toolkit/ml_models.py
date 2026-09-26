@@ -21,13 +21,14 @@ from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import is_numeric_dtype
+from scipy import stats
 from scipy.linalg import qr as scipy_qr
 from statsmodels.duration.hazard_regression import PHReg
-from statsmodels.duration.survfunc import survdiff
 
 from survival_toolkit.analysis import (
+    ThresholdLogrankScan,
     duplicate_identifier_caution,
+    fit_phreg,
     _cohort_frame,
     _harrell_c_index,
     _safe_float,
@@ -35,9 +36,11 @@ from survival_toolkit.analysis import (
 from survival_toolkit.encoding import (
     fit_feature_encoder as _fit_shared_feature_encoder,
     ordered_category_values as _ordered_category_values,
+    reject_numeric_text_features,
     transform_feature_encoder as _transform_shared_feature_encoder,
 )
-from survival_toolkit.errors import user_input_boundary
+from survival_toolkit.concurrency import raise_if_cancelled
+from survival_toolkit.errors import must_propagate, user_input_boundary
 from survival_toolkit.evaluation import (
     DEFAULT_HOLDOUT_FRACTION,
     evaluation_split_fingerprint,
@@ -47,12 +50,10 @@ from survival_toolkit.evaluation import (
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
 
 try:
-    from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import StratifiedKFold, train_test_split
 
     _SKLEARN_AVAILABLE = True
 except ImportError:
-    RandomForestClassifier = None
     StratifiedKFold = None
     train_test_split = None
     _SKLEARN_AVAILABLE = False
@@ -88,13 +89,6 @@ except ImportError:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-_EXPECTED_CUTPOINT_SCAN_ERRORS = (
-    ValueError,
-    ZeroDivisionError,
-    FloatingPointError,
-    OverflowError,
-    np.linalg.LinAlgError,
-)
 _TREE_N_JOBS = -1
 # Gradient boosting relies on shallow base learners; "auto" (None) resolves to
 # this depth instead of fully grown trees.
@@ -187,9 +181,8 @@ def _sksurv_c_index(
         try:
             c_index, _, _, _, _ = concordance_index_censored(events, times, risk_scores)
             return _safe_float(c_index)
-        except (MemoryError, KeyboardInterrupt):
-            raise
-        except Exception:
+        except (ValueError, ZeroDivisionError):
+            # No comparable pairs or all censored; fall through to the shared estimator.
             pass
 
     return _harrell_c_index(
@@ -197,6 +190,92 @@ def _sksurv_c_index(
         events.astype(int).astype(float),
         risk_scores.astype(float),
     )
+
+
+_PERMUTATION_IMPORTANCE_MAX_ROWS = 300
+PERMUTATION_IMPORTANCE_METHOD = (
+    "Permutation importance: mean drop in Harrell's C-index on the evaluation rows when a raw feature is "
+    "shuffled (all one-hot columns of a categorical feature are shuffled together)."
+)
+
+
+def encoded_feature_groups(encoded_columns: Sequence[str], feature_encoder: dict[str, Any] | None) -> dict[str, list[int]]:
+    """Positions of the encoded columns that belong to each raw input feature.
+
+    Columns the encoder does not describe (for example hand-built matrices) form their
+    own group, so every encoded column is covered exactly once.
+    """
+    column_positions = {str(name): index for index, name in enumerate(encoded_columns)}
+    groups: dict[str, list[int]] = {}
+    covered: set[int] = set()
+    if isinstance(feature_encoder, dict):
+        for column in feature_encoder.get("numeric_features", []):
+            position = column_positions.get(str(column))
+            if position is not None:
+                groups.setdefault(str(column), []).append(position)
+                covered.add(position)
+        mappings = feature_encoder.get("categorical_mappings", {}) or {}
+        for column in feature_encoder.get("categorical_features", []):
+            meta = mappings.get(column, {}) or {}
+            level_columns = meta.get("level_columns") or {}
+            names = [level_columns.get(level, f"{column}_{level}") for level in meta.get("retained_levels", [])]
+            names.extend(name for name in (meta.get("unknown_column"), meta.get("missing_column")) if name)
+            positions = [column_positions[str(name)] for name in names if str(name) in column_positions]
+            if positions:
+                groups[str(column)] = positions
+                covered.update(positions)
+    for name, position in column_positions.items():
+        if position not in covered:
+            groups.setdefault(name, []).append(position)
+    return groups
+
+
+def _grouped_permutation_importance(
+    model: Any,
+    X_eval: pd.DataFrame,
+    y_eval: np.ndarray,
+    feature_encoder: dict[str, Any] | None,
+    *,
+    random_state: int,
+) -> list[dict[str, Any]]:
+    """Out-of-sample permutation importance per raw feature for a fitted survival model.
+
+    Shuffling one-hot columns one at a time would create impossible rows (two levels at
+    once) and split a feature's importance across its levels, so each raw feature's
+    columns are permuted together with one shared row permutation.
+    """
+    matrix = np.asarray(X_eval.to_numpy(dtype=float), dtype=float)
+    y_values = np.asarray(y_eval)
+    rng = np.random.default_rng(int(random_state))
+    if matrix.shape[0] > _PERMUTATION_IMPORTANCE_MAX_ROWS:
+        rows = np.sort(rng.choice(matrix.shape[0], size=_PERMUTATION_IMPORTANCE_MAX_ROWS, replace=False))
+        matrix = matrix[rows]
+        y_values = y_values[rows]
+    groups = encoded_feature_groups(list(X_eval.columns), feature_encoder)
+    n_repeats = 5 if len(groups) <= 20 else (3 if len(groups) <= 60 else 2)
+    baseline = _sksurv_c_index(y_values, np.asarray(model.predict(matrix), dtype=float))
+    records: list[dict[str, Any]] = []
+    for feature, positions in groups.items():
+        raise_if_cancelled()
+        drops: list[float] = []
+        if baseline is not None and matrix.shape[0] > 1:
+            for _ in range(n_repeats):
+                permutation = rng.permutation(matrix.shape[0])
+                shuffled = matrix.copy()
+                shuffled[:, positions] = matrix[permutation][:, positions]
+                score = _sksurv_c_index(y_values, np.asarray(model.predict(shuffled), dtype=float))
+                if score is not None:
+                    drops.append(float(baseline) - float(score))
+        records.append(
+            {
+                "feature": feature,
+                "importance": _safe_float(float(np.mean(drops))) if drops else None,
+                "importance_std": _safe_float(float(np.std(drops, ddof=1))) if len(drops) > 1 else None,
+                "encoded_columns": [str(X_eval.columns[position]) for position in positions],
+            }
+        )
+    records.sort(key=lambda row: row["importance"] if row["importance"] is not None else float("-inf"), reverse=True)
+    return records
 
 
 def _representative_subsample_indices(values: np.ndarray, n_samples: int) -> np.ndarray:
@@ -380,9 +459,18 @@ def _summarize_repeated_cv_rows(
         train_times = [float(item["training_time_ms"]) for item in rows if item.get("training_time_ms") is not None]
         ibs_values = [float(item["ibs"]) for item in rows if item.get("ibs") is not None]
         null_ibs_values = [float(item["null_ibs"]) for item in rows if item.get("null_ibs") is not None]
-        brier_skill_values = [
-            float(item["brier_skill_score"]) for item in rows if item.get("brier_skill_score") is not None
+        # Pooled like the top-level score (1 - mean IBS / mean null IBS over the same folds),
+        # not an average of per-fold ratios, so repeat rows agree with the aggregate.
+        paired_brier = [
+            (float(item["ibs"]), float(item["null_ibs"]))
+            for item in rows
+            if item.get("ibs") is not None and item.get("null_ibs") is not None
         ]
+        repeat_bss: float | None = None
+        if paired_brier:
+            mean_repeat_null = float(np.mean([pair[1] for pair in paired_brier]))
+            if mean_repeat_null > 0.0:
+                repeat_bss = 1.0 - float(np.mean([pair[0] for pair in paired_brier])) / mean_repeat_null
         repeat_results.append({
             "repeat": repeat,
             "c_index": float(np.mean(c_values)),
@@ -390,7 +478,7 @@ def _summarize_repeated_cv_rows(
             "c_index_median": float(np.median(c_values)),
             "ibs": float(np.mean(ibs_values)) if ibs_values else None,
             "null_ibs": float(np.mean(null_ibs_values)) if null_ibs_values else None,
-            "brier_skill_score": float(np.mean(brier_skill_values)) if brier_skill_values else None,
+            "brier_skill_score": _safe_float(repeat_bss),
             "training_time_ms": float(np.mean(train_times)) if train_times else None,
             "n_folds": len(c_values),
             "n_features": int(round(np.mean([float(item[n_features_key]) for item in rows if item.get(n_features_key) is not None]))),
@@ -465,6 +553,43 @@ def _summarize_repeated_cv_rows(
         "test_n": _mean_repeat_field("test_n"),
         "train_events": _mean_repeat_field("train_events"),
         "test_events": _mean_repeat_field("test_events"),
+    }
+
+
+def repeated_cv_row_fields(summary: dict[str, Any] | None, *, incomplete: bool) -> dict[str, Any]:
+    """Comparison-table fields shared by the ML and deep-learning repeated-CV results.
+
+    Aggregate metrics are withheld (None) when any fold failed or fell back, so an
+    incomplete run can never be ranked as if it were complete.
+    """
+
+    def _metric(key: str) -> float | None:
+        return None if incomplete or summary is None else _safe_float(summary.get(key))
+
+    def _count(key: str) -> int | None:
+        return None if summary is None or summary.get(key) is None else int(summary[key])
+
+    return {
+        "c_index": _metric("c_index"),
+        "c_index_std": _metric("c_index_std"),
+        "c_index_std_label": None if summary is None else summary.get("c_index_std_label"),
+        "c_index_repeat_std": _metric("c_index_repeat_std"),
+        "c_index_median": _metric("c_index_median"),
+        "c_index_interval_lower": _metric("c_index_interval_lower"),
+        "c_index_interval_upper": _metric("c_index_interval_upper"),
+        "c_index_interval_label": None if summary is None else summary.get("c_index_interval_label"),
+        "ibs": _metric("ibs"),
+        "null_ibs": _metric("null_ibs"),
+        "brier_skill_score": _metric("brier_skill_score"),
+        "n_features": _count("n_features"),
+        "training_time_ms": None if summary is None else _safe_float(summary.get("training_time_ms")),
+        "n_repeats": 0 if summary is None else int(summary["n_repeats"]),
+        "evaluation_mode": "repeated_cv_incomplete" if incomplete else "repeated_cv",
+        "repeat_results": [] if summary is None else summary["repeat_results"],
+        "training_samples": _count("train_n"),
+        "evaluation_samples": _count("test_n"),
+        "train_events": _count("train_events"),
+        "test_events": _count("test_events"),
     }
 
 
@@ -996,17 +1121,16 @@ def _select_lasso_alpha(
                     tol=1e-7,
                     max_iter=100000,
                 )
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    fold_model.fit(
-                        inner_train_scaled.to_numpy(),
-                        _prepare_sksurv_data(
-                            train_frame.iloc[inner_train_idx].reset_index(drop=True),
-                            time_column,
-                            event_column,
-                        ),
-                    )
-            except Exception:
+                fold_model.fit(
+                    inner_train_scaled.to_numpy(),
+                    _prepare_sksurv_data(
+                        train_frame.iloc[inner_train_idx].reset_index(drop=True),
+                        time_column,
+                        event_column,
+                    ),
+                )
+            except (ValueError, ArithmeticError):
+                # Degenerate inner fold (for example a singular design or too few events).
                 continue
             y_inner_eval = _prepare_sksurv_data(
                 train_frame.iloc[inner_eval_idx].reset_index(drop=True),
@@ -1019,7 +1143,7 @@ def _select_lasso_alpha(
                         fold_model.predict(inner_eval_scaled.to_numpy(), alpha=float(alpha)),
                         dtype=float,
                     )
-                except Exception:
+                except (ValueError, ArithmeticError):
                     continue
                 c_index = _sksurv_c_index(y_inner_eval, risk_scores)
                 if c_index is not None and np.isfinite(float(c_index)):
@@ -1030,7 +1154,7 @@ def _select_lasso_alpha(
         for idx, alpha in enumerate(alphas.tolist()):
             try:
                 risk_scores = np.asarray(path_model.predict(full_scaled.to_numpy(), alpha=float(alpha)), dtype=float)
-            except Exception:
+            except (ValueError, ArithmeticError):
                 continue
             c_index = _sksurv_c_index(y_train, risk_scores)
             if c_index is not None and np.isfinite(float(c_index)):
@@ -1197,6 +1321,9 @@ def find_optimal_cutpoint(
 
     numeric_values = pd.to_numeric(frame[variable], errors="coerce")
     source_rows = _frame_source_rows(frame)
+    if include_split_series and source_rows is None:
+        # Falling back to positional labels would shift the split onto other patients.
+        raise ValueError("The analysed rows could not be mapped back to the source dataset rows.")
     keep_mask = numeric_values.notna().to_numpy(dtype=bool)
     frame = frame.loc[keep_mask].reset_index(drop=True)
     numeric_values = pd.to_numeric(frame[variable], errors="coerce")
@@ -1223,49 +1350,57 @@ def find_optimal_cutpoint(
             f"'{variable}' has fewer than 2 unique values; a cutpoint split is not possible."
         )
 
-    # Candidate cutpoints: midpoints between consecutive sorted unique values
-    candidates = 0.5 * (unique_vals[:-1] + unique_vals[1:])
-
-    scan_data: list[dict[str, Any]] = []
-    best_stat = -1.0
-    best_record: dict[str, Any] | None = None
-
-    for cutpoint in candidates:
-        high_mask = var_values > cutpoint
-        n_high = int(high_mask.sum())
-        n_low = n_total - n_high
-
-        if n_high < min_size or n_low < min_size:
-            continue
-
-        # Require at least one event in each group
-        if event_values[high_mask].sum() == 0 or event_values[~high_mask].sum() == 0:
-            continue
-
-        try:
-            groups = np.where(high_mask, upper_label, lower_label)
-            chisq, p_value = survdiff(time_values, event_values, groups)
-        except _EXPECTED_CUTPOINT_SCAN_ERRORS:
-            continue
-
-        record = {
-            "cutpoint": _safe_float(cutpoint),
-            "statistic": _safe_float(chisq),
-            "p_value": _safe_float(p_value),
-            "n_high": n_high,
-            "n_low": n_low,
-        }
-        scan_data.append(record)
-
-        if chisq > best_stat:
-            best_stat = chisq
-            best_record = record
-
-    if best_record is None:
+    # Candidate cutpoints: midpoints between consecutive sorted unique values. Group
+    # sizes depend only on the marker's values, which a permutation merely reorders, so
+    # size-infeasible cutpoints are dropped once for the observed scan and every
+    # permutation.
+    all_candidates = 0.5 * (unique_vals[:-1] + unique_vals[1:])
+    all_n_high = n_total - np.searchsorted(np.sort(var_values), all_candidates, side="right")
+    size_feasible = (all_n_high >= min_size) & ((n_total - all_n_high) >= min_size)
+    candidates = all_candidates[size_feasible]
+    if candidates.size == 0:
         raise ValueError(
             f"No valid cutpoint found for '{variable}'. "
             "Ensure min_group_fraction allows at least one feasible split."
         )
+    scanner = ThresholdLogrankScan(time_values, event_values)
+    candidates, candidate_grid = _limit_cutpoint_candidates(
+        candidates,
+        n_event_times=int(scanner.event_times.size),
+        permutation_iterations=int(permutation_iterations),
+    )
+
+    def _scan(marker: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        scanned = scanner.scan(marker, candidates)
+        n_high_values = scanned["n_high"]
+        events_high = scanned["events_high"]
+        # At least one event in each group, as for the observed split.
+        eligible = (events_high > 0) & ((scanner.total_events - events_high) > 0)
+        return scanned["statistic"], n_high_values, eligible
+
+    statistics, n_high_values, eligible = _scan(var_values)
+    if not bool(np.any(eligible)):
+        raise ValueError(
+            f"No valid cutpoint found for '{variable}'. "
+            "Ensure min_group_fraction allows at least one feasible split."
+        )
+    scan_data: list[dict[str, Any]] = [
+        {
+            "cutpoint": _safe_float(cutpoint),
+            "statistic": _safe_float(statistic),
+            "p_value": _safe_float(float(stats.chi2.sf(statistic, df=1))),
+            "n_high": int(n_high),
+            "n_low": int(n_total - n_high),
+        }
+        for cutpoint, statistic, n_high, keep in zip(candidates, statistics, n_high_values, eligible, strict=True)
+        if keep
+    ]
+    # First maximum in cutpoint order, as a sequential scan with a strict ">" would pick.
+    best_position = int(np.argmax(np.where(eligible, statistics, -np.inf)))
+    best_stat = float(statistics[best_position])
+    best_record = next(
+        record for record in scan_data if record["cutpoint"] == _safe_float(candidates[best_position])
+    )
 
     # Build the split — assign labels based on actual survival direction
     optimal_cp = best_record["cutpoint"]
@@ -1287,7 +1422,7 @@ def find_optimal_cutpoint(
     if include_split_series:
         split_series = pd.Series(
             np.where(high_mask, label_above, label_below),
-            index=pd.Index(kept_source_rows) if kept_source_rows is not None else frame.index,
+            index=pd.Index(kept_source_rows),
             dtype="string",
         )
 
@@ -1296,27 +1431,17 @@ def find_optimal_cutpoint(
     if permutation_iterations > 0:
         rng = np.random.default_rng(int(random_seed))
         extreme = 0
+        # Identical arithmetic for the observed and permuted scans, so a tie with the
+        # observed maximum is counted; the tolerance only absorbs summation order.
+        threshold = best_stat - 1e-9 * max(1.0, abs(best_stat))
         for _ in range(int(permutation_iterations)):
-            permuted_var = rng.permutation(var_values)
-            perm_best = -1.0
-            for cutpoint in candidates:
-                high_mask_perm = permuted_var > cutpoint
-                n_high = int(high_mask_perm.sum())
-                n_low = n_total - n_high
-                if n_high < min_size or n_low < min_size:
-                    continue
-                if event_values[high_mask_perm].sum() == 0 or event_values[~high_mask_perm].sum() == 0:
-                    continue
-                try:
-                    chisq_perm, _ = survdiff(time_values, event_values, np.where(high_mask_perm, "A", "B"))
-                except _EXPECTED_CUTPOINT_SCAN_ERRORS:
-                    continue
-                if float(chisq_perm) > perm_best:
-                    perm_best = float(chisq_perm)
-            if perm_best >= 0.0:
-                perm_valid += 1
-                if perm_best >= float(best_stat):
-                    extreme += 1
+            raise_if_cancelled()
+            permuted_statistics, _, permuted_eligible = _scan(rng.permutation(var_values))
+            if not bool(np.any(permuted_eligible)):
+                continue
+            perm_valid += 1
+            if float(np.max(permuted_statistics[permuted_eligible])) >= threshold:
+                extreme += 1
         selection_adjusted_p_value = float((extreme + 1) / (perm_valid + 1)) if perm_valid else None
 
     raw_p_value = best_record["p_value"]
@@ -1354,9 +1479,248 @@ def find_optimal_cutpoint(
         "label_below_cutpoint": label_below,
         "scan_data": scan_data,
         "split_column": split_col_name,
+        "candidate_grid": candidate_grid,
     }
     if split_series is not None:
         result["split_series"] = split_series
+    return result
+
+
+# Event times x cutpoints x (permutations + 1) cells one cutpoint scan may evaluate
+# (~15 s of vectorised work). Larger problems scan a quantile-spaced subset of cutpoints.
+_CUTPOINT_SCAN_CELL_BUDGET = 1_000_000_000
+_MIN_CUTPOINT_GRID = 50
+
+
+def _limit_cutpoint_candidates(
+    candidates: np.ndarray,
+    *,
+    n_event_times: int,
+    permutation_iterations: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Keep every feasible cutpoint unless the scan would exceed the work budget.
+
+    The observed scan and every permutation use the same cutpoint set, so a thinned grid
+    still gives a valid selection-adjusted p-value for the procedure actually run.
+    """
+    n_candidates = int(candidates.size)
+    per_scan_cells = max(int(n_event_times), 1) * (int(permutation_iterations) + 1)
+    max_candidates = max(_MIN_CUTPOINT_GRID, _CUTPOINT_SCAN_CELL_BUDGET // per_scan_cells)
+    if n_candidates <= max_candidates:
+        return candidates, {
+            "method": "all_midpoints",
+            "n_candidates": n_candidates,
+            "n_feasible_candidates": n_candidates,
+            "note": None,
+        }
+    positions = np.unique(np.round(np.linspace(0, n_candidates - 1, int(max_candidates))).astype(int))
+    reduced = candidates[positions]
+    return reduced, {
+        "method": "quantile_spaced_subset",
+        "n_candidates": int(reduced.size),
+        "n_feasible_candidates": n_candidates,
+        "note": (
+            f"{int(reduced.size)} of {n_candidates} feasible cutpoints (evenly spaced over the marker's ranks) were "
+            "scanned to keep the scan and its permutation null tractable; the permutation p-value is exact for "
+            "this scanned set."
+        ),
+    }
+
+
+def _prepare_training_matrices(
+    df: pd.DataFrame,
+    *,
+    time_column: str,
+    event_column: str,
+    features: Sequence[str],
+    categorical_features: Sequence[str] | None,
+    event_positive_value: Any,
+    random_state: int,
+    internal_evaluation: bool,
+    model_label: str,
+) -> dict[str, Any]:
+    """Clean the cohort and build aligned train/evaluation/full encoded matrices.
+
+    Shared by the RSF, GBS, and LASSO-Cox trainers. With ``internal_evaluation`` the
+    shared stratified holdout is used (falling back to apparent evaluation for small
+    cohorts); otherwise every row is used for fitting and scoring. Encoded columns that
+    are constant in the training rows are dropped from all three matrices.
+    """
+    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
+    frame = _cohort_frame(
+        df,
+        time_column=time_column,
+        event_column=event_column,
+        event_positive_value=event_positive_value,
+        extra_columns=list(features),
+        drop_missing_extra_columns=False,
+    )
+    reject_numeric_text_features(frame, features)
+
+    if internal_evaluation:
+        split = _prepare_model_evaluation_split(
+            frame,
+            time_column=time_column,
+            event_column=event_column,
+            features=features,
+            categorical_features=categorical_features,
+            random_state=random_state,
+        )
+        matrices = {
+            key: split[key]
+            for key in (
+                "train_frame",
+                "eval_frame",
+                "full_frame",
+                "train_encoded",
+                "eval_encoded",
+                "full_encoded",
+                "evaluation_mode",
+                "metric_name",
+                "feature_encoder",
+            )
+        }
+    else:
+        feature_encoder = _fit_feature_encoder(frame, features, categorical_features)
+        full_encoded = _transform_feature_encoder(frame, feature_encoder).reset_index(drop=True)
+        full_frame = frame.reset_index(drop=True)
+        if full_encoded.empty:
+            raise ValueError(f"No analyzable rows remain after encoding features for {model_label}.")
+        matrices = {
+            "train_frame": full_frame,
+            "eval_frame": full_frame,
+            "full_frame": full_frame,
+            "train_encoded": full_encoded,
+            "eval_encoded": full_encoded,
+            "full_encoded": full_encoded,
+            "evaluation_mode": "apparent",
+            "metric_name": _metric_name_for_evaluation("apparent"),
+            "feature_encoder": feature_encoder,
+        }
+    (
+        matrices["train_encoded"],
+        matrices["eval_encoded"],
+        matrices["full_encoded"],
+    ) = _drop_constant_train_columns_with_full(
+        matrices["train_encoded"],
+        matrices["eval_encoded"],
+        matrices["full_encoded"],
+    )
+    matrices["y_train"] = _prepare_sksurv_data(matrices["train_frame"], time_column, event_column)
+    matrices["y_eval"] = _prepare_sksurv_data(matrices["eval_frame"], time_column, event_column)
+    matrices["y_full"] = _prepare_sksurv_data(matrices["full_frame"], time_column, event_column)
+    return matrices
+
+
+def _cohort_counts(matrices: dict[str, Any], event_column: str) -> dict[str, int]:
+    full_frame = matrices["full_frame"]
+    eval_frame = matrices["eval_frame"]
+    train_frame = matrices["train_frame"]
+    return {
+        "n_patients": int(full_frame.shape[0]),
+        "n_events": int(full_frame[event_column].sum()),
+        "n_evaluation_patients": int(eval_frame.shape[0]),
+        "n_evaluation_events": int(eval_frame[event_column].sum()),
+        "n_fit_patients": int(train_frame.shape[0]),
+        "n_fit_events": int(train_frame[event_column].sum()),
+    }
+
+
+def _holdout_brier_metrics(
+    model: Any,
+    matrices: dict[str, Any],
+    *,
+    time_column: str,
+    event_column: str,
+    alpha: float | None = None,
+) -> dict[str, Any] | None:
+    """IPCW Brier metrics on the evaluation rows, with censoring weights from the fitting rows."""
+    eval_frame = matrices["eval_frame"]
+    support_frame = matrices["train_frame"] if matrices["evaluation_mode"] == "holdout" else matrices["full_frame"]
+    return _maybe_compute_sksurv_brier_metrics(
+        eval_frame[time_column].to_numpy(dtype=float),
+        eval_frame[event_column].to_numpy(dtype=int),
+        model,
+        matrices["eval_encoded"],
+        alpha=alpha,
+        support_times=support_frame[time_column].to_numpy(dtype=float),
+        support_events=support_frame[event_column].to_numpy(dtype=int),
+    )
+
+
+def _fitted_model_result(
+    *,
+    model_type: str,
+    model_name: str,
+    model: Any,
+    matrices: dict[str, Any],
+    event_column: str,
+    evaluation_risk_scores: np.ndarray,
+    risk_scores: np.ndarray,
+    importance_records: list[dict[str, Any]],
+    importance_method: str,
+    brier_result: dict[str, Any] | None,
+    model_settings: dict[str, Any],
+    training_time_ms: float,
+    extra_strengths: Sequence[str] | None = None,
+    extra_cautions: Sequence[str] | None = None,
+    extra_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Assemble the shared result payload of a fitted RSF, GBS, or LASSO-Cox model."""
+    counts = _cohort_counts(matrices, event_column)
+    feature_names = list(matrices["train_encoded"].columns)
+    c_index = _sksurv_c_index(matrices["y_eval"], np.asarray(evaluation_risk_scores, dtype=float))
+    scientific_summary = _scientific_summary_ml(
+        model_name=model_name,
+        c_index=c_index,
+        n_patients=counts["n_patients"],
+        n_events=counts["n_events"],
+        n_features=len(feature_names),
+        evaluation_mode=matrices["evaluation_mode"],
+        n_evaluation_patients=counts["n_evaluation_patients"],
+        n_evaluation_events=counts["n_evaluation_events"],
+        n_fit_patients=counts["n_fit_patients"],
+        n_fit_events=counts["n_fit_events"],
+        extra_strengths=extra_strengths,
+        extra_cautions=extra_cautions,
+    )
+    scientific_summary = _augment_scientific_summary_with_brier(scientific_summary, brier_result)
+    result = {
+        "model_type": model_type,
+        "model_stats": {
+            "c_index": _safe_float(c_index),
+            "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
+            "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
+            "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
+            "metric_name": matrices["metric_name"],
+            "evaluation_mode": matrices["evaluation_mode"],
+            **model_settings,
+            "n_patients": counts["n_patients"],
+            "n_events": counts["n_events"],
+            "n_evaluation_patients": counts["n_evaluation_patients"],
+            "n_evaluation_events": counts["n_evaluation_events"],
+            "n_features": len(feature_names),
+            "training_time_ms": training_time_ms,
+        },
+        "feature_importance": importance_records,
+        "importance_method": importance_method,
+        "predicted_risk_scores": [_safe_float(v) for v in risk_scores],
+        "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
+        "calibration_metrics": brier_result,
+        "feature_names": feature_names,
+        "scientific_summary": scientific_summary,
+        "_model": model,
+        "_X_encoded": matrices["full_encoded"],
+        "_X_eval_encoded": matrices["eval_encoded"],
+        "_feature_encoder": matrices["feature_encoder"],
+        "_analysis_frame": matrices["full_frame"],
+        "_analysis_eval_frame": matrices["eval_frame"],
+        "_analysis_train_frame": matrices["train_frame"],
+        "_y": matrices["y_full"],
+        "_y_eval": matrices["y_eval"],
+    }
+    if extra_payload:
+        result.update(extra_payload)
     return result
 
 
@@ -1387,182 +1751,63 @@ def train_random_survival_forest(
             "scikit-survival is required for Random Survival Forest. "
             "Install it with: pip install scikit-survival"
         )
-    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
-
-    frame = _cohort_frame(
+    matrices = _prepare_training_matrices(
         df,
         time_column=time_column,
         event_column=event_column,
+        features=features,
+        categorical_features=categorical_features,
         event_positive_value=event_positive_value,
-        extra_columns=list(features),
-        drop_missing_extra_columns=False,
+        random_state=random_state,
+        internal_evaluation=internal_evaluation,
+        model_label="RSF",
     )
-
-    if internal_evaluation:
-        split = _prepare_model_evaluation_split(
-            frame,
-            time_column=time_column,
-            event_column=event_column,
-            features=features,
-            categorical_features=categorical_features,
-            random_state=random_state,
-        )
-        train_frame = split["train_frame"]
-        eval_frame = split["eval_frame"]
-        full_frame = split["full_frame"]
-        train_encoded = split["train_encoded"]
-        eval_encoded = split["eval_encoded"]
-        full_encoded = split["full_encoded"]
-        evaluation_mode = split["evaluation_mode"]
-        metric_name = split["metric_name"]
-        feature_encoder = split["feature_encoder"]
-    else:
-        feature_encoder = _fit_feature_encoder(frame, features, categorical_features)
-        full_encoded = _transform_feature_encoder(frame, feature_encoder).reset_index(drop=True)
-        full_frame = frame.reset_index(drop=True)
-        if full_encoded.empty:
-            raise ValueError("No analyzable rows remain after encoding features for RSF.")
-        train_frame = eval_frame = full_frame
-        train_encoded = eval_encoded = full_encoded
-        evaluation_mode = "apparent"
-        metric_name = _metric_name_for_evaluation(evaluation_mode)
-    train_encoded, eval_encoded, full_encoded = _drop_constant_train_columns_with_full(
-        train_encoded,
-        eval_encoded,
-        full_encoded,
+    effective_min_samples_leaf = _effective_tree_min_samples_leaf(
+        min_samples_leaf, int(matrices["train_encoded"].shape[0])
     )
-    effective_min_samples_leaf = _effective_tree_min_samples_leaf(min_samples_leaf, int(train_encoded.shape[0]))
-    y_train = _prepare_sksurv_data(train_frame, time_column, event_column)
-    y_eval = _prepare_sksurv_data(eval_frame, time_column, event_column)
-    y_full = _prepare_sksurv_data(full_frame, time_column, event_column)
 
     t_start = time.monotonic()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        model = RandomSurvivalForest(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            min_samples_leaf=effective_min_samples_leaf,
-            random_state=random_state,
-            n_jobs=_TREE_N_JOBS,
-        )
-        model.fit(train_encoded.to_numpy(), y_train)
+    model = RandomSurvivalForest(
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        min_samples_leaf=effective_min_samples_leaf,
+        random_state=random_state,
+        n_jobs=_TREE_N_JOBS,
+    )
+    model.fit(matrices["train_encoded"].to_numpy(), matrices["y_train"])
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
 
-    evaluation_risk_scores = model.predict(eval_encoded.to_numpy())
-    c_index = _sksurv_c_index(y_eval, evaluation_risk_scores)
-    risk_scores = model.predict(full_encoded.to_numpy())
-
-    # Feature importance — try built-in, fall back to permutation
-    feature_names = list(train_encoded.columns)
-    try:
-        importances = model.feature_importances_
-    except NotImplementedError:
-        # sksurv >=0.24 removed built-in importances for RSF
-        from sklearn.inspection import permutation_importance as _perm_imp
-
-        perm_eval_encoded = eval_encoded
-        perm_y_eval = y_eval
-        if int(eval_encoded.shape[0]) > 120:
-            perm_rng = np.random.default_rng(random_state)
-            sampled_idx = np.sort(perm_rng.choice(eval_encoded.shape[0], size=120, replace=False))
-            perm_eval_encoded = eval_encoded.iloc[sampled_idx].reset_index(drop=True)
-            perm_y_eval = y_eval[sampled_idx]
-        perm_repeats = 3 if int(perm_eval_encoded.shape[1]) <= 20 else 2
-        try:
-            perm_result = _perm_imp(
-                model,
-                perm_eval_encoded.to_numpy(),
-                perm_y_eval,
-                n_repeats=perm_repeats,
-                random_state=random_state,
-                n_jobs=_TREE_N_JOBS,
-            )
-        except (NotImplementedError, PermissionError, OSError):
-            perm_result = _perm_imp(
-                model,
-                perm_eval_encoded.to_numpy(),
-                perm_y_eval,
-                n_repeats=perm_repeats,
-                random_state=random_state,
-                n_jobs=1,
-            )
-        importances = perm_result.importances_mean
-    importance_records = sorted(
-        [
-            {"feature": name, "importance": _safe_float(imp)}
-            for name, imp in zip(feature_names, importances, strict=False)
-        ],
-        key=lambda r: r["importance"] if r["importance"] is not None else 0.0,
-        reverse=True,
-    )
-
-    n_patients = int(full_frame.shape[0])
-    n_events = int(full_frame[event_column].sum())
-    n_eval_patients = int(eval_frame.shape[0])
-    n_eval_events = int(eval_frame[event_column].sum())
-    support_frame = train_frame if evaluation_mode == "holdout" else full_frame
-    brier_result = _maybe_compute_sksurv_brier_metrics(
-        eval_frame[time_column].to_numpy(dtype=float),
-        eval_frame[event_column].to_numpy(dtype=int),
-        model,
-        eval_encoded,
-        support_times=support_frame[time_column].to_numpy(dtype=float),
-        support_events=support_frame[event_column].to_numpy(dtype=int),
-    )
-
-    scientific_summary = _scientific_summary_ml(
+    return _fitted_model_result(
+        model_type="RandomSurvivalForest",
         model_name="Random Survival Forest",
-        c_index=c_index,
-        n_patients=n_patients,
-        n_events=n_events,
-        n_features=len(feature_names),
-        evaluation_mode=evaluation_mode,
-        n_evaluation_patients=n_eval_patients,
-        n_evaluation_events=n_eval_events,
-        n_fit_patients=int(train_frame.shape[0]),
-        n_fit_events=int(train_frame[event_column].sum()),
+        model=model,
+        matrices=matrices,
+        event_column=event_column,
+        evaluation_risk_scores=model.predict(matrices["eval_encoded"].to_numpy()),
+        risk_scores=model.predict(matrices["full_encoded"].to_numpy()),
+        # Out-of-sample permutation importance per raw feature, computed the same way
+        # for RSF and GBS so their rankings are comparable (impurity importance is
+        # in-sample, and sksurv >= 0.24 no longer provides it for RSF).
+        importance_records=_grouped_permutation_importance(
+            model,
+            matrices["eval_encoded"],
+            matrices["y_eval"],
+            matrices["feature_encoder"],
+            random_state=random_state,
+        ),
+        importance_method=PERMUTATION_IMPORTANCE_METHOD,
+        brier_result=_holdout_brier_metrics(model, matrices, time_column=time_column, event_column=event_column),
+        model_settings={
+            "n_estimators": n_estimators,
+            "max_depth": max_depth,
+            "min_samples_leaf": effective_min_samples_leaf,
+        },
+        training_time_ms=training_time_ms,
         extra_strengths=[
             f"Ensemble of {n_estimators} trees with min_samples_leaf={effective_min_samples_leaf}.",
             "Non-parametric model; no proportional-hazards assumption required.",
         ],
     )
-    scientific_summary = _augment_scientific_summary_with_brier(scientific_summary, brier_result)
-
-    return {
-        "model_type": "RandomSurvivalForest",
-        "model_stats": {
-            "c_index": _safe_float(c_index),
-            "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
-            "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
-            "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
-            "metric_name": metric_name,
-            "evaluation_mode": evaluation_mode,
-            "n_estimators": n_estimators,
-            "max_depth": max_depth,
-            "min_samples_leaf": effective_min_samples_leaf,
-            "n_patients": n_patients,
-            "n_events": n_events,
-            "n_evaluation_patients": n_eval_patients,
-            "n_evaluation_events": n_eval_events,
-            "n_features": len(feature_names),
-            "training_time_ms": training_time_ms,
-        },
-        "feature_importance": importance_records,
-        "predicted_risk_scores": [_safe_float(v) for v in risk_scores],
-        "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
-        "calibration_metrics": brier_result,
-        "feature_names": feature_names,
-        "scientific_summary": scientific_summary,
-        "_model": model,
-        "_X_encoded": full_encoded,
-        "_X_eval_encoded": eval_encoded,
-        "_feature_encoder": feature_encoder,
-        "_analysis_frame": full_frame,
-        "_analysis_eval_frame": eval_frame,
-        "_y": y_full,
-        "_y_eval": y_eval,
-    }
 
 
 # ===================================================================
@@ -1593,150 +1838,62 @@ def train_gradient_boosted_survival(
             "scikit-survival is required for Gradient Boosted Survival. "
             "Install it with: pip install scikit-survival"
         )
-    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
-
-    frame = _cohort_frame(
+    matrices = _prepare_training_matrices(
         df,
         time_column=time_column,
         event_column=event_column,
+        features=features,
+        categorical_features=categorical_features,
         event_positive_value=event_positive_value,
-        extra_columns=list(features),
-        drop_missing_extra_columns=False,
+        random_state=random_state,
+        internal_evaluation=internal_evaluation,
+        model_label="GBS",
     )
-
-    if internal_evaluation:
-        split = _prepare_model_evaluation_split(
-            frame,
-            time_column=time_column,
-            event_column=event_column,
-            features=features,
-            categorical_features=categorical_features,
-            random_state=random_state,
-        )
-        train_frame = split["train_frame"]
-        eval_frame = split["eval_frame"]
-        full_frame = split["full_frame"]
-        train_encoded = split["train_encoded"]
-        eval_encoded = split["eval_encoded"]
-        full_encoded = split["full_encoded"]
-        evaluation_mode = split["evaluation_mode"]
-        metric_name = split["metric_name"]
-        feature_encoder = split["feature_encoder"]
-    else:
-        feature_encoder = _fit_feature_encoder(frame, features, categorical_features)
-        full_encoded = _transform_feature_encoder(frame, feature_encoder).reset_index(drop=True)
-        full_frame = frame.reset_index(drop=True)
-        if full_encoded.empty:
-            raise ValueError("No analyzable rows remain after encoding features for GBS.")
-        train_frame = eval_frame = full_frame
-        train_encoded = eval_encoded = full_encoded
-        evaluation_mode = "apparent"
-        metric_name = _metric_name_for_evaluation(evaluation_mode)
-    train_encoded, eval_encoded, full_encoded = _drop_constant_train_columns_with_full(
-        train_encoded,
-        eval_encoded,
-        full_encoded,
+    effective_min_samples_leaf = _effective_tree_min_samples_leaf(
+        min_samples_leaf, int(matrices["train_encoded"].shape[0])
     )
-    effective_min_samples_leaf = _effective_tree_min_samples_leaf(min_samples_leaf, int(train_encoded.shape[0]))
-    y_train = _prepare_sksurv_data(train_frame, time_column, event_column)
-    y_eval = _prepare_sksurv_data(eval_frame, time_column, event_column)
-    y_full = _prepare_sksurv_data(full_frame, time_column, event_column)
+    resolved_max_depth = _resolve_gbs_max_depth(max_depth)
 
     t_start = time.monotonic()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        model = GradientBoostingSurvivalAnalysis(
-            n_estimators=n_estimators,
-            learning_rate=learning_rate,
-            max_depth=_resolve_gbs_max_depth(max_depth),
-            min_samples_leaf=effective_min_samples_leaf,
-            random_state=random_state,
-        )
-        model.fit(train_encoded.to_numpy(), y_train)
+    model = GradientBoostingSurvivalAnalysis(
+        n_estimators=n_estimators,
+        learning_rate=learning_rate,
+        max_depth=resolved_max_depth,
+        min_samples_leaf=effective_min_samples_leaf,
+        random_state=random_state,
+    )
+    model.fit(matrices["train_encoded"].to_numpy(), matrices["y_train"])
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
 
-    evaluation_risk_scores = model.predict(eval_encoded.to_numpy())
-    c_index = _sksurv_c_index(y_eval, evaluation_risk_scores)
-    risk_scores = model.predict(full_encoded.to_numpy())
-
-    importances = model.feature_importances_
-    feature_names = list(train_encoded.columns)
-    importance_records = sorted(
-        [
-            {"feature": name, "importance": _safe_float(imp)}
-            for name, imp in zip(feature_names, importances, strict=False)
-        ],
-        key=lambda r: r["importance"] if r["importance"] is not None else 0.0,
-        reverse=True,
-    )
-
-    n_patients = int(full_frame.shape[0])
-    n_events = int(full_frame[event_column].sum())
-    n_eval_patients = int(eval_frame.shape[0])
-    n_eval_events = int(eval_frame[event_column].sum())
-    support_frame = train_frame if evaluation_mode == "holdout" else full_frame
-    brier_result = _maybe_compute_sksurv_brier_metrics(
-        eval_frame[time_column].to_numpy(dtype=float),
-        eval_frame[event_column].to_numpy(dtype=int),
-        model,
-        eval_encoded,
-        support_times=support_frame[time_column].to_numpy(dtype=float),
-        support_events=support_frame[event_column].to_numpy(dtype=int),
-    )
-
-    scientific_summary = _scientific_summary_ml(
+    return _fitted_model_result(
+        model_type="GradientBoostingSurvivalAnalysis",
         model_name="Gradient Boosted Survival",
-        c_index=c_index,
-        n_patients=n_patients,
-        n_events=n_events,
-        n_features=len(feature_names),
-        evaluation_mode=evaluation_mode,
-        n_evaluation_patients=n_eval_patients,
-        n_evaluation_events=n_eval_events,
-        n_fit_patients=int(train_frame.shape[0]),
-        n_fit_events=int(train_frame[event_column].sum()),
+        model=model,
+        matrices=matrices,
+        event_column=event_column,
+        evaluation_risk_scores=model.predict(matrices["eval_encoded"].to_numpy()),
+        risk_scores=model.predict(matrices["full_encoded"].to_numpy()),
+        importance_records=_grouped_permutation_importance(
+            model,
+            matrices["eval_encoded"],
+            matrices["y_eval"],
+            matrices["feature_encoder"],
+            random_state=random_state,
+        ),
+        importance_method=PERMUTATION_IMPORTANCE_METHOD,
+        brier_result=_holdout_brier_metrics(model, matrices, time_column=time_column, event_column=event_column),
+        model_settings={
+            "n_estimators": n_estimators,
+            "learning_rate": learning_rate,
+            "max_depth": resolved_max_depth,
+            "min_samples_leaf": effective_min_samples_leaf,
+        },
+        training_time_ms=training_time_ms,
         extra_strengths=[
-            f"Boosted ensemble with {n_estimators} stages, learning_rate={learning_rate}, max_depth={_resolve_gbs_max_depth(max_depth)}, min_samples_leaf={effective_min_samples_leaf}.",
+            f"Boosted ensemble with {n_estimators} stages, learning_rate={learning_rate}, max_depth={resolved_max_depth}, min_samples_leaf={effective_min_samples_leaf}.",
             "Non-parametric model; no proportional-hazards assumption required.",
         ],
     )
-    scientific_summary = _augment_scientific_summary_with_brier(scientific_summary, brier_result)
-
-    return {
-        "model_type": "GradientBoostingSurvivalAnalysis",
-        "model_stats": {
-            "c_index": _safe_float(c_index),
-            "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
-            "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
-            "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
-            "metric_name": metric_name,
-            "evaluation_mode": evaluation_mode,
-            "n_estimators": n_estimators,
-            "learning_rate": learning_rate,
-            "max_depth": _resolve_gbs_max_depth(max_depth),
-            "min_samples_leaf": effective_min_samples_leaf,
-            "n_patients": n_patients,
-            "n_events": n_events,
-            "n_evaluation_patients": n_eval_patients,
-            "n_evaluation_events": n_eval_events,
-            "n_features": len(feature_names),
-            "training_time_ms": training_time_ms,
-        },
-        "feature_importance": importance_records,
-        "predicted_risk_scores": [_safe_float(v) for v in risk_scores],
-        "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
-        "calibration_metrics": brier_result,
-        "feature_names": feature_names,
-        "scientific_summary": scientific_summary,
-        "_model": model,
-        "_X_encoded": full_encoded,
-        "_X_eval_encoded": eval_encoded,
-        "_feature_encoder": feature_encoder,
-        "_analysis_frame": full_frame,
-        "_analysis_eval_frame": eval_frame,
-        "_y": y_full,
-        "_y_eval": y_eval,
-    }
 
 
 # ===================================================================
@@ -1761,75 +1918,42 @@ def train_lasso_cox(
             "scikit-survival is required for LASSO-Cox. "
             "Install it with: pip install scikit-survival"
         )
-    _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
-
-    frame = _cohort_frame(
+    matrices = _prepare_training_matrices(
         df,
         time_column=time_column,
         event_column=event_column,
+        features=features,
+        categorical_features=categorical_features,
         event_positive_value=event_positive_value,
-        extra_columns=list(features),
-        drop_missing_extra_columns=False,
+        random_state=random_state,
+        internal_evaluation=internal_evaluation,
+        model_label="LASSO-Cox",
     )
-
-    if internal_evaluation:
-        split = _prepare_model_evaluation_split(
-            frame,
-            time_column=time_column,
-            event_column=event_column,
-            features=features,
-            categorical_features=categorical_features,
-            random_state=random_state,
-        )
-        train_frame = split["train_frame"]
-        eval_frame = split["eval_frame"]
-        full_frame = split["full_frame"]
-        train_encoded = split["train_encoded"]
-        eval_encoded = split["eval_encoded"]
-        full_encoded = split["full_encoded"]
-        evaluation_mode = split["evaluation_mode"]
-        metric_name = split["metric_name"]
-        feature_encoder = split["feature_encoder"]
-    else:
-        feature_encoder = _fit_feature_encoder(frame, features, categorical_features)
-        full_encoded = _transform_feature_encoder(frame, feature_encoder).reset_index(drop=True)
-        full_frame = frame.reset_index(drop=True)
-        if full_encoded.empty:
-            raise ValueError("No analyzable rows remain after encoding features for LASSO-Cox.")
-        train_frame = eval_frame = full_frame
-        train_encoded = eval_encoded = full_encoded
-        evaluation_mode = "apparent"
-        metric_name = _metric_name_for_evaluation(evaluation_mode)
-
-    train_encoded, eval_encoded = _drop_constant_train_columns(train_encoded, eval_encoded)
-    full_encoded = full_encoded.loc[:, train_encoded.columns].copy().reset_index(drop=True)
     alpha_meta = _select_lasso_alpha(
-        train_frame,
-        train_encoded,
+        matrices["train_frame"],
+        matrices["train_encoded"],
         time_column=time_column,
         event_column=event_column,
         random_state=random_state,
     )
-    train_encoded, eval_encoded, full_encoded, scaler = _standardize_encoded_matrices(
-        train_encoded,
-        eval_encoded,
-        full_encoded,
+    (
+        matrices["train_encoded"],
+        matrices["eval_encoded"],
+        matrices["full_encoded"],
+        scaler,
+    ) = _standardize_encoded_matrices(
+        matrices["train_encoded"],
+        matrices["eval_encoded"],
+        matrices["full_encoded"],
     )
-
-    y_train = _prepare_sksurv_data(train_frame, time_column, event_column)
-    y_eval = _prepare_sksurv_data(eval_frame, time_column, event_column)
-    y_full = _prepare_sksurv_data(full_frame, time_column, event_column)
 
     t_start = time.monotonic()
     model = _make_lasso_coxnet_model(alpha=alpha_meta["alpha"])
-    model.fit(train_encoded.to_numpy(), y_train)
+    model.fit(matrices["train_encoded"].to_numpy(), matrices["y_train"])
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
 
-    evaluation_risk_scores = np.asarray(model.predict(eval_encoded.to_numpy()), dtype=float)
-    c_index = _sksurv_c_index(y_eval, evaluation_risk_scores)
-    risk_scores = np.asarray(model.predict(full_encoded.to_numpy()), dtype=float)
     coef_vector = _coerce_coxnet_coef_vector(model)
-    feature_names = list(train_encoded.columns)
+    feature_names = list(matrices["train_encoded"].columns)
     n_active_features = int(np.count_nonzero(np.abs(coef_vector) > 1e-10))
     importance_records = sorted(
         [
@@ -1843,33 +1967,34 @@ def train_lasso_cox(
         key=lambda row: row["importance"] if row["importance"] is not None else 0.0,
         reverse=True,
     )
-
-    n_patients = int(full_frame.shape[0])
-    n_events = int(full_frame[event_column].sum())
-    n_eval_patients = int(eval_frame.shape[0])
-    n_eval_events = int(eval_frame[event_column].sum())
-    support_frame = train_frame if evaluation_mode == "holdout" else full_frame
-    brier_result = _maybe_compute_sksurv_brier_metrics(
-        eval_frame[time_column].to_numpy(dtype=float),
-        eval_frame[event_column].to_numpy(dtype=int),
-        model,
-        eval_encoded,
-        alpha=float(alpha_meta["alpha"]),
-        support_times=support_frame[time_column].to_numpy(dtype=float),
-        support_events=support_frame[event_column].to_numpy(dtype=int),
-    )
-
-    scientific_summary = _scientific_summary_ml(
+    return _fitted_model_result(
+        model_type="LassoCox",
         model_name="LASSO-Cox",
-        c_index=c_index,
-        n_patients=n_patients,
-        n_events=n_events,
-        n_features=len(feature_names),
-        evaluation_mode=evaluation_mode,
-        n_evaluation_patients=n_eval_patients,
-        n_evaluation_events=n_eval_events,
-        n_fit_patients=int(train_frame.shape[0]),
-        n_fit_events=int(train_frame[event_column].sum()),
+        model=model,
+        matrices=matrices,
+        event_column=event_column,
+        evaluation_risk_scores=np.asarray(model.predict(matrices["eval_encoded"].to_numpy()), dtype=float),
+        risk_scores=np.asarray(model.predict(matrices["full_encoded"].to_numpy()), dtype=float),
+        importance_records=importance_records,
+        importance_method="Absolute LASSO-Cox coefficient on the standardized encoded design (one row per encoded column).",
+        brier_result=_holdout_brier_metrics(
+            model,
+            matrices,
+            time_column=time_column,
+            event_column=event_column,
+            alpha=float(alpha_meta["alpha"]),
+        ),
+        model_settings={
+            "alpha": _safe_float(alpha_meta["alpha"]),
+            "alpha_selection_mode": alpha_meta["selection_mode"],
+            "alpha_selection_rule": alpha_meta.get("selection_rule"),
+            "alpha_selection_c_index": _safe_float(alpha_meta["inner_selection_c_index"]),
+            "alpha_selection_c_index_se": _safe_float(alpha_meta.get("inner_selection_c_index_se")),
+            "alpha_selection_threshold_c_index": _safe_float(alpha_meta.get("selection_threshold_c_index")),
+            "n_alpha_candidates": int(alpha_meta["n_alpha_candidates"]),
+            "n_active_features": n_active_features,
+        },
+        training_time_ms=training_time_ms,
         extra_strengths=[
             (
                 f"L1-penalized Coxnet selected alpha={alpha_meta['alpha']:.4g} "
@@ -1893,49 +2018,8 @@ def train_lasso_cox(
                 else "Penalty selection fell back to apparent training performance because inner cross-validation was not feasible."
             ),
         ],
+        extra_payload={"_feature_scaler": scaler},
     )
-    scientific_summary = _augment_scientific_summary_with_brier(scientific_summary, brier_result)
-
-    return {
-        "model_type": "LassoCox",
-        "model_stats": {
-            "c_index": _safe_float(c_index),
-            "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
-            "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
-            "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
-            "metric_name": metric_name,
-            "evaluation_mode": evaluation_mode,
-            "alpha": _safe_float(alpha_meta["alpha"]),
-            "alpha_selection_mode": alpha_meta["selection_mode"],
-            "alpha_selection_rule": alpha_meta.get("selection_rule"),
-            "alpha_selection_c_index": _safe_float(alpha_meta["inner_selection_c_index"]),
-            "alpha_selection_c_index_se": _safe_float(alpha_meta.get("inner_selection_c_index_se")),
-            "alpha_selection_threshold_c_index": _safe_float(alpha_meta.get("selection_threshold_c_index")),
-            "n_alpha_candidates": int(alpha_meta["n_alpha_candidates"]),
-            "n_active_features": n_active_features,
-            "n_patients": n_patients,
-            "n_events": n_events,
-            "n_evaluation_patients": n_eval_patients,
-            "n_evaluation_events": n_eval_events,
-            "n_features": len(feature_names),
-            "training_time_ms": training_time_ms,
-        },
-        "feature_importance": importance_records,
-        "predicted_risk_scores": [_safe_float(v) for v in risk_scores],
-        "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
-        "calibration_metrics": brier_result,
-        "feature_names": feature_names,
-        "scientific_summary": scientific_summary,
-        "_model": model,
-        "_X_encoded": full_encoded,
-        "_X_eval_encoded": eval_encoded,
-        "_feature_encoder": feature_encoder,
-        "_analysis_frame": full_frame,
-        "_analysis_eval_frame": eval_frame,
-        "_y": y_full,
-        "_y_eval": y_eval,
-        "_feature_scaler": scaler,
-    }
 
 
 # ===================================================================
@@ -1972,6 +2056,7 @@ def compare_survival_models(
         extra_columns=list(features),
         drop_missing_extra_columns=False,
     )
+    reject_numeric_text_features(frame, features)
 
     n_patients = int(frame.shape[0])
     n_events = int(frame[event_column].sum())
@@ -2001,6 +2086,7 @@ def compare_survival_models(
         )
 
     for model_name, fit_fn, extra_kwargs in model_specs:
+        raise_if_cancelled()
         try:
             result = fit_fn(
                 train_frame,
@@ -2028,6 +2114,8 @@ def compare_survival_models(
                 "test_events": result.get("test_events"),
             })
         except Exception as exc:
+            if must_propagate(exc):
+                raise
             errors.append({"model": model_name, "error": str(exc)})
 
     if not comparison:
@@ -2101,6 +2189,62 @@ def compare_survival_models(
     return result
 
 
+def _encoded_fold_matrices(
+    train_frame: pd.DataFrame,
+    test_frame: pd.DataFrame,
+    *,
+    features: Sequence[str],
+    categorical_features: Sequence[str] | None,
+    model_label: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Encode a train/evaluation split with training-only preprocessing.
+
+    Returns the encoded matrices (constant training columns dropped) and the matching
+    outcome frames, all re-indexed from zero.
+    """
+    train_encoded, test_encoded, _ = _encode_train_test_features(
+        train_frame,
+        test_frame,
+        features,
+        categorical_features,
+    )
+    train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
+    train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
+    test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
+    if train_encoded.empty or test_encoded.empty:
+        raise ValueError(f"No valid rows remain after encoding features for {model_label}.")
+    return train_encoded, test_encoded, train_eval, test_eval
+
+
+def _fold_result(
+    *,
+    model: str,
+    c_index: float | None,
+    brier_result: dict[str, Any] | None,
+    n_features: int,
+    training_time_ms: float,
+    train_eval: pd.DataFrame,
+    test_eval: pd.DataFrame,
+    event_column: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Metrics of one model fitted on a training split and scored on its evaluation split."""
+    return {
+        "model": model,
+        "c_index": _safe_float(c_index),
+        "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
+        "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
+        "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
+        "n_features": int(n_features),
+        **(extra or {}),
+        "training_time_ms": training_time_ms,
+        "train_n": int(train_eval.shape[0]),
+        "test_n": int(test_eval.shape[0]),
+        "train_events": int(train_eval[event_column].sum()),
+        "test_events": int(test_eval[event_column].sum()),
+    }
+
+
 def _fit_evaluate_cox_split(
     train_frame: pd.DataFrame,
     test_frame: pd.DataFrame,
@@ -2112,18 +2256,14 @@ def _fit_evaluate_cox_split(
     random_state: int | None = None,
 ) -> dict[str, Any]:
     del random_state
-    train_encoded, test_encoded, _ = _encode_train_test_features(
+    train_encoded, test_encoded, train_eval, test_eval = _encoded_fold_matrices(
         train_frame,
         test_frame,
-        features,
-        categorical_features,
+        features=features,
+        categorical_features=categorical_features,
+        model_label="Cox PH",
     )
-    train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
     train_encoded, test_encoded = _drop_rank_deficient_train_columns(train_encoded, test_encoded)
-    train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
-    test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
-    if train_encoded.empty or test_encoded.empty:
-        raise ValueError("No valid rows remain after encoding features for Cox PH.")
     train_encoded, test_encoded, _, _ = _standardize_encoded_matrices(train_encoded, test_encoded)
 
     train_times = train_eval[time_column].to_numpy(dtype=float)
@@ -2133,11 +2273,9 @@ def _fit_evaluate_cox_split(
 
     t_start = time.monotonic()
     model = PHReg(train_times, train_encoded.to_numpy(dtype=float), status=train_status, ties="efron")
-    with warnings.catch_warnings(record=True) as fit_warnings:
-        warnings.simplefilter("always")
-        results = model.fit(disp=False)
+    results, converged = fit_phreg(model)
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
-    if any("converg" in str(item.message).lower() for item in fit_warnings):
+    if not converged:
         # Same rule as the inferential Cox workflow: a non-converged
         # partial-likelihood fit is not a valid benchmark entry.
         raise ValueError(
@@ -2162,19 +2300,16 @@ def _fit_evaluate_cox_split(
         support_times=train_times,
         support_events=train_status,
     )
-    return {
-        "model": "Cox PH",
-        "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
-        "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
-        "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
-        "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
-        "n_features": len(param_vector),
-        "training_time_ms": training_time_ms,
-        "train_n": int(train_eval.shape[0]),
-        "test_n": int(test_eval.shape[0]),
-        "train_events": int(train_eval[event_column].sum()),
-        "test_events": int(test_eval[event_column].sum()),
-    }
+    return _fold_result(
+        model="Cox PH",
+        c_index=_sksurv_c_index(y_test, risk_score),
+        brier_result=brier_result,
+        n_features=len(param_vector),
+        training_time_ms=training_time_ms,
+        train_eval=train_eval,
+        test_eval=test_eval,
+        event_column=event_column,
+    )
 
 
 def _fit_evaluate_lasso_cox_split(
@@ -2190,17 +2325,13 @@ def _fit_evaluate_lasso_cox_split(
     if not SKSURV_AVAILABLE:
         raise ImportError("scikit-survival is not installed.")
 
-    train_encoded, test_encoded, _ = _encode_train_test_features(
+    train_encoded, test_encoded, train_eval, test_eval = _encoded_fold_matrices(
         train_frame,
         test_frame,
-        features,
-        categorical_features,
+        features=features,
+        categorical_features=categorical_features,
+        model_label="LASSO-Cox",
     )
-    train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
-    train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
-    test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
-    if train_encoded.empty or test_encoded.empty:
-        raise ValueError("No valid rows remain after encoding features for LASSO-Cox.")
 
     alpha_meta = _select_lasso_alpha(
         train_eval,
@@ -2229,21 +2360,20 @@ def _fit_evaluate_lasso_cox_split(
         support_times=train_eval[time_column].to_numpy(dtype=float),
         support_events=train_eval[event_column].to_numpy(dtype=int),
     )
-    return {
-        "model": "LASSO-Cox",
-        "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
-        "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
-        "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
-        "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
-        "n_features": int(train_encoded.shape[1]),
-        "n_active_features": int(np.count_nonzero(np.abs(coef_vector) > 1e-10)),
-        "alpha_selection_rule": alpha_meta.get("selection_rule"),
-        "training_time_ms": training_time_ms,
-        "train_n": int(train_eval.shape[0]),
-        "test_n": int(test_eval.shape[0]),
-        "train_events": int(train_eval[event_column].sum()),
-        "test_events": int(test_eval[event_column].sum()),
-    }
+    return _fold_result(
+        model="LASSO-Cox",
+        c_index=_sksurv_c_index(y_test, risk_score),
+        brier_result=brier_result,
+        n_features=int(train_encoded.shape[1]),
+        training_time_ms=training_time_ms,
+        train_eval=train_eval,
+        test_eval=test_eval,
+        event_column=event_column,
+        extra={
+            "n_active_features": int(np.count_nonzero(np.abs(coef_vector) > 1e-10)),
+            "alpha_selection_rule": alpha_meta.get("selection_rule"),
+        },
+    )
 
 
 def _fit_evaluate_rsf_split(
@@ -2262,31 +2392,25 @@ def _fit_evaluate_rsf_split(
     if not SKSURV_AVAILABLE:
         raise ImportError("scikit-survival is not installed.")
 
-    train_encoded, test_encoded, _ = _encode_train_test_features(
+    train_encoded, test_encoded, train_eval, test_eval = _encoded_fold_matrices(
         train_frame,
         test_frame,
-        features,
-        categorical_features,
+        features=features,
+        categorical_features=categorical_features,
+        model_label="Random Survival Forest",
     )
-    train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
-    train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
-    test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
-    if train_encoded.empty or test_encoded.empty:
-        raise ValueError("No valid rows remain after encoding features for Random Survival Forest.")
     effective_min_samples_leaf = _effective_tree_min_samples_leaf(min_samples_leaf, int(train_encoded.shape[0]))
 
     y_train = _prepare_sksurv_data(train_eval, time_column, event_column)
     t_start = time.monotonic()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        model = RandomSurvivalForest(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            min_samples_leaf=effective_min_samples_leaf,
-            random_state=random_state,
-            n_jobs=_TREE_N_JOBS,
-        )
-        model.fit(train_encoded.to_numpy(), y_train)
+    model = RandomSurvivalForest(
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        min_samples_leaf=effective_min_samples_leaf,
+        random_state=random_state,
+        n_jobs=_TREE_N_JOBS,
+    )
+    model.fit(train_encoded.to_numpy(), y_train)
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
     risk_score = model.predict(test_encoded.to_numpy())
 
@@ -2299,19 +2423,16 @@ def _fit_evaluate_rsf_split(
         support_times=train_eval[time_column].to_numpy(dtype=float),
         support_events=train_eval[event_column].to_numpy(dtype=int),
     )
-    return {
-        "model": "Random Survival Forest",
-        "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
-        "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
-        "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
-        "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
-        "n_features": int(train_encoded.shape[1]),
-        "training_time_ms": training_time_ms,
-        "train_n": int(train_eval.shape[0]),
-        "test_n": int(test_eval.shape[0]),
-        "train_events": int(train_eval[event_column].sum()),
-        "test_events": int(test_eval[event_column].sum()),
-    }
+    return _fold_result(
+        model="Random Survival Forest",
+        c_index=_sksurv_c_index(y_test, risk_score),
+        brier_result=brier_result,
+        n_features=int(train_encoded.shape[1]),
+        training_time_ms=training_time_ms,
+        train_eval=train_eval,
+        test_eval=test_eval,
+        event_column=event_column,
+    )
 
 
 def _fit_evaluate_gbs_split(
@@ -2331,31 +2452,25 @@ def _fit_evaluate_gbs_split(
     if not SKSURV_AVAILABLE:
         raise ImportError("scikit-survival is not installed.")
 
-    train_encoded, test_encoded, _ = _encode_train_test_features(
+    train_encoded, test_encoded, train_eval, test_eval = _encoded_fold_matrices(
         train_frame,
         test_frame,
-        features,
-        categorical_features,
+        features=features,
+        categorical_features=categorical_features,
+        model_label="Gradient Boosted Survival",
     )
-    train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
-    train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
-    test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
-    if train_encoded.empty or test_encoded.empty:
-        raise ValueError("No valid rows remain after encoding features for Gradient Boosted Survival.")
     effective_min_samples_leaf = _effective_tree_min_samples_leaf(min_samples_leaf, int(train_encoded.shape[0]))
 
     y_train = _prepare_sksurv_data(train_eval, time_column, event_column)
     t_start = time.monotonic()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        model = GradientBoostingSurvivalAnalysis(
-            n_estimators=n_estimators,
-            learning_rate=learning_rate,
-            max_depth=_resolve_gbs_max_depth(max_depth),
-            min_samples_leaf=effective_min_samples_leaf,
-            random_state=random_state,
-        )
-        model.fit(train_encoded.to_numpy(), y_train)
+    model = GradientBoostingSurvivalAnalysis(
+        n_estimators=n_estimators,
+        learning_rate=learning_rate,
+        max_depth=_resolve_gbs_max_depth(max_depth),
+        min_samples_leaf=effective_min_samples_leaf,
+        random_state=random_state,
+    )
+    model.fit(train_encoded.to_numpy(), y_train)
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
     risk_score = model.predict(test_encoded.to_numpy())
 
@@ -2368,19 +2483,16 @@ def _fit_evaluate_gbs_split(
         support_times=train_eval[time_column].to_numpy(dtype=float),
         support_events=train_eval[event_column].to_numpy(dtype=int),
     )
-    return {
-        "model": "Gradient Boosted Survival",
-        "c_index": _safe_float(_sksurv_c_index(y_test, risk_score)),
-        "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
-        "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
-        "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
-        "n_features": int(train_encoded.shape[1]),
-        "training_time_ms": training_time_ms,
-        "train_n": int(train_eval.shape[0]),
-        "test_n": int(test_eval.shape[0]),
-        "train_events": int(train_eval[event_column].sum()),
-        "test_events": int(test_eval[event_column].sum()),
-    }
+    return _fold_result(
+        model="Gradient Boosted Survival",
+        c_index=_sksurv_c_index(y_test, risk_score),
+        brier_result=brier_result,
+        n_features=int(train_encoded.shape[1]),
+        training_time_ms=training_time_ms,
+        train_eval=train_eval,
+        test_eval=test_eval,
+        event_column=event_column,
+    )
 
 
 def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
@@ -2399,7 +2511,7 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             return None
         try:
             ints = [int(value) for value in values]
-        except Exception:
+        except (TypeError, ValueError):
             return None
         return ", ".join(str(value) for value in ints) if ints else None
 
@@ -2642,6 +2754,7 @@ def cross_validate_survival_models(
         extra_columns=list(features),
         drop_missing_extra_columns=False,
     )
+    reject_numeric_text_features(frame, features)
     n_patients = int(frame.shape[0])
     n_events = int(frame[event_column].sum())
     source_rows = _frame_source_rows(frame)
@@ -2692,6 +2805,7 @@ def cross_validate_survival_models(
             test_frame = dev_frame.iloc[test_idx].reset_index(drop=True)
             unseen_fold_rows += _unseen_category_rows(train_frame, test_frame, categorical_features)
             for model_name, fit_fn, extra_kwargs in model_specs:
+                raise_if_cancelled()
                 try:
                     result = fit_fn(
                         train_frame,
@@ -2720,6 +2834,8 @@ def cross_validate_survival_models(
                         "test_events": result["test_events"],
                     })
                 except Exception as exc:
+                    if must_propagate(exc):
+                        raise
                     errors.append({
                         "model": model_name,
                         "repeat": repeat_idx + 1,
@@ -2731,6 +2847,7 @@ def cross_validate_survival_models(
     if use_locked_test and locked_test_frame is not None:
         design_splits.append((dev_positions, test_positions))
         for model_name, fit_fn, extra_kwargs in model_specs:
+            raise_if_cancelled()
             try:
                 locked_results[model_name] = fit_fn(
                     dev_frame,
@@ -2743,6 +2860,8 @@ def cross_validate_survival_models(
                     **extra_kwargs,
                 )
             except Exception as exc:
+                if must_propagate(exc):
+                    raise
                 locked_results[model_name] = {"error": str(exc)}
 
     comparison: list[dict[str, Any]] = []
@@ -2757,31 +2876,12 @@ def cross_validate_survival_models(
         active_counts = [float(row["n_active_features"]) for row in model_rows if row.get("n_active_features") is not None]
         row_payload = {
             "model": model_name,
-            "c_index": None if incomplete or summary is None else _safe_float(summary["c_index"]),
-            "c_index_std": None if incomplete or summary is None else _safe_float(summary["c_index_std"]),
-            "c_index_std_label": None if summary is None else summary["c_index_std_label"],
-            "c_index_repeat_std": None if incomplete or summary is None else _safe_float(summary["c_index_repeat_std"]),
-            "c_index_median": None if incomplete or summary is None else _safe_float(summary["c_index_median"]),
-            "c_index_interval_lower": None if incomplete or summary is None else _safe_float(summary["c_index_interval_lower"]),
-            "c_index_interval_upper": None if incomplete or summary is None else _safe_float(summary["c_index_interval_upper"]),
-            "c_index_interval_label": None if summary is None else summary["c_index_interval_label"],
-            "ibs": None if incomplete or summary is None else _safe_float(summary.get("ibs")),
-            "null_ibs": None if incomplete or summary is None else _safe_float(summary.get("null_ibs")),
-            "brier_skill_score": None if incomplete or summary is None else _safe_float(summary.get("brier_skill_score")),
-            "n_features": None if summary is None or summary.get("n_features") is None else int(summary["n_features"]),
+            **repeated_cv_row_fields(summary, incomplete=incomplete),
             "n_active_features": int(round(float(np.mean(active_counts)))) if active_counts else None,
-            "training_time_ms": None if summary is None else _safe_float(summary["training_time_ms"]),
             "n_evaluations": len(model_rows),
-            "n_repeats": 0 if summary is None else int(summary["n_repeats"]),
             "n_failures": n_failures,
             "cv_folds": cv_folds,
             "cv_repeats": cv_repeats,
-            "evaluation_mode": "repeated_cv_incomplete" if incomplete else "repeated_cv",
-            "repeat_results": [] if summary is None else summary["repeat_results"],
-            "training_samples": None if summary is None or summary.get("train_n") is None else int(summary["train_n"]),
-            "evaluation_samples": None if summary is None or summary.get("test_n") is None else int(summary["test_n"]),
-            "train_events": None if summary is None or summary.get("train_events") is None else int(summary["train_events"]),
-            "test_events": None if summary is None or summary.get("test_events") is None else int(summary["test_events"]),
         }
         if use_locked_test:
             locked = locked_results.get(model_name) or {}
@@ -2915,6 +3015,7 @@ def cross_validate_survival_models(
 # ===================================================================
 
 
+@user_input_boundary
 def compute_shap_values(
     model: Any,
     X_encoded: pd.DataFrame,
@@ -3050,7 +3151,6 @@ def compute_shap_values(
 # ===================================================================
 
 
-@user_input_boundary
 def _apply_feature_scaler(encoded: pd.DataFrame, scaler: dict[str, Any] | None) -> pd.DataFrame:
     """Re-apply training standardization (LASSO-Cox stores its design standardized)."""
     if not scaler:
@@ -3070,6 +3170,7 @@ def _model_risk_scale(model: Any) -> str:
     return "cumulative_hazard"
 
 
+@user_input_boundary
 def compute_partial_dependence(
     model: Any,
     X_encoded: pd.DataFrame,
@@ -3144,6 +3245,7 @@ def compute_partial_dependence(
             mean_risks: list[float | None] = []
             category_counts = analysis_frame[feature_name].astype("string").value_counts(dropna=True)
             for category in category_values:
+                raise_if_cancelled()
                 frame_variant = analysis_frame.copy()
                 frame_variant[feature_name] = category
                 try:
@@ -3187,6 +3289,7 @@ def compute_partial_dependence(
         grid = np.linspace(col_min, col_max, n_points)
         mean_risks: list[float | None] = []
         for grid_val in grid:
+            raise_if_cancelled()
             frame_variant = analysis_frame.copy()
             frame_variant[feature_name] = float(grid_val)
             try:
@@ -3263,6 +3366,78 @@ def compute_partial_dependence(
 # ===================================================================
 
 
+def _censoring_survival_function(times: np.ndarray, events: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Reverse Kaplan-Meier estimate of the censoring survival G(t) = P(C > t).
+
+    Events precede censorings at tied times, so the subjects who had the event at a
+    time are not at risk of being censored then: hazard_C(u) = c_u / (n_u - d_u).
+    Returns the distinct observed times and G at each of them (right-continuous).
+    """
+    times_arr = np.asarray(times, dtype=float).reshape(-1)
+    event_mask = np.asarray(events, dtype=float).reshape(-1) > 0
+    unique_times, inverse = np.unique(times_arr, return_inverse=True)
+    exits = np.bincount(inverse, minlength=unique_times.size).astype(float)
+    deaths = np.bincount(inverse, weights=event_mask.astype(float), minlength=unique_times.size)
+    censored = exits - deaths
+    at_risk = exits[::-1].cumsum()[::-1]
+    denominator = at_risk - deaths
+    with np.errstate(divide="ignore", invalid="ignore"):
+        hazard = np.where(denominator > 0.0, censored / denominator, 0.0)
+    return unique_times, np.cumprod(1.0 - hazard)
+
+
+def _ipcw_brier_weights(
+    times: np.ndarray,
+    events: np.ndarray,
+    eval_times: np.ndarray,
+    *,
+    support_times: np.ndarray,
+    support_events: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """IPCW weights and "still at risk" indicators for Brier scores at ``eval_times``.
+
+    Graf et al. (1999) weights with the convention that an event precedes a censoring
+    at the same time, as the Kaplan-Meier estimator does:
+
+    * ``t_i > t``: weight ``1 / G(t)`` (still under observation at t);
+    * ``t_i <= t`` and an event: weight ``1 / G(t_i-)``, because the event is observed
+      exactly when ``C >= t_i`` (Gerds & Schumacher, 2006; pec, riskRegression);
+    * ``t_i <= t`` and censored: weight 0.
+
+    ``G`` is the reverse Kaplan-Meier estimate from the support cohort whose censoring
+    hazard at a tied time excludes the subjects who had the event then (as sksurv's
+    reverse estimator does). Returns ``(weights, alive)``, both ``(n, len(eval_times))``.
+    """
+    eps = 1e-12
+    times_arr = np.asarray(times, dtype=float).reshape(-1)
+    events_arr = np.asarray(events, dtype=float).reshape(-1)
+    eval_arr = np.asarray(eval_times, dtype=float).reshape(-1)
+    censor_times, censor_surv = _censoring_survival_function(support_times, support_events)
+
+    def _lookup(query: np.ndarray, *, left_limit: bool) -> np.ndarray:
+        out = np.ones_like(query, dtype=float)
+        if censor_times.size == 0:
+            return out
+        idx = np.searchsorted(censor_times, query, side="left" if left_limit else "right") - 1
+        valid = idx >= 0
+        out[valid] = censor_surv[idx[valid]]
+        return out
+
+    g_at_eval = np.maximum(_lookup(eval_arr, left_limit=False), eps)
+    g_before_subject = np.maximum(_lookup(times_arr, left_limit=True), eps)
+    alive = times_arr[:, np.newaxis] > eval_arr[np.newaxis, :]
+    event_before = (~alive) & (events_arr[:, np.newaxis] == 1)
+    weights = np.where(alive, 1.0 / g_at_eval[np.newaxis, :], 0.0)
+    weights = np.where(event_before, (1.0 / g_before_subject)[:, np.newaxis], weights)
+    return weights, alive.astype(float)
+
+
+def _brier_scores_from_weights(weights: np.ndarray, alive: np.ndarray, survival: np.ndarray) -> np.ndarray:
+    """Brier score at each evaluation time from precomputed IPCW weights."""
+    return np.mean(weights * (np.asarray(survival, dtype=float) - alive) ** 2, axis=0)
+
+
+@user_input_boundary
 def compute_integrated_brier_score(
     times: np.ndarray | Sequence[float],
     events: np.ndarray | Sequence[int],
@@ -3362,64 +3537,35 @@ def compute_integrated_brier_score(
             "predicted_survival_fn returned non-finite survival probabilities."
         )
 
-    # Compute Brier Score at each evaluation time with IPCW to handle censoring.
-    # Reference weight scheme (Graf et al., 1999; commonly used in survival packages):
-    # - If t_i > t: weight = 1 / G_hat(t)
-    # - If t_i <= t and event_i == 1: weight = 1 / G_hat(t_i)
-    # - If t_i <= t and event_i == 0: weight = 0
     from statsmodels.duration.survfunc import SurvfuncRight
 
-    censor_status = (1.0 - support_events_arr).astype(float)
-    censor_sf = SurvfuncRight(support_times_arr, censor_status)
-    censor_times = censor_sf.surv_times.astype(float)
-    censor_surv = censor_sf.surv_prob.astype(float)
-
-    def _G_hat(query_times: np.ndarray | float) -> np.ndarray:
-        qt = np.atleast_1d(np.asarray(query_times, dtype=float))
-        if censor_times.size == 0:
-            return np.ones_like(qt, dtype=float)
-        idx = np.searchsorted(censor_times, qt, side="right") - 1
-        out = np.ones_like(qt, dtype=float)
-        valid_idx = idx >= 0
-        out[valid_idx] = censor_surv[idx[valid_idx]]
-        return out
-
     eps = 1e-12
+    weights, alive_indicator = _ipcw_brier_weights(
+        times_arr,
+        events_arr,
+        eval_times_arr,
+        support_times=support_times_arr,
+        support_events=support_events_arr,
+    )
     event_sf = SurvfuncRight(support_times_arr, support_events_arr)
     event_times = event_sf.surv_times.astype(float)
     event_surv = event_sf.surv_prob.astype(float)
     null_survival = _step_survival_lookup(event_times, event_surv, eval_times_arr)
 
-    brier_scores: list[dict[str, Any]] = []
-    null_brier_scores: list[dict[str, Any]] = []
-    bs_values: list[float] = []
-    null_bs_values: list[float] = []
-
-    for j, t in enumerate(eval_times_arr):
-        # Indicator: patient experienced event before or at time t
-        # I(T > t) = 1 if the patient is still alive at t
-        alive_indicator = (times_arr > t).astype(float)
-        s_hat = surv_matrix[:, j]
-
-        g_t = float(max(_G_hat(float(t)).item(), eps))
-        g_ti = np.maximum(_G_hat(times_arr), eps)
-        weights = np.zeros(n_samples, dtype=float)
-        weights[times_arr > t] = 1.0 / g_t
-        event_mask = (times_arr <= t) & (events_arr == 1)
-        weights[event_mask] = 1.0 / g_ti[event_mask]
-
-        bs = float(np.mean(weights * (s_hat - alive_indicator) ** 2))
-        null_bs = float(np.mean(weights * (float(null_survival[j]) - alive_indicator) ** 2))
-        bs_values.append(bs)
-        null_bs_values.append(null_bs)
-        brier_scores.append({
-            "time": _safe_float(float(t)),
-            "score": _safe_float(bs),
-        })
-        null_brier_scores.append({
-            "time": _safe_float(float(t)),
-            "score": _safe_float(null_bs),
-        })
+    bs_values = _brier_scores_from_weights(weights, alive_indicator, surv_matrix)
+    null_bs_values = _brier_scores_from_weights(
+        weights,
+        alive_indicator,
+        np.broadcast_to(null_survival[np.newaxis, :], surv_matrix.shape),
+    )
+    brier_scores: list[dict[str, Any]] = [
+        {"time": _safe_float(float(t)), "score": _safe_float(float(score))}
+        for t, score in zip(eval_times_arr, bs_values, strict=True)
+    ]
+    null_brier_scores: list[dict[str, Any]] = [
+        {"time": _safe_float(float(t)), "score": _safe_float(float(score))}
+        for t, score in zip(eval_times_arr, null_bs_values, strict=True)
+    ]
 
     # Integrated Brier Score via trapezoidal rule
     bs_arr = np.array(bs_values, dtype=float)
@@ -3432,17 +3578,26 @@ def compute_integrated_brier_score(
 
     # Scientific summary
     n_events = int(np.sum(events_arr))
+    grid_description = (
+        "the 10th-90th percentile range of evaluation-cohort follow-up"
+        if eval_times is None
+        else "the requested evaluation times"
+    )
+    window_text = (
+        f"[{float(eval_times_arr[0]):.4g}, {float(eval_times_arr[-1]):.4g}] ({grid_description}, capped at the last "
+        f"support event time {support_time_upper:.4g} and the last evaluation follow-up time)"
+    )
     strengths: list[str] = (
         [
             f"Brier score computed at a single IPCW-supported time point for {n_samples} patients ({n_events} events).",
             "The Kaplan-Meier null-model reference was evaluated at the same time point to contextualize absolute prediction error.",
-            f"Evaluation times were restricted to the IPCW support window [0, {support_time_upper:.4g}], which collapsed to a single supported time point.",
+            f"The evaluation window {window_text} collapsed to a single supported time point.",
         ]
         if single_time_support
         else [
             f"IBS computed over {len(eval_times_arr)} time points for {n_samples} patients ({n_events} events).",
             "IBS summarizes predicted-vs-observed survival error across time, and Brier Skill Score contextualizes that error versus a Kaplan-Meier null model.",
-            f"Evaluation times were restricted to the IPCW support window [0, {support_time_upper:.4g}] to avoid late-time extrapolation beyond the last support event.",
+            f"Evaluation times span {window_text}, which avoids late-time extrapolation where the censoring distribution is poorly estimated.",
         ]
     )
     cautions: list[str] = []
@@ -3548,6 +3703,7 @@ def compute_integrated_brier_score(
 # ===================================================================
 
 
+@user_input_boundary
 def compute_calibration_data(
     times: np.ndarray | Sequence[float],
     events: np.ndarray | Sequence[int],
@@ -3603,7 +3759,8 @@ def compute_calibration_data(
     try:
         bin_assign = pd.qcut(pred_series, q=n_bins, duplicates="drop")
         bin_categories = list(bin_assign.cat.categories)
-    except Exception:
+    except (ValueError, IndexError):
+        # Too few distinct predictions to form quantile bins.
         bin_assign = None
         bin_categories = []
 
@@ -3611,6 +3768,7 @@ def compute_calibration_data(
         # Fallback: single-bin summary
         bin_categories = [None]
 
+    non_estimable_bins = 0
     for cat in bin_categories:
         mask = np.ones_like(pred_arr, dtype=bool) if cat is None else (bin_assign == cat).to_numpy()
 
@@ -3626,23 +3784,27 @@ def compute_calibration_data(
         bin_events = events_arr[mask]
 
         observed_survival: float | None = None
-        if t is not None and np.sum(bin_events) > 0:
-            try:
-                sf = SurvfuncRight(bin_times, bin_events)
-                # Evaluate survival at the target time
-                km_times = sf.surv_times
-                km_surv = sf.surv_prob
-                if len(km_times) > 0:
-                    idx = np.searchsorted(km_times, t, side="right") - 1
-                    if idx < 0:
-                        observed_survival = 1.0
-                    else:
-                        observed_survival = float(km_surv[idx])
-            except Exception:
-                observed_survival = None
-        elif t is not None:
-            # No events in this bin: observed survival is 1.0 (no failures)
-            observed_survival = 1.0
+        if t is not None:
+            last_follow_up = float(np.max(bin_times))
+            if np.sum(bin_events) > 0:
+                try:
+                    sf = SurvfuncRight(bin_times, bin_events)
+                    km_times = sf.surv_times
+                    km_surv = sf.surv_prob
+                    idx = int(np.searchsorted(km_times, t, side="right")) - 1
+                    observed_survival = 1.0 if idx < 0 else float(km_surv[idx])
+                except (ValueError, FloatingPointError, np.linalg.LinAlgError):
+                    observed_survival = None
+                # Beyond the bin's last follow-up the Kaplan-Meier curve is undefined
+                # unless it already reached zero.
+                if observed_survival is not None and t > last_follow_up and observed_survival > 0.0:
+                    observed_survival = None
+            elif last_follow_up >= t:
+                # No events and some patients followed to t: no failures observed.
+                observed_survival = 1.0
+            # Otherwise everyone was censored before t: survival at t is not estimable.
+            if observed_survival is None:
+                non_estimable_bins += 1
 
         bins_result.append({
             "predicted_mean": _safe_float(predicted_mean),
@@ -3681,6 +3843,11 @@ def compute_calibration_data(
         cautions.append(
             f"{empty_bins} of {n_bins} bins had no patients; "
             "consider reducing n_bins or using a larger dataset."
+        )
+    if non_estimable_bins > 0:
+        cautions.append(
+            f"{non_estimable_bins} bin(s) had no follow-up reaching t={time_label}, so observed survival there is not "
+            "estimable and those bins are left out of the agreement summary."
         )
 
     next_steps.append(
@@ -3740,187 +3907,191 @@ def compute_time_dependent_importance(
     eval_times: Sequence[float] | None = None,
     event_positive_value: Any = None,
     model_type: str = "rsf",
+    n_estimators: int = 100,
+    max_depth: int | None = None,
+    learning_rate: float = 0.1,
+    random_state: int = 42,
 ) -> dict[str, Any]:
-    """Compute how feature importance changes over time.
+    """Time-dependent permutation importance of a fitted survival model.
 
-    This is a proxy time-slice importance analysis, not a formal
-    survival-specific attribution method. For each evaluation time point
-    *t*, patients censored before *t* are excluded, the remaining known
-    status labels are binarised (event before *t* → 1, else → 0), and a
-    simple tree-based classifier is fitted. Feature importances from each
-    classifier form rows of the importance matrix.
-
-    Parameters
-    ----------
-    df
-        Source DataFrame.
-    time_column, event_column
-        Column names for time and event indicator.
-    features
-        Feature column names.
-    categorical_features
-        Subset of *features* that are categorical.
-    eval_times
-        Time points at which to evaluate importance.  If *None*, five
-        equally-spaced quantiles of the observed event times are used.
-    event_positive_value
-        Passed through to ``_cohort_frame`` for event coercion.
-    model_type
-        Retained for API compatibility. The current implementation uses
-        time-slice ``RandomForestClassifier`` models regardless of value.
+    A Random Survival Forest (``model_type="rsf"``) or Gradient Boosted Survival model
+    (``"gbs"``) is fitted on the shared stratified training split. For each evaluation
+    time ``t`` the importance of a raw feature is the increase in the IPCW Brier score at
+    ``t`` on the evaluation rows when that feature is shuffled (all one-hot columns of a
+    categorical feature together), averaged over repeats. IPCW weights keep patients
+    censored before ``t`` represented instead of dropping them, and nothing is scored on
+    the rows the model was fitted on unless the cohort is too small for a holdout.
 
     Returns
     -------
     dict
-        ``eval_times``, ``features``, ``importance_matrix`` (times × features),
-        ``importance_matrix_feature_major`` (features × times),
-        ``importance_matrix_orientation``, ``dominant_feature_per_time``,
-        and ``scientific_summary``.
+        ``eval_times``, ``features``, ``importance_matrix`` (times x features),
+        ``importance_matrix_feature_major`` (features x times),
+        ``importance_matrix_orientation``, ``baseline_brier_scores``,
+        ``dominant_feature_per_time``, ``evaluable_patients_per_time``,
+        ``skipped_time_points``, and ``scientific_summary``.
     """
-    _require_sklearn()
-    _ = model_type
+    if not SKSURV_AVAILABLE:
+        raise ImportError(
+            "scikit-survival is required for time-dependent importance. "
+            "Install it with: pip install scikit-survival"
+        )
+    if model_type not in {"rsf", "gbs"}:
+        raise ValueError(f"Unsupported time-dependent importance model_type '{model_type}'. Expected 'rsf' or 'gbs'.")
     _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
 
-    frame = _cohort_frame(
+    trainer = train_random_survival_forest if model_type == "rsf" else train_gradient_boosted_survival
+    trainer_kwargs: dict[str, Any] = {"n_estimators": n_estimators, "max_depth": max_depth, "random_state": random_state}
+    if model_type == "gbs":
+        trainer_kwargs["learning_rate"] = learning_rate
+    fitted = trainer(
         df,
         time_column=time_column,
         event_column=event_column,
+        features=features,
+        categorical_features=categorical_features,
         event_positive_value=event_positive_value,
-        extra_columns=list(features),
-        drop_missing_extra_columns=False,
+        **trainer_kwargs,
     )
-    X_encoded = _encode_features(frame, features, categorical_features).reset_index(drop=True)
-    frame = frame.reset_index(drop=True)
+    model = fitted["_model"]
+    evaluation_mode = str(fitted["model_stats"]["evaluation_mode"])
+    eval_frame: pd.DataFrame = fitted["_analysis_eval_frame"]
+    X_eval: pd.DataFrame = fitted["_X_eval_encoded"]
+    # Censoring weights come from the fitting rows, as for the holdout IBS.
+    support_frame: pd.DataFrame = fitted["_analysis_train_frame"]
+    time_values = eval_frame[time_column].to_numpy(dtype=float)
+    event_values = eval_frame[event_column].to_numpy(dtype=float)
+    support_times = support_frame[time_column].to_numpy(dtype=float)
+    support_events = support_frame[event_column].to_numpy(dtype=float)
 
-    if X_encoded.empty:
-        raise ValueError("No analyzable rows remain after encoding features.")
+    rng = np.random.default_rng(int(random_state))
+    matrix = X_eval.to_numpy(dtype=float)
+    if matrix.shape[0] > _PERMUTATION_IMPORTANCE_MAX_ROWS:
+        rows = np.sort(rng.choice(matrix.shape[0], size=_PERMUTATION_IMPORTANCE_MAX_ROWS, replace=False))
+        matrix = matrix[rows]
+        time_values = time_values[rows]
+        event_values = event_values[rows]
 
-    time_values = frame[time_column].to_numpy(dtype=float)
-    event_values = frame[event_column].to_numpy(dtype=float)
-    feature_names = list(X_encoded.columns)
-
-    # Default eval_times: quintiles of observed event times
+    support_event_times = support_times[support_events == 1]
+    horizon = min(
+        float(np.max(support_event_times)) if support_event_times.size else float(np.max(support_times)),
+        float(np.max(time_values)),
+    )
     if eval_times is None:
         event_times = time_values[event_values == 1]
-        if len(event_times) < 5:
+        if event_times.size < 5:
             eval_times_arr = np.unique(event_times)
         else:
             eval_times_arr = np.quantile(event_times, [0.2, 0.4, 0.5, 0.6, 0.8])
     else:
         eval_times_arr = np.asarray(eval_times, dtype=float)
-
-    # Remove duplicates and sort
-    eval_times_arr = np.sort(np.unique(eval_times_arr))
-    if len(eval_times_arr) == 0:
-        raise ValueError("No valid evaluation time points.")
-
-    importance_matrix_time_major: list[list[float | None]] = []
-    dominant_per_time: list[str | None] = []
-    evaluable_patients_per_time: list[int] = []
-    skipped_time_points: list[dict[str, Any]] = []
-    computation_errors: list[str] = []
-
-    X_array = X_encoded.to_numpy(dtype=float)
-
-    for t in eval_times_arr:
-        # Binary outcome: event occurred at or before time t.
-        # Subjects censored before t are excluded because their status at t is unknown.
-        evaluable_mask = (time_values > t) | ((time_values <= t) & (event_values == 1))
-        binary_outcome = ((time_values <= t) & (event_values == 1)).astype(int)
-        X_t = X_array[evaluable_mask]
-        y_t = binary_outcome[evaluable_mask]
-
-        evaluable_patients = int(np.sum(evaluable_mask))
-        evaluable_patients_per_time.append(evaluable_patients)
-
-        # Need at least two classes among patients with known status at time t.
-        if evaluable_patients < 2 or len(np.unique(y_t)) < 2:
-            importance_matrix_time_major.append([None] * len(feature_names))
-            dominant_per_time.append(None)
-            skipped_time_points.append({
-                "time": _safe_float(float(t)),
-                "reason": "not_enough_evaluable_patients_or_classes",
-                "evaluable_patients": evaluable_patients,
-            })
-            continue
-
-        try:
-            clf = RandomForestClassifier(
-                n_estimators=100,
-                max_depth=5,
-                min_samples_leaf=10,
-                random_state=42,
-                n_jobs=_TREE_N_JOBS,
-            )
-            clf.fit(X_t, y_t)
-            importances = clf.feature_importances_
-            row = [_safe_float(float(v)) for v in importances]
-            importance_matrix_time_major.append(row)
-
-            best_idx = int(np.argmax(importances))
-            dominant_per_time.append(feature_names[best_idx])
-        except Exception as exc:
-            importance_matrix_time_major.append([None] * len(feature_names))
-            dominant_per_time.append(None)
-            computation_errors.append(f"t={float(t):.6g}: {type(exc).__name__}: {exc}")
-
-    if computation_errors:
+    requested_times = np.sort(np.unique(eval_times_arr[np.isfinite(eval_times_arr)]))
+    in_support = (requested_times > 0.0) & (requested_times <= horizon)
+    eval_times_arr = requested_times[in_support]
+    skipped_time_points: list[dict[str, Any]] = [
+        {"time": _safe_float(float(t)), "reason": "outside_follow_up_support", "evaluable_patients": None}
+        for t in requested_times[~in_support]
+    ]
+    if eval_times_arr.size == 0:
         raise ValueError(
-            "Time-dependent importance failed for one or more evaluation times: "
-            + "; ".join(computation_errors[:3])
+            "No evaluation time points fall inside the follow-up support of the evaluation rows "
+            f"(0 < t <= {horizon:.4g})."
         )
 
-    n_patients = int(frame.shape[0])
-    n_events = int(np.sum(event_values))
+    weights, alive = _ipcw_brier_weights(
+        time_values,
+        event_values,
+        eval_times_arr,
+        support_times=support_times,
+        support_events=support_events,
+    )
 
-    # Identify features whose importance varies most across time
-    valid_rows = [
-        row for row in importance_matrix_time_major
-        if all(v is not None for v in row)
+    def _survival_matrix(design: np.ndarray) -> np.ndarray:
+        functions = model.predict_survival_function(design, return_array=False)
+        return _step_function_matrix(functions, eval_times_arr)
+
+    baseline_scores = _brier_scores_from_weights(weights, alive, _survival_matrix(matrix))
+    groups = encoded_feature_groups(list(X_eval.columns), fitted.get("_feature_encoder"))
+    feature_names = list(groups)
+    n_repeats = 5 if len(groups) <= 20 else (3 if len(groups) <= 60 else 2)
+    importance_by_feature = np.zeros((len(feature_names), eval_times_arr.size), dtype=float)
+    for feature_index, feature in enumerate(feature_names):
+        raise_if_cancelled()
+        positions = groups[feature]
+        increases = np.zeros(eval_times_arr.size, dtype=float)
+        for _ in range(n_repeats):
+            permutation = rng.permutation(matrix.shape[0])
+            shuffled = matrix.copy()
+            shuffled[:, positions] = matrix[permutation][:, positions]
+            increases += _brier_scores_from_weights(weights, alive, _survival_matrix(shuffled)) - baseline_scores
+        importance_by_feature[feature_index] = increases / n_repeats
+
+    evaluable_patients_per_time = [
+        int(np.sum((time_values > t) | ((time_values <= t) & (event_values == 1)))) for t in eval_times_arr
     ]
-    varying_features: list[str] = []
-    if len(valid_rows) >= 2:
-        imp_arr = np.array(valid_rows, dtype=float)
-        stds = np.std(imp_arr, axis=0)
-        top_varying_idx = np.argsort(stds)[::-1][:3]
-        varying_features = [feature_names[i] for i in top_varying_idx]
+    importance_matrix_time_major: list[list[float | None]] = [
+        [_safe_float(float(value)) for value in importance_by_feature[:, time_index]]
+        for time_index in range(eval_times_arr.size)
+    ]
+    dominant_per_time: list[str | None] = [
+        feature_names[int(np.argmax(importance_by_feature[:, time_index]))] if feature_names else None
+        for time_index in range(eval_times_arr.size)
+    ]
+    importance_matrix_feature_major = [
+        [_safe_float(float(value)) for value in importance_by_feature[feature_index]]
+        for feature_index in range(len(feature_names))
+    ]
 
+    n_patients = int(fitted["model_stats"]["n_patients"])
+    n_events = int(fitted["model_stats"]["n_events"])
+    n_eval_events = int(np.sum(event_values))
+    varying_features: list[str] = []
+    if eval_times_arr.size >= 2 and feature_names:
+        spread = np.std(importance_by_feature, axis=1)
+        varying_features = [feature_names[index] for index in np.argsort(spread)[::-1][:3]]
+
+    model_label = "Random Survival Forest" if model_type == "rsf" else "Gradient Boosted Survival"
     strengths: list[str] = [
-        f"Importance computed at {len(eval_times_arr)} time points for {len(feature_names)} features.",
-        "Provides a proxy view of how feature rankings change across early vs late follow-up.",
-        "Patients censored before a given time point are excluded from that time-specific classifier.",
+        f"Importance computed at {eval_times_arr.size} time point(s) for {len(feature_names)} feature(s) from a "
+        f"{model_label} fitted on the training split.",
+        "Each value is the increase in the IPCW Brier score at that time when the feature is shuffled on the "
+        f"evaluation rows ({matrix.shape[0]} patients, {n_eval_events} events), averaged over {n_repeats} shuffles.",
+        "Inverse-probability-of-censoring weights keep patients censored before a time point represented instead of dropping them.",
     ]
     cautions: list[str] = [
-        "This is a proxy time-slice analysis and should not be described as formal SurvSHAP(t) or a survival-specific attribution method.",
+        "Permutation importance measures how much the fitted model relies on a feature; correlated features share and can mask each other's importance.",
+        "This is model-based permutation importance, not SurvSHAP(t) or a causal effect.",
     ]
-    next_steps: list[str] = []
-
-    if varying_features:
-        strengths.append(
-            f"Features with greatest temporal variation: {', '.join(varying_features)}."
+    if evaluation_mode != "holdout":
+        cautions.append(
+            "The cohort was too small for a holdout split, so importance was measured on the rows the model was fitted on and is optimistic."
         )
-    if n_events < 20:
-        cautions.append("Fewer than 20 events may make per-time-point estimates unreliable.")
-    next_steps.append(
-        "Examine the importance_matrix to identify which features dominate at early vs late time points."
-    )
-    next_steps.append(
-        "Consider dedicated SurvSHAP(t) implementations for more precise time-dependent explanations."
-    )
+    if varying_features:
+        strengths.append(f"Features with the greatest change across time: {', '.join(varying_features)}.")
+    if n_eval_events < 20:
+        cautions.append("Fewer than 20 events on the evaluation rows make per-time-point importance noisy.")
+    if skipped_time_points:
+        cautions.append(
+            f"{len(skipped_time_points)} requested time point(s) outside the evaluation follow-up support "
+            f"(0 < t <= {horizon:.4g}) were skipped."
+        )
+    next_steps = [
+        "Compare early and late time points to see which features drive short- versus long-term risk predictions.",
+        "Check stability by rerunning with another seed before interpreting small differences.",
+    ]
 
-    unique_dominant = [f for f in dominant_per_time if f is not None]
+    unique_dominant = [feature for feature in dominant_per_time if feature is not None]
     headline_feature = max(set(unique_dominant), key=unique_dominant.count) if unique_dominant else "N/A"
-
     status = "robust"
-    if n_events < 20:
+    if n_eval_events < 20 or evaluation_mode != "holdout":
         status = "review"
-    if n_events < 10:
+    if n_eval_events < 10:
         status = "caution"
 
     scientific_summary = {
         "status": status,
         "headline": (
-            f"Proxy time-slice importance summary computed with censoring-aware slices; most frequently dominant feature: {headline_feature}."
+            f"Time-dependent permutation importance ({model_label}); most frequently dominant feature: {headline_feature}."
         ),
         "strengths": strengths,
         "cautions": cautions,
@@ -3928,18 +4099,15 @@ def compute_time_dependent_importance(
         "metrics": [
             {"label": "Patients", "value": n_patients},
             {"label": "Events", "value": n_events},
-            {"label": "Time points", "value": len(eval_times_arr)},
-            {"label": "Evaluable patients, min", "value": int(min(evaluable_patients_per_time) if evaluable_patients_per_time else 0)},
-            {"label": "Features (encoded)", "value": len(feature_names)},
+            {"label": "Evaluation patients", "value": int(matrix.shape[0])},
+            {"label": "Time points", "value": int(eval_times_arr.size)},
+            {
+                "label": "Evaluable patients, min",
+                "value": int(min(evaluable_patients_per_time)) if evaluable_patients_per_time else 0,
+            },
+            {"label": "Features", "value": len(feature_names)},
         ],
     }
-
-    importance_matrix_feature_major: list[list[float | None]] = []
-    for feat_idx in range(len(feature_names)):
-        column: list[float | None] = []
-        for row in importance_matrix_time_major:
-            column.append(row[feat_idx] if feat_idx < len(row) else None)
-        importance_matrix_feature_major.append(column)
 
     return {
         "eval_times": [_safe_float(float(t)) for t in eval_times_arr],
@@ -3948,6 +4116,14 @@ def compute_time_dependent_importance(
         "importance_matrix_time_major": importance_matrix_time_major,
         "importance_matrix_feature_major": importance_matrix_feature_major,
         "importance_matrix_orientation": "time_major",
+        "importance_label": "Brier score increase",
+        "importance_method": (
+            "Increase in the IPCW Brier score at each time when a raw feature is shuffled on the evaluation rows."
+        ),
+        "baseline_brier_scores": [_safe_float(float(value)) for value in baseline_scores],
+        "model_type": model_type,
+        "evaluation_mode": evaluation_mode,
+        "random_state": int(random_state),
         "dominant_feature_per_time": dominant_per_time,
         "evaluable_patients_per_time": evaluable_patients_per_time,
         "skipped_time_points": skipped_time_points,

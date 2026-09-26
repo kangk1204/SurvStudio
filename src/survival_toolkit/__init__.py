@@ -4,7 +4,8 @@ import pandas as pd
 
 __all__ = ["__version__"]
 
-__version__ = "0.1.0"
+# Single source of the package version (pyproject.toml reads it via tool.setuptools.dynamic).
+__version__ = "0.2.0"
 
 # Prefer copy-on-write semantics for defensive DatasetStore snapshots without
 # paying the full deep-copy cost on every access.

@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 from typing import Any
-import warnings
 
 import numpy as np
 import pytest
@@ -1164,8 +1163,6 @@ def test_cox_analysis_scales_schoenfeld_diagnostics_and_reports_ci(monkeypatch) 
         bse = np.asarray([0.1], dtype=float)
         tvalues = np.asarray([2.0], dtype=float)
         pvalues = np.asarray([0.04], dtype=float)
-        schoenfeld_residuals = np.asarray([[1.0], [2.0], [3.0], [4.0]], dtype=float)
-        martingale_residuals = np.asarray([-0.2, -0.1, 0.1, 0.2], dtype=float)
         llf = -4.0
         llnull = -7.0
         model = type("_FakeModelMeta", (), {"exog_names": ["Q(\"age\")"], "exog": np.ones((4, 1), dtype=float)})()
@@ -1189,6 +1186,11 @@ def test_cox_analysis_scales_schoenfeld_diagnostics_and_reports_ci(monkeypatch) 
     monkeypatch.setattr(analysis, "_prepare_cox_frame", lambda *args, **kwargs: frame.copy())
     monkeypatch.setattr(analysis, "PHReg", _FakePHReg)
     monkeypatch.setattr(analysis, "_reference_levels", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        analysis,
+        "_efron_schoenfeld_residuals",
+        lambda *args, **kwargs: np.asarray([[1.0], [2.0], [3.0], [4.0]], dtype=float),
+    )
     monkeypatch.setattr(analysis, "_harrell_c_index", lambda *args, **kwargs: 0.62)
     monkeypatch.setattr(
         analysis,
@@ -1204,6 +1206,7 @@ def test_cox_analysis_scales_schoenfeld_diagnostics_and_reports_ci(monkeypatch) 
         covariates=["age"],
     )
 
+    # Scaled Schoenfeld residuals are d * r * V (2 events, variance 2).
     first_trace = result["diagnostics_plot_data"][0]
     assert first_trace["residual"] == pytest.approx([4.0, 8.0, 12.0, 16.0])
     assert len(first_trace["trend_log_time"]) == len(first_trace["trend_residual"])
@@ -2024,7 +2027,7 @@ def test_cox_strata_encoding_is_collision_free(monkeypatch) -> None:
     assert result["model_stats"]["n_strata"] == 2
 
 
-def test_cox_analysis_raises_on_convergence_warning(monkeypatch) -> None:
+def test_cox_analysis_raises_when_the_optimizer_does_not_converge(monkeypatch) -> None:
     import survival_toolkit.analysis as analysis
 
     frame = pd.DataFrame(
@@ -2038,16 +2041,12 @@ def test_cox_analysis_raises_on_convergence_warning(monkeypatch) -> None:
     class _FakePHReg:
         @staticmethod
         def from_formula(*args, **kwargs):
-            class _FakeFit:
-                @staticmethod
-                def fit(disp=False):
-                    warnings.warn("Maximum likelihood optimization failed to converge.", analysis.ConvergenceWarning)
-                    return object()
-
-            return _FakeFit()
+            return object()
 
     monkeypatch.setattr(analysis, "_prepare_cox_frame", lambda *args, **kwargs: frame.copy())
     monkeypatch.setattr(analysis, "PHReg", _FakePHReg)
+    # Convergence comes from the optimizer's own flag, not from process-wide warning capture.
+    monkeypatch.setattr(analysis, "fit_phreg", lambda model: (object(), False))
 
     with pytest.raises(ValueError, match="did not converge cleanly"):
         compute_cox_analysis(
@@ -2786,3 +2785,250 @@ def test_signature_discovery_accepts_boolean_candidates() -> None:
         max_combination_size=1, bootstrap_iterations=0, permutation_iterations=0, validation_iterations=0,
     )
     assert payload["search_space"]["tested_combinations"] >= 1
+
+
+# ---------------------------------------------------------------------------------------
+# Reference values from R survival 3.8.6 (coxph ties="efron", survdiff, survfit with
+# conf.type="log-log"; the proportional-hazards statistics use the classic cox.zph
+# formulas on resid(fit, "schoenfeld") with a log-time transform).
+# Rows: time, event, x, z, s. Event times are heavily tied.
+_R_REFERENCE_ROWS = (
+    "2,1,0.034,0,A;2,0,1.36,0,B;1,1,1.225,0,B;6,1,-0.51,1,B;6,0,-0.298,0,B;1,0,-0.527,0,B;"
+    "1,1,0.57,0,B;8,1,-0.056,0,B;2,1,0.747,1,A;1,0,-1.847,1,B;1,1,1.567,1,A;4,1,-0.096,0,A;"
+    "2,0,0.68,1,B;5,1,-0.137,0,B;2,1,-0.379,0,B;1,1,0.463,1,A;3,1,0.825,1,A;2,0,-0.203,1,A;"
+    "1,1,-0.153,1,B;2,1,0.686,0,A;3,0,-0.87,0,A;2,1,-1.514,1,A;5,1,0.395,1,A;2,1,-0.671,0,B;"
+    "10,1,-1.92,1,B;1,0,-0.814,0,A;1,0,-0.468,1,A;4,0,-1.193,0,A;7,1,-1.492,0,B;1,0,0.037,0,A;"
+    "1,1,0.897,1,A;3,0,-0.233,1,A;4,0,-0.744,1,B;1,1,0.385,0,B;3,0,0.717,0,A;1,0,-0.3,1,B;"
+    "2,0,0.545,1,A;2,1,1.043,0,A;8,0,-0.207,0,A;7,1,-0.814,0,A"
+)
+_R_MARTINGALE_PLAIN = [
+    0.7104108398, -1.363916216, 0.7506417682, 0.1169950029, -0.8580007255, -0.09197343023,
+    0.8634685579, -1.302138559, 0.3022814688, -0.03416879801, 0.5728766536, 0.4771746507,
+    -0.9127574955, 0.2907639008, 0.8019202088, 0.845245736, -0.2223979314, -0.4052348001,
+    0.9121731633, 0.472557396, -0.2056495622, 0.9127647566, -0.4467776843, 0.8485663159,
+    -0.518607076, -0.07063851825, -0.1214419365, -0.1906520938, 0.5666230444, -0.1544935081,
+    0.7693403419, -0.4620332159, -0.3603332771, 0.8848276609, -0.8849870201, -0.1417306531,
+    -0.8061942551, 0.2675933079, -2.003667898, 0.1915698797,
+]
+_R_MARTINGALE_STRATIFIED = [
+    0.7338440802, -1.391160175, 0.5910607268, 0.2200783614, -0.7698662561, -0.1430056248,
+    0.7728869697, -1.434148327, 0.3813074511, -0.05357041605, 0.6772136774, 0.3491311096,
+    -0.9257986981, 0.4079294701, 0.7411452813, 0.8802126009, -0.2285037773, -0.3884161397,
+    0.8545835083, 0.522049356, -0.2188303536, 0.9187544474, -0.8106980857, 0.8008451437,
+    -0.5594825401, -0.04830040118, -0.0807566162, -0.243063177, 0.5534949296, -0.1037044906,
+    0.8231320605, -0.4751275063, -0.2577678873, 0.8076459043, -0.909823282, -0.2148703704,
+    -0.7602900697, 0.3414406217, -1.493560242, 0.1339887368,
+]
+
+
+def _r_reference_frame() -> pd.DataFrame:
+    rows = [item.split(",") for item in _R_REFERENCE_ROWS.split(";")]
+    return pd.DataFrame(
+        {
+            "time": [float(row[0]) for row in rows],
+            "event": [int(row[1]) for row in rows],
+            "x": [float(row[2]) for row in rows],
+            "z": [int(row[3]) for row in rows],
+            "s": [row[4] for row in rows],
+        }
+    )
+
+
+def _ph_terms(result: dict[str, Any]) -> list[float]:
+    return [row["Chi-square"] for row in result["diagnostics_table"] if row.get("_kind") != "global"]
+
+
+def test_cox_proportional_hazards_test_matches_r_with_tied_event_times() -> None:
+    frame = _r_reference_frame()
+
+    plain = compute_cox_analysis(frame, "time", "event", ["x", "z"])
+    assert [row["Beta"] for row in plain["results_table"]] == pytest.approx([0.9195963533, 0.2236803417], abs=1e-7)
+    assert _ph_terms(plain) == pytest.approx([0.4337472685, 0.02231142114], rel=1e-6)
+    assert plain["model_stats"]["global_ph_statistic"] == pytest.approx(0.4661127274, rel=1e-6)
+    assert plain["model_stats"]["c_index"] == pytest.approx(0.7458823529, abs=1e-9)
+
+    stratified = compute_cox_analysis(frame, "time", "event", ["x", "z"], strata_columns=["s"])
+    assert [row["Beta"] for row in stratified["results_table"]] == pytest.approx([0.8978913651, 0.2033296142], abs=1e-7)
+    assert _ph_terms(stratified) == pytest.approx([0.6012703623, 0.0428374226], rel=1e-6)
+    assert stratified["model_stats"]["global_ph_statistic"] == pytest.approx(0.626085916, rel=1e-6)
+
+
+def test_efron_martingale_residuals_match_r() -> None:
+    from survival_toolkit.analysis import _efron_martingale_residuals
+
+    frame = _r_reference_frame()
+    exog = frame[["x", "z"]].to_numpy(dtype=float)
+    time = frame["time"].to_numpy(dtype=float)
+    event = frame["event"].to_numpy(dtype=int)
+
+    plain = _efron_martingale_residuals(exog, time, event, [0.9195963533, 0.2236803417])
+    assert plain == pytest.approx(_R_MARTINGALE_PLAIN, abs=1e-8)
+    stratified = _efron_martingale_residuals(
+        exog, time, event, [0.8978913651, 0.2033296142], pd.factorize(frame["s"])[0]
+    )
+    assert stratified == pytest.approx(_R_MARTINGALE_STRATIFIED, abs=1e-8)
+
+
+def test_km_estimates_and_weighted_tests_match_r() -> None:
+    frame = _r_reference_frame()
+    result = compute_km_analysis(frame, "time", "event", group_column="s")
+    fleming = compute_km_analysis(
+        frame, "time", "event", group_column="s", logrank_weight="fleming_harrington", fh_p=1.0
+    )
+
+    assert result["test"]["chisq"] == pytest.approx(0.1981617151, rel=1e-8)
+    assert fleming["test"]["chisq"] == pytest.approx(0.09671944676, rel=1e-8)
+    # RMST is truncated at the shorter group's last follow-up (group A ends at 8).
+    assert result["rmst_horizon"] == pytest.approx(8.0)
+    rows = {row["Group"]: row for row in result["summary_table"]}
+    expected = {
+        "A": (4.0, 2.0, 7.0, 4.111090067, 0.6377823875),
+        "B": (6.0, 2.0, 8.0, 4.924242424, 0.7306230682),
+    }
+    for group, (median, lower, upper, rmst, rmst_se) in expected.items():
+        row = rows[group]
+        assert (row["Median survival"], row["Median CI lower"], row["Median CI upper"]) == (median, lower, upper)
+        assert row["RMST"] == pytest.approx(rmst, rel=1e-9)
+        assert row["RMST SE"] == pytest.approx(rmst_se, rel=1e-9)
+
+    survival_at = {
+        ("A", 2): (0.59375, 0.3466203291, 0.773767953),
+        ("A", 4): (0.4222222222, 0.1710198692, 0.6564073175),
+        ("B", 2): (0.6363636364, 0.3570231236, 0.8200835447),
+        ("B", 4): (0.6363636364, 0.3570231236, 0.8200835447),
+    }
+    curves = {curve["group"]: curve for curve in result["curves"]}
+    for (group, time_point), values in survival_at.items():
+        curve = curves[group]
+        index = int(np.searchsorted(curve["timeline"], time_point, side="right")) - 1
+        observed = (curve["survival"][index], curve["ci_lower"][index], curve["ci_upper"][index])
+        assert observed == pytest.approx(values, abs=1e-9)
+
+
+def test_risk_table_labels_stay_unique_on_short_horizons() -> None:
+    from survival_toolkit.analysis import _risk_tick_labels
+
+    assert _risk_tick_labels([0.0, 0.5, 1.0]) == ["0", "0.5", "1"]
+    assert _risk_tick_labels([0.0, 0.001, 0.002]) == ["0", "0.001", "0.002"]
+
+    frame = pd.DataFrame({"time": np.linspace(0.001, 0.01, 30), "event": [1, 0] * 15})
+    result = compute_km_analysis(frame, "time", "event", risk_table_points=6)
+    columns = result["risk_table"]["columns"]
+    assert len(columns) == len(set(columns)) == 7
+    # At-risk counts use the exact tick times: the patient followed to the horizon is still at risk there.
+    assert result["risk_table"]["rows"][0][columns[-1]] == 1
+
+
+def test_km_rejects_unknown_logrank_weight() -> None:
+    df = make_example_dataset(seed=21, n_patients=80)
+    with pytest.raises(ValueError, match="Unknown logrank_weight 'wilcoxon'"):
+        compute_km_analysis(df, "os_months", "os_event", group_column="sex", logrank_weight="wilcoxon")
+
+
+def test_km_keeps_large_non_integer_group_values_apart() -> None:
+    from survival_toolkit.analysis import _canonical_level_strings
+
+    labels = _canonical_level_strings(pd.Series([100000.5, 100000.0, 100001.0, np.nan]))
+    assert labels.dropna().nunique() == 3
+
+    frame = pd.DataFrame(
+        {
+            "time": np.arange(1.0, 21.0),
+            "event": [1, 0, 1, 1] * 5,
+            "dose": [100000.5, 100000.0] * 10,
+        }
+    )
+    result = compute_km_analysis(frame, "time", "event", group_column="dose")
+    assert result["groups"] == 2
+
+
+def test_km_handles_a_group_without_events() -> None:
+    frame = pd.DataFrame(
+        {
+            "time": np.arange(1.0, 21.0),
+            "event": [1, 0] * 5 + [0] * 10,
+            "arm": ["treated"] * 10 + ["control"] * 10,
+        }
+    )
+    result = compute_km_analysis(frame, "time", "event", group_column="arm")
+    rows = {row["Group"]: row for row in result["summary_table"]}
+    assert rows["control"]["Events"] == 0
+    assert rows["control"]["Median survival"] is None
+    assert rows["control"]["RMST"] == pytest.approx(result["rmst_horizon"])
+    assert result["test_p_value"] is not None and 0.0 <= result["test_p_value"] <= 1.0
+
+
+def test_cox_bic_uses_the_number_of_events() -> None:
+    df = make_example_dataset(seed=22, n_patients=150)
+    stats = compute_cox_analysis(df, "os_months", "os_event", ["age", "biomarker_score"])["model_stats"]
+    expected = -2.0 * stats["partial_log_likelihood"] + stats["parameters"] * np.log(stats["events"])
+    assert stats["bic"] == pytest.approx(expected)
+    assert stats["bic_sample_size"] == "events"
+
+
+def test_cox_treats_text_covariates_as_categorical_without_being_told() -> None:
+    df = make_example_dataset(seed=23, n_patients=160)
+    result = compute_cox_analysis(df, "os_months", "os_event", ["age", "stage"])
+    assert result["categorical_covariates"] == ["stage"]
+    assert sum(1 for row in result["results_table"] if row["Variable"] == "stage") == df["stage"].nunique() - 1
+    preview = preview_cox_analysis_inputs(df, "os_months", "os_event", ["age", "stage"])
+    assert preview["categorical_covariates"] == ["stage"]
+
+
+def test_cox_rejects_numeric_columns_with_stray_text() -> None:
+    df = make_example_dataset(seed=24, n_patients=120)
+    df["age"] = df["age"].astype(object)
+    df.loc[0, "age"] = "unknown"
+    with pytest.raises(ValueError, match='Feature "age" looks numeric but contains 1 non-numeric value'):
+        compute_cox_analysis(df, "os_months", "os_event", ["age", "sex"])
+
+
+def test_optimal_cutpoint_labels_rows_without_an_outcome() -> None:
+    df = make_example_dataset(seed=25, n_patients=150)
+    df.loc[:9, "os_months"] = np.nan
+    updated, column, summary = derive_group_column(
+        df,
+        source_column="biomarker_score",
+        method="optimal_cutpoint",
+        time_column="os_months",
+        event_column="os_event",
+        permutation_iterations=20,
+    )
+    assert summary["n_rows_labelled_without_outcome"] == 10
+    assert summary["n_rows_scanned"] == 140
+    assert updated.loc[:9, column].notna().all()
+    above = updated["biomarker_score"] > summary["cutoff"]
+    assert (updated.loc[above, column] == summary["label_above_cutpoint"]).all()
+    assert (updated.loc[~above, column] == summary["label_below_cutpoint"]).all()
+
+
+def test_text_loader_detects_korean_and_western_encodings() -> None:
+    from survival_toolkit.analysis import load_dataframe
+
+    korean = "환자,생존기간,사망\n김,12.5,1\n이,7,0\n".encode("cp949")
+    frame = load_dataframe(korean, "korean.csv")
+    assert frame.columns.tolist() == ["환자", "생존기간", "사망"]
+    assert frame.attrs["source_encoding"] == "cp949"
+
+    western = "patient,time,event\nJosé,12.5,1\nBjörn,7,0\n".encode("cp1252")
+    frame = load_dataframe(western, "western.csv")
+    assert frame["patient"].tolist() == ["José", "Björn"]
+    assert frame.attrs["source_encoding"] == "cp1252"
+
+    # A byte that is not UTF-8 only after the 1 MiB sniffed prefix still falls back cleanly.
+    late = ("time,event,site\n" + "1,0,A\n" * 200_000 + "2,1,Zürich\n").encode("cp1252")
+    frame = load_dataframe(late, "late.csv")
+    assert frame["site"].iloc[-1] == "Zürich"
+
+
+def test_text_loader_enforces_shape_limits_before_the_full_parse() -> None:
+    from survival_toolkit.analysis import UploadShapeError, load_dataframe
+
+    rows = "time,event\n" + "1,0\n" * 50
+    assert len(load_dataframe(rows.encode(), "ok.csv", max_rows=50)) == 50
+    with pytest.raises(UploadShapeError, match="more than 49 rows"):
+        load_dataframe(rows.encode(), "rows.csv", max_rows=49)
+    with pytest.raises(UploadShapeError, match="3 columns"):
+        load_dataframe(b"a,b,c\n1,2,3\n", "cols.csv", max_columns=2)
+    with pytest.raises(UploadShapeError, match="more than 99 cells"):
+        load_dataframe(rows.encode(), "cells.csv", max_cells=99)

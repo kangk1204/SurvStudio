@@ -432,9 +432,10 @@ def test_build_cutpoint_scan_figure_with_data() -> None:
     # group labels and p-values are shown as stacked right-aligned annotations
     annotations = figure["layout"].get("annotations", [])
     assert any("Adj. p" in (a.get("text", "") or "") for a in annotations)
-    assert any("<= cutpoint: Low" in (a.get("text", "") or "") for a in annotations)
+    # "<" is escaped so Plotly does not read "<= cutpoint ... >" as a markup tag.
+    assert any("&lt;= cutpoint: Low" in (a.get("text", "") or "") for a in annotations)
     p_annotation = next(a for a in annotations if "Adj. p" in (a.get("text", "") or ""))
-    group_annotation = next(a for a in annotations if "<= cutpoint: Low" in (a.get("text", "") or ""))
+    group_annotation = next(a for a in annotations if "&lt;= cutpoint: Low" in (a.get("text", "") or ""))
     assert p_annotation["font"]["size"] == 14
     assert group_annotation["y"] > p_annotation["y"]
 
@@ -768,3 +769,34 @@ def test_time_dependent_heatmap_keeps_distinct_time_labels() -> None:
     )
     labels = figure["data"][0]["x"]
     assert len(set(labels)) == 3
+
+
+def test_plot_text_from_the_dataset_is_escaped() -> None:
+    from survival_toolkit.plots import escape_plotly_template_text, escape_plotly_text
+
+    assert escape_plotly_text("<b>A & B</b>") == "&lt;b&gt;A &amp; B&lt;/b&gt;"
+    assert escape_plotly_template_text("50% <x> %{y}") == "50&#37; &lt;x&gt; &#37;{y}"
+
+    group = '<a href="https://example.org">%{y}</a>'
+    figure = build_km_figure(
+        {
+            "curves": [
+                {
+                    "group": group,
+                    "timeline": [0.0, 1.0, 2.0],
+                    "survival": [1.0, 0.8, 0.6],
+                    "ci_lower": [1.0, 0.7, 0.5],
+                    "ci_upper": [1.0, 0.9, 0.7],
+                    "censor_times": [1.5],
+                    "censor_survival": [0.8],
+                }
+            ],
+            "test": None,
+            "display_horizon": 3.0,
+        }
+    )
+    for trace in figure["data"]:
+        assert "<a" not in str(trace.get("name", ""))
+        # The hover template keeps its own %{x}/%{y} fields but none from the group label.
+        assert "%{y}</a>" not in str(trace.get("hovertemplate", ""))
+    assert escape_plotly_text(group) in {trace.get("name") for trace in figure["data"]}

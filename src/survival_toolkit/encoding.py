@@ -4,7 +4,74 @@ from typing import Any, Literal, Sequence
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import is_numeric_dtype
+from pandas.api.types import is_bool_dtype, is_numeric_dtype
+
+# A text column is treated as a contaminated number when at least this share of its
+# non-missing values parse as numbers and the numeric part has more than
+# ``_NUMERIC_TEXT_MIN_LEVELS`` distinct values (a small code set such as 1/2/3/"unknown"
+# stays a legitimate categorical variable).
+_NUMERIC_TEXT_MIN_SHARE = 0.8
+_NUMERIC_TEXT_MIN_LEVELS = 10
+
+
+def numeric_text_contamination(series: pd.Series) -> dict[str, Any] | None:
+    """Describe stray text in a column that otherwise holds continuous numbers.
+
+    Returns ``None`` for numeric, boolean, and genuinely categorical columns. A column such
+    as ``[12.5, 13.1, ..., "unknown"]`` is read as text, so without this check it would be
+    encoded as a categorical variable with one level per distinct number.
+    """
+
+    if is_numeric_dtype(series) or is_bool_dtype(series):
+        return None
+    non_missing = series.dropna()
+    if non_missing.empty:
+        return None
+    text = non_missing.astype(str).str.strip()
+    numeric = pd.to_numeric(text, errors="coerce")
+    numeric_mask = numeric.notna()
+    n_numeric = int(numeric_mask.sum())
+    n_text = int((~numeric_mask).sum())
+    if n_text == 0 or n_numeric < _NUMERIC_TEXT_MIN_SHARE * len(text):
+        return None
+    if int(numeric[numeric_mask].nunique()) <= _NUMERIC_TEXT_MIN_LEVELS:
+        return None
+    examples = list(dict.fromkeys(text[~numeric_mask].tolist()))[:3]
+    return {"n_non_numeric": n_text, "examples": examples}
+
+
+def reject_numeric_text_features(frame: pd.DataFrame, features: Sequence[str]) -> None:
+    """Refuse model features that are continuous numbers with a few stray text values.
+
+    ML, deep-learning, and Cox paths share this rule so the same column cannot be a
+    hundreds-of-levels categorical in one module and an error in another.
+    """
+
+    for feature in features:
+        if feature not in frame.columns:
+            continue
+        details = numeric_text_contamination(frame[feature])
+        if details is None:
+            continue
+        examples = ", ".join(f'"{value}"' for value in details["examples"])
+        raise ValueError(
+            f'Feature "{feature}" looks numeric but contains {details["n_non_numeric"]} non-numeric '
+            f"value(s) such as {examples}. Recode those values as missing (blank cells) so the column "
+            "is used as a number, or recode the whole column into a small set of categories."
+        )
+
+
+def ordered_level_labels(values: pd.Series, column_name: str | None = None) -> list[str]:
+    """Observed labels in the order used for reference levels.
+
+    Numeric-looking labels sort numerically ("2" before "10"); other labels follow the
+    clinical reference ordering used by the Cox workflow (for example stage I < II < III,
+    never smoker before current smoker, wild type before mutant).
+    """
+
+    from survival_toolkit.analysis import _ordered_unique_level_strings
+
+    return _ordered_unique_level_strings(values.dropna().astype("string"), column_name)
 
 
 def coerce_feature_subset(
@@ -39,11 +106,7 @@ def ordered_category_values(series: pd.Series) -> list[str]:
         return []
     if isinstance(series.dtype, pd.CategoricalDtype) and getattr(series.dtype, "ordered", False):
         return [str(value) for value in series.dtype.categories.tolist() if pd.notna(value)]
-    numeric_values = pd.to_numeric(non_missing, errors="coerce")
-    if numeric_values.notna().all():
-        ordered_numeric = np.sort(numeric_values.unique().astype(float))
-        return [str(int(value)) if float(value).is_integer() else str(value) for value in ordered_numeric]
-    return list(dict.fromkeys(non_missing.astype("string").tolist()))
+    return ordered_level_labels(non_missing, str(series.name) if series.name is not None else None)
 
 
 def fit_feature_encoder(
@@ -57,6 +120,7 @@ def fit_feature_encoder(
 
     if not list(features):
         raise ValueError("Select at least one feature before fitting the encoder.")
+    reject_numeric_text_features(df, features)
 
     selected, resolved_categorical, numeric_features = coerce_feature_subset(
         df,
@@ -67,8 +131,8 @@ def fit_feature_encoder(
     categorical_mappings: dict[str, dict[str, Any]] = {}
     categorical_levels: dict[str, list[str]] = {}
     categorical_all_levels: dict[str, list[str]] = {}
-    categorical_unknown_columns: dict[str, str] = {}
-    categorical_missing_columns: dict[str, str] = {}
+    categorical_unknown_columns: dict[str, str | None] = {}
+    categorical_missing_columns: dict[str, str | None] = {}
     feature_names: list[str] = []
     categorical_feature_indices: list[int] = []
     # Numeric features keep their raw names, so generated dummy names must avoid them (and each
@@ -86,30 +150,34 @@ def fit_feature_encoder(
         return candidate
 
     for column in resolved_categorical:
-        levels = sorted(
-            str(level)
-            for level in selected[column].dropna().astype("string").unique().tolist()
-        )
+        # The first level is the dropped baseline, so it follows the same reference ordering
+        # as the Cox workflow instead of plain string order ("10" before "2").
+        levels = ordered_level_labels(selected[column], str(column))
         retained_levels = levels[1:] if len(levels) > 1 else []
         level_columns = {level: _allocate_name(f"{column}_{level}") for level in retained_levels}
-        unknown_column = _allocate_name(f"{column}__unknown")
-        missing_column = _allocate_name(f"{column}__missing")
+        # Indicators that are constant in the fitting data carry no information for any
+        # model: an unseen level can never occur while fitting, and a missing-value
+        # indicator only varies when the fitting data contain missing values. Unseen or
+        # missing values at transform time are scored as the baseline level.
+        missing_column = (
+            _allocate_name(f"{column}__missing") if bool(selected[column].isna().any()) else None
+        )
         categorical_mappings[column] = {
             "all_levels": levels,
             "baseline_level": levels[0] if levels else None,
             "retained_levels": retained_levels,
             "level_columns": level_columns,
-            "unknown_column": unknown_column,
+            "unknown_column": None,
             "missing_column": missing_column,
         }
         categorical_levels[column] = retained_levels
         categorical_all_levels[column] = levels
-        categorical_unknown_columns[column] = unknown_column
+        categorical_unknown_columns[column] = None
         categorical_missing_columns[column] = missing_column
         start_index = len(feature_names)
         feature_names.extend(level_columns[level] for level in retained_levels)
-        feature_names.append(unknown_column)
-        feature_names.append(missing_column)
+        if missing_column is not None:
+            feature_names.append(missing_column)
         categorical_feature_indices.extend(range(start_index, len(feature_names)))
 
     numeric_impute_values: dict[str, float] = {}
@@ -187,10 +255,12 @@ def transform_feature_encoder(
         for level in mapping["retained_levels"]:
             encoded_name = level_columns.get(level, f"{column}_{level}")
             encoded_columns[encoded_name] = values.eq(level).fillna(False).astype(float)
-        missing_mask = values.isna()
-        unknown_mask = values.notna() & ~values.isin(all_levels)
-        encoded_columns[mapping["unknown_column"]] = unknown_mask.astype(float)
-        encoded_columns[mapping["missing_column"]] = missing_mask.astype(float)
+        # Hand-built encoder dicts may still name an unknown-level column.
+        if mapping.get("unknown_column"):
+            unknown_mask = values.notna() & ~values.isin(all_levels)
+            encoded_columns[mapping["unknown_column"]] = unknown_mask.astype(float)
+        if mapping.get("missing_column"):
+            encoded_columns[mapping["missing_column"]] = values.isna().astype(float)
 
     for column in encoder.get("numeric_features", []):
         numeric_series = pd.to_numeric(selected[column], errors="coerce").replace([np.inf, -np.inf], np.nan)

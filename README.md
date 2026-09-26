@@ -139,7 +139,7 @@ If you want a file that you can upload manually instead of clicking a built-in l
 
 **Recommended: install everything up front.**
 `pip install -e ".[all]"` is the right default for manuscript work.
-It unlocks Excel/Parquet import, ML and DL survival models, figure-export (`kaleido`), and the full test suite.
+It unlocks Excel/Parquet import, ML and DL survival models, and figure export (`kaleido`). To run the test suite as well, use `pip install -e ".[dev]"`.
 A minimal `pip install -e .` works for KM + Cox only — use it only if disk space or install time is a concern.
 
 Use the first block that matches your machine.
@@ -419,7 +419,7 @@ Notes:
 - `.[ml]` adds `scikit-survival` and `shap`
 - `.[dl]` adds `torch`
 - `.[dev]` includes pytest, httpx, `kaleido`, the format readers, and the ML and DL extras
-- `.[all]` includes the format readers, ML, DL, export, and browser-test extras
+- `.[all]` includes every runtime feature: the format readers, ML, DL, and `kaleido` figure export (test tools live in `.[dev]` and `.[e2e]`)
 - on Linux, `.[dl]`, `.[dev]`, and `.[all]` can download a large PyTorch wheel and, depending on platform resolution, additional CUDA runtime packages
 - on Linux, PyTorch may print a CUDA initialization warning if the installed NVIDIA driver is older than the wheel expects; SurvStudio can still run on CPU, so this warning is only a blocker if you specifically need GPU acceleration
 - if you only want to run the dashboard or classical survival workflows with CSV or TSV input, stay with `pip install -e .`
@@ -458,6 +458,13 @@ The app opens in the guided workflow by default. For predictive modeling, use th
 Local-only request guard:
 - the server answers only requests addressed to `localhost`, `127.x.x.x`, `[::1]`, or the `--host` bind address, and refuses state-changing requests (uploads, analyses, shutdown) sent from other websites
 - to reach it through another name (a LAN hostname or a reverse proxy), allow that name explicitly: `python -m survival_toolkit serve --host 0.0.0.0 --allowed-host my-workstation.local`, or set `SURVSTUDIO_ALLOWED_HOSTS=my-workstation.local` (comma-separated; `*` disables the Host check) when launching `uvicorn` directly
+
+Security and runtime behavior:
+- SurvStudio has **no login**. Keep the default `127.0.0.1` bind address unless every machine that can reach the server is trusted; `serve --host 0.0.0.0` prints a warning because anyone who can reach the address can upload data, run analyses, and open datasets whose IDs they know.
+- The in-app `Shutdown` works only when the page was opened through a loopback address; through a LAN name or a reverse proxy it returns `403`.
+- Uploaded datasets live in memory only: at most 10 at a time (the least recently used is dropped first), and each expires after 1 hour without use. `DELETE /api/dataset/{dataset_id}` frees one immediately, together with any cached models fitted on it.
+- Heavy jobs (model training and comparison, signature search, optimal cutpoints, time-dependent importance, counterfactual and partial-dependence runs) run at most 2 at a time; later ones wait for a free slot. Set `SURVSTUDIO_MAX_HEAVY_JOBS` to change the limit.
+- When the page abandons a request (you start a newer run of the same kind, or close the tab), the server stops that job at its next checkpoint instead of finishing work nobody will read.
 
 If `python -m survival_toolkit` does not start the server, check:
 - the virtual environment is activated
@@ -595,6 +602,12 @@ Supported file types:
 
 If you are choosing a spreadsheet format, prefer `.xlsx` over legacy `.xls`.
 
+Upload limits and text encodings:
+- at most 200 MB per file, 100,000 rows, 5,000 columns, and 5,000,000 cells; `.xlsx` workbooks may expand to at most 256 MB when decompressed
+- text and Excel files over a limit are refused from their header and a bounded read, before the whole file is parsed
+- other file extensions are refused before anything is written to disk
+- text files may be UTF-8 (with or without BOM), UTF-16, Korean CP949/EUC-KR (what Korean Excel saves as "CSV"), Windows-1252, or Latin-1; the encoding is detected automatically, and the upload banner and `survival-toolkit inspect` profile (`text_encoding`) show which one was used
+
 Expected structure:
 - one row per patient or subject
 - one column for follow-up time
@@ -692,6 +705,11 @@ So before analysis, it is better if your file has:
 - clean time values
 - clean event values
 - as little missingness as possible in the variables you plan to model
+
+Text and numeric features:
+- text columns (for example `stage` or `smoking_status`) are used as categorical variables by Cox PH, the ML models, and the deep models, even if you do not mark them categorical
+- a column that is numeric except for a few stray text values (for example `unknown` in an `age` column) is refused as a model feature in every module; recode those cells as blank so the column stays numeric (a blank is handled as missing)
+- the reference (baseline) level of a categorical variable follows the clinical ordering (stage I before II, never smoker before current smoker) or numeric order for numeric-looking codes (`2` before `10`)
 
 ### One Row Per Patient
 
@@ -824,6 +842,8 @@ Practical note:
 - `Compare All` focuses on cross-model scoring
 - single-model `Train a model` may do extra post-fit work such as feature importance and optional SHAP computation
 - ML result payloads now include IPCW `IBS`, a Kaplan-Meier null-model `IBS`, and `Brier Skill Score = 1 - IBS_model / IBS_null` so raw error can be interpreted relative to a no-covariate reference
+- the IPCW weights follow Graf et al. (1999) with the Gerds & Schumacher (2006) convention used by `pec` and `riskRegression`: an event at `t_i` is weighted by `1 / G(t_i-)`, a patient still at risk at `t` by `1 / G(t)`, and the reverse Kaplan-Meier estimate `G` counts events before censorings at tied times. scikit-survival's `brier_score` uses `G(t_i)` instead, so the two differ slightly when censoring times coincide with event times
+- Random Survival Forest and Gradient Boosted Survival feature importance is permutation importance on the evaluation rows (up to 300): the mean drop in Harrell's C when a raw feature is shuffled, with all one-hot columns of a categorical feature shuffled together
 - for quick RSF checks on larger cohorts, leave `Fast mode` enabled
 - if `TreeExplainer` is unsupported, SHAP falls back to a tightly capped `KernelExplainer` approximation using a small background/evaluation sample, so treat the ranking as approximate rather than publication-grade
 - if SHAP safe mode is triggered because the encoded matrix is too wide, SurvStudio explains a reduced companion tree model for interpretability only; describe that companion-model caveat explicitly if you cite SHAP outputs in a manuscript
@@ -872,7 +892,8 @@ Architecture note:
 - DeepHit ranks the predicted cumulative incidence at each event time (Lee et al., 2018), including subjects censored in the same time bin, with a stabilized ranking-loss scale (`sigma=1.0`).
 - `Neural MTLR` uses a neuralized right-cumulative MTLR parameterization for workflow comparison; its censored likelihood is evaluated in log space for numerical stability. It matches the canonical MTLR probability construction, while the surrounding network/training path is a practical SurvStudio implementation rather than a line-by-line clone of one reference codebase.
 - `Survival VAE` should be interpreted as a VAE-inspired latent representation model for clustering and risk screening. SurvStudio does not claim validated generative simulation or uncertainty estimation from this path.
-- Early stopping monitors a stratified 20% subset of the training partition that is **held out from gradient updates** (the model never trains on it). `DeepSurv`, `Survival Transformer`, and `Survival VAE` monitor C-index; `DeepHit` and `Neural MTLR` monitor the discrete-time loss. The restored checkpoint is the reported best monitor epoch. The monitor subset never overlaps the holdout, CV fold, or locked test set, and its curve is not a validation metric.
+- Early stopping monitors a stratified 20% subset of the training partition that is **held out from gradient updates** (the model never trains on it). `DeepSurv`, `Survival Transformer`, and `Survival VAE` monitor C-index; `DeepHit` and `Neural MTLR` monitor the discrete-time loss. The monitor subset never overlaps the holdout, CV fold, or locked test set, and its curve is not a validation metric.
+- After early stopping picks the best epoch, the model is refit from scratch on the **whole** training partition (monitor rows included) for that many epochs, so the reported model uses every training row. The run metadata reports `refit_epochs`, the rows used for early stopping (`early_stopping_fit_samples`, `monitor_samples`), and the final `fit_samples`.
 - Deep-model summaries currently report discrimination (`C-index`) only. SurvStudio does not yet compute IBS for deep-model outputs, so calibration/error comparisons are not directly symmetric with the ML module.
 - Cox-style DL paths (`DeepSurv`, `Survival Transformer`) optimize a Breslow-ties partial-likelihood objective, while the classical Cox PH workflow reports Efron-ties estimates; this difference is intentional and should be documented in manuscript Methods if you compare those paths directly.
 
@@ -890,8 +911,10 @@ Architecture note:
 - Hazard ratio `< 1`: lower hazard
 - Confidence intervals crossing `1` mean the estimate is compatible with no effect
 - The current Cox discrimination summary is an `Apparent C-index` on the analyzable cohort, not an externally validated performance estimate.
-- PH diagnostics use the Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time: one 1-df test per model term plus a global test (the classic `cox.zph` statistic, matching lifelines' `proportional_hazard_test` with a log transform).
+- PH diagnostics use the Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time: one 1-df test per model term plus a global test (the classic `cox.zph` statistic of R `survival` < 3.0, also used by lifelines' `proportional_hazard_test` with a log transform).
+- Schoenfeld and martingale residuals are computed with the Efron tie correction within each stratum, as R's `residuals.coxph` does, so the PH test and residual plots stay correct with tied event times and in stratified models. The test suite checks them against R `survival` 3.8 reference values.
 - Continuous covariates also expose Martingale residual trend plots as a visual linearity screen; strong curvature suggests splines, transforms, or recoding before locking the Cox specification.
+- AIC and BIC are reported for the fitted model; BIC uses the number of events as the sample size, as R's `BIC(coxph)` does.
 - A Cox `C-index = 0.65` means the fitted model ranks about `65%` of comparable patient pairs in the observed risk order; it is not "65% accuracy."
 
 ### Model C-index
@@ -924,6 +947,8 @@ If you use them in a manuscript:
 - prefer selection-adjusted p-values when available
 - validate the cutpoint on separate data
 
+The chosen cutpoint is a fixed rule on the marker, so the derived column labels every row with a usable marker value, including rows whose survival outcome is missing (they did not help choose the cutpoint). The summary reports how many rows were scanned and how many were labelled without an outcome. On very large cohorts the scan may use a quantile grid of candidate cutpoints instead of every observed value; the result then carries a `candidate_grid` note.
+
 Current derive-group options also include:
 - `Percentile split`
   - `25` means `at/above the 75th-percentile threshold vs Rest`
@@ -944,8 +969,8 @@ If you derive a `High/Low` grouping from the same cohort with optimal cutpointin
 ### Calibration and Time-Dependent Importance
 
 These outputs are useful, but should be interpreted carefully:
-- calibration outputs are partly descriptive
-- time-dependent importance is an approximate proxy, not a formal SurvSHAP(t) implementation
+- calibration outputs are partly descriptive; a bin whose patients were not followed up to the evaluation time is reported as not estimable instead of carrying its last Kaplan-Meier value forward
+- time-dependent importance refits the selected Random Survival Forest or Gradient Boosted Survival model and reports, for each raw feature and time point, how much the IPCW Brier score on the evaluation rows increases when that feature is shuffled; it is a permutation-based check, not a formal SurvSHAP(t) implementation
 - partial dependence and counterfactual outputs are model-based local utilities, not causal intervention estimates
 
 ## Export
@@ -993,6 +1018,8 @@ ML and DL manuscript-table export supports these formatting helpers:
 
 These apply to manuscript table export only.
 They are formatting helpers, not official publisher-certified house styles.
+
+Analysis exports end with provenance notes: the SurvStudio version that produced them (results changed in 0.2.0, see the release notes), the dataset fingerprint, and the request settings needed to replay the run.
 
 ## Evaluation Contract
 
@@ -1095,13 +1122,18 @@ pytest -q
 ```
 
 Recent regression coverage includes:
-- upload and parsing
-- Kaplan-Meier / Cox / cohort-table workflows
+- upload and parsing, including legacy text encodings and upload limits
+- Kaplan-Meier / Cox / cohort-table workflows, with Kaplan-Meier, log-rank, RMST, proportional-hazards, and residual values checked against R `survival` 3.8 reference numbers
 - derive-group options
 - signature-search operator combinations
 - ML and DL single-model and compare flows
 - XAI endpoints
 - export formats
+- server behavior: request cancellation, the heavy-job limit, and the model-cache memory budget
+
+CI runs the suite on Linux with Python 3.11, 3.12, and 3.13 and on macOS and Windows with Python 3.11, checks the front-end scripts' syntax, builds the wheel and serves the page from a clean install, and runs the browser E2E test.
+
+The front end is split into classic scripts (`static/app_core.js` … `static/app.js`) that `templates/index.html` loads in order and that share one global scope; only `app.js`, loaded last, runs startup code.
 
 ## Release Notes
 

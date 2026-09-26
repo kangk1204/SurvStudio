@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -13,8 +14,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
-        python-version: ["3.11"]
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+        include:
+          - os: macos-14
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.11"
 
     steps:
       - name: Check out repository
@@ -34,16 +40,81 @@ jobs:
       - name: CLI smoke test
         shell: bash
         run: |
-          cat > /tmp/survstudio_smoke.csv <<'EOF'
-          os_months,os_event,age
-          12,1,60
-          18,0,55
-          EOF
-          survival-toolkit inspect /tmp/survstudio_smoke.csv > /tmp/survstudio_profile.json
-          test -s /tmp/survstudio_profile.json
+          printf 'os_months,os_event,age\n12,1,60\n18,0,55\n' > survstudio_smoke.csv
+          survival-toolkit inspect survstudio_smoke.csv > survstudio_profile.json
+          test -s survstudio_profile.json
 
       - name: Run test suite
         run: pytest -q
+
+  frontend:
+    name: Front-end script syntax
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check every script and the page's shared script scope
+        run: |
+          for script in src/survival_toolkit/static/*.js; do
+            node --check "$script"
+          done
+          # index.html loads the app scripts as classic scripts that share one global
+          # scope, so their concatenation in load order must parse as well: a duplicate
+          # top-level declaration across two files would break the page.
+          cd src/survival_toolkit
+          scripts=$(grep -o 'static/app[a-z_]*\.js' templates/index.html)
+          cat $scripts > "$RUNNER_TEMP/survstudio-page-scripts.js"
+          node --check "$RUNNER_TEMP/survstudio-page-scripts.js"
+
+  package:
+    name: Wheel install smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build the sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Install the wheel into a clean environment
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-env"
+          "$RUNNER_TEMP/wheel-env/bin/pip" install dist/*.whl
+
+      - name: Serve the page, its static files, and bundled data from the wheel
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$RUNNER_TEMP/wheel-env/bin/survival-toolkit" serve --port 8765 > server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8765/api/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8765/api/health
+          curl -fsS http://127.0.0.1:8765/ -o index.html
+          curl -fsS http://127.0.0.1:8765/static/styles.css -o styles.css
+          assets="$(grep -o 'static/[^"?]*' index.html) $(grep -o 'fonts/[^")]*' styles.css | sed 's|^|static/|')"
+          for asset in $(echo "$assets" | tr ' ' '\n' | sort -u); do
+            curl -fsS -o /dev/null "http://127.0.0.1:8765/$asset" || { echo "Missing packaged asset: $asset"; cat server.log; exit 1; }
+          done
+          curl -fsS -X POST http://127.0.0.1:8765/api/load-tcga-example -o tcga.json
+          grep -q '"dataset_id"' tcga.json
 
   browser-e2e:
     name: ubuntu-latest / Python 3.11 / browser-e2e
