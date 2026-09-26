@@ -251,3 +251,45 @@ def test_locked_recipe_maps_external_column_names_and_notes_imputation() -> None
     assert any("5 missing true_up_1 value(s) imputed" in note for note in report["notes"])
     with pytest.raises(ValueError, match="lacks columns"):
         validate_locked_recipe(external, recipe)
+
+
+def _sksurv_available() -> bool:
+    try:
+        import sksurv  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.skipif(not _sksurv_available(), reason="scikit-survival is not installed")
+def test_nonlinear_lens_flags_a_u_shaped_marker_the_cox_lenses_miss() -> None:
+    rng = np.random.default_rng(21)
+    n = 400
+    age = rng.normal(size=n)
+    u_shaped = rng.normal(size=n)
+    noise = rng.normal(size=(n, 8))
+    linear = 0.6 * age + 1.0 * (u_shaped**2 - 1.0)
+    event_time = rng.exponential(np.exp(-linear))
+    censor_time = rng.exponential(1.5, size=n)
+    frame = pd.DataFrame(noise, columns=[f"noise_{index}" for index in range(8)])
+    frame["u_shaped"] = u_shaped
+    frame["age"] = age
+    frame["os_time"] = np.minimum(event_time, censor_time)
+    frame["os_event"] = (event_time <= censor_time).astype(int)
+    result = evaluate_markers(
+        frame,
+        time_column="os_time",
+        event_column="os_event",
+        marker_columns=["u_shaped", *[f"noise_{index}" for index in range(8)]],
+        clinical_columns=["age"],
+        settings=_FAST._replace(n_permutations=99, n_resamples=10, nonlinear_lens="gbs", nonlinear_replicates=12),
+    )
+    rows = {row["marker"]: row for row in result["marker_table"]}
+    assert result["nonlinear_lens"]["available"] is True
+    # A symmetric U-shape has no linear trend, so the score lenses see nothing ...
+    assert rows["u_shaped"]["tier"] == "not supported"
+    # ... while the tree model's out-of-sample importance is consistently positive.
+    assert rows["u_shaped"]["pattern"].endswith("N+")
+    assert rows["u_shaped"]["nonlinear"]["positive_fraction"] >= 0.8
+    assert all(not rows[f"noise_{index}"]["pattern"].endswith("N+") for index in range(8))

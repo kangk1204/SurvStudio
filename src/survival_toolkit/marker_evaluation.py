@@ -70,6 +70,9 @@ class MarkerSettings(NamedTuple):
     max_signature_markers: int = 10
     shortlist_size: int = 50
     lens2_null: str = "freedman_lane"
+    nonlinear_lens: str = "off"
+    nonlinear_replicates: int = 30
+    nonlinear_top_markers: int = 100
     random_seed: int = 20260926
 
 
@@ -130,6 +133,10 @@ def _validated_settings(settings: MarkerSettings) -> MarkerSettings:
         raise ValueError('lens2_null must be "freedman_lane" or "raw".')
     if settings.max_signature_markers < 1 or settings.shortlist_size < 0:
         raise ValueError("max_signature_markers must be at least 1 and shortlist_size at least 0.")
+    if settings.nonlinear_lens not in {"off", "gbs", "rsf"}:
+        raise ValueError('nonlinear_lens must be "off", "gbs" or "rsf".')
+    if settings.nonlinear_replicates < 1 or settings.nonlinear_top_markers < 1:
+        raise ValueError("nonlinear_replicates and nonlinear_top_markers must be at least 1.")
     return settings
 
 
@@ -575,6 +582,104 @@ def _optimism_summary(
     }
 
 
+def nonlinear_lens(cohort: MarkerCohort, settings: MarkerSettings, rng: np.random.Generator) -> dict[str, Any] | None:
+    """Descriptive tree-model lens: out-of-sample permutation importance of each marker.
+
+    On each event-stratified subsample a gradient-boosted survival model (or a random
+    survival forest) is fitted on the clinical design plus the ``nonlinear_top_markers``
+    markers with the largest in-subsample marginal score statistic; each marker's
+    importance is the drop in Harrell's C on the left-out rows when it is shuffled.
+    It can reveal non-linear or interaction signals the Cox score lenses miss, but it
+    does not set tiers.
+    """
+    if settings.nonlinear_lens == "off":
+        return None
+    from survival_toolkit.ml_models import (
+        SKSURV_AVAILABLE,
+        _TREE_N_JOBS,
+        _effective_tree_min_samples_leaf,
+        _grouped_permutation_importance,
+    )
+
+    if not SKSURV_AVAILABLE:
+        return {"available": False, "note": "scikit-survival is not installed, so the non-linear lens was skipped."}
+    from sksurv.ensemble import GradientBoostingSurvivalAnalysis, RandomSurvivalForest
+
+    n = cohort.time.shape[0]
+    n_markers = len(cohort.marker_names)
+    total = np.zeros(n_markers, dtype=float)
+    positive = np.zeros(n_markers, dtype=float)
+    evaluated = np.zeros(n_markers, dtype=float)
+    for replicate in range(int(settings.nonlinear_replicates)):
+        raise_if_cancelled()
+        rows = _event_stratified_subsample(cohort.event, settings.resample_fraction, rng)
+        left_out = np.setdiff1d(np.arange(n), rows)
+        if int(cohort.event[left_out].sum()) < 2:
+            continue
+        medians = _column_medians(cohort.markers[rows])
+        inside = _impute(cohort.markers[rows], medians)
+        outside = _impute(cohort.markers[left_out], medians)
+        keep = np.arange(n_markers)
+        if n_markers > settings.nonlinear_top_markers:
+            strata = None if cohort.strata is None else cohort.strata[rows]
+            null = fit_cox_null(cohort.time[rows], cohort.event[rows], None, strata, settings.ties)
+            chi2 = CoxScoreScreen(cohort.time[rows], cohort.event[rows], null=null, strata=strata, ties=settings.ties).statistics(inside).chi2
+            keep = np.argsort(-np.nan_to_num(chi2, nan=-np.inf), kind="mergesort")[: settings.nonlinear_top_markers]
+        names = [cohort.marker_names[int(index)] for index in keep]
+        parts_in = [inside[:, keep]]
+        parts_out = [outside[:, keep]]
+        if cohort.clinical is not None:
+            varying = np.flatnonzero(np.ptp(cohort.clinical[rows], axis=0) > 0)
+            parts_in.insert(0, cohort.clinical[rows][:, varying])
+            parts_out.insert(0, cohort.clinical[left_out][:, varying])
+            names = [f"clinical::{cohort.clinical_names[int(index)]}" for index in varying] + names
+        y_in = np.empty(rows.size, dtype=[("event", bool), ("time", float)])
+        y_in["event"] = cohort.event[rows].astype(bool)
+        y_in["time"] = cohort.time[rows]
+        y_out = np.empty(left_out.size, dtype=[("event", bool), ("time", float)])
+        y_out["event"] = cohort.event[left_out].astype(bool)
+        y_out["time"] = cohort.time[left_out]
+        seed = int(settings.random_seed) + 7919 * (replicate + 1)
+        leaf = _effective_tree_min_samples_leaf(10, int(rows.size))
+        if settings.nonlinear_lens == "rsf":
+            model = RandomSurvivalForest(n_estimators=100, min_samples_leaf=leaf, random_state=seed, n_jobs=_TREE_N_JOBS)
+        else:
+            model = GradientBoostingSurvivalAnalysis(
+                n_estimators=100, learning_rate=0.1, max_depth=3, min_samples_leaf=leaf, random_state=seed
+            )
+        model.fit(np.column_stack(parts_in), y_in)
+        records = _grouped_permutation_importance(
+            model,
+            pd.DataFrame(np.column_stack(parts_out), columns=names),
+            y_out,
+            None,
+            random_state=seed,
+        )
+        positions = {name: index for index, name in enumerate(cohort.marker_names)}
+        for record in records:
+            index = positions.get(str(record["feature"]))
+            if index is None or record["importance"] is None:
+                continue
+            total[index] += float(record["importance"])
+            positive[index] += float(record["importance"]) > 0.0
+            evaluated[index] += 1.0
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean_importance = np.where(evaluated > 0, total / np.maximum(evaluated, 1.0), np.nan)
+        positive_fraction = np.where(evaluated > 0, positive / np.maximum(evaluated, 1.0), np.nan)
+    # One-sided sign test of "importance > 0 more often than chance", Holm-adjusted over
+    # the evaluated markers. Replicates overlap, so read it as a screen, not a test.
+    sign_p = np.where(evaluated > 0, stats.binom.sf(positive - 1, evaluated, 0.5), np.nan)
+    return {
+        "available": True,
+        "model": "gradient-boosted survival" if settings.nonlinear_lens == "gbs" else "random survival forest",
+        "replicates": int(settings.nonlinear_replicates),
+        "mean_importance": mean_importance,
+        "positive_fraction": positive_fraction,
+        "n_evaluated": evaluated,
+        "sign_test_p_holm": np.asarray(_holm(sign_p.tolist()), dtype=float),
+    }
+
+
 def _exact_fits(cohort: MarkerCohort, full: ProcedureFit, columns: np.ndarray) -> dict[int, dict[str, Any]]:
     """Efron Cox fits for shortlisted markers: HRs with Wald CIs, nested LR test, delta C."""
     strata = cohort.strata
@@ -804,6 +909,16 @@ def evaluate_markers(
     adjusted = permutation_null(cohort, full, settings, rng)
     resampling = resample_procedure(cohort, full, settings, rng, primary)
     tiers, patterns = assign_tiers(primary, adjusted, resampling, full.lenses, settings)
+    nonlinear = nonlinear_lens(cohort, settings, rng)
+    nonlinear_ready = bool(nonlinear and nonlinear.get("available"))
+    if nonlinear_ready:
+        for index in range(len(patterns)):
+            consistent = (
+                float(np.nan_to_num(nonlinear["positive_fraction"][index], nan=0.0)) >= settings.robust_frequency
+                and float(np.nan_to_num(nonlinear["sign_test_p_holm"][index], nan=1.0)) <= settings.alpha
+                and float(np.nan_to_num(nonlinear["mean_importance"][index], nan=0.0)) > 0.0
+            )
+            patterns[index] += " N+" if consistent else " N·"
 
     primary_chi2 = np.nan_to_num(full.lenses[primary].chi2, nan=-np.inf)
     by_strength = np.argsort(-primary_chi2, kind="mergesort")
@@ -854,6 +969,13 @@ def evaluate_markers(
                     _finite_or_none(resampling.rank_high[lens][index]),
                 ],
             }
+        if nonlinear_ready:
+            row["nonlinear"] = {
+                "mean_importance": _finite_or_none(nonlinear["mean_importance"][index]),
+                "positive_fraction": _finite_or_none(nonlinear["positive_fraction"][index]),
+                "sign_test_p_holm": _finite_or_none(nonlinear["sign_test_p_holm"][index]),
+                "n_evaluated": int(nonlinear["n_evaluated"][index]),
+            }
         row["exact"] = exact.get(index)
         rows.append(row)
     tier_rank = {tier: position for position, tier in enumerate(TIER_ORDER)}
@@ -893,6 +1015,9 @@ def evaluate_markers(
             "apparent_c": apparent_c,
             **resampling.optimism,
         },
+        "nonlinear_lens": None
+        if nonlinear is None
+        else {key: value for key, value in nonlinear.items() if key not in {"mean_importance", "positive_fraction", "n_evaluated", "sign_test_p_holm"}},
         "locked_recipe": recipe,
         "settings": settings._asdict(),
     }
