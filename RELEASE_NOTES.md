@@ -1,5 +1,16 @@
 # Release Notes
 
+## Unreleased — Prognostic marker evaluation (Python API)
+
+### New
+
+- `survival_toolkit.marker_screen`: vectorized Cox score tests for many candidate markers, marginal and as added value over clinical covariates (Efron or Breslow ties, with strata); Freedman–Lane residual permutations; Westfall–Young step-down p-values; permutation FDR; Harrell's C for many risk scores at once. Score statistics match R `coxph` score tests to a relative 1e-8 (univariate) and 1e-6 (clinically adjusted).
+- `survival_toolkit.marker_evaluation.evaluate_markers`: the whole screening procedure checked in one step. It reports family-wise error and FDR by permutation, stability over event-stratified subsamples, and pre-declared tiers. A robust marker needs a Westfall–Young p ≤ 0.05, selection in at least 50% of subsamples and the same direction in at least 90%. It also reports an optimism-corrected C-index for the selected signature, the shrinkage of the strongest marker's effect, and an optional descriptive tree-model lens.
+- `survival_toolkit.marker_evaluation.validate_locked_recipe`: applies a SHA-256-locked signature unchanged to an external cohort. It reports the C-index with a bootstrap CI, the gain over the clinical-only model, the calibration slope, observed/expected risk, the Brier score and skill, and a Holm-adjusted replication test per marker.
+- README: a Prognostic Marker Evaluation section with a runnable example.
+
+The web interface does not expose the marker evaluation yet.
+
 ## 0.2.0 — 2026-09-26 — Full code review
 
 Several fixes below change reported numbers (marked **changes results**). Exports now record the SurvStudio version that produced them, so re-run analyses exported by 0.1.0 before comparing them with new output.
