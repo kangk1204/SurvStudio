@@ -1467,6 +1467,34 @@ def test_cli_serve_exports_bind_host_for_request_guard(monkeypatch: pytest.Monke
     assert os.environ[app_module.ALLOWED_HOSTS_ENV_VAR] == "lab.example"
 
 
+def test_cli_serve_in_a_container_explains_how_to_publish_the_port(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from survival_toolkit import __main__ as cli_module
+
+    monkeypatch.setenv(app_module.BIND_HOST_ENV_VAR, "")
+    monkeypatch.setenv(app_module.ALLOWED_HOSTS_ENV_VAR, "")
+    monkeypatch.setenv("SURVSTUDIO_CONTAINER", "1")
+    monkeypatch.setattr(cli_module.uvicorn, "run", lambda *args, **kwargs: None)
+
+    assert cli_module.main(["serve", "--host", "0.0.0.0"]) == 0
+
+    message = capsys.readouterr().err
+    assert "-p 127.0.0.1:8000:8000" in message
+    assert "WARNING" not in message
+
+
+def test_package_is_published_as_survstudio_with_both_commands() -> None:
+    pyproject = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["name"] == "survstudio"
+    assert pyproject["project"]["scripts"] == {
+        "survstudio": "survival_toolkit.__main__:main",
+        "survival-toolkit": "survival_toolkit.__main__:main",
+    }
+    assert pyproject["project"]["license"] == "MIT"
+
+
 def test_grouping_settings_show_only_for_survival_curves_and_table_1() -> None:
     text = _AppJsSource().read_text(encoding="utf-8")
 

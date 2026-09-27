@@ -41,8 +41,9 @@ jobs:
         shell: bash
         run: |
           printf 'os_months,os_event,age\n12,1,60\n18,0,55\n' > survstudio_smoke.csv
-          survival-toolkit inspect survstudio_smoke.csv > survstudio_profile.json
+          survstudio inspect survstudio_smoke.csv > survstudio_profile.json
           test -s survstudio_profile.json
+          survival-toolkit inspect survstudio_smoke.csv > /dev/null
 
       - name: Run test suite
         run: pytest -q
@@ -99,7 +100,7 @@ jobs:
       - name: Serve the page, its static files, and bundled data from the wheel
         working-directory: ${{ runner.temp }}
         run: |
-          "$RUNNER_TEMP/wheel-env/bin/survival-toolkit" serve --port 8765 > server.log 2>&1 &
+          "$RUNNER_TEMP/wheel-env/bin/survstudio" serve --port 8765 > server.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do

@@ -13,7 +13,7 @@ from survival_toolkit.analysis import load_dataframe_from_path, profile_datafram
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="survival-toolkit")
+    parser = argparse.ArgumentParser(prog="survstudio")
     subparsers = parser.add_subparsers(dest="command")
 
     serve_parser = subparsers.add_parser("serve", help="Run the FastAPI app with Uvicorn.")
@@ -67,6 +67,8 @@ def _configure_request_host_guard(host: str, allowed_hosts: Sequence[str] = ()) 
 
 
 _LOOPBACK_BIND_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+# Set by the Docker image, which has to listen on every interface of the container.
+_CONTAINER_ENV_VAR = "SURVSTUDIO_CONTAINER"
 
 
 def _warn_if_reachable_from_network(host: str) -> None:
@@ -74,6 +76,13 @@ def _warn_if_reachable_from_network(host: str) -> None:
 
     normalized = str(host).strip().strip("[]").lower()
     if normalized in _LOOPBACK_BIND_HOSTS:
+        return
+    if os.environ.get(_CONTAINER_ENV_VAR) == "1":
+        print(
+            f"SurvStudio is listening on {host} inside its container. It has no login, so publish the port on "
+            "127.0.0.1 only (docker run -p 127.0.0.1:8000:8000 ...) and open http://localhost:8000.",
+            file=sys.stderr,
+        )
         return
     print(
         f"WARNING: SurvStudio is listening on {host}. It has no login: anyone who can reach this address can "

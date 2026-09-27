@@ -434,6 +434,17 @@ On Ubuntu CI or a fresh Linux machine, if Chromium system dependencies are missi
 python -m playwright install --with-deps chromium
 ```
 
+### Docker
+
+To run SurvStudio without installing Python, build the container image from the repository:
+
+```bash
+docker build -t survstudio .
+docker run --rm -p 127.0.0.1:8000:8000 survstudio
+```
+
+Then open `http://localhost:8000`. Publish the port on `127.0.0.1` as shown: inside the container the server listens on every interface and it has no login, so `-p 8000:8000` would expose it to your network. The image includes the table formats and the classical ML models; build with `--build-arg EXTRAS=all` to add deep learning (PyTorch, about 1 GB more). Uploaded data stay in the container's memory and are gone when it stops. The in-app `Shutdown` button does not work through Docker's port forwarding; stop the container with `docker stop` or Ctrl+C.
+
 ## Run
 
 Start the local app:
@@ -441,6 +452,8 @@ Start the local app:
 ```bash
 python -m survival_toolkit
 ```
+
+The installed `survstudio` command does the same (`survstudio serve --port 8001` picks another port; the older `survival-toolkit` name still works).
 
 Then open:
 

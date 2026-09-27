@@ -30,6 +30,12 @@
 - `survival_toolkit.reporting`: `remark_checklist` and `tripod_ai_checklist` build the checklists from a marker evaluation or model comparisons; `checklist_markdown` renders one.
 - API: `POST /api/marker-evaluation` (now with a `report` field), `POST /api/marker-validation`, `POST /api/design-audit`, `POST /api/tripod-ai-checklist` and `POST /api/checklist-export`.
 
+### Packaging
+
+- The distribution is now named `survstudio` (the import name stays `survival_toolkit`), with a `survstudio` command next to the old `survival-toolkit`; the package metadata carries the licence, authors, keywords and project links.
+- A Dockerfile builds a container that serves the app on port 8000 (`docker run --rm -p 127.0.0.1:8000:8000 survstudio`); inside a container the start-up message explains how to publish the port on loopback only.
+- `CITATION.cff` and `.zenodo.json` describe the software for GitHub's citation box and Zenodo archiving; a release workflow builds and checks the wheel, publishes it to PyPI by trusted publishing and pushes a multi-architecture image to GHCR when a GitHub release is published. `docs/releasing.md` lists the one-time account steps.
+
 ## 0.2.0 — 2026-09-26 — Full code review
 
 Several fixes below change reported numbers (marked **changes results**). Exports now record the SurvStudio version that produced them, so re-run analyses exported by 0.1.0 before comparing them with new output.
