@@ -9,7 +9,10 @@ It supports:
 - honest marker evaluation: family-wise error control, stability across subsamples, added value over clinical covariates, and validation of the locked model in another cohort
 - a design check for studies that fit many models and keep the best, with no data needed
 - optional machine-learning and deep-learning survival models, compared on the same patient splits (the Transformer and VAE are experimental)
+- omics marker matrices (up to 60,000 markers) attached to the clinical table for marker evaluation
+- REMARK and TRIPOD+AI checklists with the methods and results paragraphs of the run, as Word or Markdown
 - manuscript-oriented table export
+- numerical agreement with R `survival`, lifelines and scikit-survival documented in [docs/validation](./docs/validation/numerical_agreement.md)
 
 ## Interface Preview
 
@@ -34,36 +37,36 @@ These screenshots show the main manuscript-facing workflows.
     <td width="50%">
       <img src="github_images/03_KM_plot.png" alt="Kaplan-Meier analysis screenshot" />
       <br />
-      <strong>Kaplan-Meier</strong><br />
-      Survival curves, weighted log-rank testing, and manuscript-ready figure export.
+      <strong>Survival curves</strong><br />
+      Kaplan-Meier curves, weighted log-rank testing, and manuscript-ready figure export.
     </td>
     <td width="50%">
       <img src="github_images/04_Cox_PH.png" alt="Cox proportional hazards forest plot screenshot" />
       <br />
-      <strong>Cox PH</strong><br />
-      Hazard-ratio forest plots, PH diagnostics, and stratified Cox support.
+      <strong>Cox model</strong><br />
+      Hazard-ratio forest plots, proportional-hazards diagnostics, and stratified Cox support.
     </td>
   </tr>
   <tr>
     <td width="50%">
-      <img src="github_images/05_cohort_table.png" alt="Cohort table screenshot" />
+      <img src="github_images/05_cohort_table.png" alt="Table 1 screenshot" />
       <br />
-      <strong>Cohort table</strong><br />
-      Baseline summaries stay aligned to the currently analyzable grouped subset.
+      <strong>Table 1</strong><br />
+      Baseline characteristics of the analysed patients, overall or by group.
     </td>
     <td width="50%">
       <img src="github_images/06_MLDL_cindex.png" alt="Unified ML and DL model comparison screenshot" />
       <br />
-      <strong>Unified predictive screening</strong><br />
-      One board compares classical ML and deep-learning survival models on the same shared feature set.
+      <strong>Prediction models</strong><br />
+      One board compares classical ML and deep-learning survival models on the same patient splits.
     </td>
   </tr>
   <tr>
     <td width="50%">
       <img src="github_images/07_importance.png" alt="Model feature importance screenshot" />
       <br />
-      <strong>Feature salience</strong><br />
-      Tree-model importance and deep-model salience views stay inside the same predictive workbench.
+      <strong>Feature importance</strong><br />
+      Permutation importance of a trained model, shown in the model workbench.
     </td>
     <td width="50%">
       <img src="github_images/08_SHAP.png" alt="SHAP explanation screenshot" />
@@ -180,7 +183,7 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-Click `Synthetic Example` first.
+Click `Synthetic demo` first.
 
 Use the `pip` bundled with the fresh virtual environment for the first install. If you upgraded `pip` separately and the editable install failed, recreate `.venv` and retry without the `pip` upgrade step.
 
@@ -236,7 +239,7 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-Click `Synthetic Example` first.
+Click `Synthetic demo` first.
 
 ### Easiest Path For A New Ubuntu Machine
 
@@ -573,13 +576,13 @@ Recommended first figures and tables:
 Recommended manuscript outputs:
 - Kaplan-Meier plot for hormonal therapy groups
 - Cox forest plot for recurrence-free survival
-- cohort table grouped by hormonal therapy
+- Table 1 grouped by hormonal therapy
 - ML comparison table for recurrence discrimination
 
 ### Synthetic Example Workflow
 
 Best starting dataset choice:
-- `Synthetic Example`
+- `Synthetic demo`
 
 Recommended study columns:
 - time column: `os_months`
@@ -799,7 +802,7 @@ If upload or analysis fails:
 3. check that you selected the correct event-positive value
 4. check that one patient appears only once
 5. check missing values in the variables you selected for modeling
-6. use `Synthetic Example` first to confirm the app itself is working
+6. use `Synthetic demo` first to confirm the app itself is working
 7. use `survival-toolkit inspect path/to/file.csv` to inspect your file before opening the UI
 
 ## Main Analyses
@@ -846,9 +849,9 @@ LASSO-Cox note:
 - SHAP, partial dependence, and counterfactual analysis remain tree-model features only
 
 Practical note:
-- `Compare All` is usually faster than single-model `Train a model`
-- `Compare All` focuses on cross-model scoring
-- single-model `Train a model` may do extra post-fit work such as feature importance and optional SHAP computation
+- `Compare All Models` is usually faster than training one model (`Train one model`)
+- `Compare All Models` focuses on cross-model scoring
+- training one model may do extra post-fit work such as feature importance and optional SHAP computation
 - ML result payloads now include IPCW `IBS`, a Kaplan-Meier null-model `IBS`, and `Brier Skill Score = 1 - IBS_model / IBS_null` so raw error can be interpreted relative to a no-covariate reference
 - the IPCW weights follow Graf et al. (1999) with the Gerds & Schumacher (2006) convention used by `pec` and `riskRegression`: an event at `t_i` is weighted by `1 / G(t_i-)`, a patient still at risk at `t` by `1 / G(t)`, and the reverse Kaplan-Meier estimate `G` counts events before censorings at tied times. scikit-survival's `brier_score` uses `G(t_i)` instead, so the two differ slightly when censoring times coincide with event times
 - Random Survival Forest and Gradient Boosted Survival feature importance is permutation importance on the evaluation rows (up to 300): the mean drop in Harrell's C when a raw feature is shuffled, with all one-hot columns of a categorical feature shuffled together
@@ -1065,7 +1068,7 @@ Available exports (each tab's `Export` menu):
   - manuscript table as `LaTeX`
   - manuscript table as `DOCX`
 
-When Group by is active in the cohort table:
+When Group by is active in Table 1:
 - `Overall` refers to the grouped non-missing subset used in that table
 - it is not a separate all-rows summary outside the grouped analysis frame
 
@@ -1088,8 +1091,8 @@ Analysis exports end with provenance notes: the SurvStudio version that produced
 
 ## Evaluation Contract
 
-- ML `Train a model` currently supports the deterministic holdout path for a single fitted model.
-- ML `Compare All` is the screening path for shared-model comparison, including repeated cross-validation when selected.
+- Training one ML model (`Train one model`) uses the deterministic holdout path.
+- `Compare All Models` is the screening path for shared-model comparison, including repeated cross-validation when selected.
 - DL single-model runs can use holdout or repeated-CV according to the visible evaluation controls.
 - Every classical ML and deep model is trained and scored on identical row partitions for the same seed: one stratified 70/30 holdout helper and identical `StratifiedKFold` folds are shared by both families.
 - Each comparison result carries an `evaluation_split_fingerprint` (a hash of which source rows were trained and scored in each split). The unified ML+DL leaderboard ranks the two families together only when the fingerprints match.
@@ -1144,12 +1147,12 @@ This is the fastest way to catch file-format problems before uploading a cohort 
 ## DL Runtime Note
 
 Deep learning comparison can take substantial time on CPU-only machines, especially with:
-- `Compare All`
+- `Compare All Models`
 - `Repeated Stratified CV`
 - large `Epochs`
 - larger shared ML/DL feature sets
 
-`Compare All` is the slowest DL path because it trains all implemented deep models in sequence. For example, a 100+ feature input set can take noticeably longer than the same cohort with a compact feature set.
+`Compare All Models` is the slowest path because it trains every deep model in sequence. For example, a 100+ feature input set can take noticeably longer than the same cohort with a compact feature set.
 
 For larger cohorts, note that the current `DeepSurv` and `Survival Transformer` paths use a full-batch Cox-style objective. That is statistically fine, but it can hit memory limits sooner than mini-batch tree workflows on 10k+ rows.
 
@@ -1157,7 +1160,7 @@ If you are running on a laptop without GPU acceleration, start with:
 - `Epochs = 100`
 - `Holdout`
 - a compact feature set
-- `Train a model` before `Compare All`
+- `Train one model` before `Compare All Models`
 
 Then increase epochs or switch to repeated CV only after the single-run workflow looks correct.
 
