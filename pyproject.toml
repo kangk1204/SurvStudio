@@ -63,6 +63,11 @@ dl = [
   "scikit-learn>=1.4.0",
   "torch>=2.0.0",
 ]
+# Reference packages for validation/agreement/run_agreement.py (R survival is also needed).
+validation = [
+  "lifelines>=0.29.0",
+  "scikit-survival>=0.23.0",
+]
 e2e = [
   "playwright>=1.52.0",
 ]

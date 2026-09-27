@@ -30,6 +30,11 @@
 - `survival_toolkit.reporting`: `remark_checklist` and `tripod_ai_checklist` build the checklists from a marker evaluation or model comparisons; `checklist_markdown` renders one.
 - API: `POST /api/marker-evaluation` (now with a `report` field), `POST /api/marker-validation`, `POST /api/design-audit`, `POST /api/tripod-ai-checklist` and `POST /api/checklist-export`.
 
+### Validation
+
+- `validation/agreement/run_agreement.py` compares SurvStudio with R `survival` (the reference), lifelines and scikit-survival on the bundled GBSG2 and TCGA-LUAD cohorts and writes `docs/validation/numerical_agreement.md` with every compared value and its difference.
+- `docs/usability_study_protocol.md`: the protocol for a moderated usability study (8 to 12 participants, seven tasks, task success, time, the Single Ease Question and SUS).
+
 ### Packaging
 
 - The distribution is now named `survstudio` (the import name stays `survival_toolkit`), with a `survstudio` command next to the old `survival-toolkit`; the package metadata carries the licence, authors, keywords and project links.
