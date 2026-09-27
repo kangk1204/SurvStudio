@@ -32,7 +32,8 @@ release is published; Zenodo archives the release through its GitHub integration
      `survstudio inspect` on a small file;
    - uploads to PyPI;
    - builds the container image for amd64 and arm64 and pushes it with the version tag
-     and `latest`.
+     and `latest`. scikit-survival has no prebuilt arm64 wheels, so the arm64 build
+     compiles it under emulation and takes considerably longer than the amd64 one.
 5. Zenodo mints a DOI for the release. Add the DOI badge to the README and a
    `doi` field to `CITATION.cff` (the concept DOI, which always resolves to the latest
    version, is the one to cite in papers).
