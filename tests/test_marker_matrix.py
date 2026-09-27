@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ from survival_toolkit.marker_matrix import (
     MarkerMatrixStore,
     id_key,
     match_summary,
+    matrix_format,
     matrix_frame,
     read_marker_matrix,
 )
@@ -77,8 +79,10 @@ def test_matrix_problems_are_explained(tmp_path: Path) -> None:
     path = tmp_path / "matrix.csv"
 
     _expression(["X1", "X2"]).to_csv(path, index_label="gene")
-    with pytest.raises(UserInputError, match="No patient ID in the matrix matches"):
+    with pytest.raises(UserInputError, match="No patient ID in the matrix matches") as mismatch:
         read_marker_matrix(path, "matrix.csv", patient_ids=patients)
+    # Both files' IDs are shown, so a user can see how they differ.
+    assert "'P000', 'P001', 'P002'" in str(mismatch.value) and "'X1', 'X2'" in str(mismatch.value) and "'GENE0'" in str(mismatch.value)
 
     repeated = _expression(patients)
     repeated.index = ["GENE0", "GENE0", "GENE2", "GENE3", "GENE4"]
@@ -135,3 +139,54 @@ def test_matrix_store_keeps_a_few_matrices_and_expires_them(tmp_path: Path) -> N
     expired = MarkerMatrixStore(ttl_seconds=-1)
     with pytest.raises(NotFoundError):
         expired.get(expired.add(matrix))
+
+
+def test_gzip_compressed_matrices_are_read(tmp_path: Path) -> None:
+    clinical = _clinical()
+    patients = clinical["patient_id"].tolist()
+    genes = _expression(patients)
+    text = genes.to_csv(sep="\t", index_label="gene")
+    # GEO and UCSC Xena serve gzip-compressed TSV, sometimes without a table suffix (HiSeqV2.gz).
+    for name in ("expression.tsv.gz", "HiSeqV2.gz"):
+        path = tmp_path / name
+        path.write_bytes(gzip.compress(text.encode("utf-8")))
+        matrix = read_marker_matrix(path, name, patient_ids=patients)
+        assert matrix.filename == name and matrix.orientation == "markers_in_rows"
+        assert matrix.values[:, 2] == pytest.approx(genes.loc["GENE2", patients].to_numpy(dtype=np.float32))
+
+    assert matrix_format("a.csv.gz") == (".csv", True) and matrix_format("HiSeqV2.gz") == ("", True)
+    assert matrix_format("a.parquet") == (".parquet", False) and matrix_format("a.xlsx") == (".xlsx", False)
+    broken = tmp_path / "broken.tsv.gz"
+    broken.write_bytes(b"not gzip at all")
+    with pytest.raises(UserInputError, match="could not be unpacked"):
+        read_marker_matrix(broken, "broken.tsv.gz", patient_ids=patients)
+
+
+def test_tcga_sample_barcodes_are_matched_to_patient_barcodes(tmp_path: Path) -> None:
+    patients = ["TCGA-05-4244", "TCGA-05-4249", "TCGA-05-4250", "TCGA-35-3615"]
+    samples = [
+        "TCGA-05-4244-01",  # primary tumour
+        "TCGA-05-4244-11",  # normal tissue of the same patient
+        "TCGA-05-4249-02",  # recurrent tumour, listed before the primary one
+        "TCGA-05-4249-01",
+        "TCGA-05-4250-01A",
+        "TCGA-99-9999-01",  # a patient not in the dataset
+    ]
+    genes = _expression(samples, n_genes=3)
+    path = tmp_path / "HiSeqV2.tsv"
+    genes.to_csv(path, sep="\t", index_label="sample")
+
+    matrix = read_marker_matrix(path, "HiSeqV2.tsv", patient_ids=patients)
+
+    assert matrix.orientation == "markers_in_rows"
+    assert matrix.sample_keys == ("TCGA-05-4244", "TCGA-05-4249", "TCGA-05-4250")
+    assert matrix.values[1] == pytest.approx(genes["TCGA-05-4249-01"].to_numpy(dtype=np.float32))
+    assert "used 3 primary tumour (01)" in matrix.id_note
+    assert "1 further tumour" in matrix.id_note and "1 normal-tissue" in matrix.id_note
+    assert match_summary(matrix, patients)["n_matched"] == 3
+
+    # One row per sample works the same way; IDs already written alike are left alone.
+    genes.T.to_csv(path, index_label="sample")
+    assert read_marker_matrix(path, "wide.csv", patient_ids=patients).sample_keys == matrix.sample_keys
+    exact = read_marker_matrix(path, "wide.csv", patient_ids=samples)
+    assert exact.id_note == "" and len(exact.sample_keys) == len(samples)

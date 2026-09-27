@@ -153,14 +153,19 @@ def test_marker_inputs_are_validated() -> None:
     frame["label"] = ["a", "b", "c"] * 40
     frame["mostly_missing"] = np.where(np.arange(120) < 60, np.nan, 1.0 * np.arange(120))
     frame["flat"] = 2.0
+    # Expressed in 6 of 120 patients: the kind of gene that dominated the permutation maximum.
+    frame["rare"] = np.where(np.arange(120) < 6, 5.0, 0.0)
     common = dict(time_column="os_time", event_column="os_event", settings=_FAST._replace(n_permutations=9, n_resamples=2))
     with pytest.raises(ValueError, match="Markers must be numeric"):
         evaluate_markers(frame, marker_columns=["true_up_1", "label"], **common)
     with pytest.raises(ValueError, match="cannot also be"):
         evaluate_markers(frame, marker_columns=["true_up_1", "age"], clinical_columns=["age"], **common)
-    result = evaluate_markers(frame, marker_columns=["true_up_1", "mostly_missing", "flat"], **common)
+    result = evaluate_markers(frame, marker_columns=["true_up_1", "mostly_missing", "flat", "rare"], **common)
     dropped = {item["marker"]: item["reason"] for item in result["cohort"]["dropped_markers"]}
-    assert dropped == {"mostly_missing": "50% missing", "flat": "constant"}
+    assert dropped == {"mostly_missing": "50% missing", "flat": "constant", "rare": "near-constant (95% at one value)"}
+    loose = evaluate_markers(frame, marker_columns=["true_up_1", "rare"], time_column="os_time", event_column="os_event",
+                             settings=_FAST._replace(n_permutations=9, n_resamples=2, max_mode_fraction=1.0))
+    assert [row["marker"] for row in loose["marker_table"]].count("rare") == 1 and not loose["cohort"]["dropped_markers"]
     with pytest.raises(ValueError, match="resample_fraction"):
         evaluate_markers(frame, marker_columns=["true_up_1"], time_column="os_time", event_column="os_event",
                          settings=MarkerSettings(resample_fraction=0.95))
@@ -252,6 +257,56 @@ def test_locked_recipe_maps_external_column_names_and_notes_imputation() -> None
     assert any("5 missing true_up_1 value(s) imputed" in note for note in report["notes"])
     with pytest.raises(ValueError, match="lacks columns"):
         validate_locked_recipe(external, recipe)
+
+
+def test_locked_recipe_rescales_markers_measured_on_another_platform() -> None:
+    from survival_toolkit.marker_evaluation import validate_locked_recipe
+
+    recipe = _development_result()["locked_recipe"]
+    assert set(recipe["marker_scale"]) == set(recipe["markers"])
+    external = _simulated_cohort(11, n=300)
+    # Another platform puts every marker on its own scale: a different positive linear map per marker.
+    other = external.copy()
+    for index, name in enumerate(recipe["markers"]):
+        other[name] = (index + 2.0) * other[name] + 10.0 * index
+
+    reference = validate_locked_recipe(external, recipe, marker_scaling="within_cohort")
+    rescaled = validate_locked_recipe(other, recipe, marker_scaling="within_cohort")
+    as_measured = validate_locked_recipe(other, recipe)
+
+    # Rescaling within the cohort undoes any such map, so the model's ranking is unchanged.
+    assert rescaled["metrics"]["c_index"] == pytest.approx(reference["metrics"]["c_index"], abs=1e-12)
+    assert rescaled["metrics"]["delta_c_index"] == pytest.approx(reference["metrics"]["delta_c_index"], abs=1e-12)
+    assert abs(as_measured["metrics"]["c_index"] - reference["metrics"]["c_index"]) > 1e-6
+    assert rescaled["metrics"]["marker_scaling"] == "within_cohort"
+    assert any("rescaled within this cohort" in note for note in rescaled["notes"])
+
+
+def test_locked_recipe_holds_unmeasured_markers_at_their_development_median() -> None:
+    from survival_toolkit.marker_evaluation import recipe_hash, validate_locked_recipe
+
+    recipe = _development_result()["locked_recipe"]
+    external = _simulated_cohort(11, n=300)
+    coefficient = dict(zip(recipe["model"]["terms"], recipe["model"]["coefficients"]))
+    weight = {name: abs(coefficient[name]) * recipe["marker_scale"][name]["sd"] for name in recipe["markers"]}
+    lightest = min(weight, key=weight.get)
+
+    report = validate_locked_recipe(external.drop(columns=[lightest]), recipe)
+
+    assert report["metrics"]["absent_markers"] == [lightest]
+    assert report["metrics"]["marker_weight_available"] == pytest.approx(1 - weight[lightest] / sum(weight.values()))
+    row = next(row for row in report["markers"] if row["marker"] == lightest)
+    assert row["absent"] and row["replication_p_holm"] is None and not row["replicated"]
+    assert any("not in the external dataset" in note for note in report["notes"])
+    with pytest.raises(ValueError, match="at least half must be measured"):
+        validate_locked_recipe(external.drop(columns=recipe["markers"]), recipe)
+
+    # A model locked before the marker scale was recorded validates as measured, not rescaled.
+    legacy = {key: value for key, value in recipe.items() if key not in ("marker_scale", "recipe_hash")}
+    legacy["recipe_hash"] = recipe_hash(legacy)
+    assert validate_locked_recipe(external, legacy)["metrics"]["c_index"] is not None
+    with pytest.raises(ValueError, match="no development marker scale"):
+        validate_locked_recipe(external, legacy, marker_scaling="within_cohort")
 
 
 def _sksurv_available() -> bool:

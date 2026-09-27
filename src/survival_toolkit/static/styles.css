@@ -2818,6 +2818,17 @@ tbody tr:hover td {
   margin: 10px 0;
 }
 
+.marker-validation-section .inline-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.marker-validation-section .inline-select select {
+  width: auto;
+}
+
 .marker-validation-section input[type="file"] {
   width: auto;
   height: auto;

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -128,3 +128,137 @@ def evaluation_split_fingerprint(
     }
     digest = hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode("utf-8")).hexdigest()
     return digest[:16]
+
+
+def prediction_block(
+    row_ids: Sequence[Any],
+    time: Sequence[float],
+    event: Sequence[int],
+    risks: Mapping[str, tuple[Sequence[int] | None, Sequence[float]]],
+) -> dict[str, Any] | None:
+    """Test-set risk scores of several models on the test patients all of them scored.
+
+    ``row_ids``, ``time`` and ``event`` describe every test patient in order; each model
+    gives the positions it scored (None for all) and its risk scores there, higher
+    meaning earlier events. Row IDs are the stored dataset's row labels as text, so
+    blocks from different model families can be matched patient by patient.
+    """
+    n = len(row_ids)
+    aligned: dict[str, dict[int, float]] = {}
+    common = set(range(n))
+    for name, (positions, values) in risks.items():
+        scored = list(range(n)) if positions is None else [int(position) for position in positions]
+        values = [float(value) for value in values]
+        if len(scored) != len(values):
+            continue
+        lookup = {position: value for position, value in zip(scored, values) if np.isfinite(value)}
+        aligned[str(name)] = lookup
+        common &= set(lookup)
+    keep = sorted(common)
+    if not aligned or not keep:
+        return None
+    return {
+        "row_ids": [str(row_ids[position]) for position in keep],
+        "time": [float(time[position]) for position in keep],
+        "event": [int(event[position]) for position in keep],
+        "risk": {name: [lookup[position] for position in keep] for name, lookup in aligned.items()},
+    }
+
+
+def merge_prediction_blocks(blocks: Sequence[Mapping[str, Any]]) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray], list[str]]:
+    """Time, event and every model's risk on the patients present in all blocks.
+
+    Blocks come from comparisons of different model families on the same split; a
+    patient's time and event must agree between blocks. A model in several blocks is
+    taken from the first.
+    """
+    usable = [block for block in blocks if block and block.get("row_ids")]
+    if not usable:
+        raise ValueError("No test-set predictions to compare.")
+    shared = set(str(row) for row in usable[0]["row_ids"])
+    for block in usable[1:]:
+        shared &= set(str(row) for row in block["row_ids"])
+    rows = sorted(shared)
+    if not rows:
+        raise ValueError("The comparisons share no test patients; run them on the same split.")
+    time = np.empty(len(rows))
+    event = np.empty(len(rows), dtype=int)
+    risks: dict[str, np.ndarray] = {}
+    for index, block in enumerate(usable):
+        position = {str(row): offset for offset, row in enumerate(block["row_ids"])}
+        order = [position[row] for row in rows]
+        block_time = np.asarray(block["time"], dtype=float)[order]
+        block_event = np.asarray(block["event"], dtype=int)[order]
+        if index == 0:
+            time, event = block_time, block_event
+        elif not (np.allclose(time, block_time) and np.array_equal(event, block_event)):
+            raise ValueError("The comparisons disagree on the outcome of shared test patients; run them on the same dataset.")
+        for name, values in block["risk"].items():
+            if name not in risks:
+                risks[str(name)] = np.asarray(values, dtype=float)[order]
+    return time, event, risks, rows
+
+
+def c_index_intervals(
+    time: Sequence[float] | np.ndarray,
+    event: Sequence[int] | np.ndarray,
+    risks: Mapping[str, Sequence[float] | np.ndarray],
+    *,
+    reference: str | None = "Cox PH",
+    n_bootstrap: int = 1000,
+    random_seed: int = 20260926,
+    level: float = 0.95,
+) -> dict[str, Any]:
+    """Harrell's C of each model on the same test patients, with bootstrap intervals.
+
+    Every bootstrap draw resamples patients once and scores all models on them, so the
+    interval for a model's difference from the reference is paired: it accounts for the
+    models being scored on the same patients, which separate intervals do not.
+    """
+    from survival_toolkit.marker_screen import harrell_c_many
+
+    names = [str(name) for name in risks]
+    if not names:
+        raise ValueError("No model risk scores to compare.")
+    time = np.asarray(time, dtype=float).reshape(-1)
+    event = np.asarray(event).reshape(-1).astype(int)
+    matrix = np.column_stack([np.asarray(risks[name], dtype=float).reshape(-1) for name in names])
+    if matrix.shape[0] != time.shape[0] or not np.isfinite(matrix).all():
+        raise ValueError("Every model needs a finite risk score for every test patient.")
+    point = harrell_c_many(time, event, matrix)
+    rng = np.random.default_rng(int(random_seed))
+    draws = []
+    for _ in range(int(n_bootstrap)):
+        rows = rng.integers(0, time.shape[0], size=time.shape[0])
+        if event[rows].any():
+            draws.append(harrell_c_many(time[rows], event[rows], matrix[rows]))
+    samples = np.asarray(draws, dtype=float).reshape(-1, len(names))
+    tail = (1.0 - float(level)) / 2.0
+
+    def interval(values: np.ndarray) -> list[float | None]:
+        finite = values[np.isfinite(values)]
+        if finite.size < 20:
+            return [None, None]
+        return [float(np.quantile(finite, tail)), float(np.quantile(finite, 1.0 - tail))]
+
+    reference_index = names.index(reference) if reference in names else None
+    rows_out: list[dict[str, Any]] = []
+    for column, name in enumerate(names):
+        row: dict[str, Any] = {
+            "model": name,
+            "c_index": None if not np.isfinite(point[column]) else float(point[column]),
+            "c_index_ci": interval(samples[:, column]),
+        }
+        if reference_index is not None and column != reference_index:
+            difference = float(point[column] - point[reference_index])
+            row["delta_vs_reference"] = difference if np.isfinite(difference) else None
+            row["delta_ci"] = interval(samples[:, column] - samples[:, reference_index])
+        rows_out.append(row)
+    return {
+        "n": int(time.shape[0]),
+        "events": int(event.sum()),
+        "reference": names[reference_index] if reference_index is not None else None,
+        "n_bootstrap": int(samples.shape[0]),
+        "level": float(level),
+        "rows": rows_out,
+    }

@@ -63,12 +63,14 @@ from survival_toolkit import __version__ as SURVSTUDIO_VERSION
 from survival_toolkit.concurrency import cancellation_scope, raise_if_cancelled
 from survival_toolkit.design_audit import audit_design, design_from_dict
 from survival_toolkit.errors import InternalAnalysisError, JobCancelledError, NotFoundError, UserInputError
+from survival_toolkit.evaluation import c_index_intervals, merge_prediction_blocks
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
 from survival_toolkit.marker_matrix import (
     MATRIX_SUFFIXES,
     ORIENTATIONS,
     MarkerMatrixStore,
     match_summary,
+    matrix_format,
     matrix_frame,
     read_marker_matrix,
 )
@@ -1015,6 +1017,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
     n_resamples: int = Field(default=200, ge=0, le=1_000)
     resample_fraction: float = Field(default=0.632, ge=0.3, le=0.9)
     max_missing_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
+    max_mode_fraction: float = Field(default=0.9, ge=0.5, le=1.0)
     max_signature_markers: int = Field(default=10, ge=1, le=50)
     nonlinear_lens: Literal["off", "gbs", "rsf"] = "off"
     random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
@@ -1049,6 +1052,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
             n_resamples=self.n_resamples,
             resample_fraction=self.resample_fraction,
             max_missing_fraction=self.max_missing_fraction,
+            max_mode_fraction=self.max_mode_fraction,
             max_signature_markers=self.max_signature_markers,
             nonlinear_lens=self.nonlinear_lens,
             random_seed=self.random_seed,
@@ -1066,6 +1070,22 @@ class MarkerValidationRequest(_EventPositiveValueRequestModel):
     alpha: float = Field(default=0.05, gt=0.0, lt=0.5)
     n_bootstrap: int = Field(default=200, ge=0, le=2_000)
     random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
+    # "within_cohort" rescales each marker to its development distribution (a cohort from another platform).
+    marker_scaling: Literal["as_measured", "within_cohort"] = "as_measured"
+
+
+class ModelComparisonIntervalsRequest(BaseModel):
+    # The ``test_predictions`` (or ``locked_test_predictions``) blocks of ML and DL comparisons run on one split.
+    model_config = ConfigDict(extra="forbid")
+
+    predictions: list[dict[str, Any]] = Field(min_length=1, max_length=4)
+    reference: str | None = Field(default="Cox PH", max_length=200)
+    n_bootstrap: int = Field(default=1000, ge=100, le=5000)
+    random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
+
+
+# Bootstrap draws are cut back on large test sets so one request stays within tens of seconds.
+_INTERVAL_WORK_BUDGET = 3_000_000_000
 
 
 class DesignAuditCohort(BaseModel):
@@ -2630,12 +2650,13 @@ async def upload_marker_matrix(
     temp_path: Path | None = None
     filename = file.filename or "marker_matrix.csv"
     try:
-        suffix = (Path(filename).suffix or ".csv").lower()
-        if suffix not in MATRIX_SUFFIXES:
+        suffix, compressed = matrix_format(filename)
+        if not compressed and suffix not in MATRIX_SUFFIXES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported matrix file type '{suffix}' for '{filename}'. Use CSV, TSV, TXT or Parquet.",
+                detail=f"Unsupported matrix file type '{suffix}' for '{filename}'. Use CSV, TSV, TXT or Parquet, optionally gzip-compressed (.gz).",
             )
+        suffix = ".gz" if compressed else suffix
         if orientation not in ORIENTATIONS:
             raise HTTPException(status_code=422, detail=f"Unknown matrix layout '{orientation}'.")
         total_bytes = 0
@@ -2670,6 +2691,7 @@ async def upload_marker_matrix(
                 "marker_preview": list(matrix.marker_names[:8]),
                 "id_column": id_column,
                 "fingerprint": matrix.fingerprint,
+                "id_note": matrix.id_note,
                 **summary,
             }
 
@@ -3908,6 +3930,7 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
                     alpha=request_model.alpha,
                     n_bootstrap=request_model.n_bootstrap,
                     random_seed=request_model.random_seed,
+                    marker_scaling=request_model.marker_scaling,
                 )
             except KeyError as exc:
                 raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
@@ -3994,6 +4017,29 @@ async def checklist_export(request_model: ChecklistExportRequest) -> Response:
             content=content,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+@app.post("/api/model-comparison-intervals")
+async def model_comparison_intervals(request_model: ModelComparisonIntervalsRequest) -> dict[str, Any]:
+    try:
+
+        def _run() -> dict[str, Any]:
+            time, event, risks, rows = merge_prediction_blocks(request_model.predictions)
+            work = max(int(event.sum()), 1) * time.shape[0] * max(len(risks), 1)
+            draws = max(200, min(int(request_model.n_bootstrap), _INTERVAL_WORK_BUDGET // work))
+            result = c_index_intervals(
+                time,
+                event,
+                risks,
+                reference=request_model.reference,
+                n_bootstrap=draws,
+                random_seed=request_model.random_seed,
+            )
+            return {**result, "n_shared": len(rows)}
+
+        return await run_in_threadpool(_run)
     except Exception as exc:
         fail_bad_request(exc)
 

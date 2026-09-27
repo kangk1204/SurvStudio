@@ -9,7 +9,10 @@ It supports:
 - honest marker evaluation: family-wise error control, stability across subsamples, added value over clinical covariates, and validation of the locked model in another cohort
 - a design check for studies that fit many models and keep the best, with no data needed
 - optional machine-learning and deep-learning survival models, compared on the same patient splits (the Transformer and VAE are experimental)
+- omics marker matrices (up to 60,000 markers) attached to the clinical table for marker evaluation
+- REMARK and TRIPOD+AI checklists with the methods and results paragraphs of the run, as Word or Markdown
 - manuscript-oriented table export
+- numerical agreement with R `survival`, lifelines and scikit-survival documented in [docs/validation](./docs/validation/numerical_agreement.md)
 
 ## Interface Preview
 
@@ -34,36 +37,36 @@ These screenshots show the main manuscript-facing workflows.
     <td width="50%">
       <img src="github_images/03_KM_plot.png" alt="Kaplan-Meier analysis screenshot" />
       <br />
-      <strong>Kaplan-Meier</strong><br />
-      Survival curves, weighted log-rank testing, and manuscript-ready figure export.
+      <strong>Survival curves</strong><br />
+      Kaplan-Meier curves, weighted log-rank testing, and manuscript-ready figure export.
     </td>
     <td width="50%">
       <img src="github_images/04_Cox_PH.png" alt="Cox proportional hazards forest plot screenshot" />
       <br />
-      <strong>Cox PH</strong><br />
-      Hazard-ratio forest plots, PH diagnostics, and stratified Cox support.
+      <strong>Cox model</strong><br />
+      Hazard-ratio forest plots, proportional-hazards diagnostics, and stratified Cox support.
     </td>
   </tr>
   <tr>
     <td width="50%">
-      <img src="github_images/05_cohort_table.png" alt="Cohort table screenshot" />
+      <img src="github_images/05_cohort_table.png" alt="Table 1 screenshot" />
       <br />
-      <strong>Cohort table</strong><br />
-      Baseline summaries stay aligned to the currently analyzable grouped subset.
+      <strong>Table 1</strong><br />
+      Baseline characteristics of the analysed patients, overall or by group.
     </td>
     <td width="50%">
       <img src="github_images/06_MLDL_cindex.png" alt="Unified ML and DL model comparison screenshot" />
       <br />
-      <strong>Unified predictive screening</strong><br />
-      One board compares classical ML and deep-learning survival models on the same shared feature set.
+      <strong>Prediction models</strong><br />
+      One board compares classical ML and deep-learning survival models on the same patient splits.
     </td>
   </tr>
   <tr>
     <td width="50%">
       <img src="github_images/07_importance.png" alt="Model feature importance screenshot" />
       <br />
-      <strong>Feature salience</strong><br />
-      Tree-model importance and deep-model salience views stay inside the same predictive workbench.
+      <strong>Feature importance</strong><br />
+      Permutation importance of a trained model, shown in the model workbench.
     </td>
     <td width="50%">
       <img src="github_images/08_SHAP.png" alt="SHAP explanation screenshot" />
@@ -180,7 +183,7 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-Click `Synthetic Example` first.
+Click `Synthetic demo` first.
 
 Use the `pip` bundled with the fresh virtual environment for the first install. If you upgraded `pip` separately and the editable install failed, recreate `.venv` and retry without the `pip` upgrade step.
 
@@ -236,7 +239,7 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-Click `Synthetic Example` first.
+Click `Synthetic demo` first.
 
 ### Easiest Path For A New Ubuntu Machine
 
@@ -573,13 +576,13 @@ Recommended first figures and tables:
 Recommended manuscript outputs:
 - Kaplan-Meier plot for hormonal therapy groups
 - Cox forest plot for recurrence-free survival
-- cohort table grouped by hormonal therapy
+- Table 1 grouped by hormonal therapy
 - ML comparison table for recurrence discrimination
 
 ### Synthetic Example Workflow
 
 Best starting dataset choice:
-- `Synthetic Example`
+- `Synthetic demo`
 
 Recommended study columns:
 - time column: `os_months`
@@ -799,7 +802,7 @@ If upload or analysis fails:
 3. check that you selected the correct event-positive value
 4. check that one patient appears only once
 5. check missing values in the variables you selected for modeling
-6. use `Synthetic Example` first to confirm the app itself is working
+6. use `Synthetic demo` first to confirm the app itself is working
 7. use `survival-toolkit inspect path/to/file.csv` to inspect your file before opening the UI
 
 ## Main Analyses
@@ -846,9 +849,9 @@ LASSO-Cox note:
 - SHAP, partial dependence, and counterfactual analysis remain tree-model features only
 
 Practical note:
-- `Compare All` is usually faster than single-model `Train a model`
-- `Compare All` focuses on cross-model scoring
-- single-model `Train a model` may do extra post-fit work such as feature importance and optional SHAP computation
+- `Compare All Models` is usually faster than training one model (`Train one model`)
+- `Compare All Models` focuses on cross-model scoring
+- training one model may do extra post-fit work such as feature importance and optional SHAP computation
 - ML result payloads now include IPCW `IBS`, a Kaplan-Meier null-model `IBS`, and `Brier Skill Score = 1 - IBS_model / IBS_null` so raw error can be interpreted relative to a no-covariate reference
 - the IPCW weights follow Graf et al. (1999) with the Gerds & Schumacher (2006) convention used by `pec` and `riskRegression`: an event at `t_i` is weighted by `1 / G(t_i-)`, a patient still at risk at `t` by `1 / G(t)`, and the reverse Kaplan-Meier estimate `G` counts events before censorings at tied times. scikit-survival's `brier_score` uses `G(t_i)` instead, so the two differ slightly when censoring times coincide with event times
 - Random Survival Forest and Gradient Boosted Survival feature importance is permutation importance on the evaluation rows (up to 300): the mean drop in Harrell's C when a raw feature is shuffled, with all one-hot columns of a categorical feature shuffled together
@@ -909,7 +912,9 @@ Architecture note:
 
 Use this when you screen many candidate markers (for example gene-expression columns) for association with survival and want the claim checked the way a careful reviewer would check it. It runs in the Markers tab and from Python.
 
-Markers can be columns of the uploaded table or, for omics data, a separate marker matrix. In the Markers tab, open `Markers in a separate file (omics)`, choose the dataset's patient ID column and attach a CSV, TSV, TXT or Parquet file with one row per marker and one column per patient (as GEO and TCGA distribute expression) or one row per patient; the layout is detected from the IDs. The matrix can hold up to 60,000 markers and 30 million values, and its patient IDs must be written exactly as in the ID column; patients without matrix values are left out of the evaluation. The clinical table stays small, so the other tabs are unaffected.
+Markers can be columns of the uploaded table or, for omics data, a separate marker matrix. In the Markers tab, open `Markers in a separate file (omics)`, choose the dataset's patient ID column and attach a CSV, TSV, TXT or Parquet file with one row per marker and one column per patient (as GEO and TCGA distribute expression) or one row per patient; the layout is detected from the IDs. Text files may be gzip-compressed, so a UCSC Xena download such as `HiSeqV2.gz` attaches as it is. The matrix can hold up to 60,000 markers and 30 million values, and its patient IDs must be written exactly as in the ID column, except that TCGA sample barcodes (`TCGA-05-4244-01`) are matched to patient barcodes (`TCGA-05-4244`), one tumour sample per patient with normal tissue left out; patients without matrix values are left out of the evaluation. The clinical table stays small, so the other tabs are unaffected.
+
+Markers with more than 90% of patients at one value are left out before testing (`max_mode_fraction`). A gene expressed in a handful of patients has a heavy-tailed test statistic; in the TCGA-LUAD RNA-seq data such genes made the permutation maximum (its 95% point was chi-square 239 instead of about 25), so no gene could pass family-wise control. The filter does not look at the outcome, so the error control holds.
 
 For every marker it reports:
 - two Cox score-test lenses: marginal association, and added value over the clinical covariates you name (the primary lens whenever clinical covariates are given)
@@ -921,7 +926,7 @@ For every marker it reports:
   - `marginal only`: associated on its own but not beyond the clinical covariates
   - `not supported`
 
-For a signature built from the selected markers it reports the apparent C-index, an optimism-corrected C-index, the C-index on left-out rows, and how much the top marker's effect shrinks outside the rows that selected it (the "winner's curse" of picking the strongest marker). The signature is then locked into a recipe (encoders, coefficients, baseline survival, and a SHA-256 hash) that can be applied unchanged to an external cohort:
+For a signature built from the selected markers it reports the apparent C-index, an optimism-corrected C-index, the C-index on left-out rows next to that of the clinical covariates alone, and how much the top marker's effect shrinks outside the rows that selected it (the "winner's curse" of picking the strongest marker). The signature is then locked into a recipe (encoders, coefficients, baseline survival, and a SHA-256 hash) that can be applied unchanged to an external cohort:
 
 ```python
 import pandas as pd
@@ -948,6 +953,10 @@ print(report["metrics"]["c_index"])
 In the Markers tab, `Export` also gives a REMARK checklist (Word or Markdown): the methods and results paragraphs of the run and the 20 REMARK items, each marked as filled in by SurvStudio, partly filled in, or for the authors to complete (study design, specimens, assay, interpretation). From Python, `survival_toolkit.reporting.remark_checklist(result)` returns the same checklist.
 
 External validation reports Harrell's C with a bootstrap CI, the C-index gain over the locked clinical-only model, the calibration slope, observed/expected risk, the Brier score and Brier skill at the horizon, and each marker's external hazard ratio with a Holm-adjusted one-sided replication test. A recipe that was edited after it was locked is rejected.
+
+For a cohort measured on another platform (for example microarrays against an RNA-seq development set), choose `Another platform (rescale within cohort)` in the interface or pass `marker_scaling="within_cohort"`: each marker is mapped onto its development mean and SD by its z-score within the external cohort, so the model's relative weights hold; discrimination is then comparable, absolute risks only roughly. Locked markers the external dataset does not measure are held at their development median, and the report gives the share of the model's marker weight (|coefficient| x development SD) that was measured; below half, validation stops.
+
+In the TCGA-LUAD case study, the ten-gene model locked on RNA-seq (apparent C 0.749, optimism-corrected 0.652) reached a pooled C of 0.665 in seven GEO microarray cohorts (1,509 patients, 576 deaths), against 0.660 for age, sex and stage alone: the corrected estimate, not the apparent one, anticipated the external result.
 
 Notes:
 - every threshold used for a tier is a field of `MarkerSettings`; fix them before looking at results, not after
@@ -1065,7 +1074,7 @@ Available exports (each tab's `Export` menu):
   - manuscript table as `LaTeX`
   - manuscript table as `DOCX`
 
-When Group by is active in the cohort table:
+When Group by is active in Table 1:
 - `Overall` refers to the grouped non-missing subset used in that table
 - it is not a separate all-rows summary outside the grouped analysis frame
 
@@ -1088,11 +1097,12 @@ Analysis exports end with provenance notes: the SurvStudio version that produced
 
 ## Evaluation Contract
 
-- ML `Train a model` currently supports the deterministic holdout path for a single fitted model.
-- ML `Compare All` is the screening path for shared-model comparison, including repeated cross-validation when selected.
+- Training one ML model (`Train one model`) uses the deterministic holdout path.
+- `Compare All Models` is the screening path for shared-model comparison, including repeated cross-validation when selected.
 - DL single-model runs can use holdout or repeated-CV according to the visible evaluation controls.
 - Every classical ML and deep model is trained and scored on identical row partitions for the same seed: one stratified 70/30 holdout helper and identical `StratifiedKFold` folds are shared by both families.
 - Each comparison result carries an `evaluation_split_fingerprint` (a hash of which source rows were trained and scored in each split). The unified ML+DL leaderboard ranks the two families together only when the fingerprints match.
+- Holdout and locked-test comparisons also return each model's test-set risk scores (`test_predictions`, `locked_test_predictions`). The leaderboard sends them to `POST /api/model-comparison-intervals`, which gives every model's C-index a 95% bootstrap interval and its difference from Cox PH a paired 95% interval (every draw scores all models on the same resampled patients). A model whose difference interval contains 0 is not distinguishable from Cox PH on that split; on small test sets this is the usual outcome, so do not report the top-ranked model as better on its point estimate alone.
 - For manuscript benchmarks, use repeated CV with a locked test set: the development set is used for all fitting, preprocessing, tuning, early stopping, and model selection; the locked test set is used once. Describe the training-set composition, the CV procedure, and the locked test set in the Methods or Supplement.
 - Datasets with repeated subject identifiers (for example several tumour samples per patient) are flagged: row-level splits would place one subject in both training and test data. Keep one row per subject before benchmarking.
 - Journals often require a supplementary section on how the training data, cross-validation sets, and independent test set were built. [docs/reporting/training_dataset_composition.md](docs/reporting/training_dataset_composition.md) is a fill-in template that maps each required item to the SurvStudio setting or result field that records it.
@@ -1144,12 +1154,12 @@ This is the fastest way to catch file-format problems before uploading a cohort 
 ## DL Runtime Note
 
 Deep learning comparison can take substantial time on CPU-only machines, especially with:
-- `Compare All`
+- `Compare All Models`
 - `Repeated Stratified CV`
 - large `Epochs`
 - larger shared ML/DL feature sets
 
-`Compare All` is the slowest DL path because it trains all implemented deep models in sequence. For example, a 100+ feature input set can take noticeably longer than the same cohort with a compact feature set.
+`Compare All Models` is the slowest path because it trains every deep model in sequence. For example, a 100+ feature input set can take noticeably longer than the same cohort with a compact feature set.
 
 For larger cohorts, note that the current `DeepSurv` and `Survival Transformer` paths use a full-batch Cox-style objective. That is statistically fine, but it can hit memory limits sooner than mini-batch tree workflows on 10k+ rows.
 
@@ -1157,7 +1167,7 @@ If you are running on a laptop without GPU acceleration, start with:
 - `Epochs = 100`
 - `Holdout`
 - a compact feature set
-- `Train a model` before `Compare All`
+- `Train one model` before `Compare All Models`
 
 Then increase epochs or switch to repeated CV only after the single-run workflow looks correct.
 

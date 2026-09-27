@@ -5,14 +5,20 @@ tab lists and profiles. An omics matrix with thousands of markers is uploaded se
 stored here, and matched to the patients of whichever dataset the marker evaluation runs
 on through an ID column. Two layouts are read: one row per marker with one column per
 patient (as GEO and TCGA distribute expression), or one row per patient with one column
-per marker. The first column holds the marker names or patient IDs.
+per marker. The first column holds the marker names or patient IDs. Text files may be
+gzip-compressed, as GEO and UCSC Xena serve them. TCGA sample barcodes (TCGA-05-4244-01A)
+are matched to patient barcodes (TCGA-05-4244) when the dataset holds the latter.
 """
 
 from __future__ import annotations
 
 import csv
+import gzip
 import hashlib
+import re
 import secrets
+import shutil
+import tempfile
 import threading
 import time
 from collections import OrderedDict
@@ -29,6 +35,12 @@ MAX_MATRIX_SAMPLES = 100_000
 MAX_MATRIX_CELLS = 30_000_000
 MATRIX_SUFFIXES = frozenset({".csv", ".tsv", ".txt", ".parquet"})
 ORIENTATIONS = ("auto", "markers_in_rows", "samples_in_rows")
+# A gzip-compressed text matrix is unpacked to a temporary file first; this bounds what it may unpack to.
+MAX_DECOMPRESSED_BYTES = 1024 * 1024 * 1024
+
+_TCGA_PATIENT = re.compile(r"^TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}$", re.IGNORECASE)
+_TCGA_SAMPLE = re.compile(r"^(TCGA-[A-Z0-9]{2}-[A-Z0-9]{4})-(\d{2})([A-Z]?)(?:-.*)?$", re.IGNORECASE)
+_TCGA_TUMOUR_TYPES = {"01": "primary tumour", "02": "recurrent tumour", "03": "primary blood cancer", "05": "additional primary", "06": "metastatic", "07": "additional metastatic"}
 
 
 class MarkerMatrix(NamedTuple):
@@ -38,6 +50,94 @@ class MarkerMatrix(NamedTuple):
     sample_keys: tuple[str, ...]
     values: np.ndarray  # float32, one row per sample and one column per marker
     fingerprint: str
+    id_note: str = ""  # how the matrix IDs were matched when not written as in the dataset
+
+
+class _SampleMap(NamedTuple):
+    """Which samples of the matrix to keep and the patient key each one stands for."""
+
+    positions: list[int]
+    keys: list[str]
+    note: str
+
+
+def matrix_format(filename: str) -> tuple[str, bool]:
+    """The table suffix of a matrix file name and whether it is gzip-compressed.
+
+    "expr.tsv.gz" gives (".tsv", True); a bare "HiSeqV2.gz" gives ("", True), and its separator is
+    then read from the header line.
+    """
+    suffixes = [suffix.lower() for suffix in Path(filename).suffixes]
+    if suffixes and suffixes[-1] == ".gz":
+        inner = suffixes[-2] if len(suffixes) >= 2 and suffixes[-2] in MATRIX_SUFFIXES - {".parquet"} else ""
+        return inner, True
+    return (suffixes[-1] if suffixes else ".csv"), False
+
+
+def _gunzip(source: Path, target: Path) -> None:
+    written = 0
+    try:
+        with gzip.open(source, "rb") as packed, target.open("wb") as plain:
+            while chunk := packed.read(1 << 20):
+                written += len(chunk)
+                if written > MAX_DECOMPRESSED_BYTES:
+                    raise UserInputError(f"The compressed matrix unpacks to more than {MAX_DECOMPRESSED_BYTES // 1024 ** 3} GB.")
+                plain.write(chunk)
+    except (OSError, EOFError) as exc:
+        raise UserInputError("The .gz file could not be unpacked; is it a gzip-compressed text file?") from exc
+
+
+def _sniffed_suffix(path: Path) -> str:
+    with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+        first = handle.readline()
+    return ".tsv" if "\t" in first else ".csv"
+
+
+def _tcga_sample_map(ids: Sequence[Any], patient_keys: set[str]) -> _SampleMap | None:
+    """TCGA sample barcodes matched to the dataset's patient barcodes: one tumour sample per patient.
+
+    Normal-tissue (10-19) and control (20-29) samples are left out. A patient with several tumour
+    samples keeps the lowest sample type (01, primary tumour, first) and then the first vial.
+    """
+    if not patient_keys or sum(1 for key in patient_keys if _TCGA_PATIENT.match(key)) < 0.8 * len(patient_keys):
+        return None
+    chosen: dict[str, tuple[str, str, int]] = {}
+    left_out: dict[str, int] = {}
+    parsed = 0
+    for position, value in enumerate(ids):
+        match = _TCGA_SAMPLE.match(str(value).strip())
+        if not match:
+            continue
+        parsed += 1
+        patient, sample_type, vial = match.group(1).upper(), match.group(2), match.group(3).upper()
+        if sample_type not in _TCGA_TUMOUR_TYPES:
+            kind = "normal-tissue" if sample_type.startswith("1") else "control"
+            left_out[kind] = left_out.get(kind, 0) + 1
+            continue
+        if patient not in patient_keys:
+            continue
+        current = chosen.get(patient)
+        if current is None or (sample_type, vial) < current[:2]:
+            if current is not None:
+                left_out["further tumour"] = left_out.get("further tumour", 0) + 1
+            chosen[patient] = (sample_type, vial, position)
+        else:
+            left_out["further tumour"] = left_out.get("further tumour", 0) + 1
+    if parsed < 0.8 * max(len(ids), 1) or not chosen:
+        return None
+    ordered = sorted(chosen.items(), key=lambda item: item[1][2])
+    used: dict[str, int] = {}
+    for _, (sample_type, _, _) in ordered:
+        used[sample_type] = used.get(sample_type, 0) + 1
+    used_text = ", ".join(f"{count} {_TCGA_TUMOUR_TYPES[code]} ({code})" for code, count in sorted(used.items()))
+    left_text = ", ".join(f"{count} {kind}" for kind, count in sorted(left_out.items()))
+    note = f"TCGA sample barcodes were matched to patient barcodes: used {used_text} sample(s)" + (f"; left out {left_text} sample(s)." if left_text else ".")
+    return _SampleMap(positions=[item[1][2] for item in ordered], keys=[item[0] for item in ordered], note=note)
+
+
+def _examples(values: Sequence[Any], limit: int = 3) -> str:
+    shown = [str(value) for value in list(values)[:limit]]
+    return ", ".join(f"'{value}'" for value in shown) if shown else "(none)"
 
 
 def id_key(value: Any) -> str | None:
@@ -83,16 +183,31 @@ def _check_shape(n_markers: int, n_samples: int) -> None:
         )
 
 
-def _orientation(header_ids: Sequence[Any], first_column_ids: Sequence[Any], patient_keys: set[str], requested: str) -> str:
-    if requested != "auto":
-        return requested
+def _orientation(
+    header_ids: Sequence[Any],
+    first_column_ids: Sequence[Any],
+    patient_keys: set[str],
+    requested: str,
+    patient_examples: Sequence[Any] = (),
+) -> tuple[str, _SampleMap | None]:
+    """The layout, and a sample map when the matrix IDs match only as TCGA sample barcodes."""
     in_header = sum(1 for value in header_ids if id_key(value) in patient_keys)
     in_column = sum(1 for value in first_column_ids if id_key(value) in patient_keys)
-    if in_header == 0 and in_column == 0:
-        raise UserInputError(
-            "No patient ID in the matrix matches the chosen ID column. The IDs must be written the same way in both files."
-        )
-    return "markers_in_rows" if in_header > in_column else "samples_in_rows"
+    if in_header or in_column:
+        if requested != "auto":
+            return requested, None
+        return ("markers_in_rows" if in_header > in_column else "samples_in_rows"), None
+    candidates = (("markers_in_rows", header_ids), ("samples_in_rows", first_column_ids))
+    for layout, ids in candidates:
+        if requested in ("auto", layout):
+            sample_map = _tcga_sample_map(ids, patient_keys)
+            if sample_map is not None:
+                return layout, sample_map
+    raise UserInputError(
+        "No patient ID in the matrix matches the chosen ID column. The dataset's IDs look like "
+        f"{_examples(patient_examples)}; the matrix's first row holds {_examples(header_ids)} and its first column "
+        f"{_examples(first_column_ids)}. The IDs must be written the same way in both files."
+    )
 
 
 def _unique_names(values: Sequence[Any], what: str) -> tuple[str, ...]:
@@ -129,11 +244,23 @@ def read_marker_matrix(path: str | Path, filename: str, *, patient_ids: Sequence
     """Read a marker matrix file; ``patient_ids`` (the dataset's ID column) decide the layout when it is "auto"."""
     if orientation not in ORIENTATIONS:
         raise UserInputError(f"Unknown matrix layout '{orientation}'.")
-    path = Path(path)
-    suffix = Path(filename).suffix.lower()
+    suffix, compressed = matrix_format(filename)
+    if compressed:
+        with tempfile.TemporaryDirectory() as folder:
+            plain = Path(folder) / "matrix"
+            _gunzip(Path(path), plain)
+            suffix = suffix or _sniffed_suffix(plain)
+            unpacked = plain.with_suffix(suffix)
+            shutil.move(plain, unpacked)
+            return _read_matrix_file(unpacked, suffix, filename, patient_ids=patient_ids, orientation=orientation)
     if suffix not in MATRIX_SUFFIXES:
-        raise UserInputError(f"Unsupported matrix file type '{suffix}'. Use CSV, TSV, TXT or Parquet.")
+        raise UserInputError(f"Unsupported matrix file type '{suffix}'. Use CSV, TSV, TXT or Parquet, optionally gzip-compressed (.gz).")
+    return _read_matrix_file(Path(path), suffix, filename, patient_ids=patient_ids, orientation=orientation)
+
+
+def _read_matrix_file(path: Path, suffix: str, filename: str, *, patient_ids: Sequence[Any], orientation: str) -> MarkerMatrix:
     patient_keys = {key for key in (id_key(value) for value in patient_ids) if key is not None}
+    patient_examples = [key for key in (id_key(value) for value in patient_ids[:3]) if key is not None]
 
     if suffix == ".parquet":
         try:
@@ -158,14 +285,14 @@ def read_marker_matrix(path: str | Path, filename: str, *, patient_ids: Sequence
         frame = frame.set_index(frame.columns[0])
         _check_shape(frame.shape[1], frame.shape[0])
         column_names = list(frame.columns)
-        layout = _orientation(column_names, list(frame.index), patient_keys, orientation)
+        layout, sample_map = _orientation(column_names, list(frame.index), patient_keys, orientation, patient_examples)
     else:
         separator = _separator(suffix)
         header, n_lines = _text_shape(path, separator)
         if len(header) < 2:
             raise UserInputError("The matrix needs an ID column and at least one data column.")
         first_column = pd.read_csv(path, sep=separator, usecols=[0], dtype=str, encoding="utf-8-sig").iloc[:, 0].tolist()
-        layout = _orientation(header[1:], first_column, patient_keys, orientation)
+        layout, sample_map = _orientation(header[1:], first_column, patient_keys, orientation, patient_examples)
         n_data_columns = len(header) - 1
         _check_shape(*((n_lines, n_data_columns) if layout == "markers_in_rows" else (n_data_columns, n_lines)))
         frame = pd.read_csv(path, sep=separator, index_col=0, encoding="utf-8-sig", low_memory=False)
@@ -174,6 +301,14 @@ def read_marker_matrix(path: str | Path, filename: str, *, patient_ids: Sequence
         if len(column_names) != frame.shape[1]:
             raise UserInputError("Every row of the matrix must have as many fields as the header.")
 
+    if sample_map is not None:
+        # Only the matched tumour samples are kept, under the patients' barcodes.
+        if layout == "markers_in_rows":
+            frame = frame.iloc[:, sample_map.positions]
+            column_names = list(sample_map.keys)
+        else:
+            frame = frame.iloc[sample_map.positions]
+            frame.index = list(sample_map.keys)
     if layout == "markers_in_rows":
         marker_names = _unique_names(list(frame.index), "marker name")
         sample_keys = _unique_names(column_names, "patient ID")
@@ -194,6 +329,7 @@ def read_marker_matrix(path: str | Path, filename: str, *, patient_ids: Sequence
         sample_keys=sample_keys,
         values=np.ascontiguousarray(values),
         fingerprint=digest.hexdigest()[:16],
+        id_note=sample_map.note if sample_map is not None else "",
     )
 
 

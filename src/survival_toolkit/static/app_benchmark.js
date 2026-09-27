@@ -27,6 +27,8 @@
       renderPredictiveWorkbench,
       syncPredictiveWorkbenchCompareVisibility,
       showError,
+      fetchJSON,
+      requestBoardRender,
     } = deps;
 
     function createBenchmarkActionButton(action) {
@@ -338,7 +340,6 @@
       return [
         "Cross-family partial-likelihood models do not share one tie method: Cox PH and LASSO-Cox use Efron, whereas DeepSurv, Survival Transformer, and Survival VAE use Breslow. Treat small cross-family C-index gaps cautiously when many event times are tied.",
         "ML comparison rows may include IBS / Brier Skill Score, but DL comparison rows currently report C-index only, so calibration/error comparisons are not symmetric across families.",
-        "Leaderboard order is a point-estimate screening view only; SurvStudio does not run a paired significance test for C-index gaps between models.",
       ];
     }
 
@@ -445,6 +446,8 @@
         pendingFamilies,
         excludedByFamily: showingStaleBoard ? snapshotExcludedByFamily : excludedByFamily,
         showingStaleBoard,
+        currentPayloads,
+        snapshotPayloads,
         snapshotRowCounts: {
           ml: comparisonRowsFromPayload(snapshotPayloads.ml).length,
           dl: comparisonRowsFromPayload(snapshotPayloads.dl).length,
@@ -505,110 +508,103 @@
         noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
       }
       if (board.hasLockedTest) noteParts.push(LOCKED_TEST_RANKING_NOTE);
+      noteParts.push(intervalNote(board));
       noteParts.push(...benchmarkMethodologyNotes(board));
       if (board.missingMetricCount) {
         noteParts.push(`Omitted ${board.missingMetricCount} row(s) without a numeric C-index.`);
       }
       refs.benchmarkPlotNote.textContent = noteParts.join(" ");
 
-      const x = board.plottableRows.map((row) => {
-        const familyMeta = benchmarkRowFamilyMeta(row);
-        return `${row.model}<br>${familyMeta.familyShortLabel}`;
-      });
-      const y = board.plottableRows.map((row) => row.numericCIndex);
-      const colors = board.plottableRows.map((row) => {
-        const familyMeta = benchmarkRowFamilyMeta(row);
-        return familyMeta.familyTab === "ml" ? "rgba(47, 101, 217, 0.92)" : "rgba(219, 126, 21, 0.92)";
-      });
-      const borderColors = board.plottableRows.map((row) => {
-        const familyMeta = benchmarkRowFamilyMeta(row);
-        return familyMeta.familyTab === "ml" ? "rgba(34, 72, 156, 1)" : "rgba(156, 86, 15, 1)";
-      });
-      let plotRank = 0;
-      const customdata = board.plottableRows.map((row) => {
-        const familyMeta = benchmarkRowFamilyMeta(row);
-        return ([
-        row.comparableForRanking ? String(++plotRank) : "Not ranked",
-        familyMeta.familyLabel,
-        benchmarkEvaluationLabel(row.evaluation_mode),
-        row.status,
-        ]);
-      });
-      const referenceMax = Math.max(0.72, ...y.filter((value) => Number.isFinite(value)).map((value) => value + 0.04));
+      const intervals = board.intervals?.status === "ready" ? board.intervals.result : null;
+      const intervalByModel = new Map((intervals?.rows || []).map((row) => [String(row.model), row]));
+      const valueOf = (row) => {
+        const interval = intervalByModel.get(String(row.model));
+        if (interval?.c_index != null) return Number(interval.c_index);
+        return board.hasLockedTest ? benchmarkMetricNumber(row.locked_test_c_index) : row.numericCIndex;
+      };
+      // Best model on top; each dot carries its bootstrap interval when the board has one.
+      const ordered = board.plottableRows.filter((row) => Number.isFinite(valueOf(row))).sort((left, right) => valueOf(left) - valueOf(right));
+      const label = (row) => `${row.model} (${benchmarkRowFamilyMeta(row).familyShortLabel})`;
+      const traces = ["ml", "dl"].map((family) => {
+        const members = ordered.filter((row) => benchmarkRowFamilyMeta(row).familyTab === family);
+        const intervalsOf = members.map((row) => intervalByModel.get(String(row.model)) || null);
+        return {
+          type: "scatter",
+          mode: "markers",
+          name: family === "ml" ? "Classical ML" : "Deep Learning",
+          x: members.map(valueOf),
+          y: members.map(label),
+          marker: {
+            size: 11,
+            color: family === "ml" ? "rgba(47, 101, 217, 0.95)" : "rgba(219, 126, 21, 0.95)",
+            line: { color: "#1a2332", width: 1 },
+          },
+          error_x: intervals
+            ? {
+              type: "data",
+              symmetric: false,
+              array: members.map((row, index) => (intervalsOf[index]?.c_index_ci?.[1] ?? valueOf(row)) - valueOf(row)),
+              arrayminus: members.map((row, index) => valueOf(row) - (intervalsOf[index]?.c_index_ci?.[0] ?? valueOf(row))),
+              thickness: 1.6,
+              width: 0,
+              color: family === "ml" ? "rgba(34, 72, 156, 0.9)" : "rgba(156, 86, 15, 0.9)",
+            }
+            : undefined,
+          customdata: members.map((row, index) => [
+            intervalRangeText(intervalsOf[index]?.c_index_ci),
+            deltaText(intervalsOf[index]),
+            benchmarkEvaluationLabel(row.evaluation_mode),
+          ]),
+          hovertemplate: [
+            "<b>%{y}</b>",
+            `${board.hasLockedTest ? "Locked-test C-index" : "C-index"}: %{x:.3f} %{customdata[0]}`,
+            "%{customdata[1]}",
+            "Evaluation: %{customdata[2]}",
+            "<extra></extra>",
+          ].join("<br>"),
+        };
+      }).filter((trace) => trace.x.length);
+      const lows = ordered.map((row) => intervalByModel.get(String(row.model))?.c_index_ci?.[0] ?? valueOf(row));
+      const highs = ordered.map((row) => intervalByModel.get(String(row.model))?.c_index_ci?.[1] ?? valueOf(row));
+      // The chance line (0.5) joins the axis only when an interval comes near it.
+      const showChance = Math.min(...lows) < 0.58;
+      const low = showChance ? Math.min(...lows, 0.5) : Math.min(...lows);
+      const high = Math.max(...highs);
+      const reference = intervalByModel.get("Cox PH");
+      const shapes = showChance
+        ? [{ type: "line", yref: "paper", y0: 0, y1: 1, xref: "x", x0: 0.5, x1: 0.5, line: { color: "rgba(90, 103, 118, 0.7)", width: 1.2, dash: "dot" } }]
+        : [];
+      const annotations = showChance
+        ? [{ xref: "x", x: 0.5, yref: "paper", y: 1, yanchor: "bottom", text: "0.5", showarrow: false, font: { size: 11, color: "rgba(90, 103, 118, 0.95)" } }]
+        : [];
+      if (reference?.c_index != null) {
+        shapes.push({ type: "line", yref: "paper", y0: 0, y1: 1, xref: "x", x0: reference.c_index, x1: reference.c_index, line: { color: "rgba(34, 72, 156, 0.6)", width: 1.2, dash: "dash" } });
+        annotations.push({ xref: "x", x: reference.c_index, yref: "paper", y: 1, yanchor: "bottom", text: "Cox PH", showarrow: false, font: { size: 11, color: "rgba(34, 72, 156, 0.95)" } });
+      }
       const layout = {
         title: {
-          text: "C-index on the same patient splits",
+          text: board.hasLockedTest ? "Locked-test C-index with 95% intervals" : "C-index on the same test patients, with 95% intervals",
           x: 0.02,
           xanchor: "left",
-          font: { family: "Source Serif 4, serif", size: 22, color: "#1a2332" },
+          font: { family: "Source Serif 4, serif", size: 20, color: "#1a2332" },
         },
         font: { family: "Sora, sans-serif", size: 13, color: "#1a2332" },
-        height: 420,
-        margin: { l: 72, r: 24, t: 54, b: 92 },
+        height: Math.max(300, 120 + 34 * ordered.length),
+        margin: { l: 24, r: 24, t: 70, b: 56 },
         paper_bgcolor: "#ffffff",
         plot_bgcolor: "#ffffff",
         xaxis: {
-          title: { text: "Model" },
-          tickfont: { size: 12 },
-          automargin: true,
-        },
-        yaxis: {
-          title: { text: "Concordance index" },
-          range: [0, referenceMax],
+          title: { text: board.hasLockedTest ? "Locked-test C-index" : "C-index" },
+          range: [low - 0.02, Math.min(1, high + 0.02)],
           gridcolor: "rgba(27, 39, 51, 0.08)",
           zeroline: false,
         },
-        shapes: [
-          {
-            type: "line",
-            xref: "paper",
-            x0: 0,
-            x1: 1,
-            yref: "y",
-            y0: 0.5,
-            y1: 0.5,
-            line: { color: "rgba(90, 103, 118, 0.75)", width: 1.5, dash: "dot" },
-          },
-        ],
-        annotations: [
-          {
-            xref: "paper",
-            x: 0.02,
-            yref: "y",
-            y: 0.5,
-            yanchor: "bottom",
-            text: "Reference 0.5",
-            showarrow: false,
-            font: { size: 11, color: "rgba(90, 103, 118, 0.95)" },
-            bgcolor: "rgba(255,255,255,0.85)",
-          },
-        ],
-        showlegend: false,
-      };
-      const trace = {
-        type: "bar",
-        x,
-        y,
-        text: board.plottableRows.map((row) => formatValue(row.c_index)),
-        textposition: "outside",
-        cliponaxis: false,
-        marker: {
-          color: colors,
-          line: {
-            color: borderColors,
-            width: 1.2,
-          },
-        },
-        customdata,
-        hovertemplate: [
-          "<b>%{x}</b>",
-          "Rank: %{customdata[0]}",
-          "Family: %{customdata[1]}",
-          "C-index: %{y:.3f}",
-          "Evaluation: %{customdata[2]}",
-          "Status: %{customdata[3]}",
-          "<extra></extra>",
-        ].join("<br>"),
+        // Categories in C-index order across both families (best on top), not grouped by family.
+        yaxis: { automargin: true, tickfont: { size: 12 }, categoryorder: "array", categoryarray: ordered.map(label) },
+        shapes,
+        annotations,
+        showlegend: true,
+        legend: { orientation: "h", x: 1, xanchor: "right", y: 1.02, yanchor: "bottom" },
       };
 
       refs.benchmarkComparisonPlot.classList.remove("hidden");
@@ -616,11 +612,79 @@
       refs.benchmarkComparisonPlot.innerHTML = "";
       await Plotly.newPlot(
         refs.benchmarkComparisonPlot,
-        [trace],
+        traces,
         plotLayoutConfig(layout, "benchmark_comparison"),
         plotConfig("benchmark_comparison"),
       );
       stabilizePlotShellHeight(refs.benchmarkComparisonPlot);
+    }
+
+    function intervalRangeText(interval) {
+      return Array.isArray(interval) && interval[0] != null
+        ? `(95% ${Number(interval[0]).toFixed(3)} to ${Number(interval[1]).toFixed(3)})`
+        : "";
+    }
+
+    function deltaText(row) {
+      if (!row || row.delta_vs_reference == null) return row && String(row.model) === "Cox PH" ? "Reference model" : "";
+      const sign = Number(row.delta_vs_reference) >= 0 ? "+" : "";
+      return `ΔC vs Cox PH: ${sign}${Number(row.delta_vs_reference).toFixed(3)} ${intervalRangeText(row.delta_ci)}`;
+    }
+
+    // The test-set predictions behind the visible board, when its families scored one shared test set.
+    function boardPredictionBlocks(board) {
+      if (board.withholdCrossFamilyRanking || board.predictiveBusy || !board.visibleFamilies.length) return null;
+      const payloads = board.showingStaleBoard ? board.snapshotPayloads : board.currentPayloads;
+      const blocks = board.visibleFamilies.map((goal) => {
+        const analysis = payloads?.[goal]?.analysis || {};
+        return board.hasLockedTest ? analysis.locked_test_predictions : analysis.test_predictions;
+      });
+      return blocks.every((block) => Array.isArray(block?.row_ids) && block.row_ids.length) ? blocks : null;
+    }
+
+    function boardIntervalKey(board) {
+      const payloads = board.showingStaleBoard ? board.snapshotPayloads : board.currentPayloads;
+      return [
+        board.showingStaleBoard ? "snapshot" : "current",
+        board.hasLockedTest ? "locked" : "holdout",
+        ...board.visibleFamilies.map((goal) => {
+          const payload = payloads?.[goal];
+          const rows = comparisonRowsFromPayload(payload).map((row) => `${row.model}=${row.c_index}`).join(",");
+          return `${goal}:${comparePayloadSplitFingerprint(payload)}:${comparePayloadGroupId(payload)}:${rows}`;
+        }),
+      ].join("|");
+    }
+
+    // Bootstrap intervals for the visible board, fetched once per board and kept in runtime.
+    function boardIntervals(board) {
+      const blocks = boardPredictionBlocks(board);
+      if (!blocks) return null;
+      const key = boardIntervalKey(board);
+      if (runtime.benchmarkIntervals?.key === key) return runtime.benchmarkIntervals;
+      runtime.benchmarkIntervals = { key, status: "loading" };
+      fetchJSON("/api/model-comparison-intervals", { method: "POST", body: JSON.stringify({ predictions: blocks }) })
+        .then((result) => {
+          if (runtime.benchmarkIntervals?.key !== key) return;
+          runtime.benchmarkIntervals = { key, status: "ready", result };
+          requestBoardRender();
+        })
+        .catch((error) => {
+          if (runtime.benchmarkIntervals?.key !== key) return;
+          runtime.benchmarkIntervals = { key, status: "error", error: error?.message || String(error) };
+          requestBoardRender();
+        });
+      return runtime.benchmarkIntervals;
+    }
+
+    function intervalNote(board) {
+      const intervals = board.intervals;
+      if (intervals?.status === "ready") {
+        const result = intervals.result || {};
+        return `Intervals are 95% bootstrap intervals over the ${formatValue(result.n)} ${board.hasLockedTest ? "locked-test" : "test"} patients all models share (${formatValue(result.events)} events). ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients, so a model whose ΔC interval contains 0 is not distinguishable from Cox PH on this split.`;
+      }
+      if (intervals?.status === "loading") return "Computing bootstrap intervals for the C-index of each model.";
+      if (intervals?.status === "error") return `Bootstrap intervals are unavailable: ${intervals.error}`;
+      return "Leaderboard order is a point-estimate screening view; repeated cross-validation reports the spread across folds instead of intervals.";
     }
 
     function buildBenchmarkSummaryContent(board, hasAnyResult, currentMlRows, currentDlRows) {
@@ -845,6 +909,7 @@
         noteParts.push("Visible ML and DL rows come from different compare runs, so no cross-family rank or shared chart is published.");
       }
       if (board.hasLockedTest) noteParts.push(LOCKED_TEST_RANKING_NOTE);
+      noteParts.push(intervalNote(board));
       noteParts.push(...benchmarkMethodologyNotes(board));
       ["ml", "dl"].forEach((goal) => {
         const copy = excludedModelsCopy(goal, board.excludedByFamily?.[goal], {
@@ -854,6 +919,8 @@
       });
       refs.benchmarkTableNote.textContent = noteParts.join(" ");
 
+      const intervals = board.intervals?.status === "ready" ? board.intervals.result : null;
+      const intervalByModel = new Map((intervals?.rows || []).map((row) => [String(row.model), row]));
       const rankLabel = board.hasMixedEvaluation ? "Family rank" : "Screen rank";
       const displayedRankLabel = board.withholdCrossFamilyRanking ? "Family rank" : rankLabel;
       let screenRank = 0;
@@ -873,6 +940,7 @@
               <th>Model</th>
               <th>${board.hasLockedTest ? "CV C-index (development)" : "C-index"}</th>
               ${board.hasLockedTest ? "<th>Locked-test C-index</th>" : ""}
+              ${intervals ? `<th>${board.hasLockedTest ? "Locked-test 95% CI" : "95% CI"}</th><th>ΔC vs Cox PH (95% CI)</th>` : ""}
               <th>Evaluation</th>
               <th>Status</th>
               <th class="benchmark-review-column">Review</th>
@@ -889,6 +957,7 @@
                 <td>${escapeHtml(formatValue(row.model))}</td>
                 <td>${escapeHtml(formatValue(row.c_index))}</td>
                 ${board.hasLockedTest ? `<td>${row.hasLockedTest ? escapeHtml(formatValue(row.locked_test_c_index)) : "—"}</td>` : ""}
+                ${intervals ? intervalCells(intervalByModel.get(String(row.model))) : ""}
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>
                 <td class="benchmark-review-column"><span class="benchmark-action-slot" data-benchmark-action-slot="${index}"></span></td>
@@ -907,6 +976,14 @@
       });
     }
 
+    function intervalCells(row) {
+      if (!row) return "<td>—</td><td>—</td>";
+      const delta = row.delta_vs_reference == null
+        ? (String(row.model) === "Cox PH" ? "reference" : "—")
+        : `${Number(row.delta_vs_reference) >= 0 ? "+" : ""}${Number(row.delta_vs_reference).toFixed(3)} ${intervalRangeText(row.delta_ci).replace("95% ", "")}`;
+      return `<td>${escapeHtml(intervalRangeText(row.c_index_ci).replace("(95% ", "").replace(")", ""))}</td><td>${escapeHtml(delta)}</td>`;
+    }
+
     function renderBenchmarkBoard() {
       if (!refs.benchmarkSummaryGrid || !refs.benchmarkComparisonShell) return;
       renderPredictiveWorkbench();
@@ -919,6 +996,7 @@
         return;
       }
       const board = benchmarkBoardState();
+      board.intervals = boardIntervals(board);
       renderUnifiedBenchmarkSummary(board);
       renderUnifiedBenchmarkPlot(board).catch((error) => showError(error?.message || "Failed to render unified benchmark plot."));
       renderUnifiedBenchmarkTable(board);

@@ -843,3 +843,41 @@ def test_plot_text_from_the_dataset_is_escaped() -> None:
         # The hover template keeps its own %{x}/%{y} fields but none from the group label.
         assert "%{y}</a>" not in str(trace.get("hovertemplate", ""))
     assert escape_plotly_text(group) in {trace.get("name") for trace in figure["data"]}
+
+
+def test_build_km_figure_prints_numbers_at_risk_under_the_axis() -> None:
+    curve = {
+        "timeline": [0.0, 10.0, 20.0],
+        "survival": [1.0, 0.8, 0.6],
+        "ci_lower": [1.0, 0.7, 0.5],
+        "ci_upper": [1.0, 0.9, 0.7],
+        "censor_times": [],
+        "censor_survival": [],
+    }
+    km_result = {
+        "curves": [{**curve, "group": "Stage I"}, {**curve, "group": "Stage II"}],
+        "test": {"test": "logrank", "chisq": 4.2, "p_value": 0.0004},
+        "confidence_level": 0.95,
+        "display_horizon": 24.0,
+        "risk_table": {
+            "columns": ["Group", "0", "10", "20"],
+            "rows": [{"Group": "Stage I", "0": 50, "10": 31, "20": 12}, {"Group": "Stage II", "0": 40, "10": 20, "20": 5}],
+            "times": [0.0, 10.0, 20.0],
+        },
+    }
+
+    figure = build_km_figure(km_result)
+
+    annotations = figure["layout"]["annotations"]
+    texts = [annotation["text"] for annotation in annotations]
+    assert "<b>Number at risk</b>" in texts and "Stage I" in texts and "Stage II" in texts
+    counts = [annotation for annotation in annotations if annotation.get("xref") == "x"]
+    assert [(annotation["x"], annotation["text"]) for annotation in counts[:3]] == [(0.0, "50"), (10.0, "31"), (20.0, "12")]
+    assert figure["layout"]["xaxis"]["tickvals"] == [0.0, 10.0, 20.0]
+    # The test result and the band note sit in the lower left, off the curves' start at 100%.
+    note = next(annotation for annotation in annotations if "Logrank" in annotation["text"])
+    assert note["y"] == 0.02 and "Shaded bands" in note["text"]
+    assert figure["layout"]["margin"]["b"] > 70
+
+    without_table = build_km_figure({key: value for key, value in km_result.items() if key != "risk_table"})
+    assert not any("Number at risk" in annotation["text"] for annotation in without_table["layout"]["annotations"])

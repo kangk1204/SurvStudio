@@ -78,6 +78,12 @@ def test_remark_checklist_fills_in_what_the_run_knows() -> None:
     assert f"given for {scope}" in items["17"]["text"]
     assert "Unadjusted HR" in items["15"]["text"]
     assert report["results"].startswith(f"Of {len(_MARKERS)} markers, {result['tier_counts']['robust']} were robust")
+    # The selected-marker model is set against the clinical covariates alone, in the patients left out.
+    signature = result["signature"]
+    gain = f"{signature['signature_c_left_out'] - signature['clinical_c_left_out']:+.3f}"
+    assert f"for the clinical covariates alone (difference {gain})" in report["results"]
+    assert "In the patients left out of each subsample, the selected-marker model reached" in items["18"]["text"]
+    assert "more than 90% of patients at one value were excluded" in report["methods"]
 
 
 def test_remark_checklist_without_clinical_covariates_asks_for_adjusted_effects() -> None:

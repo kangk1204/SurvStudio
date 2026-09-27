@@ -52,6 +52,12 @@ function formatPValue(value) {
   return value.toFixed(3);
 }
 
+// "p=0.012" or "p<0.001" (never "p=<0.001").
+function pValuePhrase(value) {
+  const text = formatPValue(value);
+  return text.startsWith("<") ? `p${text}` : `p=${text}`;
+}
+
 function formatDisplayValue(value, label = "") {
   return isPValueLikeLabel(label) ? formatPValue(value) : formatValue(value);
 }
