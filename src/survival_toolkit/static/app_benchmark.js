@@ -566,15 +566,17 @@
       }).filter((trace) => trace.x.length);
       const lows = ordered.map((row) => intervalByModel.get(String(row.model))?.c_index_ci?.[0] ?? valueOf(row));
       const highs = ordered.map((row) => intervalByModel.get(String(row.model))?.c_index_ci?.[1] ?? valueOf(row));
-      const low = Math.min(...lows, 0.5);
+      // The chance line (0.5) joins the axis only when an interval comes near it.
+      const showChance = Math.min(...lows) < 0.58;
+      const low = showChance ? Math.min(...lows, 0.5) : Math.min(...lows);
       const high = Math.max(...highs);
       const reference = intervalByModel.get("Cox PH");
-      const shapes = [
-        { type: "line", yref: "paper", y0: 0, y1: 1, xref: "x", x0: 0.5, x1: 0.5, line: { color: "rgba(90, 103, 118, 0.7)", width: 1.2, dash: "dot" } },
-      ];
-      const annotations = [
-        { xref: "x", x: 0.5, yref: "paper", y: 1, yanchor: "bottom", text: "0.5", showarrow: false, font: { size: 11, color: "rgba(90, 103, 118, 0.95)" } },
-      ];
+      const shapes = showChance
+        ? [{ type: "line", yref: "paper", y0: 0, y1: 1, xref: "x", x0: 0.5, x1: 0.5, line: { color: "rgba(90, 103, 118, 0.7)", width: 1.2, dash: "dot" } }]
+        : [];
+      const annotations = showChance
+        ? [{ xref: "x", x: 0.5, yref: "paper", y: 1, yanchor: "bottom", text: "0.5", showarrow: false, font: { size: 11, color: "rgba(90, 103, 118, 0.95)" } }]
+        : [];
       if (reference?.c_index != null) {
         shapes.push({ type: "line", yref: "paper", y0: 0, y1: 1, xref: "x", x0: reference.c_index, x1: reference.c_index, line: { color: "rgba(34, 72, 156, 0.6)", width: 1.2, dash: "dash" } });
         annotations.push({ xref: "x", x: reference.c_index, yref: "paper", y: 1, yanchor: "bottom", text: "Cox PH", showarrow: false, font: { size: 11, color: "rgba(34, 72, 156, 0.95)" } });
