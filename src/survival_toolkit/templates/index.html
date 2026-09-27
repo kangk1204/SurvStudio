@@ -986,6 +986,26 @@
               </div>
               <input class="selection-search" id="markerSearchInput" type="search" placeholder="Search markers" aria-label="Search markers" />
               <div class="checklist" id="markerChecklist"></div>
+              <details class="marker-matrix" id="markerMatrixDetails">
+                <summary>Markers in a separate file (omics)</summary>
+                <p class="marker-matrix-hint">For more markers than fit in one table, such as gene expression: one row per marker and one column per patient, or one row per patient. The patient IDs must match an ID column of this dataset.</p>
+                <div class="marker-matrix-controls">
+                  <label><span>Patient ID column</span><select id="markerMatrixIdColumn"></select></label>
+                  <label><span>Layout</span>
+                    <select id="markerMatrixOrientation">
+                      <option value="auto" selected>Detect</option>
+                      <option value="markers_in_rows">One row per marker</option>
+                      <option value="samples_in_rows">One row per patient</option>
+                    </select>
+                  </label>
+                  <input id="markerMatrixFile" type="file" accept=".csv,.tsv,.txt,.parquet" aria-label="Marker matrix file" />
+                  <button class="button ghost compact-btn" id="attachMarkerMatrixButton" type="button">Attach</button>
+                </div>
+                <div class="marker-matrix-status hidden" id="markerMatrixStatus">
+                  <span id="markerMatrixSummary"></span>
+                  <button class="button ghost compact-btn" id="removeMarkerMatrixButton" type="button">Remove</button>
+                </div>
+              </details>
             </div>
             <div class="selection-card">
               <div class="selection-card-head">

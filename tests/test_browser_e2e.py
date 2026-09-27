@@ -1695,6 +1695,62 @@ def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str, 
         raise
 
 
+def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server: str, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    import numpy as np
+    import pandas as pd
+
+    from survival_toolkit.sample_data import make_example_dataset
+
+    frame = make_example_dataset()
+    rng = np.random.default_rng(4)
+    genes = pd.DataFrame(rng.normal(size=(20, len(frame))), index=[f"GENE{index:02d}" for index in range(20)], columns=frame["patient_id"])
+    genes.loc["SIGNAL"] = frame["biomarker_score"].to_numpy()
+    matrix_path = tmp_path / "expression.tsv"
+    genes.to_csv(matrix_path, sep="	", index_label="gene")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _wait_for_workspace(page)
+            page.locator('[data-tab="markers"]').click()
+            _assert_tab_active(page, "markers")
+
+            page.locator("#markerMatrixDetails > summary").click()
+            assert page.locator("#markerMatrixIdColumn").input_value() == "patient_id"
+            page.locator("#markerMatrixFile").set_input_files(str(matrix_path))
+            page.locator("#attachMarkerMatrixButton").click()
+            page.locator("#markerMatrixStatus").wait_for(state="visible")
+            assert "21 markers, 360 of 360 patients matched by patient_id" in page.locator("#markerMatrixSummary").inner_text()
+            assert "21 markers from expression.tsv" in page.locator("#markerSelectionLine").inner_text()
+            assert page.locator("#selectAllMarkersButton").is_disabled()
+            assert page.locator("#attachMarkerMatrixButton").is_disabled()
+
+            page.locator("#panel-markers .options-details > summary").click()
+            page.locator("#markerPermutations").fill("99")
+            page.locator("#markerResamples").fill("10")
+            page.locator("#runMarkersButton").click()
+            page.wait_for_function("!document.getElementById('downloadMarkersCsvButton').disabled", timeout=120000)
+
+            assert "markers from expression.tsv" in page.locator("#markersMetaBanner").inner_text()
+            assert "SIGNAL" in page.locator("#markersTableShell tbody tr").nth(0).inner_text()
+
+            page.locator("#removeMarkerMatrixButton").click()
+            assert page.locator("#markerMatrixStatus").is_hidden()
+            assert page.locator("#selectAllMarkersButton").is_enabled()
+            page.wait_for_function("document.querySelector('[data-run-status=\"markers\"]').textContent === 'Settings changed'")
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
 def test_browser_design_check_page_flags_a_single_cohort_best_of_101_design(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 

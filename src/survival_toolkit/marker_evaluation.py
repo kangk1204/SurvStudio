@@ -26,13 +26,11 @@ from typing import Any, NamedTuple, Sequence
 import numpy as np
 import pandas as pd
 from scipy import stats
-from statsmodels.duration.hazard_regression import PHReg
 
 from survival_toolkit.analysis import (
     _build_cox_strata_payload,
     _cohort_frame,
     _harrell_c_index_counts,
-    fit_phreg,
 )
 from survival_toolkit.concurrency import raise_if_cancelled
 from survival_toolkit.encoding import fit_feature_encoder, transform_feature_encoder
@@ -44,6 +42,7 @@ from survival_toolkit.marker_screen import (
     PermutationFdrAccumulator,
     ScoreStats,
     bh_vector,
+    fit_cox,
     fit_cox_null,
     harrell_c_many,
     residualize,
@@ -179,8 +178,10 @@ def prepare_marker_cohort(
     if missing:
         raise ValueError("Columns not found in the dataset: " + ", ".join(missing[:5]) + ".")
 
+    # Only the outcome and clinical columns go through the cohort checks, which inspect every
+    # column they are given; a genome-wide panel would make them the slowest step.
     frame = _cohort_frame(
-        df,
+        df[list(dict.fromkeys([time_column, event_column, *clinical, *strata]))],
         time_column=time_column,
         event_column=event_column,
         event_positive_value=event_positive_value,
@@ -190,15 +191,22 @@ def prepare_marker_cohort(
     raw_markers = df.loc[source_rows, markers]
     non_numeric: list[str] = []
     values = np.empty((len(source_rows), len(markers)), dtype=float)
-    for index, column in enumerate(markers):
-        series = raw_markers[column]
-        numeric = pd.to_numeric(series, errors="coerce")
-        if bool((series.notna() & numeric.isna()).any()):
-            non_numeric.append(column)
+    # Numeric columns convert in one step (a genome-wide panel has tens of thousands);
+    # only text-typed columns are checked value by value.
+    is_numeric = [pd.api.types.is_numeric_dtype(dtype) for dtype in raw_markers.dtypes]
+    numeric_positions = [index for index, numeric in enumerate(is_numeric) if numeric]
+    if numeric_positions:
+        values[:, numeric_positions] = raw_markers.iloc[:, numeric_positions].to_numpy(dtype=float, na_value=np.nan)
+    for index, numeric in enumerate(is_numeric):
+        if numeric:
             continue
-        column_values = numeric.to_numpy(dtype=float, copy=True)
-        column_values[~np.isfinite(column_values)] = np.nan
-        values[:, index] = column_values
+        series = raw_markers.iloc[:, index]
+        coerced = pd.to_numeric(series, errors="coerce")
+        if bool((series.notna() & coerced.isna()).any()):
+            non_numeric.append(markers[index])
+            continue
+        values[:, index] = coerced.to_numpy(dtype=float, na_value=np.nan)
+    values[~np.isfinite(values)] = np.nan
     if non_numeric:
         raise ValueError(
             "Markers must be numeric; these columns contain text: "
@@ -250,8 +258,18 @@ def _impute(block: np.ndarray, medians: np.ndarray) -> np.ndarray:
 
 
 def _column_medians(block: np.ndarray) -> np.ndarray:
-    with np.errstate(all="ignore"):
-        medians = np.nanmedian(block, axis=0) if block.size else np.zeros(block.shape[1])
+    if not block.size:
+        return np.zeros(block.shape[1])
+    medians = np.empty(block.shape[1], dtype=float)
+    missing = np.isnan(block).any(axis=0)
+    # np.nanmedian is many times slower than np.median; only columns with gaps need it.
+    # Medians along contiguous rows of the transposed block: partitioning down the columns of
+    # a wide row-major block is cache-unfriendly.
+    if (~missing).any():
+        medians[~missing] = np.median(np.ascontiguousarray(block[:, ~missing].T), axis=1)
+    if missing.any():
+        with np.errstate(all="ignore"):
+            medians[missing] = np.nanmedian(np.ascontiguousarray(block[:, missing].T), axis=1)
     return np.where(np.isfinite(medians), medians, 0.0)
 
 
@@ -415,10 +433,9 @@ def _fit_signature(cohort: MarkerCohort, rows: np.ndarray, fit: ProcedureFit, pr
         return None
     exog = np.column_stack(parts)
     strata = None if cohort.strata is None else cohort.strata[rows]
-    model = PHReg(cohort.time[rows], exog, status=cohort.event[rows], strata=strata, ties="efron")
-    results, converged = fit_phreg(model)
-    params = np.asarray(results.params, dtype=float)
-    if not converged or not np.isfinite(params).all():
+    cox = fit_cox(cohort.time[rows], cohort.event[rows], exog, strata, "efron")
+    params = cox.beta
+    if not cox.converged or not np.isfinite(params).all():
         return None
     return _SignatureFit(columns=columns, params=params, medians=fit.medians, design_columns=design_columns)
 
@@ -438,9 +455,9 @@ def _single_marker_beta(cohort: MarkerCohort, rows: np.ndarray, column: int, med
     if adjusted and cohort.clinical is not None:
         exog = np.column_stack([_varying_columns(cohort.clinical[rows]), marker])
     strata = None if cohort.strata is None else cohort.strata[rows]
-    results, converged = fit_phreg(PHReg(cohort.time[rows], exog, status=cohort.event[rows], strata=strata, ties="efron"))
-    beta = float(np.asarray(results.params, dtype=float)[-1])
-    return beta if converged and np.isfinite(beta) else float("nan")
+    fit = fit_cox(cohort.time[rows], cohort.event[rows], exog, strata, "efron")
+    beta = float(fit.beta[-1])
+    return beta if fit.converged and np.isfinite(beta) else float("nan")
 
 
 def resample_procedure(
@@ -544,8 +561,7 @@ def resample_procedure(
 def _clinical_params(cohort: MarkerCohort, rows: np.ndarray, design_columns: np.ndarray) -> np.ndarray:
     design = cohort.clinical[rows][:, design_columns]
     strata = None if cohort.strata is None else cohort.strata[rows]
-    results, _ = fit_phreg(PHReg(cohort.time[rows], design, status=cohort.event[rows], strata=strata, ties="efron"))
-    return np.asarray(results.params, dtype=float)
+    return fit_cox(cohort.time[rows], cohort.event[rows], design, strata, "efron").beta
 
 
 def _top_marker(fit: ProcedureFit, primary: str) -> int | None:
@@ -694,10 +710,10 @@ def _exact_fits(cohort: MarkerCohort, full: ProcedureFit, columns: np.ndarray) -
     clinical_design = None
     if cohort.clinical is not None and _varying_columns(cohort.clinical).shape[1]:
         clinical_design = _varying_columns(cohort.clinical)
-        results, converged = fit_phreg(PHReg(cohort.time, clinical_design, status=cohort.event, strata=strata, ties="efron"))
-        if converged:
-            clinical_llf = float(results.llf)
-            clinical_c = _pooled_c_index(cohort.time, cohort.event, clinical_design @ np.asarray(results.params), strata)
+        clinical_fit = fit_cox(cohort.time, cohort.event, clinical_design, strata, "efron")
+        if clinical_fit.converged:
+            clinical_llf = clinical_fit.loglik
+            clinical_c = _pooled_c_index(cohort.time, cohort.event, clinical_design @ clinical_fit.beta, strata)
     z_value = float(stats.norm.ppf(0.975))
     for column in columns:
         raise_if_cancelled()
@@ -706,10 +722,10 @@ def _exact_fits(cohort: MarkerCohort, full: ProcedureFit, columns: np.ndarray) -
         for label, exog in (("marginal", marker), ("adjusted", None if clinical_design is None else np.column_stack([clinical_design, marker]))):
             if exog is None:
                 continue
-            results, converged = fit_phreg(PHReg(cohort.time, exog, status=cohort.event, strata=strata, ties="efron"))
-            beta = float(np.asarray(results.params)[-1])
-            se = float(np.asarray(results.bse)[-1])
-            if not converged or not np.isfinite(beta) or not np.isfinite(se):
+            fit = fit_cox(cohort.time, cohort.event, exog, strata, "efron")
+            beta = float(fit.beta[-1])
+            se = float(np.sqrt(fit.covariance[-1, -1])) if fit.covariance[-1, -1] > 0 else float("nan")
+            if not fit.converged or not np.isfinite(beta) or not np.isfinite(se):
                 entry[label] = None
                 continue
             entry[label] = {
@@ -719,11 +735,11 @@ def _exact_fits(cohort: MarkerCohort, full: ProcedureFit, columns: np.ndarray) -
                 "wald_p": float(2.0 * stats.norm.sf(abs(beta / se))),
             }
             if label == "adjusted" and clinical_llf is not None:
-                statistic = max(2.0 * (float(results.llf) - clinical_llf), 0.0)
+                statistic = max(2.0 * (fit.loglik - clinical_llf), 0.0)
                 entry[label]["lr_statistic"] = statistic
                 entry[label]["lr_p"] = float(stats.chi2.sf(statistic, df=1))
                 if clinical_c is not None:
-                    full_c = _pooled_c_index(cohort.time, cohort.event, exog @ np.asarray(results.params), strata)
+                    full_c = _pooled_c_index(cohort.time, cohort.event, exog @ fit.beta, strata)
                     entry[label]["delta_c_apparent"] = float(full_c - clinical_c)
         fits[int(column)] = entry
     return fits
@@ -1043,10 +1059,10 @@ def _km_survival_at(time: np.ndarray, event: np.ndarray, horizon: float) -> floa
 
 
 def _external_cox(time: np.ndarray, event: np.ndarray, exog: np.ndarray, strata: np.ndarray | None) -> dict[str, float] | None:
-    results, converged = fit_phreg(PHReg(time, exog, status=event, strata=strata, ties="efron"))
-    beta = float(np.asarray(results.params)[-1])
-    se = float(np.asarray(results.bse)[-1])
-    if not converged or not np.isfinite(beta) or not np.isfinite(se) or se <= 0:
+    fit = fit_cox(time, event, exog, strata, "efron")
+    beta = float(fit.beta[-1])
+    se = float(np.sqrt(fit.covariance[-1, -1])) if fit.covariance[-1, -1] > 0 else float("nan")
+    if not fit.converged or not np.isfinite(beta) or not np.isfinite(se) or se <= 0:
         return None
     z_value = float(stats.norm.ppf(0.975))
     return {

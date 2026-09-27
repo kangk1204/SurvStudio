@@ -3,10 +3,14 @@ from __future__ import annotations
 import copy
 import io
 import zipfile
+from pathlib import Path
 
+import numpy as np
+import pandas as pd
 from fastapi.testclient import TestClient
 
 from survival_toolkit.app import app
+from survival_toolkit.sample_data import make_example_dataset
 
 # The local request guard only answers loopback Host headers.
 client = TestClient(app, base_url="http://127.0.0.1")
@@ -177,3 +181,66 @@ def test_tripod_ai_checklist_endpoint_reads_comparisons_and_the_dataset():
     assert expired.json()["items"][4]["text"].startswith("The analysed table")
     assert client.post("/api/tripod-ai-checklist", json={"comparisons": []}).status_code == 422
 
+
+def _expression_file(tmp_path: Path) -> Path:
+    """30 noise genes and one gene equal to the example biomarker, one row per gene."""
+    frame = make_example_dataset()
+    rng = np.random.default_rng(4)
+    genes = pd.DataFrame(rng.normal(size=(30, len(frame))), index=[f"GENE{index:02d}" for index in range(30)], columns=frame["patient_id"])
+    genes.loc["SIGNAL"] = frame["biomarker_score"].to_numpy()
+    path = tmp_path / "expression.tsv"
+    genes.to_csv(path, sep="\t", index_label="gene")
+    return path
+
+
+def _attach(path: Path, dataset_id: str, **fields):
+    with path.open("rb") as handle:
+        return client.post(
+            "/api/marker-matrix",
+            data={"dataset_id": dataset_id, "id_column": "patient_id", **fields},
+            files={"file": (path.name, handle, "text/tab-separated-values")},
+        )
+
+
+def test_marker_matrix_markers_are_evaluated_against_the_dataset(tmp_path: Path):
+    dataset = client.post("/api/load-example").json()
+    attached = _attach(_expression_file(tmp_path), dataset["dataset_id"])
+
+    assert attached.status_code == 200, attached.text
+    info = attached.json()
+    assert info["orientation"] == "markers_in_rows"
+    assert (info["n_markers"], info["n_matched"], info["n_patients"]) == (31, 360, 360)
+
+    request = _marker_request(dataset["dataset_id"], marker_columns=[], marker_matrix_id=info["matrix_id"], marker_matrix_id_column="patient_id")
+    response = client.post("/api/marker-evaluation", json=request)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["marker_matrix"]["n_markers"] == 31 and payload["marker_matrix"]["n_matched"] == 360
+    assert payload["display_table"][0]["Marker"] == "SIGNAL"
+    assert payload["analysis"]["cohort"]["n_markers_evaluated"] == 31
+    assert "expression.tsv" in payload["report"]["items"][1]["text"]
+    assert "Markers evaluated: 31 markers from expression.tsv." in payload["report"]["items"][0]["text"]
+
+    both = client.post("/api/marker-evaluation", json={**request, "marker_columns": ["immune_index"]})
+    assert both.status_code == 422
+    assert client.delete(f"/api/marker-matrix/{info['matrix_id']}").status_code == 200
+    expired = client.post("/api/marker-evaluation", json=request)
+    assert expired.status_code == 404
+    assert "attach the file again" in expired.json()["detail"]
+
+
+def test_marker_matrix_upload_explains_problems(tmp_path: Path):
+    dataset = client.post("/api/load-example").json()
+    path = _expression_file(tmp_path)
+
+    unknown_column = _attach(path, dataset["dataset_id"], id_column="barcode")
+    assert unknown_column.status_code == 400 and "not in the dataset" in unknown_column.json()["detail"]
+
+    wrong_layout = _attach(path, dataset["dataset_id"], orientation="samples_in_rows")
+    assert wrong_layout.status_code == 400 and "Only 0 patients" in wrong_layout.json()["detail"]
+
+    assert _attach(path, dataset["dataset_id"], orientation="sideways").status_code == 422
+    excel = tmp_path / "expression.xlsx"
+    excel.write_bytes(b"not a workbook")
+    assert _attach(excel, dataset["dataset_id"]).status_code == 400

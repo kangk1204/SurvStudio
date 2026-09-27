@@ -4,6 +4,75 @@
 
 const MARKER_TABLE_DISPLAY_LIMIT = 300;
 
+// An attached marker matrix (omics, POST /api/marker-matrix) replaces the marker checklist; the server
+// matches its patients to the dataset through the chosen ID column at every run.
+function markerMatrixAttached() {
+  return Boolean(state.markerMatrix?.matrix_id);
+}
+
+function likelyIdColumn(columns) {
+  const rows = Number(state.dataset?.n_rows || 0);
+  const unique = columns.filter((column) => Number(column.n_unique || 0) === rows);
+  const named = unique.find((column) => /(^|[^a-z])(id|patient|sample|subject|case|barcode)([^a-z]|$)/i.test(column.name));
+  return (named || unique[0] || columns[0])?.name || "";
+}
+
+function refreshMarkerMatrixControls() {
+  if (!refs.markerMatrixIdColumn) return;
+  const columns = state.dataset?.columns || [];
+  const names = columns.map((column) => column.name);
+  const previous = refs.markerMatrixIdColumn.value;
+  renderSelect(refs.markerMatrixIdColumn, names, { selected: names.includes(previous) ? previous : likelyIdColumn(columns) });
+  renderMarkerMatrixState();
+}
+
+function renderMarkerMatrixState() {
+  const matrix = state.markerMatrix;
+  const attached = markerMatrixAttached();
+  refs.markerMatrixStatus?.classList.toggle("hidden", !attached);
+  if (attached && refs.markerMatrixSummary) {
+    refs.markerMatrixSummary.textContent = `${matrix.filename}: ${formatValue(matrix.n_markers)} markers, ${formatValue(matrix.n_matched)} of ${formatValue(matrix.n_patients)} patients matched by ${matrix.id_column}.`;
+  }
+  if (attached && refs.markerMatrixDetails) refs.markerMatrixDetails.open = true;
+  refs.markerChecklist?.classList.toggle("matrix-attached", attached);
+  refs.markerChecklist?.querySelectorAll("input").forEach((input) => { input.disabled = attached; });
+  [refs.markerSearchInput, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.markerMatrixIdColumn, refs.markerMatrixOrientation, refs.markerMatrixFile]
+    .filter(Boolean)
+    .forEach((control) => { control.disabled = attached; });
+  if (refs.attachMarkerMatrixButton) refs.attachMarkerMatrixButton.disabled = attached;
+}
+
+async function attachMarkerMatrix() {
+  if (!state.dataset) throw new Error("Load a dataset first.");
+  const file = refs.markerMatrixFile?.files?.[0];
+  if (!file) throw new Error("Choose a marker matrix file first.");
+  const idColumn = refs.markerMatrixIdColumn?.value;
+  if (!idColumn) throw new Error("Choose the dataset's patient ID column.");
+  const datasetId = state.dataset.dataset_id;
+  const form = new FormData();
+  form.append("file", file);
+  form.append("dataset_id", datasetId);
+  form.append("id_column", idColumn);
+  form.append("orientation", refs.markerMatrixOrientation?.value || "auto");
+  const payload = await fetchJSON("/api/marker-matrix", { method: "POST", body: form });
+  if (state.dataset?.dataset_id !== datasetId) return;
+  state.markerMatrix = payload;
+  if (refs.markerMatrixFile) refs.markerMatrixFile.value = "";
+  renderMarkerMatrixState();
+  renderMarkerSelectionLine();
+  scheduleResultCurrencySync();
+  showToast(`Attached ${formatValue(payload.n_markers)} markers; ${formatValue(payload.n_matched)} of ${formatValue(payload.n_patients)} patients matched.`, "success", 4000);
+}
+
+function removeMarkerMatrix() {
+  const matrixId = state.markerMatrix?.matrix_id;
+  state.markerMatrix = null;
+  if (matrixId) fetch(apiUrl(`/api/marker-matrix/${encodeURIComponent(matrixId)}`), { method: "DELETE" }).catch(() => {});
+  renderMarkerMatrixState();
+  renderMarkerSelectionLine();
+  scheduleResultCurrencySync();
+}
+
 function markerCandidateColumns() {
   return modelFeatureCandidateColumns().filter((name) => getColumnMeta(name)?.kind === "numeric");
 }
@@ -21,11 +90,12 @@ function refreshMarkerSelections() {
   const markers = previousMarkers.length ? previousMarkers : markerCandidates.filter((value) => !clinical.includes(value));
   renderChecklist(refs.markerChecklist, markerCandidates, markers);
   renderChecklist(refs.markerClinicalChecklist, clinicalCandidates, clinical);
+  refreshMarkerMatrixControls();
   renderMarkerSelectionLine();
 }
 
 function currentMarkerSelections() {
-  const markers = selectedCheckboxValues(refs.markerChecklist);
+  const markers = markerMatrixAttached() ? [] : selectedCheckboxValues(refs.markerChecklist);
   const clinical = selectedCheckboxValues(refs.markerClinicalChecklist).filter((value) => !markers.includes(value));
   const categoricalCandidates = new Set(sharedModelCategoricalCandidates());
   return { markers, clinical, categorical: clinical.filter((value) => categoricalCandidates.has(value)) };
@@ -38,15 +108,23 @@ function renderMarkerSelectionLine() {
     refs.markerSelectionLine.textContent = "";
     return;
   }
-  refs.markerSelectionLine.textContent = markers.length
-    ? `${formatValue(markers.length)} marker${markers.length === 1 ? "" : "s"}, ${clinical.length ? `judged on added value over ${formatValue(clinical.length)} clinical covariate${clinical.length === 1 ? "" : "s"}` : "judged on marginal association (no clinical covariates)"}.`
+  const matrix = markerMatrixAttached() ? state.markerMatrix : null;
+  const count = matrix ? Number(matrix.n_markers || 0) : markers.length;
+  const lens = clinical.length
+    ? `judged on added value over ${formatValue(clinical.length)} clinical covariate${clinical.length === 1 ? "" : "s"}`
+    : "judged on marginal association (no clinical covariates)";
+  refs.markerSelectionLine.textContent = count
+    ? `${formatValue(count)} marker${count === 1 ? "" : "s"}${matrix ? ` from ${matrix.filename}` : ""}, ${lens}.`
     : "Choose at least one numeric marker.";
 }
 
 function markerRequestFields() {
   const { markers, clinical, categorical } = currentMarkerSelections();
+  const matrix = markerMatrixAttached() ? state.markerMatrix : null;
   return {
     marker_columns: markers,
+    marker_matrix_id: matrix ? matrix.matrix_id : null,
+    marker_matrix_id_column: matrix ? matrix.id_column : null,
     clinical_columns: clinical,
     categorical_clinical: categorical,
     n_permutations: numericControlValue(refs.markerPermutations, 1000),
@@ -59,12 +137,13 @@ function markerRequestFields() {
 async function runMarkerEvaluation() {
   const base = currentBaseConfig();
   const fields = markerRequestFields();
-  if (!fields.marker_columns.length) throw new Error("Choose at least one marker.");
+  if (!fields.marker_columns.length && !fields.marker_matrix_id) throw new Error("Choose at least one marker.");
+  const markerCount = fields.marker_matrix_id ? Number(state.markerMatrix?.n_markers || 0) : fields.marker_columns.length;
   const requestToken = beginRequestToken("markers");
   const datasetId = base.dataset_id;
   const loading = beginShellLoading([refs.markersStabilityPlot]);
   setRuntimeBanner(
-    `Evaluating ${formatValue(fields.marker_columns.length)} marker(s) with ${formatValue(fields.n_permutations)} permutations and ${formatValue(fields.n_resamples)} subsamples. Large panels take a few minutes.`,
+    `Evaluating ${formatValue(markerCount)} marker(s) with ${formatValue(fields.n_permutations)} permutations and ${formatValue(fields.n_resamples)} subsamples. ${markerCount > 5000 ? "A genome-wide panel takes 10 minutes or more." : "Large panels take a few minutes."}`,
     "info",
   );
   let payload;
@@ -149,6 +228,7 @@ function markerMetaBanner(payload) {
   const signature = analysis.signature || {};
   const lens = analysis.primary_lens === "added_value" ? "added value over clinical covariates" : "marginal association";
   const parts = [
+    ...(payload?.marker_matrix ? [`markers from ${payload.marker_matrix.filename}`] : []),
     `N=${formatValue(cohort.n)}`,
     `events=${formatValue(cohort.events)}`,
     `markers=${formatValue(cohort.n_markers_evaluated)}`,
@@ -351,6 +431,12 @@ function wireMarkerControls() {
   [refs.markerPermutations, refs.markerResamples, refs.markerRandomSeed, refs.markerNonlinearLens].filter(Boolean).forEach((control) => {
     control.addEventListener("change", () => { scheduleResultCurrencySync(); queueHistorySync(); });
   });
+  refs.attachMarkerMatrixButton?.addEventListener("click", async () => {
+    await withLoading(refs.attachMarkerMatrixButton, attachMarkerMatrix);
+    // withLoading re-enables its button; it stays off while a matrix is attached.
+    renderMarkerMatrixState();
+  });
+  refs.removeMarkerMatrixButton?.addEventListener("click", removeMarkerMatrix);
   refs.downloadMarkersCsvButton?.addEventListener("click", downloadMarkerTable);
   refs.downloadMarkerRecipeButton?.addEventListener("click", downloadMarkerRecipe);
   refs.downloadMarkerRemarkDocxButton?.addEventListener("click", () => downloadMarkerChecklist("docx"));

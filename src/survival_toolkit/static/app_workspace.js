@@ -54,6 +54,8 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
     return {
       ...base,
       marker_columns: sortedStrings(requestConfig.marker_columns || []),
+      marker_matrix_id: requestConfig.marker_matrix_id || null,
+      marker_matrix_id_column: requestConfig.marker_matrix_id_column || null,
       clinical_columns: sortedStrings(requestConfig.clinical_columns || []),
       categorical_clinical: sortedStrings(requestConfig.categorical_clinical || []),
       n_permutations: numberOrDefault(requestConfig.n_permutations, 1000),

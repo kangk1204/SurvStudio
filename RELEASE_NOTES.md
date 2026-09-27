@@ -14,6 +14,7 @@
 - Prediction models: a "Train one model" entry next to Compare All, results hidden until a run, and the Survival Transformer and VAE labelled experimental.
 - Reporting checklists: the Markers tab exports a REMARK checklist and the prediction-model leaderboard a TRIPOD+AI checklist, as Word or Markdown. Each holds the run's methods and results paragraphs and every guideline item, marked as filled in by SurvStudio, partly filled in, or for the authors to complete.
 - The marker table adds each marker's unadjusted hazard ratio and p-value when markers are judged on added value, as REMARK asks for univariable results.
+- Omics marker matrices: the Markers tab attaches a separate file of up to 60,000 markers (one row per marker or per patient), matched to the dataset's patients by an ID column, so genome-wide panels no longer have to fit into the 1,000-feature table.
 - Hazard-ratio axes are labelled with round values (0.5, 1, 2, 5); the landing page shows one card per analysis tab.
 
 ### New
@@ -24,6 +25,8 @@
 - README: a Prognostic Marker Evaluation section with a runnable example.
 
 - `survival_toolkit.design_audit.audit_design`: places a multi-algorithm study design (number and size of selection cohorts, genes only or with clinical covariates, number of candidates, training C-index in the choice, headline C-index) on the benchmark pilot's simulation map and returns the expected optimism of the presented C-index, the expected regret of the choice, and flagged practices with remedies.
+- `survival_toolkit.marker_matrix`: reads marker matrices, matches them to a dataset by patient ID and keeps a few in memory; API `POST /api/marker-matrix` and `DELETE /api/marker-matrix/{id}`, and `marker_matrix_id` in `POST /api/marker-evaluation`.
+- The marker evaluation runs about 10 times faster with the same results: on one machine, 200 markers with the default 1,000 permutations and 200 subsamples took 37 s instead of 374 s, and 4,000 markers with 48 permutations and 10 subsamples 19 s instead of 175 s, with identical tiers. Cox fits use a Newton-Raphson fitter on the score screen's risk-set sums instead of statsmodels' PHReg (same estimates to 1e-6; the R reference tests are unchanged); the screen sums risk sets with sparse products in cache-sized blocks, and medians, p-values and input conversion are vectorized.
 - `survival_toolkit.reporting`: `remark_checklist` and `tripod_ai_checklist` build the checklists from a marker evaluation or model comparisons; `checklist_markdown` renders one.
 - API: `POST /api/marker-evaluation` (now with a `report` field), `POST /api/marker-validation`, `POST /api/design-audit`, `POST /api/tripod-ai-checklist` and `POST /api/checklist-export`.
 

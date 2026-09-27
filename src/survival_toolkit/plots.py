@@ -1345,6 +1345,7 @@ def build_marker_stability_figure(result: dict[str, Any]) -> dict[str, Any]:
     primary = str(result.get("primary_lens", "marginal"))
     settings = result.get("settings") or {}
     fig = go.Figure()
+    scatter = go.Scattergl if len(result.get("marker_table", [])) > 2_000 else go.Scatter
     for tier, color in MARKER_TIER_COLORS.items():
         members = [
             row
@@ -1357,7 +1358,7 @@ def build_marker_stability_figure(result: dict[str, Any]) -> dict[str, Any]:
         if not members:
             continue
         fig.add_trace(
-            go.Scatter(
+            scatter(
                 x=[row[primary]["selection_frequency"] for row in members],
                 y=[row[primary]["direction_consistency"] for row in members],
                 mode="markers",

@@ -50,6 +50,12 @@ def _dataset_text(dataset: dict[str, Any] | None) -> str:
         parts.append(f"{dataset['n_rows']} rows")
     if dataset.get("dataset_hash"):
         parts.append(f"fingerprint {dataset['dataset_hash']}")
+    matrix = dataset.get("marker_matrix")
+    if matrix:
+        parts.append(
+            f"markers from {matrix.get('filename')} ({matrix.get('n_markers')} markers, fingerprint {matrix.get('fingerprint')}), "
+            f"matched to {matrix.get('n_matched')} patients by {matrix.get('id_column')}"
+        )
     return "; ".join(parts) + "."
 
 
@@ -165,9 +171,15 @@ def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None =
     if dataset and dataset.get("n_rows") is not None and cohort.get("n") is not None:
         excluded_rows = int(dataset["n_rows"]) - int(cohort["n"])
     shrinkage = signature.get("top_marker_shrinkage")
+    matrix = (dataset or {}).get("marker_matrix")
+    marker_text = (
+        f"{matrix.get('n_markers')} markers from {matrix.get('filename')}"
+        if matrix
+        else _names(request.get("marker_columns") or [], limit=20)
+    )
     items = [
         _item("1", "Introduction", "Markers, objectives and pre-specified hypotheses", "partly",
-              f"Markers evaluated: {_names(request.get('marker_columns') or [], limit=20)}. State the objectives and the hypotheses fixed before the analysis."),
+              f"Markers evaluated: {marker_text}. State the objectives and the hypotheses fixed before the analysis."),
         _item("2", "Patients", "Patient characteristics, source, inclusion and exclusion criteria", "partly",
               _dataset_text(dataset) + " Describe the source population and the eligibility criteria."),
         _item("3", "Patients", "Treatments received", "author", "Describe the treatments and how they were chosen."),

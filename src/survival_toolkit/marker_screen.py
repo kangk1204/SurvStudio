@@ -19,14 +19,14 @@ from __future__ import annotations
 from typing import Iterable, NamedTuple, Sequence
 
 import numpy as np
-from scipy import stats
-from statsmodels.duration.hazard_regression import PHReg
+from scipy import sparse, special
 
-from survival_toolkit.analysis import _bh_adjust, _efron_tie_groups, fit_phreg
+from survival_toolkit.analysis import _bh_adjust, _efron_tie_groups
 
 TIES_METHODS = ("efron", "breslow")
-# Columns processed together; bounds the n x block working arrays for wide marker sets.
-_COLUMN_BLOCK = 2048
+# Columns processed together. Blocks of a few hundred columns keep the n x block working
+# arrays in cache; 512 ran about three times faster than 2048 on 500 rows.
+_COLUMN_BLOCK = 512
 
 
 class CoxNull(NamedTuple):
@@ -37,6 +37,16 @@ class CoxNull(NamedTuple):
     covariance: np.ndarray
     loglik: float
     converged: bool
+
+
+class CoxFit(NamedTuple):
+    """A Cox model fitted by Newton-Raphson on the partial likelihood."""
+
+    beta: np.ndarray
+    covariance: np.ndarray
+    loglik: float
+    converged: bool
+    iterations: int
 
 
 class ScoreStats(NamedTuple):
@@ -61,15 +71,17 @@ class MaxT(NamedTuple):
 
 class _StratumTerms(NamedTuple):
     order: np.ndarray
-    risk: np.ndarray
-    tie_starts: np.ndarray
-    group_starts: np.ndarray
-    dead_pos: np.ndarray
     a: np.ndarray
     b: np.ndarray
     c: np.ndarray
     expected: np.ndarray
     martingale: np.ndarray
+    # exp(eta)-weighted sums of the tied events' rows by tie group (over all sorted rows).
+    tie_sum: sparse.csr_matrix
+    # exp(eta)-weighted sums of the sorted rows from each event time's first position up to the next one's.
+    segment_sum: sparse.csr_matrix
+    # Whether the Efron tie terms (b, c) are non-zero; they vanish without ties and for Breslow.
+    tied: bool
 
 
 def _as_strata(strata: np.ndarray | None, n: int) -> np.ndarray:
@@ -128,30 +140,57 @@ def _stratum_terms(
     expected = groups.risk * cumulative_hazard
     died = np.zeros(groups.order.size, dtype=float)
     died[groups.dead_pos] = 1.0
-    group_starts = np.searchsorted(tie_index, np.arange(groups.tie_starts.size), side="left")
+    n_groups, n_rows = groups.tie_starts.size, groups.order.size
+    tie_sum = sparse.csr_matrix(
+        (groups.risk[groups.dead_pos], (tie_index, groups.dead_pos)),
+        shape=(n_groups, n_rows),
+    )
+    # Rows censored before the first event time belong to no risk set.
+    segment = np.searchsorted(groups.tie_starts, np.arange(n_rows), side="right") - 1
+    in_risk = np.flatnonzero(segment >= 0)
+    segment_sum = sparse.csr_matrix(
+        (groups.risk[in_risk], (segment[in_risk], in_risk)),
+        shape=(n_groups, n_rows),
+    )
     return _StratumTerms(
         order=groups.order,
-        risk=groups.risk,
-        tie_starts=groups.tie_starts,
-        group_starts=group_starts,
-        dead_pos=groups.dead_pos,
         a=a,
         b=b,
         c=c,
         expected=expected,
         martingale=died - expected,
+        tie_sum=tie_sum,
+        segment_sum=segment_sum,
+        tied=bool(np.any(b != 0.0) or np.any(c != 0.0)),
     )
 
 
-def _risk_set_sums(terms: _StratumTerms, sorted_block: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Risk-set sums S1 and tied-event sums T1 of exp(eta) * x at each event time."""
-    weighted = terms.risk[:, None] * sorted_block
-    # Rows between consecutive event times, summed from the last one backwards: the
-    # risk set of an event time holds every row from its first sorted position on.
-    segments = np.add.reduceat(weighted, terms.tie_starts, axis=0)
-    s1 = np.cumsum(segments[::-1], axis=0)[::-1]
-    t1 = np.add.reduceat(weighted[terms.dead_pos], terms.group_starts, axis=0)
-    return s1, t1
+def _reverse_cumsum_rows(block: np.ndarray) -> np.ndarray:
+    """Cumulative sums from the last row upwards.
+
+    np.cumsum along axis 0 walks each column with a row-sized stride, which is slow for
+    blocks thousands of columns wide; adding whole rows keeps the memory access contiguous.
+    """
+    if block.shape[1] < 64:
+        return np.cumsum(block[::-1], axis=0)[::-1]
+    out = np.empty_like(block)
+    running = np.zeros(block.shape[1], dtype=block.dtype)
+    for row in range(block.shape[0] - 1, -1, -1):
+        running += block[row]
+        out[row] = running
+    return out
+
+
+def _risk_set_sums(terms: _StratumTerms, sorted_block: np.ndarray, *, tied_sums: bool = True) -> tuple[np.ndarray, np.ndarray | None]:
+    """Risk-set sums S1 and tied-event sums T1 of exp(eta) * x at each event time.
+
+    The risk set of an event time holds every row from its first sorted position on, so S1
+    is the reverse cumulative sum of the rows summed between consecutive event times.
+    """
+    s1 = _reverse_cumsum_rows(np.asarray(terms.segment_sum @ sorted_block))
+    if not tied_sums:
+        return s1, None
+    return s1, np.asarray(terms.tie_sum @ sorted_block)
 
 
 class _WeightedSide(NamedTuple):
@@ -224,6 +263,87 @@ def cox_partial_loglik(
     return loglik
 
 
+def _score_and_information_at(
+    time: np.ndarray,
+    event: np.ndarray,
+    design: np.ndarray,
+    codes: np.ndarray,
+    eta: np.ndarray,
+    ties: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Partial-likelihood score vector and information matrix of ``design`` at the linear predictor ``eta``."""
+    k = design.shape[1]
+    score = np.zeros(k, dtype=float)
+    information = np.zeros((k, k), dtype=float)
+    for code in np.unique(codes):
+        terms = _stratum_terms(np.flatnonzero(codes == code), time, event, eta, ties)
+        if terms is None:
+            continue
+        # Centring changes neither sum (the martingale residuals of a stratum sum to zero)
+        # and keeps the information from cancelling for large-valued columns.
+        sorted_x = design[terms.order]
+        sorted_x = sorted_x - sorted_x.mean(axis=0, keepdims=True)
+        sums = _risk_set_sums(terms, sorted_x)
+        score += terms.martingale @ sorted_x
+        information += _cross_information(sorted_x, sums, _weighted_side(terms, sorted_x, sums))
+    return score, information
+
+
+def fit_cox(
+    time: np.ndarray,
+    event: np.ndarray,
+    X: np.ndarray,
+    strata: np.ndarray | None = None,
+    ties: str = "efron",
+    *,
+    max_iterations: int = 50,
+) -> CoxFit:
+    """Maximum partial-likelihood Cox fit by Newton-Raphson with step halving (Efron or Breslow ties, strata).
+
+    Uses the screen's risk-set sums, so a fit costs a few passes over the rows; it replaces
+    statsmodels' PHReg, whose Efron fit loops over event times in Python. Convergence
+    follows R's coxph: the partial log-likelihood changes by less than 1e-9 relative.
+    """
+    ties = _check_ties(ties)
+    time = np.asarray(time, dtype=float).reshape(-1)
+    event = np.asarray(event).reshape(-1).astype(bool)
+    design = np.asarray(X, dtype=float)
+    if design.ndim == 1:
+        design = design.reshape(-1, 1)
+    if design.shape[0] != time.shape[0]:
+        raise ValueError("X must have one row per subject.")
+    codes = _as_strata(strata, time.shape[0])
+    beta = np.zeros(design.shape[1], dtype=float)
+    loglik = cox_partial_loglik(time, event, design @ beta, codes, ties)
+    converged = False
+    iterations = 0
+    for iterations in range(1, max_iterations + 1):
+        score, information = _score_and_information_at(time, event, design, codes, design @ beta, ties)
+        step = np.linalg.lstsq(information, score, rcond=None)[0]
+        if not np.all(np.isfinite(step)):
+            break
+        for _ in range(40):
+            candidate = beta + step
+            candidate_loglik = cox_partial_loglik(time, event, design @ candidate, codes, ties)
+            if np.isfinite(candidate_loglik) and candidate_loglik >= loglik - 1e-12 * max(abs(loglik), 1.0):
+                break
+            step = step / 2.0
+        else:
+            break
+        change = candidate_loglik - loglik
+        beta, loglik = candidate, candidate_loglik
+        if abs(change) <= 1e-9 * max(abs(loglik), 1.0):
+            converged = True
+            break
+    _, information = _score_and_information_at(time, event, design, codes, design @ beta, ties)
+    try:
+        covariance = np.linalg.inv(information)
+    except np.linalg.LinAlgError:
+        covariance = np.linalg.pinv(information)
+        converged = False
+    return CoxFit(beta=beta, covariance=covariance, loglik=float(loglik), converged=converged, iterations=iterations)
+
+
 def fit_cox_null(
     time: np.ndarray,
     event: np.ndarray,
@@ -250,15 +370,13 @@ def fit_cox_null(
         design = design.reshape(-1, 1)
     if design.shape[0] != n:
         raise ValueError("Z must have one row per subject.")
-    model = PHReg(time, design, status=event, strata=strata, ties=ties)
-    results, converged = fit_phreg(model)
-    beta = np.asarray(results.params, dtype=float)
+    fit = fit_cox(time, event, design, strata, ties)
     return CoxNull(
-        eta=design @ beta,
-        beta=beta,
-        covariance=np.atleast_2d(np.asarray(results.cov_params(), dtype=float)),
-        loglik=float(results.llf),
-        converged=bool(converged),
+        eta=design @ fit.beta,
+        beta=fit.beta,
+        covariance=np.atleast_2d(fit.covariance),
+        loglik=fit.loglik,
+        converged=fit.converged,
     )
 
 
@@ -326,7 +444,9 @@ class CoxScoreScreen:
         if not self.terms:
             raise ValueError("The score screen needs at least one event.")
         design = None if Z is None or np.asarray(Z).size == 0 else np.asarray(Z, dtype=float).reshape(self.n, -1)
-        self._z_sides: list[_WeightedSide] = []
+        # Per stratum, the clinical side of the marker-by-clinical information:
+        # I_xz = X' rows + S1x' at_s1 + T1x' at_t1.
+        self._z_weights: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
         self._izz_inverse: np.ndarray | None = None
         if design is not None:
             izz = np.zeros((design.shape[1], design.shape[1]), dtype=float)
@@ -335,7 +455,7 @@ class CoxScoreScreen:
                 sorted_z = sorted_z - sorted_z.mean(axis=0, keepdims=True)
                 sums = _risk_set_sums(terms, sorted_z)
                 side = _weighted_side(terms, sorted_z, sums)
-                self._z_sides.append(side)
+                self._z_weights.append((side.expected, side.b_t1 - side.a_s1, side.b_s1 - side.c_t1))
                 izz += _cross_information(sorted_z, sums, side)
             self._izz_inverse = np.linalg.pinv(izz)
 
@@ -352,13 +472,19 @@ class CoxScoreScreen:
             for index, terms in enumerate(self.terms):
                 source_rows = terms.order if row_index is None else row_index[terms.order]
                 sorted_block = block[source_rows]
-                sums = _risk_set_sums(terms, sorted_block)
-                s1, t1 = sums
-                u += terms.martingale @ sorted_block
-                ixx += terms.expected @ (sorted_block * sorted_block)
-                ixx -= terms.a @ (s1 * s1) - 2.0 * (terms.b @ (s1 * t1)) + terms.c @ (t1 * t1)
+                s1, t1 = _risk_set_sums(terms, sorted_block, tied_sums=terms.tied)
+                u += np.einsum("i,ij->j", terms.martingale, sorted_block)
+                ixx += np.einsum("i,ij->j", terms.expected, sorted_block * sorted_block)
+                ixx -= np.einsum("g,gj->j", terms.a, s1 * s1)
+                if terms.tied:
+                    ixx += 2.0 * np.einsum("g,gj->j", terms.b, s1 * t1) - np.einsum("g,gj->j", terms.c, t1 * t1)
                 if ixz is not None:
-                    ixz += _cross_information(sorted_block, sums, self._z_sides[index])
+                    rows, at_s1, at_t1 = self._z_weights[index]
+                    for column in range(rows.shape[1]):
+                        ixz[:, column] += np.einsum("ij,i->j", sorted_block, rows[:, column])
+                        ixz[:, column] += np.einsum("gj,g->j", s1, at_s1[:, column])
+                        if terms.tied:
+                            ixz[:, column] += np.einsum("gj,g->j", t1, at_t1[:, column])
             if ixz is not None:
                 ixx = ixx - np.einsum("ij,jk,ik->i", ixz, self._izz_inverse, ixz)
             score[start:stop] = u
@@ -379,13 +505,20 @@ class CoxScoreScreen:
         tolerance = 1e-10 * np.maximum(variance, 1e-300) * max(int(self.event.sum()), 1)
         return centred, tolerance
 
-    def _finish(self, score: np.ndarray, information: np.ndarray, tolerance: np.ndarray) -> ScoreStats:
+    @staticmethod
+    def _chi2(score: np.ndarray, information: np.ndarray, tolerance: np.ndarray) -> np.ndarray:
         collinear = ~(information > tolerance)
         with np.errstate(divide="ignore", invalid="ignore"):
-            chi2 = np.where(collinear, np.nan, score * score / information)
+            return np.where(collinear, np.nan, score * score / information)
+
+    def _finish(self, score: np.ndarray, information: np.ndarray, tolerance: np.ndarray) -> ScoreStats:
+        collinear = ~(information > tolerance)
+        chi2 = self._chi2(score, information, tolerance)
+        with np.errstate(divide="ignore", invalid="ignore"):
             z = np.where(collinear, np.nan, score / np.sqrt(np.where(collinear, 1.0, information)))
             beta = np.where(collinear, np.nan, score / information)
-        p_value = np.where(collinear, np.nan, stats.chi2.sf(np.where(collinear, 0.0, chi2), df=1))
+        # chdtrc(1, x) is the chi-square(1) survival function without scipy.stats' per-call overhead.
+        p_value = np.where(collinear, np.nan, special.chdtrc(1.0, np.where(collinear, 0.0, chi2)))
         return ScoreStats(
             score=score,
             information=information,
@@ -415,7 +548,7 @@ class CoxScoreScreen:
             if index.shape[0] != self.n:
                 raise ValueError("Each permutation must list every row once.")
             score, information = self._score_and_information(centred, index)
-            rows.append(self._finish(score, information, tolerance).chi2)
+            rows.append(self._chi2(score, information, tolerance))
         return np.vstack(rows) if rows else np.zeros((0, centred.shape[1]), dtype=float)
 
     def _validated(self, X: np.ndarray) -> np.ndarray:

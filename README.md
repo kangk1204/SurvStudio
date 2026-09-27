@@ -896,6 +896,8 @@ Architecture note:
 
 Use this when you screen many candidate markers (for example gene-expression columns) for association with survival and want the claim checked the way a careful reviewer would check it. It runs in the Markers tab and from Python.
 
+Markers can be columns of the uploaded table or, for omics data, a separate marker matrix. In the Markers tab, open `Markers in a separate file (omics)`, choose the dataset's patient ID column and attach a CSV, TSV, TXT or Parquet file with one row per marker and one column per patient (as GEO and TCGA distribute expression) or one row per patient; the layout is detected from the IDs. The matrix can hold up to 60,000 markers and 30 million values, and its patient IDs must be written exactly as in the ID column; patients without matrix values are left out of the evaluation. The clinical table stays small, so the other tabs are unaffected.
+
 For every marker it reports:
 - two Cox score-test lenses: marginal association, and added value over the clinical covariates you name (the primary lens whenever clinical covariates are given)
 - Westfall–Young step-down permutation p-values (family-wise error over all markers) and permutation FDR q-values. The added-value null permutes the marker residuals left after projecting on the clinical covariates (Freedman–Lane), so a marker that merely tracks a clinical factor is not called prognostic
@@ -1159,6 +1161,7 @@ Then increase epochs or switch to repeated CV only after the single-run workflow
 ## Current Limitations
 
 - Cox PH currently reports an apparent C-index only. If you need bootstrap optimism correction or cross-validated Cox discrimination, run that validation outside the current dashboard workflow.
+- Uploaded tables are limited to 1,000 candidate model features (5,000 columns). Wider omics data go into the Markers tab as a separate marker matrix; the ML and DL panels keep the 1,000-feature limit.
 - Standard unpenalized Cox PH is not the right tool for very wide `p >> n` settings. Use the ML-panel `LASSO-Cox` path for penalized predictive screening instead of forcing a classical Cox PH fit.
 - External-cohort validation in the web interface covers the locked marker model (Markers tab, Validate in another cohort; the file needs the same column names). For Cox and prediction models, load the separate cohort, reproduce the endpoint and covariate specification, and rerun the analysis. From Python, `validate_locked_recipe` validates a locked marker model (see Prognostic Marker Evaluation).
 - Left truncation and competing risks are outside the current scope. In manuscript Methods, state explicitly that these workflows assume standard cause-specific survival with independent censoring and do not estimate cumulative incidence under competing events.

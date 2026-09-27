@@ -27,7 +27,7 @@ from typing import Any, Callable, Literal, NoReturn, Sequence, TypeVar
 from urllib.parse import urlsplit
 from xml.sax.saxutils import escape as xml_escape
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,6 +64,14 @@ from survival_toolkit.concurrency import cancellation_scope, raise_if_cancelled
 from survival_toolkit.design_audit import audit_design, design_from_dict
 from survival_toolkit.errors import InternalAnalysisError, JobCancelledError, NotFoundError, UserInputError
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
+from survival_toolkit.marker_matrix import (
+    MATRIX_SUFFIXES,
+    ORIENTATIONS,
+    MarkerMatrixStore,
+    match_summary,
+    matrix_frame,
+    read_marker_matrix,
+)
 from survival_toolkit.reporting import (
     CHECKLIST_COLUMNS,
     checklist_intro,
@@ -692,6 +700,8 @@ _ML_ARTIFACT_CACHE_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB
 _ml_artifact_cache = _MlArtifactCache(max_items=8, max_bytes=_ML_ARTIFACT_CACHE_MAX_BYTES)
 # Fitted models hold deep-copied training frames; release them together with their dataset.
 store.add_eviction_listener(_ml_artifact_cache.purge_dataset)
+# Marker matrices are matched to a dataset by patient ID at each use, so they outlive derived-column snapshots.
+marker_matrices = MarkerMatrixStore()
 
 _T = TypeVar("_T")
 
@@ -991,7 +1001,11 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
     time_column: str
     event_column: str
     event_positive_value: Any = 1
-    marker_columns: list[str] = Field(min_length=1, max_length=_MAX_UPLOAD_COLUMNS)
+    marker_columns: list[str] = Field(default_factory=list, max_length=_MAX_UPLOAD_COLUMNS)
+    # An attached marker matrix (POST /api/marker-matrix) replaces marker_columns; its patients are
+    # matched to this dataset through marker_matrix_id_column.
+    marker_matrix_id: str | None = Field(default=None, max_length=64)
+    marker_matrix_id_column: str | None = Field(default=None, max_length=512)
     clinical_columns: list[str] = Field(default_factory=list, max_length=200)
     categorical_clinical: list[str] = Field(default_factory=list, max_length=200)
     strata_columns: list[str] = Field(default_factory=list, max_length=20)
@@ -1018,6 +1032,13 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
             subset_name="categorical_clinical",
             superset_name="clinical_columns",
         )
+        if self.marker_matrix_id:
+            if self.marker_columns:
+                raise ValueError("Give marker_columns or a marker matrix, not both.")
+            if not self.marker_matrix_id_column:
+                raise ValueError("A marker matrix needs marker_matrix_id_column, the dataset's patient ID column.")
+        elif not self.marker_columns:
+            raise ValueError("Choose at least one marker.")
         return self
 
     def marker_settings(self) -> MarkerSettings:
@@ -2599,6 +2620,76 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
             temp_path.unlink(missing_ok=True)
 
 
+@app.post("/api/marker-matrix")
+async def upload_marker_matrix(
+    file: UploadFile = File(...),
+    dataset_id: str = Form(..., max_length=128),
+    id_column: str = Form(..., max_length=512),
+    orientation: str = Form("auto"),
+) -> dict[str, Any]:
+    temp_path: Path | None = None
+    filename = file.filename or "marker_matrix.csv"
+    try:
+        suffix = (Path(filename).suffix or ".csv").lower()
+        if suffix not in MATRIX_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported matrix file type '{suffix}' for '{filename}'. Use CSV, TSV, TXT or Parquet.",
+            )
+        if orientation not in ORIENTATIONS:
+            raise HTTPException(status_code=422, detail=f"Unknown matrix layout '{orientation}'.")
+        total_bytes = 0
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_path = Path(temp_file.name)
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail=_UPLOAD_TOO_LARGE_DETAIL)
+                temp_file.write(chunk)
+
+        def _ingest() -> dict[str, Any]:
+            stored = _get_stored_dataset(dataset_id)
+            if id_column not in stored.dataframe.columns:
+                raise UserInputError(f"The ID column '{id_column}' is not in the dataset.")
+            patient_ids = stored.dataframe[id_column].tolist()
+            matrix = read_marker_matrix(temp_path, filename, patient_ids=patient_ids, orientation=orientation)
+            summary = match_summary(matrix, patient_ids)
+            if summary["n_matched"] < 10:
+                raise UserInputError(
+                    f"Only {summary['n_matched']} patients of the dataset are in the matrix; at least 10 are needed. "
+                    f"The IDs in '{id_column}' must be written exactly as in the matrix."
+                )
+            return {
+                "matrix_id": marker_matrices.add(matrix),
+                "filename": filename,
+                "orientation": matrix.orientation,
+                "n_markers": len(matrix.marker_names),
+                "marker_preview": list(matrix.marker_names[:8]),
+                "id_column": id_column,
+                "fingerprint": matrix.fingerprint,
+                **summary,
+            }
+
+        return await run_in_threadpool(_ingest)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        fail_bad_request(exc)
+    finally:
+        await file.close()
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+@app.delete("/api/marker-matrix/{matrix_id}")
+async def remove_marker_matrix(matrix_id: str) -> dict[str, Any]:
+    marker_matrices.remove(matrix_id)
+    return {"removed": True}
+
+
 @app.post("/api/load-example")
 async def load_example() -> dict[str, Any]:
     return await _load_builtin_dataset_response(make_example_dataset, filename="example_survival_cohort")
@@ -3738,6 +3829,7 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
         inputs = [*request_model.marker_columns, *request_model.clinical_columns, *request_model.strata_columns]
+        matrix = marker_matrices.get(request_model.marker_matrix_id) if request_model.marker_matrix_id else None
 
         def _run() -> dict[str, Any]:
             # Input checks scan every column, so they run in the worker thread too.
@@ -3750,28 +3842,47 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
                 context="marker evaluation",
             )
             _reject_outcome_informed_columns(stored, inputs, context="marker evaluation")
+            frame = stored.dataframe
+            markers = list(request_model.marker_columns)
+            matrix_info = None
+            if matrix is not None:
+                frame = matrix_frame(
+                    stored.dataframe,
+                    matrix,
+                    id_column=str(request_model.marker_matrix_id_column),
+                    columns=[request_model.time_column, request_model.event_column, *request_model.clinical_columns, *request_model.strata_columns],
+                )
+                markers = list(matrix.marker_names)
+                matrix_info = {
+                    "filename": matrix.filename,
+                    "n_markers": len(markers),
+                    "n_matched": int(frame.shape[0]),
+                    "id_column": request_model.marker_matrix_id_column,
+                    "fingerprint": matrix.fingerprint,
+                }
             result = evaluate_markers(
-                stored.dataframe,
+                frame,
                 time_column=request_model.time_column,
                 event_column=request_model.event_column,
-                marker_columns=request_model.marker_columns,
+                marker_columns=markers,
                 clinical_columns=request_model.clinical_columns,
                 categorical_clinical=request_model.categorical_clinical,
                 strata_columns=request_model.strata_columns,
                 event_positive_value=request_model.event_positive_value,
                 settings=request_model.marker_settings(),
             )
-            return _attach_dataset_hash(
-                {
-                    "analysis": result,
-                    "display_table": _marker_display_rows(result),
-                    "stability_figure": build_marker_stability_figure(result),
-                    "rank_figure": build_marker_rank_figure(result),
-                    "report": remark_checklist(result, request=request_config, dataset=_report_dataset(stored)),
-                    "request_config": request_config,
-                },
-                stored,
-            )
+            report_dataset = {**_report_dataset(stored), "marker_matrix": matrix_info} if matrix_info else _report_dataset(stored)
+            payload = {
+                "analysis": _trim_marker_table(result),
+                "display_table": _marker_display_rows(result),
+                "stability_figure": build_marker_stability_figure(result),
+                "rank_figure": build_marker_rank_figure(result),
+                "report": remark_checklist(result, request={**request_config, "marker_columns": markers}, dataset=report_dataset),
+                "request_config": request_config,
+            }
+            if matrix_info:
+                payload["marker_matrix"] = matrix_info
+            return _attach_dataset_hash(payload, stored)
 
         return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
@@ -3812,6 +3923,21 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
         return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
+
+
+_MARKER_TABLE_RESPONSE_ROWS = 2_000
+
+
+def _trim_marker_table(result: dict[str, Any]) -> dict[str, Any]:
+    """Send only the strongest rows of a very long per-marker table in the JSON response.
+
+    The flat display table still lists every marker; the nested per-lens rows add about a
+    kilobyte per marker, which a genome-wide screen would turn into tens of megabytes.
+    """
+    rows = result.get("marker_table") or []
+    if len(rows) <= _MARKER_TABLE_RESPONSE_ROWS:
+        return result
+    return {**result, "marker_table": rows[:_MARKER_TABLE_RESPONSE_ROWS], "marker_table_rows_total": len(rows)}
 
 
 def _report_dataset(stored: Any) -> dict[str, Any]:

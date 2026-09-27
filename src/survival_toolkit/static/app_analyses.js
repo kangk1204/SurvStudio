@@ -428,6 +428,8 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   // A different dataset makes any pending derive/signature response obsolete.
   invalidateRequestTokens(["derive", "signature"]);
   state.dataset = payload;
+  // A marker matrix belongs to the patients of the dataset it was attached to; derived-column snapshots keep it.
+  state.markerMatrix = null;
   // Results, banners, plots, and export buttons of the previous dataset.
   clearAnalysisOutputs();
   refs.deriveSummary.innerHTML = "";
