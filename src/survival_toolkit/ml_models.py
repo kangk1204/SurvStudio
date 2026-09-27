@@ -45,6 +45,7 @@ from survival_toolkit.evaluation import (
     DEFAULT_HOLDOUT_FRACTION,
     evaluation_split_fingerprint,
     locked_test_split,
+    prediction_block,
     stratified_holdout_indices,
 )
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
@@ -2062,6 +2063,7 @@ def compare_survival_models(
     n_events = int(frame[event_column].sum())
     comparison: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    predictions: dict[str, tuple[list[int], list[float]]] = {}
     train_positions, eval_positions, evaluation_mode = _split_train_test_positions(
         frame,
         event_column,
@@ -2098,6 +2100,8 @@ def compare_survival_models(
                 random_state=random_state,
                 **extra_kwargs,
             )
+            if result.get("test_risk") is not None:
+                predictions[model_name] = (result["test_positions"], result["test_risk"])
             comparison.append({
                 "model": model_name,
                 "c_index": _safe_float(result["c_index"]),
@@ -2184,9 +2188,35 @@ def compare_survival_models(
         "split_seed": int(random_state),
         "evaluation_split_fingerprint": split_fingerprint,
         "scientific_summary": scientific_summary,
+        "test_predictions": (
+            _test_prediction_block(frame, eval_positions, test_frame, time_column, event_column, predictions)
+            if evaluation_mode == "holdout"
+            else None
+        ),
     }
     result["manuscript_tables"] = build_manuscript_result_tables(result)
     return result
+
+
+def _test_prediction_block(
+    frame: pd.DataFrame,
+    positions: np.ndarray,
+    test_frame: pd.DataFrame,
+    time_column: str,
+    event_column: str,
+    predictions: dict[str, tuple[list[int], list[float]]],
+) -> dict[str, Any] | None:
+    """The models' risk scores on the test patients all of them scored, keyed by stored row label."""
+    if not predictions:
+        return None
+    source_rows = _frame_source_rows(frame)
+    row_ids = [source_rows[int(position)] if source_rows is not None else int(position) for position in positions]
+    return prediction_block(
+        row_ids,
+        test_frame[time_column].to_numpy(dtype=float),
+        test_frame[event_column].astype(int).to_numpy(),
+        predictions,
+    )
 
 
 def _encoded_fold_matrices(
@@ -2211,6 +2241,8 @@ def _encoded_fold_matrices(
     train_encoded, test_encoded = _drop_constant_train_columns(train_encoded, test_encoded)
     train_eval = train_frame.loc[train_encoded.index].reset_index(drop=True)
     test_eval = test_frame.loc[test_encoded.index].reset_index(drop=True)
+    # Positions of the scored rows in ``test_frame``, so test-set predictions can be matched to patients.
+    test_eval.attrs["test_positions"] = [int(label) for label in test_encoded.index]
     if train_encoded.empty or test_encoded.empty:
         raise ValueError(f"No valid rows remain after encoding features for {model_label}.")
     return train_encoded, test_encoded, train_eval, test_eval
@@ -2227,9 +2259,22 @@ def _fold_result(
     test_eval: pd.DataFrame,
     event_column: str,
     extra: dict[str, Any] | None = None,
+    risk_score: np.ndarray | None = None,
 ) -> dict[str, Any]:
-    """Metrics of one model fitted on a training split and scored on its evaluation split."""
+    """Metrics of one model fitted on a training split and scored on its evaluation split.
+
+    With ``risk_score`` the result also carries the evaluation rows' risk scores and their
+    positions in the evaluation frame (``test_risk``, ``test_positions``); callers copy only
+    the fields they report, so these stay internal unless a comparison uses them.
+    """
+    predictions = {}
+    if risk_score is not None:
+        predictions = {
+            "test_risk": np.asarray(risk_score, dtype=float).reshape(-1).tolist(),
+            "test_positions": list(test_eval.attrs.get("test_positions", range(test_eval.shape[0]))),
+        }
     return {
+        **predictions,
         "model": model,
         "c_index": _safe_float(c_index),
         "ibs": None if brier_result is None else _safe_float(brier_result.get("ibs")),
@@ -2303,6 +2348,7 @@ def _fit_evaluate_cox_split(
     return _fold_result(
         model="Cox PH",
         c_index=_sksurv_c_index(y_test, risk_score),
+        risk_score=risk_score,
         brier_result=brier_result,
         n_features=len(param_vector),
         training_time_ms=training_time_ms,
@@ -2363,6 +2409,7 @@ def _fit_evaluate_lasso_cox_split(
     return _fold_result(
         model="LASSO-Cox",
         c_index=_sksurv_c_index(y_test, risk_score),
+        risk_score=risk_score,
         brier_result=brier_result,
         n_features=int(train_encoded.shape[1]),
         training_time_ms=training_time_ms,
@@ -2426,6 +2473,7 @@ def _fit_evaluate_rsf_split(
     return _fold_result(
         model="Random Survival Forest",
         c_index=_sksurv_c_index(y_test, risk_score),
+        risk_score=risk_score,
         brier_result=brier_result,
         n_features=int(train_encoded.shape[1]),
         training_time_ms=training_time_ms,
@@ -2486,6 +2534,7 @@ def _fit_evaluate_gbs_split(
     return _fold_result(
         model="Gradient Boosted Survival",
         c_index=_sksurv_c_index(y_test, risk_score),
+        risk_score=risk_score,
         brier_result=brier_result,
         n_features=int(train_encoded.shape[1]),
         training_time_ms=training_time_ms,
@@ -3005,6 +3054,22 @@ def cross_validate_survival_models(
         "locked_test_note": locked_note,
         "evaluation_split_fingerprint": evaluation_split_fingerprint(source_rows, design_splits, kind=fingerprint_kind),
         "scientific_summary": scientific_summary,
+        "locked_test_predictions": (
+            _test_prediction_block(
+                frame,
+                test_positions,
+                locked_test_frame,
+                time_column,
+                event_column,
+                {
+                    name: (locked["test_positions"], locked["test_risk"])
+                    for name, locked in locked_results.items()
+                    if locked.get("test_risk") is not None
+                },
+            )
+            if use_locked_test and locked_test_frame is not None
+            else None
+        ),
     }
     result["manuscript_tables"] = build_manuscript_result_tables(result)
     return result

@@ -4823,7 +4823,8 @@ def test_benchmark_board_warns_about_cross_family_tie_methods_and_ibs_asymmetry(
     assert "Cox PH and LASSO-Cox use Efron" in benchmark_js
     assert "DeepSurv, Survival Transformer, and Survival VAE use Breslow" in benchmark_js
     assert "ML comparison rows may include IBS / Brier Skill Score, but DL comparison rows currently report C-index only" in benchmark_js
-    assert "SurvStudio does not run a paired significance test for C-index gaps between models" in benchmark_js
+    assert "ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients" in benchmark_js
+    assert "/api/model-comparison-intervals" in benchmark_js
 
 
 def test_predictive_current_result_requires_both_current_compare_payloads() -> None:
@@ -7164,7 +7165,7 @@ def test_marker_frontend_runs_the_evaluation_and_validates_the_locked_model() ->
     assert "async function runMarkerEvaluation() {" in text
     assert 'fetchJSON("/api/marker-evaluation", {' in text
     assert 'fetchJSON("/api/marker-validation", {' in text
-    assert "body: JSON.stringify({ dataset_id: external.dataset_id, recipe })," in text
+    assert 'body: JSON.stringify({ dataset_id: external.dataset_id, recipe, marker_scaling: refs.markerValidationScaling?.value || "as_measured" }),' in text
     assert 'withLoading(refs.runMarkersButton, runMarkerEvaluation, "markers")' in text
     assert 'if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];' in text
     assert 'if (goal === "markers") {' in text

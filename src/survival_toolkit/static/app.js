@@ -33,6 +33,8 @@ const benchmarkBoardApi = window.SurvStudioBenchmark.createBenchmarkBoardApi({
   renderPredictiveWorkbench,
   syncPredictiveWorkbenchCompareVisibility,
   showError,
+  fetchJSON,
+  requestBoardRender: () => renderBenchmarkBoard(),
 });
 
 const benchmarkCompareRows = benchmarkBoardApi.benchmarkCompareRows;

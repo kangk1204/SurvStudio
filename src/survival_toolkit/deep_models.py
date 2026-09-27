@@ -40,6 +40,7 @@ from survival_toolkit.evaluation import (
     DEFAULT_HOLDOUT_FRACTION,
     evaluation_split_fingerprint,
     locked_test_split,
+    prediction_block,
     stratified_holdout_indices,
 )
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
@@ -180,6 +181,7 @@ def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
         "training_samples": result.get("training_samples"),
         "evaluation_samples": result.get("evaluation_samples"),
         "epochs_trained": result.get("epochs_trained"),
+        **({"holdout_risk": result.get("holdout_risk")} if task.get("keep_holdout_risk") else {}),
     }
 
 
@@ -502,6 +504,8 @@ def _prepare_deep_split_data(
     evaluation_split = {
         "train_idx": np.arange(train_n, dtype=int),
         "eval_idx": np.arange(train_n, train_n + eval_n, dtype=int),
+        # Positions in ``eval_df`` of the evaluation rows, in tensor order.
+        "eval_source_positions": [int(label) for label in eval_frame.attrs.get("source_row_index", range(eval_n))],
         "evaluation_mode": "holdout",
         "evaluation_note": (
             f"Reported C-index is computed on an external fold with {train_n} training samples "
@@ -763,6 +767,11 @@ def _prepare_deep_training_inputs(
             )
             if resolved_split.get("evaluation_split_fingerprint"):
                 split_eval["evaluation_split_fingerprint"] = resolved_split["evaluation_split_fingerprint"]
+            clean_rows = clean_frame.attrs.get("source_row_index")
+            split_eval["eval_row_ids"] = [
+                clean_rows[int(eval_idx[position])] if clean_rows is not None else int(eval_idx[position])
+                for position in split_eval["eval_source_positions"]
+            ]
             split_data["dropped_nonpositive_time_rows"] = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
             return split_data, split_eval
         except InsufficientDeepSampleError:
@@ -1734,8 +1743,12 @@ def _deep_fit_summary_counts(
 def _holdout_and_apparent_c_index(
     context: _DeepTrainingContext,
     risk_scores: Any,
-) -> tuple[float | None, float | None, float | None, str, str]:
-    """Holdout C-index (apparent fallback) with the matching evaluation mode and note."""
+) -> tuple[float | None, float | None, float | None, str, str, list[float] | None]:
+    """Holdout C-index (apparent fallback) with the matching evaluation mode and note.
+
+    The last value is the evaluation rows' risk scores when the C-index is a holdout
+    estimate, for paired comparisons with other models; comparisons remove it.
+    """
     # Apparent = resubstitution on the training partition only.
     apparent_c_index = _compute_c_index_torch(
         risk_scores[context.train_idx], context.t_all[context.train_idx], context.e_all[context.train_idx]
@@ -1752,7 +1765,10 @@ def _holdout_and_apparent_c_index(
             "A deterministic holdout split was available, but the holdout subset did not "
             "support a comparable concordance estimate; the reported C-index is apparent."
         )
-    return c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note
+    holdout_risk = None
+    if holdout_c_index is not None and evaluation_mode == "holdout":
+        holdout_risk = risk_scores[context.eval_idx].detach().cpu().numpy().reshape(-1).astype(float).tolist()
+    return c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note, holdout_risk
 
 
 def _time_bin_grid(time_values: np.ndarray, num_time_bins: int) -> tuple[np.ndarray, np.ndarray]:
@@ -1947,6 +1963,7 @@ def _deep_holdout_comparison(
     )
     comparison: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    holdout_risks: dict[str, tuple[None, list[float]]] = {}
     for model_name, trainer, extra_kwargs in trainer_specs:
         raise_if_cancelled()
         try:
@@ -1970,6 +1987,9 @@ def _deep_holdout_comparison(
                 **extra_kwargs,
             )
             training_time_ms = round((time.monotonic() - started) * 1000, 1)
+            risk = result.pop("holdout_risk", None)
+            if risk is not None:
+                holdout_risks[str(result.get("model") or model_name)] = (None, risk)
             comparison.append({
                 "model": str(result.get("model") or model_name or "Unknown model"),
                 "c_index": result.get("c_index"),
@@ -1989,7 +2009,7 @@ def _deep_holdout_comparison(
             if must_propagate(exc):
                 raise
             errors.append({"model": model_name, "error": str(exc)})
-    return _finalize_deep_comparison(
+    result = _finalize_deep_comparison(
         comparison,
         errors,
         df=df,
@@ -2002,6 +2022,26 @@ def _deep_holdout_comparison(
             "n_events": int(float(shared_data["event_tensor"].sum().item())),
             "evaluation_split_fingerprint": shared_eval_split.get("evaluation_split_fingerprint"),
         },
+    )
+    result["test_predictions"] = _deep_prediction_block(shared_data, shared_eval_split, holdout_risks)
+    return result
+
+
+def _deep_prediction_block(
+    data: dict[str, Any],
+    split: dict[str, Any],
+    risks: dict[str, tuple[None, list[float]]],
+) -> dict[str, Any] | None:
+    """The models' risk scores on the evaluation rows, keyed by stored row label."""
+    row_ids = split.get("eval_row_ids")
+    if not risks or row_ids is None or str(split.get("evaluation_mode")) != "holdout":
+        return None
+    eval_idx = np.asarray(split["eval_idx"], dtype=int)
+    return prediction_block(
+        row_ids,
+        data["time_tensor"].detach().cpu().numpy().reshape(-1)[eval_idx],
+        data["event_tensor"].detach().cpu().numpy().reshape(-1)[eval_idx].astype(int),
+        risks,
     )
 
 
@@ -2127,6 +2167,7 @@ def _deep_repeated_cv_comparison(
     )
 
     locked_results: dict[str, dict[str, Any]] = {}
+    locked_predictions: dict[str, Any] | None = None
     locked_note: str | None = None
     if use_locked_test:
         design_splits.append((dev_positions, test_positions))
@@ -2138,12 +2179,14 @@ def _deep_repeated_cv_comparison(
             f"({int(dev_frame.shape[0])} patients, {int(dev_frame[event_column].sum())} events); each model was then refit "
             "once on the full development set and scored once on the locked test set."
         )
-        locked_results = _deep_locked_test_results(
+        locked_labels = [source_rows[int(position)] if source_rows is not None else int(position) for position in test_positions]
+        locked_results, locked_predictions = _deep_locked_test_results(
             dev_frame,
             locked_test_frame,
             model_specs,
             settings,
             random_seed=random_seed,
+            row_labels=locked_labels,
         )
 
     comparison = _summarize_deep_cv_rows(
@@ -2188,6 +2231,7 @@ def _deep_repeated_cv_comparison(
     if parallel_execution_note:
         result["parallel_execution_note"] = parallel_execution_note
         result["scientific_summary"]["cautions"].append(parallel_execution_note)
+    result["locked_test_predictions"] = locked_predictions
     return result
 
 
@@ -2374,8 +2418,13 @@ def _deep_locked_test_results(
     settings: _DeepRunSettings,
     *,
     random_seed: int,
-) -> dict[str, dict[str, Any]]:
-    """Refit every model on the development set and score it once on the locked test set."""
+    row_labels: Sequence[Any] | None = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any] | None]:
+    """Refit every model on the development set and score it once on the locked test set.
+
+    Also returns the models' locked-test risk scores keyed by stored row label
+    (``row_labels`` gives the label of each ``locked_test_frame`` row).
+    """
     locked_results: dict[str, dict[str, Any]] = {}
     try:
         locked_data, locked_split = _prepare_deep_split_data(
@@ -2391,7 +2440,7 @@ def _deep_locked_test_results(
     except Exception as exc:
         if must_propagate(exc):
             raise
-        return {str(spec["model_name"]): {"error": str(exc)} for spec in model_specs}
+        return {str(spec["model_name"]): {"error": str(exc)} for spec in model_specs}, None
     for model_spec in model_specs:
         model_name = str(model_spec["model_name"])
         try:
@@ -2409,13 +2458,24 @@ def _deep_locked_test_results(
                     "evaluation_split": locked_split,
                     "monitor_indices": locked_monitor,
                     "require_holdout_evaluation": True,
+                    "keep_holdout_risk": True,
                 }
             )
         except Exception as exc:
             if must_propagate(exc):
                 raise
             locked_results[model_name] = {"error": str(exc)}
-    return locked_results
+    risks = {
+        name: (None, risk)
+        for name, result in locked_results.items()
+        if (risk := result.pop("holdout_risk", None)) is not None
+    }
+    if row_labels is not None:
+        locked_split = {
+            **locked_split,
+            "eval_row_ids": [row_labels[position] for position in locked_split["eval_source_positions"]],
+        }
+    return locked_results, _deep_prediction_block(locked_data, locked_split, risks)
 
 
 def _summarize_deep_cv_rows(
@@ -2911,7 +2971,9 @@ def evaluate_single_deep_survival_model(
     }
     if model_type not in trainer_map:
         raise ValueError(f"Unknown model type: {model_type}")
-    return trainer_map[model_type]()
+    result = trainer_map[model_type]()
+    result.pop("holdout_risk", None)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -3082,7 +3144,7 @@ def train_deepsurv(
     model.eval()
     with torch.inference_mode():
         risk_scores_tensor = model(x_all)
-    c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note = _holdout_and_apparent_c_index(
+    c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note, holdout_risk = _holdout_and_apparent_c_index(
         context, risk_scores_tensor
     )
     artifact_idx = _select_artifact_indices(
@@ -3206,6 +3268,7 @@ def train_deepsurv(
         "c_index": c_index,
         "apparent_c_index": apparent_c_index,
         "holdout_c_index": holdout_c_index,
+        "holdout_risk": holdout_risk,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
         "tie_method": "breslow",
@@ -3450,7 +3513,7 @@ def train_deephit(
         pmf_all = model(x_all)
     survival_all, rmst_risk_all = _discrete_survival_from_pmf(pmf_all, bin_widths)
     risk_scores_tensor = rmst_risk_all
-    c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note = _holdout_and_apparent_c_index(
+    c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note, holdout_risk = _holdout_and_apparent_c_index(
         context, risk_scores_tensor
     )
     evaluation_note = _append_evaluation_note(
@@ -3546,6 +3609,7 @@ def train_deephit(
         "c_index": c_index,
         "apparent_c_index": apparent_c_index,
         "holdout_c_index": holdout_c_index,
+        "holdout_risk": holdout_risk,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
         **training_fields,
@@ -3747,7 +3811,7 @@ def train_neural_mtlr(
     log_pmf = torch.log_softmax(cumsum_logits_all, dim=1)
     pmf = torch.exp(log_pmf)
     survival_all, rmst_risk_all = _discrete_survival_from_pmf(pmf, bin_widths)
-    c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note = _holdout_and_apparent_c_index(
+    c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note, holdout_risk = _holdout_and_apparent_c_index(
         context, rmst_risk_all
     )
     evaluation_note = _append_evaluation_note(
@@ -3885,6 +3949,7 @@ def train_neural_mtlr(
         "c_index": c_index,
         "apparent_c_index": apparent_c_index,
         "holdout_c_index": holdout_c_index,
+        "holdout_risk": holdout_risk,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
         **training_fields,
@@ -4134,7 +4199,7 @@ def train_survival_transformer(
     model.eval()
     with torch.inference_mode():
         risk_scores_tensor = model(x_all)
-    c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note = _holdout_and_apparent_c_index(
+    c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note, holdout_risk = _holdout_and_apparent_c_index(
         context, risk_scores_tensor
     )
     artifact_idx = _select_artifact_indices(
@@ -4221,6 +4286,7 @@ def train_survival_transformer(
         "c_index": c_index,
         "apparent_c_index": apparent_c_index,
         "holdout_c_index": holdout_c_index,
+        "holdout_risk": holdout_risk,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
         "tie_method": "breslow",
@@ -4568,7 +4634,7 @@ def train_survival_vae(
     with torch.inference_mode():
         x_recon_all, mu_all, log_var_all, risk_all = model(x_all)
         latent_all = mu_all  # get_latent returns mu; reuse from the forward pass above
-    c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note = _holdout_and_apparent_c_index(
+    c_index, apparent_c_index, holdout_c_index, evaluation_mode, evaluation_note, holdout_risk = _holdout_and_apparent_c_index(
         context, risk_all
     )
     artifact_idx = _select_artifact_indices(
@@ -4693,6 +4759,7 @@ def train_survival_vae(
         "c_index": c_index,
         "apparent_c_index": apparent_c_index,
         "holdout_c_index": holdout_c_index,
+        "holdout_risk": holdout_risk,
         "evaluation_mode": evaluation_mode,
         "evaluation_note": evaluation_note,
         "tie_method": "breslow",

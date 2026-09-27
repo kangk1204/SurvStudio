@@ -1051,6 +1051,12 @@
             <p class="card-subtitle">Applies the locked model unchanged to a cohort file with the same column names, then reports discrimination, calibration and which markers replicate.</p>
             <div class="button-row">
               <input id="markerValidationFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" aria-label="External cohort file" />
+              <label class="inline-select"><span>Marker scale <button class="help-dot" type="button" data-tooltip="Same platform: apply the model to the values as measured. Another platform (for example microarrays against RNA-seq): rescale each marker within the cohort to its development mean and SD, so the model's relative weights hold.">?</button></span>
+                <select id="markerValidationScaling">
+                  <option value="as_measured" selected>Same platform (as measured)</option>
+                  <option value="within_cohort">Another platform (rescale within cohort)</option>
+                </select>
+              </label>
               <button class="button ghost" id="runMarkerValidationButton" type="button" disabled>Validate</button>
             </div>
             <div id="markerValidationSummary"></div>

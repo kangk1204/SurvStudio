@@ -327,7 +327,7 @@ async function runMarkerValidation() {
     const payload = await fetchJSON("/api/marker-validation", {
       signal: requestSignal("markerValidation"),
       method: "POST",
-      body: JSON.stringify({ dataset_id: external.dataset_id, recipe }),
+      body: JSON.stringify({ dataset_id: external.dataset_id, recipe, marker_scaling: refs.markerValidationScaling?.value || "as_measured" }),
     });
     if (!requestTokenMatches("markerValidation", requestToken) || state.dataset?.dataset_id !== sourceDatasetId) return;
     state.markerValidation = { ...payload, external_filename: file.name };
@@ -349,6 +349,10 @@ function markerValidationMetrics(validation) {
   if (metrics.delta_c_index != null) rows.push({ label: "C gain over clinical", value: `${formatValue(metrics.delta_c_index)}${interval(metrics.delta_c_index_ci)}` });
   if (metrics.observed_expected_ratio != null) rows.push({ label: `Observed/expected at ${formatValue(metrics.horizon)}`, value: formatValue(metrics.observed_expected_ratio) });
   if (metrics.brier_skill != null) rows.push({ label: "Brier skill", value: formatValue(metrics.brier_skill) });
+  if (metrics.marker_weight_available != null && Number(metrics.marker_weight_available) < 1) {
+    rows.push({ label: "Marker weight measured", value: `${Math.round(100 * Number(metrics.marker_weight_available))}%` });
+  }
+  if (metrics.marker_scaling === "within_cohort") rows.push({ label: "Marker scale", value: "rescaled within cohort" });
   return rows;
 }
 
@@ -356,7 +360,7 @@ async function renderMarkerValidation(payload) {
   const validation = payload?.validation || {};
   const cohort = validation.cohort || {};
   const replicated = (validation.markers || []).filter((row) => row.replicated).length;
-  const total = (validation.markers || []).length;
+  const total = (validation.markers || []).filter((row) => !row.absent).length;
   const metrics = markerValidationMetrics(validation);
   if (refs.markerValidationSummary) {
     refs.markerValidationSummary.innerHTML = `
@@ -382,9 +386,9 @@ function markerValidationRows(validation) {
       "HR per unit": tested.hazard_ratio,
       "CI lower": tested.ci_lower,
       "CI upper": tested.ci_upper,
-      "Same direction": row.same_direction ? "yes" : "no",
+      "Same direction": row.absent ? "not measured" : row.same_direction ? "yes" : "no",
       "Replication P (Holm)": row.replication_p_holm,
-      Replicated: row.replicated ? "yes" : "no",
+      Replicated: row.absent ? "not measured" : row.replicated ? "yes" : "no",
     };
   });
 }

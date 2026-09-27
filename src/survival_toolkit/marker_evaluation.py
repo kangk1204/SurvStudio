@@ -816,6 +816,9 @@ def _finite_or_none(value: Any) -> float | None:
 
 
 RECIPE_VERSION = 1
+MARKER_SCALINGS = ("as_measured", "within_cohort")
+# Below this share of the locked model's marker weight in an external dataset, validation stops.
+MIN_MARKER_WEIGHT_AVAILABLE = 0.5
 
 
 def _json_ready(value: Any) -> Any:
@@ -840,6 +843,14 @@ def recipe_hash(recipe: dict[str, Any]) -> str:
     payload = {key: value for key, value in recipe.items() if key != "recipe_hash"}
     text = json.dumps(_json_ready(payload), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _marker_scale(values: np.ndarray) -> dict[str, float]:
+    observed = values[np.isfinite(values)]
+    return {
+        "mean": float(np.mean(observed)) if observed.size else 0.0,
+        "sd": float(np.std(observed, ddof=1)) if observed.size > 1 else 0.0,
+    }
 
 
 def freeze_recipe(
@@ -888,6 +899,9 @@ def freeze_recipe(
         "strata_columns": list(cohort.strata_columns),
         "markers": marker_terms,
         "marker_medians": {cohort.marker_names[int(column)]: float(signature.medians[int(column)]) for column in signature.columns},
+        # Development mean and SD of each locked marker: the scale to map another platform onto, and the
+        # weight (|coefficient| x SD) a marker carries in the model.
+        "marker_scale": {cohort.marker_names[int(column)]: _marker_scale(cohort.markers[:, int(column)]) for column in signature.columns},
         "marker_development_log_hr": {
             cohort.marker_names[int(column)]: float(primary_beta[int(column)]) for column in signature.columns
         },
@@ -1112,6 +1126,7 @@ def validate_locked_recipe(
     alpha: float = 0.05,
     n_bootstrap: int = 200,
     random_seed: int = 20260926,
+    marker_scaling: str = "as_measured",
 ) -> dict[str, Any]:
     """Apply a locked marker recipe, unchanged, to an external cohort and score it.
 
@@ -1121,6 +1136,14 @@ def validate_locked_recipe(
     external hazard ratio with a Holm-adjusted one-sided replication test in the
     development direction. ``column_mapping`` maps recipe column names to the
     external dataset's names when they differ.
+
+    ``marker_scaling="within_cohort"`` is for a cohort measured on another platform (for
+    example microarrays against RNA-seq): each marker is mapped onto its development
+    distribution by its z-score within the cohort, so the model's relative weights hold;
+    discrimination is then comparable, absolute risks and calibration only roughly. Locked
+    markers the external dataset does not have are held at their development median (a
+    constant), provided at least half of the model's marker weight (|coefficient| x
+    development SD) is measured.
     """
     from survival_toolkit.ml_models import _brier_scores_from_weights, _ipcw_brier_weights
 
@@ -1140,10 +1163,25 @@ def validate_locked_recipe(
     clinical_columns = list(recipe["clinical"]["columns"])
     strata_columns = list(recipe.get("strata_columns") or [])
     markers = list(recipe["markers"])
-    needed = [external(column) for column in [*clinical_columns, *strata_columns, *markers]]
+    if marker_scaling not in MARKER_SCALINGS:
+        raise ValueError(f"marker_scaling must be one of {MARKER_SCALINGS}.")
+    needed = [time_column, event_column, *[external(column) for column in [*clinical_columns, *strata_columns]]]
     missing = [column for column in needed if column not in df.columns]
     if missing:
         raise ValueError("The external dataset lacks columns the recipe needs: " + ", ".join(missing[:6]) + ".")
+    scale = recipe.get("marker_scale") or {}
+    if marker_scaling == "within_cohort" and not scale:
+        raise ValueError("This locked model has no development marker scale; lock it again with this SurvStudio version to rescale markers within the cohort.")
+    absent = [name for name in markers if external(name) not in df.columns]
+    coefficient_of = dict(zip(recipe["model"]["terms"], recipe["model"]["coefficients"]))
+    weight = {name: abs(float(coefficient_of[name])) * float((scale.get(name) or {}).get("sd", 1.0) or 1.0) for name in markers}
+    total_weight = sum(weight.values())
+    weight_available = 1.0 if total_weight <= 0 else sum(value for name, value in weight.items() if name not in absent) / total_weight
+    if absent and (len(absent) == len(markers) or weight_available < MIN_MARKER_WEIGHT_AVAILABLE):
+        raise ValueError(
+            f"The external dataset lacks locked markers carrying {1.0 - weight_available:.0%} of the model's marker weight "
+            f"({', '.join(external(name) for name in absent[:6])}{' ...' if len(absent) > 6 else ''}); at least half must be measured."
+        )
 
     frame = _cohort_frame(
         df,
@@ -1172,6 +1210,10 @@ def validate_locked_recipe(
             if unseen_count:
                 notes.append(f"{unseen_count} external row(s) have a {column} level not seen in development; scored as the reference level.")
     for name in markers:
+        median = float(recipe["marker_medians"][name])
+        if name in absent:
+            columns[name] = np.full(time.shape[0], median)
+            continue
         raw = df.loc[source_rows, external(name)]
         numeric = pd.to_numeric(raw, errors="coerce")
         if bool((raw.notna() & numeric.isna()).any()):
@@ -1179,9 +1221,27 @@ def validate_locked_recipe(
         values = numeric.to_numpy(dtype=float, copy=True)
         values[~np.isfinite(values)] = np.nan
         imputed = int(np.isnan(values).sum())
+        if marker_scaling == "within_cohort":
+            observed = values[~np.isnan(values)]
+            spread = float(np.std(observed, ddof=1)) if observed.size > 1 else 0.0
+            if spread <= 0:
+                notes.append(f"{name} does not vary in the external cohort; it was held at its development median.")
+                columns[name] = np.full(time.shape[0], median)
+                continue
+            values = float(scale[name]["mean"]) + float(scale[name]["sd"]) * (values - float(np.mean(observed))) / spread
         if imputed:
             notes.append(f"{imputed} missing {name} value(s) imputed with the development median.")
-        columns[name] = np.where(np.isnan(values), float(recipe["marker_medians"][name]), values)
+        columns[name] = np.where(np.isnan(values), median, values)
+    if absent:
+        notes.append(
+            f"{len(absent)} locked marker(s) are not in the external dataset ({', '.join(absent)}); they were held at their "
+            f"development median, so the model ran on {weight_available:.0%} of its marker weight."
+        )
+    if marker_scaling == "within_cohort":
+        notes.append(
+            "Markers were rescaled within this cohort to their development mean and SD, as for data from another platform: "
+            "the C-index compares like with like, absolute risks and calibration only roughly."
+        )
 
     model = recipe["model"]
     linear_predictor = np.column_stack([columns[term] for term in model["terms"]]) @ np.asarray(model["coefficients"], dtype=float)
@@ -1213,6 +1273,9 @@ def validate_locked_recipe(
 
     slope_fit = _external_cox(time, event, linear_predictor[:, None], strata)
     metrics: dict[str, Any] = {
+        "marker_scaling": marker_scaling,
+        "marker_weight_available": float(weight_available),
+        "absent_markers": absent,
         "c_index": _finite_or_none(c_index),
         "c_index_ci": interval(c_draws),
         "calibration_slope": None if slope_fit is None else slope_fit["log_hr"],
@@ -1256,6 +1319,10 @@ def validate_locked_recipe(
     marker_rows = []
     one_sided: list[float] = []
     for name in markers:
+        if name in absent:
+            one_sided.append(float("nan"))
+            marker_rows.append({"marker": name, "marginal": None, "adjusted": None, "same_direction": False, "absent": True})
+            continue
         marginal = _external_cox(time, event, columns[name][:, None], strata)
         adjusted = None if base_design is None else _external_cox(time, event, np.column_stack([base_design, columns[name]]), strata)
         tested = adjusted if primary == "added_value" and adjusted is not None else marginal

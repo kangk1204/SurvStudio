@@ -19,6 +19,8 @@
 - Kaplan-Meier figures print the numbers at risk under the time axis, at round times (0, 50, 100 ...) that match the axis ticks, and place the test and band notes where no curve runs.
 - Marker matrices may be gzip-compressed (the .gz files GEO and UCSC Xena serve), TCGA sample barcodes are matched to patient barcodes (one tumour sample per patient, normal tissue left out), and an ID mismatch shows both files' IDs.
 - Summary badges read Robust when only the method's standing assumptions apply, and the Cox headline names the estimates that look unstable rather than the significant terms.
+- The prediction-model leaderboard gives every model's C-index a 95% bootstrap interval and its difference from Cox PH a paired 95% interval on the same test patients, drawn as a dot plot with intervals instead of bars from zero.
+- Validating a locked marker model in another cohort can rescale the markers within the cohort (another platform), and runs when some locked markers are not measured there, reporting the share of the model's weight that was.
 
 ### New
 
@@ -27,6 +29,8 @@
 - `survival_toolkit.marker_evaluation.validate_locked_recipe`: applies a SHA-256-locked signature unchanged to an external cohort. It reports the C-index with a bootstrap CI, the gain over the clinical-only model, the calibration slope, observed/expected risk, the Brier score and skill, and a Holm-adjusted replication test per marker.
 - README: a Prognostic Marker Evaluation section with a runnable example.
 - Markers with more than 90% of patients at one value (`max_mode_fraction`) are left out before the marker screen. In genome-wide RNA-seq, genes expressed in a few patients made the permutation maximum (in TCGA-LUAD its 95% point was chi-square 239 instead of about 25), so no marker could pass family-wise control; the filter never looks at the outcome. The marker screen and REMARK report also set the selected-marker model against the clinical covariates alone in the patients left out.
+- `survival_toolkit.evaluation.c_index_intervals` and `POST /api/model-comparison-intervals`: bootstrap intervals for several models scored on the same test patients, with paired differences from a reference model. ML and DL comparisons return `test_predictions` (holdout) or `locked_test_predictions` (locked test) keyed by stored row label, so the two families can be paired patient by patient.
+- `validate_locked_recipe(..., marker_scaling="within_cohort")`; locked recipes now record each marker's development mean and SD (`marker_scale`).
 
 - `survival_toolkit.design_audit.audit_design`: places a multi-algorithm study design (number and size of selection cohorts, genes only or with clinical covariates, number of candidates, training C-index in the choice, headline C-index) on the benchmark pilot's simulation map and returns the expected optimism of the presented C-index, the expected regret of the choice, and flagged practices with remedies.
 - `survival_toolkit.marker_matrix`: reads marker matrices, matches them to a dataset by patient ID and keeps a few in memory; API `POST /api/marker-matrix` and `DELETE /api/marker-matrix/{id}`, and `marker_matrix_id` in `POST /api/marker-evaluation`.

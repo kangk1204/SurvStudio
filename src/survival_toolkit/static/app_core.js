@@ -125,6 +125,7 @@ const refs = {
   cutpointPlot: document.getElementById("cutpointPlot"),
   showConfidenceBands: document.getElementById("showConfidenceBands"),
   riskTablePoints: document.getElementById("riskTablePoints"),
+  markerValidationScaling: document.getElementById("markerValidationScaling"),
   logrankWeight: document.getElementById("logrankWeight"),
   fhPowerWrap: document.getElementById("fhPowerWrap"),
   fhPower: document.getElementById("fhPower"),
