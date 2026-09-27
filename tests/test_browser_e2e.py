@@ -880,7 +880,9 @@ def test_browser_km_derive_defaults_to_group_when_current_group_is_overall_only(
             page.locator("#deriveSource").select_option("age")
             page.locator("#deriveMethod").select_option("median_split")
             page.locator("#deriveColumnName").fill("age_median_group")
-            page.locator("#deriveButton").click(force=True)
+            # The workspace scrolls smoothly after loading (and the KM figure's height changes the layout), so click
+            # the element itself rather than a screen position.
+            page.evaluate("() => document.getElementById('deriveButton').click()")
             page.wait_for_function(
                 "document.getElementById('groupColumn').value === 'age_median_group'"
             )
@@ -961,7 +963,9 @@ def test_browser_km_derive_summary_marks_stored_result_vs_locked_draft(browser_s
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("pack_years_smoked")
             page.locator("#deriveMethod").select_option("median_split")
-            page.locator("#deriveButton").click(force=True)
+            # The workspace scrolls smoothly after loading (and the KM figure's height changes the layout), so click
+            # the element itself rather than a screen position.
+            page.evaluate("() => document.getElementById('deriveButton').click()")
             page.wait_for_function(
                 "document.getElementById('groupColumn').value === 'pack_years_smoked__median_split'"
             )
@@ -1038,7 +1042,9 @@ def test_browser_optimal_cutpoint_summary_explains_risk_labels(browser_server: s
             page.locator("#deriveToggle").click()
             page.locator("#deriveSource").select_option("age")
             page.locator("#deriveMethod").select_option("optimal_cutpoint")
-            page.locator("#deriveButton").click(force=True)
+            # The workspace scrolls smoothly after loading (and the KM figure's height changes the layout), so click
+            # the element itself rather than a screen position.
+            page.evaluate("() => document.getElementById('deriveButton').click()")
             page.wait_for_function(
                 "document.getElementById('deriveSummary').textContent.includes('Assignment rule')"
             )
