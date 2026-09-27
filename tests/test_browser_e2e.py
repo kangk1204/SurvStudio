@@ -1103,14 +1103,17 @@ def test_browser_ml_importance_plot_stays_inside_its_section(browser_server: str
                 "document.getElementById('mlMetaBanner').textContent.includes('eval=')"
             )
 
-            importance_box = page.locator("#mlImportancePlot").bounding_box()
-            shap_box = page.locator("#mlShapPlot").bounding_box()
-            banner_box = page.locator("#mlMetaBanner").bounding_box()
-            assert importance_box is not None
-            assert shap_box is not None
-            assert banner_box is not None
-            assert importance_box["y"] + importance_box["height"] <= banner_box["y"] + 1.0
-            assert shap_box["y"] + shap_box["height"] <= banner_box["y"] + 1.0
+            # The page scrolls smoothly to the new result, so separate bounding_box() calls can
+            # catch the plots and the banner at different scroll positions; read all three
+            # rectangles together and let the layout settle.
+            page.wait_for_function(
+                """() => {
+                    const box = (id) => document.getElementById(id).getBoundingClientRect();
+                    const banner = box("mlMetaBanner");
+                    return box("mlImportancePlot").bottom <= banner.top + 1 && box("mlShapPlot").bottom <= banner.top + 1;
+                }""",
+                timeout=10000,
+            )
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
