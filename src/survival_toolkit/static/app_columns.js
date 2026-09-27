@@ -17,7 +17,7 @@ function setPanelResultMode(panel, mode = "idle") {
 
 function runScopeForGoal(goal) {
   if (goal === "predictive") return isScopeBusy("predictive") ? "predictive" : predictiveFamilyGoal();
-  if (["km", "cox", "ml", "dl", "tables"].includes(goal)) return goal;
+  if (["km", "cox", "markers", "ml", "dl", "tables"].includes(goal)) return goal;
   return null;
 }
 
@@ -58,6 +58,7 @@ function buttonsForScope(scope) {
     ];
   }
   if (scope === "tables") return [refs.runCohortTableButton];
+  if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];
   return [];
 }
 
@@ -107,7 +108,7 @@ function setScopeBusy(scope, isBusy, activeButton = null) {
   if (scope === "ml") updateMlEvaluationControls();
   if (scope === "dl") updateDlEvaluationControls();
   syncAnalysisRunButtonAvailability();
-  renderGuidedChrome();
+  renderWorkspaceChrome();
   if (scope === "predictive" || scope === "ml" || scope === "dl") {
     renderBenchmarkBoard();
   }
@@ -316,16 +317,11 @@ function updateTimeColumnGuidance() {
 
   const recommended = recommendedTimeColumns();
   const numericColumns = allowedTimeColumns();
-  const compactGuidedCopy = runtime.uiMode === "guided" && currentGuidedStep() === 2;
   if (refs.timeColumnHelp) {
     if (recommended.length) {
-      refs.timeColumnHelp.textContent = compactGuidedCopy
-        ? "Showing likely time columns only. Genes and baseline covariates are hidden here."
-        : "Showing likely follow-up time columns only. Genes and baseline covariates are hidden here.";
+      refs.timeColumnHelp.textContent = "Showing likely time columns only.";
     } else if (numericColumns.length) {
-      refs.timeColumnHelp.textContent = compactGuidedCopy
-        ? "No clear time-style name was found. Showing numeric columns only."
-        : "No clear time-style name was found. Showing numeric columns only, so confirm the follow-up field carefully.";
+      refs.timeColumnHelp.textContent = "No clear time column name was found; showing numeric columns. Check the follow-up field.";
     } else {
       refs.timeColumnHelp.textContent = "No numeric time candidates were detected in this dataset.";
     }
@@ -519,7 +515,7 @@ function currentEventColumnWarning() {
     return {
       tone: "warning",
       blocking: true,
-      message: `"${eventColumn}" is not a standard event column name. Turn on Show all columns only if you intend to use it as the event indicator.`,
+      message: `"${eventColumn}" is not a standard event column name. Tick All columns only if you intend to use it as the event indicator.`,
     };
   }
 
@@ -562,24 +558,15 @@ function updateEventColumnGuidance() {
 
   const binaryColumns = binaryCandidateColumns();
   const recommendedColumns = recommendedEventColumns();
-  const compactGuidedCopy = runtime.uiMode === "guided" && currentGuidedStep() === 2;
   if (refs.eventColumnHelp) {
     if (refs.showAllEventColumns?.checked) {
-      refs.eventColumnHelp.textContent = compactGuidedCopy
-        ? "Showing all columns. Use only a true binary event column here."
-        : "Showing all columns. Use only a true binary event indicator here.";
+      refs.eventColumnHelp.textContent = "Showing all columns. Use only a true binary event indicator.";
     } else if (recommendedColumns.length && recommendedColumns.length < datasetColumnNames().length) {
-      refs.eventColumnHelp.textContent = compactGuidedCopy
-        ? "Showing likely event columns only. Turn on Show all columns only if yours is missing."
-        : "Showing event-like binary columns only. Turn on Show all columns if your event indicator uses a non-standard name.";
+      refs.eventColumnHelp.textContent = "Showing likely event columns only.";
     } else if (binaryColumns.length) {
-      refs.eventColumnHelp.textContent = compactGuidedCopy
-        ? "Showing binary columns that could be the event field."
-        : "No clear event-style name was found. Showing binary candidate columns only.";
+      refs.eventColumnHelp.textContent = "No clear event column name was found; showing binary columns.";
     } else {
-      refs.eventColumnHelp.textContent = compactGuidedCopy
-        ? "No clear event column was found. Turn on Show all columns only if you already know it."
-        : "No binary event candidates were detected. Turn on Show all columns only if you already know which column is the event indicator.";
+      refs.eventColumnHelp.textContent = "No binary event column was found. Tick All columns if you know which one it is.";
     }
   }
 
@@ -623,7 +610,7 @@ function renderEventColumnOptions({ preferred = null, silent = true } = {}) {
 
   if (!silent && currentValue && nextValue && currentValue !== nextValue) {
     showToast(
-      `Event column reset to ${nextValue}. Turn on Show all columns to select non-standard event fields.`,
+      `Event column reset to ${nextValue}. Tick All columns to select a non-standard event field.`,
       "warning",
       3600,
     );
@@ -703,6 +690,8 @@ function searchControlForChecklist(container) {
   if (container === refs.categoricalChecklist) return refs.categoricalSearchInput;
   if (container === refs.strataChecklist) return refs.strataSearchInput;
   if (container === refs.cohortVariableChecklist) return refs.cohortVariableSearchInput;
+  if (container === refs.markerChecklist) return refs.markerSearchInput;
+  if (container === refs.markerClinicalChecklist) return refs.markerClinicalSearchInput;
   return null;
 }
 

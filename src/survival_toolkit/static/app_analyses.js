@@ -14,7 +14,7 @@ function currentBaseConfig() {
   const eventWarning = currentEventColumnWarning();
   if (eventWarning?.blocking) {
     if (eventWarning.tone === "warning" && !refs.showAllEventColumns?.checked) {
-      throw new Error(`${eventWarning.message} If this is intentional, turn on Show all columns for Event first.`);
+      throw new Error(`${eventWarning.message} If this is intentional, tick All columns next to Event first.`);
     }
     throw new Error(eventWarning.message);
   }
@@ -256,7 +256,7 @@ function showWorkspace() {
   refs.workspace.classList.remove("fade-in");
 }
 
-function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", historyMode = "replace", focusTabButton = false, syncHistory = true } = {}) {
+function activateTab(tabName, { historyMode = "replace", focusTabButton = false, syncHistory = true } = {}) {
   let resolvedTabName = tabName;
   if (resolvedTabName === "predictive") {
     resolvedTabName = "benchmark";
@@ -264,10 +264,8 @@ function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", his
   if (tabName === "ml" || tabName === "dl") {
     runtime.predictiveFamily = tabName;
   }
-  if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive" && (resolvedTabName === "ml" || resolvedTabName === "dl")) {
-    resolvedTabName = "benchmark";
-  }
-  if (runtime.uiMode === "expert" && (resolvedTabName === "ml" || resolvedTabName === "dl")) {
+  // ML and DL controls live in the Prediction models tab.
+  if (resolvedTabName === "ml" || resolvedTabName === "dl") {
     resolvedTabName = "benchmark";
   }
   if (resolvedTabName !== "benchmark" && activeTabName() === "benchmark") {
@@ -283,7 +281,7 @@ function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", his
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-selected", isActive ? "true" : "false");
     button.setAttribute("tabindex", isActive ? "0" : "-1");
-    if (isActive && runtime.uiMode !== "guided" && focusTabButton) {
+    if (isActive && focusTabButton) {
       try {
         button.focus({ preventScroll: true });
       } catch {
@@ -292,11 +290,10 @@ function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", his
     }
   });
   refs.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === resolvedTabName));
-  if (setGuidedGoal && GUIDED_GOALS.includes(resolvedTabName)) runtime.guidedGoal = resolvedTabName;
   renderPredictiveWorkbench();
   updateGroupingDetailsVisibility(resolvedTabName);
   if (state.dataset && syncHistory) syncHistoryState(historyMode);
-  renderGuidedChrome();
+  renderWorkspaceChrome();
   requestAnimationFrame(() => {
     if (resolvedTabName === "km" && state.km) resizePlotIfDisplayed(refs.kmPlot);
     if (resolvedTabName === "cox" && state.cox) {
@@ -315,6 +312,11 @@ function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", his
       resizePlotIfDisplayed(refs.dlComparisonPlot);
     }
     if (resolvedTabName === "benchmark") resizePlotIfDisplayed(refs.benchmarkComparisonPlot);
+    if (resolvedTabName === "markers" && state.markers) {
+      resizePlotIfDisplayed(refs.markersStabilityPlot);
+      resizePlotIfDisplayed(refs.markersRankPlot);
+      resizePlotIfDisplayed(refs.markerValidationPlot);
+    }
   });
 }
 
@@ -338,22 +340,17 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   updateDatasetBadge();
   renderSharedFeatureSummary();
   renderDatasetPreview();
-  updateDatasetPresetBar();
+  applyBundledPresets();
   refs.downloadSignatureButton.disabled = true;
   showWorkspace();
   if (scrollToTop) scrollWorkspaceEntryToTop();
-  renderGuidedChrome();
-  const timeSugg = suggestions.time_columns?.[0];
-  const eventSugg = hasConfidentEventSuggestion() ? (refs.eventColumn?.value || null) : null;
-  if (timeSugg && eventSugg) {
-    showSmartBanner(`Auto-detected: "${timeSugg}" as time column, "${eventSugg}" as event column. Adjust if needed.`);
-  } else if (timeSugg) {
-    showSmartBanner(`Auto-detected "${timeSugg}" as the time column. Confirm the event column and event value before running an analysis.`);
-  }
+  renderWorkspaceChrome();
 }
 
 function clearAnalysisOutputs() {
   invalidateRequestTokens(["km", "cox", "tables", "signature", "ml", "dl"]);
+  invalidateRequestTokens(["markers", "markerValidation"]);
+  clearMarkerOutputs();
   state.km = null;
   state.cox = null;
   state.cohort = null;
@@ -365,7 +362,7 @@ function clearAnalysisOutputs() {
   runtime.compareCache.unified = null;
   runtime.workbenchRevealed = false;
   runtime.predictiveWorkbenchIntent = null;
-  refs.kmMetaBanner.textContent = "Configure your study columns above, then click Run Analysis.";
+  refs.kmMetaBanner.textContent = "";
   refs.coxMetaBanner.textContent = "Select covariates above, then click Run Analysis.";
   refs.mlMetaBanner.textContent = "Select shared model features in Predictive Models, then run analysis.";
   refs.dlMetaBanner.textContent = "Select model features here, configure hyperparameters, then run analysis.";
@@ -403,8 +400,8 @@ function clearAnalysisOutputs() {
   clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Training and monitor metric curves will appear here</span></div>', { state: "placeholder" });
   purgePlot(refs.kmPlot);
   purgePlot(refs.coxPlot);
-  refs.kmPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Click <strong>Run Analysis</strong> to generate your survival curve</span><small>Tip: Press Ctrl+Enter as a shortcut</small></div>';
-  refs.coxPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg><span>Select covariates and click <strong>Run Analysis</strong> to see the forest plot</span></div>';
+  refs.kmPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Click <strong>Run Analysis</strong> to draw the survival curves (Ctrl+Enter).</span></div>';
+  refs.coxPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg><span>Choose covariates and click <strong>Run Analysis</strong>.</span></div>';
   refs.downloadKmSummaryButton.disabled = true;
   refs.downloadKmPairwiseButton.disabled = true;
   if (refs.downloadKmPngButton) refs.downloadKmPngButton.disabled = true;
@@ -431,10 +428,10 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   // A different dataset makes any pending derive/signature response obsolete.
   invalidateRequestTokens(["derive", "signature"]);
   state.dataset = payload;
+  // A marker matrix belongs to the patients of the dataset it was attached to; derived-column snapshots keep it.
+  state.markerMatrix = null;
   // Results, banners, plots, and export buttons of the previous dataset.
   clearAnalysisOutputs();
-  runtime.guidedGoal = null;
-  runtime.guidedStep = runtime.uiMode === "guided" ? 2 : 1;
   refs.deriveSummary.innerHTML = "";
   refs.deriveSummary.classList.add("hidden");
   refs.deriveSummary.dataset.summaryKind = "";
@@ -443,7 +440,6 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   runtime.derivedColumnProvenance = normalizeDerivedColumnProvenance(payload.derived_column_provenance);
   runtime.resultPreference.ml = "single";
   runtime.resultPreference.dl = "single";
-  refs.datasetPresetBar?.classList.add("hidden");
   refs.deriveStatus.textContent = "";
   setSelectValueIfPresent(refs.deriveMethod, "median_split");
   if (refs.cutpointPlot) { resetPlotElement(refs.cutpointPlot); refs.cutpointPlot.classList.add("hidden"); }
@@ -452,8 +448,6 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
 
 function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   const snapshot = captureControlSnapshot();
-  const preservedGuidedGoal = runtime.guidedGoal;
-  const preservedGuidedStep = runtime.guidedStep;
   const columnNames = payload.columns.map((column) => column.name);
   const suggestions = payload.suggestions || { time_columns: [], event_columns: [] };
   const preferredTime = snapshot?.timeColumn && columnNames.includes(snapshot.timeColumn)
@@ -466,7 +460,7 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
     ? snapshot.groupColumn
     : null;
 
-  const discardedScopes = ["cox", "tables", "ml", "dl"].filter((scope) => isScopeBusy(scope));
+  const discardedScopes = ["cox", "markers", "tables", "ml", "dl"].filter((scope) => isScopeBusy(scope));
 
   state.dataset = payload;
   clearAnalysisOutputs();
@@ -479,8 +473,6 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   }
   runtime.derivedColumnProvenance = normalizeDerivedColumnProvenance(payload.derived_column_provenance);
   runtime.deriveDraftTouched = false;
-  runtime.guidedGoal = preservedGuidedGoal;
-  runtime.guidedStep = preservedGuidedStep;
 
   if (refs.showAllEventColumns) refs.showAllEventColumns.checked = Boolean(snapshot?.showAllEventColumns);
   renderTimeColumnOptions({ preferred: preferredTime, silent: true });
@@ -490,17 +482,16 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   if (snapshot) applyControlSnapshot(snapshot);
   updateDatasetBadge();
   renderDatasetPreview();
-  updateDatasetPresetBar();
   showWorkspace();
 
   if (!deferChrome) {
-    renderGuidedChrome();
+    renderWorkspaceChrome();
     queueHistorySync();
   }
 }
 
 function hasCompletedResults() {
-  return Boolean(state.km || state.cox || state.cohort || state.signature || state.ml || state.dl);
+  return Boolean(state.km || state.cox || state.cohort || state.signature || state.markers || state.ml || state.dl);
 }
 
 function uploadEncodingNote(payload) {
@@ -541,7 +532,7 @@ async function fetchLatestDatasetPayload(fetchPayload) {
 function applyLoadedDataset(payload) {
   updateAfterDataset(payload, { scrollToTop: true });
   runtime.historySyncPaused = true;
-  activateTab("km", { setGuidedGoal: false });
+  activateTab("km");
   runtime.historySyncPaused = false;
   syncHistoryState("push");
 }
@@ -574,10 +565,6 @@ async function loadExampleDataset() {
 
 async function loadTcgaUploadReadyDataset() {
   await loadBundledDataset("/api/load-tcga-upload-ready");
-}
-
-async function loadTcgaDataset() {
-  await loadBundledDataset("/api/load-tcga-example");
 }
 
 async function loadGbsg2Dataset() {
@@ -642,8 +629,7 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
 
   const preservedGroup = String(refs.groupColumn?.value || "");
   const shouldAutoApplyDerivedGroup = autoApplyOverride ?? !preservedGroup;
-  const guidedKmRefresh = runtime.uiMode === "guided" && runtime.guidedGoal === "km";
-  const shouldRefreshKm = refreshKmOverride ?? (shouldAutoApplyDerivedGroup && (activeTabName() === "km" || guidedKmRefresh));
+  const shouldRefreshKm = refreshKmOverride ?? (shouldAutoApplyDerivedGroup && activeTabName() === "km");
   let payload;
   try {
     payload = await fetchJSON("/api/derive-group", {
@@ -674,7 +660,7 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
   syncDeriveControlsState();
   const shouldClearTableOutput = shouldAutoApplyDerivedGroup
     && currentCohortTableOutputState().hasOutput
-    && (activeTabName() === "tables" || runtime.guidedGoal === "tables");
+    && activeTabName() === "tables";
   runtime.lastDerivedGroup = {
     derivedColumn: payload.derived_column,
     summary: payload.derive_summary,
@@ -693,7 +679,7 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
   } else {
     renderSharedFeatureSummary();
   }
-  renderGuidedChrome();
+  renderWorkspaceChrome();
   queueHistorySync();
   if (toastMode !== "silent") {
     showToast(
@@ -703,7 +689,7 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
           ? `Created ${payload.derived_column} and updated Group by. ${featureUseMessage}${shouldClearTableOutput ? " Previous cohort table output was cleared; build the table again to match the new grouping." : ""}`
           : `Created ${payload.derived_column}. Current Group by remains ${preservedGroup}. ${featureUseMessage} Use Group by or Run again when you want to analyze the new grouping.`,
       "success",
-      toastMode === "guided-inline" ? 4200 : 5200,
+      5200,
     );
   }
 
@@ -722,13 +708,10 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
   if (shouldRefreshKm) {
     try {
       await runKaplanMeier();
-      if (runtime.uiMode === "guided" && runtime.guidedGoal === "km") {
-        setGuidedStep(5, { scroll: false, historyMode: "replace" });
-      }
     } finally {
       refs.deriveStatus.textContent = "";
       renderSharedFeatureSummary();
-      renderGuidedChrome();
+      renderWorkspaceChrome();
     }
   }
 }
@@ -847,16 +830,12 @@ async function runKaplanMeier() {
   await Plotly.newPlot(refs.kmPlot, kmFigure.data || [], kmFigure.layout || {}, plotConfig("km_curve"));
   markPlotResult(refs.kmPlot, payload);
   stabilizePlotShellHeight(refs.kmPlot);
-  updateStepIndicator(3);
   renderTable(refs.kmSummaryShell, kmAnalysis.summary_table);
   renderTable(refs.kmRiskShell, kmRiskTable.rows, kmRiskTable.columns);
   flashPresetTargets([refs.kmRiskShell]);
   renderTable(refs.kmPairwiseShell, kmAnalysis.pairwise_table);
   renderInsightBoard(refs.kmInsightBoard, kmSummary, "Run KM to generate an interpretation panel.");
-  const kmCompetingRiskPrefix = summaryHasCaution(kmSummary, "competing risk")
-    ? "Competing risks not modeled; 1-KM is not cumulative incidence when competing events can preclude the endpoint. "
-    : "";
-  refs.kmMetaBanner.textContent = `${kmCompetingRiskPrefix}N=${formatValue(cohort.n)}, events=${formatValue(cohort.events)}, censored=${formatValue(cohort.censored)}, median follow-up=${formatValue(cohort.median_follow_up)} ${base.time_unit_label}${test ? `, ${test.test} p=${formatPValue(test.p_value)}` : ""}`;
+  refs.kmMetaBanner.textContent = `N=${formatValue(cohort.n)}, events=${formatValue(cohort.events)}, censored=${formatValue(cohort.censored)}, median follow-up=${formatValue(cohort.median_follow_up)} ${base.time_unit_label}${test ? `, ${test.test} p=${formatPValue(test.p_value)}` : ""}`;
   syncDownloadButtonAvailability();
   revealCompletedResultIfCurrent("km", {
     successMessage: `Kaplan-Meier analysis complete. Risk table updated to ${requestedRiskTicks} time points.`,
@@ -895,8 +874,9 @@ function renderSignatureResult(analysis) {
 async function runSignatureSearch() {
   const base = currentBaseConfig();
   const requestToken = beginRequestToken("signature");
-  const candidateColumns = selectedCheckboxValues(refs.covariateChecklist);
-  if (!candidateColumns.length) throw new Error("Select at least one covariate to search for signatures.");
+  const { markers, clinical } = currentMarkerSelections();
+  const candidateColumns = [...markers, ...clinical];
+  if (!markers.length) throw new Error("Select at least one marker to search for cut-point combinations.");
   const requestedColumnName = validateDerivedColumnName(refs.deriveColumnName.value);
   validateMinGroupFraction(refs.signatureMinFraction);
   const preservedGroup = String(refs.groupColumn?.value || "");
@@ -949,7 +929,7 @@ async function runSignatureSearch() {
   updateDatasetBadge();
   renderSignatureResult(payload.signature_analysis);
   renderSharedFeatureSummary();
-  renderGuidedChrome();
+  renderWorkspaceChrome();
   queueHistorySync();
   refs.deriveStatus.textContent = shouldAutoApplyDerivedGroup
     ? `Auto-derived ${payload.derived_column}`
@@ -1007,7 +987,6 @@ async function runCox() {
     clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Scaled Schoenfeld residual screening was unavailable for this fit.</span></div>');
   }
   await renderCoxMartingalePlot(runtime.coxMartingaleTerm);
-  updateStepIndicator(3);
   renderTable(refs.coxResultsShell, coxAnalysis.results_table);
   renderTable(refs.coxDiagnosticsShell, coxAnalysis.diagnostics_table, exportColumnsFromRows(coxAnalysis.diagnostics_table));
   renderInsightBoard(refs.coxInsightBoard, coxSummary, "Run Cox PH to review diagnostics.");
@@ -1025,10 +1004,7 @@ async function runCox() {
   if (Number(stats.zero_event_strata_count || 0) > 0) coxStrataMeta.push(`zero-event strata=${formatValue(stats.zero_event_strata_count)}`);
   if (Number(stats.sparse_event_strata_count || 0) > 0) coxStrataMeta.push(`one-event strata=${formatValue(stats.sparse_event_strata_count)}`);
   const coxStrataCore = coxStrataMeta.length ? `, ${coxStrataMeta.join(", ")}` : "";
-  const coxCompetingRiskPrefix = summaryHasCaution(coxSummary, "competing risk")
-    ? "Competing risks not modeled; cause-specific questions need dedicated competing-risk methods. "
-    : "";
-  refs.coxMetaBanner.textContent = `${coxCompetingRiskPrefix}N=${formatValue(stats.n)}, events=${formatValue(stats.events)}, parameters=${formatValue(stats.parameters)}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricCore}${coxMetricCi}${coxStrataCore}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
+  refs.coxMetaBanner.textContent = `N=${formatValue(stats.n)}, events=${formatValue(stats.events)}, parameters=${formatValue(stats.parameters)}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricCore}${coxMetricCi}${coxStrataCore}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
   syncDownloadButtonAvailability();
   revealCompletedResultIfCurrent("cox", {
     successMessage: "Cox PH model fitted.",
@@ -1073,7 +1049,6 @@ async function runCohortTable() {
   }
   renderSharedFeatureSummary();
   syncDownloadButtonAvailability();
-  updateStepIndicator(3);
   revealCompletedResultIfCurrent("tables", {
     successMessage: "Cohort table built.",
     backgroundMessage: "Cohort table finished in the background. Switch back when you are ready to review the updated table.",

@@ -27,7 +27,7 @@ from typing import Any, Callable, Literal, NoReturn, Sequence, TypeVar
 from urllib.parse import urlsplit
 from xml.sax.saxutils import escape as xml_escape
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -61,7 +61,25 @@ from survival_toolkit.analysis import (
 )
 from survival_toolkit import __version__ as SURVSTUDIO_VERSION
 from survival_toolkit.concurrency import cancellation_scope, raise_if_cancelled
+from survival_toolkit.design_audit import audit_design, design_from_dict
 from survival_toolkit.errors import InternalAnalysisError, JobCancelledError, NotFoundError, UserInputError
+from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
+from survival_toolkit.marker_matrix import (
+    MATRIX_SUFFIXES,
+    ORIENTATIONS,
+    MarkerMatrixStore,
+    match_summary,
+    matrix_frame,
+    read_marker_matrix,
+)
+from survival_toolkit.reporting import (
+    CHECKLIST_COLUMNS,
+    checklist_intro,
+    checklist_markdown,
+    checklist_rows,
+    remark_checklist,
+    tripod_ai_checklist,
+)
 from survival_toolkit.sample_data import (
     load_gbsg2_upload_ready_dataset,
     load_tcga_luad_example_dataset,
@@ -682,6 +700,8 @@ _ML_ARTIFACT_CACHE_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB
 _ml_artifact_cache = _MlArtifactCache(max_items=8, max_bytes=_ML_ARTIFACT_CACHE_MAX_BYTES)
 # Fitted models hold deep-copied training frames; release them together with their dataset.
 store.add_eviction_listener(_ml_artifact_cache.purge_dataset)
+# Marker matrices are matched to a dataset by patient ID at each use, so they outlive derived-column snapshots.
+marker_matrices = MarkerMatrixStore()
 
 _T = TypeVar("_T")
 
@@ -974,6 +994,144 @@ class OptimalCutpointRequest(_EventPositiveValueRequestModel):
     variable: str
     min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
     permutation_iterations: int = Field(default=500, ge=0, le=500)
+
+
+class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
+    dataset_id: str
+    time_column: str
+    event_column: str
+    event_positive_value: Any = 1
+    marker_columns: list[str] = Field(default_factory=list, max_length=_MAX_UPLOAD_COLUMNS)
+    # An attached marker matrix (POST /api/marker-matrix) replaces marker_columns; its patients are
+    # matched to this dataset through marker_matrix_id_column.
+    marker_matrix_id: str | None = Field(default=None, max_length=64)
+    marker_matrix_id_column: str | None = Field(default=None, max_length=512)
+    clinical_columns: list[str] = Field(default_factory=list, max_length=200)
+    categorical_clinical: list[str] = Field(default_factory=list, max_length=200)
+    strata_columns: list[str] = Field(default_factory=list, max_length=20)
+    alpha: float = Field(default=0.05, gt=0.0, lt=0.5)
+    fdr_level: float = Field(default=0.10, gt=0.0, lt=0.5)
+    n_permutations: int = Field(default=1000, ge=0, le=10_000)
+    n_resamples: int = Field(default=200, ge=0, le=1_000)
+    resample_fraction: float = Field(default=0.632, ge=0.3, le=0.9)
+    max_missing_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
+    max_signature_markers: int = Field(default=10, ge=1, le=50)
+    nonlinear_lens: Literal["off", "gbs", "rsf"] = "off"
+    random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
+
+    @field_validator("marker_columns", "clinical_columns", "categorical_clinical", "strata_columns", mode="before")
+    @classmethod
+    def validate_name_lists(cls, value: Any, info: Any) -> list[str]:
+        return _normalize_unique_name_list(value, field_name=info.field_name)
+
+    @model_validator(mode="after")
+    def validate_categorical_subset(self) -> "MarkerEvaluationRequest":
+        _validate_subset_names(
+            self.categorical_clinical,
+            self.clinical_columns,
+            subset_name="categorical_clinical",
+            superset_name="clinical_columns",
+        )
+        if self.marker_matrix_id:
+            if self.marker_columns:
+                raise ValueError("Give marker_columns or a marker matrix, not both.")
+            if not self.marker_matrix_id_column:
+                raise ValueError("A marker matrix needs marker_matrix_id_column, the dataset's patient ID column.")
+        elif not self.marker_columns:
+            raise ValueError("Choose at least one marker.")
+        return self
+
+    def marker_settings(self) -> MarkerSettings:
+        return MarkerSettings(
+            alpha=self.alpha,
+            fdr_level=self.fdr_level,
+            n_permutations=self.n_permutations,
+            n_resamples=self.n_resamples,
+            resample_fraction=self.resample_fraction,
+            max_missing_fraction=self.max_missing_fraction,
+            max_signature_markers=self.max_signature_markers,
+            nonlinear_lens=self.nonlinear_lens,
+            random_seed=self.random_seed,
+        )
+
+
+class MarkerValidationRequest(_EventPositiveValueRequestModel):
+    # The external cohort; the recipe comes from a marker evaluation of another dataset.
+    dataset_id: str
+    recipe: dict[str, Any]
+    column_mapping: dict[str, str] = Field(default_factory=dict, max_length=_MAX_UPLOAD_COLUMNS)
+    # None applies the recipe's own event coding.
+    event_positive_value: Any = None
+    horizon: float | None = Field(default=None, gt=0.0)
+    alpha: float = Field(default=0.05, gt=0.0, lt=0.5)
+    n_bootstrap: int = Field(default=200, ge=0, le=2_000)
+    random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
+
+
+class DesignAuditCohort(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(default="", max_length=120)
+    n: int = Field(ge=2, le=10_000_000)
+    events: int | None = Field(default=None, ge=1)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> str:
+        return _normalize_optional_text_field(value, field_name="cohort name", allow_empty_as_none=True) or ""
+
+
+class DesignAuditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_models: int = Field(ge=2, le=1_000_000)
+    gene_only: bool
+    selection_cohorts: list[DesignAuditCohort] = Field(min_length=1, max_length=200)
+    training_in_selection: bool = False
+    sealed_cohorts: list[DesignAuditCohort] = Field(default_factory=list, max_length=200)
+    headline: Literal["validation", "average including training", "training", "sealed"] = "validation"
+    prefilter_used_validation_outcomes: bool = False
+    refit_in_validation: bool = False
+    cutoff_per_cohort: bool = False
+    compared_with_clinical: bool = False
+
+
+class ChecklistItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item: str = Field(max_length=8)
+    section: str = Field(max_length=80)
+    topic: str = Field(max_length=200)
+    status: Literal["reported", "partly", "author"]
+    text: str = Field(max_length=8000)
+
+
+class ChecklistExportRequest(BaseModel):
+    """A REMARK or TRIPOD+AI checklist, as returned by the marker evaluation or the TRIPOD+AI endpoint."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    format: Literal["markdown", "docx"]
+    guideline: Literal["REMARK", "TRIPOD+AI"]
+    reference: str = Field(max_length=400)
+    software: str = Field(max_length=80)
+    methods: str = Field(default="", max_length=12000)
+    results: str = Field(default="", max_length=4000)
+    items: list[ChecklistItem] = Field(min_length=1, max_length=40)
+
+
+class ComparisonForReport(BaseModel):
+    family: Literal["ml", "dl"]
+    analysis: dict[str, Any]
+    request_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class TripodChecklistRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # The dataset the comparisons ran on, for the data-source item; optional because it may have expired.
+    dataset_id: str | None = None
+    comparisons: list[ComparisonForReport] = Field(min_length=1, max_length=2)
 
 
 class TableExportRequest(BaseModel):
@@ -2182,10 +2340,18 @@ def _docx_cell(text: str, *, width: int, bold: bool = False) -> str:
     )
 
 
-def _docx_table(rows: list[dict[str, Any]], *, style: str, columns: Sequence[str] | None = None) -> str:
+def _docx_table(
+    rows: list[dict[str, Any]],
+    *,
+    style: str,
+    columns: Sequence[str] | None = None,
+    widths: Sequence[int] | None = None,
+) -> str:
     resolved_columns = _export_columns(rows, columns)
     cell_width = max(1200, int(9000 / max(len(resolved_columns), 1)))
-    grid = "".join(f'<w:gridCol w:w="{cell_width}"/>' for _ in resolved_columns)
+    # Column widths in twentieths of a point; equal unless the caller gives one per column.
+    column_widths = list(widths) if widths is not None and len(widths) == len(resolved_columns) else [cell_width] * len(resolved_columns)
+    grid = "".join(f'<w:gridCol w:w="{width}"/>' for width in column_widths)
     borders = (
         "<w:tblBorders>"
         '<w:top w:val="single" w:sz="8" w:space="0" w:color="auto"/>'
@@ -2196,12 +2362,16 @@ def _docx_table(rows: list[dict[str, Any]], *, style: str, columns: Sequence[str
         '<w:insideV w:val="single" w:sz="6" w:space="0" w:color="auto"/>'
         "</w:tblBorders>"
     )
-    header_row = "<w:tr>" + "".join(_docx_cell(column, width=cell_width, bold=True) for column in resolved_columns) + "</w:tr>"
+    header_row = (
+        "<w:tr>"
+        + "".join(_docx_cell(column, width=width, bold=True) for column, width in zip(resolved_columns, column_widths))
+        + "</w:tr>"
+    )
     body_rows = [
         "<w:tr>"
         + "".join(
-            _docx_cell(_normalize_export_text(row.get(column), style, column), width=cell_width)
-            for column in resolved_columns
+            _docx_cell(_normalize_export_text(row.get(column), style, column), width=width)
+            for column, width in zip(resolved_columns, column_widths)
         )
         + "</w:tr>"
         for row in rows
@@ -2239,6 +2409,12 @@ def _export_rows_to_docx(
         body_parts.append(_docx_paragraph(f"{template_profile['notes_heading']}:", italic=True))
         for note in clean_notes:
             body_parts.append(_docx_paragraph(note, italic=True))
+    return _docx_package(body_parts)
+
+
+def _docx_package(body_parts: list[str]) -> bytes:
+    """A minimal Word document (Letter page, 1-inch margins) holding these body paragraphs and tables."""
+    body_parts = [*body_parts]
     body_parts.append(
         "<w:sectPr>"
         '<w:pgSz w:w="12240" w:h="15840"/>'
@@ -2309,6 +2485,13 @@ async def request_validation_exception_handler(request: Request, exc: RequestVal
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     response = templates.TemplateResponse(request, "index.html", {"static_version": _static_asset_version()})
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return response
+
+
+@app.get("/design-check", response_class=HTMLResponse)
+async def design_check_page(request: Request) -> HTMLResponse:
+    response = templates.TemplateResponse(request, "design_check.html", {"static_version": _static_asset_version()})
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return response
 
@@ -2435,6 +2618,76 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
         await file.close()
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
+
+
+@app.post("/api/marker-matrix")
+async def upload_marker_matrix(
+    file: UploadFile = File(...),
+    dataset_id: str = Form(..., max_length=128),
+    id_column: str = Form(..., max_length=512),
+    orientation: str = Form("auto"),
+) -> dict[str, Any]:
+    temp_path: Path | None = None
+    filename = file.filename or "marker_matrix.csv"
+    try:
+        suffix = (Path(filename).suffix or ".csv").lower()
+        if suffix not in MATRIX_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported matrix file type '{suffix}' for '{filename}'. Use CSV, TSV, TXT or Parquet.",
+            )
+        if orientation not in ORIENTATIONS:
+            raise HTTPException(status_code=422, detail=f"Unknown matrix layout '{orientation}'.")
+        total_bytes = 0
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_path = Path(temp_file.name)
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail=_UPLOAD_TOO_LARGE_DETAIL)
+                temp_file.write(chunk)
+
+        def _ingest() -> dict[str, Any]:
+            stored = _get_stored_dataset(dataset_id)
+            if id_column not in stored.dataframe.columns:
+                raise UserInputError(f"The ID column '{id_column}' is not in the dataset.")
+            patient_ids = stored.dataframe[id_column].tolist()
+            matrix = read_marker_matrix(temp_path, filename, patient_ids=patient_ids, orientation=orientation)
+            summary = match_summary(matrix, patient_ids)
+            if summary["n_matched"] < 10:
+                raise UserInputError(
+                    f"Only {summary['n_matched']} patients of the dataset are in the matrix; at least 10 are needed. "
+                    f"The IDs in '{id_column}' must be written exactly as in the matrix."
+                )
+            return {
+                "matrix_id": marker_matrices.add(matrix),
+                "filename": filename,
+                "orientation": matrix.orientation,
+                "n_markers": len(matrix.marker_names),
+                "marker_preview": list(matrix.marker_names[:8]),
+                "id_column": id_column,
+                "fingerprint": matrix.fingerprint,
+                **summary,
+            }
+
+        return await run_in_threadpool(_ingest)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        fail_bad_request(exc)
+    finally:
+        await file.close()
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+@app.delete("/api/marker-matrix/{matrix_id}")
+async def remove_marker_matrix(matrix_id: str) -> dict[str, Any]:
+    marker_matrices.remove(matrix_id)
+    return {"removed": True}
 
 
 @app.post("/api/load-example")
@@ -3527,5 +3780,230 @@ async def pdp(request_model: PDPRequest, request: Request) -> dict[str, Any]:
             )
 
         return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+# ── Marker evaluation and design audit endpoints ────────────────
+
+
+def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """The marker table as flat rows on the primary lens, for display and export."""
+    primary = result["primary_lens"]
+    exact_lens = "adjusted" if primary == "added_value" else "marginal"
+    rows: list[dict[str, Any]] = []
+    for row in result["marker_table"]:
+        stats = row[primary]
+        exact = (row.get("exact") or {}).get(exact_lens) or {}
+        low, high = stats["rank_interval"]
+        display = {
+            "Marker": row["marker"],
+            "Tier": row["tier"],
+            "Evidence": row["pattern"],
+            "Direction": row["direction"],
+            "HR per unit": exact.get("hazard_ratio"),
+            "CI lower": exact.get("ci_lower"),
+            "CI upper": exact.get("ci_upper"),
+            "P value": stats["p_value"],
+            "Family-wise P": stats["p_fwer"],
+            "Permutation q value": stats["q_perm"],
+            "Selection frequency": stats["selection_frequency"],
+            "Direction consistency": stats["direction_consistency"],
+            "Median rank": stats["median_rank"],
+            "Rank 95% interval": None if low is None or high is None else f"{low:.0f}-{high:.0f}",
+        }
+        if primary == "added_value":
+            display["LR test P"] = exact.get("lr_p")
+            display["Apparent C gain"] = exact.get("delta_c_apparent")
+            display["Unadjusted HR"] = ((row.get("exact") or {}).get("marginal") or {}).get("hazard_ratio")
+            display["Unadjusted P"] = row["marginal"]["p_value"]
+        rows.append(display)
+    return rows
+
+
+@app.post("/api/marker-evaluation")
+async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Request) -> dict[str, Any]:
+    try:
+        from survival_toolkit.plots import build_marker_rank_figure, build_marker_stability_figure
+
+        stored = _get_stored_dataset(request_model.dataset_id)
+        request_config = request_model.model_dump()
+        inputs = [*request_model.marker_columns, *request_model.clinical_columns, *request_model.strata_columns]
+        matrix = marker_matrices.get(request_model.marker_matrix_id) if request_model.marker_matrix_id else None
+
+        def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                inputs,
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="marker evaluation",
+            )
+            _reject_outcome_informed_columns(stored, inputs, context="marker evaluation")
+            frame = stored.dataframe
+            markers = list(request_model.marker_columns)
+            matrix_info = None
+            if matrix is not None:
+                frame = matrix_frame(
+                    stored.dataframe,
+                    matrix,
+                    id_column=str(request_model.marker_matrix_id_column),
+                    columns=[request_model.time_column, request_model.event_column, *request_model.clinical_columns, *request_model.strata_columns],
+                )
+                markers = list(matrix.marker_names)
+                matrix_info = {
+                    "filename": matrix.filename,
+                    "n_markers": len(markers),
+                    "n_matched": int(frame.shape[0]),
+                    "id_column": request_model.marker_matrix_id_column,
+                    "fingerprint": matrix.fingerprint,
+                }
+            result = evaluate_markers(
+                frame,
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                marker_columns=markers,
+                clinical_columns=request_model.clinical_columns,
+                categorical_clinical=request_model.categorical_clinical,
+                strata_columns=request_model.strata_columns,
+                event_positive_value=request_model.event_positive_value,
+                settings=request_model.marker_settings(),
+            )
+            report_dataset = {**_report_dataset(stored), "marker_matrix": matrix_info} if matrix_info else _report_dataset(stored)
+            payload = {
+                "analysis": _trim_marker_table(result),
+                "display_table": _marker_display_rows(result),
+                "stability_figure": build_marker_stability_figure(result),
+                "rank_figure": build_marker_rank_figure(result),
+                "report": remark_checklist(result, request={**request_config, "marker_columns": markers}, dataset=report_dataset),
+                "request_config": request_config,
+            }
+            if matrix_info:
+                payload["marker_matrix"] = matrix_info
+            return _attach_dataset_hash(payload, stored)
+
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+@app.post("/api/marker-validation")
+async def marker_validation(request_model: MarkerValidationRequest, request: Request) -> dict[str, Any]:
+    try:
+        from survival_toolkit.plots import build_marker_replication_figure
+
+        stored = _get_stored_dataset(request_model.dataset_id)
+        request_config = request_model.model_dump(exclude={"recipe"})
+
+        def _run() -> dict[str, Any]:
+            try:
+                validation = validate_locked_recipe(
+                    stored.dataframe,
+                    request_model.recipe,
+                    column_mapping=request_model.column_mapping,
+                    event_positive_value=request_model.event_positive_value,
+                    horizon=request_model.horizon,
+                    alpha=request_model.alpha,
+                    n_bootstrap=request_model.n_bootstrap,
+                    random_seed=request_model.random_seed,
+                )
+            except KeyError as exc:
+                raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
+            return _attach_dataset_hash(
+                {
+                    "validation": validation,
+                    "figure": build_marker_replication_figure(validation),
+                    "request_config": request_config,
+                },
+                stored,
+            )
+
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+_MARKER_TABLE_RESPONSE_ROWS = 2_000
+
+
+def _trim_marker_table(result: dict[str, Any]) -> dict[str, Any]:
+    """Send only the strongest rows of a very long per-marker table in the JSON response.
+
+    The flat display table still lists every marker; the nested per-lens rows add about a
+    kilobyte per marker, which a genome-wide screen would turn into tens of megabytes.
+    """
+    rows = result.get("marker_table") or []
+    if len(rows) <= _MARKER_TABLE_RESPONSE_ROWS:
+        return result
+    return {**result, "marker_table": rows[:_MARKER_TABLE_RESPONSE_ROWS], "marker_table_rows_total": len(rows)}
+
+
+def _report_dataset(stored: Any) -> dict[str, Any]:
+    return {
+        "filename": stored.filename,
+        "n_rows": int(stored.dataframe.shape[0]),
+        "dataset_hash": str(stored.metadata.get("dataset_hash") or ""),
+    }
+
+
+@app.post("/api/tripod-ai-checklist")
+async def tripod_ai_report(request_model: TripodChecklistRequest) -> dict[str, Any]:
+    try:
+        dataset = None
+        if request_model.dataset_id:
+            try:
+                dataset = _report_dataset(_get_stored_dataset(request_model.dataset_id))
+            except NotFoundError:
+                dataset = None
+        comparisons = [
+            {**item.analysis, "family": item.family, "request_config": item.request_config}
+            for item in request_model.comparisons
+        ]
+        return await run_in_threadpool(tripod_ai_checklist, comparisons, dataset=dataset)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+def _checklist_docx(report: dict[str, Any]) -> bytes:
+    rows = checklist_rows(report)
+    return _docx_package(
+        [
+            _docx_paragraph(f"{report['guideline']} checklist", bold=True),
+            _docx_paragraph(checklist_intro(report), italic=True),
+            _docx_paragraph("Methods", bold=True),
+            _docx_paragraph(report.get("methods", "")),
+            _docx_paragraph("Results", bold=True),
+            _docx_paragraph(report.get("results", "")),
+            _docx_paragraph("Checklist", bold=True),
+            # Item, Section, Topic, Status, Text across a 6.5-inch text width.
+            _docx_table(rows, style="plain", columns=list(CHECKLIST_COLUMNS), widths=[600, 1300, 1900, 1300, 4260]),
+        ]
+    )
+
+
+@app.post("/api/checklist-export")
+async def checklist_export(request_model: ChecklistExportRequest) -> Response:
+    try:
+        report = request_model.model_dump(exclude={"format"})
+        if request_model.format == "markdown":
+            return Response(content=checklist_markdown(report), media_type="text/markdown; charset=utf-8")
+        content = await run_in_threadpool(_checklist_docx, report)
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+@app.post("/api/design-audit")
+async def design_audit(request_model: DesignAuditRequest) -> dict[str, Any]:
+    try:
+        request_config = request_model.model_dump()
+        design = design_from_dict(request_config)
+        result = await run_in_threadpool(audit_design, design)
+        return {**result, "request_config": request_config}
     except Exception as exc:
         fail_bad_request(exc)

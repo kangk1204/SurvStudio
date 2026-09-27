@@ -203,6 +203,33 @@ def test_build_cox_forest_figure_keeps_stats_out_of_plot_annotations() -> None:
     assert "Points = HR; whiskers = 95% Wald CI" in annotation_text
 
 
+def test_build_cox_forest_figure_labels_log_ticks_in_full() -> None:
+    cox_result = {
+        "results_table": [
+            {"Label": "stage", "Hazard ratio": 3.9, "CI lower": 2.2, "CI upper": 6.9, "P value": 0.001},
+            {"Label": "smoking", "Hazard ratio": 3.0, "CI lower": 0.4, "CI upper": 22.0, "P value": 0.3},
+        ],
+        "model_stats": {"n": 489, "events": 175, "c_index": 0.7, "c_index_label": "Apparent C-index"},
+    }
+
+    xaxis = build_cox_forest_figure(cox_result)["layout"]["xaxis"]
+
+    assert xaxis["type"] == "log"
+    assert xaxis["tickvals"] == [0.5, 1, 2, 5, 10, 20]
+    assert xaxis["ticktext"] == ["0.5", "1", "2", "5", "10", "20"]
+
+
+def test_build_cox_forest_figure_keeps_default_ticks_for_a_narrow_range() -> None:
+    cox_result = {
+        "results_table": [{"Label": "age", "Hazard ratio": 1.01, "CI lower": 0.99, "CI upper": 1.03, "P value": 0.2}],
+        "model_stats": {"n": 100, "events": 50, "c_index": 0.6, "c_index_label": "Apparent C-index"},
+    }
+
+    xaxis = build_cox_forest_figure(cox_result)["layout"]["xaxis"]
+
+    assert "tickvals" not in xaxis
+
+
 def test_build_cox_forest_figure_wraps_long_labels() -> None:
     cox_result = {
         "results_table": [
@@ -538,6 +565,22 @@ def test_build_shap_figure_keeps_distinct_bars_when_wrapped_labels_collide() -> 
     assert figure["data"][0]["y"][0] != figure["data"][0]["y"][1]
     assert figure["layout"]["yaxis"]["ticktext"][0] == figure["layout"]["yaxis"]["ticktext"][1]
     assert figure["layout"]["yaxis"]["tickvals"][0] != figure["layout"]["yaxis"]["tickvals"][1]
+
+
+def test_build_shap_figure_without_subtitle_uses_the_standard_title() -> None:
+    shap_result = {
+        "method": "kernel",
+        "feature_importance": [
+            {"feature": "gene_a", "mean_abs_shap": 0.12},
+            {"feature": "gene_b", "mean_abs_shap": 0.08},
+        ],
+    }
+
+    figure = build_shap_figure(shap_result)
+
+    assert figure["layout"]["title"]["text"] == "Approximate SHAP Screening Importance"
+    assert not figure["layout"].get("annotations")
+    assert figure["layout"]["margin"]["t"] == 80
 
 
 def test_build_shap_figure_safe_mode_separates_title_and_subtitle() -> None:

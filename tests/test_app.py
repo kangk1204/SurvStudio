@@ -46,6 +46,7 @@ _APP_JS_PARTS = (
     "app_predictive.js",
     "app_analyses.js",
     "app_models.js",
+    "app_markers.js",
     "app.js",
 )
 
@@ -94,8 +95,8 @@ def test_index_uses_relative_static_assets() -> None:
     assert '<script src="../static/app_benchmark.js?v=' in response.text
     assert '<script src="../static/app.js?v=' in response.text
     assert "cdn.plot.ly" not in response.text
-    assert 'id="expertModeButton"' in response.text
-    assert 'class="mode-toggle-button hidden" id="expertModeButton" type="button" role="tab" aria-selected="false" aria-hidden="true" tabindex="-1">Expert</button>' in response.text
+    assert 'id="expertModeButton"' not in response.text
+    assert 'id="guidedShell"' not in response.text
     assert 'id="coxDiagnosticsPlot"' in response.text
     assert 'id="mlEvaluationStrategy"' in response.text
     assert 'id="downloadMlManuscriptMarkdownButton"' in response.text
@@ -168,57 +169,47 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="runCompareInlineButton"' in response.text
     assert 'id="runDlCompareInlineButton"' in response.text
     assert "publication-ready" not in response.text
-    assert "exploratory Kaplan-Meier curves" in response.text
     assert 'class="button ghost" id="loadTcgaUploadReadyButton"' in response.text
-    assert 'class="button ghost" id="loadTcgaButton"' in response.text
+    assert 'id="loadTcgaButton"' not in response.text
     assert 'class="button ghost" id="loadGbsg2Button"' in response.text
     assert 'class="button ghost" id="loadExampleButton"' in response.text
-    assert "Compact upload-style test cohort with fewer columns" in response.text
-    assert "Broader bundled clinical cohort with extra fields" in response.text
-    assert "Classic breast cancer recurrence-survival cohort" in response.text
-    assert "Fastest demo path for checking the app and workflow" in response.text
+    assert "Lung cancer (TCGA-LUAD)" in response.text
+    assert "Breast cancer (GBSG2)" in response.text
+    assert "Synthetic demo" in response.text
     assert 'id="uploadButton" type="button"' in response.text
-    assert 'id="guidedModeButton"' in response.text
-    assert 'id="expertModeButton"' in response.text
-    assert 'class="mode-toggle"' not in response.text
-    assert 'class="mode-toggle-button hidden" id="expertModeButton" type="button" role="tab" aria-selected="false" aria-hidden="true" tabindex="-1">Expert</button>' in response.text
-    assert 'class="mode-toggle mode-toggle-guided-only"' in response.text
-    assert 'id="expertSurfaceLabel"' not in response.text
-    assert 'id="guidedShell"' in response.text
-    assert 'id="guidedSummaryBar"' in response.text
-    assert 'id="guidedPanel"' in response.text
-    assert 'id="guidedRailStatus"' in response.text
-    assert 'id="guidedRailStatusLabel"' in response.text
-    assert 'id="guidedRailStatusTitle"' in response.text
-    assert 'id="guidedRailStatusText"' in response.text
-    assert 'class="guided-rail"' in response.text
-    assert "Confirm outcome" in response.text
-    assert "Choose analysis" in response.text
-    assert "Configure &amp; run" in response.text
-    assert "Review results" in response.text
-    assert "Upload or open a sample cohort" in response.text
-    assert "Configure &amp; run" in response.text
+    for removed in (
+        'id="guidedModeButton"',
+        'id="expertModeButton"',
+        'class="mode-toggle',
+        'id="guidedShell"',
+        'id="guidedPanel"',
+        'id="stepIndicator"',
+        'id="smartBanner"',
+        'id="datasetPresetBar"',
+        'id="kmDependencyText"',
+        'id="coxDependencyText"',
+        'id="tableDependencyText"',
+        "What this tab uses",
+        'class="scope-tag',
+    ):
+        assert removed not in response.text
+    assert '<span class="config-row-label">Outcome</span>' in response.text
     assert '<span>Evaluation Mode</span>' in response.text
     assert "Evaluation Mode applies to both <strong>Run Analysis</strong> and <strong>Compare All</strong>" in response.text
     assert 'class="button ghost compact-btn shutdown-button" id="shutdownButton"' in response.text
     assert '<div class="brand-mark">S</div>' in response.text
     assert "Risk table ticks" in response.text
     assert "It does not change the Kaplan-Meier curve itself." in response.text
-    assert "Used everywhere" not in response.text
-    assert "Used mainly for grouping and display" not in response.text
     assert 'id="showAllEventColumns"' in response.text
+    assert "<span>All columns</span>" in response.text
     assert 'id="eventColumnHelp"' in response.text
     assert 'id="eventColumnWarning"' in response.text
     assert 'id="eventValueWarning"' in response.text
     assert 'id="groupColumnWarning"' in response.text
-    assert "Show all columns for Event" in response.text
-    assert "Showing likely event columns only." in response.text
     assert 'id="groupingDetails"' in response.text
     assert 'id="groupingSummaryText"' in response.text
-    assert 'id="kmDependencyText"' in response.text
+    assert "<strong>Groups</strong>" in response.text
     assert 'id="deriveCutoff" type="text" inputmode="text" placeholder="e.g. 25 or 25,25"' in response.text
-    assert 'id="coxDependencyText"' in response.text
-    assert 'id="tableDependencyText"' in response.text
     assert 'id="tableOutputStatusText"' in response.text
     assert 'id="runCohortTableButtonLabel"' in response.text
     assert 'id="downloadCohortTableButton"' in response.text
@@ -227,9 +218,6 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
     assert 'id="selectAllCohortVariablesButton"' in response.text
     assert 'id="clearCohortVariablesButton"' in response.text
     assert 'id="coxMartingaleVariableSelect"' in response.text
-    assert "Standard Cox reports an apparent C-index on the analyzable cohort; stratified Cox suppresses pooled discrimination reporting." in response.text
-    assert "What this tab uses" in response.text
-    assert "KM / grouped summary settings" in response.text
     assert 'id="deriveButton" type="button">Create</button>' in response.text
     assert "Grambsch-Therneau proportional-hazards tests on scaled Schoenfeld residuals versus log time appear here, per term and as a global test." in response.text
     assert "Allowed ranges:" not in response.text
@@ -239,9 +227,8 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
-    assert 'id="datasetPresetStatusTitle"' in response.text
-    assert 'id="datasetPresetStatusText"' in response.text
-    assert 'id="datasetPresetChips"' in response.text
+    assert 'id="datasetPresetBar"' not in response.text
+    assert 'id="applyBasicPresetButton"' not in response.text
     assert 'id="mlFeatureSummaryText"' in response.text
     assert 'id="mlFeatureSummaryChips"' in response.text
     assert 'id="dlFeatureSummaryText"' in response.text
@@ -257,18 +244,13 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'id="mlShapSafeMode"' in response.text
     assert "Fast mode (skip SHAP)" in response.text
     assert "SHAP safe mode (auto-reduce)" in response.text
-    assert "ML uses the Study Design outcome definition and the shared ML/DL model features selected here." in response.text
-    assert "DL uses the Study Design outcome definition and the shared model features selected in this workspace." in response.text
-    assert "No preset applied yet." in response.text
-    assert "Applying a preset updates recommended columns and checkbox selections only." in response.text
-    assert 'class="button ghost compact-btn" id="applyBasicPresetButton"' in response.text
-    assert 'class="button ghost compact-btn" id="applyModelPresetButton"' in response.text
-    assert 'class="button-row dataset-preset-actions"' in response.text
+    assert "Machine-learning and deep-learning models share the inputs chosen below." in response.text
+    assert "Study Design" not in response.text
     assert "Run setup" in response.text
     assert "Validation and runtime" in response.text
     assert 'class="table-card-head"' in response.text
     assert 'option value="lasso_cox"' in response.text
-    assert "screening comparison across Cox PH and, when available, LASSO-Cox, RSF, and GBS" in response.text
+    assert "screens Cox PH, LASSO-Cox, RSF and GBS on one shared evaluation" in response.text
     # The workspace has no partial-dependence/counterfactual UI, so the page must not advertise it.
     assert "Partial dependence and counterfactual analysis are available" not in response.text
     assert "Fresh datasets preselect up to 20 eligible model features for a faster first run." in response.text
@@ -284,11 +266,14 @@ def test_index_exposes_dataset_preset_feedback_ui() -> None:
     assert 'id="benchmarkComparisonShell"' in response.text
     assert 'id="benchmarkWorkbench"' in response.text
     assert 'id="benchmarkWorkbenchCaption"' in response.text
-    assert "Predictive Models" in response.text
-    assert "Runs all 8 models" in response.text
+    assert "Prediction models" in response.text
+    assert "Fits every model on the same splits and ranks them by C-index." in response.text
+    assert 'id="openPredictiveWorkbenchButton"' in response.text
+    assert "Survival Transformer (experimental)" in response.text
+    assert "Survival VAE (experimental)" in response.text
     assert "Compare All Models" in response.text
     assert "Test one model" in response.text
-    assert "Unified C-index Chart" in response.text
+    assert "C-index by model" in response.text
 
 
 def test_frontend_tracks_workspace_controls_in_history_state() -> None:
@@ -310,17 +295,22 @@ def test_frontend_tracks_workspace_controls_in_history_state() -> None:
     assert 'dlModelCategoricals: selectedCheckboxValues(refs.dlModelCategoricalChecklist),' in text
 
 
-def test_guided_step_indicator_exposes_navigation_a11y_labels() -> None:
-    index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
-    html = index_html.read_text(encoding="utf-8")
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_workspace_is_a_single_view_without_guided_mode() -> None:
+    html = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html").read_text(encoding="utf-8")
+    styles = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text(encoding="utf-8")
+    text = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'id="stepIndicator" role="navigation" aria-label="Guided workflow steps"' in html
-    assert 'aria-label="Step 1: Load data"' in html
-    assert 'aria-label="Step 5: Review results"' in html
-    assert 'el.setAttribute("aria-disabled", String(s > reachableStep));' in text
+    for token in ('id="stepIndicator"', 'id="guidedShell"', 'id="guidedModeButton"', "data-guided-action"):
+        assert token not in html
+    for token in ("uiMode", "guidedGoal", "guidedStep", "renderGuidedChrome", "setUiMode", "runGuidedGoal", "GUIDED_GOALS"):
+        assert token not in text
+    assert "data-ui-mode" not in styles
+    assert "guided" not in styles
     assert "updateAfterDataset(payload, { scrollToTop: true });" in text
+    assert "function renderWorkspaceChrome() {" in text
+    assert "function syncWorkspaceLayout() {" in text
+    assert "function updateResultVisibility() {" in text
+    assert ".result-hidden {" in styles
 
 
 def test_frontend_surfaces_upload_success_feedback_and_allows_reselecting_same_file() -> None:
@@ -366,7 +356,7 @@ def test_readme_states_current_scope_and_validation_limitations() -> None:
     assert "right-censored data" in readme
     assert "no left-truncated entry-time handling" in readme
     assert "no competing-risks analysis" in readme
-    assert 'no built-in "apply the locked model directly to an external cohort" workflow yet' in readme
+    assert "external validation in the interface covers locked marker models" in readme
     assert "Apparent C-index" in readme
     assert "Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time" in readme
     assert "Martingale residual trend plots" in readme
@@ -422,65 +412,41 @@ def test_frontend_exposes_analysis_consistency_banner_and_row_hash_checks() -> N
     assert "Loaded analyses currently use different analyzable cohorts on the same dataset" in app_js
 
 
-def test_frontend_exposes_guided_mode_shell_and_history_state() -> None:
+def test_frontend_restores_workspace_from_history_state() -> None:
     app_js = _AppJsSource()
     shell_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_shell.js"
     text = app_js.read_text(encoding="utf-8")
     shell_text = shell_js.read_text(encoding="utf-8")
 
-    assert 'uiMode: "guided"' in text
-    assert "guidedGoal: null" in text
-    assert "guidedStep: 1" in text
-    assert "function setUiMode(mode" in text
-    assert "function setGuidedGoal(goal" in text
-    assert "function setGuidedStep(step" in text
-    assert "function maxReachableGuidedStep()" in text
-    assert "function canNavigateToGuidedStep(step)" in text
-    assert "function updateGuidedSurfaceVisibility()" in text
-    assert "function renderGuidedChrome()" in text
-    assert "view: \"home\", uiMode: runtime.uiMode" in shell_text
-    assert "guidedGoal: runtime.guidedGoal" in shell_text
-    assert "guidedStep: runtime.guidedStep" in shell_text
+    assert 'if (!state.dataset) return { view: "home" };' in shell_text
+    assert "tab: activeTabName()," in shell_text
     assert "predictiveFamily: runtime.predictiveFamily" in shell_text
-    assert 'setUiMode(restoredUiMode, { syncHistory: false, preserveGuidedState: restoredUiMode === "guided" });' in text
+    assert "uiMode" not in shell_text
     assert "function queueVisiblePlotResize()" in text
     assert "function resizeVisiblePlotsNow()" in text
     assert "queueVisiblePlotResize();" in text
-    assert "const restoredGuidedGoal = GUIDED_GOALS.includes(historyState?.guidedGoal) ? historyState.guidedGoal : null;" in text
-    assert "const restoredGuidedStep = normalizedGuidedStep(historyState?.guidedStep || (restoredGuidedGoal ? 4 : 2));" in text
     assert "const restoredPredictiveFamily = normalizedPredictiveFamily(historyState?.predictiveFamily);" in text
-    assert "runtime.guidedGoal = restoredGuidedGoal;" in text
-    assert "runtime.guidedStep = restoredGuidedStep;" in text
+    assert 'activateTab(historyState.tab || "km");' in text
     assert 'updateGroupingDetailsVisibility(activeTabName(), { force: true });' in text
     assert 'const compareRun = String(requestConfig.model_type || "") === "compare";' in text
     assert 'function preferredResultMode(goal)' in text
-    assert "handleGuidedPanelAction(button);" in text
-    assert 'setGuidedStep(currentGuidedStep() + 1, { historyMode: "push" });' in text
-    assert 'setGuidedStep(currentGuidedStep() - 1, { historyMode: "push" });' in text
-    assert 'setGuidedGoal(target.dataset.goal || null, { historyMode: "push" });' in text
-    assert 'setGuidedStep(5, { scroll: false, historyMode: "push" });' in text
-    assert 'refs.stepIndicator?.addEventListener("click", (event) => {' in text
-    assert 'if (requestedStep === 1) {' in text
-    assert 'if (requestedStep >= 4 && runtime.guidedGoal) {' in text
     assert "historyRestoreToken: 0" in text
     assert "const restoreToken = ++runtime.historyRestoreToken;" in text
     assert 'goHome({ historyMode: "push" });' in text
-    assert 'setUiMode("guided", { historyMode: "push" })' in text
-    assert 'setUiMode("expert", { historyMode: "push" })' in text
 
 
-def test_frontend_hides_dataset_preset_bar_in_guided_mode() -> None:
-    index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
-    app_js = _AppJsSource()
-    index_text = index_html.read_text(encoding="utf-8")
-    text = app_js.read_text(encoding="utf-8")
+def test_bundled_samples_apply_their_presets_on_load() -> None:
+    index_text = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html").read_text(encoding="utf-8")
+    text = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'id="datasetPresetBarHome"' not in index_text
-    assert 'refs.datasetPresetBar?.classList.toggle("hidden", guidedActive || !datasetPresetForCurrentDataset());' in text
-    assert 'refs.datasetPresetBar?.classList.toggle("hidden", !datasetPresetForCurrentDataset());' not in text
-    assert 'refs.guidedConfigMount.insertBefore(refs.datasetPresetBar, guidedPresetAnchor);' not in text
-    assert 'const showOutcomeConfigInRail = guidedActive && step === 2;' in text
-    assert 'const guidedConfigTarget = showOutcomeConfigInRail ? refs.guidedRailPanelMount : refs.guidedConfigMount;' in text
+    assert 'id="datasetPresetBar"' not in index_text
+    assert "function applyBundledPresets() {" in text
+    assert 'applyDatasetPreset("basic");' in text
+    assert 'applyDatasetPreset("models");' in text
+    update_body = text.split("function updateControlsFromDataset({ scrollToTop = false } = {}) {", 1)[1].split("function updateAfterDataset(", 1)[0]
+    assert "applyBundledPresets();" in update_body
+    derived_body = text.split("function updateAfterDerivedDataset(", 1)[1].split("\nfunction ", 1)[0]
+    assert "applyBundledPresets" not in derived_body
 
 
 def test_frontend_uses_server_side_preset_metadata_and_validates_dom_refs() -> None:
@@ -498,7 +464,7 @@ def test_frontend_uses_server_side_preset_metadata_and_validates_dom_refs() -> N
     assert "Missing required DOM references:" in text
 
 
-def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
+def test_frontend_exposes_unified_benchmark_tab() -> None:
     index_html = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html"
     app_js = _AppJsSource()
     benchmark_js = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "app_benchmark.js"
@@ -540,10 +506,8 @@ def test_frontend_exposes_unified_benchmark_tab_and_guided_fallback() -> None:
     assert "const benchmarkBoardApi = window.SurvStudioBenchmark.createBenchmarkBoardApi({" in text
     assert "function syncPredictiveWorkbenchCompareVisibility()" in text
     assert "function reviewBenchmarkSourceTab(tabName, mode = null)" in text
-    assert 'if (runtime.uiMode === "expert" && (resolvedTabName === "ml" || resolvedTabName === "dl")) {' in text
-    assert 'body[data-ui-mode="expert"] #tab-ml,' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text(encoding="utf-8")
-    assert 'runtime.guidedGoal = runtime.guidedGoal || "km";' in text
-    assert 'activateTab(runtime.guidedGoal, { setGuidedGoal: false, historyMode: "replace", syncHistory: false });' in text
+    assert '  if (resolvedTabName === "ml" || resolvedTabName === "dl") {' in text
+    assert '#tab-ml,' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text(encoding="utf-8")
 
 
 def test_frontend_persists_predictive_workbench_visibility_in_history_state() -> None:
@@ -565,24 +529,17 @@ def test_frontend_persists_predictive_workbench_visibility_in_history_state() ->
     assert 'refs.mlModelType?.closest(".model-choice-field")?.classList.toggle("hidden", workbenchOpen);' in text
     assert 'refs.runCompareButton?.classList.toggle("hidden", workbenchOpen);' in text
     assert 'refs.runDlCompareButton?.classList.toggle("hidden", workbenchOpen);' in text
-    assert 'const guidedPredictiveWorkbench = workbenchOpen && runtime.uiMode === "guided" && runtime.guidedGoal === "predictive";' in text
-    assert 'refs.runMlButton?.classList.toggle("hidden", guidedPredictiveWorkbench);' in text
-    assert 'refs.runDlButton?.classList.toggle("hidden", guidedPredictiveWorkbench);' in text
+    assert 'refs.runMlButton?.classList.remove("hidden");' in text
+    assert 'refs.runDlButton?.classList.remove("hidden");' in text
     assert 'refs.predictiveModelSelector?.closest(".predictive-model-picker")?.classList.toggle("hidden", !workbenchOpen);' in text
     assert 'refs.runPredictiveSelectedButton?.classList.add("hidden");' in text
-    assert 'const guidedPredictiveFeatureReview = guidedPredictiveWorkbench && runtime.predictiveWorkbenchIntent === "features";' in text
-    assert 'refs.runPredictiveWorkbenchButton?.classList.toggle("hidden", !workbenchOpen || guidedPredictiveFeatureReview);' in text
+    assert 'refs.runPredictiveWorkbenchButton?.classList.toggle("hidden", !workbenchOpen);' in text
     assert "runtime.workbenchRevealed = false;" in text
     assert 'predictiveWorkbenchIntent: runtime.predictiveWorkbenchIntent,' in shell_text
     assert 'runtime.predictiveWorkbenchIntent = normalizedPredictiveWorkbenchIntent(historyState?.predictiveWorkbenchIntent)' in text
     assert 'runtime.predictiveWorkbenchIntent = null;' in text
-    assert 'title: predictiveWorkbenchTrainMode ? "Train a model" : "Run ML/DL Models"' in text
-    assert 'runAction: predictiveWorkbenchTrainMode ? "run-predictive-selected" : "run-predictive-compare-all"' in text
     assert "const selectedPredictiveModel = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey());" in text
-    assert 'runLabel: predictiveWorkbenchTrainMode ? `Train ${selectedPredictiveModel.label}` : "Compare all models"' in text
-    assert '{ label: "Compare all models", action: "run-predictive-compare-all", tone: "primary" },' in text
-    assert '{ label: "Review shared features", action: "review-shared-features", tone: "ghost" },' in text
-    assert '{ label: "Back", action: "previous-step", tone: "ghost" },' in text
+    assert 'refs.closePredictiveWorkbenchButton?.classList.remove("hidden");' in text
 
 
 def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None:
@@ -667,20 +624,17 @@ def test_frontend_limits_event_columns_by_default_and_warns_on_nonstandard_selec
     assert "function inferEventPositiveSelection(" in text
     assert "function updateEventValueGuidance(" in text
     assert "function currentEventColumnWarning()" in text
-    assert "Turn on Show all columns to select non-standard event fields." in text
+    assert "Tick All columns to select a non-standard event field." in text
     assert "looks like TCGA-style 1/2 coding" in text
     assert "is not a standard event column name" in text
     assert "looks more like a baseline characteristic than an event indicator" in text
     assert "is not a binary event column" in text
-    assert 'If this is intentional, turn on Show all columns for Event first.' in text
+    assert 'If this is intentional, tick All columns next to Event first.' in text
     assert "Choose event value" in text
     assert 'Choose the Event Value for "' in text
     assert 'updateEventValueGuidance(eventColumnWarning?.blocking ? null : inferred.warning);' in text
     assert "function currentGroupColumnWarning()" in text
     assert "high-cardinality numeric column" in text
-    styles = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text(encoding="utf-8")
-    assert 'body[data-ui-mode="guided"][data-guided-step="2"] #guidedRailPanelMount #eventColumnWarning' in styles
-    assert 'body[data-ui-mode="guided"][data-guided-step="2"] #guidedRailPanelMount #eventValueWarning' in styles
 
 
 def test_frontend_disables_ml_learning_rate_for_rsf() -> None:
@@ -839,10 +793,11 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
     assert 'updateTimeColumnGuidance();' in text
     assert 'const coxCovariateCount = goalFeatureCount("cox");' in text
     assert 'const tableVariableCount = goalFeatureCount("tables");' in text
-    assert 'Select at least one covariate to search for signatures.' in text
+    assert 'Select at least one marker to search for cut-point combinations.' in text
     assert 'Select at least one covariate for the Cox model.' in text
     assert 'Select at least one variable for the cohort table.' in text
-    assert '!endpointReady || !hasCoxCovariates || isScopeBusy("km")' in text
+    assert '!endpointReady || !hasMarkers || isScopeBusy("km")' in text
+    assert '!endpointReady || !hasMarkers || isScopeBusy("markers")' in text
     assert '!endpointReady || !hasCoxCovariates || isScopeBusy("cox")' in text
     assert '!endpointReady || !hasTableVariables || isScopeBusy("tables")' in text
     assert 'cohortVariableSearchInput: document.getElementById("cohortVariableSearchInput"),' in text
@@ -865,18 +820,18 @@ def test_cohort_table_variable_picker_supports_search_and_bulk_actions() -> None
     assert 'showToast("Cleared the cohort table variable list.", "success", 2200);' in text
 
 
-def test_analysis_banners_surface_competing_risk_cautions() -> None:
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_competing_risk_cautions_stay_in_the_interpretation_panel() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
 
-    assert "function summaryHasCaution(summary, phrase) {" in text
-    assert 'const kmCompetingRiskPrefix = summaryHasCaution(kmSummary, "competing risk")' in text
-    assert 'Competing risks not modeled; 1-KM is not cumulative incidence when competing events can preclude the endpoint.' in text
-    assert 'const coxCompetingRiskPrefix = summaryHasCaution(coxSummary, "competing risk")' in text
-    assert 'Competing risks not modeled; cause-specific questions need dedicated competing-risk methods.' in text
+    assert "Competing risks not modeled" not in text
+    assert "const leadCautions = cautions.slice(0, 2);" in text
+    assert '<ul class="insight-cautions">' in text
+    assert '<details class="insight-details"><summary>More detail</summary>' in text
+    assert "refs.kmMetaBanner.textContent = `N=${formatValue(cohort.n)}" in text
+    assert "refs.coxMetaBanner.textContent = `N=${formatValue(stats.n)}" in text
 
 
-def test_guided_ml_results_keep_shap_message_cards_visible() -> None:
+def test_ml_results_keep_shap_message_cards_visible() -> None:
     app_js = _AppJsSource()
     text = app_js.read_text(encoding="utf-8")
 
@@ -885,7 +840,8 @@ def test_guided_ml_results_keep_shap_message_cards_visible() -> None:
     assert 'function hasPlotMessage(plot) {' in text
     assert 'clearPlotShell(refs.mlShapPlot, \'<div class="empty-state plot-empty"><span>SHAP values will appear after training</span></div>\', { state: "placeholder" });' in text
     assert 'setPlotShellState(refs.mlShapPlot, "plot");' in text
-    assert 'const hasSingleShap = resultMode === "single" && (hasRenderedPlot(refs.mlShapPlot) || hasPlotMessage(refs.mlShapPlot));' in text
+    assert 'const hasSecond = resultMode === "single" && (hasRenderedPlot(secondPlot) || hasPlotMessage(secondPlot));' in text
+    assert "const secondPlot = isMl ? refs.mlShapPlot : refs.dlLossPlot;" in text
     assert 'SHAP could not be generated because the encoded feature matrix is too wide for the safe fallback path. Reduce the ML feature set to inspect SHAP.' in text
 
 
@@ -1028,18 +984,16 @@ def test_cox_ui_banner_includes_c_index_ci_when_available() -> None:
     assert '% CI ${formatValue(stats.c_index_ci_lower)} to ${formatValue(stats.c_index_ci_upper)}' in text
 
 
-def test_guided_ml_inline_compare_uses_clicked_button_as_loading_target() -> None:
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_ml_inline_compare_uses_clicked_button_as_loading_target() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'void runGuidedGoal("ml", refs.runCompareInlineButton, runCompareModels);' in text
+    assert 'refs.runCompareInlineButton?.addEventListener("click", () => withLoading(refs.runCompareInlineButton, runCompareModels));' in text
 
 
-def test_guided_dl_inline_compare_uses_clicked_button_as_loading_target() -> None:
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_dl_inline_compare_uses_clicked_button_as_loading_target() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'void runGuidedGoal("dl", refs.runDlCompareInlineButton, runDlCompareModels);' in text
+    assert 'refs.runDlCompareInlineButton?.addEventListener("click", () => withLoading(refs.runDlCompareInlineButton, runDlCompareModels));' in text
 
 
 def test_review_shared_features_buttons_keep_the_user_on_matching_model_tab() -> None:
@@ -1067,29 +1021,29 @@ def test_shared_feature_controls_lock_while_ml_or_dl_scope_is_busy() -> None:
     assert "syncSharedFeatureControlsBusy();" in text
 
 
-def test_guided_rail_status_tracks_running_ready_and_stale_states() -> None:
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_run_status_tracks_running_current_and_changed_results() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
+    html = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html").read_text(encoding="utf-8")
+    styles = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text(encoding="utf-8")
 
-    assert "function guidedRailStatusState() {" in text
+    assert "function goalResultStatusState(goal" in text
     assert 'label: "Running"' in text
-    assert 'label: "Ready"' in text
-    assert 'label: "Needs rerun"' in text
-    assert 'label: "No result yet"' in text
-    assert "function renderGuidedRailStatus() {" in text
-    assert 'refs.guidedRailStatus.className = `guided-rail-status guided-rail-status-${compactStatus.tone}${showReviewActions ? " guided-rail-status-actionable" : ""}`;' in text
-    assert 'guided-rail-status-actionable' in text
-    assert "renderGuidedRailStatus();" in text
+    assert 'label: "Settings changed"' in text
+    assert "function renderRunStatus() {" in text
+    assert 'goalResultStatusState(node.dataset.runStatus, { currentLabel: "Up to date" })' in text
+    assert "renderRunStatus();" in text
+    for goal in ("km", "cox", "tables"):
+        assert f'data-run-status="{goal}"' in html
+    assert ".run-status-warning {" in styles
 
 
-def test_refresh_cox_preview_does_not_rerender_guided_chrome_during_loading_state() -> None:
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_refresh_cox_preview_only_updates_the_preview_line() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
     refresh_body = text.split("async function refreshCoxPreview({ force = false } = {}) {", 1)[1].split("function scheduleCoxPreview(", 1)[0]
 
     assert 'status: "loading"' in refresh_body
-    assert 'syncGuidedCoxPanelMounts();' in refresh_body
-    assert 'if (!syncGuidedCoxPanelMounts()) renderGuidedChrome();' in refresh_body
+    assert "renderCoxPreviewLine();" in refresh_body
+    assert "renderWorkspaceChrome" not in refresh_body
 
 
 def test_cox_checklist_search_select_all_is_limited_to_visible_rows() -> None:
@@ -1120,21 +1074,22 @@ def test_legacy_derive_restore_only_reuses_cutoff_when_method_is_still_available
     assert 'refs.deriveCutoff.placeholder = isExtremeSplit ? "e.g. 25" : "e.g. 25 or 25,25";' in text
 
 
-def test_dl_guided_review_hides_compare_tables_when_single_mode_is_active() -> None:
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_single_model_results_hide_compare_tables() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'const hasCompareTable = resultMode === "compare" && hasRenderedTable(refs.dlComparisonShell);' in text
-    assert 'const hasManuscript = resultMode === "compare" && hasRenderedTable(refs.dlManuscriptShell);' in text
+    assert 'const hasCompareTable = resultMode === "compare" && hasRenderedTable(comparisonShell);' in text
+    assert 'const hasManuscript = resultMode === "compare" && hasRenderedTable(manuscriptShell);' in text
+    assert "const comparisonShell = isMl ? refs.mlComparisonShell : refs.dlComparisonShell;" in text
 
 
-def test_guided_cox_preview_summary_surfaces_parameter_count_and_epv() -> None:
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_cox_preview_line_surfaces_usable_rows_parameters_and_epv() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
+    html = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "templates" / "index.html").read_text(encoding="utf-8")
 
-    assert "function renderGuidedCoxPreviewSummary() {" in text
-    assert "<strong>Parameters</strong>" in text
-    assert "<strong>EPV</strong>" in text
+    assert "function renderCoxPreviewLine() {" in text
+    assert "patients usable" in text
+    assert "parameters · ${epv} events per parameter" in text
+    assert 'id="coxPreviewLine"' in html
 
 
 def test_frontend_removes_expert_surface_status_banner() -> None:
@@ -1150,14 +1105,11 @@ def test_frontend_removes_expert_surface_status_banner() -> None:
     assert "Visible settings no longer match the current result. Run again before exporting or interpreting it." in text
 
 
-def test_mode_switch_busy_guard_and_tab_focus_scroll_protection() -> None:
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_tab_activation_moves_focus_only_when_asked() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'Object.values(runtime.busyScopes || {}).some(Boolean)' in text
-    assert "Wait for the current analysis run to finish before switching views." in text
-    assert 'function activateTab(tabName, { setGuidedGoal = runtime.uiMode === "guided", historyMode = "replace", focusTabButton = false, syncHistory = true } = {}) {' in text
-    assert 'if (isActive && runtime.uiMode !== "guided" && focusTabButton)' in text
+    assert 'function activateTab(tabName, { historyMode = "replace", focusTabButton = false, syncHistory = true } = {}) {' in text
+    assert "if (isActive && focusTabButton) {" in text
     assert 'activateTab(tabs[next].dataset.tab, { historyMode: "push", focusTabButton: true });' in text
 
 
@@ -1179,7 +1131,8 @@ def test_ml_dl_result_reveal_is_conditional_on_current_view() -> None:
 
     assert "function shouldRevealCompletedResult(goal) {" in text
     assert "function revealCompletedResultIfCurrent(goal" in text
-    assert "if (hasResult && shouldRevealCompletedResult(tabName)) {" in text
+    assert 'if (activeTabName() === "benchmark" && ["ml", "dl"].includes(goal)) return true;' in text
+    assert "return activeTabName() === goal;" in text
     assert 'revealCompletedResultIfCurrent("ml", {' in text
     assert 'revealCompletedResultIfCurrent("dl", {' in text
 
@@ -1217,7 +1170,7 @@ def test_frontend_deemphasizes_shutdown_button_and_disabled_exports() -> None:
     assert "opacity: 0.15;" in styles
 
 
-def test_frontend_uses_teal_primary_actions_and_visible_active_step_descriptions() -> None:
+def test_frontend_uses_teal_primary_actions() -> None:
     styles = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -1231,11 +1184,6 @@ def test_frontend_uses_teal_primary_actions_and_visible_active_step_descriptions
     primary_css = styles[primary_start:primary_end]
     assert "background: linear-gradient(135deg, var(--teal), #2d8fa8);" in primary_css
     assert "rgba(37, 115, 135, 0.22)" in primary_css
-
-    assert ".step.active .step-desc {" in styles
-    assert "display: block;" in styles
-    assert ".step:disabled {" in styles
-    assert "opacity: 0.75;" in styles
 
 
 def test_frontend_guards_km_and_cox_result_payload_accesses() -> None:
@@ -1258,16 +1206,15 @@ def test_cox_forest_plot_heading_and_copy_render_outside_plot_shell() -> None:
 
     assert '<div class="table-card full-width">' in html
     assert '<div class="diagnostic-copy" id="coxForestCopy">' in html
-    assert "<h3>Cox PH Forest Plot</h3>" in html
-    assert "PH diagnostics are reviewed separately in the diagnostics table." in html
-    cox_block = html[html.index("<h3>Cox PH Forest Plot</h3>"):html.index('<div class="insight-board" id="coxInsightBoard">')]
+    assert "<h3>Hazard ratios</h3>" in html
+    cox_block = html[html.index("<h3>Hazard ratios</h3>"):html.index('<div class="insight-board" id="coxInsightBoard">')]
     assert 'id="coxMetaBanner"' in cox_block
     assert 'class="diagnostic-copy-note" id="coxMetaBanner"' in cox_block
     assert cox_block.index('id="coxMetaBanner"') < cox_block.index('id="coxPlot"')
     assert ".diagnostic-copy {" in styles
 
 
-def test_frontend_removes_study_design_board_and_uses_readable_scope_tags() -> None:
+def test_frontend_has_no_study_design_board_or_scope_tags() -> None:
     template = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -1284,8 +1231,8 @@ def test_frontend_removes_study_design_board_and_uses_readable_scope_tags() -> N
     ).read_text(encoding="utf-8")
 
     assert "study-design-board" not in template
-    assert ".scope-tag {" in styles
-    assert "font-size: 0.65rem;" in styles
+    assert ".scope-tag {" not in styles
+    assert 'class="scope-tag' not in template
     assert ".derive-status {" in styles
     assert "border: 1px solid rgba(37, 115, 135, 0.18);" in styles
 
@@ -1309,23 +1256,17 @@ def test_frontend_uses_design_tokens_for_spacing_motion_and_state_colors() -> No
     assert "--surface-info-border: rgba(var(--teal-rgb), 0.12);" in styles
     assert "--surface-subtle-border: rgba(41, 77, 98, 0.14);" in styles
 
-    ready_start = styles.index(".guided-rail-status-ready {")
-    ready_end = styles.index(".guided-rail-status-ready strong,", ready_start)
+    ready_start = styles.index(".run-status-ready {")
+    ready_end = styles.index(".run-status-warning {", ready_start)
     ready_css = styles[ready_start:ready_end]
-    assert "border-color: var(--state-ready-border);" in ready_css
-    assert "background: linear-gradient(180deg, var(--state-ready-bg), rgba(255, 255, 255, 0.96));" in ready_css
+    assert "color: var(--state-ready-text);" in ready_css
+    assert "background: var(--state-ready-bg);" in ready_css
 
     warning_start = styles.index(".event-warning-warning {")
     warning_end = styles.index(".event-warning-error {", warning_start)
     warning_css = styles[warning_start:warning_end]
     assert "background: rgba(var(--gold-rgb), 0.09);" in warning_css
     assert "color: var(--state-warning-text);" in warning_css
-
-    scope_start = styles.index(".scope-grouping {")
-    scope_end = styles.index(".config-row > .button {", scope_start)
-    scope_css = styles[scope_start:scope_end]
-    assert "background: rgba(var(--gold-rgb), 0.1);" in scope_css
-    assert "border-color: rgba(var(--gold-rgb), 0.2);" in scope_css
 
     model_badge_start = styles.index(".model-choice-field > span::before {")
     model_badge_end = styles.index(".model-choice-field select {", model_badge_start)
@@ -1367,18 +1308,6 @@ def test_frontend_normalizes_primary_control_geometry_to_grid() -> None:
     upload_end = styles.index(".upload-zone:hover {", upload_start)
     upload_css = styles[upload_start:upload_end]
     assert "padding: var(--space-12) var(--space-6);" in upload_css
-
-    readiness_start = styles.index(".guided-readiness {")
-    readiness_end = styles.index(".guided-readiness strong {", readiness_start)
-    readiness_css = styles[readiness_start:readiness_end]
-    assert "margin-top: var(--space-4);" in readiness_css
-    assert "padding: var(--space-3) var(--space-4);" in readiness_css
-
-    step_start = styles.index(".step-circle {")
-    step_end = styles.index(".step-copy {", step_start)
-    step_css = styles[step_start:step_end]
-    assert "width: 24px;" in step_css
-    assert "height: 24px;" in step_css
 
     help_start = styles.index(".help-dot {")
     help_end = styles.index(".help-dot:hover {", help_start)
@@ -1538,21 +1467,40 @@ def test_cli_serve_exports_bind_host_for_request_guard(monkeypatch: pytest.Monke
     assert os.environ[app_module.ALLOWED_HOSTS_ENV_VAR] == "lab.example"
 
 
-def test_guided_grouping_context_only_uses_guided_goal_inside_guided_mode() -> None:
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_cli_serve_in_a_container_explains_how_to_publish_the_port(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from survival_toolkit import __main__ as cli_module
 
-    assert '|| (runtime.uiMode === "guided" && (runtime.guidedGoal === "km" || runtime.guidedGoal === "tables"))' in text
-    assert 'const guidedKmRefresh = runtime.uiMode === "guided" && runtime.guidedGoal === "km";' in text
+    monkeypatch.setenv(app_module.BIND_HOST_ENV_VAR, "")
+    monkeypatch.setenv(app_module.ALLOWED_HOSTS_ENV_VAR, "")
+    monkeypatch.setenv("SURVSTUDIO_CONTAINER", "1")
+    monkeypatch.setattr(cli_module.uvicorn, "run", lambda *args, **kwargs: None)
+
+    assert cli_module.main(["serve", "--host", "0.0.0.0"]) == 0
+
+    message = capsys.readouterr().err
+    assert "-p 127.0.0.1:8000:8000" in message
+    assert "WARNING" not in message
 
 
-def test_change_analysis_clears_guided_goal_before_pushing_history() -> None:
-    app_js = _AppJsSource()
-    text = app_js.read_text(encoding="utf-8")
+def test_package_is_published_as_survstudio_with_both_commands() -> None:
+    pyproject = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert 'runtime.guidedGoal = null;' in text
-    assert 'activateTab("km", { setGuidedGoal: false, historyMode: "push" });' in text
-    assert 'activateTab("data", { setGuidedGoal: false, historyMode: "push" });' not in text
+    assert pyproject["project"]["name"] == "survstudio"
+    assert pyproject["project"]["scripts"] == {
+        "survstudio": "survival_toolkit.__main__:main",
+        "survival-toolkit": "survival_toolkit.__main__:main",
+    }
+    assert pyproject["project"]["license"] == "MIT"
+
+
+def test_grouping_settings_show_only_for_survival_curves_and_table_1() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
+
+    assert 'const grouped = ["km", "tables"].includes(tabName);' in text
+    assert 'refs.groupingConfigBlock?.classList.toggle("hidden", !grouped);' in text
+    assert 'const shouldRefreshKm = refreshKmOverride ?? (shouldAutoApplyDerivedGroup && activeTabName() === "km");' in text
 
 
 def test_ml_model_fast_mode_skips_shap_computation(monkeypatch) -> None:
@@ -4533,12 +4481,10 @@ def test_frontend_exposes_real_dataset_loader_buttons() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert 'id="loadTcgaUploadReadyButton"' in index_html
-    assert 'Upload-Ready TCGA' in index_html
+    assert 'Lung cancer (TCGA-LUAD)' in index_html
     assert 'id="loadGbsg2Button"' in index_html
-    assert 'GBSG2 (Real)' in index_html
-    assert 'id="datasetPresetBar"' in index_html
-    assert 'id="applyBasicPresetButton"' in index_html
-    assert 'id="applyModelPresetButton"' in index_html
+    assert 'Breast cancer (GBSG2)' in index_html
+    assert 'id="datasetPresetBar"' not in index_html
     assert 'loadBundledDataset("/api/load-tcga-upload-ready")' in app_js
     assert 'loadBundledDataset("/api/load-gbsg2-example")' in app_js
     assert "function datasetPresetForCurrentDataset()" in app_js
@@ -4730,7 +4676,7 @@ def test_frontend_derive_group_explains_that_dl_features_do_not_change() -> None
     assert "Use it for grouping or visualization, not as an ML/DL training feature." in app_js
     assert "Grouping only:" in app_js
     assert "ML and DL share this model feature list" in app_js
-    assert "Cox, ML, and DL use the outcome definition plus their own feature selections." in app_js
+    assert "Curves and Table 1 are split by ${groupLabel}." in app_js
 
 
 def test_frontend_derive_group_auto_applies_only_when_group_is_overall_only() -> None:
@@ -4808,8 +4754,7 @@ def test_frontend_refreshes_km_after_creating_and_applying_a_new_group() -> None
     derive_start = app_js.index('async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null, toastMode = "default" } = {}) {')
     derive_end = app_js.index("function updateMethodVisibility()", derive_start)
     derive_body = app_js[derive_start:derive_end]
-    assert 'const guidedKmRefresh = runtime.uiMode === "guided" && runtime.guidedGoal === "km";' in derive_body
-    assert 'const shouldRefreshKm = refreshKmOverride ?? (shouldAutoApplyDerivedGroup && (activeTabName() === "km" || guidedKmRefresh));' in derive_body
+    assert 'const shouldRefreshKm = refreshKmOverride ?? (shouldAutoApplyDerivedGroup && activeTabName() === "km");' in derive_body
     assert "Refreshing Kaplan-Meier with the new grouping..." in derive_body
     assert "Kaplan-Meier is refreshing now." in derive_body
     assert "await runKaplanMeier();" in derive_body
@@ -4823,17 +4768,6 @@ def test_frontend_preserves_existing_group_when_creating_a_new_derived_column() 
     derive_body = app_js[derive_start:derive_end]
     assert "Current Group by remains ${preservedGroup}." in derive_body
     assert "Use Group by or Run again when you want to analyze the new grouping." in derive_body
-
-
-def test_frontend_guided_km_uses_single_run_button_for_pending_derive() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-
-    assert "function guidedKmHasPendingDerivedGroup()" in app_js
-    assert "async function runGuidedKaplanMeier()" in app_js
-    assert '&& runtime.guidedGoal === "km"' in app_js
-    assert 'await deriveGroup({ autoApplyOverride: true, refreshKmOverride: false, toastMode: "silent" });' in app_js
-    assert 'if (action === "run-km") { void runGuidedGoal("km", target, runGuidedKaplanMeier); return; }' in app_js
-    assert 'void runGuidedGoal("km", refs.runKmButton, runGuidedKaplanMeier);' in app_js
 
 
 def test_frontend_derive_group_uses_lightweight_dataset_refresh() -> None:
@@ -4852,120 +4786,15 @@ def test_frontend_derive_group_uses_lightweight_dataset_refresh() -> None:
     assert "updateAfterDataset(payload);" not in derive_body
 
 
-def test_guided_confirm_outcome_shows_ready_status_when_event_value_is_set() -> None:
+def test_review_shared_features_opens_the_model_editor() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'const issueHeading = canContinue ? "Ready to continue" : "What still needs attention";' in app_js
-    assert '`SurvStudio is ready to use ${refs.timeColumn?.value || "time"}, ${refs.eventColumn?.value || "event"}, and ${refs.eventPositiveValue?.value || "event value"}.`' in app_js
+    focus_body = app_js.split('function focusModelFeatureEditor(tabName = "ml") {', 1)[1].split("\nfunction ", 1)[0]
+    assert "activateTab(tabName);" in focus_body
+    assert '(featureCard || featureSummaryCard)?.scrollIntoView({ behavior: "smooth", block: "start" });' in focus_body
 
 
-def test_guided_mode_exposes_compare_all_actions_for_ml_and_dl() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-    styles = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "styles.css"
-    ).read_text(encoding="utf-8")
-
-    assert 'secondaryAction: "run-ml-compare"' in app_js
-    assert 'secondaryAction: "run-dl-compare"' in app_js
-    assert 'secondaryLabel: "Compare all ML models"' in app_js
-    assert 'secondaryLabel: "Compare all DL models"' in app_js
-    assert 'const predictiveWorkbenchTrainMode = goal === "predictive" && runtime.workbenchRevealed && runtime.predictiveWorkbenchIntent === "train";' in app_js
-    assert 'const predictiveWorkbenchFeatureMode = goal === "predictive" && runtime.workbenchRevealed && runtime.predictiveWorkbenchIntent === "features";' in app_js
-    assert 'const workbenchSingleModelMode = goal === "predictive"' in app_js
-    assert 'runAction: predictiveWorkbenchTrainMode ? "run-predictive-selected" : "run-predictive-compare-all"' in app_js
-    assert 'runLabel: predictiveWorkbenchTrainMode ? `Train ${selectedPredictiveModel.label}` : "Compare all models"' in app_js
-    assert "if (workbenchSingleModelMode) {" in app_js
-    assert "configureCopy.secondaryAction = null;" in app_js
-    assert "configureCopy.secondaryLabel = null;" in app_js
-    assert '"Compare all models to build the leaderboard, then click any result to open its controls."' in app_js
-    assert '"Run Compare All once to see every model ranked. Then click a result to tune that model."' in app_js
-    assert 'guided-actions guided-actions-priority' in app_js
-    assert 'guided-actions guided-actions-secondary' in app_js
-    assert 'guided-run-choice' in app_js
-    assert 'runCompareInlineButton' in app_js
-    assert 'runDlCompareInlineButton' in app_js
-    assert 'if (action === "run-ml-compare")' in app_js
-    assert 'if (action === "run-dl-compare")' in app_js
-    assert 'body[data-ui-mode="guided"][data-guided-step="5"] #panel-ml #runCompareButton' in styles
-    assert 'body[data-ui-mode="guided"][data-guided-step="5"] #panel-dl #runDlCompareButton' in styles
-    assert ".guided-actions-priority" in styles
-    assert ".guided-run-choice" in styles
-    assert ".run-setup-quick-actions" in styles
-
-
-def test_guided_choose_analysis_uses_single_predictive_card() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-
-    assert 'const GUIDED_GOALS = ["km", "cox", "predictive", "tables", "ml", "dl"];' in app_js
-    assert 'predictive: "ML/DL Models"' in app_js
-    assert '["km", "cox", "tables", "predictive"].map((entry) => {' in app_js
-    assert 'title: predictiveWorkbenchTrainMode ? "Train a model" : "Run ML/DL Models"' in app_js
-    assert 'runLabel: predictiveWorkbenchTrainMode ? `Train ${selectedPredictiveModel.label}` : "Compare all models"' in app_js
-    assert 'data-guided-action="choose-goal" data-goal="${entry}"' in app_js
-
-
-def test_guided_predictive_configure_panel_surfaces_shared_feature_summary() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-
-    assert "function estimateEncodedFeatureWidth(features = [], categoricalFeatures = []) {" in app_js
-    assert "function guidedPredictiveFeatureSummaryState() {" in app_js
-    assert "function renderGuidedPredictiveFeatureSummary(goal = runtime.guidedGoal) {" in app_js
-    assert "function syncGuidedPredictiveFeatureSummaryMount() {" in app_js
-    assert "Fresh cohorts start with up to 20 shared features for a faster first run." in app_js
-    assert "Compare All can slow down substantially with a wide shared feature list." in app_js
-    assert "Selected raw features" in app_js
-    assert "ML encoded width" in app_js
-    assert "DL encoded width" in app_js
-    assert "Compare All uses the shared raw feature list. ML and DL keep their own categorical flags on top of the same raw inputs." in app_js
-    assert 'const guidedPredictiveFeatureSummary = goal === "predictive" ? "" : renderGuidedPredictiveFeatureSummary(goal);' in app_js
-    assert 'data-guided-action="review-shared-features"' in app_js
-
-
-def test_guided_review_shared_features_action_opens_model_editor() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-
-    assert 'if (action === "review-shared-features") {' in app_js
-    assert 'const reviewTab = runtime.guidedGoal === "dl"' in app_js
-    assert ': (runtime.guidedGoal === "ml" ? "ml" : predictiveFamilyGoal());' in app_js
-    assert "focusModelFeatureEditor(reviewTab);" in app_js
-    assert 'if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive") {' in app_js
-    assert "runtime.workbenchRevealed = true;" in app_js
-    assert 'runtime.predictiveWorkbenchIntent = "features";' in app_js
-    assert 'if (currentGuidedStep() === 5) {' in app_js
-    assert 'setGuidedStep(4, { syncHistory: false, scroll: false, historyMode: "replace" });' in app_js
-    assert 'setPredictiveWorkbenchFamily(tabName, { syncHistory: false, historyMode: "replace" });' in app_js
-    assert 'activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });' in app_js
-    assert "(featureCard || featureSummaryCard || refs.benchmarkGuidedFeatureSummary)?.scrollIntoView({ behavior: \"smooth\", block: \"start\" });" in app_js
-
-
-def test_benchmark_panel_hosts_guided_predictive_feature_summary_mount() -> None:
-    html = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "templates"
-        / "index.html"
-    ).read_text(encoding="utf-8")
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-    styles = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "styles.css"
-    ).read_text(encoding="utf-8")
-
-    assert 'id="benchmarkGuidedFeatureSummary"' in html
-    assert 'benchmarkGuidedFeatureSummary: document.getElementById("benchmarkGuidedFeatureSummary")' in app_js
-    assert "syncGuidedPredictiveFeatureSummaryMount();" in app_js
-    assert ".benchmark-guided-feature-summary {" in styles
-
-
-def test_guided_predictive_hides_right_side_starter_workbench_buttons() -> None:
+def test_benchmark_board_offers_a_starter_action_before_any_result() -> None:
     benchmark_js = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -4975,26 +4804,9 @@ def test_guided_predictive_hides_right_side_starter_workbench_buttons() -> None:
     ).read_text(encoding="utf-8")
 
     assert "function showBenchmarkStarterAction() {" in benchmark_js
-    assert 'return !(runtime.uiMode === "guided" && runtime.guidedGoal === "predictive");' in benchmark_js
     assert '${!hasAnyResult && showBenchmarkStarterAction() ? benchmarkStarterActionMarkup() : ""}' in benchmark_js
     assert "refs.benchmarkComparisonShell.innerHTML = showBenchmarkStarterAction()" in benchmark_js
-
-
-def test_guided_predictive_incomplete_compare_hides_unified_board() -> None:
-    benchmark_js = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "app_benchmark.js"
-    ).read_text(encoding="utf-8")
-
-    assert 'const guidedPredictiveIncomplete = runtime.uiMode === "guided"' in benchmark_js
-    assert "&& !showingStaleBoard;" in benchmark_js
-    assert 'status: "Incomplete compare"' in benchmark_js
-    assert 'title: "Unified predictive board is incomplete"' in benchmark_js
-    assert 'The unified chart publishes only after both ML and DL comparison rows are current.' in benchmark_js
-    assert 'The unified leaderboard publishes only after both ML and DL comparison rows are current.' in benchmark_js
+    assert "guided" not in benchmark_js
 
 
 def test_benchmark_board_warns_about_cross_family_tie_methods_and_ibs_asymmetry() -> None:
@@ -5059,56 +4871,15 @@ def test_guided_chrome_rerenders_benchmark_starter_visibility() -> None:
     assert "syncBenchmarkBoardChrome();" in app_js
 
 
-def test_guided_predictive_workbench_uses_navigation_actions_instead_of_run_button() -> None:
+def test_predictive_leaderboard_is_current_only_for_a_complete_board() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'const guidedPredictiveWorkbenchOpen = goal === "predictive" && runtime.workbenchRevealed;' in app_js
-    assert "const showGuidedPrimaryAction = !predictiveWorkbenchTrainMode;" in app_js
-    assert 'const showGuidedBackAction = !(goal === "predictive" && runtime.workbenchRevealed);' in app_js
-    assert "showGuidedPrimaryAction" in app_js
-    assert "showGuidedBackAction" in app_js
-    assert 'data-guided-action="close-predictive-workbench"' in app_js
-    assert '${predictiveWorkbenchFeatureMode ? "Back to results" : "Back to leaderboard"}' in app_js
-    assert "const guidedPredictiveTrainReview = guidedPredictiveWorkbench" in app_js
-    assert 'refs.closePredictiveWorkbenchButton?.classList.toggle("hidden", guidedPredictiveWorkbench && !guidedPredictiveTrainReview);' in app_js
-
-
-def test_guided_predictive_preserves_reviewable_leaderboard_after_single_model_tuning() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-
-    assert "function guidedPredictiveHasLeaderboardReference() {" in app_js
+    assert "function predictiveLeaderboardIsCurrent() {" in app_js
     assert "&& !board?.hasMixedEvaluation" in app_js
     assert "&& !board?.visibleHasMixedRunGroups" in app_js
     assert '&& (board?.visibleRows?.length || 0) > 0,' in app_js
-    assert 'function guidedPredictiveSelectedModelReady({ family = predictiveFamilyGoal(), modelKey = currentPredictiveModelKey(), previousPayload = null } = {}) {' in app_js
-    assert "const payload = goalPayload(family);" in app_js
-    assert 'return matchesRequestConfig(family, requestConfig, { expectsCompareOverride: false });' in app_js
-    assert "function guidedGoalCanReachReviewStep(goal = runtime.guidedGoal) {" in app_js
+    assert "if (predictiveLeaderboardIsCurrent()) {" in app_js
     assert "unified: null," in app_js
-    assert 'return Boolean(selectedPredictiveSingleResult(predictiveFamilyGoal()) || guidedPredictiveHasLeaderboardReference());' in app_js
-    assert 'if (!guidedGoalCanReachReviewStep(runtime.guidedGoal) && bounded > 4) return 4;' in app_js
-    assert 'if (!guidedGoalCanReachReviewStep(runtime.guidedGoal)) return 4;' in app_js
-    assert 'runtime.guidedStep = normalizedGuidedStep(guidedGoalCanReachReviewStep(runtime.guidedGoal) ? 5 : 4);' in app_js
-    assert 'if (runtime.predictiveWorkbenchIntent === "train" && Boolean(selectedPredictiveSingleResult(predictiveFamilyGoal()))) return "Run Analysis";' in app_js
-    assert 'if (guidedPredictiveHasLeaderboardReference()) return "Compare all";' in app_js
-    assert 'const runStatus = await withLoading(button, action, tabName);' in app_js
-    assert 'if (!runStatus?.ok) return;' in app_js
-    assert 'successCheck: () => guidedPredictiveSelectedModelReady({ family, modelKey, previousPayload }),' in app_js
-    assert "compareRunSequence: 0," in app_js
-    assert "function nextCompareRunGroupId(prefix = \"compare\") {" in app_js
-    assert "function tagComparePayload(payload, groupId, source = \"compare\") {" in app_js
-    assert "const sharedCompareGroupId = nextCompareRunGroupId(\"predictive-compare-all\");" in app_js
-    assert 'compareSource: "predictive_compare_all",' in app_js
-    assert "group_id: sharedCompareGroupId," in app_js
-    assert "runtime.compareCache.unified = {" in app_js
-    assert "const resolveHasResult = () => (typeof successCheck === \"function\" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName)));" in app_js
-    assert "await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));" in app_js
-    assert 'if (runtime.uiMode === "guided" && runtime.guidedGoal === "predictive" && ["ml", "dl"].includes(tabName)) {' in app_js
-    assert 'if (!resolveHasResult() || currentGuidedStep() === 5) return;' in app_js
-    assert 'const returnToPredictiveLeaderboard = runtime.uiMode === "guided"' in app_js
-    assert 'activateTab("benchmark", { setGuidedGoal: false, historyMode: "replace", syncHistory: false });' in app_js
-    assert 'setGuidedStep(5, { syncHistory: false, scroll: false, historyMode: "replace" });' in app_js
-    assert 'refs.benchmarkComparisonShell?.closest(".table-card")' in app_js
 
 
 def test_frontend_download_helpers_accept_fallback_mime_type() -> None:
@@ -5165,17 +4936,14 @@ def test_frontend_invalidates_stale_analysis_responses_with_request_tokens() -> 
 def test_frontend_predictive_compare_uses_unified_scope_and_honest_review_actions() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert "function guidedPredictiveCompareReady()" in app_js
-    assert 'successCheck: guidedPredictiveCompareReady,' in app_js
     assert 'withLoading(refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, "predictive");' in app_js
-    assert 'void runGuidedGoal("predictive", target, runUnifiedPredictiveComparison, {' in app_js
     assert '() => runCompareModels({' in app_js
     assert 'compareGroupId: sharedCompareGroupId,' in app_js
     assert '() => runDlCompareModels({' in app_js
     assert 'compareSource: "predictive_compare_all",' in app_js
     assert 'label: "Train a model"' in app_js
     assert 'label: "Screening only"' in app_js
-    assert 'if (action === "close-predictive-workbench")' in app_js
+    assert 'refs.closePredictiveWorkbenchButton?.addEventListener("click", () => {' in app_js
 
     benchmark_js = (
         Path(__file__).resolve().parents[1]
@@ -5189,7 +4957,7 @@ def test_frontend_predictive_compare_uses_unified_scope_and_honest_review_action
     assert "renderUnifiedBenchmarkPlot(board).catch" in benchmark_js
 
 
-def test_frontend_locks_predictive_picker_during_busy_runs_and_hides_guided_action_card() -> None:
+def test_frontend_locks_predictive_picker_during_busy_runs() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
     styles = (
         Path(__file__).resolve().parents[1]
@@ -5202,9 +4970,8 @@ def test_frontend_locks_predictive_picker_during_busy_runs_and_hides_guided_acti
     assert 'setActionDisabledState(' in app_js
     assert 'refs.predictiveModelSelector,' in app_js
     assert 'predictiveBusy ? "Wait for the current predictive run to finish." : ""' in app_js
-    assert "function guidedPredictiveModelPickerMarkup({ disabled = false } = {})" in app_js
-    assert 'data-guided-predictive-model-selector' in app_js
-    assert 'body[data-ui-mode="guided"][data-guided-goal="predictive"] #panel-benchmark .benchmark-action-card' in styles
+    assert "data-guided" not in app_js
+    assert "data-guided" not in styles
     assert "function syncBenchmarkWorkbenchVisibility()" in app_js
 
 
@@ -5213,8 +4980,7 @@ def test_frontend_scrolls_to_results_after_runs_finish() -> None:
 
     assert "function resultAnchorFor(tabName, { mode = \"single\" } = {})" in app_js
     assert "function scrollToAnalysisResult(tabName, { mode = \"single\" } = {})" in app_js
-    assert 'setGuidedStep(5, { scroll: false, historyMode: "push" });' in app_js
-    assert 'scrollToAnalysisResult(tabName, { mode: resultMode });' in app_js
+    assert "scrollToAnalysisResult(goal, { mode });" in app_js
     assert 'revealCompletedResultIfCurrent("km", {' in app_js
     assert 'revealCompletedResultIfCurrent("cox", {' in app_js
     assert 'revealCompletedResultIfCurrent("tables", {' in app_js
@@ -5261,7 +5027,6 @@ def test_index_exposes_optimal_cutpoint_controls_and_non_ai_empty_states() -> No
     assert 'id="deriveRandomSeed"' in response.text
     assert "Interpretation notes will appear here after analysis." in response.text
     assert "Model interpretation and diagnostic notes will appear here after analysis." in response.text
-    assert "When Group by is active, Overall summarizes the grouped non-missing subset." in response.text
 
 
 def test_frontend_exports_require_current_results_and_signature_scope_guard() -> None:
@@ -5288,7 +5053,7 @@ def test_frontend_signature_search_preserves_controls_and_syncs_group_state() ->
     assert "updateAfterDataset(payload);" not in signature_body
     assert "updateDatasetBadge();" in signature_body
     assert "renderSharedFeatureSummary();" in signature_body
-    assert "renderGuidedChrome();" in signature_body
+    assert "renderWorkspaceChrome();" in signature_body
     assert "queueHistorySync();" in signature_body
 
 
@@ -5304,24 +5069,6 @@ def test_frontend_syncs_bulk_model_feature_actions_across_ml_and_dl() -> None:
     assert 'refs.clearDlModelFeaturesButton?.addEventListener("click"' in app_js
     assert 'setSharedModelFeatureSelection(modelFeatureCandidateColumns());' in app_js
     assert 'setSharedModelFeatureSelection([], { clearCategoricals: true });' in app_js
-
-
-def test_guided_summary_bar_is_not_sticky() -> None:
-    styles = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "styles.css"
-    ).read_text(encoding="utf-8")
-
-    start = styles.index(".guided-summary-bar {")
-    end = styles.index(".guided-summary-copy", start)
-    guided_summary_css = styles[start:end]
-    assert "position: static;" in guided_summary_css
-    assert "position: sticky;" not in guided_summary_css
-    assert "background: rgba(37, 115, 135, 0.05);" in guided_summary_css
-    assert "linear-gradient" not in guided_summary_css
 
 
 def test_frontend_caps_importance_plot_container_height() -> None:
@@ -5369,13 +5116,11 @@ def test_predictive_workbench_keeps_model_action_row_left_aligned() -> None:
     ).read_text(encoding="utf-8")
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'refs.mlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);' in app_js
-    assert 'refs.dlWorkspaceCard?.classList.toggle("predictive-workbench-card", useMergedPredictiveWorkspace);' in app_js
+    assert 'card.classList.toggle("predictive-workbench-card", merged);' in app_js
     assert "function syncPredictiveWorkbenchCardActions(card, workbenchActive) {" in app_js
     assert 'secondaryRow.className = "button-row compact predictive-workbench-secondary-actions";' in app_js
     assert "while (primaryRow.children.length > 1) {" in app_js
-    assert 'syncPredictiveWorkbenchCardActions(refs.mlWorkspaceCard, useMergedPredictiveWorkspace);' in app_js
-    assert 'syncPredictiveWorkbenchCardActions(refs.dlWorkspaceCard, useMergedPredictiveWorkspace);' in app_js
+    assert "syncPredictiveWorkbenchCardActions(card, merged);" in app_js
     assert ".predictive-workbench-card > .card-head {" in styles
     assert "flex-direction: column;" in styles
     assert ".predictive-workbench-card > .card-head > .button-row.compact {" in styles
@@ -6853,42 +6598,19 @@ def test_optional_extras_include_format_ml_dl_and_export_dependencies() -> None:
     assert pyproject["tool"]["setuptools"]["dynamic"]["version"] == {"attr": "survival_toolkit.__version__"}
 
 
-def test_guided_tables_hide_cutpoint_scan_when_goal_is_not_km() -> None:
+def test_cutpoint_scan_stays_hidden_until_it_has_a_plot() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert "const showCutpointPlot = hasCutpointPlot && (!guidedActive || goal === \"km\");" in app_js
+    assert 'refs.cutpointPlot.classList.toggle("hidden", refs.cutpointPlot.innerHTML.trim().length === 0);' in app_js
 
 
-def test_guided_tables_use_single_column_builder_layout() -> None:
-    styles = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "styles.css"
-    ).read_text(encoding="utf-8")
-
-    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .table-builder-grid {' in styles
-    assert "grid-template-columns: 1fr;" in styles
-    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .table-card {' in styles
-    assert "order: 1;" in styles
-    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .selection-card {' in styles
-    assert "order: 2;" in styles
-    assert 'body[data-ui-mode="guided"][data-guided-step="4"] #panel-tables .table-card {' not in styles
-
-
-def test_guided_tables_run_uses_clicked_button_and_state_based_success_check() -> None:
+def test_cohort_table_run_uses_its_button_as_loading_target() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'async function runGuidedGoal(tabName, button, action, { resultMode = "single", successCheck = null } = {})' in app_js
-    assert 'const resolveHasResult = () => (typeof successCheck === "function" ? Boolean(successCheck()) : Boolean(currentGoalResult(tabName)));' in app_js
-    assert 'if (action === "run-tables") {' in app_js
-    assert 'void runGuidedGoal("tables", target, runCohortTable, {' in app_js
-    assert 'successCheck: () => Boolean(state.cohort?.analysis),' in app_js
-    assert 'void runGuidedGoal("tables", refs.runCohortTableButton, runCohortTable, {' in app_js
+    assert 'refs.runCohortTableButton.addEventListener("click", () => withLoading(refs.runCohortTableButton, runCohortTable));' in app_js
 
 
-def test_cohort_table_frontend_exposes_csv_xlsx_downloads_and_guided_header_override() -> None:
+def test_cohort_table_frontend_exposes_csv_xlsx_downloads() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
     styles = (
         Path(__file__).resolve().parents[1]
@@ -6913,8 +6635,7 @@ def test_cohort_table_frontend_exposes_csv_xlsx_downloads_and_guided_header_over
     assert 'time_column: outcomeRestricted ? String(requestConfig.time_column) : "",' in app_js
     assert 'event_positive_value: outcomeRestricted ? String(requestConfig.event_positive_value ?? "") : "",' in app_js
     assert "const notes = [...cohortTableAnalysisNotes(payload)];" in app_js
-    assert 'body[data-ui-mode="guided"][data-guided-step="4"] #panel-tables.guided-visible .card-head,' in styles
-    assert 'body[data-ui-mode="guided"][data-guided-step="5"] #panel-tables.guided-visible .card-head {' in styles
+    assert ".export-menu-items {" in styles
 
 
 def test_benchmark_frontend_normalizes_missing_family_labels_before_rendering() -> None:
@@ -6928,15 +6649,16 @@ def test_benchmark_frontend_normalizes_missing_family_labels_before_rendering() 
     assert 'const presentFamilies = [...new Set(board.visibleRows.map((row) => benchmarkRowFamilyMeta(row).familyLabel))];' in text
     assert '<td><span class="benchmark-family-pill family-${escapeHtml(familyMeta.familyTab)}">${escapeHtml(familyMeta.familyLabel)}</span></td>' in text
     assert '<td>${escapeHtml(formatValue(row.model))}</td>' in text
-    assert '<td class="benchmark-notes-column">${row.excluded && row.exclusionReason ? `<div class="benchmark-row-note">${escapeHtml(row.exclusionReason)}</div>` : ""}</td>' in text
+    assert '<td class="benchmark-notes-column">${row.excluded && row.exclusionReason ? `<div class="benchmark-row-note">${escapeHtml(row.exclusionReason)}</div>` : ""}${EXPERIMENTAL_MODELS.has(String(row.model)) ? \'<div class="benchmark-row-note">Experimental architecture</div>\' : ""}</td>' in text
+    assert 'const EXPERIMENTAL_MODELS = new Set(["Survival Transformer", "Survival VAE"]);' in text
 
 
-def test_guided_runs_use_scope_override_for_loading_locks() -> None:
+def test_runs_use_scope_override_for_loading_locks() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "async function withLoading(button, action, scopeOverride = null, { swallowErrors = true } = {}) {" in app_js
     assert "const scope = scopeOverride || (" in app_js
-    assert "await withLoading(button, action, tabName);" in app_js
+    assert 'withLoading(refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, "predictive");' in app_js
     assert "const scopeButtons = buttonsForScope(scope);" in app_js
     assert "if (activeButton && !scopeButtons.includes(activeButton)) {" in app_js
     assert "setButtonLoading(activeButton, isBusy);" in app_js
@@ -6947,10 +6669,7 @@ def test_loading_helpers_publish_busy_state_and_repeat_cv_blocked_ml_run_does_no
 
     assert 'button.setAttribute("aria-busy", loading ? "true" : "false");' in app_js
     assert 'button.setAttribute("aria-busy", "false");' in app_js
-    assert 'const primaryBusy = goal === "predictive"' in app_js
-    assert "const primaryDisabled = primaryBusy || mlSingleModelBlocked;" in app_js
-    assert 'guided-run-choice${primaryBusy ? " is-loading" : ""}' in app_js
-    assert 'aria-busy="${primaryBusy ? "true" : "false"}"' in app_js
+    assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");' in app_js
 
 
 def test_compare_all_actions_surface_pending_feedback() -> None:
@@ -6960,49 +6679,8 @@ def test_compare_all_actions_surface_pending_feedback() -> None:
     assert "function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
     assert 'setRuntimeBanner("Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info");' in app_js
     assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");' in app_js
-    assert 'busyText: "DL model run in progress. Deep-learning runs can take longer, so stay on this analysis path if you want the updated result to open here when the run finishes."' in app_js
-    assert 'class="guided-run-status" role="status"' in app_js
     assert "refs.mlMetaBanner.textContent = mlComparePendingBannerText({" in app_js
     assert "refs.dlMetaBanner.textContent = dlComparePendingBannerText({" in app_js
-
-
-def test_guided_run_tips_use_polished_analysis_specific_copy() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-
-    assert 'text: "Run the curve once with the current endpoint. Open Group by only if you need subgroup curves or grouped tables."' in app_js
-    assert 'text: "Review the settings here, then fit the model once."' in app_js
-    assert app_js.count('text: "Review the settings here, then start with one run."') >= 2
-    assert 'text: "Review the settings here, then build the table once."' in app_js
-    assert 'tip: "Use this after the classical analyses look right."' in app_js
-    assert 'tip: "Start with one model. This is the slowest and most advanced path."' in app_js
-    assert '"Run Compare All once to see every model ranked. Then click a result to tune that model."' in app_js
-
-
-def test_guided_tables_configure_panel_uses_stacked_layout() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-    styles = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "survival_toolkit"
-        / "static"
-        / "styles.css"
-    ).read_text(encoding="utf-8")
-
-    assert '<div class="guided-panel-grid guided-panel-grid-compact">' in app_js
-    assert ".guided-panel-grid.guided-panel-grid-stacked {" in styles
-    assert "grid-template-columns: 1fr;" in styles
-    assert ".guided-actions-priority:not(.guided-actions-dual) .guided-run-choice {" in styles
-    assert "min-width: 220px;" in styles
-    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .table-builder-grid {' in styles
-    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .table-card {' in styles
-    assert 'body[data-ui-mode="guided"] #panel-tables.guided-visible .selection-card {' in styles
-    assert "justify-self: stretch;" in styles
-    assert "body[data-ui-mode=\"guided\"] #guidedConfigMount," in styles
-    assert "body[data-ui-mode=\"guided\"] #guidedActivePanelMount {" in styles
-    assert "display: contents;" in styles
-    assert "body[data-ui-mode=\"guided\"] .guided-main," in styles
-    assert "body[data-ui-mode=\"guided\"] .smart-banner {" in styles
-    assert "body[data-ui-mode=\"guided\"] .guided-main,\n  body[data-ui-mode=\"guided\"] .config-strip,\n  body[data-ui-mode=\"guided\"] .smart-banner,\n  body[data-ui-mode=\"guided\"] .tab-panel.guided-visible {" not in styles
 
 
 def test_cohort_table_dependency_copy_marks_stale_output_and_rebuild_label() -> None:
@@ -7010,8 +6688,7 @@ def test_cohort_table_dependency_copy_marks_stale_output_and_rebuild_label() -> 
 
     assert "function currentCohortTableOutputState() {" in app_js
     assert "if (!hasDataset || !tableState.hasOutput || tableState.isCurrent) {" in app_js
-    assert "Current output still reflects the last built table:" in app_js
-    assert "You can still export this visible table" in app_js
+    assert "Settings changed since this table was built" in app_js
     assert 'dataset_id: String(requestConfig?.dataset_id || "")' in app_js
     assert 'dataset_id: state.dataset.dataset_id,' in app_js
     assert "function updateCohortTableButtonLabel() {" in app_js
@@ -7449,3 +7126,66 @@ def test_exports_record_the_version_and_dataset_fingerprint() -> None:
     # Plain table exports without provenance stay data-only.
     assert app_module._export_provenance_notes(None) == []
     assert client.get("/api/health").json()["app_version"] == __version__
+
+
+def test_index_exposes_the_markers_tab_with_validation_and_exploratory_search() -> None:
+    response = client.get("/")
+    html = response.text
+
+    assert response.status_code == 200
+    assert '<script src="../static/app_markers.js?v=' in html
+    assert html.index("app_models.js") < html.index("app_markers.js") < html.index('src="../static/app.js')
+    assert 'data-tab="markers"' in html and 'id="panel-markers"' in html
+    for element_id in (
+        "runMarkersButton",
+        "markerChecklist",
+        "markerClinicalChecklist",
+        "markersStabilityPlot",
+        "markersRankPlot",
+        "markersTableShell",
+        "markerValidationFile",
+        "runMarkerValidationButton",
+        "downloadMarkerRecipeButton",
+    ):
+        assert f'id="{element_id}"' in html
+    assert 'data-run-status="markers"' in html
+    markers_panel = html[html.index('id="panel-markers"'):html.index("<!-- Cohort Table Panel -->")]
+    assert "Exploratory: cut-point combinations" in markers_panel
+    assert 'id="runSignatureSearchButton"' in markers_panel
+    assert 'href="/design-check"' in markers_panel
+    km_panel = html[html.index('id="panel-km"'):html.index('id="panel-cox"')]
+    assert "runSignatureSearchButton" not in km_panel
+
+
+def test_marker_frontend_runs_the_evaluation_and_validates_the_locked_model() -> None:
+    text = _AppJsSource().read_text(encoding="utf-8")
+
+    assert "async function runMarkerEvaluation() {" in text
+    assert 'fetchJSON("/api/marker-evaluation", {' in text
+    assert 'fetchJSON("/api/marker-validation", {' in text
+    assert "body: JSON.stringify({ dataset_id: external.dataset_id, recipe })," in text
+    assert 'withLoading(refs.runMarkersButton, runMarkerEvaluation, "markers")' in text
+    assert 'if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];' in text
+    assert 'if (goal === "markers") {' in text
+    assert "markers: state.markers," in text
+    assert "refreshMarkerSelections();" in text
+    assert "syncMarkerDownloadButtons();" in text
+    assert "clearMarkerOutputs();" in text
+    assert 'invalidateRequestTokens(["markers", "markerValidation"]);' in text
+    assert "const candidateColumns = [...markers, ...clinical];" in text
+    assert "MARKER_TABLE_DISPLAY_LIMIT" in text
+
+
+def test_design_check_page_is_served_without_a_dataset() -> None:
+    response = client.get("/design-check")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+    assert '<script src="../static/design_check.js?v=' in response.text
+    for element_id in ("designForm", "candidateModels", "geneOnly", "headline", "selectionCohorts", "sealedCohorts", "designResult", "designFlags"):
+        assert f'id="{element_id}"' in response.text
+    script = (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "design_check.js").read_text(encoding="utf-8")
+    assert 'fetch("/api/design-audit", {' in script
+    assert "textContent = flag.message;" in script
+    assert "innerHTML = `" not in script.split("function renderResult", 1)[1]
+

@@ -99,7 +99,7 @@ def _resolve_gbs_max_depth(max_depth: int | None) -> int:
     return _GBS_DEFAULT_MAX_DEPTH if max_depth is None else int(max_depth)
 _SKLEARN_INSTALL_MSG = (
     "scikit-learn is required for ML model splitting and time-dependent importance. "
-    "Install with: pip install 'survival-toolkit[ml]'"
+    "Install with: pip install 'survstudio[ml]'"
 )
 
 

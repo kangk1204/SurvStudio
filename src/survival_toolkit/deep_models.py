@@ -84,7 +84,7 @@ _TORCH_INSTALL_MSG = (
 )
 _SKLEARN_INSTALL_MSG = (
     "scikit-learn is required for deep-learning holdout splits and repeated CV. "
-    "Install with: pip install 'survival-toolkit[dl]'"
+    "Install with: pip install 'survstudio[dl]'"
 )
 _ADAM_WEIGHT_DECAY = 1e-4
 _DEEPHIT_RANKING_SIGMA = 1.0

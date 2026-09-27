@@ -1,6 +1,21 @@
 # Release Notes
 
-## Unreleased — Prognostic marker evaluation (Python API)
+## Unreleased — Prognostic marker evaluation, design check, and a simpler interface
+
+### Interface
+
+- One workspace replaces the guided and expert modes. The outcome is set once in a one-line bar; grouping settings appear only on the Survival curves and Table 1 tabs; tab names are plain (Survival curves, Cox model, Markers, Prediction models, Table 1, Data).
+- Sample cohorts open with their recommended outcome, grouping and variable selections, so the preset bar and the auto-detection banner are gone. The landing page offers three samples (lung cancer, breast cancer, synthetic).
+- Result sections stay hidden until a run, each tab exports from one menu, and a status next to each Run button says whether the result is up to date, running, or out of date after a settings change.
+- Interpretation panels show the headline, key numbers and the first two cautions; the rest folds under "More detail".
+- The Cox tab previews usable patients, dropped rows, parameters and events per parameter before fitting.
+- New Markers tab: the honest marker evaluation with stability and rank-uncertainty plots, the marker table, export of the locked model as JSON, and validation of the locked model on another cohort file. The outcome-informed cut-point combination search moved here as an exploratory option and now searches the selected markers and clinical covariates.
+- New design-check page (`/design-check`, no data needed) for studies that fit many models and keep the best.
+- Prediction models: a "Train one model" entry next to Compare All, results hidden until a run, and the Survival Transformer and VAE labelled experimental.
+- Reporting checklists: the Markers tab exports a REMARK checklist and the prediction-model leaderboard a TRIPOD+AI checklist, as Word or Markdown. Each holds the run's methods and results paragraphs and every guideline item, marked as filled in by SurvStudio, partly filled in, or for the authors to complete.
+- The marker table adds each marker's unadjusted hazard ratio and p-value when markers are judged on added value, as REMARK asks for univariable results.
+- Omics marker matrices: the Markers tab attaches a separate file of up to 60,000 markers (one row per marker or per patient), matched to the dataset's patients by an ID column, so genome-wide panels no longer have to fit into the 1,000-feature table.
+- Hazard-ratio axes are labelled with round values (0.5, 1, 2, 5); the landing page shows one card per analysis tab.
 
 ### New
 
@@ -9,7 +24,22 @@
 - `survival_toolkit.marker_evaluation.validate_locked_recipe`: applies a SHA-256-locked signature unchanged to an external cohort. It reports the C-index with a bootstrap CI, the gain over the clinical-only model, the calibration slope, observed/expected risk, the Brier score and skill, and a Holm-adjusted replication test per marker.
 - README: a Prognostic Marker Evaluation section with a runnable example.
 
-The web interface does not expose the marker evaluation yet.
+- `survival_toolkit.design_audit.audit_design`: places a multi-algorithm study design (number and size of selection cohorts, genes only or with clinical covariates, number of candidates, training C-index in the choice, headline C-index) on the benchmark pilot's simulation map and returns the expected optimism of the presented C-index, the expected regret of the choice, and flagged practices with remedies.
+- `survival_toolkit.marker_matrix`: reads marker matrices, matches them to a dataset by patient ID and keeps a few in memory; API `POST /api/marker-matrix` and `DELETE /api/marker-matrix/{id}`, and `marker_matrix_id` in `POST /api/marker-evaluation`.
+- The marker evaluation runs about 10 times faster with the same results: on one machine, 200 markers with the default 1,000 permutations and 200 subsamples took 37 s instead of 374 s, and 4,000 markers with 48 permutations and 10 subsamples 19 s instead of 175 s, with identical tiers. Cox fits use a Newton-Raphson fitter on the score screen's risk-set sums instead of statsmodels' PHReg (same estimates to 1e-6; the R reference tests are unchanged); the screen sums risk sets with sparse products in cache-sized blocks, and medians, p-values and input conversion are vectorized.
+- `survival_toolkit.reporting`: `remark_checklist` and `tripod_ai_checklist` build the checklists from a marker evaluation or model comparisons; `checklist_markdown` renders one.
+- API: `POST /api/marker-evaluation` (now with a `report` field), `POST /api/marker-validation`, `POST /api/design-audit`, `POST /api/tripod-ai-checklist` and `POST /api/checklist-export`.
+
+### Validation
+
+- `validation/agreement/run_agreement.py` compares SurvStudio with R `survival` (the reference), lifelines and scikit-survival on the bundled GBSG2 and TCGA-LUAD cohorts and writes `docs/validation/numerical_agreement.md` with every compared value and its difference.
+- `docs/usability_study_protocol.md`: the protocol for a moderated usability study (8 to 12 participants, seven tasks, task success, time, the Single Ease Question and SUS).
+
+### Packaging
+
+- The distribution is now named `survstudio` (the import name stays `survival_toolkit`), with a `survstudio` command next to the old `survival-toolkit`; the package metadata carries the licence, authors, keywords and project links.
+- A Dockerfile builds a container that serves the app on port 8000 (`docker run --rm -p 127.0.0.1:8000:8000 survstudio`); inside a container the start-up message explains how to publish the port on loopback only.
+- `CITATION.cff` and `.zenodo.json` describe the software for GitHub's citation box and Zenodo archiving; a release workflow builds and checks the wheel, publishes it to PyPI by trusted publishing and pushes a multi-architecture image to GHCR when a GitHub release is published. `docs/releasing.md` lists the one-time account steps.
 
 ## 0.2.0 — 2026-09-26 — Full code review
 

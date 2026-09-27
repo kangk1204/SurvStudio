@@ -13,6 +13,7 @@ from survival_toolkit.marker_screen import (
     PermutationFdrAccumulator,
     bh_vector,
     cox_partial_loglik,
+    fit_cox,
     fit_cox_null,
     harrell_c_many,
     residualize,
@@ -107,6 +108,32 @@ def test_score_screen_matches_r_score_tests(ties: str, stratified: bool) -> None
     assert adjusted.chi2 == pytest.approx(expected["adjusted"], rel=1e-6)
     assert np.all(adjusted.p_value > 0.0) and np.all(adjusted.p_value <= 1.0)
     assert np.sign(adjusted.z) == pytest.approx(np.sign(adjusted.score))
+
+
+@pytest.mark.parametrize(("ties", "stratified"), list(itertools.product(["efron", "breslow"], [False, True])))
+def test_fit_cox_matches_statsmodels(ties: str, stratified: bool) -> None:
+    from statsmodels.duration.hazard_regression import PHReg
+
+    from survival_toolkit.analysis import fit_phreg
+
+    time, event, clinical, markers, strata = _arrays(_reference_cohort(), stratified)
+    design = np.column_stack([clinical, markers[:, 0], 100.0 + 5.0 * markers[:, 1]])
+
+    fit = fit_cox(time, event, design, strata, ties)
+    reference, converged = fit_phreg(PHReg(time, design, status=event, strata=strata, ties=ties))
+
+    assert fit.converged and converged
+    assert fit.beta == pytest.approx(np.asarray(reference.params), rel=1e-6, abs=1e-8)
+    assert fit.covariance == pytest.approx(np.asarray(reference.cov_params()), rel=1e-5, abs=1e-9)
+    assert fit.loglik == pytest.approx(float(reference.llf), rel=1e-10)
+
+
+def test_fit_cox_reports_a_separated_covariate_as_not_converged() -> None:
+    time = np.arange(1.0, 21.0)
+    event = np.ones(20, dtype=int)
+    separated = (time <= 10).astype(float)  # every early event has x = 1: the MLE is infinite
+    fit = fit_cox(time, event, separated)
+    assert not fit.converged or abs(fit.beta[0]) > 5
 
 
 def test_score_equals_the_schoenfeld_residual_sum_of_the_marker() -> None:

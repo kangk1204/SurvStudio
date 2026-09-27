@@ -1,0 +1,29 @@
+{
+  "title": "SurvStudio: local survival analysis with honest prognostic marker evaluation",
+  "upload_type": "software",
+  "description": "A local survival analysis workbench: Kaplan-Meier curves, Cox models, prognostic marker evaluation with family-wise error control, subsample stability and locked external validation, and machine-learning and deep-learning survival models compared on the same patient splits, with REMARK and TRIPOD+AI reporting checklists.",
+  "creators": [
+    {
+      "name": "Kang, Keunsoo"
+    }
+  ],
+  "license": "MIT",
+  "access_right": "open",
+  "keywords": [
+    "survival analysis",
+    "Kaplan-Meier",
+    "Cox proportional hazards",
+    "prognostic markers",
+    "multiple testing",
+    "machine learning",
+    "reporting guidelines"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/kangk1204/SurvStudio",
+      "relation": "isSupplementTo",
+      "resource_type": "software",
+      "scheme": "url"
+    }
+  ]
+}

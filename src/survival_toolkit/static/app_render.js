@@ -83,24 +83,21 @@ function renderInsightBoard(container, summary, emptyMessage) {
   const metricsMarkup = metrics.length
     ? `<div class="insight-metrics">${metrics.map((m) => `<div class="metric-pill"><span>${escapeHtml(m.label || "")}</span><strong>${escapeHtml(formatDisplayValue(metricValue(m), m.label || ""))}</strong></div>`).join("")}</div>`
     : "";
+  // The headline, key numbers and the first two cautions stay in view; everything else folds away.
+  const leadCautions = cautions.slice(0, 2);
+  const moreCautions = cautions.slice(2);
   const sections = [
+    moreCautions.length ? `<div class="insight-section"><h4>What to watch</h4><ul>${moreCautions.map(escapeListItem).join("")}</ul></div>` : "",
     strengths.length ? `<div class="insight-section"><h4>What was checked</h4><ul>${strengths.map(escapeListItem).join("")}</ul></div>` : "",
-    cautions.length ? `<div class="insight-section"><h4>What to watch</h4><ul>${cautions.map(escapeListItem).join("")}</ul></div>` : "",
     nextSteps.length ? `<div class="insight-section"><h4>Next steps</h4><ul>${nextSteps.map(escapeListItem).join("")}</ul></div>` : "",
   ].filter(Boolean).join("");
   container.innerHTML = `
     <article class="insight-card tone-${escapeHtml(tone)}">
       <div class="insight-header"><span class="insight-badge">${escapeHtml(statusLabel(tone))}</span><p>${escapeHtml(summary.headline || "Interpretation unavailable.")}</p></div>
       ${metricsMarkup}
-      <div class="insight-sections">${sections}</div>
+      ${leadCautions.length ? `<ul class="insight-cautions">${leadCautions.map(escapeListItem).join("")}</ul>` : ""}
+      ${sections ? `<details class="insight-details"><summary>More detail</summary><div class="insight-sections">${sections}</div></details>` : ""}
     </article>`;
-}
-
-function summaryHasCaution(summary, phrase) {
-  if (!summary || !phrase) return false;
-  const needle = String(phrase).trim().toLowerCase();
-  if (!needle) return false;
-  return (summary.cautions || []).some((item) => String(item || "").toLowerCase().includes(needle));
 }
 
 function deriveGroupCountLabel(group) {
@@ -457,7 +454,7 @@ function clearCohortTableOutput({ rerenderChrome = true, syncHistory = true } = 
   if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.disabled = true;
   renderSharedFeatureSummary();
   syncDownloadButtonAvailability();
-  if (rerenderChrome) renderGuidedChrome();
+  if (rerenderChrome) renderWorkspaceChrome();
   if (syncHistory) queueHistorySync();
 }
 
@@ -514,6 +511,26 @@ async function downloadServerTable(filename, payload, fallbackMimeType = "text/p
     apiUrl,
     showToast,
   });
+}
+
+async function downloadChecklist(report, format, stem) {
+  // A REMARK or TRIPOD+AI checklist from the server, as a Word or Markdown file.
+  const response = await fetch(apiUrl("/api/checklist-export"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...report, format }),
+  });
+  if (!response.ok) {
+    let message = "Checklist export failed.";
+    try {
+      const detail = (await response.json())?.detail;
+      if (typeof detail === "string" && detail.trim()) message = detail.trim();
+    } catch {
+      // Keep the generic message when the error body is not JSON.
+    }
+    throw new Error(message);
+  }
+  triggerBlobDownload(buildDownloadFilename(stem, format === "docx" ? "docx" : "md"), await response.blob());
 }
 
 function buildMarkdownTable(rows, { caption = "", notes = [] } = {}) {
@@ -884,7 +901,7 @@ function updateMlEvaluationControls() {
   if (refs.mlCvRepeats) refs.mlCvRepeats.disabled = !isRepeatedCv;
   syncLockedTestControls("ml", isRepeatedCv);
   syncAnalysisRunButtonAvailability();
-  renderGuidedChrome();
+  renderWorkspaceChrome();
 }
 
 function updateDlEvaluationControls() {
