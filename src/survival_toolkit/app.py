@@ -69,6 +69,7 @@ from survival_toolkit.marker_matrix import (
     ORIENTATIONS,
     MarkerMatrixStore,
     match_summary,
+    matrix_format,
     matrix_frame,
     read_marker_matrix,
 )
@@ -1015,6 +1016,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
     n_resamples: int = Field(default=200, ge=0, le=1_000)
     resample_fraction: float = Field(default=0.632, ge=0.3, le=0.9)
     max_missing_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
+    max_mode_fraction: float = Field(default=0.9, ge=0.5, le=1.0)
     max_signature_markers: int = Field(default=10, ge=1, le=50)
     nonlinear_lens: Literal["off", "gbs", "rsf"] = "off"
     random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
@@ -1049,6 +1051,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
             n_resamples=self.n_resamples,
             resample_fraction=self.resample_fraction,
             max_missing_fraction=self.max_missing_fraction,
+            max_mode_fraction=self.max_mode_fraction,
             max_signature_markers=self.max_signature_markers,
             nonlinear_lens=self.nonlinear_lens,
             random_seed=self.random_seed,
@@ -2630,12 +2633,13 @@ async def upload_marker_matrix(
     temp_path: Path | None = None
     filename = file.filename or "marker_matrix.csv"
     try:
-        suffix = (Path(filename).suffix or ".csv").lower()
-        if suffix not in MATRIX_SUFFIXES:
+        suffix, compressed = matrix_format(filename)
+        if not compressed and suffix not in MATRIX_SUFFIXES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported matrix file type '{suffix}' for '{filename}'. Use CSV, TSV, TXT or Parquet.",
+                detail=f"Unsupported matrix file type '{suffix}' for '{filename}'. Use CSV, TSV, TXT or Parquet, optionally gzip-compressed (.gz).",
             )
+        suffix = ".gz" if compressed else suffix
         if orientation not in ORIENTATIONS:
             raise HTTPException(status_code=422, detail=f"Unknown matrix layout '{orientation}'.")
         total_bytes = 0
@@ -2670,6 +2674,7 @@ async def upload_marker_matrix(
                 "marker_preview": list(matrix.marker_names[:8]),
                 "id_column": id_column,
                 "fingerprint": matrix.fingerprint,
+                "id_note": matrix.id_note,
                 **summary,
             }
 

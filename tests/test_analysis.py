@@ -42,6 +42,7 @@ from survival_toolkit.analysis import (
 )
 from survival_toolkit.sample_data import load_tcga_luad_example_dataset
 from survival_toolkit.sample_data import load_gbsg2_upload_ready_dataset
+from survival_toolkit.sample_data import load_tcga_luad_upload_ready_dataset
 from survival_toolkit.sample_data import make_example_dataset
 
 
@@ -2126,7 +2127,10 @@ def test_cox_analysis_warns_when_reference_levels_are_too_small() -> None:
 
     cautions = result["scientific_summary"]["cautions"]
     assert any('pathologic_stage reference "Stage I" (n=2)' in caution for caution in cautions)
-    assert "appear unstable" in result["scientific_summary"]["headline"]
+    headline = result["scientific_summary"]["headline"]
+    # The headline names the estimates that look unstable, not the significant terms.
+    unstable = headline.split("appear unstable:")[1]
+    assert 'pathologic_stage reference "Stage I" (n=2)' in unstable
 
 
 def test_cox_analysis_uses_ph_review_headline_when_fit_is_not_structurally_unstable() -> None:
@@ -3032,3 +3036,45 @@ def test_text_loader_enforces_shape_limits_before_the_full_parse() -> None:
         load_dataframe(b"a,b,c\n1,2,3\n", "cols.csv", max_columns=2)
     with pytest.raises(UploadShapeError, match="more than 99 cells"):
         load_dataframe(rows.encode(), "cells.csv", max_cells=99)
+
+
+def test_risk_table_times_are_round_and_stop_at_the_horizon() -> None:
+    from survival_toolkit.analysis import _nice_time_ticks
+
+    assert _nice_time_ticks(238.11, 6) == [0, 40, 80, 120, 160, 200]
+    assert _nice_time_ticks(60.0, 6) == [0, 12, 24, 36, 48, 60]
+    # Steps of 600 (7 times) and 800 (5 times) are equally close to 6; the finer one is kept.
+    assert _nice_time_ticks(3650.0, 6) == [0, 600, 1200, 1800, 2400, 3000, 3600]
+    # More points asked, more times given: the setting stays responsive.
+    assert len(_nice_time_ticks(71.35, 6)) == 6 and len(_nice_time_ticks(71.35, 10)) == 9
+    assert _nice_time_ticks(0.01, 6) == [0, 0.002, 0.004, 0.006, 0.008, 0.01]
+    assert _nice_time_ticks(0.0, 6) == [0.0]
+
+    df = load_tcga_luad_upload_ready_dataset()
+    result = compute_km_analysis(df, "os_months", "os_event", group_column="stage_group")
+    times = result["risk_table"]["times"]
+    assert result["risk_table"]["columns"][1:] == [f"{time:g}" for time in times]
+    assert times[-1] <= result["display_horizon"] and all(float(time).is_integer() for time in times)
+
+
+def test_standing_assumption_notes_do_not_lower_the_status() -> None:
+    df = load_tcga_luad_upload_ready_dataset()
+    km = compute_km_analysis(df, "os_months", "os_event", group_column="stage_group")
+    assert km["scientific_summary"]["status"] == "robust"
+    assert any("non-informative" in caution for caution in km["scientific_summary"]["cautions"])
+
+    cox = compute_cox_analysis(
+        df,
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        covariates=["age", "stage_group"],
+        categorical_covariates=["stage_group"],
+    )
+    summary = cox["scientific_summary"]
+    assert any("non-informative" in caution for caution in summary["cautions"])
+    assert summary["status"] in {"robust", "review"}
+    if summary["status"] == "review":
+        from survival_toolkit.analysis import _COX_STANDING_NOTES
+
+        assert any(caution not in _COX_STANDING_NOTES for caution in summary["cautions"])

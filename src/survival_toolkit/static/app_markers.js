@@ -31,7 +31,7 @@ function renderMarkerMatrixState() {
   const attached = markerMatrixAttached();
   refs.markerMatrixStatus?.classList.toggle("hidden", !attached);
   if (attached && refs.markerMatrixSummary) {
-    refs.markerMatrixSummary.textContent = `${matrix.filename}: ${formatValue(matrix.n_markers)} markers, ${formatValue(matrix.n_matched)} of ${formatValue(matrix.n_patients)} patients matched by ${matrix.id_column}.`;
+    refs.markerMatrixSummary.textContent = `${matrix.filename}: ${formatValue(matrix.n_markers)} markers, ${formatValue(matrix.n_matched)} of ${formatValue(matrix.n_patients)} patients matched by ${matrix.id_column}.${matrix.id_note ? ` ${matrix.id_note}` : ""}`;
   }
   if (attached && refs.markerMatrixDetails) refs.markerMatrixDetails.open = true;
   refs.markerChecklist?.classList.toggle("matrix-attached", attached);
@@ -192,8 +192,16 @@ function markerSummary(payload) {
   if (signature.signature_optimism != null && Number(signature.signature_optimism) > 0.02) {
     cautions.push(`The selected-marker model's apparent C-index is optimistic by about ${formatValue(signature.signature_optimism)}; report the corrected value.`);
   }
+  const leftOut = markerLeftOutComparison(signature, addedValue);
+  if (leftOut && leftOut.gain < 0.02) cautions.push(leftOut.text + " The selected markers add little discrimination beyond the clinical covariates.");
   if ((cohort.dropped_markers || []).length) {
-    cautions.push(`${formatValue(cohort.dropped_markers.length)} marker(s) were left out because they were constant or mostly missing.`);
+    const dropped = cohort.dropped_markers;
+    const nearConstant = dropped.filter((item) => String(item.reason || "").startsWith("near-constant")).length;
+    cautions.push(
+      `${formatValue(dropped.length)} marker(s) were left out before testing: `
+      + `${formatValue(nearConstant)} near-constant (most patients at one value, as for genes expressed in few patients) `
+      + `and ${formatValue(dropped.length - nearConstant)} constant or mostly missing.`,
+    );
   }
   if (Number(counts["marginal only"] || 0) > 0) {
     cautions.push(`${formatValue(counts["marginal only"])} marker(s) are associated with survival but add nothing beyond the clinical covariates.`);
@@ -208,8 +216,10 @@ function markerSummary(payload) {
       { label: "Robust", value: robust },
       { label: "Suggestive", value: suggestive },
       { label: "Model C (corrected)", value: signature.optimism_corrected_c },
+      ...(leftOut ? [{ label: "Clinical-only C (left out)", value: signature.clinical_c_left_out }] : []),
     ],
     strengths: [
+      ...(leftOut && leftOut.gain >= 0.02 ? [leftOut.text] : []),
       `Family-wise p-values (Westfall-Young) from ${formatValue(analysis.null?.n_permutations)} permutations${analysis.null?.lens2_null === "freedman_lane" ? ", keeping each marker's link to the clinical covariates" : ""}.`,
       `The whole screen was repeated on ${formatValue(analysis.resampling?.n_valid)} subsamples of ${Math.round(100 * Number(analysis.resampling?.fraction || 0.632))}% of the patients.`,
       `Robust: family-wise p ≤ ${formatValue(settings.alpha)}, selected in ≥ ${Math.round(100 * Number(settings.robust_frequency || 0.5))}% of subsamples and the same direction in ≥ ${Math.round(100 * Number(settings.robust_direction || 0.9))}%.`,
@@ -219,6 +229,18 @@ function markerSummary(payload) {
       robust ? "Validate the locked model in an independent cohort below before claiming the markers." : "Treat suggestive markers as hypotheses for an independent cohort.",
       "Report the optimism-corrected C-index rather than the apparent one.",
     ],
+  };
+}
+
+// The selected-marker model against the clinical covariates alone, both in the patients left out of each subsample.
+function markerLeftOutComparison(signature, addedValue) {
+  const model = signature?.signature_c_left_out;
+  const clinical = signature?.clinical_c_left_out;
+  if (!addedValue || model == null || clinical == null) return null;
+  const gain = Number(model) - Number(clinical);
+  return {
+    gain,
+    text: `In the patients left out of each subsample, the selected-marker model reached C ${formatValue(model)} against ${formatValue(clinical)} for the clinical covariates alone (${gain >= 0 ? "+" : ""}${gain.toFixed(3)}).`,
   };
 }
 
@@ -235,6 +257,7 @@ function markerMetaBanner(payload) {
     `tested for ${lens}`,
   ];
   if (signature.apparent_c != null) parts.push(`model C apparent=${formatValue(signature.apparent_c)}, corrected=${formatValue(signature.optimism_corrected_c)}`);
+  if (analysis.primary_lens === "added_value" && signature.clinical_c_left_out != null) parts.push(`clinical-only C (left out)=${formatValue(signature.clinical_c_left_out)}`);
   return parts.join(", ");
 }
 
@@ -258,9 +281,10 @@ async function renderMarkerResults(payload) {
   const rows = payload.display_table || [];
   renderTable(refs.markersTableShell, rows.slice(0, MARKER_TABLE_DISPLAY_LIMIT));
   if (refs.markersTableNote) {
-    refs.markersTableNote.textContent = rows.length > MARKER_TABLE_DISPLAY_LIMIT
+    const evidence = "Evidence: M marginal association and A added value over the clinical covariates, each + or − when family-wise significant (higher or lower hazard) and · when not; N+ when the non-linear check agrees.";
+    refs.markersTableNote.textContent = (rows.length > MARKER_TABLE_DISPLAY_LIMIT
       ? `Showing the first ${formatValue(MARKER_TABLE_DISPLAY_LIMIT)} of ${formatValue(rows.length)} markers, strongest first. Export the table for all of them.`
-      : "Strongest markers first. HR per unit of the marker, from a Cox model with the clinical covariates.";
+      : "Strongest markers first. HR per unit of the marker, from a Cox model with the clinical covariates.") + ` ${evidence}`;
   }
   if (refs.markerValidationSection) refs.markerValidationSection.classList.remove("hidden");
   updateResultVisibility();

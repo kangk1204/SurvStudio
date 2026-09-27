@@ -912,7 +912,9 @@ Architecture note:
 
 Use this when you screen many candidate markers (for example gene-expression columns) for association with survival and want the claim checked the way a careful reviewer would check it. It runs in the Markers tab and from Python.
 
-Markers can be columns of the uploaded table or, for omics data, a separate marker matrix. In the Markers tab, open `Markers in a separate file (omics)`, choose the dataset's patient ID column and attach a CSV, TSV, TXT or Parquet file with one row per marker and one column per patient (as GEO and TCGA distribute expression) or one row per patient; the layout is detected from the IDs. The matrix can hold up to 60,000 markers and 30 million values, and its patient IDs must be written exactly as in the ID column; patients without matrix values are left out of the evaluation. The clinical table stays small, so the other tabs are unaffected.
+Markers can be columns of the uploaded table or, for omics data, a separate marker matrix. In the Markers tab, open `Markers in a separate file (omics)`, choose the dataset's patient ID column and attach a CSV, TSV, TXT or Parquet file with one row per marker and one column per patient (as GEO and TCGA distribute expression) or one row per patient; the layout is detected from the IDs. Text files may be gzip-compressed, so a UCSC Xena download such as `HiSeqV2.gz` attaches as it is. The matrix can hold up to 60,000 markers and 30 million values, and its patient IDs must be written exactly as in the ID column, except that TCGA sample barcodes (`TCGA-05-4244-01`) are matched to patient barcodes (`TCGA-05-4244`), one tumour sample per patient with normal tissue left out; patients without matrix values are left out of the evaluation. The clinical table stays small, so the other tabs are unaffected.
+
+Markers with more than 90% of patients at one value are left out before testing (`max_mode_fraction`). A gene expressed in a handful of patients has a heavy-tailed test statistic; in the TCGA-LUAD RNA-seq data such genes made the permutation maximum (its 95% point was chi-square 239 instead of about 25), so no gene could pass family-wise control. The filter does not look at the outcome, so the error control holds.
 
 For every marker it reports:
 - two Cox score-test lenses: marginal association, and added value over the clinical covariates you name (the primary lens whenever clinical covariates are given)
@@ -924,7 +926,7 @@ For every marker it reports:
   - `marginal only`: associated on its own but not beyond the clinical covariates
   - `not supported`
 
-For a signature built from the selected markers it reports the apparent C-index, an optimism-corrected C-index, the C-index on left-out rows, and how much the top marker's effect shrinks outside the rows that selected it (the "winner's curse" of picking the strongest marker). The signature is then locked into a recipe (encoders, coefficients, baseline survival, and a SHA-256 hash) that can be applied unchanged to an external cohort:
+For a signature built from the selected markers it reports the apparent C-index, an optimism-corrected C-index, the C-index on left-out rows next to that of the clinical covariates alone, and how much the top marker's effect shrinks outside the rows that selected it (the "winner's curse" of picking the strongest marker). The signature is then locked into a recipe (encoders, coefficients, baseline survival, and a SHA-256 hash) that can be applied unchanged to an external cohort:
 
 ```python
 import pandas as pd

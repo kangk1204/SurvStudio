@@ -153,14 +153,19 @@ def test_marker_inputs_are_validated() -> None:
     frame["label"] = ["a", "b", "c"] * 40
     frame["mostly_missing"] = np.where(np.arange(120) < 60, np.nan, 1.0 * np.arange(120))
     frame["flat"] = 2.0
+    # Expressed in 6 of 120 patients: the kind of gene that dominated the permutation maximum.
+    frame["rare"] = np.where(np.arange(120) < 6, 5.0, 0.0)
     common = dict(time_column="os_time", event_column="os_event", settings=_FAST._replace(n_permutations=9, n_resamples=2))
     with pytest.raises(ValueError, match="Markers must be numeric"):
         evaluate_markers(frame, marker_columns=["true_up_1", "label"], **common)
     with pytest.raises(ValueError, match="cannot also be"):
         evaluate_markers(frame, marker_columns=["true_up_1", "age"], clinical_columns=["age"], **common)
-    result = evaluate_markers(frame, marker_columns=["true_up_1", "mostly_missing", "flat"], **common)
+    result = evaluate_markers(frame, marker_columns=["true_up_1", "mostly_missing", "flat", "rare"], **common)
     dropped = {item["marker"]: item["reason"] for item in result["cohort"]["dropped_markers"]}
-    assert dropped == {"mostly_missing": "50% missing", "flat": "constant"}
+    assert dropped == {"mostly_missing": "50% missing", "flat": "constant", "rare": "near-constant (95% at one value)"}
+    loose = evaluate_markers(frame, marker_columns=["true_up_1", "rare"], time_column="os_time", event_column="os_event",
+                             settings=_FAST._replace(n_permutations=9, n_resamples=2, max_mode_fraction=1.0))
+    assert [row["marker"] for row in loose["marker_table"]].count("rare") == 1 and not loose["cohort"]["dropped_markers"]
     with pytest.raises(ValueError, match="resample_fraction"):
         evaluate_markers(frame, marker_columns=["true_up_1"], time_column="os_time", event_column="os_event",
                          settings=MarkerSettings(resample_fraction=0.95))

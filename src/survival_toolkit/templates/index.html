@@ -323,7 +323,7 @@
               <span>CI bands</span>
             </label>
             <label class="toolbar-field">
-              <span>Risk table ticks <button class="help-dot" type="button" data-tooltip="Controls how many time points are shown in the Number at risk table. It does not change the Kaplan-Meier curve itself.">?</button></span>
+              <span>Risk table ticks <button class="help-dot" type="button" data-tooltip="About how many time points the Number at risk table shows; they are rounded to steps such as 10, 25 or 50. It does not change the Kaplan-Meier curve itself.">?</button></span>
               <input id="riskTablePoints" type="number" min="4" max="12" step="1" value="6" />
             </label>
             <label class="toolbar-field">
@@ -988,7 +988,7 @@
               <div class="checklist" id="markerChecklist"></div>
               <details class="marker-matrix" id="markerMatrixDetails">
                 <summary>Markers in a separate file (omics)</summary>
-                <p class="marker-matrix-hint">For more markers than fit in one table, such as gene expression: one row per marker and one column per patient, or one row per patient. The patient IDs must match an ID column of this dataset.</p>
+                <p class="marker-matrix-hint">For more markers than fit in one table, such as gene expression: one row per marker and one column per patient, or one row per patient, as CSV, TSV or Parquet (.gz files from GEO or UCSC Xena work too). The patient IDs must match an ID column of this dataset; TCGA sample barcodes are matched to patient barcodes.</p>
                 <div class="marker-matrix-controls">
                   <label><span>Patient ID column</span><select id="markerMatrixIdColumn"></select></label>
                   <label><span>Layout</span>
@@ -998,7 +998,7 @@
                       <option value="samples_in_rows">One row per patient</option>
                     </select>
                   </label>
-                  <input id="markerMatrixFile" type="file" accept=".csv,.tsv,.txt,.parquet" aria-label="Marker matrix file" />
+                  <input id="markerMatrixFile" type="file" accept=".csv,.tsv,.txt,.parquet,.gz" aria-label="Marker matrix file" />
                   <button class="button ghost compact-btn" id="attachMarkerMatrixButton" type="button">Attach</button>
                 </div>
                 <div class="marker-matrix-status hidden" id="markerMatrixStatus">

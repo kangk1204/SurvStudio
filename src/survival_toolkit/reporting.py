@@ -115,7 +115,8 @@ def marker_methods_paragraph(result: dict[str, Any], request: dict[str, Any] | N
             if added_value
             else "."
         ),
-        f"Markers with more than {_percent(settings.get('max_missing_fraction', 0.2))} missing values or a constant value were excluded; "
+        f"Markers with more than {_percent(settings.get('max_missing_fraction', 0.2))} missing values, a constant value or more than "
+        f"{_percent(settings.get('max_mode_fraction', 0.9))} of patients at one value were excluded before testing (a filter blind to the outcome); "
         "other missing marker values were replaced by the marker's median among the patients in each fit, and patients with a missing "
         "or invalid outcome, clinical covariate or stratum were excluded.",
         "Markers were analysed as continuous variables without cut-points.",
@@ -145,7 +146,19 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
             f" The selected-marker model ({_names(signature.get('markers') or [])}) had an apparent C-index of {_number(signature.get('apparent_c'))} "
             f"and an optimism-corrected C-index of {_number(signature.get('optimism_corrected_c'))}."
         )
+    text += _left_out_comparison(signature, added_value)
     return text
+
+
+def _left_out_comparison(signature: dict[str, Any], added_value: bool, *, subject: str = "it") -> str:
+    """The selected-marker model against the clinical covariates alone, in the patients left out."""
+    model_c, clinical_c = signature.get("signature_c_left_out"), signature.get("clinical_c_left_out")
+    if not added_value or model_c is None or clinical_c is None:
+        return ""
+    return (
+        f" In the patients left out of each subsample, {subject} reached a C-index of {_number(model_c)} against {_number(clinical_c)} "
+        f"for the clinical covariates alone (difference {float(model_c) - float(clinical_c):+.3f})."
+    )
 
 
 def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None = None, dataset: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -191,9 +204,11 @@ def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None =
         _item("7", "Study design", "Clinical endpoints", "reported", _endpoint_text(request)),
         _item("8", "Study design", "Candidate variables", "reported",
               f"{markers_evaluated} candidate markers; clinical covariates: {_names(cohort.get('clinical_columns') or [])}; strata: {_names(cohort.get('strata_columns') or [])}."
-              + (f" {len(dropped)} marker(s) were excluded before the analysis ({_names([entry.get('marker') for entry in dropped])})." if dropped else "")),
+              + (f" {len(dropped)} marker(s) were excluded before the analysis ({_dropped_text(dropped)})." if dropped else "")),
         _item("9", "Study design", "Sample size rationale", "partly",
-              f"{cohort.get('n')} patients and {events} events for {markers_evaluated} candidate markers ({events / max(markers_evaluated, 1):.1f} events per marker). Give the rationale for the sample size."),
+              f"{cohort.get('n')} patients and {events} events for {markers_evaluated} candidate markers "
+              + (f"({events / max(markers_evaluated, 1):.1f} events per marker)" if events >= markers_evaluated else "(fewer events than markers, so the evaluation is a screen)")
+              + ". Give the rationale for the sample size."),
         _item("10", "Statistical analysis", "Statistical methods, variable selection, assumptions, missing data", "reported", marker_methods_paragraph(result, request)),
         _item("11", "Statistical analysis", "Handling of marker values and cut-points", "reported",
               "Markers were analysed as continuous variables; the evaluation used no cut-points. Any cut-point used for figures should be fixed before looking at the outcome."),
@@ -231,7 +246,9 @@ def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None =
               f"Internal validation: the whole procedure was repeated on {resampling.get('n_valid')} subsamples"
               + (f", and the selected-marker model's C-index was corrected from {_number(signature.get('apparent_c'))} to {_number(signature.get('optimism_corrected_c'))}" if signature.get("apparent_c") is not None else "")
               + (f"; in the patients left out, the strongest marker's log hazard ratio was {_percent(shrinkage)} of its value in the subsamples that selected it" if isinstance(shrinkage, (int, float)) else "")
-              + ". Check proportional hazards for the reported markers in the Cox model tab."),
+              + "."
+              + _left_out_comparison(signature, added_value, subject="the selected-marker model")
+              + " Check proportional hazards for the reported markers in the Cox model tab."),
         _item("19", "Discussion", "Interpretation and limitations", "author",
               marker_results_paragraph(result) + " Interpret these results against the pre-specified hypotheses and discuss the limitations."),
         _item("20", "Discussion", "Implications for future research and clinical value", "author",
@@ -479,6 +496,18 @@ def tripod_ai_checklist(results: Sequence[dict[str, Any]], *, dataset: dict[str,
 
 
 # ── Rendering ────────────────────────────────────────────────────
+
+
+def _dropped_text(dropped: list[dict[str, Any]]) -> str:
+    """Excluded markers by reason: every name for a few, counts per reason for a genome-wide panel."""
+    if len(dropped) <= 20:
+        return _names([entry.get("marker") for entry in dropped])
+    reasons: dict[str, int] = {}
+    for entry in dropped:
+        reason = str(entry.get("reason") or "")
+        key = "near-constant" if reason.startswith("near-constant") else "missing values" if reason.endswith("missing") else reason
+        reasons[key] = reasons.get(key, 0) + 1
+    return "; ".join(f"{count} {reason}" for reason, count in sorted(reasons.items(), key=lambda item: -item[1]))
 
 
 def checklist_rows(report: dict[str, Any]) -> list[dict[str, str]]:

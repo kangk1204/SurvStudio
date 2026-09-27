@@ -310,9 +310,20 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
                 )
             )
 
+    risk_times, risk_rows = _km_risk_rows(km_result)
+    # The numbers at risk sit under the time axis, one row per group, as journals print them. Group
+    # labels end left of the time-0 counts, which are centred on the axis origin.
+    row_height = 20
+    risk_top = 78
+    labels = [escape_plotly_text(row["group"]) for row in risk_rows]
+    label_shift = 10 + 4 * max((len(str(row["counts"][0])) for row in risk_rows), default=0)
+    label_width = 7 * max((len(str(row["group"])) for row in risk_rows), default=0)
+    left_margin = max(70, min(240, label_shift + max(label_width, 100) + 8)) if risk_rows else 70
+    bottom_margin = risk_top + row_height * len(risk_rows) + 16 if risk_rows else 70
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": 70, "r": 30, "t": 80, "b": 70},
+        margin={"l": left_margin, "r": 30, "t": 80, "b": bottom_margin},
+        height=460 + (bottom_margin - 70),
         title={
             "text": "Kaplan-Meier Survival Curve",
             "font": {"family": "Source Serif 4, serif", "size": 24, "color": INK},
@@ -321,41 +332,91 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0.01},
         hovermode="x unified",
     )
+    notes = []
     if km_result.get("test"):
         test = km_result["test"]
-        fig.add_annotation(
-            text=f"{test['test'].replace('_', ' ').title()} test: {_p_value_expression(test['p_value'])}",
-            xref="paper", yref="paper", x=0.98, y=0.98,
-            showarrow=False, font={"size": 12, "color": INK},
-            align="right", xanchor="right", yanchor="top",
-            bgcolor="rgba(255,255,255,0.85)", borderpad=4,
-        )
+        notes.append(f"{test['test'].replace('_', ' ').title()} test: {_p_value_expression(test['p_value'])}")
     elif km_result.get("outcome_informed_group"):
+        notes.append("Outcome-informed grouping: fresh raw p-value suppressed")
+    if show_confidence_bands:
+        notes.append(f"Shaded bands: {confidence_percent}% pointwise CI")
+    if notes:
+        x, y, xanchor, yanchor = _km_note_position(km_result)
         fig.add_annotation(
-            text="Outcome-informed grouping: fresh raw p-value suppressed",
-            xref="paper", yref="paper", x=0.98, y=0.98,
+            text="<br>".join(notes),
+            xref="paper", yref="paper", x=x, y=y,
             showarrow=False, font={"size": 12, "color": INK},
-            align="right", xanchor="right", yanchor="top",
+            align="left" if xanchor == "left" else "right", xanchor=xanchor, yanchor=yanchor,
             bgcolor="rgba(255,255,255,0.85)", borderpad=4,
         )
-    if show_confidence_bands:
+    if risk_rows:
         fig.add_annotation(
-            text=f"Shaded bands: {confidence_percent}% pointwise CI",
-            xref="paper",
-            yref="paper",
-            x=0.01,
-            y=0.98,
-            showarrow=False,
-            font={"size": 12, "color": INK},
-            align="left",
-            xanchor="left",
-            yanchor="top",
-            bgcolor="rgba(255,255,255,0.85)",
-            borderpad=4,
+            text="<b>Number at risk</b>", xref="paper", yref="paper", x=0, y=0, xanchor="right", yanchor="top",
+            xshift=-label_shift, yshift=-(risk_top - row_height), showarrow=False, font={"size": 12, "color": INK}, align="right",
         )
-    fig.update_xaxes(title=f"Time ({escape_plotly_text(time_unit_label)})", **_COMMON_AXES, range=[0, km_result["display_horizon"]])
+        for index, (row, label) in enumerate(zip(risk_rows, labels, strict=True)):
+            color = _km_group_color(row["group"], index)
+            shift = -(risk_top + row_height * index)
+            fig.add_annotation(
+                text=label, xref="paper", yref="paper", x=0, y=0, xanchor="right", yanchor="top",
+                xshift=-label_shift, yshift=shift, showarrow=False, font={"size": 12, "color": color}, align="right",
+            )
+            for time, count in zip(risk_times, row["counts"], strict=True):
+                fig.add_annotation(
+                    text=str(count), xref="x", yref="paper", x=time, y=0, xanchor="center", yanchor="top",
+                    yshift=shift, showarrow=False, font={"size": 12, "color": INK},
+                )
+    axis_ticks = {"tickmode": "array", "tickvals": risk_times, "ticktext": [f"{time:g}" for time in risk_times]} if risk_times else {}
+    fig.update_xaxes(title=f"Time ({escape_plotly_text(time_unit_label)})", **_COMMON_AXES, **axis_ticks, range=[0, km_result["display_horizon"]])
     fig.update_yaxes(title="Survival probability", tickformat=".0%", range=[0, 1.02], **_COMMON_AXES)
     return figure_to_json(fig)
+
+
+# Corners for the test and band notes, tried in this order: (x, y, xanchor, yanchor) and the box the
+# notes take there as (x0, x1, y0, y1) in plot fractions.
+_KM_NOTE_CORNERS = (
+    ((0.01, 0.02, "left", "bottom"), (0.0, 0.34, 0.0, 0.17)),
+    ((0.99, 0.98, "right", "top"), (0.66, 1.0, 0.83, 1.0)),
+    ((0.99, 0.02, "right", "bottom"), (0.66, 1.0, 0.0, 0.17)),
+)
+
+
+def _km_note_position(km_result: dict[str, Any]) -> tuple[float, float, str, str]:
+    """The first corner no survival curve runs through, else above the plot at the right."""
+    horizon = float(km_result.get("display_horizon") or 0.0)
+    curves = km_result.get("curves") or []
+    for position, (x0, x1, y0, y1) in _KM_NOTE_CORNERS:
+        if horizon <= 0 or not any(_km_curve_crosses(curve, x0 * horizon, x1 * horizon, y0 * 1.02, y1 * 1.02) for curve in curves):
+            return position
+    return 1.0, 1.0, "right", "bottom"
+
+
+def _km_curve_crosses(curve: dict[str, Any], start: float, end: float, low: float, high: float) -> bool:
+    """Whether a step curve (drawn with its vertical drops) enters the box [start, end] x [low, high]."""
+    times = np.asarray(curve.get("timeline") or [], dtype=float)
+    survival = np.asarray(curve.get("survival") or [], dtype=float)
+    if times.size == 0 or times.size != survival.size or start > times[-1]:
+        return False
+    end = min(end, float(times[-1]))
+    upper = float(survival[max(np.searchsorted(times, start, side="right") - 1, 0)])
+    lower = float(survival[max(np.searchsorted(times, end, side="right") - 1, 0)])
+    return lower <= high and upper >= low
+
+
+def _km_risk_rows(km_result: dict[str, Any]) -> tuple[list[float], list[dict[str, Any]]]:
+    """Tick times and per-group at-risk counts from the KM result's risk table (empty when absent)."""
+    table = km_result.get("risk_table") or {}
+    times = [float(time) for time in table.get("times") or []]
+    columns = list(table.get("columns") or [])[1:]
+    if not times or len(columns) != len(times):
+        return [], []
+    rows = []
+    for row in table.get("rows") or []:
+        counts = [row.get(column) for column in columns]
+        if any(count is None for count in counts):
+            return [], []
+        rows.append({"group": row.get("Group", ""), "counts": [int(count) for count in counts]})
+    return times, rows
 
 
 def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
@@ -1444,7 +1505,14 @@ def build_marker_rank_figure(result: dict[str, Any], *, top: int = 25) -> dict[s
         )
     _marker_layout(fig, "Rank Uncertainty of the Strongest Markers", height=max(420, axis_layout["height"]), left=axis_layout["l"])
     highest = max((row[primary]["rank_interval"][1] for row in rows), default=1.0)
-    fig.update_xaxes(title="Rank across subsamples (1 = strongest)", range=[0.5, highest + 0.5], **_COMMON_AXES)
+    title = "Rank across subsamples (1 = strongest)"
+    if highest > 200:
+        # Ranks of a genome-wide panel run to tens of thousands; a log axis keeps the top ranks apart.
+        ticks = [value for value in (1, 3, 10, 30, 100, 300, 1000, 3000, 10000, 30000, 100000) if value <= highest * 1.5]
+        fig.update_xaxes(title=title, type="log", range=[np.log10(0.8), np.log10(highest * 1.25)],
+                         tickmode="array", tickvals=ticks, ticktext=[f"{value:,}" for value in ticks], **_COMMON_AXES)
+    else:
+        fig.update_xaxes(title=title, range=[0.5, highest + 0.5], **_COMMON_AXES)
     fig.update_yaxes(automargin=True, tickmode="array", tickvals=labels, ticktext=display_labels, **_COMMON_AXES)
     return figure_to_json(fig)
 

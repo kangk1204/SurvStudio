@@ -4640,7 +4640,8 @@ def test_frontend_format_p_value_uses_journal_thresholds() -> None:
 def test_frontend_uses_p_value_formatter_for_km_banner_and_tables() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert "p=${formatPValue(test.p_value)}" in app_js
+    assert "${test.test} ${pValuePhrase(test.p_value)}" in app_js
+    assert 'return text.startsWith("<") ? `p${text}` : `p=${text}`;' in app_js
     assert "td.textContent = formatDisplayValue(row[column], column);" in app_js
 
 

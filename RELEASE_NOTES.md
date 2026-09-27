@@ -16,6 +16,9 @@
 - The marker table adds each marker's unadjusted hazard ratio and p-value when markers are judged on added value, as REMARK asks for univariable results.
 - Omics marker matrices: the Markers tab attaches a separate file of up to 60,000 markers (one row per marker or per patient), matched to the dataset's patients by an ID column, so genome-wide panels no longer have to fit into the 1,000-feature table.
 - Hazard-ratio axes are labelled with round values (0.5, 1, 2, 5); the landing page shows one card per analysis tab.
+- Kaplan-Meier figures print the numbers at risk under the time axis, at round times (0, 50, 100 ...) that match the axis ticks, and place the test and band notes where no curve runs.
+- Marker matrices may be gzip-compressed (the .gz files GEO and UCSC Xena serve), TCGA sample barcodes are matched to patient barcodes (one tumour sample per patient, normal tissue left out), and an ID mismatch shows both files' IDs.
+- Summary badges read Robust when only the method's standing assumptions apply, and the Cox headline names the estimates that look unstable rather than the significant terms.
 
 ### New
 
@@ -23,6 +26,7 @@
 - `survival_toolkit.marker_evaluation.evaluate_markers`: the whole screening procedure checked in one step. It reports family-wise error and FDR by permutation, stability over event-stratified subsamples, and pre-declared tiers. A robust marker needs a Westfall–Young p ≤ 0.05, selection in at least 50% of subsamples and the same direction in at least 90%. It also reports an optimism-corrected C-index for the selected signature, the shrinkage of the strongest marker's effect, and an optional descriptive tree-model lens.
 - `survival_toolkit.marker_evaluation.validate_locked_recipe`: applies a SHA-256-locked signature unchanged to an external cohort. It reports the C-index with a bootstrap CI, the gain over the clinical-only model, the calibration slope, observed/expected risk, the Brier score and skill, and a Holm-adjusted replication test per marker.
 - README: a Prognostic Marker Evaluation section with a runnable example.
+- Markers with more than 90% of patients at one value (`max_mode_fraction`) are left out before the marker screen. In genome-wide RNA-seq, genes expressed in a few patients made the permutation maximum (in TCGA-LUAD its 95% point was chi-square 239 instead of about 25), so no marker could pass family-wise control; the filter never looks at the outcome. The marker screen and REMARK report also set the selected-marker model against the clinical covariates alone in the patients left out.
 
 - `survival_toolkit.design_audit.audit_design`: places a multi-algorithm study design (number and size of selection cohorts, genes only or with clinical covariates, number of candidates, training C-index in the choice, headline C-index) on the benchmark pilot's simulation map and returns the expected optimism of the presented C-index, the expected regret of the choice, and flagged practices with remedies.
 - `survival_toolkit.marker_matrix`: reads marker matrices, matches them to a dataset by patient ID and keeps a few in memory; API `POST /api/marker-matrix` and `DELETE /api/marker-matrix/{id}`, and `marker_matrix_id` in `POST /api/marker-evaluation`.

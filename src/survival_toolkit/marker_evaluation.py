@@ -64,6 +64,12 @@ class MarkerSettings(NamedTuple):
     n_resamples: int = 200
     resample_fraction: float = 0.632
     max_missing_fraction: float = 0.2
+    # Markers with more than this share of patients at one value are left out before the screen. A gene
+    # expressed in a few patients has a heavy-tailed score statistic, and the permutation maximum is then
+    # made of such genes: in TCGA-LUAD RNA-seq its 95% point was chi-square 239 (about 25 without them)
+    # and no marker could pass. The filter never looks at the outcome, so error control is kept
+    # (independent filtering, Bourgon et al. 2010).
+    max_mode_fraction: float = 0.9
     # In the benchmark pilot a 0.8 frequency kept 6% of true markers robust against 21% at
     # 0.5, with family-wise error at most 1% either way; direction 0.9 vs 0.95 made no difference.
     robust_frequency: float = 0.5
@@ -131,6 +137,8 @@ def _validated_settings(settings: MarkerSettings) -> MarkerSettings:
         raise ValueError("resample_fraction must be between 0.3 and 0.9.")
     if not 0.0 <= settings.max_missing_fraction < 1.0:
         raise ValueError("max_missing_fraction must be at least 0 and below 1.")
+    if not 0.5 <= settings.max_mode_fraction <= 1.0:
+        raise ValueError("max_mode_fraction must be between 0.5 and 1.")
     if settings.lens2_null not in {"freedman_lane", "raw"}:
         raise ValueError('lens2_null must be "freedman_lane" or "raw".')
     if not all(0.0 <= value <= 1.0 for value in (settings.robust_frequency, settings.robust_direction, settings.nonlinear_frequency)):
@@ -155,13 +163,15 @@ def prepare_marker_cohort(
     strata_columns: Sequence[str] = (),
     event_positive_value: Any = None,
     max_missing_fraction: float = 0.2,
+    max_mode_fraction: float = 0.9,
 ) -> MarkerCohort:
     """Align the outcome, clinical design, strata and numeric marker block row by row.
 
     Rows missing the outcome, a clinical covariate or a stratum are dropped (as in the
     Cox workflow). A missing marker value never drops a row: markers with more missing
     values than ``max_missing_fraction`` are left out, and the rest are imputed inside
-    each fit of the procedure.
+    each fit of the procedure. Markers with more than ``max_mode_fraction`` of their
+    observed values equal to one value are left out as near-constant.
     """
     markers = list(dict.fromkeys(str(column) for column in marker_columns))
     clinical = list(dict.fromkeys(str(column) for column in clinical_columns))
@@ -221,12 +231,16 @@ def prepare_marker_cohort(
         observed = values[:, index][~np.isnan(values[:, index])]
         if missing_share[index] > max_missing_fraction:
             dropped.append({"marker": column, "reason": f"{missing_share[index]:.0%} missing"})
-        elif observed.size < 2 or np.unique(observed).size < 2:
+            continue
+        counts = np.unique(observed, return_counts=True)[1] if observed.size else np.zeros(0, dtype=int)
+        if counts.size < 2:
             dropped.append({"marker": column, "reason": "constant"})
+        elif counts.max() > max_mode_fraction * observed.size:
+            dropped.append({"marker": column, "reason": f"near-constant ({counts.max() / observed.size:.0%} at one value)"})
         else:
             kept.append(index)
     if not kept:
-        raise ValueError("No usable markers remain after removing constant or mostly missing columns.")
+        raise ValueError("No usable markers remain after removing constant, near-constant or mostly missing columns.")
 
     clinical_design = None
     clinical_names: list[str] = []
@@ -922,6 +936,7 @@ def evaluate_markers(
         strata_columns=strata_columns,
         event_positive_value=event_positive_value,
         max_missing_fraction=settings.max_missing_fraction,
+        max_mode_fraction=settings.max_mode_fraction,
     )
     rng = np.random.default_rng(int(settings.random_seed))
     all_rows = np.arange(cohort.time.shape[0])

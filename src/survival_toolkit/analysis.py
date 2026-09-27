@@ -2597,6 +2597,8 @@ def _km_scientific_summary(
     cautions.append(
         "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, survival estimates can be biased."
     )
+    # Notes that hold for every KM run are shown but do not lower the status; only data-driven cautions do.
+    standing_cautions = len(cautions)
 
     if group_column and not outcome_informed_group:
         test_name = _weighted_test_label(test_payload["test"], fh_p=fh_p) if test_payload else "weighted"
@@ -2614,6 +2616,7 @@ def _km_scientific_summary(
             cautions.append(
                 "Pairwise BH-adjusted comparisons are shown alongside the global test, so pre-specify in the manuscript how omnibus and pairwise evidence will be interpreted."
             )
+            standing_cautions += 1
     elif group_column and outcome_informed_group:
         strengths.append("Outcome-informed groups were visualized descriptively without a fresh between-group hypothesis test.")
     else:
@@ -2678,7 +2681,7 @@ def _km_scientific_summary(
         )
 
     status = "robust"
-    if cautions:
+    if len(cautions) > standing_cautions:
         status = "review"
     if total_events < 10 or min_group_events < 3:
         status = "caution"
@@ -2719,6 +2722,24 @@ class _SummaryNotes(NamedTuple):
     strengths: list[str]
     cautions: list[str]
     next_steps: list[str]
+
+
+# Notes that hold for every Cox fit: shown with the cautions, but they do not lower the status.
+_COX_ASSUMPTION_NOTES = (
+    "All Cox outputs assume non-informative (independent) censoring.",
+    "Competing risks are not modeled in this Cox workflow, so cause-specific questions need dedicated competing-risk methods rather than treating other event types as ordinary censoring.",
+    "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, coefficient estimates and survival summaries can be biased.",
+)
+_COX_APPARENT_C_NOTE = "The Cox C-index is apparent, so it is optimistic and should not be treated as external validation."
+_COX_C_INTERVAL_NOTE = (
+    "The reported C-index confidence interval is a bootstrap interval on the same cohort using fixed fitted risk scores, "
+    "so it understates full model-building uncertainty and does not replace external validation."
+)
+_COX_EXTERNAL_NOTE = (
+    "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; "
+    "validate the final specification on a separate cohort outside this run."
+)
+_COX_STANDING_NOTES = frozenset({*_COX_ASSUMPTION_NOTES, _COX_APPARENT_C_NOTE, _COX_C_INTERVAL_NOTE, _COX_EXTERNAL_NOTE})
 
 
 class _CoxTermAlerts(NamedTuple):
@@ -2911,7 +2932,7 @@ def _cox_fit_statistic_notes(
     if c_index is not None:
         if c_index < 0.6:
             cautions.append("Apparent model discrimination is modest (C-index below 0.60).")
-        cautions.append("The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.")
+        cautions.append(_COX_APPARENT_C_NOTE)
         strengths.append(
             f"A C-index of {c_index:.3f} means the fitted model correctly orders approximately {c_index * 100:.1f}% of evaluable patient pairs by predicted risk."
         )
@@ -2956,18 +2977,25 @@ def _cox_fit_statistic_notes(
         strengths.append(
             f"{c_index_label} includes an internal bootstrap percentile {level_pct}% CI ({ci_low:.3f} to {ci_high:.3f}) on the fixed fitted risk scores."
         )
-        cautions.append(
-            "The reported C-index confidence interval is a bootstrap interval on the same cohort using fixed fitted risk scores, so it understates full model-building uncertainty and does not replace external validation."
-        )
+        cautions.append(_COX_C_INTERVAL_NOTE)
 
 
 def _cox_summary_headline(alerts: _CoxTermAlerts, structural_instability: bool, next_steps: list[str]) -> str:
     significant_terms = alerts.significant
+    # Name the estimates that look unstable, not the significant ones: causes (a small reference or
+    # sparse level) before the wide intervals they produce. Instability from the model as a whole
+    # (few events per parameter, collinearity, sparse strata) has no term to name.
+    unstable_terms = list(dict.fromkeys(alerts.reference_levels + alerts.sparse_levels + alerts.non_estimable + alerts.wide_ci))
     if significant_terms:
         if structural_instability:
             headline = (
-                f"Model fit shows {len(significant_terms)} term(s) with nominal hazard association, "
-                f"but some estimates appear unstable: {_summarize_labels(significant_terms)}."
+                f"Model fit shows {len(significant_terms)} term(s) with nominal hazard association "
+                f"({_summarize_labels(significant_terms)}), but "
+                + (
+                    f"some estimates appear unstable: {_summarize_labels(unstable_terms)}."
+                    if unstable_terms
+                    else "the estimates may be unstable; see the cautions."
+                )
             )
         elif alerts.proportional_hazards:
             headline = (
@@ -3102,13 +3130,7 @@ def _cox_scientific_summary(
         notes.cautions.append("Events per parameter is below 10, so coefficients may be unstable or overfit.")
         notes.next_steps.append("Reduce model complexity or increase the event count before treating estimates as final.")
     _cox_strata_notes(model_stats, strata_columns, notes)
-    notes.cautions.extend(
-        [
-            "All Cox outputs assume non-informative (independent) censoring.",
-            "Competing risks are not modeled in this Cox workflow, so cause-specific questions need dedicated competing-risk methods rather than treating other event types as ordinary censoring.",
-            "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, coefficient estimates and survival summaries can be biased.",
-        ]
-    )
+    notes.cautions.extend(_COX_ASSUMPTION_NOTES)
     _cox_input_quality_notes(
         model_stats,
         outcome_rows=outcome_rows,
@@ -3118,9 +3140,7 @@ def _cox_scientific_summary(
         notes=notes,
     )
     _cox_fit_statistic_notes(model_stats, c_index=c_index, c_index_label=c_index_label, notes=notes)
-    notes.cautions.append(
-        "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; validate the final specification on a separate cohort outside this run."
-    )
+    notes.cautions.append(_COX_EXTERNAL_NOTE)
     if not alerts.significant:
         notes.cautions.append("No model term shows clear nominal evidence at p < 0.05.")
 
@@ -3137,7 +3157,7 @@ def _cox_scientific_summary(
     headline = _cox_summary_headline(alerts, structural_instability, notes.next_steps)
 
     status = "robust"
-    if notes.cautions:
+    if any(caution not in _COX_STANDING_NOTES for caution in notes.cautions):
         status = "review"
     if (
         (epv is not None and epv < 5)
@@ -4865,6 +4885,32 @@ def discover_feature_signature(
     return output_df, best_column_name, payload
 
 
+def _nice_time_ticks(horizon: float, points: int) -> list[float]:
+    """Round times from 0 up to the horizon for the risk table and the time axis.
+
+    The step is 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 times a power of ten, whichever gives the tick
+    count closest to ``points`` (the finer step on a tie), so the columns read 0, 12, 24 ... or
+    0, 40, 80 ... rather than 0, 47.62, 95.24 ..., line up with the axis ticks, and follow the
+    requested number of points closely.
+    """
+    if not np.isfinite(horizon) or horizon <= 0:
+        return [0.0]
+    raw_step = horizon / max(int(points) - 1, 1)
+    magnitude = 10.0 ** np.floor(np.log10(raw_step))
+    best: tuple[int, float] | None = None
+    for scale in (magnitude / 10.0, magnitude, magnitude * 10.0):
+        for multiple in (1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0):
+            step = multiple * scale
+            count = int(np.floor(horizon / step * (1.0 + 1e-9))) + 1
+            if best is None or abs(count - points) < abs(best[0] - points):
+                best = (count, step)
+    count, step = best
+    # Tick times are rounded to the step's precision; the last one never passes the horizon, so a
+    # patient followed exactly to it is still counted at risk there.
+    decimals = max(0, int(-np.floor(np.log10(step))) + 2)
+    return [min(round(index * step, decimals), float(horizon)) for index in range(count)]
+
+
 def _risk_tick_labels(ticks: Sequence[float]) -> list[str]:
     """Readable, unique column labels for risk-table tick times.
 
@@ -5140,9 +5186,7 @@ def compute_km_analysis(
         rmst_horizon = max(min(display_horizon, common_group_horizon), 1e-6)
     else:
         rmst_horizon = display_horizon
-    # At-risk counts use the exact tick times; only the column labels are rounded (a
-    # rounded last tick above the horizon would report 0 patients at risk).
-    risk_ticks = np.linspace(0, display_horizon, risk_table_points).tolist()
+    risk_ticks = _nice_time_ticks(display_horizon, risk_table_points)
     risk_tick_labels = _risk_tick_labels(risk_ticks)
 
     summary_rows: list[dict[str, Any]] = []
@@ -5223,6 +5267,7 @@ def compute_km_analysis(
         "risk_table": {
             "columns": ["Group", *risk_tick_labels],
             "rows": risk_rows,
+            "times": risk_ticks,
         },
         "pairwise_table": pairwise_rows,
         "test": test_payload,
