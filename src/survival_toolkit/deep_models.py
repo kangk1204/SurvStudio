@@ -1344,28 +1344,53 @@ def _compute_c_index_torch(
     return _harrell_c_index(time_np.astype(float), event_np.astype(int), risk_np.astype(float))
 
 
-def _logsumexp_numpy(values: np.ndarray) -> float:
-    if values.size == 0:
-        return float("-inf")
-    max_value = float(np.max(values))
-    if not np.isfinite(max_value):
-        return max_value
-    stable = np.exp(values - max_value)
-    return float(max_value + np.log(np.sum(stable)))
-
-
 def _survival_from_log_cumulative_hazard(log_cumulative_hazard: np.ndarray) -> np.ndarray:
-    safe_log = np.asarray(log_cumulative_hazard, dtype=float)
-    survival = np.ones_like(safe_log)
-    positive_mask = np.isfinite(safe_log)
-    if not positive_mask.any():
-        return survival
-    very_large = safe_log >= 50.0
-    moderate = positive_mask & ~very_large
-    survival[very_large] = 0.0
-    survival[moderate] = np.exp(-np.exp(safe_log[moderate]))
-    survival[~positive_mask] = 1.0
-    return survival
+    """S = exp(-H) from log H: 1 where log H is -inf (no hazard), 0 where it is +inf or large.
+
+    A NaN stays NaN instead of being reported as certain survival.
+    """
+    log_hazard = np.asarray(log_cumulative_hazard, dtype=float)
+    # exp(-exp(50)) is already 0.0 in float64; capping avoids overflow warnings, and
+    # np.minimum keeps NaN.
+    return np.exp(-np.exp(np.minimum(log_hazard, 50.0)))
+
+
+def _breslow_log_baseline_cumulative_hazard(
+    times: np.ndarray,
+    events: np.ndarray,
+    risk: np.ndarray,
+    grid: np.ndarray,
+) -> np.ndarray:
+    """log of the Breslow baseline cumulative hazard at each time of the sorted ``grid``.
+
+    H0(t) = sum over event times t_k <= t of d_k / sum_{j: t_j >= t_k} exp(r_j). The risk-set
+    sums come from one reverse cumulative log-sum-exp over the rows sorted by time, so the
+    curve costs O(n log n), and the whole computation stays in log space: shifting every risk
+    score by a constant shifts log H0 by the opposite constant (the predicted survival is
+    unchanged), however negative or large the scores are.
+    """
+    times = np.asarray(times, dtype=float).reshape(-1)
+    events = np.asarray(events, dtype=float).reshape(-1)
+    risk = np.asarray(risk, dtype=float).reshape(-1)
+    grid = np.asarray(grid, dtype=float).reshape(-1)
+    if times.size == 0 or grid.size == 0:
+        return np.full(grid.shape, -np.inf)
+    order = np.argsort(times, kind="stable")
+    sorted_times = times[order]
+    # log sum_{j >= i} exp(r_j) over the rows sorted by time: the log risk-set sum of position i.
+    reverse_log_sums = np.logaddexp.accumulate(risk[order][::-1])[::-1]
+    first_at_risk = np.searchsorted(sorted_times, grid, side="left")
+    event_times, event_counts = np.unique(times[events == 1], return_counts=True)
+    matched = np.searchsorted(event_times, grid)
+    deaths = np.zeros(grid.size)
+    found = matched < event_times.size
+    found[found] = event_times[matched[found]] == grid[found]
+    deaths[found] = event_counts[matched[found]]
+    at_risk = first_at_risk < times.size
+    log_increments = np.full(grid.size, -np.inf)
+    usable = at_risk & (deaths > 0)
+    log_increments[usable] = np.log(deaths[usable]) - reverse_log_sums[first_at_risk[usable]]
+    return np.logaddexp.accumulate(log_increments)
 
 
 def _expected_time_risk(pmf_with_tail: torch.Tensor, time_grid: torch.Tensor) -> torch.Tensor:
@@ -1659,6 +1684,26 @@ def _digitize_time_bins(
         indices = indices.copy()
         indices[values > float(bin_edges[-1])] = num_time_bins
     return indices
+
+
+def _survival_at_reference_time(
+    survival_at_edges: np.ndarray,
+    bin_edges: np.ndarray,
+    t_ref: float,
+    num_time_bins: int,
+) -> np.ndarray:
+    """Each row's survival at ``t_ref``, interpolated between the edges of the bin holding it.
+
+    Column k of ``survival_at_edges`` is the survival at ``bin_edges[k]``; column 0 is the
+    first edge (the earliest fitting time, where survival is 1), not time 0 at which the
+    plotted curves start.
+    """
+    ref_bin = int(_digitize_time_bins(np.asarray([t_ref]), bin_edges, num_time_bins)[0])
+    edge_low = float(bin_edges[ref_bin])
+    edge_high = float(bin_edges[min(ref_bin + 1, len(bin_edges) - 1)])
+    weight = 0.0 if edge_high <= edge_low else min(max((t_ref - edge_low) / (edge_high - edge_low), 0.0), 1.0)
+    next_column = min(ref_bin + 1, survival_at_edges.shape[1] - 1)
+    return (1.0 - weight) * survival_at_edges[:, ref_bin] + weight * survival_at_edges[:, next_column]
 
 
 def _append_evaluation_note(note: str | None, extra_note: str | None) -> str:
@@ -4079,39 +4124,14 @@ def train_deepsurv(
     if len(unique_times) == 0:
         unique_times = np.sort(np.unique(train_time_np))
 
-    # Breslow baseline hazard estimation
-    # Sort training samples once; use searchsorted to avoid O(N) boolean mask per time point.
-    train_risk_np = risk_np[train_idx_np]
-    sort_order = np.argsort(train_time_np, kind="stable")
-    sorted_times_train = train_time_np[sort_order]
-    sorted_risk_train = train_risk_np[sort_order]
-    sorted_events_train = train_event_np[sort_order]
-    # Precompute event counts at each unique time (O(N) via np.unique).
-    event_times_train = sorted_times_train[sorted_events_train == 1]
-    event_uniq, event_counts_arr = np.unique(event_times_train, return_counts=True)
-    event_count_map: dict[float, float] = dict(zip(event_uniq.tolist(), event_counts_arr.tolist()))
-    baseline_cumhaz = np.zeros(len(unique_times))
-    for k, t_k in enumerate(unique_times):
-        first_at_risk = int(np.searchsorted(sorted_times_train, t_k, side="left"))
-        at_risk_risk = sorted_risk_train[first_at_risk:]
-        if at_risk_risk.size == 0:
-            baseline_cumhaz[k] = baseline_cumhaz[k - 1] if k > 0 else 0.0
-            continue
-        d_k = event_count_map.get(float(t_k), 0.0)
-        log_risk_sum = _logsumexp_numpy(at_risk_risk)
-        risk_sum = 0.0 if not np.isfinite(log_risk_sum) else float(np.exp(min(log_risk_sum, 700.0)))
-        h0_k = d_k / max(risk_sum, 1e-12)
-        baseline_cumhaz[k] = (baseline_cumhaz[k - 1] if k > 0 else 0.0) + h0_k
+    # Breslow baseline cumulative hazard on the training partition (log scale).
+    log_baseline_cumhaz = _breslow_log_baseline_cumulative_hazard(
+        train_time_np, train_event_np, risk_np[train_idx_np], unique_times
+    )
 
     predicted_survival_function: list[dict[str, Any]] = []
     for idx in representative_indices:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            log_cumhaz_i = np.where(
-                baseline_cumhaz > 0.0,
-                np.log(baseline_cumhaz) + float(risk_np[idx]),
-                -np.inf,
-            )
-        surv_i = _survival_from_log_cumulative_hazard(log_cumhaz_i)
+        surv_i = _survival_from_log_cumulative_hazard(log_baseline_cumhaz + float(risk_np[idx]))
         timeline = [0.0] + [float(t) for t in unique_times]
         survival = [1.0] + [float(s) for s in surv_i]
         predicted_survival_function.append({
@@ -4257,9 +4277,11 @@ def _deephit_loss(
     # Ranking loss component (pairwise)
     if event_mask.sum() > 0 and n > 1:
         event_indices = torch.where(event_mask)[0]
-        ranking_terms: list[torch.Tensor] = []
-        # Evaluate all event-driven pairings, but chunk the event dimension so
-        # monitoring on larger holdout sets does not allocate one huge matrix.
+        # The mean over every comparable pair, accumulated as a sum and a count per chunk of
+        # events: evaluating all event-driven pairings (for example on a large monitor subset)
+        # never holds more than one chunk's pair terms.
+        ranking_sum: torch.Tensor | None = None
+        ranking_count = 0
         chunk_size = 128
         for start in range(0, int(event_indices.shape[0]), chunk_size):
             chunk = event_indices[start:start + chunk_size]
@@ -4277,10 +4299,12 @@ def _deephit_loss(
             # predicted incidence by the event time as the subject who failed.
             diff = subject_cif - event_cif.unsqueeze(0)
             scaled_diff = torch.clamp(diff / _DEEPHIT_RANKING_SIGMA, min=-20.0, max=20.0)
-            ranking_terms.append(F.softplus(scaled_diff)[later_mask])
+            chunk_terms = F.softplus(scaled_diff)[later_mask]
+            ranking_sum = chunk_terms.sum() if ranking_sum is None else ranking_sum + chunk_terms.sum()
+            ranking_count += int(chunk_terms.numel())
         ranking_loss = (
-            torch.cat(ranking_terms).mean()
-            if ranking_terms
+            ranking_sum / ranking_count
+            if ranking_sum is not None
             else torch.tensor(0.0, device=pmf.device)
         )
     else:
@@ -4798,17 +4822,7 @@ def train_neural_mtlr(
         evt_times = t_np[e_np == 1]
         t_ref = float(np.median(evt_times)) if evt_times.size else float(np.median(t_np))
         t_ref = min(t_ref, float(bin_edges[-1]))
-        ref_bin = int(_digitize_time_bins(np.asarray([t_ref]), bin_edges, num_time_bins)[0])
-
-        # Predicted survival at t_ref: interpolate between the edges of the
-        # reference bin instead of taking the value at the end of the bin.
-        edge_low = float(timeline[ref_bin])
-        edge_high = float(timeline[min(ref_bin + 1, len(timeline) - 1)])
-        weight = 0.0 if edge_high <= edge_low else min(max((t_ref - edge_low) / (edge_high - edge_low), 0.0), 1.0)
-        survival_at_ref = (
-            (1.0 - weight) * survival_np[artifact_idx_np, ref_bin]
-            + weight * survival_np[artifact_idx_np, min(ref_bin + 1, survival_np.shape[1] - 1)]
-        )
+        survival_at_ref = _survival_at_reference_time(survival_np[artifact_idx_np], bin_edges, t_ref, num_time_bins)
         predicted_event_prob = 1.0 - survival_at_ref
         decile_indices = np.argsort(predicted_event_prob)
         chunk_size = len(decile_indices) // n_deciles

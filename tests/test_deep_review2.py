@@ -677,3 +677,116 @@ def test_a_locked_test_refit_without_a_holdout_estimate_is_described_as_such(mon
         dm._run_deep_compare_task(task)
     with pytest.raises(ValueError, match="Deep repeated-CV fold did not retain a clean holdout evaluation"):
         dm._run_deep_compare_task({**task, "repeat": 1, "fold": 2})
+
+
+# R9#10 / R8#12 / R9#9 / R9#13 and the R8 note on the Breslow floor: numerics ----------------
+
+
+def _direct_breslow(times, events, risk, grid) -> np.ndarray:
+    """The Breslow baseline cumulative hazard written out term by term (float64)."""
+    cumulative, values = 0.0, []
+    for t_k in grid:
+        at_risk = times >= t_k
+        deaths = float(np.sum((times == t_k) & (events == 1)))
+        if deaths and at_risk.any():
+            cumulative += deaths / float(np.sum(np.exp(risk[at_risk])))
+        values.append(cumulative)
+    return np.asarray(values)
+
+
+def test_the_breslow_baseline_matches_the_direct_sum_and_ignores_a_shift_of_the_scores() -> None:
+    rng = np.random.default_rng(0)
+    n = 300
+    times = rng.integers(1, 60, n).astype(float)  # many ties
+    events = (rng.random(n) < 0.6).astype(float)
+    risk = rng.normal(size=n)
+    grid = np.unique(times[events == 1])
+    log_h0 = dm._breslow_log_baseline_cumulative_hazard(times, events, risk, grid)
+    np.testing.assert_allclose(np.exp(log_h0), _direct_breslow(times, events, risk, grid), rtol=1e-10)
+    # Scores below -27 made the old risk-set floor (1e-12) bite; shifting every score by a
+    # constant must leave every predicted survival curve unchanged.
+    shifted = dm._breslow_log_baseline_cumulative_hazard(times, events, risk - 40.0, grid)
+    for score in (risk.min(), 0.0, risk.max()):
+        np.testing.assert_allclose(
+            dm._survival_from_log_cumulative_hazard(shifted + (score - 40.0)),
+            dm._survival_from_log_cumulative_hazard(log_h0 + score),
+            rtol=1e-9,
+            atol=1e-12,
+        )
+    # Grid times without an event add nothing; no event at all gives survival 1 everywhere.
+    all_times = np.unique(times)
+    assert np.array_equal(
+        np.exp(dm._breslow_log_baseline_cumulative_hazard(times, events, risk, all_times))[np.isin(all_times, grid)],
+        np.exp(log_h0),
+    )
+    assert np.all(np.isneginf(dm._breslow_log_baseline_cumulative_hazard(times, np.zeros(n), risk, all_times)))
+
+
+def test_deepsurv_survival_curves_do_not_depend_on_the_breslow_floor(monkeypatch) -> None:
+    df = make_example_dataset(seed=9, n_patients=90)
+    common = dict(hidden_layers=[4], epochs=1, early_stopping_patience=None, random_seed=4)
+    reference = dm.train_deepsurv(df, "os_months", "os_event", FEATURES, **common)
+    original_net = dm.DeepSurvNet
+
+    class _ShiftedNet(original_net):
+        def forward(self, x):  # the same network with every risk score 40 lower
+            return super().forward(x) - 40.0
+
+    monkeypatch.setattr(dm, "DeepSurvNet", _ShiftedNet)
+    shifted = dm.train_deepsurv(df, "os_months", "os_event", FEATURES, **common)
+    assert shifted["c_index"] == pytest.approx(reference["c_index"], abs=0.01)
+    for ours, theirs in zip(shifted["predicted_survival_function"], reference["predicted_survival_function"]):
+        np.testing.assert_allclose(ours["curve"]["survival"], theirs["curve"]["survival"], rtol=1e-4, atol=1e-6)
+
+
+def test_survival_from_the_log_cumulative_hazard_handles_infinite_and_missing_values() -> None:
+    survival = dm._survival_from_log_cumulative_hazard(np.array([np.inf, np.nan, -np.inf, 60.0, 0.0]))
+    assert survival[0] == 0.0
+    assert np.isnan(survival[1])
+    assert survival[2] == 1.0 and survival[3] == 0.0
+    assert survival[4] == pytest.approx(np.exp(-1.0))
+
+
+def _all_pairs_ranking_loss(pmf, bins, events) -> float:
+    """DeepHit's ranking term as the mean over every comparable pair, built in one piece (float64)."""
+    cif = torch.cumsum(pmf.double(), dim=1)
+    total, count = 0.0, 0
+    censored = events != 1
+    for i in torch.where(events == 1)[0].tolist():
+        later = (bins > bins[i]) | ((bins == bins[i]) & censored)
+        diff = cif[later, bins[i]] - cif[i, bins[i]]
+        total += float(torch.nn.functional.softplus(torch.clamp(diff, -20.0, 20.0)).sum())
+        count += int(later.sum())
+    return total / count
+
+
+def test_the_deephit_ranking_loss_is_accumulated_per_chunk_without_joining_all_pairs(monkeypatch) -> None:
+    torch.manual_seed(3)
+    n, n_bins = 400, 6
+    pmf = torch.softmax(torch.randn(n, n_bins + 1), dim=1)
+    bins = torch.randint(0, n_bins, (n,))
+    events = (torch.rand(n) < 0.75).float()  # about 300 events: three chunks of 128
+    joined: list[int] = []
+    original_cat = torch.cat
+
+    def _spy_cat(tensors, *args, **kwargs):
+        joined.append(sum(int(tensor.numel()) for tensor in tensors))
+        return original_cat(tensors, *args, **kwargs)
+
+    monkeypatch.setattr(torch, "cat", _spy_cat)
+    loss = dm._deephit_loss(pmf, bins, events, alpha=0.0)
+    monkeypatch.undo()
+    assert float(loss) == pytest.approx(_all_pairs_ranking_loss(pmf, bins, events), rel=1e-5)
+    # Only per-row tables (the survival table and the likelihood terms) are ever joined, never
+    # the event-by-subject pair terms (tens of thousands here).
+    assert joined and max(joined) <= n * (n_bins + 1)
+
+
+def test_the_mtlr_calibration_interpolates_the_first_bin_from_its_edge() -> None:
+    bin_edges = np.array([10.0, 20.0, 30.0])
+    survival = np.array([[1.0, 0.5, 0.2], [1.0, 0.8, 0.6]])
+    at_15 = dm._survival_at_reference_time(survival, bin_edges, 15.0, num_time_bins=2)
+    np.testing.assert_allclose(at_15, [0.75, 0.9])  # halfway between the edges at 10 and 20
+    np.testing.assert_allclose(dm._survival_at_reference_time(survival, bin_edges, 25.0, num_time_bins=2), [0.35, 0.7])
+    np.testing.assert_allclose(dm._survival_at_reference_time(survival, bin_edges, 5.0, num_time_bins=2), [1.0, 1.0])
+
