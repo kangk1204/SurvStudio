@@ -26,22 +26,15 @@ function normalizeValueLabel(label) {
     .trim();
 }
 
+// Labels of analysis outputs whose values are p-values: "P value", "Logrank p", "Family-wise P",
+// "Global PH pvalue", "Permutation p (search-adjusted)". Whole words only, so "Test positive", "raw
+// pathology" or "p16" are not p-values; a qualifier in parentheses ("(Holm)", "(p<alpha)") is ignored.
 function isPValueLikeLabel(label) {
-  const text = normalizeValueLabel(label);
-  if (!text) return false;
-  return text === "p"
-    || text === "p value"
-    || text === "pvalue"
-    || text.endsWith(" p")
-    || text.endsWith(" p value")
-    || text.includes("adjusted p")
-    || text.includes("permutation p")
-    || text.includes("raw p")
-    || text.includes("rmst difference p")
-    || text.includes("logrank p")
-    || text.includes("global ph pvalue")
-    || text.includes("global ph p value")
-    || text.includes("test p");
+  const tokens = normalizeValueLabel(String(label ?? "").replace(/\([^)]*\)/g, " ")).split(/[^a-z0-9]+/).filter(Boolean);
+  if (!tokens.length) return false;
+  const last = tokens[tokens.length - 1];
+  if (last === "p" || last === "pvalue") return true;
+  return tokens.some((token, index) => token === "pvalue" || (token === "p" && tokens[index + 1] === "value"));
 }
 
 function formatPValue(value) {
@@ -58,13 +51,15 @@ function pValuePhrase(value) {
   return text.startsWith("<") ? `p${text}` : `p=${text}`;
 }
 
+// Only numbers get p-value formatting; text such as "45 (30.0%)" is shown as it is.
 function formatDisplayValue(value, label = "") {
-  return isPValueLikeLabel(label) ? formatPValue(value) : formatValue(value);
+  return typeof value === "number" && isPValueLikeLabel(label) ? formatPValue(value) : formatValue(value);
 }
 
-function formatPercent(numerator, denominator) {
-  if (!denominator) return "0%";
-  return `${((100 * numerator) / denominator).toFixed(1).replace(/\.0$/, "")}%`;
+// Own properties only, so a column named "constructor" or "toString" does not pick up Object.prototype.
+function ownEntry(record, key) {
+  if (record instanceof Map) return record.get(key);
+  return record && Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
 }
 
 function statusLabel(status) {
@@ -327,19 +322,26 @@ function syncPredictiveWorkbenchCardActions(card, workbenchActive) {
 
 const COHORT_TABLE_EMPTY_STATE_HTML = '<div class="empty-state">Check variables on the left, then click <strong>Build Table</strong>.</div>';
 
-function renderTable(shell, rows, columns = null, { labels = {} } = {}) {
+// `pValueColumns` lists the columns shown as p-values; without it, the labels of analysis outputs decide
+// (isPValueLikeLabel). Tables whose column names come from the data (Table 1 group levels, the data
+// preview) pass `pValueColumns: []` and `rawHeaders: true`, so a group named "Test positive" or a column
+// named "ki67_p" is shown as it is.
+function renderTable(shell, rows, columns = null, { labels = {}, pValueColumns = null, rawHeaders = false } = {}) {
   if (!rows || rows.length === 0) {
     shell.innerHTML = '<div class="empty-state">No rows returned.</div>';
     return;
   }
   const visibleColumns = columns || Object.keys(rows[0]);
+  const isPValueColumn = Array.isArray(pValueColumns)
+    ? (column) => pValueColumns.includes(column)
+    : (column) => isPValueLikeLabel(column);
   const table = document.createElement("table");
   const thead = document.createElement("thead");
   const tbody = document.createElement("tbody");
   const headerRow = document.createElement("tr");
   visibleColumns.forEach((column) => {
     const th = document.createElement("th");
-    th.textContent = labels[column] || humanizeHeader(column);
+    th.textContent = ownEntry(labels, column) || (rawHeaders ? String(column) : humanizeHeader(String(column)));
     th.title = column;
     headerRow.appendChild(th);
   });
@@ -348,7 +350,8 @@ function renderTable(shell, rows, columns = null, { labels = {} } = {}) {
     const tr = document.createElement("tr");
     visibleColumns.forEach((column) => {
       const td = document.createElement("td");
-      td.textContent = formatDisplayValue(row[column], column);
+      const value = ownEntry(row, column);
+      td.textContent = typeof value === "number" && isPValueColumn(column) ? formatPValue(value) : formatValue(value);
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -472,22 +475,6 @@ function downloadText(filename, text, mimeType = "text/plain;charset=utf-8;") {
   return downloadHelpers.downloadText({ filename, text, mimeType });
 }
 
-function slugifyDownloadToken(value, fallback = "na") {
-  return downloadHelpers.slugifyDownloadToken(value, fallback);
-}
-
-function currentDatasetSlug() {
-  return downloadHelpers.currentDatasetSlug(state);
-}
-
-function currentOutcomeSlug() {
-  return downloadHelpers.currentOutcomeSlug(refs);
-}
-
-function currentGroupSlug() {
-  return downloadHelpers.currentGroupSlug(refs);
-}
-
 function buildDownloadFilename(stem, ext, { includeGroup = false, template = null, group = null } = {}) {
   return downloadHelpers.buildDownloadFilename({
     state,
@@ -537,10 +524,6 @@ async function downloadChecklist(report, format, stem) {
     throw new Error(message);
   }
   triggerBlobDownload(buildDownloadFilename(stem, format === "docx" ? "docx" : "md"), await response.blob());
-}
-
-function buildMarkdownTable(rows, { caption = "", notes = [] } = {}) {
-  return downloadHelpers.buildMarkdownTable(rows, { caption, notes, formatValue });
 }
 
 function currentMlJournalTemplate() {
@@ -776,7 +759,9 @@ function buildCohortTableExportPayload(format = "xlsx") {
 }
 
 function downloadPlotImage(plotEl, filename, format) {
-  return downloadHelpers.downloadPlotImage({ plotEl, filename, format });
+  return downloadHelpers.downloadPlotImage({ plotEl, filename, format }).catch((error) => {
+    showError(`Saving the ${String(format || "image").toUpperCase()} image failed: ${errorMessageText(error, "the chart could not be exported.")}`);
+  });
 }
 
 function requireCurrentResultForExport(goal, { payload = null } = {}) {
@@ -957,7 +942,21 @@ function purgePlot(el) {
   el.style.height = "";
   el.classList.remove("is-refreshing");
   el.removeAttribute("aria-busy");
+  setPlotStale(el, false);
   if (el.data || el._fullLayout) { try { Plotly.purge(el); } catch { /* ignore */ } }
+}
+
+// A plot whose result no longer matches the visible settings stays drawn under a notice instead of being
+// purged, so it is back as soon as the settings match its result again (for example after switching the
+// model away and back, or undoing an edit).
+function setPlotStale(el, stale, message = "") {
+  if (!el) return;
+  el.classList.toggle("plot-stale", Boolean(stale));
+  if (stale) {
+    el.dataset.staleMessage = message;
+  } else if (el.dataset && "staleMessage" in el.dataset) {
+    delete el.dataset.staleMessage;
+  }
 }
 
 function resetPlotElement(el, html = "") {

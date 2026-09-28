@@ -531,7 +531,7 @@ def test_cohort_frame_rejects_identical_time_and_event_columns() -> None:
         )
 
 
-def test_cohort_frame_rejects_non_time_numeric_column_when_likely_time_exists() -> None:
+def test_cohort_frame_notes_non_time_numeric_column_when_likely_time_exists() -> None:
     df = pd.DataFrame(
         {
             "os_months": [12, 18, 24],
@@ -541,14 +541,20 @@ def test_cohort_frame_rejects_non_time_numeric_column_when_likely_time_exists() 
         }
     )
 
-    with pytest.raises(ValueError, match="does not look like a survival follow-up time column"):
-        _cohort_frame(
-            df,
-            time_column="SFTPC",
-            event_column="os_event",
-            event_positive_value=1,
-            extra_columns=["age"],
-        )
+    # An unrecognized time-column name is a caution carried with the results, not a hard error:
+    # standard endpoints are named in too many ways for a name check to refuse them.
+    frame = _cohort_frame(
+        df,
+        time_column="SFTPC",
+        event_column="os_event",
+        event_positive_value=1,
+        extra_columns=["age"],
+    )
+    assert "does not look like a survival follow-up time column" in frame.attrs["time_column_note"]
+    assert "os_months" in frame.attrs["time_column_note"]
+    km = compute_km_analysis(df, "SFTPC", "os_event")
+    assert any("SFTPC" in caution for caution in km["scientific_summary"]["cautions"])
+    assert km["scientific_summary"]["status"] != "robust"
 
 
 def test_ordered_level_strings_deduplicates_string_levels() -> None:
@@ -1686,10 +1692,12 @@ def test_cox_analysis_rejects_non_finite_model_fit(monkeypatch) -> None:
     import survival_toolkit.analysis as analysis
 
     df = make_example_dataset(seed=23, n_patients=40)
+    # Five events for four coefficients: fewer coefficients than events, so the design is not
+    # refused before fitting, but the events per parameter are still very low.
     frame = pd.DataFrame(
         {
             "os_months": [1, 2, 3, 4, 5, 6],
-            "os_event": [1, 1, 0, 0, 0, 0],
+            "os_event": [1, 1, 1, 1, 1, 0],
             "age": [50.0, 54.0, 58.0, 62.0, 66.0, 70.0],
             "pathologic_stage": pd.Categorical(
                 ["Stage I", "Stage I", "Stage II", "Stage II", "Stage III", "Stage III"],
@@ -1743,7 +1751,7 @@ def test_cox_analysis_rejects_non_finite_model_fit(monkeypatch) -> None:
         )
 
     message = str(exc_info.value)
-    assert "EPV=0.50" in message
+    assert "EPV=1.25" in message
     assert 'pathologic_stage="Stage I" (n=2)' in message
     assert 'histology="RareType" (n=1)' in message
 
@@ -2479,7 +2487,7 @@ def test_discover_feature_signature_limits_cox_estimation_to_ranked_candidates(m
     def _flat_survdiff(times, events, groups):
         return 1.0, 0.9
 
-    def _fake_cox(times, events, mask):
+    def _fake_cox(times, events, mask, alpha=0.05):
         calls["count"] += 1
         return {
             "Hazard ratio (signature+ vs -)": 1.2,
@@ -2518,7 +2526,7 @@ def test_discover_feature_signature_warns_when_cox_estimation_fails(monkeypatch)
     monkeypatch.setattr(
         analysis,
         "_signature_cox_metrics",
-        lambda times, events, mask: (_ for _ in ()).throw(ValueError("unstable fit")),
+        lambda times, events, mask, alpha=0.05: (_ for _ in ()).throw(ValueError("unstable fit")),
     )
 
     with pytest.warns(RuntimeWarning, match="Skipping Cox robustness metrics"):
@@ -2549,7 +2557,7 @@ def test_discover_feature_signature_reraises_memory_error_from_cox_metrics(monke
     monkeypatch.setattr(
         analysis,
         "_signature_cox_metrics",
-        lambda times, events, mask: (_ for _ in ()).throw(MemoryError("out of memory")),
+        lambda times, events, mask, alpha=0.05: (_ for _ in ()).throw(MemoryError("out of memory")),
     )
 
     with pytest.raises(MemoryError, match="out of memory"):
@@ -3078,3 +3086,17 @@ def test_standing_assumption_notes_do_not_lower_the_status() -> None:
         from survival_toolkit.analysis import _COX_STANDING_NOTES
 
         assert any(caution not in _COX_STANDING_NOTES for caution in summary["cautions"])
+        # The data-driven cautions come first, ahead of the notes every Cox fit carries.
+        assert summary["cautions"][0] not in _COX_STANDING_NOTES
+
+
+def test_data_driven_km_cautions_lead_the_standing_notes() -> None:
+    rng = np.random.default_rng(4)
+    # One group of 10 patients raises the data-driven "fewer than 15 patients" caution.
+    df = pd.DataFrame({"time": rng.exponential(10.0, 50), "event": rng.integers(0, 2, 50), "arm": ["a"] * 40 + ["b"] * 10})
+    df.loc[[0, 40], "event"] = 1
+    km = compute_km_analysis(df, "time", "event", group_column="arm")
+    cautions = km["scientific_summary"]["cautions"]
+    assert km["scientific_summary"]["status"] != "robust"
+    assert "non-informative" not in cautions[0]
+    assert "non-informative" in " ".join(cautions)

@@ -7,12 +7,17 @@ a reader should check a published marker claim:
    association (no covariates) and *added value* over the clinical baseline.
 2. Westfall–Young max-statistic permutation p-values over all markers (family-wise
    error) and permutation FDR q-values. The added-value null permutes the marker
-   residuals left after projecting on the clinical covariates (Freedman–Lane), so it
-   keeps each marker's relationship with the clinical covariates.
+   residuals left after projecting on the clinical covariates, so it keeps each
+   marker's relationship with the clinical covariates. Permuting the residualised
+   regressor of interest is the Smith scheme (Winkler et al. 2014, NeuroImage
+   92:381-397, Table 2), not Freedman–Lane, which permutes residuals of the outcome.
 3. The whole procedure rerun on subsamples: how often each marker is selected, its
    rank interval, and whether its direction holds.
 4. Tiers from pre-declared rules, and an optimism report for a signature built from
    the selected markers ("winner's curse" of picking the strongest marker).
+5. A screen for patients whose marker profiles are identical or near-identical
+   (``survival_toolkit.duplicates``): a patient in the data twice can sit on both sides
+   of a subsample split and flatter the internal estimates.
 
 Nothing here dichotomizes markers; every statistic uses the continuous values.
 """
@@ -21,7 +26,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, NamedTuple, Sequence
+import math
+from typing import Any, NamedTuple, NoReturn, Sequence
 
 import numpy as np
 import pandas as pd
@@ -33,8 +39,9 @@ from survival_toolkit.analysis import (
     _harrell_c_index_counts,
 )
 from survival_toolkit.concurrency import raise_if_cancelled
+from survival_toolkit.duplicates import possible_duplicates
 from survival_toolkit.encoding import fit_feature_encoder, transform_feature_encoder
-from survival_toolkit.errors import user_input_boundary
+from survival_toolkit.errors import _raised_by_survstudio, must_propagate, user_input_boundary
 from survival_toolkit.marker_screen import (
     TIES_METHODS,
     CoxScoreScreen,
@@ -52,6 +59,15 @@ from survival_toolkit.marker_screen import (
 LENSES = ("marginal", "added_value")
 TIER_ORDER = ("robust", "suggestive", "marginal only", "not supported")
 _PERMUTATION_BATCH = 16
+# Null schemes for the added-value lens: "smith" permutes each marker's residual after regression on the
+# clinical covariates; "raw" permutes the markers themselves. "freedman_lane", the earlier (wrong) name
+# of the first scheme, is still accepted.
+LENS2_NULLS = ("smith", "raw")
+_LENS2_NULL_ALIASES = {"freedman_lane": "smith"}
+# Linear predictors are clipped at this distance from the development mean before exponentiating.
+_LP_CLIP = 50.0
+# Above this share of external rows at a categorical level the locked model has not seen, validation stops.
+MAX_UNSEEN_LEVEL_SHARE = 0.5
 
 
 class MarkerSettings(NamedTuple):
@@ -77,7 +93,7 @@ class MarkerSettings(NamedTuple):
     nonlinear_frequency: float = 0.8
     max_signature_markers: int = 10
     shortlist_size: int = 50
-    lens2_null: str = "freedman_lane"
+    lens2_null: str = "smith"
     nonlinear_lens: str = "off"
     nonlinear_replicates: int = 30
     nonlinear_top_markers: int = 100
@@ -98,6 +114,8 @@ class MarkerCohort(NamedTuple):
     row_mask_hash: str
     dropped_markers: list[dict[str, Any]]
     clinical_encoder: dict[str, Any] | None
+    # Encoded clinical columns left out because a Cox model cannot estimate them (see prepare_marker_cohort).
+    dropped_clinical: tuple[dict[str, str], ...] = ()
 
 
 class LensStats(NamedTuple):
@@ -139,8 +157,9 @@ def _validated_settings(settings: MarkerSettings) -> MarkerSettings:
         raise ValueError("max_missing_fraction must be at least 0 and below 1.")
     if not 0.5 <= settings.max_mode_fraction <= 1.0:
         raise ValueError("max_mode_fraction must be between 0.5 and 1.")
-    if settings.lens2_null not in {"freedman_lane", "raw"}:
-        raise ValueError('lens2_null must be "freedman_lane" or "raw".')
+    settings = settings._replace(lens2_null=_LENS2_NULL_ALIASES.get(settings.lens2_null, settings.lens2_null))
+    if settings.lens2_null not in LENS2_NULLS:
+        raise ValueError('lens2_null must be "smith" or "raw".')
     if not all(0.0 <= value <= 1.0 for value in (settings.robust_frequency, settings.robust_direction, settings.nonlinear_frequency)):
         raise ValueError("robust_frequency, robust_direction and nonlinear_frequency must be between 0 and 1.")
     if settings.max_signature_markers < 1 or settings.shortlist_size < 0:
@@ -171,7 +190,10 @@ def prepare_marker_cohort(
     Cox workflow). A missing marker value never drops a row: markers with more missing
     values than ``max_missing_fraction`` are left out, and the rest are imputed inside
     each fit of the procedure. Markers with more than ``max_mode_fraction`` of their
-    observed values equal to one value are left out as near-constant.
+    values equal to one value, counting missing values at the median they are imputed
+    with, are left out as near-constant. Encoded clinical columns that a Cox model cannot
+    estimate (constant within every stratum, or a linear combination of the columns before
+    them) are left out and listed in ``dropped_clinical``.
     """
     markers = list(dict.fromkeys(str(column) for column in marker_columns))
     clinical = list(dict.fromkeys(str(column) for column in clinical_columns))
@@ -183,6 +205,16 @@ def prepare_marker_cohort(
     if overlap:
         raise ValueError(
             "Markers cannot also be the outcome, a clinical covariate or a stratum: " + ", ".join(overlap[:5]) + "."
+        )
+    outcome = {str(time_column), str(event_column)}
+    for names, role in ((clinical, "Clinical covariates"), (strata, "Strata")):
+        clash = [column for column in names if column in outcome]
+        if clash:
+            raise ValueError(f"{role} cannot also be the outcome: " + ", ".join(clash[:5]) + ".")
+    both = [column for column in clinical if column in set(strata)]
+    if both:
+        raise ValueError(
+            "A column cannot be both a clinical covariate and a stratum: " + ", ".join(both[:5]) + ". Use it as one or the other."
         )
     missing = [column for column in [*markers, *clinical, *strata] if column not in df.columns]
     if missing:
@@ -232,24 +264,45 @@ def prepare_marker_cohort(
         if missing_share[index] > max_missing_fraction:
             dropped.append({"marker": column, "reason": f"{missing_share[index]:.0%} missing"})
             continue
-        counts = np.unique(observed, return_counts=True)[1] if observed.size else np.zeros(0, dtype=int)
+        distinct, counts = np.unique(observed, return_counts=True) if observed.size else (np.zeros(0), np.zeros(0, dtype=int))
+        n_missing = values.shape[0] - observed.size
+        if n_missing and observed.size:
+            # Every fit fills missing values with the median, so they count at that value.
+            median = float(np.median(observed))
+            position = int(np.searchsorted(distinct, median))
+            if position < distinct.size and distinct[position] == median:
+                counts = counts.copy()
+                counts[position] += n_missing
+            else:
+                counts = np.append(counts, n_missing)
         if counts.size < 2:
             dropped.append({"marker": column, "reason": "constant"})
-        elif counts.max() > max_mode_fraction * observed.size:
-            dropped.append({"marker": column, "reason": f"near-constant ({counts.max() / observed.size:.0%} at one value)"})
+        elif counts.max() > max_mode_fraction * values.shape[0]:
+            dropped.append({"marker": column, "reason": f"near-constant ({counts.max() / values.shape[0]:.0%} at one value)"})
         else:
             kept.append(index)
     if not kept:
-        raise ValueError("No usable markers remain after removing constant, near-constant or mostly missing columns.")
+        reasons = "; ".join(f"{item['marker']} ({item['reason']})" for item in dropped[:5])
+        raise ValueError(
+            f"No usable markers remain: {reasons}{' ...' if len(dropped) > 5 else ''}. "
+            f"Markers may have at most {max_missing_fraction:.0%} missing values and need more than one common value."
+        )
 
     clinical_design = None
     clinical_names: list[str] = []
     encoder = None
+    dropped_clinical: list[dict[str, str]] = []
+    strata_codes = _build_cox_strata_payload(frame, strata)["codes"] if strata else None
     if clinical:
         encoder = fit_feature_encoder(frame, clinical, list(categorical_clinical))
         clinical_design = np.asarray(transform_feature_encoder(frame, encoder, output="numpy"), dtype=float)
         clinical_names = list(encoder["feature_names"])
-    strata_codes = _build_cox_strata_payload(frame, strata)["codes"] if strata else None
+        redundant = _redundant_clinical_columns(clinical_design, None if strata_codes is None else np.asarray(strata_codes))
+        if redundant:
+            dropped_clinical = [{"column": clinical_names[index], "reason": reason} for index, reason in redundant.items()]
+            keep = [index for index in range(len(clinical_names)) if index not in redundant]
+            clinical_design = clinical_design[:, keep]
+            clinical_names = [clinical_names[index] for index in keep]
     return MarkerCohort(
         time=frame[time_column].to_numpy(dtype=float),
         event=frame[event_column].to_numpy(dtype=int),
@@ -264,7 +317,44 @@ def prepare_marker_cohort(
         row_mask_hash=str(frame.attrs.get("row_mask_hash") or ""),
         dropped_markers=dropped,
         clinical_encoder=encoder,
+        dropped_clinical=tuple(dropped_clinical),
     )
+
+
+def _redundant_clinical_columns(design: np.ndarray, strata: np.ndarray | None) -> dict[int, str]:
+    """Encoded clinical columns a (stratified) Cox model cannot estimate, with the reason.
+
+    A column that is constant within every stratum is absorbed by the strata, and one that is a
+    linear combination of the columns before it (after removing stratum means) is aliased; either
+    makes the clinical model singular, so its fit would not converge.
+    """
+    if strata is None:
+        centred = design - design.mean(axis=0, keepdims=True)
+    else:
+        _, codes = np.unique(strata, return_inverse=True)
+        codes = codes.reshape(-1)
+        sums = np.zeros((int(codes.max()) + 1, design.shape[1]))
+        np.add.at(sums, codes, design)
+        centred = design - (sums / np.bincount(codes)[:, None])[codes]
+    redundant: dict[int, str] = {}
+    basis = np.zeros((design.shape[0], 0))
+    for index in range(design.shape[1]):
+        spread = float(np.linalg.norm(design[:, index] - design[:, index].mean()))
+        column = centred[:, index]
+        norm = float(np.linalg.norm(column))
+        if spread == 0.0:
+            redundant[index] = "constant"
+            continue
+        if norm <= 1e-9 * spread:
+            redundant[index] = "constant within every stratum"
+            continue
+        residual = column - basis @ (basis.T @ column)
+        remaining = float(np.linalg.norm(residual))
+        if remaining <= 1e-8 * norm:
+            redundant[index] = "a linear combination of other clinical columns"
+            continue
+        basis = np.column_stack([basis, residual / remaining])
+    return redundant
 
 
 def _impute(block: np.ndarray, medians: np.ndarray) -> np.ndarray:
@@ -359,8 +449,10 @@ def permutation_null(
     screens = _lens_screens(cohort, rows, settings.ties)
     sources: dict[str, np.ndarray] = {}
     accumulators: dict[str, tuple[MaxTAccumulator, PermutationFdrAccumulator]] = {}
+    lens2_null = _LENS2_NULL_ALIASES.get(settings.lens2_null, settings.lens2_null)
     for lens, (screen, design) in screens.items():
-        if lens == "added_value" and design is not None and settings.lens2_null == "freedman_lane":
+        if lens == "added_value" and design is not None and lens2_null == "smith":
+            # Smith scheme: permute each marker's residual after regression on the clinical covariates.
             sources[lens] = residualize(block, design, cohort.strata)
         else:
             sources[lens] = block
@@ -421,6 +513,8 @@ class _SignatureFit(NamedTuple):
     params: np.ndarray
     medians: np.ndarray
     design_columns: np.ndarray
+    # Clinical coefficients that run to infinity (a category without events); marker ones fail the fit.
+    runaway_clinical: tuple[int, ...] = ()
 
 
 def _signature_columns(fit: ProcedureFit, primary: str, limit: int) -> np.ndarray:
@@ -432,8 +526,20 @@ def _signature_columns(fit: ProcedureFit, primary: str, limit: int) -> np.ndarra
     return candidates[order][:limit]
 
 
-def _fit_signature(cohort: MarkerCohort, rows: np.ndarray, fit: ProcedureFit, primary: str, limit: int) -> _SignatureFit | None:
-    """Cox model of the clinical covariates plus the markers the procedure selected."""
+def _fit_signature(
+    cohort: MarkerCohort,
+    rows: np.ndarray,
+    fit: ProcedureFit,
+    primary: str,
+    limit: int,
+    ties: str = "efron",
+) -> _SignatureFit | None:
+    """Cox model of the clinical covariates plus the markers the procedure selected.
+
+    None when the fit does not converge or a marker's coefficient runs to infinity (monotone
+    likelihood). A clinical coefficient that runs to infinity (a category without events) is
+    kept, as the clinical-only null model keeps it, and listed in ``runaway_clinical``.
+    """
     columns = _signature_columns(fit, primary, limit)
     parts = []
     design_columns = np.zeros(0, dtype=np.int64)
@@ -447,11 +553,20 @@ def _fit_signature(cohort: MarkerCohort, rows: np.ndarray, fit: ProcedureFit, pr
         return None
     exog = np.column_stack(parts)
     strata = None if cohort.strata is None else cohort.strata[rows]
-    cox = fit_cox(cohort.time[rows], cohort.event[rows], exog, strata, "efron")
+    cox = fit_cox(cohort.time[rows], cohort.event[rows], exog, strata, ties)
     params = cox.beta
     if not cox.converged or not np.isfinite(params).all():
         return None
-    return _SignatureFit(columns=columns, params=params, medians=fit.medians, design_columns=design_columns)
+    runaway = np.zeros(params.shape[0], dtype=bool) if cox.separated is None else np.asarray(cox.separated, dtype=bool)
+    if runaway[design_columns.size :].any():
+        return None
+    return _SignatureFit(
+        columns=columns,
+        params=params,
+        medians=fit.medians,
+        design_columns=design_columns,
+        runaway_clinical=tuple(int(design_columns[index]) for index in np.flatnonzero(runaway[: design_columns.size])),
+    )
 
 
 def _signature_risk(cohort: MarkerCohort, rows: np.ndarray, signature: _SignatureFit) -> np.ndarray:
@@ -463,15 +578,28 @@ def _signature_risk(cohort: MarkerCohort, rows: np.ndarray, signature: _Signatur
     return np.column_stack(parts) @ signature.params
 
 
-def _single_marker_beta(cohort: MarkerCohort, rows: np.ndarray, column: int, medians: np.ndarray, adjusted: bool) -> float:
+def _marker_fit_usable(fit: Any) -> bool:
+    """A converged fit whose last coefficient (the marker's) is finite and does not run to infinity."""
+    runaway = fit.separated is not None and bool(np.asarray(fit.separated)[-1])
+    return bool(fit.converged) and bool(np.isfinite(fit.beta[-1])) and not runaway
+
+
+def _single_marker_beta(
+    cohort: MarkerCohort,
+    rows: np.ndarray,
+    column: int,
+    medians: np.ndarray,
+    adjusted: bool,
+    ties: str = "efron",
+) -> float:
     marker = _impute(cohort.markers[rows][:, [column]], medians[[column]])
     exog = marker
     if adjusted and cohort.clinical is not None:
         exog = np.column_stack([_varying_columns(cohort.clinical[rows]), marker])
     strata = None if cohort.strata is None else cohort.strata[rows]
-    fit = fit_cox(cohort.time[rows], cohort.event[rows], exog, strata, "efron")
-    beta = float(fit.beta[-1])
-    return beta if fit.converged and np.isfinite(beta) else float("nan")
+    fit = fit_cox(cohort.time[rows], cohort.event[rows], exog, strata, ties)
+    # A coefficient that runs to infinity (for example on the few events of a left-out set) is no estimate.
+    return float(fit.beta[-1]) if _marker_fit_usable(fit) else float("nan")
 
 
 def resample_procedure(
@@ -484,8 +612,10 @@ def resample_procedure(
     """Rerun the whole procedure on event-stratified subsamples of the cohort.
 
     Each replicate also fits the selected-marker signature on its subsample and scores
-    it on the rows left out, and records the strongest marker's log hazard ratio in and
-    out of the subsample (the winner's curse of picking the strongest marker).
+    it on the rows left out, next to the clinical-only model on the same rows (the
+    signature itself when no marker was selected), and records the strongest marker's
+    log hazard ratio in and out of the subsample (the winner's curse of picking the
+    strongest marker).
     """
     n = cohort.time.shape[0]
     n_markers = len(cohort.marker_names)
@@ -507,7 +637,12 @@ def resample_procedure(
         left_out = np.setdiff1d(np.arange(n), rows)
         try:
             fit = run_procedure(cohort, rows, settings)
-        except (ValueError, np.linalg.LinAlgError):
+        except (ValueError, np.linalg.LinAlgError) as exc:
+            # A subsample the procedure cannot fit (a clinical model that does not converge) is counted
+            # as failed. Programming errors, and ValueErrors raised inside libraries (shape mismatches),
+            # stop the analysis instead of being counted.
+            if must_propagate(exc) or not (isinstance(exc, np.linalg.LinAlgError) or _raised_by_survstudio(exc)):
+                raise
             n_failed += 1
             continue
         for lens in lenses:
@@ -517,27 +652,31 @@ def resample_procedure(
             finite[lens] += valid
             agree[lens] += valid & (np.sign(values.z) == full_sign[lens])
             rank_rows[lens].append(fit.ranks[lens])
-        signature = _fit_signature(cohort, rows, fit, primary, settings.max_signature_markers)
+        signature = _fit_signature(cohort, rows, fit, primary, settings.max_signature_markers, settings.ties)
         if signature is not None and left_out.size and cohort.event[left_out].any():
             strata_in = None if cohort.strata is None else cohort.strata[rows]
             strata_out = None if cohort.strata is None else cohort.strata[left_out]
             c_in.append(_pooled_c_index(cohort.time[rows], cohort.event[rows], _signature_risk(cohort, rows, signature), strata_in))
             c_out.append(_pooled_c_index(cohort.time[left_out], cohort.event[left_out], _signature_risk(cohort, left_out, signature), strata_out))
-            if cohort.clinical is not None and signature.columns.size:
-                clinical_only = _SignatureFit(
-                    columns=np.zeros(0, dtype=np.int64),
-                    params=_clinical_params(cohort, rows, signature.design_columns),
-                    medians=signature.medians,
-                    design_columns=signature.design_columns,
-                )
-                clinical_c_out.append(
-                    _pooled_c_index(cohort.time[left_out], cohort.event[left_out], _signature_risk(cohort, left_out, clinical_only), strata_out)
-                )
+            if cohort.clinical is not None:
+                # Paired with every signature C: without a selected marker the signature is the clinical-only model.
+                if signature.columns.size:
+                    clinical_only = _SignatureFit(
+                        columns=np.zeros(0, dtype=np.int64),
+                        params=_clinical_params(cohort, rows, signature.design_columns, settings.ties),
+                        medians=signature.medians,
+                        design_columns=signature.design_columns,
+                    )
+                    clinical_c_out.append(
+                        _pooled_c_index(cohort.time[left_out], cohort.event[left_out], _signature_risk(cohort, left_out, clinical_only), strata_out)
+                    )
+                else:
+                    clinical_c_out.append(c_out[-1])
         top = _top_marker(fit, primary)
         if top is not None and left_out.size and cohort.event[left_out].sum() >= 2:
             adjusted = primary == "added_value"
-            inside = _single_marker_beta(cohort, rows, top, fit.medians, adjusted)
-            outside = _single_marker_beta(cohort, left_out, top, fit.medians, adjusted)
+            inside = _single_marker_beta(cohort, rows, top, fit.medians, adjusted, settings.ties)
+            outside = _single_marker_beta(cohort, left_out, top, fit.medians, adjusted, settings.ties)
             if np.isfinite(inside) and np.isfinite(outside):
                 beta_in.append(inside)
                 beta_out.append(outside)
@@ -572,10 +711,10 @@ def resample_procedure(
     )
 
 
-def _clinical_params(cohort: MarkerCohort, rows: np.ndarray, design_columns: np.ndarray) -> np.ndarray:
+def _clinical_params(cohort: MarkerCohort, rows: np.ndarray, design_columns: np.ndarray, ties: str = "efron") -> np.ndarray:
     design = cohort.clinical[rows][:, design_columns]
     strata = None if cohort.strata is None else cohort.strata[rows]
-    return fit_cox(cohort.time[rows], cohort.event[rows], design, strata, "efron").beta
+    return fit_cox(cohort.time[rows], cohort.event[rows], design, strata, ties).beta
 
 
 def _top_marker(fit: ProcedureFit, primary: str) -> int | None:
@@ -596,7 +735,14 @@ def _optimism_summary(
     beta_in: Sequence[float],
     beta_out: Sequence[float],
 ) -> dict[str, Any]:
+    """Means over the replicates; ``clinical_c_out`` is empty or holds one value per ``c_out`` (paired)."""
     pairs = [(inside, outside) for inside, outside in zip(c_in, c_out) if np.isfinite(inside) and np.isfinite(outside)]
+    # The clinical-only C over the same replicates as the signature's left-out C.
+    paired = [
+        (outside, clinical)
+        for inside, outside, clinical in zip(c_in, c_out, clinical_c_out)
+        if np.isfinite(inside) and np.isfinite(outside) and np.isfinite(clinical)
+    ]
     shrinkage = None
     if beta_in:
         magnitude = float(np.mean(np.abs(beta_in)))
@@ -606,8 +752,10 @@ def _optimism_summary(
         "signature_c_in_subsample": _mean_or_none([inside for inside, _ in pairs]),
         "signature_c_left_out": _mean_or_none([outside for _, outside in pairs]),
         "signature_optimism": _mean_or_none([inside - outside for inside, outside in pairs]),
-        "clinical_c_left_out": _mean_or_none([value for value in clinical_c_out if np.isfinite(value)]),
+        "clinical_c_left_out": _mean_or_none([clinical for _, clinical in paired]),
+        "signature_gain_left_out": _mean_or_none([outside - clinical for outside, clinical in paired]),
         "n_signature_replicates": len(pairs),
+        "n_clinical_replicates": len(paired),
         "top_marker_log_hr_in_subsample": _mean_or_none([abs(value) for value in beta_in]),
         "top_marker_log_hr_left_out": _mean_or_none(
             [float(np.sign(inside) * outside) for inside, outside in zip(beta_in, beta_out)]
@@ -715,8 +863,11 @@ def nonlinear_lens(cohort: MarkerCohort, settings: MarkerSettings, rng: np.rando
     }
 
 
-def _exact_fits(cohort: MarkerCohort, full: ProcedureFit, columns: np.ndarray) -> dict[int, dict[str, Any]]:
-    """Efron Cox fits for shortlisted markers: HRs with Wald CIs, nested LR test, delta C."""
+def _exact_fits(cohort: MarkerCohort, full: ProcedureFit, columns: np.ndarray, ties: str = "efron") -> dict[int, dict[str, Any]]:
+    """Cox fits for shortlisted markers: HRs with Wald CIs, nested LR test, delta C.
+
+    A marker whose coefficient runs to infinity (monotone likelihood) gets no estimate.
+    """
     strata = cohort.strata
     fits: dict[int, dict[str, Any]] = {}
     clinical_llf = None
@@ -724,7 +875,7 @@ def _exact_fits(cohort: MarkerCohort, full: ProcedureFit, columns: np.ndarray) -
     clinical_design = None
     if cohort.clinical is not None and _varying_columns(cohort.clinical).shape[1]:
         clinical_design = _varying_columns(cohort.clinical)
-        clinical_fit = fit_cox(cohort.time, cohort.event, clinical_design, strata, "efron")
+        clinical_fit = fit_cox(cohort.time, cohort.event, clinical_design, strata, ties)
         if clinical_fit.converged:
             clinical_llf = clinical_fit.loglik
             clinical_c = _pooled_c_index(cohort.time, cohort.event, clinical_design @ clinical_fit.beta, strata)
@@ -736,18 +887,19 @@ def _exact_fits(cohort: MarkerCohort, full: ProcedureFit, columns: np.ndarray) -
         for label, exog in (("marginal", marker), ("adjusted", None if clinical_design is None else np.column_stack([clinical_design, marker]))):
             if exog is None:
                 continue
-            fit = fit_cox(cohort.time, cohort.event, exog, strata, "efron")
+            fit = fit_cox(cohort.time, cohort.event, exog, strata, ties)
             beta = float(fit.beta[-1])
             se = float(np.sqrt(fit.covariance[-1, -1])) if fit.covariance[-1, -1] > 0 else float("nan")
-            if not fit.converged or not np.isfinite(beta) or not np.isfinite(se):
+            if not _marker_fit_usable(fit) or not np.isfinite(se):
                 entry[label] = None
                 continue
-            entry[label] = {
-                "hazard_ratio": float(np.exp(beta)),
-                "ci_lower": float(np.exp(beta - z_value * se)),
-                "ci_upper": float(np.exp(beta + z_value * se)),
-                "wald_p": float(2.0 * stats.norm.sf(abs(beta / se))),
-            }
+            with np.errstate(over="ignore"):
+                entry[label] = {
+                    "hazard_ratio": _finite_or_none(np.exp(beta)),
+                    "ci_lower": _finite_or_none(np.exp(beta - z_value * se)),
+                    "ci_upper": _finite_or_none(np.exp(beta + z_value * se)),
+                    "wald_p": float(2.0 * stats.norm.sf(abs(beta / se))),
+                }
             if label == "adjusted" and clinical_llf is not None:
                 statistic = max(2.0 * (fit.loglik - clinical_llf), 0.0)
                 entry[label]["lr_statistic"] = statistic
@@ -778,17 +930,20 @@ def assign_tiers(
     * marginal only: with clinical covariates, no added-value evidence but a marginal
       Westfall–Young p <= alpha (for example a marker that tracks a prognostic
       clinical covariate).
+
+    Without any evaluated subsample (``n_resamples`` = 0, or every subsample failed) stability
+    is not assessed, so no marker can be robust; the strongest tier is then suggestive.
     """
     n_markers = lenses[primary].chi2.shape[0]
     p_fwer = np.nan_to_num(np.asarray(adjusted[primary]["p_fwer"], dtype=float), nan=1.0)
     q_perm = np.nan_to_num(np.asarray(adjusted[primary]["q_perm"], dtype=float), nan=1.0)
     frequency = np.nan_to_num(resampling.selection_frequency[primary], nan=0.0)
     direction = np.nan_to_num(resampling.direction_consistency[primary], nan=0.0)
-    no_resampling = resampling.n_valid == 0
+    stability_assessed = resampling.n_valid > 0
     tiers: list[str] = []
     patterns: list[str] = []
     for index in range(n_markers):
-        stable = no_resampling or (frequency[index] >= settings.robust_frequency and direction[index] >= settings.robust_direction)
+        stable = stability_assessed and frequency[index] >= settings.robust_frequency and direction[index] >= settings.robust_direction
         evidence = p_fwer[index] <= settings.alpha or q_perm[index] <= settings.fdr_level
         if p_fwer[index] <= settings.alpha and stable:
             tier = "robust"
@@ -815,7 +970,10 @@ def _finite_or_none(value: Any) -> float | None:
     return number if np.isfinite(number) else None
 
 
-RECIPE_VERSION = 1
+# Version 2 hashes a canonical form (every number as a float) and stores the baseline hazard centred on
+# the development mean linear predictor; version-1 recipes are still validated.
+RECIPE_VERSION = 2
+RECIPE_VERSIONS = (1, 2)
 MARKER_SCALINGS = ("as_measured", "within_cohort")
 # Below this share of the locked model's marker weight in an external dataset, validation stops.
 MIN_MARKER_WEIGHT_AVAILABLE = 0.5
@@ -838,11 +996,80 @@ def _json_ready(value: Any) -> Any:
     return value
 
 
+def _canonical_numbers(value: Any) -> Any:
+    """The recipe with every number (not booleans) as a float, so 18 and 18.0 hash alike.
+
+    A browser writes whole numbers without a decimal point, so a recipe sent back from the web page
+    holds 18 where Python wrote 18.0; -0.0 becomes 0.0 as well. Non-finite numbers are refused.
+    """
+    if isinstance(value, dict):
+        return {str(key): _canonical_numbers(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_numbers(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_canonical_numbers(item) for item in value.tolist()]
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("The recipe holds a number that is not finite, so it cannot be locked or checked.")
+        return number + 0.0
+    return value
+
+
 def recipe_hash(recipe: dict[str, Any]) -> str:
-    """SHA-256 of the recipe's canonical JSON, excluding the stored hash itself."""
+    """SHA-256 of the recipe's canonical JSON (every number as a float), excluding the stored hash itself."""
+    payload = {key: value for key, value in recipe.items() if key != "recipe_hash"}
+    text = json.dumps(_canonical_numbers(payload), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _legacy_recipe_hash(recipe: dict[str, Any]) -> str:
+    """The version-1 hash: Python's JSON text of the recipe as written, so 18.0 and 18 differ."""
     payload = {key: value for key, value in recipe.items() if key != "recipe_hash"}
     text = json.dumps(_json_ready(payload), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _centred_baseline(time: np.ndarray, event: np.ndarray, linear_predictor: np.ndarray) -> dict[str, Any] | None:
+    """Breslow cumulative baseline hazard at the development mean linear predictor, stored on the log scale.
+
+    Stored at a linear predictor of 0 instead, the baseline underflows (or rounds to 1) whenever the
+    markers sit far from 0, as log2 expression values do: a mean linear predictor of -9 multiplies the
+    cumulative hazard by e^9. Centred, it stays near the cohort's own cumulative hazard.
+    """
+    centre = float(np.mean(linear_predictor))
+    risk = np.exp(np.clip(linear_predictor - centre, -_LP_CLIP, _LP_CLIP))
+    died = np.asarray(event) == 1
+    event_times = np.unique(time[died])
+    if event_times.size == 0:
+        return None
+    order = np.argsort(time, kind="mergesort")
+    at_risk = np.cumsum(risk[order][::-1])[::-1][np.searchsorted(time[order], event_times, side="left")]
+    deaths = np.bincount(np.searchsorted(event_times, time[died]), minlength=event_times.size).astype(float)
+    return {
+        "times": event_times,
+        "log_cumulative_hazard": np.log(np.cumsum(deaths / at_risk)),
+        "lp_center": centre,
+    }
+
+
+def _baseline_survival_at(baseline: dict[str, Any], linear_predictor: np.ndarray, horizon: float) -> np.ndarray | None:
+    """Each patient's predicted survival at ``horizon``; None when a version-1 baseline lost its precision there."""
+    times = np.asarray(baseline["times"], dtype=float)
+    position = int(np.searchsorted(times, horizon, side="right")) - 1
+    if "log_cumulative_hazard" in baseline:
+        if position < 0:
+            return np.ones(linear_predictor.shape[0])
+        centred = np.clip(linear_predictor - float(baseline["lp_center"]), -_LP_CLIP, _LP_CLIP)
+        return np.exp(-np.exp(float(baseline["log_cumulative_hazard"][position]) + centred))
+    # Version 1 stored S0 at a linear predictor of 0: exactly 0 (underflow) or 1 (rounding) past the first
+    # event time means the cumulative hazard is lost.
+    survival = 1.0 if position < 0 else float(np.asarray(baseline["survival"], dtype=float)[position])
+    if position >= 0 and not 0.0 < survival < 1.0 - 1e-12:
+        return None
+    return np.power(survival, np.exp(np.clip(linear_predictor, -_LP_CLIP, _LP_CLIP)))
 
 
 def _marker_scale(values: np.ndarray) -> dict[str, float]:
@@ -863,10 +1090,10 @@ def freeze_recipe(
     event_column: str,
     event_positive_value: Any,
     categorical_clinical: Sequence[str],
+    ties: str = "efron",
 ) -> dict[str, Any]:
     """Everything needed to apply the selected signature, unchanged, to another cohort."""
     from survival_toolkit import __version__
-    from survival_toolkit.ml_models import _breslow_baseline_survival
 
     all_rows = np.arange(cohort.time.shape[0])
     clinical_terms = [cohort.clinical_names[int(index)] for index in signature.design_columns] if cohort.clinical is not None else []
@@ -874,13 +1101,14 @@ def freeze_recipe(
     linear_predictor = _signature_risk(cohort, all_rows, signature)
     baseline = None
     if cohort.strata is None:
-        event_times, baseline_survival = _breslow_baseline_survival(cohort.time, cohort.event, linear_predictor)
-        baseline = {"times": event_times, "survival": baseline_survival}
+        baseline = _centred_baseline(cohort.time, cohort.event, linear_predictor)
     clinical_only = None
-    if clinical_terms and marker_terms:
+    # Also locked when no marker was selected: the model is then the clinical model itself, and validation
+    # reports its gain over the clinical covariates as exactly zero instead of leaving it out.
+    if clinical_terms:
         clinical_only = {
             "terms": clinical_terms,
-            "coefficients": _clinical_params(cohort, all_rows, signature.design_columns),
+            "coefficients": _clinical_params(cohort, all_rows, signature.design_columns, ties),
         }
     primary_beta = full.lenses[primary].beta_one_step
     recipe: dict[str, Any] = {
@@ -909,7 +1137,7 @@ def freeze_recipe(
         "model": {
             "terms": [*clinical_terms, *marker_terms],
             "coefficients": signature.params,
-            "ties": "efron",
+            "ties": ties,
             "baseline": baseline,
             "default_horizon": float(np.median(cohort.time[cohort.event == 1])),
         },
@@ -925,6 +1153,14 @@ def freeze_recipe(
     return recipe
 
 
+def _patient_labels(df: pd.DataFrame, source_rows: Sequence[Any], id_column: str | None) -> list[str]:
+    """How the duplicate screen names patients: by ``id_column`` when given, else by dataset row number."""
+    if id_column and id_column in df.columns and df.index.is_unique:
+        return [str(value) for value in df.loc[list(source_rows), id_column]]
+    positions = pd.Index(df.index).get_indexer(list(source_rows)) if df.index.is_unique else np.full(len(source_rows), -1)
+    return [f"row {position + 1}" if position >= 0 else str(label) for position, label in zip(positions, source_rows)]
+
+
 @user_input_boundary
 def evaluate_markers(
     df: pd.DataFrame,
@@ -937,8 +1173,12 @@ def evaluate_markers(
     strata_columns: Sequence[str] = (),
     event_positive_value: Any = None,
     settings: MarkerSettings | None = None,
+    id_column: str | None = None,
 ) -> dict[str, Any]:
-    """Screen candidate markers and check the whole screening procedure (see module docstring)."""
+    """Screen candidate markers and check the whole screening procedure (see module docstring).
+
+    ``id_column`` only names patients in the duplicate screen; without it they are named by row number.
+    """
     settings = _validated_settings(settings or MarkerSettings())
     cohort = prepare_marker_cohort(
         df,
@@ -952,6 +1192,7 @@ def evaluate_markers(
         max_missing_fraction=settings.max_missing_fraction,
         max_mode_fraction=settings.max_mode_fraction,
     )
+    duplicates = possible_duplicates(cohort.markers, _patient_labels(df, cohort.source_rows, id_column))
     rng = np.random.default_rng(int(settings.random_seed))
     all_rows = np.arange(cohort.time.shape[0])
     full = run_procedure(cohort, all_rows, settings)
@@ -974,10 +1215,11 @@ def evaluate_markers(
     by_strength = np.argsort(-primary_chi2, kind="mergesort")
     shortlist = [int(index) for index in by_strength[: settings.shortlist_size]]
     shortlist += [index for index, tier in enumerate(tiers) if tier != "not supported" and index not in shortlist]
-    exact = _exact_fits(cohort, full, np.asarray(shortlist, dtype=np.int64))
-    signature = _fit_signature(cohort, all_rows, full, primary, settings.max_signature_markers)
+    exact = _exact_fits(cohort, full, np.asarray(shortlist, dtype=np.int64), settings.ties)
+    signature = _fit_signature(cohort, all_rows, full, primary, settings.max_signature_markers, settings.ties)
     apparent_c = None
     recipe = None
+    signature_notes: list[str] = []
     if signature is not None:
         apparent_c = _pooled_c_index(cohort.time, cohort.event, _signature_risk(cohort, all_rows, signature), cohort.strata)
         recipe = freeze_recipe(
@@ -989,7 +1231,23 @@ def evaluate_markers(
             event_column=event_column,
             event_positive_value=event_positive_value,
             categorical_clinical=categorical_clinical,
+            ties=settings.ties,
         )
+        if signature.columns.size == 0:
+            signature_notes.append("No marker was selected, so the model holds the clinical covariates alone.")
+        if signature.runaway_clinical:
+            names = ", ".join(cohort.clinical_names[index] for index in signature.runaway_clinical)
+            signature_notes.append(
+                f"The coefficient of {names} runs to infinity (a group without events, for example), so the model "
+                "treats that group as having no risk."
+            )
+    elif _signature_columns(full, primary, settings.max_signature_markers).size or cohort.clinical is not None:
+        signature_notes.append(
+            "The selected-marker model could not be fitted: it did not converge, or a marker's coefficient runs to "
+            "infinity (for example a mutation whose carriers never had the event). No model was locked."
+        )
+    cohort_notes = [f"{item['column']} was left out of the clinical model: {item['reason']}." for item in cohort.dropped_clinical]
+    stability_assessed = resampling.n_valid > 0
 
     rows: list[dict[str, Any]] = []
     for index, name in enumerate(cohort.marker_names):
@@ -1036,7 +1294,7 @@ def evaluate_markers(
         )
     )
 
-    return {
+    result = {
         "primary_lens": primary,
         "marker_table": rows,
         "tier_counts": {tier: sum(1 for item in rows if item["tier"] == tier) for tier in TIER_ORDER},
@@ -1047,9 +1305,12 @@ def evaluate_markers(
             "dropped_markers": cohort.dropped_markers,
             "clinical_columns": cohort.clinical_columns,
             "clinical_design_columns": cohort.clinical_names,
+            "dropped_clinical_columns": list(cohort.dropped_clinical),
             "strata_columns": cohort.strata_columns,
             "row_mask_hash": cohort.row_mask_hash,
+            "notes": cohort_notes,
         },
+        "duplicates": duplicates,
         "null": {
             "n_permutations": int(adjusted[primary]["n_permutations"]),
             "lens2_null": settings.lens2_null if primary == "added_value" else None,
@@ -1059,9 +1320,15 @@ def evaluate_markers(
             "fraction": float(settings.resample_fraction),
             "n_valid": resampling.n_valid,
             "n_failed": resampling.n_failed,
+            "stability_assessed": stability_assessed,
+            "note": None
+            if stability_assessed
+            else "No subsample was evaluated, so the stability of the selection was not assessed and no marker can be robust.",
         },
         "signature": {
             "markers": [] if signature is None else [cohort.marker_names[int(column)] for column in signature.columns],
+            # A model of the clinical covariates alone, because the procedure selected no marker.
+            "clinical_only": signature is not None and signature.columns.size == 0,
             "apparent_c": apparent_c,
             # Harrell-style correction: the full-cohort signature's apparent C minus the
             # mean in-subsample vs left-out gap of the whole selection procedure.
@@ -1069,6 +1336,7 @@ def evaluate_markers(
             if apparent_c is None or resampling.optimism["signature_optimism"] is None
             else float(apparent_c - resampling.optimism["signature_optimism"]),
             **resampling.optimism,
+            "notes": signature_notes,
         },
         "nonlinear_lens": None
         if nonlinear is None
@@ -1076,6 +1344,8 @@ def evaluate_markers(
         "locked_recipe": recipe,
         "settings": settings._asdict(),
     }
+    # JSON has no infinity or NaN (Starlette refuses them): every non-finite number is reported as None.
+    return _json_ready(result)
 
 
 def _km_survival_at(time: np.ndarray, event: np.ndarray, horizon: float) -> float:
@@ -1087,20 +1357,176 @@ def _km_survival_at(time: np.ndarray, event: np.ndarray, horizon: float) -> floa
     return survival
 
 
-def _external_cox(time: np.ndarray, event: np.ndarray, exog: np.ndarray, strata: np.ndarray | None) -> dict[str, float] | None:
-    fit = fit_cox(time, event, exog, strata, "efron")
+def _external_cox(
+    time: np.ndarray,
+    event: np.ndarray,
+    exog: np.ndarray,
+    strata: np.ndarray | None,
+    ties: str = "efron",
+) -> dict[str, float | None] | None:
+    fit = fit_cox(time, event, exog, strata, ties)
     beta = float(fit.beta[-1])
     se = float(np.sqrt(fit.covariance[-1, -1])) if fit.covariance[-1, -1] > 0 else float("nan")
-    if not fit.converged or not np.isfinite(beta) or not np.isfinite(se) or se <= 0:
+    if not _marker_fit_usable(fit) or not np.isfinite(se) or se <= 0:
         return None
     z_value = float(stats.norm.ppf(0.975))
-    return {
-        "log_hr": beta,
-        "hazard_ratio": float(np.exp(beta)),
-        "ci_lower": float(np.exp(beta - z_value * se)),
-        "ci_upper": float(np.exp(beta + z_value * se)),
-        "wald_p": float(2.0 * stats.norm.sf(abs(beta / se))),
+    with np.errstate(over="ignore"):
+        return {
+            "log_hr": beta,
+            "hazard_ratio": _finite_or_none(np.exp(beta)),
+            "ci_lower": _finite_or_none(np.exp(beta - z_value * se)),
+            "ci_upper": _finite_or_none(np.exp(beta + z_value * se)),
+            "wald_p": float(2.0 * stats.norm.sf(abs(beta / se))),
+        }
+
+
+def _check_recipe(recipe: Any) -> int:
+    """The recipe's version, after checking its structure and types; a malformed recipe fails with a clear message.
+
+    Recipes come back from the browser or from files, so nothing in them is trusted: every name must
+    be text, every number finite, the coefficients one per term, and the markers model terms.
+    """
+
+    def fail(message: str) -> NoReturn:
+        raise ValueError(f"The locked model is malformed: {message} Export it again from a marker evaluation.")
+
+    def is_number(value: Any) -> bool:
+        return (
+            isinstance(value, (int, float, np.integer, np.floating))
+            and not isinstance(value, (bool, np.bool_))
+            and math.isfinite(float(value))
+        )
+
+    def names(value: Any, what: str) -> list[str]:
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            fail(f"{what} must be a list of names.")
+        if len(set(value)) != len(value):
+            fail(f"{what} repeats a name.")
+        return value
+
+    def numbers(value: Any, what: str, length: int) -> None:
+        if not isinstance(value, list) or len(value) != length or not all(is_number(item) for item in value):
+            fail(f"{what} must hold {length} finite number(s).")
+
+    if not isinstance(recipe, dict):
+        fail("it must be a JSON object.")
+    version = recipe.get("recipe_version")
+    if not is_number(version) or float(version) not in RECIPE_VERSIONS:
+        raise ValueError("This recipe was written by an incompatible SurvStudio version.")
+    version = int(version)
+    if not isinstance(recipe.get("recipe_hash"), str):
+        fail("recipe_hash is missing.")
+    outcome = recipe.get("outcome")
+    if not isinstance(outcome, dict) or not all(isinstance(outcome.get(key), str) and outcome.get(key) for key in ("time_column", "event_column")):
+        fail("outcome must name the time and event columns.")
+    clinical = recipe.get("clinical")
+    if not isinstance(clinical, dict):
+        fail("clinical must be an object.")
+    columns = names(clinical.get("columns"), "clinical.columns")
+    names(clinical.get("categorical") or [], "clinical.categorical")
+    feature_names: list[str] = []
+    if columns:
+        encoder = clinical.get("encoder")
+        if not isinstance(encoder, dict):
+            fail("clinical.encoder is missing.")
+        if list(encoder.get("features") or []) != columns:
+            fail("clinical.encoder must encode the clinical columns.")
+        feature_names = names(encoder.get("feature_names"), "clinical.encoder.feature_names")
+        mappings = encoder.get("categorical_mappings")
+        categorical = encoder.get("categorical_features") or []
+        if not isinstance(categorical, list) or (categorical and not isinstance(mappings, dict)):
+            fail("clinical.encoder lacks its categorical levels.")
+        for column in categorical:
+            mapping = mappings.get(column)
+            if not isinstance(mapping, dict) or not isinstance(mapping.get("all_levels"), list) or not isinstance(mapping.get("retained_levels"), list):
+                fail(f"clinical.encoder lacks the levels of {column}.")
+        impute = encoder.get("numeric_impute_values") or {}
+        if not isinstance(impute, dict) or not all(is_number(value) for value in impute.values()):
+            fail("clinical.encoder.numeric_impute_values must be finite numbers.")
+    names(recipe.get("strata_columns") or [], "strata_columns")
+    markers = names(recipe.get("markers"), "markers")
+    for field in ("marker_medians", "marker_development_log_hr"):
+        values = recipe.get(field)
+        if not isinstance(values, dict) or not all(is_number(values.get(name)) for name in markers):
+            fail(f"{field} needs a finite number for every marker.")
+    scale = recipe.get("marker_scale")
+    if scale is not None:
+        if not isinstance(scale, dict):
+            fail("marker_scale must be an object.")
+        for name in markers:
+            entry = scale.get(name)
+            if entry is not None and (
+                not isinstance(entry, dict) or not is_number(entry.get("mean")) or not is_number(entry.get("sd")) or float(entry["sd"]) < 0
+            ):
+                fail(f"marker_scale of {name} needs a finite mean and SD.")
+    if recipe.get("primary_lens", "marginal") not in LENSES:
+        fail("primary_lens must be marginal or added_value.")
+    model = recipe.get("model")
+    if not isinstance(model, dict):
+        fail("model is missing.")
+    terms = names(model.get("terms"), "model.terms")
+    numbers(model.get("coefficients"), "model.coefficients (one per term)", len(terms))
+    missing = [name for name in markers if name not in terms]
+    if missing:
+        fail("the markers " + ", ".join(missing[:5]) + " are not model terms.")
+    unknown = [term for term in terms if term not in markers and term not in feature_names]
+    if unknown:
+        fail("the model terms " + ", ".join(unknown[:5]) + " are neither markers nor encoded clinical covariates.")
+    if model.get("ties", "efron") not in TIES_METHODS:
+        fail(f"model.ties must be one of {', '.join(TIES_METHODS)}.")
+    if not is_number(model.get("default_horizon")):
+        fail("model.default_horizon must be a finite number.")
+    baseline = model.get("baseline")
+    if baseline is not None:
+        if not isinstance(baseline, dict):
+            fail("model.baseline must be an object.")
+        times = baseline.get("times")
+        if not isinstance(times, list) or not all(is_number(value) for value in times) or any(b < a for a, b in zip(times, times[1:])):
+            fail("model.baseline.times must be increasing finite numbers.")
+        if version >= 2:
+            numbers(baseline.get("log_cumulative_hazard"), "model.baseline.log_cumulative_hazard", len(times))
+            if not is_number(baseline.get("lp_center")):
+                fail("model.baseline.lp_center must be a finite number.")
+        else:
+            survival = baseline.get("survival")
+            if not isinstance(survival, list) or len(survival) != len(times) or not all(is_number(value) and 0.0 <= float(value) <= 1.0 for value in survival):
+                fail("model.baseline.survival must hold one probability per time.")
+    clinical_only = recipe.get("clinical_only_model")
+    if clinical_only is not None:
+        if not isinstance(clinical_only, dict):
+            fail("clinical_only_model must be an object.")
+        only_terms = names(clinical_only.get("terms"), "clinical_only_model.terms")
+        numbers(clinical_only.get("coefficients"), "clinical_only_model.coefficients (one per term)", len(only_terms))
+        unknown = [term for term in only_terms if term not in feature_names]
+        if unknown:
+            fail("the clinical-only terms " + ", ".join(unknown[:5]) + " are not encoded clinical covariates.")
+    return version
+
+
+def _unseen_level_rows(frame: pd.DataFrame, encoder: dict[str, Any], column: str) -> np.ndarray:
+    """Rows whose value of a categorical covariate is none of the levels the locked model knows.
+
+    The locked encoder itself decides (with every level given its own indicator), so this agrees
+    with how the rows are scored, however the encoder matches values to levels.
+    """
+    mapping = encoder["categorical_mappings"][column]
+    levels = [str(level) for level in mapping.get("all_levels") or []]
+    observed = frame[column].notna().to_numpy()
+    if not levels:
+        return observed
+    indicators = {level: f"level {index}" for index, level in enumerate(levels)}
+    probe = {
+        **encoder,
+        "features": [column],
+        "categorical_features": [column],
+        "numeric_features": [],
+        "categorical_mappings": {
+            column: {**mapping, "retained_levels": levels, "level_columns": indicators, "unknown_column": None, "missing_column": None}
+        },
+        "feature_names": list(indicators.values()),
     }
+    seen = np.asarray(transform_feature_encoder(frame, probe, output="numpy"), dtype=float).sum(axis=1) > 0
+    return observed & ~seen
 
 
 def _holm(p_values: Sequence[float]) -> list[float]:
@@ -1144,12 +1570,16 @@ def validate_locked_recipe(
     markers the external dataset does not have are held at their development median (a
     constant), provided at least half of the model's marker weight (|coefficient| x
     development SD) is measured.
+
+    Recipes of version 1 (hashed on Python's JSON text) are still accepted when their stored hash
+    matches that computation; their baseline survival was stored at a linear predictor of 0, so
+    absolute risks are withheld at a horizon where it lost its precision.
     """
     from survival_toolkit.ml_models import _brier_scores_from_weights, _ipcw_brier_weights
 
-    if int(recipe.get("recipe_version", 0)) != RECIPE_VERSION:
-        raise ValueError("This recipe was written by an incompatible SurvStudio version.")
-    if recipe.get("recipe_hash") != recipe_hash(recipe):
+    version = _check_recipe(recipe)
+    expected_hash = _legacy_recipe_hash(recipe) if version == 1 else recipe_hash(recipe)
+    if recipe.get("recipe_hash") != expected_hash:
         raise ValueError("The recipe does not match its hash; it was edited after it was locked.")
     mapping = {str(key): str(value) for key, value in (column_mapping or {}).items()}
 
@@ -1204,9 +1634,19 @@ def validate_locked_recipe(
         for name in design.columns:
             columns[str(name)] = design[name].to_numpy(dtype=float)
         for column in encoder.get("categorical_features", []):
-            known = set(encoder["categorical_mappings"][column]["all_levels"])
-            unseen = frame[column].astype("string").dropna()
-            unseen_count = int((~unseen.isin(known)).sum())
+            unseen = _unseen_level_rows(frame, encoder, column)
+            unseen_count = int(unseen.sum())
+            observed_count = int(frame[column].notna().sum())
+            if unseen_count and unseen_count > MAX_UNSEEN_LEVEL_SHARE * observed_count:
+                # Scoring these rows as the reference level would silently collapse the covariate.
+                external_levels = sorted({str(value) for value in frame.loc[unseen, column]})
+                known = [str(level) for level in encoder["categorical_mappings"][column].get("all_levels") or []]
+                raise ValueError(
+                    f"{unseen_count} of {observed_count} external rows have a {column} level the locked model has not seen "
+                    f"({', '.join(repr(level) for level in external_levels[:5])}{' ...' if len(external_levels) > 5 else ''}; "
+                    f"it knows {', '.join(repr(level) for level in known[:8])}). Recode {column} in the external dataset "
+                    "the way it was coded in development."
+                )
             if unseen_count:
                 notes.append(f"{unseen_count} external row(s) have a {column} level not seen in development; scored as the reference level.")
     for name in markers:
@@ -1254,8 +1694,10 @@ def validate_locked_recipe(
             clinical_model["coefficients"], dtype=float
         )
     c_draws: list[float] = []
+    clinical_draws: list[float] = []
     delta_draws: list[float] = []
     for _ in range(int(n_bootstrap) if strata is None else 0):
+        raise_if_cancelled()
         rows = rng.integers(0, time.shape[0], size=time.shape[0])
         if not event[rows].any():
             continue
@@ -1263,6 +1705,7 @@ def validate_locked_recipe(
         draws = harrell_c_many(time[rows], event[rows], risks)
         c_draws.append(float(draws[0]))
         if clinical_predictor is not None:
+            clinical_draws.append(float(draws[1]))
             delta_draws.append(float(draws[0] - draws[1]))
 
     def interval(draws: list[float]) -> list[float | None]:
@@ -1271,7 +1714,11 @@ def validate_locked_recipe(
             return [None, None]
         return [float(np.quantile(finite, 0.025)), float(np.quantile(finite, 0.975))]
 
-    slope_fit = _external_cox(time, event, linear_predictor[:, None], strata)
+    def log_or_none(value: float | None) -> float | None:
+        return None if value is None or value <= 0 else float(np.log(value))
+
+    ties = str(model.get("ties", "efron"))
+    slope_fit = _external_cox(time, event, linear_predictor[:, None], strata, ties)
     metrics: dict[str, Any] = {
         "marker_scaling": marker_scaling,
         "marker_weight_available": float(weight_available),
@@ -1279,20 +1726,25 @@ def validate_locked_recipe(
         "c_index": _finite_or_none(c_index),
         "c_index_ci": interval(c_draws),
         "calibration_slope": None if slope_fit is None else slope_fit["log_hr"],
-        "calibration_slope_ci": None if slope_fit is None else [float(np.log(slope_fit["ci_lower"])), float(np.log(slope_fit["ci_upper"]))],
+        "calibration_slope_ci": None if slope_fit is None else [log_or_none(slope_fit["ci_lower"]), log_or_none(slope_fit["ci_upper"])],
     }
     if clinical_predictor is not None:
         clinical_c = _pooled_c_index(time, event, clinical_predictor, strata)
         metrics["clinical_only_c_index"] = _finite_or_none(clinical_c)
+        # From the same bootstrap draws as the locked model's interval.
+        metrics["clinical_only_c_index_ci"] = interval(clinical_draws)
         metrics["delta_c_index"] = _finite_or_none(c_index - clinical_c)
         metrics["delta_c_index_ci"] = interval(delta_draws)
     target = float(model["default_horizon"] if horizon is None else horizon)
     baseline = model.get("baseline")
-    if baseline and target > 0:
-        times = np.asarray(baseline["times"], dtype=float)
-        position = int(np.searchsorted(times, target, side="right")) - 1
-        baseline_survival = 1.0 if position < 0 else float(np.asarray(baseline["survival"], dtype=float)[position])
-        predicted = np.power(baseline_survival, np.exp(np.clip(linear_predictor, -50.0, 50.0)))
+    predicted = _baseline_survival_at(baseline, linear_predictor, target) if baseline and target > 0 else None
+    if baseline and target > 0 and predicted is None:
+        notes.append(
+            "The locked model's baseline survival was stored far from its patients' linear predictor by an earlier "
+            "SurvStudio version and lost its precision at this horizon, so absolute risks, observed/expected risk and the "
+            "Brier score are not reported. Lock the model again to get them."
+        )
+    if predicted is not None:
         observed_survival = _km_survival_at(time, event, target)
         weights, alive = _ipcw_brier_weights(time, event, np.array([target]), support_times=time, support_events=event)
         brier = float(_brier_scores_from_weights(weights, alive, predicted[:, None])[0])
@@ -1314,18 +1766,29 @@ def validate_locked_recipe(
     primary = recipe.get("primary_lens", "marginal")
     base_design = None
     if clinical_columns:
-        base_design = np.column_stack([columns[str(name)] for name in encoder["feature_names"]])
-        base_design = base_design[:, np.ptp(base_design, axis=0) > 0]
+        # Added value over the clinical terms of the locked model (the covariates it could estimate).
+        clinical_terms = [term for term in model["terms"] if term not in markers]
+        base_design = np.column_stack([columns[term] for term in clinical_terms]) if clinical_terms else np.zeros((time.shape[0], 0))
+        base_design = base_design[:, np.ptp(base_design, axis=0) > 0] if base_design.shape[1] else base_design
+    tested_lens = "added_value" if primary == "added_value" and base_design is not None and base_design.shape[1] else "marginal"
+    if primary == "added_value" and tested_lens == "marginal" and markers:
+        notes.append("No clinical covariate of the locked model varies in this cohort, so each marker's replication was tested without adjustment.")
     marker_rows = []
     one_sided: list[float] = []
     for name in markers:
         if name in absent:
             one_sided.append(float("nan"))
-            marker_rows.append({"marker": name, "marginal": None, "adjusted": None, "same_direction": False, "absent": True})
+            marker_rows.append({"marker": name, "marginal": None, "adjusted": None, "same_direction": False, "absent": True, "tested": None})
             continue
-        marginal = _external_cox(time, event, columns[name][:, None], strata)
-        adjusted = None if base_design is None else _external_cox(time, event, np.column_stack([base_design, columns[name]]), strata)
-        tested = adjusted if primary == "added_value" and adjusted is not None else marginal
+        marginal = _external_cox(time, event, columns[name][:, None], strata, ties)
+        adjusted = None if base_design is None else _external_cox(time, event, np.column_stack([base_design, columns[name]]), strata, ties)
+        tested = adjusted if tested_lens == "added_value" else marginal
+        if tested_lens == "added_value" and adjusted is None:
+            # Testing the unadjusted association instead would answer another question than the locked claim.
+            notes.append(
+                f"The added-value replication of {name} is not estimable here: its Cox fit with the clinical covariates did not "
+                "converge or its coefficient runs to infinity."
+            )
         development_sign = float(np.sign(recipe["marker_development_log_hr"][name]))
         same_direction = tested is not None and np.sign(tested["log_hr"]) == development_sign
         if tested is None:
@@ -1333,15 +1796,27 @@ def validate_locked_recipe(
         else:
             half = tested["wald_p"] / 2.0
             one_sided.append(half if same_direction else 1.0 - half)
-        marker_rows.append({"marker": name, "marginal": marginal, "adjusted": adjusted, "same_direction": bool(same_direction)})
+        marker_rows.append(
+            {
+                "marker": name,
+                "marginal": marginal,
+                "adjusted": adjusted,
+                "same_direction": bool(same_direction),
+                "tested": tested_lens if tested is not None else None,
+            }
+        )
     for row, adjusted_p in zip(marker_rows, _holm(one_sided)):
         row["replication_p_holm"] = _finite_or_none(adjusted_p)
         row["replicated"] = bool(row["same_direction"] and adjusted_p is not None and np.isfinite(adjusted_p) and adjusted_p <= alpha)
 
-    return {
-        "recipe_hash": recipe["recipe_hash"],
-        "cohort": {"n": int(time.shape[0]), "events": int(event.sum()), "row_mask_hash": str(frame.attrs.get("row_mask_hash") or "")},
-        "metrics": metrics,
-        "markers": marker_rows,
-        "notes": notes,
-    }
+    # JSON has no infinity or NaN (Starlette refuses them): every non-finite number is reported as None.
+    return _json_ready(
+        {
+            "recipe_hash": recipe["recipe_hash"],
+            "recipe_version": version,
+            "cohort": {"n": int(time.shape[0]), "events": int(event.sum()), "row_mask_hash": str(frame.attrs.get("row_mask_hash") or "")},
+            "metrics": metrics,
+            "markers": marker_rows,
+            "notes": notes,
+        }
+    )

@@ -1672,6 +1672,51 @@ def test_browser_cohort_table_sends_outcome_columns_and_shows_notes(browser_serv
         raise
 
 
+def test_browser_locked_marker_model_validates_on_an_external_cohort(browser_server: str, tmp_path: Path) -> None:
+    """The browser parses and re-serialises the locked recipe (18.0 becomes 18); validation must still accept it."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    from survival_toolkit.sample_data import make_example_dataset
+
+    external_path = tmp_path / "external_cohort.csv"
+    make_example_dataset(seed=7, n_patients=240).to_csv(external_path, index=False)
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _wait_for_workspace(page)
+            page.locator('[data-tab="markers"]').click()
+            _assert_tab_active(page, "markers")
+            page.locator("#panel-markers .options-details > summary").click()
+            page.locator("#markerPermutations").fill("99")
+            page.locator("#markerResamples").fill("10")
+            page.locator("#runMarkersButton").click()
+            page.wait_for_function("!document.getElementById('runMarkerValidationButton').disabled", timeout=120000)
+
+            page.locator("#markerValidationFile").set_input_files(str(external_path))
+            with page.expect_response(lambda response: "/api/marker-validation" in response.url, timeout=120000) as reply:
+                page.locator("#runMarkerValidationButton").click()
+            response = reply.value
+            assert response.status == 200, response.text()
+            page.wait_for_function(
+                "document.querySelector('#markerValidationShell table') !== null", timeout=60000
+            )
+            summary = page.locator("#markerValidationSummary").inner_text()
+            assert "edited after it was locked" not in summary
+            # The key-number labels are styled in capitals, so compare case-insensitively.
+            assert "240 patients" in summary and "markers replicated" in summary
+            assert "c-index" in summary.lower() and "brier skill" in summary.lower()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
 def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str, tmp_path: Path) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
@@ -1722,6 +1767,50 @@ def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str, 
         raise
 
 
+def test_browser_markers_tab_warns_about_a_patient_profiled_twice(browser_server: str, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    import numpy as np
+    import pandas as pd
+
+    from survival_toolkit.sample_data import make_example_dataset
+
+    frame = make_example_dataset()
+    rng = np.random.default_rng(8)
+    genes = rng.normal(size=(4, 300))[rng.integers(0, 4, len(frame))] * 1.5 + rng.normal(size=(len(frame), 300))
+    genes[200] = genes[15] + rng.normal(scale=0.3, size=300)
+    matrix_path = tmp_path / "expression.tsv"
+    pd.DataFrame(genes.T, index=[f"GENE{index:03d}" for index in range(300)], columns=frame["patient_id"]).to_csv(matrix_path, sep="\t", index_label="gene")
+    ids = frame["patient_id"].tolist()
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _wait_for_workspace(page)
+            page.locator('[data-tab="markers"]').click()
+            page.locator("#markerMatrixDetails > summary").click()
+            page.locator("#markerMatrixFile").set_input_files(str(matrix_path))
+            page.locator("#attachMarkerMatrixButton").click()
+            page.locator("#markerMatrixStatus").wait_for(state="visible")
+            page.locator("#panel-markers .options-details > summary").click()
+            page.locator("#markerPermutations").fill("49")
+            page.locator("#markerResamples").fill("6")
+            page.locator("#runMarkersButton").click()
+            page.wait_for_function("!document.getElementById('downloadMarkersCsvButton').disabled", timeout=120000)
+
+            board = page.locator("#markersInsightBoard").inner_text()
+            assert "Possible repeated patients (1)" in board
+            assert f"{ids[15]} and {ids[200]}" in board
+            assert "ROBUST" not in board.upper().split("\n")[0]
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
 def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server: str, tmp_path: Path) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     import numpy as np
@@ -1747,6 +1836,9 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             page.locator('[data-tab="markers"]').click()
             _assert_tab_active(page, "markers")
 
+            # With no column ticked, the attached file alone must enable Run.
+            page.locator("#clearMarkersButton").click()
+            assert page.locator("#runMarkersButton").is_disabled()
             page.locator("#markerMatrixDetails > summary").click()
             assert page.locator("#markerMatrixIdColumn").input_value() == "patient_id"
             page.locator("#markerMatrixFile").set_input_files(str(matrix_path))
@@ -1756,6 +1848,7 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             assert "21 markers from expression.tsv" in page.locator("#markerSelectionLine").inner_text()
             assert page.locator("#selectAllMarkersButton").is_disabled()
             assert page.locator("#attachMarkerMatrixButton").is_disabled()
+            assert page.locator("#runMarkersButton").is_enabled()
 
             page.locator("#panel-markers .options-details > summary").click()
             page.locator("#markerPermutations").fill("99")
@@ -1769,7 +1862,153 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             page.locator("#removeMarkerMatrixButton").click()
             assert page.locator("#markerMatrixStatus").is_hidden()
             assert page.locator("#selectAllMarkersButton").is_enabled()
+            assert page.locator("#runMarkersButton").is_disabled()
             page.wait_for_function("document.querySelector('[data-run-status=\"markers\"]').textContent === 'Settings changed'")
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_signature_search_is_shown_and_exportable_on_the_markers_tab(browser_server: str, tmp_path: Path) -> None:
+    """The cut-point search result appears where Discover is, and Signature CSV can be exported."""
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            context = browser.new_context(accept_downloads=True, viewport={"width": 1440, "height": 1200})
+            page = context.new_page()
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _wait_for_workspace(page)
+            page.locator('[data-tab="markers"]').click()
+            _assert_tab_active(page, "markers")
+            page.locator("#panel-markers .signature-details > summary").click()
+            for field, value in (
+                ("#signatureMaxDepth", "1"),
+                ("#signatureBootstrapIterations", "0"),
+                ("#signaturePermutationIterations", "0"),
+                ("#signatureValidationIterations", "0"),
+            ):
+                page.locator(field).fill(value)
+            page.locator("#runSignatureSearchButton").click()
+            page.wait_for_function("() => document.querySelector('#signatureShell table') !== null", timeout=120000)
+            page.wait_for_function("() => !document.getElementById('downloadSignatureButton').disabled")
+
+            _assert_tab_active(page, "markers")
+            assert page.locator("#signatureSummary").is_visible()
+            assert "Best signature" in page.locator("#signatureSummary").inner_text()
+
+            with page.expect_download() as signature_info:
+                page.locator("#downloadSignatureButton").click()
+            signature_path = tmp_path / (signature_info.value.suggested_filename or "signature_ranking.csv")
+            signature_info.value.save_as(signature_path)
+            assert "Signature" in signature_path.read_text(encoding="utf-8-sig")
+
+            # A new endpoint makes the search's card obsolete.
+            page.locator("#eventColumn").select_option("pfs_event")
+            page.wait_for_function("() => document.getElementById('signatureSummary').textContent.trim() === ''")
+            assert page.locator("#downloadSignatureButton").is_disabled()
+
+            context.close()
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_leaderboard_keeps_its_intervals_after_switching_tabs(browser_server: str) -> None:
+    """Re-rendering the leaderboard on a tab switch keeps the 95% CI and ΔC columns."""
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    def _compare(models: list[str], rows: list[tuple[str, float]], seed: int):
+        def handler(route) -> None:
+            body = json.loads(route.request.post_data or "{}")
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "analysis": {
+                    "comparison_table": [
+                        {"model": model, "c_index": c_index, "evaluation_mode": "holdout", "rank": rank}
+                        for rank, (model, c_index) in enumerate(rows, start=1)
+                    ],
+                    "evaluation_mode": "holdout",
+                    "evaluation_split_fingerprint": "holdout-seed42-shared",
+                    "test_predictions": _mock_test_predictions(models, seed=seed),
+                    "scientific_summary": {"status": "review", "headline": "done", "strengths": [], "cautions": [], "next_steps": []},
+                    "manuscript_tables": {"model_performance_table": []},
+                },
+                "request_config": body,
+            }))
+        return handler
+
+    board_js = "() => [...document.querySelectorAll('#benchmarkComparisonShell thead th')].map((th) => th.textContent.trim())"
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+            page.route("**/api/ml-model", _compare(["Random Survival Forest", "Cox PH"], [("Random Survival Forest", 0.714), ("Cox PH", 0.69)], 1))
+            page.route("**/api/deep-model", _compare(["DeepHit"], [("DeepHit", 0.731)], 2))
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _wait_for_workspace(page)
+            page.locator('[data-tab="benchmark"]').click()
+            page.locator("#runPredictiveCompareAllButton").click()
+            page.wait_for_function("() => document.getElementById('benchmarkComparisonShell').textContent.includes('ΔC vs Cox PH')", timeout=60000)
+            # The chart's title names the intervals only once they are drawn.
+            page.wait_for_function(
+                "() => document.getElementById('benchmarkComparisonPlot').layout?.title?.text === 'C-index on the same test patients, with 95% bootstrap intervals'"
+            )
+
+            page.locator('[data-tab="km"]').click()
+            page.locator('[data-tab="benchmark"]').click()
+            _assert_tab_active(page, "benchmark")
+            headers = page.evaluate(board_js)
+            assert "95% CI" in headers and "ΔC vs Cox PH (95% CI)" in headers
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
+def test_browser_ml_plots_come_back_when_a_changed_setting_is_undone(browser_server: str) -> None:
+    """A result that no longer matches the settings is marked stale, not deleted, and returns unchanged."""
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    state_js = """() => ({
+        traces: Array.isArray(refs.mlImportancePlot.data) ? refs.mlImportancePlot.data.length : 0,
+        stale: refs.mlImportancePlot.classList.contains('plot-stale'),
+    })"""
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _wait_for_workspace(page)
+            _open_predictive_workbench(page, "rsf")
+            page.locator("#mlNEstimators").fill("10")
+            page.locator("#runPredictiveWorkbenchButton").click()
+            page.wait_for_function("() => document.getElementById('mlMetaBanner').textContent.startsWith('Random Survival Forest:')", timeout=180000)
+            assert page.evaluate(state_js) == {"traces": 1, "stale": False}
+
+            page.locator("#mlNEstimators").fill("20")
+            page.wait_for_function("() => refs.mlImportancePlot.classList.contains('plot-stale')")
+            assert page.evaluate(state_js) == {"traces": 1, "stale": True}
+            page.locator("#mlNEstimators").fill("10")
+            page.wait_for_function("() => !refs.mlImportancePlot.classList.contains('plot-stale')")
+            assert page.evaluate(state_js) == {"traces": 1, "stale": False}
+
+            page.locator("#predictiveModelSelector").select_option("gbs")
+            page.locator("#predictiveModelSelector").select_option("rsf")
+            page.wait_for_function("() => !refs.mlImportancePlot.classList.contains('plot-stale')")
+            assert page.evaluate(state_js) == {"traces": 1, "stale": False}
+            assert page.locator("#mlImportancePlot").is_visible()
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path

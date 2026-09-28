@@ -144,6 +144,10 @@
             <span>Time <button class="help-dot" type="button" data-tooltip="Follow-up time of each patient, for example months until death or last contact.">?</button></span>
             <select id="timeColumn"></select>
           </label>
+          <label class="toggle compact-toggle" title="List every numeric column in the Time menu, not only likely follow-up time columns.">
+            <input id="showAllTimeColumns" type="checkbox" />
+            <span>All numeric</span>
+          </label>
           <label class="config-field">
             <span>Event <button class="help-dot" type="button" data-tooltip="Whether the event happened, for example death = 1 and alive = 0.">?</button></span>
             <select id="eventColumn"></select>
@@ -918,7 +922,7 @@
           <div class="table-card full-width">
             <div class="table-card-head">
               <h3>Leaderboard</h3>
-              <span class="benchmark-table-note" id="benchmarkTableNote">Run Compare All on ML or DL to build a shared leaderboard.</span>
+              <div class="benchmark-table-note" id="benchmarkTableNote">Run Compare All on ML or DL to build a shared leaderboard.</div>
               <details class="export-menu">
                 <summary class="button ghost">Export</summary>
                 <div class="export-menu-items">
@@ -969,6 +973,7 @@
                   <button class="button ghost" id="downloadMarkerRecipeButton" type="button" disabled>Locked model (JSON)</button>
                   <button class="button ghost" id="downloadMarkerRemarkDocxButton" type="button" disabled>REMARK checklist (Word)</button>
                   <button class="button ghost" id="downloadMarkerRemarkMarkdownButton" type="button" disabled>REMARK checklist (Markdown)</button>
+                  <button class="button ghost" id="downloadMarkersSummaryPngButton" type="button" disabled>Summary figure (PNG)</button>
                   <button class="button ghost" id="downloadMarkersStabilityPngButton" type="button" disabled>Stability plot (PNG)</button>
                   <button class="button ghost" id="downloadMarkersRankPngButton" type="button" disabled>Rank plot (PNG)</button>
                 </div>
@@ -1032,11 +1037,13 @@
             </div>
           </details>
 
+          <!-- At a glance first (figure, key numbers, verdict), then the per-marker detail. -->
+          <div class="plot-shell" id="markersSummaryPlot"></div>
+          <div class="analysis-banner" id="markersMetaBanner"></div>
+          <div class="insight-board" id="markersInsightBoard"><div class="empty-state">Run the evaluation to see which markers hold up.</div></div>
           <div class="plot-shell" id="markersStabilityPlot">
             <div class="empty-state plot-empty"><span>Choose markers and click <strong>Run Analysis</strong>.</span></div>
           </div>
-          <div class="analysis-banner" id="markersMetaBanner"></div>
-          <div class="insight-board" id="markersInsightBoard"><div class="empty-state">Run the evaluation to see which markers hold up.</div></div>
           <div class="plot-shell" id="markersRankPlot"></div>
           <div class="table-card full-width">
             <div class="table-card-head">
@@ -1093,6 +1100,7 @@
             </div>
           </details>
           <div class="table-grid">
+            <div class="table-card full-width"><h3>Best cut-point combination</h3><div class="signature-summary" id="signatureSummary"></div></div>
             <div class="table-card full-width"><h3>Signature Interpretation</h3><div class="insight-board compact" id="signatureInsightBoard"><div class="empty-state">Run auto-discovery to assess robustness.</div></div></div>
             <div class="table-card full-width"><h3>Signature Ranking</h3><div class="table-shell" id="signatureShell"><div class="empty-state">Run auto-discovery to find feature combinations.</div></div></div>
           </div>

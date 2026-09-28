@@ -13,12 +13,19 @@ function currentSharedModelSelections(goal = "ml") {
   };
 }
 
+// The server trims text settings (event value, time unit) before echoing them in request_config, so both
+// sides of a currency comparison are trimmed too; otherwise " Dead" or "Months " would make every result
+// look out of date.
+function trimmedSetting(value) {
+  return String(value ?? "").trim();
+}
+
 function normalizeBaseRequestConfig(requestConfig) {
   return {
     dataset_id: String(requestConfig?.dataset_id || ""),
     time_column: String(requestConfig?.time_column || ""),
     event_column: String(requestConfig?.event_column || ""),
-    event_positive_value: String(requestConfig?.event_positive_value ?? ""),
+    event_positive_value: trimmedSetting(requestConfig?.event_positive_value),
   };
 }
 
@@ -30,13 +37,15 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
     return {
       ...base,
       group_column: String(requestConfig.group_column || ""),
-      confidence_level: Number(requestConfig.confidence_level),
-      time_unit_label: String(requestConfig.time_unit_label || DEFAULT_TIME_UNIT_LABEL),
+      confidence_level: numberOrDefault(requestConfig.confidence_level, KM_NUMERIC_DEFAULTS.confidence_level),
+      time_unit_label: trimmedSetting(requestConfig.time_unit_label) || DEFAULT_TIME_UNIT_LABEL,
       // Compare numerically so "2000.0" and 2000 describe the same truncation.
       max_time: numberOrDefault(requestConfig.max_time, null),
-      risk_table_points: Number(requestConfig.risk_table_points),
+      risk_table_points: numberOrDefault(requestConfig.risk_table_points, KM_NUMERIC_DEFAULTS.risk_table_points),
       logrank_weight: String(requestConfig.logrank_weight || "logrank"),
-      fh_p: String(requestConfig.logrank_weight || "logrank") === "fleming_harrington" ? numberOrDefault(requestConfig.fh_p, 1) : null,
+      fh_p: String(requestConfig.logrank_weight || "logrank") === "fleming_harrington"
+        ? numberOrDefault(requestConfig.fh_p, KM_NUMERIC_DEFAULTS.fh_p)
+        : null,
       show_confidence_bands: Boolean(requestConfig.show_confidence_bands),
     };
   }
@@ -78,13 +87,13 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
       model_type: effectiveModelType,
       features: sortedStrings(requestConfig.features || []),
       categorical_features: sortedStrings(requestConfig.categorical_features || []),
-      n_estimators: treeCountApplies ? Number(requestConfig.n_estimators) : null,
+      n_estimators: treeCountApplies ? numberOrDefault(requestConfig.n_estimators, ML_NUMERIC_DEFAULTS.n_estimators) : null,
       max_depth: String(requestConfig.max_depth ?? ""),
-      learning_rate: learningRateApplies ? Number(requestConfig.learning_rate) : null,
-      random_state: numberOrDefault(requestConfig.random_state, 42),
+      learning_rate: learningRateApplies ? numberOrDefault(requestConfig.learning_rate, ML_NUMERIC_DEFAULTS.learning_rate) : null,
+      random_state: numberOrDefault(requestConfig.random_state, ML_NUMERIC_DEFAULTS.random_state),
       evaluation_strategy: evaluationStrategy,
-      cv_folds: repeatedCv ? numberOrDefault(requestConfig.cv_folds, 5) : null,
-      cv_repeats: repeatedCv ? numberOrDefault(requestConfig.cv_repeats, 3) : null,
+      cv_folds: repeatedCv ? numberOrDefault(requestConfig.cv_folds, ML_NUMERIC_DEFAULTS.cv_folds) : null,
+      cv_repeats: repeatedCv ? numberOrDefault(requestConfig.cv_repeats, ML_NUMERIC_DEFAULTS.cv_repeats) : null,
       locked_test_fraction: repeatedCv ? normalizedLockedTestFraction(requestConfig.locked_test_fraction) : null,
     };
   }
@@ -99,29 +108,30 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
     const usesVae = effectiveModelType === "vae" || effectiveModelType === "compare";
     const evaluationStrategy = String(requestConfig.evaluation_strategy || "holdout");
     const repeatedCv = evaluationStrategy === "repeated_cv";
+    const setting = (key) => numberOrDefault(requestConfig[key], DL_NUMERIC_DEFAULTS[key]);
     return {
       ...base,
       model_type: effectiveModelType,
       features: sortedStrings(requestConfig.features || []),
       categorical_features: sortedStrings(requestConfig.categorical_features || []),
       hidden_layers: usesHiddenLayers || expectsCompare ? (requestConfig.hidden_layers || []).map(Number) : null,
-      dropout: Number(requestConfig.dropout),
-      learning_rate: Number(requestConfig.learning_rate),
-      epochs: Number(requestConfig.epochs),
-      batch_size: usesDiscreteTime || expectsCompare ? numberOrDefault(requestConfig.batch_size, 64) : null,
-      random_seed: numberOrDefault(requestConfig.random_seed, 42),
+      dropout: setting("dropout"),
+      learning_rate: setting("learning_rate"),
+      epochs: setting("epochs"),
+      batch_size: usesDiscreteTime || expectsCompare ? setting("batch_size") : null,
+      random_seed: setting("random_seed"),
       evaluation_strategy: evaluationStrategy,
-      cv_folds: repeatedCv ? numberOrDefault(requestConfig.cv_folds, 5) : null,
-      cv_repeats: repeatedCv ? numberOrDefault(requestConfig.cv_repeats, 3) : null,
-      early_stopping_patience: numberOrDefault(requestConfig.early_stopping_patience, 10),
-      early_stopping_min_delta: numberOrDefault(requestConfig.early_stopping_min_delta, 0.0001),
-      parallel_jobs: repeatedCv ? numberOrDefault(requestConfig.parallel_jobs, 1) : null,
-      num_time_bins: usesDiscreteTime || expectsCompare ? numberOrDefault(requestConfig.num_time_bins, 50) : null,
-      d_model: usesTransformer ? numberOrDefault(requestConfig.d_model, 64) : null,
-      n_heads: usesTransformer ? numberOrDefault(requestConfig.n_heads, 4) : null,
-      n_layers: usesTransformer ? numberOrDefault(requestConfig.n_layers, 2) : null,
-      latent_dim: usesVae ? numberOrDefault(requestConfig.latent_dim, 8) : null,
-      n_clusters: usesVae ? numberOrDefault(requestConfig.n_clusters, 3) : null,
+      cv_folds: repeatedCv ? setting("cv_folds") : null,
+      cv_repeats: repeatedCv ? setting("cv_repeats") : null,
+      early_stopping_patience: setting("early_stopping_patience"),
+      early_stopping_min_delta: setting("early_stopping_min_delta"),
+      parallel_jobs: repeatedCv ? setting("parallel_jobs") : null,
+      num_time_bins: usesDiscreteTime || expectsCompare ? setting("num_time_bins") : null,
+      d_model: usesTransformer ? setting("d_model") : null,
+      n_heads: usesTransformer ? setting("n_heads") : null,
+      n_layers: usesTransformer ? setting("n_layers") : null,
+      latent_dim: usesVae ? setting("latent_dim") : null,
+      n_clusters: usesVae ? setting("n_clusters") : null,
       locked_test_fraction: expectsCompare && repeatedCv ? normalizedLockedTestFraction(requestConfig.locked_test_fraction) : null,
     };
   }
@@ -134,7 +144,7 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
       group_column: String(requestConfig.group_column || ""),
       time_column: outcomeRestricted ? String(requestConfig.time_column) : "",
       event_column: outcomeRestricted ? String(requestConfig.event_column) : "",
-      event_positive_value: outcomeRestricted ? String(requestConfig.event_positive_value ?? "") : "",
+      event_positive_value: outcomeRestricted ? trimmedSetting(requestConfig.event_positive_value) : "",
     };
   }
 
@@ -163,11 +173,11 @@ function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) 
       ...base,
       group_column: refs.groupColumn?.value || "",
       confidence_level: refs.confidenceLevel?.value,
-      time_unit_label: refs.timeUnitLabel?.value || DEFAULT_TIME_UNIT_LABEL,
+      time_unit_label: refs.timeUnitLabel?.value,
       max_time: refs.maxTime?.value || "",
       risk_table_points: refs.riskTablePoints?.value,
       logrank_weight: refs.logrankWeight?.value || "logrank",
-      fh_p: refs.fhPower?.value || 1,
+      fh_p: refs.fhPower?.value,
       show_confidence_bands: Boolean(refs.showConfidenceBands?.checked),
     });
   }
@@ -571,6 +581,7 @@ function resizeVisiblePlotsNow() {
 function allPlotRefs() {
   return [
     refs.kmPlot,
+    refs.markersSummaryPlot,
     refs.markersStabilityPlot,
     refs.markersRankPlot,
     refs.markerValidationPlot,
@@ -671,6 +682,7 @@ function captureControlSnapshot() {
   if (!state.dataset) return null;
   return {
     timeColumn: refs.timeColumn?.value || "",
+    showAllTimeColumns: Boolean(refs.showAllTimeColumns?.checked),
     eventColumn: refs.eventColumn?.value || "",
     eventPositiveValue: refs.eventPositiveValue?.value || "",
     showAllEventColumns: Boolean(refs.showAllEventColumns?.checked),
@@ -790,7 +802,12 @@ function setSelectValueIfPresent(control, value) {
 function applyControlSnapshot(snapshot) {
   if (!snapshot || !state.dataset) return;
   const columnNames = new Set(state.dataset.columns.map((column) => column.name));
-  if (snapshot.timeColumn && columnNames.has(snapshot.timeColumn)) refs.timeColumn.value = snapshot.timeColumn;
+  // The Time menu lists every numeric column only with its override ticked, so restore that first.
+  if (refs.showAllTimeColumns) refs.showAllTimeColumns.checked = Boolean(snapshot.showAllTimeColumns);
+  renderTimeColumnOptions({
+    preferred: snapshot.timeColumn && columnNames.has(snapshot.timeColumn) ? snapshot.timeColumn : null,
+    silent: true,
+  });
   if (refs.showAllEventColumns) refs.showAllEventColumns.checked = Boolean(snapshot.showAllEventColumns);
   renderEventColumnOptions({
     preferred: snapshot.eventColumn && columnNames.has(snapshot.eventColumn) ? snapshot.eventColumn : null,
@@ -948,8 +965,13 @@ async function restoreHistoryState(historyState) {
     activateTab(historyState.tab || "km");
     renderWorkspaceChrome();
   } catch (error) {
-    // A newer navigation or dataset load cancelled this restore; leave the workspace alone.
-    if (!isSupersededRequestError(error)) goHome({ syncHistory: false });
+    // A newer navigation or dataset load cancelled this restore; leave the workspace alone. Otherwise the
+    // page cannot be shown (for example its cohort left the server's store), so say why before going home.
+    if (!isSupersededRequestError(error)) {
+      goHome({ syncHistory: false });
+      const reason = errorMessageText(error).replace(/([^.!?])$/, "$1.");
+      setRuntimeBanner(`That page could not be restored: ${reason} Load the cohort again to continue.`, "warning");
+    }
   } finally {
     runtime.historySyncPaused = false;
   }
@@ -991,8 +1013,10 @@ function syncDeriveControlsState() {
     input.setAttribute("aria-disabled", String(deriveLocked));
   });
   if (refs.deriveButton) {
-    refs.deriveButton.disabled = deriveLocked;
-    refs.deriveButton.setAttribute("aria-disabled", String(deriveLocked));
+    // Create also stays off while a grouping is being created (the "derive" busy scope).
+    const deriveBusy = isScopeBusy("derive");
+    refs.deriveButton.disabled = deriveLocked || deriveBusy;
+    refs.deriveButton.setAttribute("aria-disabled", String(deriveLocked || deriveBusy));
     refs.deriveButton.title = deriveLocked
       ? `Clear Group by back to Overall only before editing or creating a new grouping. Current Group by is ${activeGroup}.`
       : "";

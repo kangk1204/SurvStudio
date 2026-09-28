@@ -1740,6 +1740,31 @@ h3 {
   box-sizing: content-box;
 }
 
+/* A result that no longer matches the settings stays drawn, faded, under a notice (setPlotStale). */
+.plot-shell.plot-stale {
+  position: relative;
+}
+
+.plot-shell.plot-stale > * {
+  opacity: 0.2;
+  pointer-events: none;
+}
+
+.plot-shell.plot-stale::after {
+  content: attr(data-stale-message);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--ink);
+  font-size: 0.85rem;
+  font-weight: 600;
+  pointer-events: none;
+}
+
 .plot-shell.is-refreshing {
   position: relative;
 }
@@ -1941,9 +1966,35 @@ h3 {
 }
 
 .benchmark-table-note {
+  flex: 1 1 320px;
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.4;
+}
+
+.benchmark-note-details {
+  margin-top: 4px;
+}
+
+/* The note grows downward when its method notes open; the heading and Export stay at the top. */
+.table-card-head:has(.benchmark-note-details) {
+  align-items: flex-start;
+}
+
+.benchmark-note-details > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.benchmark-note-details ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.benchmark-note-details li + li {
+  margin-top: 3px;
 }
 
 .benchmark-table th,
@@ -2172,6 +2223,13 @@ tr:nth-child(even) td {
 
 .check-item input {
   width: auto;
+}
+
+.check-item-note {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .check-item.hidden-by-filter {

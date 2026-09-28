@@ -27,6 +27,12 @@ TIES_METHODS = ("efron", "breslow")
 # Columns processed together. Blocks of a few hundred columns keep the n x block working
 # arrays in cache; 512 ran about three times faster than 2048 on 500 rows.
 _COLUMN_BLOCK = 512
+# R's coxph warns that a coefficient "may be infinite" when the Newton step still pending at
+# convergence exceeds toler.inf = sqrt(eps) times the coefficient (eps = 1e-9).
+_TOLER_INF = float(np.sqrt(1e-9))
+# A log hazard ratio beyond 10 per SD of the covariate (a hazard ratio above 20,000 per SD) is
+# the monotone-likelihood signature itself, whatever the pending step.
+_MAX_LOG_HR_PER_SD = 10.0
 
 
 class CoxNull(NamedTuple):
@@ -40,13 +46,20 @@ class CoxNull(NamedTuple):
 
 
 class CoxFit(NamedTuple):
-    """A Cox model fitted by Newton-Raphson on the partial likelihood."""
+    """A Cox model fitted by Newton-Raphson on the partial likelihood.
+
+    ``separated`` flags each coefficient that runs to infinity (monotone likelihood, for example
+    a covariate whose carriers never have the event). The likelihood still converges, so such a
+    fit keeps ``converged``, as in R, but its flagged coefficients and their variances are
+    meaningless; callers that report or average coefficients treat them as failed fits.
+    """
 
     beta: np.ndarray
     covariance: np.ndarray
     loglik: float
     converged: bool
     iterations: int
+    separated: np.ndarray | None = None
 
 
 class ScoreStats(NamedTuple):
@@ -319,7 +332,15 @@ def fit_cox(
     iterations = 0
     for iterations in range(1, max_iterations + 1):
         score, information = _score_and_information_at(time, event, design, codes, design @ beta, ties)
-        step = np.linalg.lstsq(information, score, rcond=None)[0]
+        # A diverging fit (monotone likelihood, as for a heavy-tailed marker that separates the
+        # events) can leave the information non-finite; it then ends as not converged instead of
+        # failing the whole marker screen.
+        if not (np.all(np.isfinite(score)) and np.all(np.isfinite(information))):
+            break
+        try:
+            step = np.linalg.lstsq(information, score, rcond=None)[0]
+        except np.linalg.LinAlgError:
+            break
         if not np.all(np.isfinite(step)):
             break
         for _ in range(40):
@@ -335,13 +356,53 @@ def fit_cox(
         if abs(change) <= 1e-9 * max(abs(loglik), 1.0):
             converged = True
             break
-    _, information = _score_and_information_at(time, event, design, codes, design @ beta, ties)
-    try:
-        covariance = np.linalg.inv(information)
-    except np.linalg.LinAlgError:
-        covariance = np.linalg.pinv(information)
+    score, information = _score_and_information_at(time, event, design, codes, design @ beta, ties)
+    if not np.all(np.isfinite(information)):
+        covariance = np.full_like(information, np.nan)
         converged = False
-    return CoxFit(beta=beta, covariance=covariance, loglik=float(loglik), converged=converged, iterations=iterations)
+    else:
+        try:
+            covariance = np.linalg.inv(information)
+        except np.linalg.LinAlgError:
+            try:
+                covariance = np.linalg.pinv(information)
+            except np.linalg.LinAlgError:
+                covariance = np.full_like(information, np.nan)
+            converged = False
+    return CoxFit(
+        beta=beta,
+        covariance=covariance,
+        loglik=float(loglik),
+        converged=converged,
+        iterations=iterations,
+        separated=_runaway_coefficients(design, beta, score, information),
+    )
+
+
+def _runaway_coefficients(design: np.ndarray, beta: np.ndarray, score: np.ndarray, information: np.ndarray) -> np.ndarray:
+    """Coefficients that run to infinity: R's infinite-coefficient check after convergence.
+
+    R flags coefficient j when the Newton step still pending at the fitted value, |(I^-1 U)_j|,
+    exceeds sqrt(eps) |beta_j|. On a monotone likelihood the log-likelihood flattens like
+    exp(-beta), so that step stays of order one however far beta has run. Here the step and the
+    coefficient are both measured per SD of the covariate, and the coefficient is floored at 1:
+    a weak marker (beta near 0) is then never flagged for a pending step of rounding size, which
+    a fit stopped by the relative log-likelihood rule can leave. A coefficient above 10 per SD is
+    flagged whatever the step.
+    """
+    flags = np.zeros(beta.shape[0], dtype=bool)
+    if beta.size == 0 or not (np.all(np.isfinite(score)) and np.all(np.isfinite(information))):
+        return flags
+    try:
+        pending = np.linalg.lstsq(information, score, rcond=None)[0]
+    except np.linalg.LinAlgError:
+        return flags
+    scale = np.std(design, axis=0)
+    with np.errstate(invalid="ignore", over="ignore"):
+        size = np.abs(beta) * scale
+        step = np.abs(pending) * scale
+        flags = (size > _MAX_LOG_HR_PER_SD) | (step > _TOLER_INF * np.maximum(size, 1.0))
+    return flags & (scale > 0)
 
 
 def fit_cox_null(
@@ -384,9 +445,11 @@ def residualize(X: np.ndarray, Z: np.ndarray | None = None, strata: np.ndarray |
     """Residuals of each marker column after least-squares projection on strata and Z.
 
     The screen's statistics do not change when a combination of Z or a stratum
-    constant is added to a marker, so permuting these residuals gives the
-    Freedman–Lane null for "no added value beyond the clinical covariates" while
-    keeping each marker's relationship with the clinical covariates.
+    constant is added to a marker, so permuting these residuals tests "no added value
+    beyond the clinical covariates" while keeping each marker's relationship with the
+    clinical covariates. Permuting the residualised regressor of interest (rather than
+    the residuals of the outcome model) is the Smith scheme of Winkler et al. (2014,
+    NeuroImage 92:381-397, Table 2), not Freedman-Lane.
     """
     block = np.asarray(X, dtype=float)
     n = block.shape[0]
@@ -444,6 +507,13 @@ class CoxScoreScreen:
         if not self.terms:
             raise ValueError("The score screen needs at least one event.")
         design = None if Z is None or np.asarray(Z).size == 0 else np.asarray(Z, dtype=float).reshape(self.n, -1)
+        # The efficient information is only right when Z is the design the null model was fitted on.
+        n_null = np.asarray(null.beta).reshape(-1).shape[0]
+        if n_null != (0 if design is None else design.shape[1]):
+            raise ValueError(
+                f"The null model has {n_null} coefficient(s) but Z has {0 if design is None else design.shape[1]} column(s); "
+                "pass the clinical design the null model was fitted on."
+            )
         # Per stratum, the clinical side of the marker-by-clinical information:
         # I_xz = X' rows + S1x' at_s1 + T1x' at_t1.
         self._z_weights: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
@@ -545,7 +615,12 @@ class CoxScoreScreen:
         rows = []
         for permutation in permutations:
             index = np.asarray(permutation, dtype=np.int64).reshape(-1)
-            if index.shape[0] != self.n:
+            if (
+                index.shape[0] != self.n
+                or index.min() < 0
+                or index.max() >= self.n
+                or np.bincount(index, minlength=self.n).max() != 1
+            ):
                 raise ValueError("Each permutation must list every row once.")
             score, information = self._score_and_information(centred, index)
             rows.append(self._chi2(score, information, tolerance))
@@ -636,8 +711,11 @@ class PermutationFdrAccumulator:
 
     def update(self, permuted: np.ndarray) -> None:
         block = np.atleast_2d(np.asarray(permuted, dtype=float))
+        if block.shape[1] != self.observed.shape[0]:
+            raise ValueError("Permuted statistics must have one column per marker.")
         for row in block:
-            values = np.sort(row[np.isfinite(row)])
+            # Markers without a valid observed statistic are not part of the tested family (as in MaxT).
+            values = np.sort(row[np.isfinite(row) & self.valid])
             self.false_counts += values.shape[0] - np.searchsorted(values, self.thresholds, side="left")
             self.n_permutations += 1
 
@@ -666,27 +744,140 @@ def harrell_c_many(time: np.ndarray, event: np.ndarray, risk: np.ndarray) -> np.
     A pair is comparable when the earlier time is an event, or when both times are
     equal and only the first subject had the event (the censored one is known to
     outlive it). Higher risk should mean earlier events; tied risks count one half.
-    Columns without any comparable pair give NaN.
+    Columns without any comparable pair give NaN. A missing risk leaves its pairs
+    comparable but neither concordant nor tied; a missing time is never comparable.
+
+    Above a small size the pair counts come from sorted prefix counts (a merge-sort tree over
+    the patients in decreasing time), so a call takes O(n log^2 n) time and O(n) memory per
+    column instead of comparing every event with every patient; small inputs, where that
+    comparison is faster, count pairs directly. Both counts are exact, so the values agree.
     """
     time = np.asarray(time, dtype=float).reshape(-1)
     event = np.asarray(event).reshape(-1).astype(bool)
     scores = np.asarray(risk, dtype=float)
     if scores.ndim == 1:
         scores = scores.reshape(-1, 1)
-    events = np.flatnonzero(event)
     result = np.full(scores.shape[1], np.nan, dtype=float)
-    if events.size == 0:
+    if not event.any():
         return result
-    later = time[None, :] > time[events][:, None]
-    tied_censored = (time[None, :] == time[events][:, None]) & ~event[None, :]
-    comparable = later | tied_censored
-    n_comparable = float(comparable.sum())
+    # Every comparison with a missing time is false, so such patients drop out of every pair.
+    timed = ~np.isnan(time)
+    time, event, scores = time[timed], event[timed], scores[timed]
+    n = time.shape[0]
+    event_time = time[event]
+    # For each event: the patients with a later time, and those censored at the same time.
+    later = n - np.searchsorted(np.sort(time), event_time, side="right")
+    censored_time = np.sort(time[~event])
+    tied = np.searchsorted(censored_time, event_time, side="right") - np.searchsorted(censored_time, event_time, side="left")
+    n_comparable = float(np.sum(later) + np.sum(tied))
     if n_comparable <= 0.0:
         return result
+    if event_time.size * n <= _PAIRWISE_LIMIT:
+        concordant, ties = _concordance_counts_pairwise(time, event, scores)
+    else:
+        concordant, ties = _concordance_counts(time, event, scores, later)
+    for column in range(scores.shape[1]):
+        result[column] = (float(concordant[column]) + 0.5 * float(ties[column])) / n_comparable
+    return result
+
+
+# Events x patients below which comparing every pair directly beats the sorted counts (about
+# 500 patients, where both take about 1.5 ms per column).
+_PAIRWISE_LIMIT = 100_000
+
+
+def _concordance_counts_pairwise(time: np.ndarray, event: np.ndarray, scores: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Concordant and tied comparable pairs per column, from an events x patients comparison."""
+    events = np.flatnonzero(event)
+    comparable = (time[None, :] > time[events][:, None]) | ((time[None, :] == time[events][:, None]) & ~event[None, :])
+    concordant = np.zeros(scores.shape[1], dtype=np.int64)
+    ties = np.zeros(scores.shape[1], dtype=np.int64)
     for column in range(scores.shape[1]):
         values = scores[:, column]
         event_values = values[events][:, None]
-        concordant = np.sum(comparable & (event_values > values[None, :]))
-        ties = np.sum(comparable & (event_values == values[None, :]))
-        result[column] = (float(concordant) + 0.5 * float(ties)) / n_comparable
-    return result
+        concordant[column] = np.sum(comparable & (event_values > values[None, :]))
+        ties[column] = np.sum(comparable & (event_values == values[None, :]))
+    return concordant, ties
+
+
+def _risk_ranks(scores: np.ndarray) -> tuple[np.ndarray, int]:
+    """Dense ranks of each column (columns x rows) and a key width above every rank.
+
+    A missing risk gets its column's number of distinct values, which is above every rank an
+    event can query, so it is never counted as lower or tied.
+    """
+    ranks = np.empty((scores.shape[1], scores.shape[0]), dtype=np.int64)
+    width = 1
+    for column in range(scores.shape[1]):
+        values = scores[:, column]
+        known = ~np.isnan(values)
+        distinct, inverse = np.unique(values[known], return_inverse=True)
+        ranks[column] = distinct.size
+        ranks[column, known] = inverse.reshape(-1)
+        width = max(width, distinct.size + 1)
+    return ranks, width
+
+
+def _concordance_counts(time: np.ndarray, event: np.ndarray, scores: np.ndarray, later: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per column, the comparable pairs whose event has the higher risk, and those with equal risks.
+
+    ``later[e]`` is the number of patients whose time exceeds that of the e-th event. With the
+    patients sorted by decreasing time they are a prefix of that length, which splits into at
+    most one aligned block of each power-of-two size; each block's risks are sorted per level,
+    so the lower and equal counts in a block are two binary searches.
+    """
+    n, n_columns = scores.shape
+    concordant = np.zeros(n_columns, dtype=np.int64)
+    ties = np.zeros(n_columns, dtype=np.int64)
+    if n_columns == 0:
+        return concordant, ties
+    ranks, width = _risk_ranks(scores)
+    events = np.flatnonzero(event)
+    censored = np.flatnonzero(~event)
+    by_time_desc = np.argsort(time, kind="stable")[::-1]
+    _, time_rank = np.unique(time, return_inverse=True)
+    time_rank = time_rank.reshape(-1).astype(np.int64)
+    n_times = int(time_rank.max()) + 1
+    positions = np.arange(n, dtype=np.int64)
+    # Keys pack (column, block or time, rank) into one int64, below (columns x n x width); columns
+    # are processed in chunks that keep it under 2**62.
+    chunk = max(1, int((2**62) // ((n + 1) * width)))
+    for first in range(0, n_columns, chunk):
+        columns = slice(first, min(first + chunk, n_columns))
+        rank = ranks[columns]
+        k = rank.shape[0]
+        offset = np.arange(k, dtype=np.int64)[:, None]
+        query = rank[:, events]
+        lower = np.zeros_like(query)
+        at_most = np.zeros_like(query)
+        ranked_desc = rank[:, by_time_desc]
+        level = 0
+        while (1 << level) <= n:
+            use = ((later >> level) & 1).astype(bool)
+            if use.any():
+                size = 1 << level
+                n_blocks = (n + size - 1) >> level
+                keys = ((offset * n_blocks + (positions >> level)[None, :]) * width + ranked_desc).ravel()
+                keys.sort()
+                block = (later[use] >> (level + 1)) << 1
+                start = offset * n + block[None, :] * size
+                probe = (offset * n_blocks + block[None, :]) * width + query[:, use]
+                # Integer keys: "at most v" is "below v + 1", so one search gives both counts.
+                found = np.searchsorted(keys, np.concatenate([probe.ravel(), probe.ravel() + 1])).reshape(2, k, -1) - start
+                lower[:, use] += found[0]
+                at_most[:, use] += found[1]
+            level += 1
+        if censored.size:
+            # Censored patients sharing the event's time are comparable as well.
+            keys = ((offset * n_times + time_rank[censored][None, :]) * width + rank[:, censored]).ravel()
+            keys.sort()
+            group = (offset * n_times + time_rank[events][None, :]) * width
+            probe = group + query
+            found = np.searchsorted(keys, np.concatenate([group.ravel(), probe.ravel(), probe.ravel() + 1])).reshape(3, k, -1)
+            lower += found[1] - found[0]
+            at_most += found[2] - found[0]
+        # An event with a missing risk is never concordant or tied.
+        known = ~np.isnan(scores[events][:, columns].T)
+        concordant[columns] = np.where(known, lower, 0).sum(axis=1)
+        ties[columns] = np.where(known, at_most - lower, 0).sum(axis=1)
+    return concordant, ties

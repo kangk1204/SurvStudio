@@ -18,16 +18,18 @@ function currentBaseConfig() {
     }
     throw new Error(eventWarning.message);
   }
-  if (!refs.eventPositiveValue.value) {
+  // The server trims these texts, so send them trimmed: the echoed request_config then matches the controls.
+  const eventPositiveValue = String(refs.eventPositiveValue.value ?? "").trim();
+  if (!eventPositiveValue) {
     throw new Error(`Choose the Event Value for "${eventColumn}" before running an analysis.`);
   }
   return {
     dataset_id: state.dataset.dataset_id,
     time_column: timeColumn,
     event_column: eventColumn,
-    event_positive_value: refs.eventPositiveValue.value,
+    event_positive_value: eventPositiveValue,
     group_column: refs.groupColumn.value || null,
-    time_unit_label: refs.timeUnitLabel.value || DEFAULT_TIME_UNIT_LABEL,
+    time_unit_label: String(refs.timeUnitLabel.value ?? "").trim() || DEFAULT_TIME_UNIT_LABEL,
     max_time: refs.maxTime.value ? Number(refs.maxTime.value) : null,
   };
 }
@@ -46,16 +48,24 @@ function validateMinGroupFraction(control, label = "Min group fraction") {
   return value;
 }
 
+function mlSetting(key, control) {
+  return numericControlValue(control, ML_NUMERIC_DEFAULTS[key]);
+}
+
+function dlSetting(key, control) {
+  return numericControlValue(control, DL_NUMERIC_DEFAULTS[key]);
+}
+
 function validateMlControls({ compare = false } = {}) {
   const modelType = compare ? "compare" : String(refs.mlModelType?.value || "rsf");
   if (compare || modelType === "rsf" || modelType === "gbs") {
-    const nEstimators = Number(refs.mlNEstimators?.value);
+    const nEstimators = mlSetting("n_estimators", refs.mlNEstimators);
     if (!Number.isInteger(nEstimators) || nEstimators < 10 || nEstimators > 1000) {
       throw new Error(`Trees must be an integer between 10 and 1000. Current value: ${formatValue(nEstimators)}.`);
     }
   }
   if (compare || modelType === "gbs") {
-    const learningRate = Number(refs.mlLearningRate?.value);
+    const learningRate = mlSetting("learning_rate", refs.mlLearningRate);
     if (!Number.isFinite(learningRate) || learningRate <= 0.001 || learningRate > 1) {
       throw new Error(`Learning rate must be greater than 0.001 and at most 1. Current value: ${formatValue(learningRate)}.`);
     }
@@ -67,8 +77,8 @@ function mlModelRequestFields(modelType) {
   // Send only the hyperparameters the chosen model uses so disabled controls never block a run.
   const compare = modelType === "compare";
   const fields = { random_state: sharedPredictiveSeed() };
-  if (compare || modelType === "rsf" || modelType === "gbs") fields.n_estimators = Number(refs.mlNEstimators.value);
-  if (compare || modelType === "gbs") fields.learning_rate = Number(refs.mlLearningRate.value);
+  if (compare || modelType === "rsf" || modelType === "gbs") fields.n_estimators = mlSetting("n_estimators", refs.mlNEstimators);
+  if (compare || modelType === "gbs") fields.learning_rate = mlSetting("learning_rate", refs.mlLearningRate);
   return fields;
 }
 
@@ -82,31 +92,32 @@ function dlArchitectureRequestFields(modelType) {
   const usesVae = compare || modelType === "vae";
   const repeatedCv = refs.dlEvaluationStrategy.value === "repeated_cv";
   return {
-    dropout: Number(refs.dlDropout.value),
-    learning_rate: Number(refs.dlLearningRate.value),
-    epochs: Number(refs.dlEpochs.value),
-    random_seed: Number(refs.dlRandomSeed.value),
-    early_stopping_patience: Number(refs.dlEarlyStoppingPatience.value),
-    early_stopping_min_delta: Number(refs.dlEarlyStoppingMinDelta.value),
+    dropout: dlSetting("dropout", refs.dlDropout),
+    learning_rate: dlSetting("learning_rate", refs.dlLearningRate),
+    epochs: dlSetting("epochs", refs.dlEpochs),
+    // The seed ML uses too, so both families split the patients alike.
+    random_seed: sharedPredictiveSeed(),
+    early_stopping_patience: dlSetting("early_stopping_patience", refs.dlEarlyStoppingPatience),
+    early_stopping_min_delta: dlSetting("early_stopping_min_delta", refs.dlEarlyStoppingMinDelta),
     evaluation_strategy: refs.dlEvaluationStrategy.value,
     ...(usesHiddenLayers ? { hidden_layers: parseHiddenLayersStrict() } : {}),
     ...(usesDiscreteTime ? {
-      batch_size: Number(refs.dlBatchSize.value),
-      num_time_bins: Number(refs.dlNumTimeBins.value),
+      batch_size: dlSetting("batch_size", refs.dlBatchSize),
+      num_time_bins: dlSetting("num_time_bins", refs.dlNumTimeBins),
     } : {}),
     ...(repeatedCv ? {
-      cv_folds: Number(refs.dlCvFolds.value),
-      cv_repeats: Number(refs.dlCvRepeats.value),
-      parallel_jobs: Number(refs.dlParallelJobs.value),
+      cv_folds: dlSetting("cv_folds", refs.dlCvFolds),
+      cv_repeats: dlSetting("cv_repeats", refs.dlCvRepeats),
+      parallel_jobs: dlSetting("parallel_jobs", refs.dlParallelJobs),
     } : {}),
     ...(usesTransformer ? {
-      d_model: Number(refs.dlDModel.value),
-      n_heads: Number(refs.dlHeads.value),
-      n_layers: Number(refs.dlLayers.value),
+      d_model: dlSetting("d_model", refs.dlDModel),
+      n_heads: dlSetting("n_heads", refs.dlHeads),
+      n_layers: dlSetting("n_layers", refs.dlLayers),
     } : {}),
     ...(usesVae ? {
-      latent_dim: Number(refs.dlLatentDim.value),
-      n_clusters: Number(refs.dlClusters.value),
+      latent_dim: dlSetting("latent_dim", refs.dlLatentDim),
+      n_clusters: dlSetting("n_clusters", refs.dlClusters),
     } : {}),
   };
 }
@@ -117,15 +128,15 @@ function validateDlControls({ compare = false } = {}) {
   const usesDiscreteTime = compare || modelType === "deephit" || modelType === "mtlr";
   const usesTransformer = compare || modelType === "transformer";
   const usesVae = compare || modelType === "vae";
-  const epochs = Number(refs.dlEpochs?.value);
+  const epochs = dlSetting("epochs", refs.dlEpochs);
   if (!Number.isFinite(epochs) || epochs < 10 || epochs > 1000) {
     throw new Error(`Epochs must be between 10 and 1000. Current value: ${formatValue(epochs)}.`);
   }
-  const learningRate = Number(refs.dlLearningRate?.value);
+  const learningRate = dlSetting("learning_rate", refs.dlLearningRate);
   if (!Number.isFinite(learningRate) || learningRate <= 0 || learningRate > 0.1) {
     throw new Error(`Learning rate must be greater than 0 and at most 0.1. Current value: ${formatValue(learningRate)}.`);
   }
-  const dropout = Number(refs.dlDropout?.value);
+  const dropout = dlSetting("dropout", refs.dlDropout);
   if (!Number.isFinite(dropout) || dropout < 0 || dropout > 0.5) {
     throw new Error(`Dropout must be between 0 and 0.5. Current value: ${formatValue(dropout)}.`);
   }
@@ -133,49 +144,49 @@ function validateDlControls({ compare = false } = {}) {
     parseHiddenLayersStrict();
   }
   if (usesDiscreteTime) {
-    const batchSize = Number(refs.dlBatchSize?.value);
+    const batchSize = dlSetting("batch_size", refs.dlBatchSize);
     if (!Number.isFinite(batchSize) || batchSize < 8 || batchSize > 512) {
       throw new Error(`Batch size must be between 8 and 512. Current value: ${formatValue(batchSize)}.`);
     }
   }
-  const randomSeed = Number(refs.dlRandomSeed?.value);
+  const randomSeed = sharedPredictiveSeed();
   if (!Number.isFinite(randomSeed) || !Number.isInteger(randomSeed)) {
     throw new Error(`Random seed must be an integer. Current value: ${formatValue(randomSeed)}.`);
   }
-  const patience = Number(refs.dlEarlyStoppingPatience?.value);
+  const patience = dlSetting("early_stopping_patience", refs.dlEarlyStoppingPatience);
   if (!Number.isFinite(patience) || patience < 1 || patience > 100) {
     throw new Error(`Early stop patience must be between 1 and 100. Current value: ${formatValue(patience)}.`);
   }
-  const minDelta = Number(refs.dlEarlyStoppingMinDelta?.value);
+  const minDelta = dlSetting("early_stopping_min_delta", refs.dlEarlyStoppingMinDelta);
   if (!Number.isFinite(minDelta) || minDelta < 0 || minDelta > 0.1) {
     throw new Error(`Min delta must be between 0 and 0.1. Current value: ${formatValue(minDelta)}.`);
   }
   const evaluationStrategy = refs.dlEvaluationStrategy?.value || "holdout";
   if (evaluationStrategy === "repeated_cv") {
-    const cvFolds = Number(refs.dlCvFolds?.value);
+    const cvFolds = dlSetting("cv_folds", refs.dlCvFolds);
     if (!Number.isFinite(cvFolds) || cvFolds < 2 || cvFolds > 10) {
       throw new Error(`CV folds must be between 2 and 10. Current value: ${formatValue(cvFolds)}.`);
     }
-    const cvRepeats = Number(refs.dlCvRepeats?.value);
+    const cvRepeats = dlSetting("cv_repeats", refs.dlCvRepeats);
     if (!Number.isFinite(cvRepeats) || cvRepeats < 1 || cvRepeats > 20) {
       throw new Error(`CV repeats must be between 1 and 20. Current value: ${formatValue(cvRepeats)}.`);
     }
-    const parallelJobs = Number(refs.dlParallelJobs?.value);
+    const parallelJobs = dlSetting("parallel_jobs", refs.dlParallelJobs);
     if (!Number.isFinite(parallelJobs) || parallelJobs < 1 || parallelJobs > 16) {
       throw new Error(`Parallel jobs must be between 1 and 16. Current value: ${formatValue(parallelJobs)}.`);
     }
   }
   validatePredictiveEvaluationControls("dl", { includeLockedTest: compare });
   if (usesDiscreteTime) {
-    const numTimeBins = Number(refs.dlNumTimeBins?.value);
+    const numTimeBins = dlSetting("num_time_bins", refs.dlNumTimeBins);
     if (!Number.isFinite(numTimeBins) || numTimeBins < 10 || numTimeBins > 200) {
       throw new Error(`Time bins must be between 10 and 200. Current value: ${formatValue(numTimeBins)}.`);
     }
   }
   if (usesTransformer) {
-    const dModel = Number(refs.dlDModel?.value);
-    const nHeads = Number(refs.dlHeads?.value);
-    const nLayers = Number(refs.dlLayers?.value);
+    const dModel = dlSetting("d_model", refs.dlDModel);
+    const nHeads = dlSetting("n_heads", refs.dlHeads);
+    const nLayers = dlSetting("n_layers", refs.dlLayers);
     if (!Number.isFinite(dModel) || dModel < 16 || dModel > 256) {
       throw new Error(`Transformer width must be between 16 and 256. Current value: ${formatValue(dModel)}.`);
     }
@@ -190,8 +201,8 @@ function validateDlControls({ compare = false } = {}) {
     }
   }
   if (usesVae) {
-    const latentDim = Number(refs.dlLatentDim?.value);
-    const nClusters = Number(refs.dlClusters?.value);
+    const latentDim = dlSetting("latent_dim", refs.dlLatentDim);
+    const nClusters = dlSetting("n_clusters", refs.dlClusters);
     if (!Number.isFinite(latentDim) || latentDim < 2 || latentDim > 32) {
       throw new Error(`Latent dim must be between 2 and 32. Current value: ${formatValue(latentDim)}.`);
     }
@@ -202,7 +213,12 @@ function validateDlControls({ compare = false } = {}) {
 }
 
 function renderDatasetPreview() {
-  renderTable(refs.datasetPreviewShell, state.dataset.preview);
+  // The file's own column order and names: object keys would put numeric names such as "7157" first,
+  // and header or p-value formatting would rewrite the data (a column named "ki67_p" is not a p-value).
+  const rows = state.dataset.preview || [];
+  const present = new Set(rows.flatMap((row) => Object.keys(row || {})));
+  const columns = datasetColumnNames().filter((column) => present.has(column));
+  renderTable(refs.datasetPreviewShell, rows, columns.length ? columns : null, { pValueColumns: [], rawHeaders: true });
 }
 
 function duplicateIdentifierColumns(dataset = state.dataset) {
@@ -313,6 +329,7 @@ function activateTab(tabName, { historyMode = "replace", focusTabButton = false,
     }
     if (resolvedTabName === "benchmark") resizePlotIfDisplayed(refs.benchmarkComparisonPlot);
     if (resolvedTabName === "markers" && state.markers) {
+      resizePlotIfDisplayed(refs.markersSummaryPlot);
       resizePlotIfDisplayed(refs.markersStabilityPlot);
       resizePlotIfDisplayed(refs.markersRankPlot);
       resizePlotIfDisplayed(refs.markerValidationPlot);
@@ -323,11 +340,13 @@ function activateTab(tabName, { historyMode = "replace", focusTabButton = false,
 function updateControlsFromDataset({ scrollToTop = false } = {}) {
   const columnNames = state.dataset.columns.map((c) => c.name);
   const suggestions = state.dataset.suggestions;
+  if (refs.showAllTimeColumns) refs.showAllTimeColumns.checked = false;
   if (refs.showAllEventColumns) refs.showAllEventColumns.checked = false;
   if (refs.covariateSearchInput) refs.covariateSearchInput.value = "";
   if (refs.categoricalSearchInput) refs.categoricalSearchInput.value = "";
   if (refs.cohortVariableSearchInput) refs.cohortVariableSearchInput.value = "";
-  renderTimeColumnOptions({ preferred: inferDefault(columnNames, suggestions.time_columns, 0), silent: true });
+  // Only a likely follow-up column is preselected; otherwise Time stays blank for the user to choose.
+  renderTimeColumnOptions({ preferred: "", silent: true });
   renderEventColumnOptions({
     preferred: inferDefault(columnNames, suggestions.event_columns, 1),
     silent: true,
@@ -347,10 +366,32 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   renderWorkspaceChrome();
 }
 
+function clearSignatureSummary() {
+  if (!refs.signatureSummary) return;
+  refs.signatureSummary.innerHTML = "";
+}
+
+// Outcome-informed grouping outputs (the cut-point search card, an optimal-cutpoint scan and its card)
+// were computed for the endpoint of their run, so they go together with the other results.
+function clearOutcomeInformedGroupingOutputs() {
+  clearSignatureSummary();
+  if (refs.cutpointPlot) {
+    resetPlotElement(refs.cutpointPlot);
+    refs.cutpointPlot.classList.add("hidden");
+  }
+  const derived = refs.deriveSummary?.dataset.summaryKind === "derived" ? currentDerivedSummaryPayload() : null;
+  if (derived && (derived.summary?.outcome_informed || derived.summary?.method === "optimal_cutpoint")) {
+    refs.deriveSummary.innerHTML = "";
+    refs.deriveSummary.classList.add("hidden");
+    refs.deriveSummary.dataset.summaryKind = "";
+  }
+}
+
 function clearAnalysisOutputs() {
   invalidateRequestTokens(["km", "cox", "tables", "signature", "ml", "dl"]);
   invalidateRequestTokens(["markers", "markerValidation"]);
   clearMarkerOutputs();
+  clearOutcomeInformedGroupingOutputs();
   state.km = null;
   state.cox = null;
   state.cohort = null;
@@ -450,9 +491,10 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   const snapshot = captureControlSnapshot();
   const columnNames = payload.columns.map((column) => column.name);
   const suggestions = payload.suggestions || { time_columns: [], event_columns: [] };
+  // Without the previous choice only a likely follow-up column is preselected (never the first column).
   const preferredTime = snapshot?.timeColumn && columnNames.includes(snapshot.timeColumn)
     ? snapshot.timeColumn
-    : inferDefault(columnNames, suggestions.time_columns || [], 0);
+    : "";
   const preferredEvent = snapshot?.eventColumn && columnNames.includes(snapshot.eventColumn)
     ? snapshot.eventColumn
     : inferDefault(columnNames, suggestions.event_columns || [], 1);
@@ -474,6 +516,7 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
   runtime.derivedColumnProvenance = normalizeDerivedColumnProvenance(payload.derived_column_provenance);
   runtime.deriveDraftTouched = false;
 
+  if (refs.showAllTimeColumns) refs.showAllTimeColumns.checked = Boolean(snapshot?.showAllTimeColumns);
   if (refs.showAllEventColumns) refs.showAllEventColumns.checked = Boolean(snapshot?.showAllEventColumns);
   renderTimeColumnOptions({ preferred: preferredTime, silent: true });
   renderEventColumnOptions({ preferred: preferredEvent, silent: true });
@@ -540,10 +583,17 @@ function applyLoadedDataset(payload) {
 async function uploadDataset() {
   if (!refs.datasetFile.files?.length) throw new Error("Choose a dataset file first.");
   const selectedFile = refs.datasetFile.files[0];
-  setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info");
+  const uploadBanner = setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info");
   const formData = new FormData();
   formData.append("file", selectedFile);
-  const payload = await fetchLatestDatasetPayload((signal) => fetchJSON("/api/upload", { method: "POST", body: formData, signal }));
+  let payload;
+  try {
+    payload = await fetchLatestDatasetPayload((signal) => fetchJSON("/api/upload", { method: "POST", body: formData, signal }));
+  } catch (error) {
+    // A rejected file ends the upload; its "Uploading" banner goes with it (a newer load keeps its own).
+    releaseRuntimeBanner(uploadBanner);
+    throw error;
+  }
   if (!payload) return;
   const previousDatasetName = state.dataset?.filename || "";
   const clearedResults = Boolean(state.dataset) && hasCompletedResults();
@@ -792,11 +842,12 @@ function updateMlModelControlVisibility() {
 }
 
 async function runKaplanMeier() {
+  // Inputs are checked before the previous request is cancelled, so an invalid click leaves it running.
   const base = currentBaseConfig();
+  validateGroupingSelection();
   const requestToken = beginRequestToken("km");
   const datasetId = base.dataset_id;
-  validateGroupingSelection();
-  const requestedRiskTicks = Number(refs.riskTablePoints.value);
+  const requestedRiskTicks = numericControlValue(refs.riskTablePoints, KM_NUMERIC_DEFAULTS.risk_table_points);
   const loading = beginShellLoading([refs.kmSummaryShell, refs.kmRiskShell]);
   let payload;
   try {
@@ -805,11 +856,11 @@ async function runKaplanMeier() {
       method: "POST",
       body: JSON.stringify({
         ...base,
-        confidence_level: Number(refs.confidenceLevel.value),
+        confidence_level: numericControlValue(refs.confidenceLevel, KM_NUMERIC_DEFAULTS.confidence_level),
         risk_table_points: requestedRiskTicks,
         show_confidence_bands: refs.showConfidenceBands.checked,
         logrank_weight: refs.logrankWeight.value,
-        fh_p: Number(refs.fhPower.value),
+        fh_p: numericControlValue(refs.fhPower, KM_NUMERIC_DEFAULTS.fh_p),
       }),
     });
   } catch (error) {
@@ -843,42 +894,48 @@ async function runKaplanMeier() {
   });
 }
 
+// The search's summary card sits with its interpretation and ranking on the Markers tab, where Discover is.
 function renderSignatureResult(analysis) {
   renderTable(refs.signatureShell, analysis.results_table);
   renderInsightBoard(refs.signatureInsightBoard, analysis.scientific_summary, "Run auto-discovery to assess robustness.");
-  refs.downloadSignatureButton.disabled = analysis.results_table.length === 0;
   const best = analysis.best_split || {};
   const search = analysis.search_space || {};
-  const significantFlag = best["Statistically significant"] ? "Yes" : "No";
-  refs.deriveSummary.classList.remove("hidden");
-  refs.deriveSummary.dataset.summaryKind = "signature";
-  refs.deriveSummary.innerHTML = `
+  const cell = (label, value) => `<div><strong>${escapeHtml(label)}</strong><br/>${escapeHtml(value)}</div>`;
+  if (!refs.signatureSummary) return;
+  refs.signatureSummary.innerHTML = `
     <div class="signature-summary-grid">
-      <div><strong>Best signature</strong><br/>${escapeHtml(best.Signature || "NA")}</div>
-      <div><strong>HR (sig+ vs -)</strong><br/>${formatValue(best["Hazard ratio (signature+ vs -)"])}</div>
-      <div><strong>BH-adjusted p</strong><br/>${formatPValue(best["BH adjusted p"])}</div>
-      <div><strong>Significant</strong><br/>${significantFlag}</div>
-      <div><strong>Stability</strong><br/>${formatValue(best["Stability score"])}</div>
-      <div><strong>Bootstrap support</strong><br/>${formatValue(best["Bootstrap support (p<alpha)"])}</div>
-      <div><strong>Direction consistency</strong><br/>${formatValue(best["Bootstrap HR direction consistency"])}</div>
-      <div><strong>Validation support</strong><br/>${formatValue(best["Validation support (p<alpha)"])}</div>
-      <div><strong>Permutation p</strong><br/>${formatPValue(best["Permutation p"])}</div>
-      <div><strong>Tested</strong><br/>${formatValue(search.tested_combinations)}</div>
-      <div><strong>Significant combos</strong><br/>${formatValue(search.significant_signatures)}</div>
-      <div><strong>Operator</strong><br/>${escapeHtml(search.combination_operator || "mixed")}</div>
-      <div><strong>Seed</strong><br/>${formatValue(search.random_seed)}</div>
-      <div><strong>Alpha</strong><br/>${formatValue(search.significance_level)}</div>
+      ${cell("Best signature", best.Signature || "NA")}
+      ${cell("HR (sig+ vs -)", formatValue(best["Hazard ratio (signature+ vs -)"]))}
+      ${cell("BH-adjusted p", formatPValue(best["BH adjusted p"]))}
+      ${cell("Significant", best["Statistically significant"] ? "Yes" : "No")}
+      ${cell("Stability", formatValue(best["Stability score"]))}
+      ${cell("Bootstrap support", formatValue(best["Bootstrap support (p<alpha)"]))}
+      ${cell("Direction consistency", formatValue(best["Bootstrap HR direction consistency"]))}
+      ${cell("Validation support", formatValue(best["Validation support (p<alpha)"]))}
+      ${cell("Permutation p", formatPValue(best["Permutation p"]))}
+      ${cell("Tested", formatValue(search.tested_combinations))}
+      ${cell("Significant combos", formatValue(search.significant_signatures))}
+      ${cell("Operator", search.combination_operator || "mixed")}
+      ${cell("Seed", formatValue(search.random_seed))}
+      ${cell("Alpha", formatValue(search.significance_level))}
     </div>`;
+}
+
+function signatureSetting(key, control) {
+  return numericControlValue(control, SIGNATURE_NUMERIC_DEFAULTS[key]);
 }
 
 async function runSignatureSearch() {
   const base = currentBaseConfig();
-  const requestToken = beginRequestToken("signature");
-  const { markers, clinical } = currentMarkerSelections();
-  const candidateColumns = [...markers, ...clinical];
+  if (markerMatrixAttached()) {
+    throw new Error("The cut-point search uses markers from the checklist, not an attached marker file. Remove the file to search the checklist markers.");
+  }
+  const { markers } = currentMarkerSelections();
+  const candidateColumns = signatureCandidateColumns();
   if (!markers.length) throw new Error("Select at least one marker to search for cut-point combinations.");
   const requestedColumnName = validateDerivedColumnName(refs.deriveColumnName.value);
   validateMinGroupFraction(refs.signatureMinFraction);
+  const requestToken = beginRequestToken("signature");
   const preservedGroup = String(refs.groupColumn?.value || "");
   const requestConfig = {
     dataset_id: state.dataset.dataset_id,
@@ -886,17 +943,17 @@ async function runSignatureSearch() {
     event_column: base.event_column,
     event_positive_value: base.event_positive_value,
     candidate_columns: candidateColumns,
-    max_combination_size: Number(refs.signatureMaxDepth.value),
-    top_k: Number(refs.signatureTopK.value),
-    min_group_fraction: Number(refs.signatureMinFraction.value),
-    bootstrap_iterations: Number(refs.signatureBootstrapIterations.value),
+    max_combination_size: signatureSetting("max_combination_size", refs.signatureMaxDepth),
+    top_k: signatureSetting("top_k", refs.signatureTopK),
+    min_group_fraction: signatureSetting("min_group_fraction", refs.signatureMinFraction),
+    bootstrap_iterations: signatureSetting("bootstrap_iterations", refs.signatureBootstrapIterations),
     bootstrap_sample_fraction: 0.8,
-    permutation_iterations: Number(refs.signaturePermutationIterations.value),
-    validation_iterations: Number(refs.signatureValidationIterations.value),
-    validation_fraction: Number(refs.signatureValidationFraction.value),
-    significance_level: Number(refs.signatureSignificanceLevel.value),
+    permutation_iterations: signatureSetting("permutation_iterations", refs.signaturePermutationIterations),
+    validation_iterations: signatureSetting("validation_iterations", refs.signatureValidationIterations),
+    validation_fraction: signatureSetting("validation_fraction", refs.signatureValidationFraction),
+    significance_level: signatureSetting("significance_level", refs.signatureSignificanceLevel),
     combination_operator: refs.signatureOperator.value,
-    random_seed: Number(refs.signatureRandomSeed.value),
+    random_seed: signatureSetting("random_seed", refs.signatureRandomSeed),
     new_column_name: requestedColumnName,
   };
   const payload = await fetchJSON("/api/discover-signature", {
@@ -935,20 +992,22 @@ async function runSignatureSearch() {
     ? `Auto-derived ${payload.derived_column}`
     : `Derived exploratory grouping ${payload.derived_column}`;
   syncDownloadButtonAvailability();
-  revealCompletedResultIfCurrent("km", {
+  // Discover lives on the Markers tab, so that is where the finished search is shown.
+  revealCompletedResultIfCurrent("markers", {
+    mode: "signature",
     successMessage: shouldAutoApplyDerivedGroup
       ? `Signature discovery complete. Group by switched to ${payload.derived_column}.`
       : `Signature discovery complete. ${payload.derived_column} was saved but not auto-applied because the top split did not pass the current significance rules.`,
-    backgroundMessage: "Signature discovery finished in the background. Switch back when you are ready to review the updated signature ranking.",
+    backgroundMessage: "Signature discovery finished in the background. Open the Markers tab to review the signature ranking.",
   });
 }
 
 async function runCox() {
   const base = currentBaseConfig();
-  const requestToken = beginRequestToken("cox");
-  const datasetId = base.dataset_id;
   const { covariates, categoricalCovariates, strataColumns } = currentCoxSelections();
   if (!covariates.length) { showToast("Select at least one covariate for the Cox model.", "error"); return; }
+  const requestToken = beginRequestToken("cox");
+  const datasetId = base.dataset_id;
   const loading = beginShellLoading([refs.coxResultsShell]);
   let payload;
   try {
@@ -1014,10 +1073,10 @@ async function runCox() {
 
 async function runCohortTable() {
   const datasetId = state.dataset?.dataset_id || "";
-  const requestToken = beginRequestToken("tables");
   validateGroupingSelection();
   const vars = selectedCheckboxValues(refs.cohortVariableChecklist);
   if (!vars.length) { showToast("Select at least one variable for the cohort table.", "error"); return; }
+  const requestToken = beginRequestToken("tables");
   const loading = beginShellLoading([refs.cohortTableShell]);
   let payload;
   try {
@@ -1039,7 +1098,8 @@ async function runCohortTable() {
   loading.finish();
   state.cohort = payload;
   renderAnalysisConsistencyBanner();
-  renderTable(refs.cohortTableShell, payload.analysis.rows, payload.analysis.columns);
+  // Group-level columns are data labels ("Test positive", "pT1a"): shown as they are, never as p-values.
+  renderTable(refs.cohortTableShell, payload.analysis.rows, payload.analysis.columns, { pValueColumns: [], rawHeaders: true });
   const tableNotes = cohortTableAnalysisNotes(payload);
   if (tableNotes.length && payload.analysis.rows?.length) {
     const noteEl = document.createElement("p");

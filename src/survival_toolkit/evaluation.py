@@ -6,6 +6,9 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from survival_toolkit.concurrency import raise_if_cancelled
+from survival_toolkit.errors import UserInputError
+
 # One holdout convention for every model family. Classical ML and deep models
 # must be scored on the same evaluation rows to be rank-comparable, so both
 # call :func:`stratified_holdout_indices` with the same seed.
@@ -165,37 +168,95 @@ def prediction_block(
     }
 
 
+def _is_list_like(value: Any) -> bool:
+    return hasattr(value, "__len__") and hasattr(value, "__iter__") and not isinstance(value, (str, bytes, Mapping))
+
+
+def _block_numbers(values: Any, *, label: str, field: str, length: int) -> np.ndarray:
+    """One list of a prediction block as floats, with its length checked against the row IDs."""
+    if not _is_list_like(values):
+        raise UserInputError(f"{label}: '{field}' must be a list of numbers, one per row ID.")
+    if len(values) != length:
+        raise UserInputError(f"{label}: '{field}' has {len(values)} values for {length} row IDs.")
+    try:
+        numbers = np.asarray(values, dtype=float).reshape(-1)
+    except (TypeError, ValueError) as exc:
+        raise UserInputError(f"{label}: '{field}' must contain only numbers.") from exc
+    if numbers.shape[0] != length:
+        raise UserInputError(f"{label}: '{field}' must be a flat list of numbers, one per row ID.")
+    return numbers
+
+
+def _validated_prediction_block(block: Any, index: int) -> dict[str, Any] | None:
+    """A prediction block checked field by field; None for an empty block (skipped)."""
+    label = f"Prediction block {index + 1}"
+    if block is None:
+        return None
+    if not isinstance(block, Mapping):
+        raise UserInputError(f"{label} must be an object with row_ids, time, event and risk.")
+    row_ids = block.get("row_ids")
+    if row_ids is None or (_is_list_like(row_ids) and len(row_ids) == 0):
+        return None
+    if not _is_list_like(row_ids):
+        raise UserInputError(f"{label}: 'row_ids' must be a list of row labels.")
+    missing = [key for key in ("time", "event", "risk") if key not in block]
+    if missing:
+        raise UserInputError(f"{label} lacks {', '.join(repr(key) for key in missing)}.")
+    rows = [str(row) for row in row_ids]
+    if len(set(rows)) != len(rows):
+        raise UserInputError(f"{label}: 'row_ids' repeats a row label; each test patient must appear once.")
+    n = len(rows)
+    time = _block_numbers(block["time"], label=label, field="time", length=n)
+    if not np.isfinite(time).all():
+        raise UserInputError(f"{label}: every 'time' must be a finite number.")
+    event_values = _block_numbers(block["event"], label=label, field="event", length=n)
+    if not np.isin(event_values, (0.0, 1.0)).all():
+        raise UserInputError(f"{label}: every 'event' must be 0 or 1.")
+    risk = block["risk"]
+    if not isinstance(risk, Mapping) or not risk:
+        raise UserInputError(f"{label}: 'risk' must map each model name to its list of risk scores.")
+    risks = {
+        str(name): _block_numbers(values, label=label, field=f"risk of {name}", length=n)
+        for name, values in risk.items()
+    }
+    return {"row_ids": rows, "time": time, "event": event_values.astype(int), "risk": risks}
+
+
 def merge_prediction_blocks(blocks: Sequence[Mapping[str, Any]]) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray], list[str]]:
     """Time, event and every model's risk on the patients present in all blocks.
 
     Blocks come from comparisons of different model families on the same split; a
     patient's time and event must agree between blocks. A model in several blocks is
-    taken from the first.
+    taken from the first. Blocks may come from a client, so each one is validated and
+    problems raise a :class:`UserInputError` that names the block and field.
     """
-    usable = [block for block in blocks if block and block.get("row_ids")]
+    if not _is_list_like(blocks):
+        raise UserInputError("Prediction blocks must be given as a list.")
+    validated = [_validated_prediction_block(block, index) for index, block in enumerate(blocks)]
+    usable = [block for block in validated if block is not None]
     if not usable:
-        raise ValueError("No test-set predictions to compare.")
-    shared = set(str(row) for row in usable[0]["row_ids"])
+        raise UserInputError("No test-set predictions to compare.")
+    shared = set(usable[0]["row_ids"])
     for block in usable[1:]:
-        shared &= set(str(row) for row in block["row_ids"])
+        shared &= set(block["row_ids"])
     rows = sorted(shared)
     if not rows:
-        raise ValueError("The comparisons share no test patients; run them on the same split.")
+        raise UserInputError("The comparisons share no test patients; run them on the same split.")
     time = np.empty(len(rows))
     event = np.empty(len(rows), dtype=int)
     risks: dict[str, np.ndarray] = {}
     for index, block in enumerate(usable):
-        position = {str(row): offset for offset, row in enumerate(block["row_ids"])}
+        position = {row: offset for offset, row in enumerate(block["row_ids"])}
         order = [position[row] for row in rows]
-        block_time = np.asarray(block["time"], dtype=float)[order]
-        block_event = np.asarray(block["event"], dtype=int)[order]
+        block_time = block["time"][order]
+        block_event = block["event"][order]
         if index == 0:
             time, event = block_time, block_event
         elif not (np.allclose(time, block_time) and np.array_equal(event, block_event)):
-            raise ValueError("The comparisons disagree on the outcome of shared test patients; run them on the same dataset.")
+            raise UserInputError("The comparisons disagree on the outcome of shared test patients; run them on the same dataset.")
         for name, values in block["risk"].items():
             if name not in risks:
-                risks[str(name)] = np.asarray(values, dtype=float)[order]
+                risks[name] = values[order]
     return time, event, risks, rows
 
 
@@ -217,18 +278,32 @@ def c_index_intervals(
     """
     from survival_toolkit.marker_screen import harrell_c_many
 
+    if not isinstance(risks, Mapping):
+        raise UserInputError("Model risk scores must map each model name to its risk scores.")
     names = [str(name) for name in risks]
     if not names:
-        raise ValueError("No model risk scores to compare.")
-    time = np.asarray(time, dtype=float).reshape(-1)
-    event = np.asarray(event).reshape(-1).astype(int)
-    matrix = np.column_stack([np.asarray(risks[name], dtype=float).reshape(-1) for name in names])
-    if matrix.shape[0] != time.shape[0] or not np.isfinite(matrix).all():
-        raise ValueError("Every model needs a finite risk score for every test patient.")
+        raise UserInputError("No model risk scores to compare.")
+    try:
+        time = np.asarray(time, dtype=float).reshape(-1)
+        event_values = np.asarray(event, dtype=float).reshape(-1)
+        columns = [np.asarray(risks[name], dtype=float).reshape(-1) for name in risks]
+    except (TypeError, ValueError) as exc:
+        raise UserInputError("Test-set times, events and risk scores must be numbers.") from exc
+    if event_values.shape[0] != time.shape[0] or not np.isin(event_values, (0.0, 1.0)).all():
+        raise UserInputError("Every test patient needs one event indicator of 0 or 1.")
+    if not np.isfinite(time).all():
+        raise UserInputError("Every test patient needs a finite follow-up time.")
+    event = event_values.astype(int)
+    if any(column.shape[0] != time.shape[0] for column in columns):
+        raise UserInputError("Every model needs a finite risk score for every test patient.")
+    matrix = np.column_stack(columns)
+    if not np.isfinite(matrix).all():
+        raise UserInputError("Every model needs a finite risk score for every test patient.")
     point = harrell_c_many(time, event, matrix)
     rng = np.random.default_rng(int(random_seed))
     draws = []
     for _ in range(int(n_bootstrap)):
+        raise_if_cancelled()
         rows = rng.integers(0, time.shape[0], size=time.shape[0])
         if event[rows].any():
             draws.append(harrell_c_many(time[rows], event[rows], matrix[rows]))

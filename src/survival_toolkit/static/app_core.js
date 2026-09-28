@@ -12,8 +12,8 @@ const appState = {
   dl: null,
   markers: null,
   markerValidation: null,
-  isFilePreview: window.location.protocol === "file:",
-  apiBase: window.location.protocol === "file:" ? "http://127.0.0.1:8000" : "",
+  // The page is always served by the SurvStudio server, so API paths stay relative to it.
+  apiBase: "",
   historySyncPaused: false,
   historySyncTimer: null,
   lastDerivedGroup: null,
@@ -30,10 +30,10 @@ const appState = {
     error: "",
   },
   coxPreviewTimer: null,
-  coxPreviewToken: 0,
   requestTokens: {
     km: 0,
     cox: 0,
+    coxPreview: 0,
     tables: 0,
     signature: 0,
     ml: 0,
@@ -43,6 +43,7 @@ const appState = {
     dataset: 0,
     derive: 0,
   },
+  runtimeBannerSerial: 0,
   requestControllers: {},
   coxMartingaleTerm: "",
   resultPreference: {
@@ -93,6 +94,7 @@ const refs = {
   configStrip: document.getElementById("configStrip"),
   tabStrip: document.getElementById("tabStrip"),
   timeColumn: document.getElementById("timeColumn"),
+  showAllTimeColumns: document.getElementById("showAllTimeColumns"),
   timeColumnHelp: document.getElementById("timeColumnHelp"),
   timeColumnWarning: document.getElementById("timeColumnWarning"),
   eventColumn: document.getElementById("eventColumn"),
@@ -149,6 +151,7 @@ const refs = {
   kmRiskShell: document.getElementById("kmRiskShell"),
   kmPairwiseShell: document.getElementById("kmPairwiseShell"),
   signatureInsightBoard: document.getElementById("signatureInsightBoard"),
+  signatureSummary: document.getElementById("signatureSummary"),
   signatureShell: document.getElementById("signatureShell"),
   downloadKmSummaryButton: document.getElementById("downloadKmSummaryButton"),
   downloadKmPairwiseButton: document.getElementById("downloadKmPairwiseButton"),
@@ -185,6 +188,7 @@ const refs = {
   downloadMarkerRecipeButton: document.getElementById("downloadMarkerRecipeButton"),
   downloadMarkerRemarkDocxButton: document.getElementById("downloadMarkerRemarkDocxButton"),
   downloadMarkerRemarkMarkdownButton: document.getElementById("downloadMarkerRemarkMarkdownButton"),
+  downloadMarkersSummaryPngButton: document.getElementById("downloadMarkersSummaryPngButton"),
   downloadMarkersStabilityPngButton: document.getElementById("downloadMarkersStabilityPngButton"),
   downloadMarkersRankPngButton: document.getElementById("downloadMarkersRankPngButton"),
   selectAllMarkersButton: document.getElementById("selectAllMarkersButton"),
@@ -206,6 +210,7 @@ const refs = {
   markerResamples: document.getElementById("markerResamples"),
   markerRandomSeed: document.getElementById("markerRandomSeed"),
   markerNonlinearLens: document.getElementById("markerNonlinearLens"),
+  markersSummaryPlot: document.getElementById("markersSummaryPlot"),
   markersStabilityPlot: document.getElementById("markersStabilityPlot"),
   markersMetaBanner: document.getElementById("markersMetaBanner"),
   markersInsightBoard: document.getElementById("markersInsightBoard"),
@@ -382,6 +387,40 @@ const AUTO_CATEGORICAL_UNIQUE_THRESHOLD = 6;
 const COX_STAGE_VARIABLE_PREFERENCE = ["stage_group", "pathologic_stage", "stage"];
 const DEFAULT_TIME_UNIT_LABEL = "Time";
 const DEFAULT_LOCKED_TEST_PERCENT = 30;
+// Defaults of the numeric settings (the server's defaults). Request builders, input checks and result
+// currency all read a blank field as its default, so a run never sends Number("") = 0 while the result
+// currency assumes the default (and ML and DL never split the patients with different seeds).
+const KM_NUMERIC_DEFAULTS = Object.freeze({ confidence_level: 0.95, risk_table_points: 6, fh_p: 1 });
+const ML_NUMERIC_DEFAULTS = Object.freeze({ n_estimators: 100, learning_rate: 0.1, random_state: 42, cv_folds: 5, cv_repeats: 3 });
+const DL_NUMERIC_DEFAULTS = Object.freeze({
+  dropout: 0.1,
+  learning_rate: 0.001,
+  epochs: 100,
+  batch_size: 64,
+  random_seed: 42,
+  cv_folds: 5,
+  cv_repeats: 3,
+  early_stopping_patience: 10,
+  early_stopping_min_delta: 0.0001,
+  parallel_jobs: 1,
+  num_time_bins: 50,
+  d_model: 64,
+  n_heads: 4,
+  n_layers: 2,
+  latent_dim: 8,
+  n_clusters: 3,
+});
+const SIGNATURE_NUMERIC_DEFAULTS = Object.freeze({
+  max_combination_size: 3,
+  top_k: 15,
+  min_group_fraction: 0.1,
+  bootstrap_iterations: 30,
+  permutation_iterations: 120,
+  validation_iterations: 12,
+  validation_fraction: 0.35,
+  significance_level: 0.05,
+  random_seed: 20260311,
+});
 const DATASET_PRESETS = Object.freeze({
   gbsg2: {
     name: "GBSG2 preset",
@@ -504,7 +543,10 @@ async function fetchJSON(url, options = {}) {
   }
   if (!response.ok) {
     const message = extractErrorMessage(payload, rawText);
-    if (response.status === 404 && /Unknown dataset id:/i.test(message) && state.dataset) {
+    // Only the loss of the loaded cohort itself ends the workspace; a 404 for another dataset (an older
+    // snapshot, an external validation cohort, a history entry) is an ordinary error.
+    const missingDatasetId = response.status === 404 ? /Unknown dataset id:\s*([\w-]+)/i.exec(message)?.[1] : null;
+    if (missingDatasetId && state.dataset && missingDatasetId === String(state.dataset.dataset_id)) {
       const datasetName = state.dataset?.filename || state.dataset?.dataset_id || "current cohort";
       goHome({ syncHistory: true, historyMode: "replace" });
       setRuntimeBanner(`The previously loaded cohort (${datasetName}) is no longer available on the server. Reload it to continue.`, "warning");
@@ -537,15 +579,24 @@ function errorMessageText(error, fallbackText = "Request failed.") {
   return fallbackText;
 }
 
+// Returns a serial that identifies this banner, so a run can later clear the banner it set without
+// wiping a newer one (releaseRuntimeBanner).
 function setRuntimeBanner(text = "", tone = "info") {
-  if (!refs.runtimeBanner) return;
+  runtime.runtimeBannerSerial = Number(runtime.runtimeBannerSerial || 0) + 1;
+  if (!refs.runtimeBanner) return runtime.runtimeBannerSerial;
   if (!text) {
     refs.runtimeBanner.textContent = "";
     refs.runtimeBanner.className = "runtime-banner hidden";
-    return;
+    return runtime.runtimeBannerSerial;
   }
   refs.runtimeBanner.textContent = text;
   refs.runtimeBanner.className = `runtime-banner runtime-banner-${tone}`;
+  return runtime.runtimeBannerSerial;
+}
+
+// Clears the banner only while it is still the one that `serial` set.
+function releaseRuntimeBanner(serial) {
+  if (serial && serial === runtime.runtimeBannerSerial) setRuntimeBanner("");
 }
 
 function renderServerStoppedState(message) {
@@ -608,10 +659,6 @@ function predictiveFamilyGoal() {
   return normalizedPredictiveFamily(runtime.predictiveFamily);
 }
 
-function alternatePredictiveFamilyGoal() {
-  return predictiveFamilyGoal() === "ml" ? "dl" : "ml";
-}
-
 function goalLabel(goal) {
   return {
     km: "Kaplan-Meier",
@@ -629,19 +676,6 @@ function goalFeatureCount(goal) {
   if (goal === "ml" || goal === "dl" || goal === "predictive") return selectedCheckboxValues(refs.modelFeatureChecklist).length;
   if (goal === "tables") return selectedCheckboxValues(refs.cohortVariableChecklist).length;
   return 0;
-}
-
-function evaluationModeLabel(goal) {
-  if (goal === "predictive") {
-    return evaluationModeLabel(predictiveFamilyGoal());
-  }
-  if (goal === "ml") {
-    return refs.mlEvaluationStrategy?.selectedOptions?.[0]?.textContent || refs.mlEvaluationStrategy?.value || "Holdout";
-  }
-  if (goal === "dl") {
-    return refs.dlEvaluationStrategy?.selectedOptions?.[0]?.textContent || refs.dlEvaluationStrategy?.value || "Holdout";
-  }
-  return null;
 }
 
 function numberOrDefault(value, fallback) {
@@ -686,7 +720,7 @@ function applyAutomaticTimeUnitLabel({ force = false } = {}) {
 
 function sharedPredictiveSeed() {
   // ML (random_state) and DL (random_seed) share one seed so both families use the same row partitions.
-  return numericControlValue(refs.dlRandomSeed, 42);
+  return numericControlValue(refs.dlRandomSeed, DL_NUMERIC_DEFAULTS.random_seed);
 }
 
 function normalizedLockedTestFraction(value) {
@@ -708,22 +742,23 @@ function currentLockedTestFraction(goal = "ml") {
 }
 
 function validatePredictiveEvaluationControls(goal = "ml", { includeLockedTest = true } = {}) {
-  const seed = Number(goal === "dl" ? refs.dlRandomSeed?.value : (refs.mlRandomSeed?.value ?? refs.dlRandomSeed?.value));
+  // Both families run with sharedPredictiveSeed(), so that is the seed to check.
+  const seed = sharedPredictiveSeed();
   if (!Number.isFinite(seed) || !Number.isInteger(seed) || seed < 0) {
     throw new Error(`Random seed must be a non-negative integer. Current value: ${formatValue(seed)}.`);
   }
   const { strategy, toggle, input } = lockedTestControls(goal);
   if ((strategy?.value || "holdout") !== "repeated_cv") return;
-  const folds = Number((goal === "dl" ? refs.dlCvFolds : refs.mlCvFolds)?.value);
+  const folds = numericControlValue(goal === "dl" ? refs.dlCvFolds : refs.mlCvFolds, ML_NUMERIC_DEFAULTS.cv_folds);
   if (!Number.isInteger(folds) || folds < 2 || folds > 10) {
     throw new Error(`CV folds must be an integer between 2 and 10. Current value: ${formatValue(folds)}.`);
   }
-  const repeats = Number((goal === "dl" ? refs.dlCvRepeats : refs.mlCvRepeats)?.value);
+  const repeats = numericControlValue(goal === "dl" ? refs.dlCvRepeats : refs.mlCvRepeats, ML_NUMERIC_DEFAULTS.cv_repeats);
   if (!Number.isInteger(repeats) || repeats < 1 || repeats > 20) {
     throw new Error(`CV repeats must be an integer between 1 and 20. Current value: ${formatValue(repeats)}.`);
   }
   if (includeLockedTest && toggle?.checked) {
-    const percent = Number(input?.value);
+    const percent = numericControlValue(input, DEFAULT_LOCKED_TEST_PERCENT);
     if (!Number.isFinite(percent) || percent < 5 || percent > 50) {
       throw new Error(`Locked test set must be between 5% and 50% of patients. Current value: ${formatValue(percent)}%.`);
     }
@@ -856,7 +891,8 @@ function resetCoxPreview({ rerender = true } = {}) {
     window.clearTimeout(runtime.coxPreviewTimer);
     runtime.coxPreviewTimer = null;
   }
-  runtime.coxPreviewToken += 1;
+  // Cancels a preview request still in flight; its answer would describe settings that are gone.
+  invalidateRequestTokens(["coxPreview"]);
   runtime.coxPreview = {
     key: "",
     status: "idle",
@@ -891,7 +927,8 @@ async function refreshCoxPreview({ force = false } = {}) {
   }
   const requestKey = coxPreviewRequestKey(requestConfig);
   if (!force && runtime.coxPreview.key === requestKey && runtime.coxPreview.status === "ready") return;
-  const previewToken = ++runtime.coxPreviewToken;
+  // A newer preview cancels the one still in flight, so the server stops counting rows nobody will read.
+  const previewToken = beginRequestToken("coxPreview");
   runtime.coxPreview = {
     key: requestKey,
     status: "loading",
@@ -901,10 +938,11 @@ async function refreshCoxPreview({ force = false } = {}) {
   renderCoxPreviewLine();
   try {
     const payload = await fetchJSON("/api/cox-preview", {
+      signal: requestSignal("coxPreview"),
       method: "POST",
       body: JSON.stringify(requestConfig),
     });
-    if (previewToken !== runtime.coxPreviewToken) return;
+    if (!requestTokenMatches("coxPreview", previewToken)) return;
     runtime.coxPreview = {
       key: requestKey,
       status: "ready",
@@ -912,7 +950,7 @@ async function refreshCoxPreview({ force = false } = {}) {
       error: "",
     };
   } catch (error) {
-    if (previewToken !== runtime.coxPreviewToken) return;
+    if (!requestTokenMatches("coxPreview", previewToken) || isSupersededRequestError(error)) return;
     runtime.coxPreview = {
       key: requestKey,
       status: "error",
@@ -1013,9 +1051,8 @@ function renderAnalysisConsistencyBanner() {
     .map((item) => (Number.isFinite(item.n) ? `${item.label} N=${formatValue(item.n)}` : item.label))
     .join("; ");
   setAnalysisConsistencyBanner(
-    `Loaded analyses currently use different analyzable cohorts on the same dataset (${cohortSummary}). `
-      + "This usually reflects different missing-value filtering or candidate-feature eligibility. "
-      + "Do not report KM, Cox, Signature, or grouped table outputs side by side as if they used the same patients.",
+    `Loaded analyses currently use different analyzable cohorts on the same dataset (${cohortSummary}), `
+      + "usually because of missing values. Do not present them side by side as one cohort.",
     "warning",
   );
 }
@@ -1062,28 +1099,36 @@ function currentSignatureResult() {
   if (!payload || !state.dataset) return null;
   const requestConfig = requestConfigFromPayload(payload);
   if (!requestConfig) return null;
-  const base = currentBaseConfig();
+  let base;
+  try {
+    base = currentBaseConfig();
+  } catch {
+    return null;
+  }
   const currentDerivedName = String(refs.deriveColumnName?.value || "").trim();
-  const currentCandidates = sortedStrings(selectedCheckboxValues(refs.covariateChecklist));
+  // The same candidates runSignatureSearch sends: the Markers tab's markers and clinical covariates.
+  const currentCandidates = sortedStrings(signatureCandidateColumns());
   const requestedCandidates = sortedStrings(requestConfig.candidate_columns || []);
   // Discovery writes its grouping into a new dataset snapshot, so the result belongs to that snapshot.
   const resultDatasetId = String(payload.result_dataset_id || requestConfig.dataset_id || "");
+  const setting = (key, control) => numberOrDefault(requestConfig[key], SIGNATURE_NUMERIC_DEFAULTS[key])
+    === numericControlValue(control, SIGNATURE_NUMERIC_DEFAULTS[key]);
   const isCurrent = (
     resultDatasetId === String(state.dataset.dataset_id || "")
     && String(requestConfig.time_column || "") === String(base.time_column || "")
     && String(requestConfig.event_column || "") === String(base.event_column || "")
-    && String(requestConfig.event_positive_value ?? "") === String(base.event_positive_value ?? "")
+    && String(requestConfig.event_positive_value ?? "").trim() === String(base.event_positive_value ?? "").trim()
     && String(requestConfig.new_column_name || "") === currentDerivedName
     && String(requestConfig.combination_operator || "mixed") === String(refs.signatureOperator?.value || "mixed")
-    && numberOrDefault(requestConfig.max_combination_size, 3) === numericControlValue(refs.signatureMaxDepth, 3)
-    && numberOrDefault(requestConfig.top_k, 15) === numericControlValue(refs.signatureTopK, 15)
-    && numberOrDefault(requestConfig.min_group_fraction, 0.1) === numericControlValue(refs.signatureMinFraction, 0.1)
-    && numberOrDefault(requestConfig.bootstrap_iterations, 30) === numericControlValue(refs.signatureBootstrapIterations, 30)
-    && numberOrDefault(requestConfig.permutation_iterations, 120) === numericControlValue(refs.signaturePermutationIterations, 120)
-    && numberOrDefault(requestConfig.validation_iterations, 12) === numericControlValue(refs.signatureValidationIterations, 12)
-    && numberOrDefault(requestConfig.validation_fraction, 0.35) === numericControlValue(refs.signatureValidationFraction, 0.35)
-    && numberOrDefault(requestConfig.significance_level, 0.05) === numericControlValue(refs.signatureSignificanceLevel, 0.05)
-    && numberOrDefault(requestConfig.random_seed, 20260311) === numericControlValue(refs.signatureRandomSeed, 20260311)
+    && setting("max_combination_size", refs.signatureMaxDepth)
+    && setting("top_k", refs.signatureTopK)
+    && setting("min_group_fraction", refs.signatureMinFraction)
+    && setting("bootstrap_iterations", refs.signatureBootstrapIterations)
+    && setting("permutation_iterations", refs.signaturePermutationIterations)
+    && setting("validation_iterations", refs.signatureValidationIterations)
+    && setting("validation_fraction", refs.signatureValidationFraction)
+    && setting("significance_level", refs.signatureSignificanceLevel)
+    && setting("random_seed", refs.signatureRandomSeed)
     && arrayEquals(requestedCandidates, currentCandidates)
   );
   return isCurrent ? payload : null;

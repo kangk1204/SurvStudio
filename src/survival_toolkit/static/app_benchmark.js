@@ -14,8 +14,6 @@
       benchmarkMetricNumber,
       benchmarkEvaluationLabel,
       benchmarkReviewAction,
-      mlModelLabel,
-      dlModelLabel,
       formatValue,
       escapeHtml,
       isScopeBusy,
@@ -137,12 +135,25 @@
       return comparisonRowsFromPayload(payload);
     }
 
+    // A failed locked-test refit ("stage": "locked_test") leaves the model ranked by cross-validation: it is
+    // not an excluded model, only a model without a locked-test estimate (see lockedTestErrorFor).
+    function exclusionErrors(payload) {
+      const errors = Array.isArray(payload?.analysis?.errors) ? payload.analysis.errors : [];
+      return errors.filter((entry) => entry && entry.stage !== "locked_test");
+    }
+
+    function lockedTestErrorFor(payload, row) {
+      if (row?.locked_test_error) return String(row.locked_test_error);
+      const errors = Array.isArray(payload?.analysis?.errors) ? payload.analysis.errors : [];
+      const entry = errors.find((item) => item?.stage === "locked_test" && String(item?.model || "").trim() === String(row?.model || "").trim());
+      return entry ? String(entry.error || "the refit failed") : "";
+    }
+
     function excludedModelsFromPayload(payload) {
       const explicit = Array.isArray(payload?.analysis?.excluded_models)
         ? payload.analysis.excluded_models.map((value) => String(value || "").trim()).filter(Boolean)
         : [];
-      const errors = Array.isArray(payload?.analysis?.errors) ? payload.analysis.errors : [];
-      const erroredModels = errors.map((entry) => String(entry?.model || "").trim()).filter(Boolean);
+      const erroredModels = exclusionErrors(payload).map((entry) => String(entry?.model || "").trim()).filter(Boolean);
       return [...new Set([...explicit, ...erroredModels])];
     }
 
@@ -173,10 +184,6 @@
 
     const EXPERIMENTAL_MODELS = new Set(["Survival Transformer", "Survival VAE"]);
 
-    function showBenchmarkStarterAction() {
-      return true;
-    }
-
     function benchmarkRowsFromPayload(goal, payload, { statusOverride = null, paramsSource = "current" } = {}) {
       if (!payload) return [];
       const meta = benchmarkGoalMeta(goal);
@@ -194,6 +201,7 @@
           numericCIndex: benchmarkMetricNumber(row.c_index),
           hasLockedTest: Object.prototype.hasOwnProperty.call(row || {}, "locked_test_c_index"),
           locked_test_c_index: row.locked_test_c_index,
+          lockedTestError: lockedTestErrorFor(payload, row),
           evaluation_mode: row.evaluation_mode || payload?.analysis?.evaluation_mode || "",
           sourceRank: rankProvided ? (ranked ? Number(row.rank) : null) : index + 1,
           comparableForRanking: ranked && row.comparable_for_ranking !== false && benchmarkMetricNumber(row.c_index) !== null,
@@ -212,7 +220,7 @@
       const runGroupId = comparePayloadGroupId(payload);
       const comparisonRows = comparisonRowsFromPayload(payload);
       const seenModels = new Set(comparisonRows.map((row) => String(row?.model || "").trim().toLowerCase()).filter(Boolean));
-      const errorRows = Array.isArray(payload?.analysis?.errors) ? payload.analysis.errors : [];
+      const errorRows = exclusionErrors(payload);
       const rows = [];
 
       errorRows.forEach((entry, index) => {
@@ -270,34 +278,6 @@
     function benchmarkExcludedRows(goal, { currentOnly = false } = {}) {
       const payload = benchmarkComparePayload(goal, { currentOnly });
       return benchmarkExcludedRowsForPayload(goal, payload, { paramsSource: currentOnly ? "current" : "latest" });
-    }
-
-    function benchmarkSingleRunSummary(goal, payload) {
-      const requestConfig = payload?.request_config || payload?.analysis?.request_config || {};
-      if (goal === "ml") {
-        const stats = payload?.analysis?.model_stats || {};
-        const label = mlModelLabel(requestConfig.model_type || "ML model");
-        return {
-          title: "Latest single run",
-          text: `${label} ${stats.metric_name || "C-index"}=${formatValue(stats.c_index)} on ${benchmarkEvaluationLabel(stats.evaluation_mode)} evaluation. Use Compare All if you want this family to appear in the unified leaderboard.`,
-          chips: [
-            `Eval: ${benchmarkEvaluationLabel(stats.evaluation_mode)}`,
-            `Features: ${formatValue(stats.n_features)}`,
-            `N: ${formatValue(stats.n_patients)}`,
-          ],
-        };
-      }
-      const stats = payload?.analysis || {};
-      const label = dlModelLabel(requestConfig.model_type || "deep model");
-      return {
-        title: "Latest single run",
-        text: `${label} C-index=${formatValue(stats.c_index)} on ${benchmarkEvaluationLabel(stats.evaluation_mode)} evaluation. Use Compare All if you want this family to appear in the unified leaderboard.`,
-        chips: [
-          `Eval: ${benchmarkEvaluationLabel(stats.evaluation_mode)}`,
-          `Epochs: ${formatValue(stats.epochs_trained || stats.epochs)}`,
-          `Features: ${formatValue(stats.n_features)}`,
-        ],
-      };
     }
 
     function unifiedBenchmarkRows({ currentOnly = true } = {}) {
@@ -420,7 +400,7 @@
       const nonComparableCount = rawVisibleRows.filter((row) => !row.comparableForRanking).length;
       const predictiveBusy = isScopeBusy("predictive") || isScopeBusy("ml") || isScopeBusy("dl");
       const pendingFamilies = ["ml", "dl"].filter((goal) => !currentFamilies.includes(goal));
-      return {
+      const board = {
         currentRows,
         visibleRows,
         visibleExcludedRows,
@@ -453,6 +433,12 @@
           dl: comparisonRowsFromPayload(snapshotPayloads.dl).length,
         },
       };
+      // Intervals already computed for exactly this board, so every re-render (not only a full
+      // renderBenchmarkBoard) keeps the 95% CI and ΔC columns. Fetching them is renderBenchmarkBoard's job.
+      board.intervals = boardPredictionBlocks(board) && runtime.benchmarkIntervals?.key === boardIntervalKey(board)
+        ? runtime.benchmarkIntervals
+        : null;
+      return board;
     }
 
     async function renderUnifiedBenchmarkPlot(board) {
@@ -496,25 +482,6 @@
         return;
       }
 
-      const noteParts = [
-        board.showingStaleBoard
-          ? "Showing the last Compare All board as a stale reference."
-          : `Showing ${board.plottableRows.length} current screening rows on one C-index axis${board.evaluationModes[0] ? ` using ${benchmarkEvaluationLabel(board.evaluationModes[0])} evaluation.` : "."}`,
-      ];
-      if (board.showingStaleBoard) {
-        noteParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the board.");
-      }
-      if (board.hiddenStaleFamilies.length) {
-        noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
-      }
-      if (board.hasLockedTest) noteParts.push(LOCKED_TEST_RANKING_NOTE);
-      noteParts.push(intervalNote(board));
-      noteParts.push(...benchmarkMethodologyNotes(board));
-      if (board.missingMetricCount) {
-        noteParts.push(`Omitted ${board.missingMetricCount} row(s) without a numeric C-index.`);
-      }
-      refs.benchmarkPlotNote.textContent = noteParts.join(" ");
-
       const intervals = board.intervals?.status === "ready" ? board.intervals.result : null;
       const intervalByModel = new Map((intervals?.rows || []).map((row) => [String(row.model), row]));
       const valueOf = (row) => {
@@ -522,9 +489,40 @@
         if (interval?.c_index != null) return Number(interval.c_index);
         return board.hasLockedTest ? benchmarkMetricNumber(row.locked_test_c_index) : row.numericCIndex;
       };
-      // Best model on top; each dot carries its bootstrap interval when the board has one.
-      const ordered = board.plottableRows.filter((row) => Number.isFinite(valueOf(row))).sort((left, right) => valueOf(left) - valueOf(right));
-      const label = (row) => `${row.model} (${benchmarkRowFamilyMeta(row).familyShortLabel})`;
+      const metricLabel = chartMetricLabel(board);
+      const stalePrefix = board.showingStaleBoard ? "Showing the last Compare All board as a stale reference. " : "";
+      // Screen-rank order, as in the leaderboard (development results), never the plotted locked-test values:
+      // those must not pick the model. Rank 1 on top and marked; each dot carries its interval when there is one.
+      const screenRank = new Map(board.rankingRows.map((row, index) => [row, index + 1]));
+      const ordered = board.plottableRows.filter((row) => Number.isFinite(valueOf(row)));
+      if (!ordered.length) {
+        refs.benchmarkPlotNote.textContent = `${stalePrefix}No model has a ${board.hasLockedTest ? "locked-test C-index" : "C-index"} to chart. Review the table below.`;
+        refs.benchmarkComparisonPlot.classList.add("hidden");
+        clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>No C-index values are available to chart for the current board.</span></div>');
+        return;
+      }
+
+      const noteParts = [
+        board.showingStaleBoard
+          ? "Showing the last Compare All board as a stale reference."
+          : `Showing ${ordered.length} current screening rows on one C-index axis${board.evaluationModes[0] ? ` using ${benchmarkEvaluationLabel(board.evaluationModes[0])} evaluation.` : "."}`,
+        "Models are in leaderboard (screen-rank) order; rank 1 is marked.",
+      ];
+      if (board.showingStaleBoard) {
+        noteParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the board.");
+      }
+      if (board.hiddenStaleFamilies.length) {
+        noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
+      }
+      const omitted = board.missingMetricCount + (board.plottableRows.length - ordered.length);
+      if (omitted) {
+        noteParts.push(`Omitted ${omitted} row(s) without a ${board.hasLockedTest ? "locked-test" : "numeric"} C-index.`);
+      }
+      // The ranking, interval and methodology notes sit once, under the leaderboard.
+      refs.benchmarkPlotNote.textContent = noteParts.join(" ");
+
+      const isRankOne = (row) => screenRank.get(row) === 1;
+      const label = (row) => `${row.model} (${benchmarkRowFamilyMeta(row).familyShortLabel})${isRankOne(row) ? " · rank 1" : ""}`;
       const traces = ["ml", "dl"].map((family) => {
         const members = ordered.filter((row) => benchmarkRowFamilyMeta(row).familyTab === family);
         const intervalsOf = members.map((row) => intervalByModel.get(String(row.model)) || null);
@@ -535,9 +533,10 @@
           x: members.map(valueOf),
           y: members.map(label),
           marker: {
-            size: 11,
+            size: members.map((row) => (isRankOne(row) ? 15 : 11)),
+            symbol: members.map((row) => (isRankOne(row) ? "diamond" : "circle")),
             color: family === "ml" ? "rgba(47, 101, 217, 0.95)" : "rgba(219, 126, 21, 0.95)",
-            line: { color: "#1a2332", width: 1 },
+            line: { color: "#1a2332", width: members.map((row) => (isRankOne(row) ? 2 : 1)) },
           },
           error_x: intervals
             ? {
@@ -554,12 +553,14 @@
             intervalRangeText(intervalsOf[index]?.c_index_ci),
             deltaText(intervalsOf[index]),
             benchmarkEvaluationLabel(row.evaluation_mode),
+            screenRank.has(row) ? String(screenRank.get(row)) : "not ranked",
           ]),
           hovertemplate: [
             "<b>%{y}</b>",
             `${board.hasLockedTest ? "Locked-test C-index" : "C-index"}: %{x:.3f} %{customdata[0]}`,
             "%{customdata[1]}",
             "Evaluation: %{customdata[2]}",
+            "Screen rank: %{customdata[3]}",
             "<extra></extra>",
           ].join("<br>"),
         };
@@ -583,7 +584,8 @@
       }
       const layout = {
         title: {
-          text: board.hasLockedTest ? "Locked-test C-index with 95% intervals" : "C-index on the same test patients, with 95% intervals",
+          // Names only what is drawn: intervals appear in the title once they are on the chart.
+          text: intervals ? `${metricLabel}, with 95% bootstrap intervals` : metricLabel,
           x: 0.02,
           xanchor: "left",
           font: { family: "Source Serif 4, serif", size: 20, color: "#1a2332" },
@@ -599,8 +601,9 @@
           gridcolor: "rgba(27, 39, 51, 0.08)",
           zeroline: false,
         },
-        // Categories in C-index order across both families (best on top), not grouped by family.
-        yaxis: { automargin: true, tickfont: { size: 12 }, categoryorder: "array", categoryarray: ordered.map(label) },
+        // Categories in screen-rank order across both families (rank 1 on top; Plotly lists the first
+        // category at the bottom), not grouped by family.
+        yaxis: { automargin: true, tickfont: { size: 12 }, categoryorder: "array", categoryarray: [...ordered].reverse().map(label) },
         shapes,
         annotations,
         showlegend: true,
@@ -617,6 +620,16 @@
         plotConfig("benchmark_comparison"),
       );
       stabilizePlotShellHeight(refs.benchmarkComparisonPlot);
+    }
+
+    // What the chart's dots are: the locked-test C-index, the mean over repeated-CV folds, or the C-index on
+    // the one holdout test set both families share.
+    function chartMetricLabel(board) {
+      if (board.hasLockedTest) return "Locked-test C-index";
+      const mode = String(board.evaluationModes?.[0] || "");
+      if (mode.startsWith("repeated_cv")) return "Mean cross-validated C-index";
+      if (mode === "holdout") return "C-index on the same test patients";
+      return "C-index";
     }
 
     function intervalRangeText(interval) {
@@ -655,13 +668,20 @@
       ].join("|");
     }
 
+    // A failed interval request is tried again on a later render, after a pause that doubles with each
+    // failure (5 s, 10 s, ... up to a minute), so a passing server hiccup does not hide the intervals for good.
+    const INTERVAL_RETRY_BASE_MS = 5000;
+    const INTERVAL_RETRY_MAX_MS = 60000;
+
     // Bootstrap intervals for the visible board, fetched once per board and kept in runtime.
     function boardIntervals(board) {
       const blocks = boardPredictionBlocks(board);
       if (!blocks) return null;
       const key = boardIntervalKey(board);
-      if (runtime.benchmarkIntervals?.key === key) return runtime.benchmarkIntervals;
-      runtime.benchmarkIntervals = { key, status: "loading" };
+      const cached = runtime.benchmarkIntervals?.key === key ? runtime.benchmarkIntervals : null;
+      if (cached && !(cached.status === "error" && Date.now() >= cached.retryAt)) return cached;
+      const failures = cached?.status === "error" ? cached.failures : 0;
+      runtime.benchmarkIntervals = { key, status: "loading", failures };
       fetchJSON("/api/model-comparison-intervals", { method: "POST", body: JSON.stringify({ predictions: blocks }) })
         .then((result) => {
           if (runtime.benchmarkIntervals?.key !== key) return;
@@ -670,7 +690,14 @@
         })
         .catch((error) => {
           if (runtime.benchmarkIntervals?.key !== key) return;
-          runtime.benchmarkIntervals = { key, status: "error", error: error?.message || String(error) };
+          const retryDelay = Math.min(INTERVAL_RETRY_MAX_MS, INTERVAL_RETRY_BASE_MS * 2 ** failures);
+          runtime.benchmarkIntervals = {
+            key,
+            status: "error",
+            error: error?.message || String(error),
+            failures: failures + 1,
+            retryAt: Date.now() + retryDelay,
+          };
           requestBoardRender();
         });
       return runtime.benchmarkIntervals;
@@ -680,11 +707,27 @@
       const intervals = board.intervals;
       if (intervals?.status === "ready") {
         const result = intervals.result || {};
-        return `Intervals are 95% bootstrap intervals over the ${formatValue(result.n)} ${board.hasLockedTest ? "locked-test" : "test"} patients all models share (${formatValue(result.events)} events). ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients, so a model whose ΔC interval contains 0 is not distinguishable from Cox PH on this split.`;
+        return `Intervals are 95% bootstrap intervals over the ${formatValue(result.n)} ${board.hasLockedTest ? "locked-test" : "test"} patients all models share (${formatValue(result.events)} events).`;
       }
       if (intervals?.status === "loading") return "Computing bootstrap intervals for the C-index of each model.";
       if (intervals?.status === "error") return `Bootstrap intervals are unavailable: ${intervals.error}`;
       return "Leaderboard order is a point-estimate screening view; repeated cross-validation reports the spread across folds instead of intervals.";
+    }
+
+    function intervalDetail(board) {
+      if (board.intervals?.status !== "ready") return "";
+      const paired = "ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients, so a model whose ΔC interval contains 0 is not distinguishable from Cox PH on this split.";
+      // The server caps the draws by a work budget and says so; the reader should know the intervals used fewer.
+      const budget = board.intervals.result?.bootstrap_note;
+      return budget ? `${paired} ${budget}` : paired;
+    }
+
+    // One line stays in view; everything a reader needs only when writing up folds into "Method notes".
+    function tableNoteMarkup(lead, details) {
+      const leadText = lead.filter(Boolean).join(" ");
+      const items = details.filter(Boolean);
+      if (!items.length) return escapeHtml(leadText);
+      return `${escapeHtml(leadText)}<details class="benchmark-note-details"><summary>Method notes (${items.length})</summary><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>`;
     }
 
     function buildBenchmarkSummaryContent(board, hasAnyResult, currentMlRows, currentDlRows) {
@@ -852,7 +895,7 @@
           <strong class="benchmark-family-title">${escapeHtml(summary.title)}</strong>
           <p class="benchmark-family-copy">${escapeHtml(summary.text)}</p>
           <div class="dataset-preset-chips">${summary.chips.map((label) => `<span class="dataset-preset-chip">${escapeHtml(label)}</span>`).join("")}</div>
-          ${!hasAnyResult && showBenchmarkStarterAction() ? benchmarkStarterActionMarkup() : ""}
+          ${hasAnyResult ? "" : benchmarkStarterActionMarkup()}
         </article>
       `;
     }
@@ -868,19 +911,17 @@
         refs.benchmarkTableNote.textContent = board.staleFamilies.length
           ? "Stored compare rows are stale and hidden. Rerun Compare All Models to rebuild the shared board with the current settings."
           : "Run Compare All Models to build a shared leaderboard across classical ML and deep learning.";
-        refs.benchmarkComparisonShell.innerHTML = showBenchmarkStarterAction()
-          ? `
+        refs.benchmarkComparisonShell.innerHTML = `
             <div class="empty-state">
               <span>Run Compare All Models to build a shared leaderboard across classical ML and deep learning.</span>
               ${benchmarkStarterActionMarkup()}
             </div>
-          `
-          : '<div class="empty-state">Run Compare All Models to build a shared leaderboard across classical ML and deep learning.</div>';
+          `;
         return;
       }
 
       const presentFamilies = [...new Set(board.visibleRows.map((row) => benchmarkRowFamilyMeta(row).familyLabel))];
-      const noteParts = [
+      const leadParts = [
         board.hasMixedEvaluation
           ? "Visible compare rows are grouped by family because evaluation modes differ. No cross-family ranking is published."
           : board.visibleHasMixedRunGroups
@@ -893,31 +934,42 @@
               : `Showing ${board.visibleRows.length} current screening rows from the latest ML and DL comparison outputs.`)
             : `Showing ${board.visibleRows.length} ${board.showingStaleBoard ? "stale" : "current"} screening row(s) from ${presentFamilies[0] ?? "one family"} only.`),
       ];
-      if (board.visibleExcludedRows.length) {
-        noteParts.push(`${board.visibleExcludedRows.length} excluded model row(s) are listed below without rank or C-index.`);
-      }
       if (board.showingStaleBoard) {
-        noteParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the leaderboard.");
+        leadParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the leaderboard.");
+      }
+      if (board.hasLockedTest) leadParts.push(LOCKED_TEST_RANKING_NOTE);
+      // A failed locked-test refit leaves the model ranked by cross-validation but without an independent estimate.
+      const lockedTestFailures = board.visibleRows.filter((row) => row.lockedTestError);
+      if (board.hasLockedTest && lockedTestFailures.length) {
+        const rankOne = board.rankingRows[0];
+        leadParts.push(
+          rankOne?.lockedTestError
+            ? `The locked-test refit of the rank-1 model (${rankOne.model}) failed, so it has no locked-test C-index to report.`
+            : `The locked-test refit failed for ${lockedTestFailures.map((row) => row.model).join(", ")}; ${lockedTestFailures.length === 1 ? "it stays" : "they stay"} ranked by cross-validation.`,
+        );
+      }
+      leadParts.push(intervalNote(board));
+      const detailParts = [intervalDetail(board)];
+      if (board.visibleExcludedRows.length) {
+        detailParts.push(`${board.visibleExcludedRows.length} excluded model row(s) are listed below without rank or C-index.`);
       }
       if (board.hiddenStaleFamilies.length) {
-        noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden.`);
+        detailParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden.`);
       }
       if (board.hasMixedEvaluation) {
-        noteParts.push(`Current evaluation modes: ${board.evaluationModes.map((mode) => benchmarkEvaluationLabel(mode)).join(", ")}.`);
+        detailParts.push(`Current evaluation modes: ${board.evaluationModes.map((mode) => benchmarkEvaluationLabel(mode)).join(", ")}.`);
       }
       if (board.visibleHasMixedRunGroups) {
-        noteParts.push("Visible ML and DL rows come from different compare runs, so no cross-family rank or shared chart is published.");
+        detailParts.push("Visible ML and DL rows come from different compare runs, so no cross-family rank or shared chart is published.");
       }
-      if (board.hasLockedTest) noteParts.push(LOCKED_TEST_RANKING_NOTE);
-      noteParts.push(intervalNote(board));
-      noteParts.push(...benchmarkMethodologyNotes(board));
+      detailParts.push(...benchmarkMethodologyNotes(board));
       ["ml", "dl"].forEach((goal) => {
         const copy = excludedModelsCopy(goal, board.excludedByFamily?.[goal], {
           sourceLabel: board.showingStaleBoard ? "the last complete snapshot" : "the current",
         });
-        if (copy) noteParts.push(copy);
+        if (copy) detailParts.push(copy);
       });
-      refs.benchmarkTableNote.textContent = noteParts.join(" ");
+      refs.benchmarkTableNote.innerHTML = tableNoteMarkup(leadParts, detailParts);
 
       const intervals = board.intervals?.status === "ready" ? board.intervals.result : null;
       const intervalByModel = new Map((intervals?.rows || []).map((row) => [String(row.model), row]));
@@ -956,7 +1008,7 @@
                 <td><span class="benchmark-family-pill family-${escapeHtml(familyMeta.familyTab)}">${escapeHtml(familyMeta.familyLabel)}</span></td>
                 <td>${escapeHtml(formatValue(row.model))}</td>
                 <td>${escapeHtml(formatValue(row.c_index))}</td>
-                ${board.hasLockedTest ? `<td>${row.hasLockedTest ? escapeHtml(formatValue(row.locked_test_c_index)) : "—"}</td>` : ""}
+                ${board.hasLockedTest ? `<td>${row.hasLockedTest ? escapeHtml(formatValue(row.locked_test_c_index)) : "—"}${row.lockedTestError ? `<div class="benchmark-row-note" title="${escapeHtml(row.lockedTestError)}">Locked-test refit failed; ranked by CV</div>` : ""}</td>` : ""}
                 ${intervals ? intervalCells(intervalByModel.get(String(row.model))) : ""}
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>
@@ -1010,7 +1062,6 @@
       renderUnifiedBenchmarkSummary,
       renderUnifiedBenchmarkTable,
       renderBenchmarkBoard,
-      benchmarkSingleRunSummary,
     };
   }
 

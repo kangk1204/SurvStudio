@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,6 +9,7 @@ import pytest
 from survival_toolkit import __version__
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers
 from survival_toolkit.reporting import (
+    _PAIRED_DIFFERENCE_KEYS,
     STATUS_LABELS,
     checklist_markdown,
     checklist_rows,
@@ -63,8 +66,9 @@ def test_remark_checklist_fills_in_what_the_run_knows() -> None:
     assert list(items) == [str(number) for number in range(1, 21)]
     assert {entry["status"] for entry in report["items"]} <= set(STATUS_LABELS)
     assert items["3"]["status"] == items["4"]["status"] == items["19"]["status"] == "author"
-    assert items["10"]["text"] == report["methods"]
-    assert "Freedman-Lane" in report["methods"] and "99 permutations" in report["methods"]
+    assert items["10"]["text"] == report["methods"] and items["10"]["status"] == "reported"
+    assert "(Smith method; Winkler et al. 2014)" in report["methods"] and "99 permutations" in report["methods"]
+    assert "Freedman" not in report["methods"] and "fixed before the analysis" not in report["methods"]
     assert "subsamples of 63.2% of the patients" in report["methods"]
     assert "Benjamini-Hochberg q-value was at most 0.05" in report["methods"]
     assert f"SurvStudio {__version__}" in report["methods"]
@@ -77,12 +81,15 @@ def test_remark_checklist_fills_in_what_the_run_knows() -> None:
     scope = f"all {adjusted} markers" if adjusted == len(_MARKERS) else f"{adjusted} markers (the 5 strongest and every supported one)"
     assert f"given for {scope}" in items["17"]["text"]
     assert "Unadjusted HR" in items["15"]["text"]
-    assert report["results"].startswith(f"Of {len(_MARKERS)} markers, {result['tier_counts']['robust']} were robust")
+    robust = result["tier_counts"]["robust"]
+    assert report["results"].startswith(f"Of {len(_MARKERS)} markers, {robust} {'was' if robust == 1 else 'were'} robust")
     # The selected-marker model is set against the clinical covariates alone, in the patients left out.
     signature = result["signature"]
-    gain = f"{signature['signature_c_left_out'] - signature['clinical_c_left_out']:+.3f}"
-    assert f"for the clinical covariates alone (difference {gain})" in report["results"]
-    assert "In the patients left out of each subsample, the selected-marker model reached" in items["18"]["text"]
+    paired = [signature[key] for key in _PAIRED_DIFFERENCE_KEYS if signature.get(key) is not None]
+    gain = f"{paired[0] if paired else signature['signature_c_left_out'] - signature['clinical_c_left_out']:+.3f}"
+    assert f"for the clinical covariates alone (mean difference {gain})" in report["results"]
+    assert re.search(r"In the patients left out of each of \d+ subsamples, it reached a mean C-index", report["results"])
+    assert "the selected-marker model reached a mean C-index" in items["18"]["text"]
     assert "more than 90% of patients at one value were excluded" in report["methods"]
 
 
@@ -94,7 +101,7 @@ def test_remark_checklist_without_clinical_covariates_asks_for_adjusted_effects(
 
     items = {entry["item"]: entry for entry in report["items"]}
     assert "unadjusted Cox score test" in report["methods"]
-    assert "Freedman-Lane" not in report["methods"] and "marginal only" not in report["methods"]
+    assert "Smith method" not in report["methods"] and "marginal only" not in report["methods"]
     assert items["16"]["status"] == "partly" and items["17"]["status"] == "author"
     assert items["2"]["text"].startswith("The analysed table")
     assert "excluded" not in items["12"]["text"]

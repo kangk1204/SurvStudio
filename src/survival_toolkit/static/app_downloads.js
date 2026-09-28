@@ -68,11 +68,62 @@
 
   const UTF8_BOM = "\uFEFF";
 
-  // Signed display values such as "-0.50 ± 1.20", "-12%", "-1,234" or "-1.2 (−3.4 to 0.5)" are data,
-  // not formulas: they contain no letters (other than "to" and an exponent), so they cannot call functions.
+  // The same rules as the server's CSV export (_is_number_like_cell and _sanitize_csv_cell in app.py), so a
+  // table exported here and one exported by the server treat every cell alike.
+  const SIGNED_NUMERIC_LITERAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+  const NUMBER_LIKE_CELL_CHARS = /^[0-9.\s±%()[\],;:/|–−+-]*$/;
+  const NUMBER_LIKE_EXPONENT = /(?<=[0-9.])[eE][+-]?(?=[0-9])/g;
+  const NUMBER_LIKE_TO_WORD = /(?<=[\s0-9])to(?=[\s+\-−0-9])/g;
+  const FORMULA_TRIGGER_CHARS = ["=", "@", "\t", "\r"];
+
+  // Signed display values such as "-0.50 ± 1.20", "-12%", "-1,234" or "-1.2 (−3.4 to 0.5)" are data, not
+  // formulas: after an optionally signed leading number they hold only digits and numeric punctuation (plus
+  // "to" between numbers and an exponent after a digit), so they cannot spell a function call or a cell
+  // reference such as the "E1" in "-1+E1".
   function isNumericLikeText(value) {
-    const compact = String(value ?? "").replace(/\bto\b/gi, " ");
-    return /^[+-]?(?:\d|\.\d)/.test(compact) && /^[\d\s.,%±()[\]/:;+\-–—−eE]*$/.test(compact);
+    const stripped = String(value ?? "").trim();
+    const body = ["+", "-", "−"].includes(stripped.slice(0, 1)) ? stripped.slice(1) : stripped;
+    if (!body) return false;
+    if (!(/^\d/.test(body) || /^\.\d/.test(body))) return false;
+    const reduced = stripped.replace(NUMBER_LIKE_EXPONENT, "").replace(NUMBER_LIKE_TO_WORD, " ");
+    return NUMBER_LIKE_CELL_CHARS.test(reduced);
+  }
+
+  // Neutralize spreadsheet formula injection in one CSV cell. Control characters become spaces first, as on
+  // the server, so one cannot hide a formula trigger behind it.
+  function sanitizeCsvCell(value) {
+    const text = value === null || value === undefined
+      ? ""
+      : String(value).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffe\uffff]/g, " ");
+    const stripped = text.replace(/^ +/, "");
+    if (stripped.startsWith("'") && SIGNED_NUMERIC_LITERAL.test(stripped.slice(1))) {
+      return `${text.slice(0, text.length - stripped.length)}${stripped.slice(1)}`;
+    }
+    if (FORMULA_TRIGGER_CHARS.some((char) => text.startsWith(char) || stripped.startsWith(char))) return `'${text}`;
+    // A bare "-" placeholder cannot form a formula.
+    if ((stripped.startsWith("+") || stripped.startsWith("-")) && stripped.replace(/[+\- ]/g, "") && !isNumericLikeText(stripped)) {
+      return `'${text}`;
+    }
+    return text;
+  }
+
+  function escapeCsvCell(value) {
+    return `"${sanitizeCsvCell(value).replaceAll('"', '""')}"`;
+  }
+
+  function buildCsvText({ rows, columns = null, caption = "", notes = [] }) {
+    const visibleColumns = columns || Object.keys(rows[0]);
+    // Each preamble line is one quoted cell, so a comma in a caption or note (for example a file name)
+    // cannot start a new cell that a spreadsheet would read as a formula.
+    const commentLine = (text) => escapeCsvCell(`# ${String(text ?? "").replace(/[\r\n]+/g, " ")}`);
+    const cleanNotes = (notes || []).map((note) => String(note ?? "").trim()).filter(Boolean);
+    const lines = [
+      ...(caption ? [commentLine(caption)] : []),
+      ...(cleanNotes.length ? [commentLine("Notes:"), ...cleanNotes.map((note) => commentLine(`- ${note}`))] : []),
+      visibleColumns.map(escapeCsvCell).join(","),
+      ...rows.map((row) => visibleColumns.map((column) => escapeCsvCell(row[column])).join(",")),
+    ];
+    return lines.join("\n");
   }
 
   function downloadCsv({ filename, rows, columns = null, showToast, caption = "", notes = [] }) {
@@ -80,36 +131,8 @@
       showToast?.("No rows available for export.", "warning");
       return;
     }
-    const visibleColumns = columns || Object.keys(rows[0]);
-    const sanitizeCsvCell = (value) => {
-      const text = value === null || value === undefined ? "" : String(value);
-      const trimmed = text.trimStart();
-      if (trimmed.startsWith("'") && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed.slice(1))) {
-        return `${text.slice(0, text.length - trimmed.length)}${trimmed.slice(1)}`;
-      }
-      if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) return text;
-      if (/^[\t\r]/.test(text) || trimmed.startsWith("=") || trimmed.startsWith("@")) {
-        return `'${text}`;
-      }
-      if ((trimmed.startsWith("+") || trimmed.startsWith("-")) && !isNumericLikeText(trimmed)) {
-        return `'${text}`;
-      }
-      return text;
-    };
-    const escapeCell = (value) => {
-      const text = sanitizeCsvCell(value);
-      return `"${text.replaceAll('"', '""')}"`;
-    };
-    const commentLine = (text) => `# ${sanitizeCsvCell(String(text ?? "").replace(/[\r\n]+/g, " "))}`;
-    const cleanNotes = (notes || []).map((note) => String(note ?? "").trim()).filter(Boolean);
-    const lines = [
-      ...(caption ? [commentLine(caption)] : []),
-      ...(cleanNotes.length ? ["# Notes:", ...cleanNotes.map((note) => commentLine(`- ${note}`))] : []),
-      visibleColumns.map(escapeCell).join(","),
-      ...rows.map((row) => visibleColumns.map((column) => escapeCell(row[column])).join(",")),
-    ];
     // The BOM makes Excel open the file as UTF-8 so symbols such as "±" survive.
-    const blob = new Blob([UTF8_BOM, lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob([UTF8_BOM, buildCsvText({ rows, columns, caption, notes })], { type: "text/csv;charset=utf-8;" });
     triggerBlobDownload(filename, blob);
   }
 
@@ -157,32 +180,16 @@
     triggerBlobDownload(filename, blob, fallbackMimeType);
   }
 
-  function buildMarkdownTable(rows, { caption = "", notes = [], formatValue = (value) => value } = {}) {
-    if (!rows || rows.length === 0) return "";
-    const columns = Object.keys(rows[0]);
-    const escapeCell = (value) => String(value ?? "").replaceAll("|", "\\|").replaceAll("\n", " ");
-    const header = `| ${columns.join(" | ")} |`;
-    const divider = `| ${columns.map(() => "---").join(" | ")} |`;
-    const body = rows.map((row) => `| ${columns.map((column) => escapeCell(formatValue(row[column]))).join(" | ")} |`);
-    const sections = [];
-    if (caption) sections.push(`**${caption}**`);
-    sections.push([header, divider, ...body].join("\n"));
-    if (notes.length) {
-      sections.push("Notes:");
-      sections.push(notes.map((note) => `- ${note}`).join("\n"));
-    }
-    return `${sections.join("\n\n")}\n`;
-  }
-
+  // Resolves when the image was handed to the browser; rejects (for the caller to report) when Plotly fails.
   function downloadPlotImage({ plotEl, filename, format }) {
-    if (!plotEl || !plotEl.data) return;
-    window.Plotly.downloadImage(plotEl, {
+    if (!plotEl || !plotEl.data) return Promise.resolve();
+    return Promise.resolve(window.Plotly.downloadImage(plotEl, {
       format,
       filename,
       height: 900,
       width: 1400,
       scale: format === "png" ? 3 : 1,
-    });
+    }));
   }
 
   function isReadonlyPlot(filename) {
@@ -198,11 +205,8 @@
   }
 
   window.SurvStudioDownloads = {
+    buildCsvText,
     buildDownloadFilename,
-    buildMarkdownTable,
-    currentDatasetSlug,
-    currentGroupSlug,
-    currentOutcomeSlug,
     downloadCsv,
     downloadPlotImage,
     downloadServerTable,
@@ -210,7 +214,7 @@
     isNumericLikeText,
     isReadonlyPlot,
     plotLayoutConfig,
-    slugifyDownloadToken,
+    sanitizeCsvCell,
     triggerBlobDownload,
   };
 }());

@@ -46,6 +46,39 @@ def test_marker_evaluation_returns_tiers_figures_and_a_locked_recipe():
     assert analysis["locked_recipe"]["recipe_hash"]
     assert payload["request_config"]["n_permutations"] == 49
     assert payload["dataset_hash"]
+    # The at-a-glance figure: a count per evidence bar, and the C-index ladder with the clinical-only rung.
+    summary = payload["summary_figure"]
+    funnel = next(trace for trace in summary["data"] if trace["type"] == "bar")
+    assert funnel["y"][:2] == ["Tested", "p < 0.05"] and funnel["y"][-1] == "Robust"
+    assert funnel["customdata"][0] == "2"
+    ladder = next(trace for trace in summary["data"] if trace.get("mode") == "markers+text")
+    assert ladder["y"][0] == "Apparent" and ladder["y"][-1].startswith("Clinical only")
+
+
+def test_marker_evidence_funnel_counts_each_bar_on_the_primary_lens():
+    from survival_toolkit.plots import build_marker_summary_figure, marker_evidence_funnel
+
+    def row(p_value, q_bh, p_fwer, tier):
+        return {"tier": tier, "added_value": {"p_value": p_value, "q_bh": q_bh, "p_fwer": p_fwer}}
+
+    result = {
+        "primary_lens": "added_value",
+        "settings": {"alpha": 0.05},
+        "cohort": {"n_markers_evaluated": 4, "dropped_markers": [{"marker": "flat", "reason": "constant"}]},
+        "tier_counts": {"robust": 1},
+        "marker_table": [
+            row(0.001, 0.004, 0.02, "robust"),
+            row(0.01, 0.02, 0.30, "suggestive"),
+            row(0.04, 0.053, 0.90, "not supported"),
+            row(None, None, None, "not supported"),
+        ],
+        "signature": {},
+    }
+    counts = {stage["label"]: stage["count"] for stage in marker_evidence_funnel(result)}
+    assert counts == {"Supplied": 5, "Tested": 4, "p < 0.05": 3, "FDR q ≤ 0.05": 2, "Family-wise p ≤ 0.05": 1, "Robust": 1}
+    # Without a fitted model the right panel says so instead of drawing an empty ladder.
+    figure = build_marker_summary_figure(result)
+    assert any(note.get("text") == "No marker entered the model." for note in figure["layout"]["annotations"])
 
 
 def test_marker_evaluation_rejects_outcome_columns_as_markers():
@@ -75,7 +108,11 @@ def test_marker_validation_applies_the_locked_recipe_to_another_dataset():
     assert payload["validation"]["recipe_hash"] == recipe["recipe_hash"]
     assert 0.5 < payload["validation"]["metrics"]["c_index"] < 1.0
     assert "recipe" not in payload["request_config"]
-    assert "data" in payload["figure"]
+    # The figure opens with the locked model's C-index beside the clinical covariates alone in this cohort.
+    ladder = next(trace for trace in payload["figure"]["data"] if trace.get("mode") == "markers+text")
+    assert ladder["y"] == ["Locked model", "Clinical covariates alone"]
+    assert ladder["x"][0] == payload["validation"]["metrics"]["c_index"]
+    assert any("gain over the clinical covariates" in note.get("text", "") for note in payload["figure"]["layout"]["annotations"])
 
 
 def test_marker_validation_rejects_an_edited_recipe():
@@ -228,6 +265,31 @@ def test_marker_matrix_markers_are_evaluated_against_the_dataset(tmp_path: Path)
     expired = client.post("/api/marker-evaluation", json=request)
     assert expired.status_code == 404
     assert "attach the file again" in expired.json()["detail"]
+
+
+def test_marker_evaluation_flags_a_patient_profiled_twice_by_patient_id(tmp_path: Path):
+    frame = make_example_dataset()
+    rng = np.random.default_rng(8)
+    subtype = rng.integers(0, 4, len(frame))
+    genes = rng.normal(size=(4, 400))[subtype] * 1.5 + rng.normal(size=(len(frame), 400))
+    # The same tumour twice under two patient IDs.
+    genes[200] = genes[15] + rng.normal(scale=0.3, size=400)
+    table = pd.DataFrame(genes.T, index=[f"GENE{index:03d}" for index in range(400)], columns=frame["patient_id"])
+    path = tmp_path / "expression.tsv"
+    table.to_csv(path, sep="\t", index_label="gene")
+    dataset = client.post("/api/load-example").json()
+    info = _attach(path, dataset["dataset_id"]).json()
+
+    request = _marker_request(dataset["dataset_id"], marker_columns=[], marker_matrix_id=info["matrix_id"], marker_matrix_id_column="patient_id")
+    payload = client.post("/api/marker-evaluation", json=request).json()
+
+    duplicates = payload["analysis"]["duplicates"]
+    ids = frame["patient_id"].tolist()
+    assert duplicates["checked"] and [(pair["a"], pair["b"]) for pair in duplicates["pairs"]] == [(ids[15], ids[200])]
+    assert "flagged 1 pair(s)" in payload["report"]["results"]
+    # Two markers in the table: too few to compare profiles, so nothing is claimed.
+    small = client.post("/api/marker-evaluation", json=_marker_request(dataset["dataset_id"])).json()["analysis"]["duplicates"]
+    assert not small["checked"] and small["pairs"] == []
 
 
 def test_marker_matrix_upload_explains_problems(tmp_path: Path):

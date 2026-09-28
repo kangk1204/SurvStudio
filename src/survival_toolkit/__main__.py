@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import sys
@@ -12,13 +13,23 @@ import uvicorn
 from survival_toolkit.analysis import load_dataframe_from_path, profile_dataframe
 
 
+def _port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a port number.") from None
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"{port} is not a valid port; use 1 to 65535.")
+    return port
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="survstudio")
     subparsers = parser.add_subparsers(dest="command")
 
     serve_parser = subparsers.add_parser("serve", help="Run the FastAPI app with Uvicorn.")
     serve_parser.add_argument("--host", default="127.0.0.1")
-    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument("--port", type=_port, default=8000)
     serve_parser.add_argument("--reload", action="store_true")
     serve_parser.add_argument(
         "--allowed-host",
@@ -66,16 +77,26 @@ def _configure_request_host_guard(host: str, allowed_hosts: Sequence[str] = ()) 
         os.environ[_ALLOWED_HOSTS_ENV_VAR] = ",".join(dict.fromkeys([*existing, *extra_hosts]))
 
 
-_LOOPBACK_BIND_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 # Set by the Docker image, which has to listen on every interface of the container.
 _CONTAINER_ENV_VAR = "SURVSTUDIO_CONTAINER"
+
+
+def _is_loopback_host(host: str) -> bool:
+    """localhost, or any loopback address (127.0.0.0/8, ::1 in any spelling)."""
+
+    normalized = str(host).strip().strip("[]").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def _warn_if_reachable_from_network(host: str) -> None:
     """SurvStudio has no login, so binding beyond loopback exposes it to the network."""
 
-    normalized = str(host).strip().strip("[]").lower()
-    if normalized in _LOOPBACK_BIND_HOSTS:
+    if _is_loopback_host(host):
         return
     if os.environ.get(_CONTAINER_ENV_VAR) == "1":
         print(
@@ -115,16 +136,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
 
-    if args.command in {None, "serve"}:
-        return _run_serve(
-            host=getattr(args, "host", "127.0.0.1"),
-            port=getattr(args, "port", 8000),
-            reload=bool(getattr(args, "reload", False)),
-            allowed_hosts=list(getattr(args, "allowed_hosts", []) or []),
-        )
-
-    parser.error(f"Unknown command: {args.command}")
-    return 2
+    # The subparsers accept only "inspect" and "serve"; no command also serves.
+    return _run_serve(
+        host=getattr(args, "host", "127.0.0.1"),
+        port=getattr(args, "port", 8000),
+        reload=bool(getattr(args, "reload", False)),
+        allowed_hosts=list(getattr(args, "allowed_hosts", []) or []),
+    )
 
 
 if __name__ == "__main__":

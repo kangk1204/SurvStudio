@@ -559,7 +559,9 @@ def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None
     assert '`Completed families: ${completedFamiliesLabel}`' in text
     assert '`Pending families: ${pendingFamiliesLabel}`' in text
     assert "function benchmarkExcludedModels(" in text
-    assert "const erroredModels = errors.map((entry) => String(entry?.model || \"\").trim()).filter(Boolean);" in text
+    # A failed locked-test refit leaves the model ranked, so only other errors exclude it.
+    assert 'return errors.filter((entry) => entry && entry.stage !== "locked_test");' in text
+    assert "const erroredModels = exclusionErrors(payload).map((entry) => String(entry?.model || \"\").trim()).filter(Boolean);" in text
     assert "return [...new Set([...explicit, ...erroredModels])];" in text
     assert "function benchmarkExcludedRows(" in text
     assert "Excluded from ${sourceLabel}" in text
@@ -670,16 +672,18 @@ def test_frontend_formats_validation_errors_and_guards_dl_epoch_range() -> None:
     assert "Latent dim must be between 2 and 32." in text
     assert "validateDlControls();" in text
     assert "evaluation_strategy: refs.dlEvaluationStrategy.value" in text
-    assert "cv_folds: Number(refs.dlCvFolds.value)" in text
-    assert "cv_repeats: Number(refs.dlCvRepeats.value)" in text
-    assert "batch_size: Number(refs.dlBatchSize.value)" in text
-    assert "random_seed: Number(refs.dlRandomSeed.value)" in text
-    assert "num_time_bins: Number(refs.dlNumTimeBins.value)" in text
-    assert "d_model: Number(refs.dlDModel.value)" in text
-    assert "n_heads: Number(refs.dlHeads.value)" in text
-    assert "n_layers: Number(refs.dlLayers.value)" in text
-    assert "latent_dim: Number(refs.dlLatentDim.value)" in text
-    assert "n_clusters: Number(refs.dlClusters.value)" in text
+    # A blank field sends its default (the one result currency assumes), never Number("") = 0.
+    assert 'cv_folds: dlSetting("cv_folds", refs.dlCvFolds)' in text
+    assert 'cv_repeats: dlSetting("cv_repeats", refs.dlCvRepeats)' in text
+    assert 'batch_size: dlSetting("batch_size", refs.dlBatchSize)' in text
+    assert "random_seed: sharedPredictiveSeed()," in text
+    assert 'num_time_bins: dlSetting("num_time_bins", refs.dlNumTimeBins)' in text
+    assert 'd_model: dlSetting("d_model", refs.dlDModel)' in text
+    assert 'n_heads: dlSetting("n_heads", refs.dlHeads)' in text
+    assert 'n_layers: dlSetting("n_layers", refs.dlLayers)' in text
+    assert 'latent_dim: dlSetting("latent_dim", refs.dlLatentDim)' in text
+    assert 'n_clusters: dlSetting("n_clusters", refs.dlClusters)' in text
+    assert "Number(refs.dl" not in text
     assert "rerun seed=" in text
     assert "rerun a single architecture with Run Analysis while keeping repeated CV selected" in text
     assert "seed=" in text
@@ -738,7 +742,9 @@ def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repea
     assert 'if (error?.name === "AbortError") throw new SupersededRequestError();' in text
     assert 'if (isSupersededRequestError(error)) return { ok: false, error, superseded: true };' in text
     assert 'The server returned an invalid JSON response.' in text
-    assert 'if (response.status === 404 && /Unknown dataset id:/i.test(message) && state.dataset) {' in text
+    # Only a 404 naming the open dataset closes the workspace (tests/test_frontend_review.py drives it).
+    assert "const missingDatasetId = response.status === 404 ? /Unknown dataset id:\\s*([\\w-]+)/i.exec(message)?.[1] : null;" in text
+    assert "if (missingDatasetId && state.dataset && missingDatasetId === String(state.dataset.dataset_id)) {" in text
     assert 'goHome({ syncHistory: true, historyMode: "replace" });' in text
     assert 'The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.' in text
     assert 'showError(errorMessageText(error));' in text
@@ -787,7 +793,8 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
 
     assert 'const matchingOutcomeWarning = identicalOutcomeColumnMessage();' in text
     assert 'refs.eventColumn.addEventListener("change", () => {' in text
-    assert 'refs.timeColumn.addEventListener("change", () => {\n    clearAnalysisOutputs();' in text
+    assert 'const onTimeColumnChange = () => {\n    clearAnalysisOutputs();' in text
+    assert 'refs.timeColumn.addEventListener("change", onTimeColumnChange);' in text
     assert 'refs.eventColumn.addEventListener("change", () => {\n    clearAnalysisOutputs();' in text
     assert 'refs.eventPositiveValue.addEventListener("change", () => {\n    clearAnalysisOutputs();' in text
     assert 'updateTimeColumnGuidance();' in text
@@ -797,7 +804,12 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
     assert 'Select at least one covariate for the Cox model.' in text
     assert 'Select at least one variable for the cohort table.' in text
     assert '!endpointReady || !hasMarkers || isScopeBusy("km")' in text
-    assert '!endpointReady || !hasMarkers || isScopeBusy("markers")' in text
+    # The marker evaluation also runs on an attached marker file with no column ticked.
+    assert '!endpointReady || !hasEvaluationMarkers || isScopeBusy("markers")' in text
+    assert 'const matrixAttached = typeof markerMatrixAttached === "function" && markerMatrixAttached();' in text
+    assert "const hasEvaluationMarkers = hasMarkers || matrixAttached;" in text
+    # The cut-point search counts only the markers it would send, not boxes disabled by an attached file.
+    assert "? currentMarkerSelections().markers.length" in text
     assert '!endpointReady || !hasCoxCovariates || isScopeBusy("cox")' in text
     assert '!endpointReady || !hasTableVariables || isScopeBusy("tables")' in text
     assert 'cohortVariableSearchInput: document.getElementById("cohortVariableSearchInput"),' in text
@@ -893,9 +905,10 @@ def test_ml_current_result_ignores_compare_only_and_explanation_only_controls() 
     assert 'const effectiveModelType = expectsCompare ? "compare" : String(requestConfig.model_type || "");' in text
     assert 'const learningRateApplies = expectsCompare || effectiveModelType === "gbs";' in text
     assert 'const evaluationStrategy = expectsCompare ? String(requestConfig.evaluation_strategy || "holdout") : null;' in text
-    assert 'cv_folds: repeatedCv ? numberOrDefault(requestConfig.cv_folds, 5) : null,' in text
-    assert 'cv_repeats: repeatedCv ? numberOrDefault(requestConfig.cv_repeats, 3) : null,' in text
-    assert 'random_state: numberOrDefault(requestConfig.random_state, 42),' in text
+    assert 'cv_folds: repeatedCv ? numberOrDefault(requestConfig.cv_folds, ML_NUMERIC_DEFAULTS.cv_folds) : null,' in text
+    assert 'cv_repeats: repeatedCv ? numberOrDefault(requestConfig.cv_repeats, ML_NUMERIC_DEFAULTS.cv_repeats) : null,' in text
+    assert 'random_state: numberOrDefault(requestConfig.random_state, ML_NUMERIC_DEFAULTS.random_state),' in text
+    assert "const ML_NUMERIC_DEFAULTS = Object.freeze({ n_estimators: 100, learning_rate: 0.1, random_state: 42, cv_folds: 5, cv_repeats: 3 });" in text
     assert 'locked_test_fraction: repeatedCv ? normalizedLockedTestFraction(requestConfig.locked_test_fraction) : null,' in text
     assert 'model_type: expectsCompare ? "compare" : String(refs.mlModelType?.value || ""),' in text
     assert 'function currentSharedModelSelections(goal = "ml") {' in text
@@ -1928,9 +1941,10 @@ def test_upload_rejects_oversized_content_length_before_reading_body(monkeypatch
 
 
 def test_upload_stops_reading_chunked_body_past_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
     monkeypatch.setattr(app_module, "_MAX_UPLOAD_BYTES", 64)
     monkeypatch.setattr(app_module, "_UPLOAD_MULTIPART_OVERHEAD_BYTES", 256)
-    chunks_sent = {"count": 0}
     body = (
         b"--bnd\r\n"
         b'Content-Disposition: form-data; name="file"; filename="big.csv"\r\n'
@@ -1938,20 +1952,44 @@ def test_upload_stops_reading_chunked_body_past_the_limit(monkeypatch: pytest.Mo
         + b"a,b\n" + b"1,2\n" * 2000
         + b"\r\n--bnd--\r\n"
     )
+    chunks = [body[start : start + 128] for start in range(0, len(body), 128)]
+    state = {"sent": 0, "status": None, "body": b""}
 
-    def _chunks():
-        for start in range(0, len(body), 128):
-            chunks_sent["count"] += 1
-            yield body[start : start + 128]
+    # The ASGI app is driven directly: a test client would read the whole body before the app sees it.
+    async def receive() -> dict:
+        index = state["sent"]
+        state["sent"] = index + 1
+        return {"type": "http.request", "body": chunks[index], "more_body": index + 1 < len(chunks)}
 
-    response = client.post(
-        "/api/upload",
-        content=_chunks(),
-        headers={"Content-Type": "multipart/form-data; boundary=bnd"},
-    )
+    async def send(message: dict) -> None:
+        if message["type"] == "http.response.start":
+            state["status"] = message["status"]
+        elif message["type"] == "http.response.body":
+            state["body"] += message.get("body", b"")
 
-    assert response.status_code == 413
-    assert "200 MB limit" in response.json()["detail"]
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/upload",
+        "raw_path": b"/api/upload",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"127.0.0.1:8000"), (b"content-type", b"multipart/form-data; boundary=bnd")],
+        "client": ("127.0.0.1", 5555),
+        "server": ("127.0.0.1", 8000),
+    }
+    try:
+        asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=30))
+    except Exception:  # the server may still raise after the response was sent
+        pass
+
+    assert state["status"] == 413
+    assert b"200 MB limit" in state["body"]
+    # 320 bytes are allowed; reading stops a chunk past that instead of consuming all ~64 chunks.
+    assert state["sent"] <= 4 < len(chunks)
 
 
 def test_upload_rejects_xlsx_that_decompresses_past_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4466,8 +4504,8 @@ def test_frontend_ml_compare_forwards_visible_hyperparameters() -> None:
     run_compare_body = app_js[run_compare_start:run_compare_end]
 
     assert '...mlModelRequestFields("compare"),' in run_compare_body
-    assert 'if (compare || modelType === "rsf" || modelType === "gbs") fields.n_estimators = Number(refs.mlNEstimators.value);' in app_js
-    assert 'if (compare || modelType === "gbs") fields.learning_rate = Number(refs.mlLearningRate.value);' in app_js
+    assert 'if (compare || modelType === "rsf" || modelType === "gbs") fields.n_estimators = mlSetting("n_estimators", refs.mlNEstimators);' in app_js
+    assert 'if (compare || modelType === "gbs") fields.learning_rate = mlSetting("learning_rate", refs.mlLearningRate);' in app_js
 
 
 def test_frontend_exposes_real_dataset_loader_buttons() -> None:
@@ -4503,8 +4541,8 @@ def test_frontend_uses_dataset_aware_download_filenames() -> None:
     ).read_text(encoding="utf-8")
 
     assert "function buildDownloadFilename(stem, ext" in app_js
-    assert "function currentDatasetSlug()" in app_js
-    assert "function currentOutcomeSlug()" in app_js
+    assert "function currentDatasetSlug(state)" in downloads_js
+    assert "function currentOutcomeSlug(refs)" in downloads_js
     assert 'buildDownloadFilename("km_summary", "csv", { includeGroup: true })' in app_js
     assert 'buildDownloadFilename("cox_results", "csv")' in app_js
     assert "function buildKmTableExportPayload(rows, caption, resultPayload = null" in app_js
@@ -4537,22 +4575,21 @@ def test_frontend_csv_download_sanitizes_formula_like_cells() -> None:
 
     assert 'function downloadCsv({ filename, rows, columns = null, showToast, caption = "", notes = [] })' in downloads_js
     assert "function isNumericLikeText(value) {" in downloads_js
-    assert "!isNumericLikeText(trimmed)" in downloads_js
-    assert "new Blob([UTF8_BOM, lines.join" in downloads_js
-    assert "const sanitizeCsvCell = (value) => {" in downloads_js
-    assert 'if (/^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$/.test(trimmed)) return text;' in downloads_js
-    assert 'trimmed.startsWith("=")' in downloads_js
-    assert 'trimmed.startsWith("+")' in downloads_js
-    assert 'trimmed.startsWith("-")' in downloads_js
-    assert 'trimmed.startsWith("@")' in downloads_js
+    assert "function sanitizeCsvCell(value) {" in downloads_js
+    assert "!isNumericLikeText(stripped)" in downloads_js
+    assert "new Blob([UTF8_BOM, buildCsvText({ rows, columns, caption, notes })]" in downloads_js
+    assert 'const FORMULA_TRIGGER_CHARS = ["=", "@", "\\t", "\\r"];' in downloads_js
+    assert 'stripped.startsWith("+") || stripped.startsWith("-")' in downloads_js
     assert "return `'${text}`;" in downloads_js
+    # Captions and notes are one quoted cell each (tests/test_frontend_review.py checks the output).
+    assert 'const commentLine = (text) => escapeCsvCell(`# ${String(text ?? "").replace(/[\\r\\n]+/g, " ")}`);' in downloads_js
 
 
 def test_frontend_format_value_keeps_tiny_p_values_nonzero() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
     start = app_js.index("function formatValue(value, options = {}) {")
-    end = app_js.index("\n\nfunction formatPercent", start)
+    end = app_js.index("\n\nfunction normalizeValueLabel", start)
     snippet = app_js[start:end]
     node_script = "\n".join(
         [
@@ -4566,6 +4603,7 @@ def test_frontend_format_value_keeps_tiny_p_values_nonzero() -> None:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     formatted = json.loads(completed.stdout.strip())
 
@@ -4585,7 +4623,7 @@ def test_frontend_format_value_keeps_ordinary_magnitudes_out_of_scientific_notat
             "console.log(JSON.stringify([formatValue(1528), formatValue(1500), formatValue(2000.0), formatValue(1528.5), formatValue(3567.6254), formatValue(12345678.9), formatValue(0)]));",
         ]
     )
-    completed = subprocess.run(["node", "-e", node_script], check=True, capture_output=True, text=True)
+    completed = subprocess.run(["node", "-e", node_script], check=True, capture_output=True, text=True, encoding="utf-8")
     formatted = json.loads(completed.stdout.strip())
 
     assert formatted == ["1528", "1500", "2000", "1528.5", "3567.625", "1.23e+7", "0"]
@@ -4608,7 +4646,7 @@ def test_frontend_csv_sanitizer_keeps_signed_display_numbers() -> None:
             "console.log(JSON.stringify(['-0.50 \u00b1 1.20', '-12%', '-1,234', '-1.2 (\u22123.4 to 0.5)', '-0.5\u20131.2', '-cmd|x', '-SUM(A1)', '@SUM(1)'].map(f)));",
         ]
     )
-    completed = subprocess.run(["node", "-e", node_script], check=True, capture_output=True, text=True)
+    completed = subprocess.run(["node", "-e", node_script], check=True, capture_output=True, text=True, encoding="utf-8")
 
     assert json.loads(completed.stdout.strip()) == [True, True, True, True, True, False, False, False]
 
@@ -4617,7 +4655,7 @@ def test_frontend_format_p_value_uses_journal_thresholds() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
     start = app_js.index("function formatPValue(value) {")
-    end = app_js.index("\n\nfunction formatDisplayValue", start)
+    end = app_js.index("\nfunction formatDisplayValue", start)
     snippet = app_js[start:end]
     node_script = "\n".join(
         [
@@ -4631,6 +4669,7 @@ def test_frontend_format_p_value_uses_journal_thresholds() -> None:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     formatted = json.loads(completed.stdout.strip())
 
@@ -4642,7 +4681,8 @@ def test_frontend_uses_p_value_formatter_for_km_banner_and_tables() -> None:
 
     assert "${test.test} ${pValuePhrase(test.p_value)}" in app_js
     assert 'return text.startsWith("<") ? `p${text}` : `p=${text}`;' in app_js
-    assert "td.textContent = formatDisplayValue(row[column], column);" in app_js
+    # Only numbers in p-value columns get p-value formatting (tests/test_frontend_review.py covers Table 1).
+    assert 'td.textContent = typeof value === "number" && isPValueColumn(column) ? formatPValue(value) : formatValue(value);' in app_js
 
 
 def test_frontend_covariate_picker_keeps_all_unique_continuous_columns() -> None:
@@ -4708,7 +4748,8 @@ def test_frontend_locks_derive_controls_when_group_by_is_active() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "function syncDeriveControlsState() {" in app_js
-    assert "refs.deriveButton.disabled = deriveLocked;" in app_js
+    # Create is also off while a grouping is being created (the "derive" busy scope).
+    assert "refs.deriveButton.disabled = deriveLocked || deriveBusy;" in app_js
     assert "Derived-group settings are locked while Group by uses" in app_js
     assert "Run again only reuses the current Group by value." in app_js
     assert "The card below describes" in app_js
@@ -4732,7 +4773,9 @@ def test_frontend_derive_summary_tracks_current_session_derived_columns() -> Non
     assert "runtime.derivedColumnProvenance?.[currentGroup]" in app_js
     assert "summary: payload.derive_summary || null," in app_js
     assert 'refs.deriveSummary.dataset.summaryKind = "derived";' in app_js
-    assert 'refs.deriveSummary.dataset.summaryKind = "signature";' in app_js
+    # The cut-point search's card sits on the Markers tab, next to Discover, not in the grouping card.
+    assert 'refs.deriveSummary.dataset.summaryKind = "signature";' not in app_js
+    assert "refs.signatureSummary.innerHTML = `" in app_js
 
 
 def test_frontend_request_matching_uses_normalized_stable_config_comparison() -> None:
@@ -4804,9 +4847,8 @@ def test_benchmark_board_offers_a_starter_action_before_any_result() -> None:
         / "app_benchmark.js"
     ).read_text(encoding="utf-8")
 
-    assert "function showBenchmarkStarterAction() {" in benchmark_js
-    assert '${!hasAnyResult && showBenchmarkStarterAction() ? benchmarkStarterActionMarkup() : ""}' in benchmark_js
-    assert "refs.benchmarkComparisonShell.innerHTML = showBenchmarkStarterAction()" in benchmark_js
+    assert '${hasAnyResult ? "" : benchmarkStarterActionMarkup()}' in benchmark_js
+    assert "              ${benchmarkStarterActionMarkup()}\n            </div>" in benchmark_js
     assert "guided" not in benchmark_js
 
 
@@ -4914,8 +4956,11 @@ def test_frontend_locks_ml_and_dl_run_buttons_by_scope() -> None:
     assert '...(runtime.workbenchRevealed && predictiveFamilyGoal() === "ml" ? [refs.runPredictiveWorkbenchButton] : []),' in app_js
     assert '...(runtime.workbenchRevealed && predictiveFamilyGoal() === "dl" ? [refs.runPredictiveWorkbenchButton] : []),' in app_js
     assert "function setScopeBusy(scope, isBusy, activeButton = null)" in app_js
-    assert 'button === refs.runMlButton || button === refs.runCompareButton || button === refs.runCompareInlineButton ? "ml"' in app_js
-    assert 'button === refs.runDlButton || button === refs.runDlCompareButton || button === refs.runDlCompareInlineButton ? "dl"' in app_js
+    # One resolver gives clicks and Ctrl+Enter the same scope (tests/test_frontend_review.py drives both).
+    assert "const scope = scopeOverride || runScopeForButton(button);" in app_js
+    assert 'if ([refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton].includes(button)) return "ml";' in app_js
+    assert 'if ([refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton].includes(button)) return "dl";' in app_js
+    assert 'if (button === refs.runPredictiveCompareAllButton) return "predictive";' in app_js
     assert 'setScopeBusy(scope, true, button);' in app_js
     assert 'setScopeBusy(scope, false, button);' in app_js
 
@@ -6635,7 +6680,7 @@ def test_cohort_table_frontend_exposes_csv_xlsx_downloads() -> None:
     assert "function cohortTableOutcomeConfig() {" in app_js
     assert app_js.count("...cohortTableOutcomeConfig(),") >= 2
     assert 'time_column: outcomeRestricted ? String(requestConfig.time_column) : "",' in app_js
-    assert 'event_positive_value: outcomeRestricted ? String(requestConfig.event_positive_value ?? "") : "",' in app_js
+    assert 'event_positive_value: outcomeRestricted ? trimmedSetting(requestConfig.event_positive_value) : "",' in app_js
     assert "const notes = [...cohortTableAnalysisNotes(payload)];" in app_js
     assert ".export-menu-items {" in styles
 
@@ -6659,7 +6704,7 @@ def test_runs_use_scope_override_for_loading_locks() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
     assert "async function withLoading(button, action, scopeOverride = null, { swallowErrors = true } = {}) {" in app_js
-    assert "const scope = scopeOverride || (" in app_js
+    assert "const scope = scopeOverride || runScopeForButton(button);" in app_js
     assert 'withLoading(refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, "predictive");' in app_js
     assert "const scopeButtons = buttonsForScope(scope);" in app_js
     assert "if (activeButton && !scopeButtons.includes(activeButton)) {" in app_js
@@ -7047,8 +7092,10 @@ def test_heavy_jobs_share_a_bounded_number_of_slots(monkeypatch: pytest.MonkeyPa
     import asyncio
     import threading
     import time
+    from concurrent.futures import ThreadPoolExecutor
 
-    monkeypatch.setattr(app_module, "_HEAVY_JOB_SLOTS", threading.BoundedSemaphore(1))
+    executor = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(app_module, "_HEAVY_JOB_EXECUTOR", executor)
     monkeypatch.setattr(app_module, "_DISCONNECT_POLL_SECONDS", 0.02)
     dataset_id = client.post("/api/load-example").json()["dataset_id"]
     lock = threading.Lock()
@@ -7068,7 +7115,10 @@ def test_heavy_jobs_share_a_bounded_number_of_slots(monkeypatch: pytest.MonkeyPa
             *(app_module._run_dataset_job(dataset_id, _job, heavy=True) for _ in range(3))
         )
 
-    assert asyncio.run(_run_three()) == [True, True, True]
+    try:
+        assert asyncio.run(_run_three()) == [True, True, True]
+    finally:
+        executor.shutdown(wait=True)
     assert state["peak"] == 1
 
 
@@ -7142,6 +7192,7 @@ def test_index_exposes_the_markers_tab_with_validation_and_exploratory_search() 
         "runMarkersButton",
         "markerChecklist",
         "markerClinicalChecklist",
+        "markersSummaryPlot",
         "markersStabilityPlot",
         "markersRankPlot",
         "markersTableShell",
@@ -7174,8 +7225,15 @@ def test_marker_frontend_runs_the_evaluation_and_validates_the_locked_model() ->
     assert "syncMarkerDownloadButtons();" in text
     assert "clearMarkerOutputs();" in text
     assert 'invalidateRequestTokens(["markers", "markerValidation"]);' in text
-    assert "const candidateColumns = [...markers, ...clinical];" in text
+    # Discover and the Signature CSV currency read the same candidates (tests/test_frontend_review.py).
+    assert "function signatureCandidateColumns() {" in text
+    assert "const candidateColumns = signatureCandidateColumns();" in text
+    assert "const currentCandidates = sortedStrings(signatureCandidateColumns());" in text
     assert "MARKER_TABLE_DISPLAY_LIMIT" in text
+    # Repeated patients lead the cautions and keep the verdict at review.
+    assert "const repeated = markerDuplicateCaution(analysis.duplicates);" in text
+    assert 'status: robust && !repeated ? "robust" : "review",' in text
+    assert "Possible repeated patients (" in text
 
 
 def test_design_check_page_is_served_without_a_dataset() -> None:
