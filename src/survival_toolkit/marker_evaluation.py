@@ -1546,16 +1546,6 @@ def _check_recipe(recipe: Any) -> int:
         values = recipe.get(field)
         if not isinstance(values, dict) or not all(is_number(values.get(name)) for name in markers):
             fail(f"{field} needs a finite number for every marker.")
-    scale = recipe.get("marker_scale")
-    if scale is not None:
-        if not isinstance(scale, dict):
-            fail("marker_scale must be an object.")
-        for name in markers:
-            entry = scale.get(name)
-            if entry is not None and (
-                not isinstance(entry, dict) or not is_number(entry.get("mean")) or not is_number(entry.get("sd")) or float(entry["sd"]) < 0
-            ):
-                fail(f"marker_scale of {name} needs a finite mean and SD.")
     if recipe.get("primary_lens", "marginal") not in LENSES:
         fail("primary_lens must be marginal or added_value.")
     model = recipe.get("model")
@@ -1569,6 +1559,15 @@ def _check_recipe(recipe: Any) -> int:
     unknown = [term for term in terms if term not in markers and term not in feature_names]
     if unknown:
         fail("the model terms " + ", ".join(unknown[:5]) + " are neither markers nor encoded clinical covariates.")
+    scale = recipe.get("marker_scale")
+    if scale is not None:
+        if not isinstance(scale, dict):
+            fail("marker_scale must be an object.")
+        # Every locked marker has its development scale (a recipe locked before the scale existed has none at all).
+        for name in markers:
+            entry = scale.get(name)
+            if not isinstance(entry, dict) or not is_number(entry.get("mean")) or not is_number(entry.get("sd")) or float(entry["sd"]) < 0:
+                fail(f"marker_scale of {name} needs a finite mean and SD.")
     if model.get("ties", "efron") not in TIES_METHODS:
         fail(f"model.ties must be one of {', '.join(TIES_METHODS)}.")
     if not is_number(model.get("default_horizon")):
@@ -1624,6 +1623,48 @@ def _unseen_level_rows(frame: pd.DataFrame, encoder: dict[str, Any], column: str
     }
     seen = np.asarray(transform_feature_encoder(frame, probe, output="numpy"), dtype=float).sum(axis=1) > 0
     return observed & ~seen
+
+
+def _clinical_columns_behind(encoder: dict[str, Any] | None, columns: Sequence[str], terms: set[str]) -> list[str]:
+    """The clinical columns whose encoded features include one of ``terms``, in their order.
+
+    A numeric column is encoded under its own name; a categorical one as one indicator per retained level
+    (and one for missing values when development had any).
+    """
+    if not columns or not encoder:
+        return []
+    mappings = encoder.get("categorical_mappings") or {}
+    categorical = set(encoder.get("categorical_features") or [])
+    used = []
+    for column in columns:
+        encoded = {column}
+        if column in categorical:
+            mapping = mappings.get(column) or {}
+            level_columns = mapping.get("level_columns") or {}
+            encoded = {level_columns.get(level, f"{column}_{level}") for level in mapping.get("retained_levels") or []}
+            encoded |= {mapping[key] for key in ("missing_column", "unknown_column") if mapping.get(key)}
+        if encoded & terms:
+            used.append(column)
+    return used
+
+
+def _reject_text_in_numeric_covariate(values: pd.Series, name: str) -> None:
+    """Refuse a numeric clinical covariate whose non-missing values include text, such as "." or "unknown".
+
+    The locked encoder would score such rows at the development median without a word; blank cells
+    are missing values instead, and their rows are left out as in development.
+    """
+    if pd.api.types.is_numeric_dtype(values) or pd.api.types.is_bool_dtype(values):
+        return
+    text = values.dropna().astype(str)
+    numbers = pd.to_numeric(text.str.strip(), errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+    bad = text[~np.isfinite(numbers)]
+    if bad.size:
+        examples = ", ".join(f'"{value}"' for value in list(dict.fromkeys(bad.tolist()))[:3])
+        raise ValueError(
+            f'Clinical covariate "{name}" holds {bad.size} value(s) in the external dataset that are not numbers, such as '
+            f"{examples}. Blank those cells so their rows are left out as missing, or recode them as numbers."
+        )
 
 
 def _holm(p_values: Sequence[float]) -> list[float]:
@@ -1690,14 +1731,19 @@ def validate_locked_recipe(
     clinical_columns = list(recipe["clinical"]["columns"])
     strata_columns = list(recipe.get("strata_columns") or [])
     markers = list(recipe["markers"])
+    encoder = recipe["clinical"]["encoder"]
+    # Only the clinical columns behind the locked terms are needed: one development left out of the model
+    # (for example a copy of another column) neither has to exist here nor removes rows where it is missing.
+    clinical_only_terms = (recipe.get("clinical_only_model") or {}).get("terms") or []
+    used_clinical = _clinical_columns_behind(encoder, clinical_columns, {*recipe["model"]["terms"], *clinical_only_terms})
     if marker_scaling not in MARKER_SCALINGS:
         raise ValueError(f"marker_scaling must be one of {MARKER_SCALINGS}.")
-    needed = [time_column, event_column, *[external(column) for column in [*clinical_columns, *strata_columns]]]
+    needed = [time_column, event_column, *[external(column) for column in [*used_clinical, *strata_columns]]]
     missing = [column for column in needed if column not in df.columns]
     if missing:
         raise ValueError("The external dataset lacks columns the recipe needs: " + ", ".join(missing[:6]) + ".")
     scale = recipe.get("marker_scale") or {}
-    if marker_scaling == "within_cohort" and not scale:
+    if marker_scaling == "within_cohort" and markers and not scale:
         raise ValueError("This locked model has no development marker scale; lock it again with this SurvStudio version to rescale markers within the cohort.")
     absent = [name for name in markers if external(name) not in df.columns]
     coefficient_of = dict(zip(recipe["model"]["terms"], recipe["model"]["coefficients"]))
@@ -1715,9 +1761,9 @@ def validate_locked_recipe(
         time_column=time_column,
         event_column=event_column,
         event_positive_value=positive,
-        extra_columns=[external(column) for column in [*clinical_columns, *strata_columns]],
+        extra_columns=[external(column) for column in [*used_clinical, *strata_columns]],
     )
-    frame = frame.rename(columns={external(column): column for column in [*clinical_columns, *strata_columns]})
+    frame = frame.rename(columns={external(column): column for column in [*used_clinical, *strata_columns]})
     time = frame[time_column].to_numpy(dtype=float)
     event = frame[event_column].to_numpy(dtype=int)
     source_rows = list(frame.attrs["source_row_index"])
@@ -1725,12 +1771,19 @@ def validate_locked_recipe(
 
     notes: list[str] = []
     columns: dict[str, np.ndarray] = {}
-    encoder = recipe["clinical"]["encoder"]
     if clinical_columns:
-        design = transform_feature_encoder(frame, encoder, output="dataframe")
+        numeric_features = set(encoder.get("numeric_features") or [])
+        for column in used_clinical:
+            if column in numeric_features:
+                _reject_text_in_numeric_covariate(frame[column], external(column))
+        # The columns the model does not use are given as missing: their encoded values are never read.
+        unused = {column: np.nan for column in clinical_columns if column not in used_clinical}
+        design = transform_feature_encoder(frame.assign(**unused) if unused else frame, encoder, output="dataframe")
         for name in design.columns:
             columns[str(name)] = design[name].to_numpy(dtype=float)
         for column in encoder.get("categorical_features", []):
+            if column not in used_clinical:
+                continue
             unseen = _unseen_level_rows(frame, encoder, column)
             unseen_count = int(unseen.sum())
             observed_count = int(frame[column].notna().sum())
@@ -1784,7 +1837,7 @@ def validate_locked_recipe(
             f"{len(absent)} locked marker(s) are not in the external dataset ({', '.join(absent)}); they were held at their "
             f"development median, so the model ran on {weight_available:.0%} of its marker weight."
         )
-    if marker_scaling == "within_cohort":
+    if marker_scaling == "within_cohort" and markers:
         notes.append(
             "Markers were rescaled within this cohort to their development mean and SD, as for data from another platform: "
             "the C-index compares like with like, absolute risks and calibration only roughly."

@@ -346,6 +346,87 @@ def test_without_tied_deaths_the_efron_baseline_is_the_breslow_one() -> None:
     assert np.array_equal(efron["log_cumulative_hazard"], breslow["log_cumulative_hazard"])
 
 
+# 6, 8 and text in numeric covariates: what validation requires of the external dataset.
+
+
+def _copy_cohort(seed: int, n: int = 200) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    age = rng.normal(size=n)
+    genes = rng.normal(size=(n, 4))
+    linear = 0.6 * age + 0.8 * genes[:, 0]
+    event_time = rng.exponential(np.exp(-linear))
+    censor_time = rng.exponential(1.5, size=n)
+    frame = pd.DataFrame(genes, columns=[f"g{index}" for index in range(4)])
+    frame["time"] = np.minimum(event_time, censor_time)
+    frame["event"] = (event_time <= censor_time).astype(int)
+    frame["age"] = age
+    frame["age_copy"] = 2 * age + 1  # development leaves it out as a linear combination of age
+    return frame
+
+
+def _copy_recipe() -> dict:
+    result = evaluate_markers(_copy_cohort(1), time_column="time", event_column="event", marker_columns=[f"g{index}" for index in range(4)],
+                              clinical_columns=["age", "age_copy"], settings=_QUICK)
+    assert result["cohort"]["dropped_clinical_columns"][0]["column"] == "age_copy"
+    return result["locked_recipe"]
+
+
+def test_validation_needs_only_the_clinical_columns_behind_the_locked_terms() -> None:
+    recipe = _copy_recipe()
+    assert "age_copy" not in recipe["model"]["terms"]
+    reference = validate_locked_recipe(_copy_cohort(2), recipe, n_bootstrap=0)
+    # The column the model does not use may be absent, partly missing or even hold text.
+    without = validate_locked_recipe(_copy_cohort(2).drop(columns=["age_copy"]), recipe, n_bootstrap=0)
+    assert without["metrics"]["c_index"] == reference["metrics"]["c_index"]
+    partly = _copy_cohort(2)
+    partly.loc[partly.index[:60], "age_copy"] = np.nan
+    assert validate_locked_recipe(partly, recipe, n_bootstrap=0)["cohort"]["n"] == 200
+    garbled = _copy_cohort(2).astype({"age_copy": object})
+    garbled.loc[garbled.index[:3], "age_copy"] = "unknown"
+    assert validate_locked_recipe(garbled, recipe, n_bootstrap=0)["metrics"]["c_index"] == reference["metrics"]["c_index"]
+
+
+def test_validation_refuses_text_in_a_numeric_clinical_covariate() -> None:
+    from survival_toolkit.errors import UserInputError
+
+    recipe = _copy_recipe()
+    external = _copy_cohort(2).astype({"age": object})
+    external.loc[external.index[:4], "age"] = "."
+    external.loc[external.index[4], "age"] = "unknown"
+    with pytest.raises(UserInputError, match=r'"age" holds 5 value\(s\) .* not numbers, such as "\.", "unknown"\. Blank those cells'):
+        validate_locked_recipe(external, recipe, n_bootstrap=0)
+    # Blank cells stay missing values: their rows are left out, as in development.
+    blank = _copy_cohort(2)
+    blank.loc[blank.index[:5], "age"] = np.nan
+    assert validate_locked_recipe(blank, recipe, n_bootstrap=0)["cohort"]["n"] == 195
+
+
+def test_within_cohort_scaling_of_a_clinical_only_model_and_of_a_recipe_without_a_marker_scale() -> None:
+    from survival_toolkit.errors import UserInputError
+
+    rng = np.random.default_rng(21)
+    n = 200
+    age = rng.normal(size=n)
+    event_time = rng.exponential(np.exp(-1.0 * age))
+    censor_time = rng.exponential(1.5, n)
+    frame = pd.DataFrame({"time": np.minimum(event_time, censor_time), "event": (event_time <= censor_time).astype(int), "age": age})
+    frame["noise"] = rng.normal(size=n)
+    recipe = evaluate_markers(frame, time_column="time", event_column="event", marker_columns=["noise"], clinical_columns=["age"],
+                              settings=_QUICK)["locked_recipe"]
+    assert recipe["markers"] == [] and recipe["marker_scale"] == {}
+    # Nothing to rescale: the clinical-only model validates as measured, without a note about rescaling.
+    within = validate_locked_recipe(frame, recipe, n_bootstrap=0, marker_scaling="within_cohort")
+    assert within["metrics"]["c_index"] == validate_locked_recipe(frame, recipe, n_bootstrap=0)["metrics"]["c_index"]
+    assert not any("rescaled" in note for note in within["notes"])
+
+    marker_recipe = _copy_recipe()
+    edited = {**marker_recipe, "marker_scale": {**marker_recipe["marker_scale"], marker_recipe["markers"][0]: None}}
+    edited["recipe_hash"] = marker_evaluation.recipe_hash(edited)
+    for scaling in ("as_measured", "within_cohort"):
+        with pytest.raises(UserInputError, match="marker_scale of .* needs a finite mean and SD"):
+            validate_locked_recipe(_copy_cohort(2), edited, n_bootstrap=0, marker_scaling=scaling)
+
+
 # 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
 
 
