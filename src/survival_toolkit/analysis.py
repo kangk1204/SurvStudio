@@ -280,20 +280,62 @@ def make_unique_columns(columns: Iterable[Any]) -> list[str]:
 
 
 _CSV_DELIMITER_CANDIDATES = ",;\t|"
-_DECIMAL_COMMA_PATTERN = re.compile(r"^-?\d{1,3}(\.\d{3})*,\d+$|^-?\d+,\d+$")
-# Every value of a decimal-comma column: optional "." thousands groups, optional ",decimals".
-_DECIMAL_COMMA_VALUE_PATTERN = re.compile(r"^[+-]?(\d{1,3}(\.\d{3})+|\d+)(,\d+)?$")
 # A number written with "," thousands separators and an optional "." decimal part ("12,345.5").
 _COMMA_GROUPED_NUMBER_PATTERN = re.compile(r"^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$")
 # A value of a column formatted with "," thousands separators (plain numbers are allowed too).
 _COMMA_THOUSANDS_VALUE_PATTERN = re.compile(r"^[+-]?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$")
-# "1,234" with a non-zero leading group and exact 3-digit groups also reads as a thousands-grouped
-# integer; which reading applies is decided from the rest of the file.
-_AMBIGUOUS_COMMA_INTEGER_PATTERN = re.compile(r"^[+-]?[1-9]\d{0,2}(,\d{3})+$")
-# The same ambiguity with "." ("1.234" is 1234 in a European export), plain integers allowed.
-_DOT_THOUSANDS_VALUE_PATTERN = re.compile(r"^[+-]?([1-9]\d{0,2}(\.\d{3})+|\d+)$")
-# A number with a "." decimal part; "12.5" or "0.25" can only be a decimal mark.
-_DOT_DECIMAL_VALUE_PATTERN = re.compile(r"^[+-]?\d*\.\d+$")
+# Shapes of number text in files not separated by commas. "1.234" and "1,234" (a non-zero lead of
+# one to three digits and one group of three) read either as a decimal or as a thousands-grouped
+# integer; each other shape reads one way only.
+_PLAIN_NUMBER_PATTERN = re.compile(r"^[+-]?\d+([eE][+-]?\d+)?$")
+_AMBIGUOUS_DOT_NUMBER_PATTERN = re.compile(r"^[+-]?[1-9]\d{0,2}\.\d{3}$")
+_AMBIGUOUS_COMMA_NUMBER_PATTERN = re.compile(r"^[+-]?[1-9]\d{0,2},\d{3}$")
+# "." as the decimal mark: "12.5", ".5", "1.5e-3", or "," thousands groups ("1,234,567", "1,234.5").
+_DOT_DECIMAL_NUMBER_PATTERN = re.compile(r"^[+-]?((\d+\.\d*|\.\d+)([eE][+-]?\d+)?|[1-9]\d{0,2}(,\d{3})+(\.\d+)?)$")
+# "," as the decimal mark: "12,5", "1,5E-3", or "." thousands groups ("1.234.567", "1.234,5").
+_COMMA_DECIMAL_NUMBER_PATTERN = re.compile(r"^[+-]?((\d+,\d+)([eE][+-]?\d+)?|[1-9]\d{0,2}(\.\d{3})+(,\d+)?)$")
+_NUMBER_SHAPE_PATTERNS = (
+    ("plain", _PLAIN_NUMBER_PATTERN),
+    ("ambiguous_dot", _AMBIGUOUS_DOT_NUMBER_PATTERN),
+    ("ambiguous_comma", _AMBIGUOUS_COMMA_NUMBER_PATTERN),
+    ("dot", _DOT_DECIMAL_NUMBER_PATTERN),
+    ("comma", _COMMA_DECIMAL_NUMBER_PATTERN),
+)
+_ANY_NUMBER_SHAPE_PATTERN = re.compile("|".join(f"(?:{pattern.pattern})" for _, pattern in _NUMBER_SHAPE_PATTERNS))
+# A number written with "," or "." separators in either convention ("1,234", "12,5", "1.234,5").
+_SEPARATED_NUMBER_PATTERN = re.compile(r"^[+-]?(\d{1,3}([.,]\d{3})+([.,]\d+)?|\d+[.,]\d+)$")
+# Text that means "no value" (TCGA exports write "[Not Available]" and similar). Time columns
+# read it as missing, and the loader leaves it out when it decides how a column writes numbers.
+_MISSING_VALUE_TOKENS = {
+    "",
+    "na",
+    "n/a",
+    "n.a.",
+    "nan",
+    "null",
+    "none",
+    "nr",
+    ".",
+    "-",
+    "--",
+    "?",
+    "#n/a",
+    "missing",
+    "unknown",
+    "no data",
+    "not available",
+    "not applicable",
+    "not assessed",
+    "not evaluated",
+    "never assessed",
+    "not reported",
+    "[not available]",
+    "[not applicable]",
+    "[not reported]",
+    "[not evaluated]",
+    "[unknown]",
+    "[discrepancy]",
+}
 # Bytes inspected to pick the text encoding and the delimiter; the full file is then
 # parsed by pandas in streaming mode instead of being decoded into one Python string.
 _TEXT_SNIFF_BYTES = 1024 * 1024
@@ -672,9 +714,63 @@ def _parse_delimited_text(
     return frame
 
 
-def _non_empty_text(series: pd.Series) -> pd.Series:
+def _number_text(series: pd.Series) -> pd.Series:
+    """Stripped text of the values that are not missing and not a missing-value marker ("NA", "-")."""
     text = series.dropna().astype(str).str.strip()
-    return text[text != ""]
+    text = text[text != ""]
+    return text[~text.str.lower().isin(_MISSING_VALUE_TOKENS)]
+
+
+def _number_shapes(text: pd.Series) -> set[str] | None:
+    """The number shapes (``_NUMBER_SHAPE_PATTERNS``) of a column's text; None when a value is no number."""
+    values = [str(value) for value in pd.unique(text.to_numpy(dtype=object))]
+    # A column of words fails on its first values, before every value is matched five times.
+    if not all(_ANY_NUMBER_SHAPE_PATTERN.fullmatch(value) for value in values[:50]):
+        return None
+    shapes: set[str] = set()
+    for value in values:
+        for shape, pattern in _NUMBER_SHAPE_PATTERNS:
+            if pattern.fullmatch(value):
+                shapes.add(shape)
+                break
+        else:
+            return None
+    return shapes
+
+
+def _float_column_may_hide_dot_groups(series: pd.Series) -> bool:
+    """True when every value of a float column could have been written as "1.234" or as a whole number.
+
+    pandas reads "1.234" as 1.234; whether the file meant a decimal or a thousands group is only
+    known from the raw text, which is read again for such columns alone. A value such as 0.5,
+    12.3456 or 1234.5 can only have been written with "." as the decimal mark.
+    """
+    values = series.to_numpy(dtype=float, na_value=np.nan)
+    values = np.abs(values[np.isfinite(values)])
+    if values.size == 0:
+        return False
+    whole = values == np.round(values)
+    scaled = values * 1000.0
+    grouped = (values >= 1.0) & (values < 1000.0) & np.isclose(scaled, np.round(scaled), rtol=0.0, atol=1e-6)
+    return bool(np.all(whole | grouped))
+
+
+def _ambiguous_number_message(column: Any, text: pd.Series, mixed_evidence: tuple[Any, Any] | None) -> str:
+    patterns = (_AMBIGUOUS_COMMA_NUMBER_PATTERN, _AMBIGUOUS_DOT_NUMBER_PATTERN)
+    example = next(str(value) for value in text if any(pattern.fullmatch(str(value)) for pattern in patterns))
+    separator = "," if "," in example else "."
+    if mixed_evidence is not None:
+        reason = (
+            f'the file writes decimals both with "," (column "{mixed_evidence[0]}") and with "." '
+            f'(column "{mixed_evidence[1]}")'
+        )
+    else:
+        reason = 'nothing else in the file shows whether "," is its decimal mark or its thousands separator'
+    return (
+        f'Column "{column}" holds numbers such as "{example}", which read either as {example.replace(separator, ".")} '
+        f'or as {example.replace(separator, "")}, and {reason}. Save the file again with one decimal mark and '
+        "without thousands separators, then upload it again."
+    )
 
 
 def _set_parsed_column(frame: pd.DataFrame, column: Any, numbers: pd.Series) -> bool:
@@ -707,93 +803,117 @@ def _convert_formatted_number_columns(
     delimiter: str,
     read_raw_text: Any = None,
 ) -> pd.DataFrame:
-    """Parse columns that hold formatted numbers, one column at a time.
+    """Parse the columns that hold formatted numbers, deciding each column's decimal mark once.
+
+    Missing-value markers ("NA", "-", "[Not Available]") are left out of every test and become
+    missing values in a converted column, so a stray marker never changes how the numbers read.
 
     * In comma-separated files, a column of quoted numbers with thousands separators
       ("1,234", as Excel exports formatted numbers) is parsed as numbers.
-    * In files not separated by commas (European ";" exports, tab-separated text), a text
-      column whose values are mostly decimal-comma numbers ("12,5", "1.234,5") is parsed with
-      "," as the decimal mark and "." as the thousands separator. Only such columns change:
-      dot-decimal columns and other text (dotted dates such as "01.02.2020") are left alone.
-      Values such as "1,234" or "1.234" read either way; they follow the rest of the file:
-      comma values are thousands-grouped integers when the file otherwise uses "." decimals,
-      and dot values are thousands-grouped integers (as the European export wrote them) when
-      the file uses "," decimals. ``read_raw_text(positions)`` returns the raw text of the
-      given columns, which the dot check needs because pandas already parsed "1.234" as 1.234.
+    * In other files (European ";" exports, tab-separated text), a column whose values are all
+      numbers is read with its own decimal mark when one of its values shows it ("12,5" or
+      "1.234,5" for ",", "12.5" or "1,234.5" for "."). A column of values such as "1,234" or
+      "1.234", which read either way, follows the file: the decimal mark its other columns
+      show, else "," in a ";" file (the European convention, so "1.234" days are 1234). Such a
+      column is refused when the file shows both marks, or when a tab-separated file shows
+      neither and the column holds "1,234" values; "1.234" alone stays the decimal pandas read.
+      ``read_raw_text(positions)`` returns the raw text of the given columns, which is needed
+      for float columns because pandas already parsed "1.234" as 1.234.
 
-    A column is converted only when every non-missing value parses; otherwise it stays as read.
+    Dot-decimal columns without "," values and other text (dotted dates such as "01.02.2020")
+    are left as read. A column is converted only when every value parses.
     """
     if delimiter == ",":
         for column in list(frame.columns):
             series = frame[column]
             if not _is_text_series(series):
                 continue
-            text = _non_empty_text(series)
+            text = _number_text(series)
             if text.empty or not bool(text.str.contains(",", regex=False).any()):
                 continue
             if bool(text.str.fullmatch(_COMMA_THOUSANDS_VALUE_PATTERN).all()):
                 _set_parsed_column(frame, column, text.str.replace(",", "", regex=False))
         return frame
 
-    comma_columns: dict[Any, tuple[pd.Series, bool]] = {}
+    shaped: dict[Any, tuple[pd.Series, set[str]]] = {}
+    dot_columns: list[Any] = []  # columns whose own values show "." as the decimal mark
+    float_candidates: list[Any] = []
     for column in frame.columns:
         series = frame[column]
-        if not _is_text_series(series):
+        if is_bool_dtype(series):
             continue
-        text = _non_empty_text(series)
-        if text.empty or not text.str.match(_DECIMAL_COMMA_PATTERN).mean() > 0.8:
-            continue
-        if not bool(text.str.fullmatch(_DECIMAL_COMMA_VALUE_PATTERN).all()):
-            continue
-        has_comma = text.str.contains(",", regex=False)
-        ambiguous = not bool(text.str.contains(".", regex=False).any()) and bool(
-            text[has_comma].str.fullmatch(_AMBIGUOUS_COMMA_INTEGER_PATTERN).all()
-        )
-        comma_columns[column] = (text, ambiguous)
-    if not comma_columns:
-        return frame
+        if _is_text_series(series):
+            text = _number_text(series)
+            shapes = _number_shapes(text) if not text.empty else None
+            if shapes is not None and shapes != {"plain"}:
+                shaped[column] = (text, shapes)
+        elif pd.api.types.is_float_dtype(series):
+            if _float_column_may_hide_dot_groups(series):
+                float_candidates.append(column)
+            elif bool(series.notna().any()):
+                dot_columns.append(column)
 
-    # A semicolon-separated export or an unambiguous "12,5" means "," is the decimal mark.
-    comma_decimals = delimiter == ";" or any(not ambiguous for _, ambiguous in comma_columns.values())
-    dot_decimals = False
-    dot_thousands_columns: dict[Any, pd.Series] = {}
-    other_columns = [
-        column
-        for column in frame.columns
-        if column not in comma_columns and not is_bool_dtype(frame[column])
-        and (is_numeric_dtype(frame[column]) or _is_text_series(frame[column]))
-    ]
-    raw: pd.DataFrame | None = None
-    positions = sorted(int(frame.columns.get_loc(column)) for column in other_columns)
-    if positions and read_raw_text is not None:
+    def _own_mark(shapes: set[str]) -> str | None:
+        if "dot" in shapes and "comma" not in shapes:
+            return "."
+        if "comma" in shapes and "dot" not in shapes:
+            return ","
+        return None
+
+    comma_columns = [column for column, (_, shapes) in shaped.items() if _own_mark(shapes) == ","]
+    dot_columns += [column for column, (_, shapes) in shaped.items() if _own_mark(shapes) == "."]
+    has_comma_values = any(shapes & {"comma", "ambiguous_comma"} for _, shapes in shaped.values())
+    if float_candidates and read_raw_text is not None and (
+        comma_columns or (not dot_columns and (delimiter == ";" or has_comma_values))
+    ):
+        positions = sorted(int(frame.columns.get_loc(column)) for column in float_candidates)
         try:
             raw = read_raw_text(positions)
         except (ValueError, pd.errors.ParserError, csv.Error):
             raw = None
         # Only trust the raw text when it lines up with the parsed columns.
-        if raw is not None and [str(name) for name in raw.columns] != [str(frame.columns[position]) for position in positions]:
-            raw = None
-    if raw is not None:
-        for offset, position in enumerate(positions):
-            column = frame.columns[position]
-            text = _non_empty_text(raw.iloc[:, offset])
-            dotted = text.str.contains(".", regex=False)
-            if text.empty or not bool(dotted.any()):
-                continue
-            if bool(text.str.fullmatch(_DOT_THOUSANDS_VALUE_PATTERN).all()):
-                dot_thousands_columns[column] = text
-            elif is_numeric_dtype(frame[column]) and bool(text[dotted].str.fullmatch(_DOT_DECIMAL_VALUE_PATTERN).any()):
-                dot_decimals = True
+        if raw is not None and [str(name) for name in raw.columns] == [str(frame.columns[position]) for position in positions]:
+            for offset, position in enumerate(positions):
+                text = _number_text(raw.iloc[:, offset])
+                shapes = _number_shapes(text) if not text.empty else None
+                if shapes is None or shapes == {"plain"}:
+                    continue
+                column = frame.columns[position]
+                shaped[column] = (text, shapes)
+                if _own_mark(shapes) == ".":
+                    dot_columns.append(column)
+    if not shaped:
+        return frame
 
-    for column, (text, ambiguous) in comma_columns.items():
-        if ambiguous and dot_decimals and not comma_decimals:
+    mixed_evidence = (comma_columns[0], dot_columns[0]) if comma_columns and dot_columns else None
+    if mixed_evidence is not None:
+        file_mark = None
+    elif comma_columns:
+        file_mark = ","
+    elif dot_columns:
+        file_mark = "."
+    else:
+        file_mark = "," if delimiter == ";" else None
+
+    ambiguous: list[Any] = []
+    for column, (text, shapes) in shaped.items():
+        if "dot" in shapes and "comma" in shapes:
+            continue  # both decimal marks in one column: left as read
+        mark = _own_mark(shapes) or file_mark
+        if mark is None:
+            if mixed_evidence is None and "ambiguous_comma" not in shapes:
+                continue  # "1.234" in a file without any "," number stays the decimal pandas read
+            ambiguous.append(column)
+            continue
+        if mark == ".":
+            if not bool(text.str.contains(",", regex=False).any()):
+                continue  # pandas (or the time-column parser) reads these values the same way
             numbers = text.str.replace(",", "", regex=False)
         else:
             numbers = text.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
         _set_parsed_column(frame, column, numbers)
-    if comma_decimals and not dot_decimals:
-        for column, text in dot_thousands_columns.items():
-            _set_parsed_column(frame, column, text.str.replace(".", "", regex=False))
+    if ambiguous:
+        raise ValueError(_ambiguous_number_message(ambiguous[0], shaped[ambiguous[0]][0], mixed_evidence))
     return frame
 
 
@@ -1919,8 +2039,13 @@ def _reject_calendar_date_time_column(series: pd.Series, time_column: str) -> No
     if is_datetime64_any_dtype(series):
         raise ValueError(message)
     if _is_text_series(series):
-        sample = series.dropna().astype(str).head(200)
-        if sample.empty or pd.to_numeric(sample, errors="coerce").notna().mean() > 0.5:
+        # Missing-value markers are neither dates nor numbers, and numbers written with separators
+        # ("1,234", "12,5", "1.234,5") are numbers: the date parser would read "1,234" as the year 234.
+        sample = _number_text(series).head(200)
+        if sample.empty:
+            return
+        numbers = pd.to_numeric(sample, errors="coerce").notna() | sample.str.fullmatch(_SEPARATED_NUMBER_PATTERN)
+        if numbers.mean() > 0.5:
             return
         with suppressed_warnings():
             parsed = pd.to_datetime(sample, errors="coerce")
@@ -2045,33 +2170,6 @@ def _validate_event_column_choice(df: pd.DataFrame, event_column: str) -> None:
         f'"{event_column}" does not look like a survival event column. '
         "Use a true event indicator or recode the dataset before survival analysis."
     )
-
-
-# Text that means "no value" in a time column (TCGA exports write "[Not Available]" and similar).
-_MISSING_VALUE_TOKENS = {
-    "",
-    "na",
-    "n/a",
-    "nan",
-    "null",
-    "none",
-    "nr",
-    ".",
-    "-",
-    "--",
-    "?",
-    "#n/a",
-    "missing",
-    "unknown",
-    "not available",
-    "not reported",
-    "[not available]",
-    "[not applicable]",
-    "[not reported]",
-    "[not evaluated]",
-    "[unknown]",
-    "[discrepancy]",
-}
 
 
 def _coerce_survival_time_values(series: pd.Series, time_column: str) -> pd.Series:
