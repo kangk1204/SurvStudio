@@ -237,6 +237,46 @@ def test_without_a_likely_event_column_nothing_is_preselected(tmp_path: Path) ->
     assert result["chosen"] == "fustat"
 
 
+def test_an_event_column_without_values_replaces_the_previous_warning(tmp_path: Path) -> None:
+    """#21: choosing an all-missing column showed the warning of the column chosen before."""
+    dataset = _profile("missing", {
+        "os_months": [5, 8, 12, 20, 25, 30, 33, 40, 41, 50, 52, 60],
+        "os_event": [0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+        "sex": ["M", "F"] * 6,
+        "empty_flag": [None] * 12,
+    })
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.change("#showAllEventColumns", true);
+      page.change("#eventColumn", "sex");
+      const before = page.run("refs.eventColumnWarning.textContent");
+      page.change("#eventColumn", "empty_flag");
+      return { before, after: page.run("refs.eventColumnWarning.textContent"), value: page.run("refs.eventValueWarning.textContent") };
+    """, dataset=dataset)
+
+    assert "baseline characteristic" in result["before"]
+    assert result["after"] == '"empty_flag" is not a binary event column. Choose a 0/1-style event column or recode it.'
+    assert "No non-missing values" in result["value"]
+
+
+def test_the_time_menu_lists_only_numeric_suggestions(tmp_path: Path) -> None:
+    """#10: the server suggests "long_term_survival" (yes/no) by name; it is no follow-up time."""
+    dataset = _profile("lts", {
+        "long_term_survival": ["yes", "no", "no", "yes", "no", "no", "yes", "no", "no", "no", "yes", "no"],
+        "os_months": [50, 8, 12, 60, 25, 30, 70, 40, 41, 50, 52, 60],
+        "os_event": [0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+        "age": [50, 61, 72, 45, 66, 58, 70, 49, 63, 55, 68, 59],
+    })
+    assert dataset["suggestions"]["time_columns"][0] == "long_term_survival"
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      return page.run(`({ time: refs.timeColumn.value, options: refs.timeColumn.options.map((option) => option.value),
+        warning: refs.timeColumnWarning.textContent, ready: endpointIsReady() })`);
+    """, dataset=dataset)
+
+    assert result == {"time": "os_months", "options": ["os_months"], "warning": "", "ready": True}
+
+
 # ── Snapshots and history ──────────────────────────────────────
 
 

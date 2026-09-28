@@ -351,9 +351,11 @@ function datasetColumnNames() {
   return state.dataset?.columns?.map((column) => column.name) || [];
 }
 
+// The server suggests follow-up columns by name; only numeric ones can be a follow-up time ("long_term_survival"
+// holding yes/no is not).
 function recommendedTimeColumns() {
-  const names = new Set(datasetColumnNames());
-  return (state.dataset?.suggestions?.time_columns || []).filter((column) => names.has(column));
+  const numeric = new Set(state.dataset?.numeric_columns || []);
+  return (state.dataset?.suggestions?.time_columns || []).filter((column) => numeric.has(column));
 }
 
 function numericTimeCandidateColumns() {
@@ -785,6 +787,7 @@ function updateEventPositiveOptions() {
         ? `No non-missing values were found in "${eventColumn}", so no event value can be selected. Choose a different event column.`
         : null,
     );
+    updateEventColumnGuidance();
     return;
   }
   const inferred = inferEventPositiveSelection(eventColumn, values, previousValue);
