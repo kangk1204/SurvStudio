@@ -306,6 +306,83 @@ def test_repeated_cv_summary_describes_fold_means_and_models_that_could_not_run(
     assert "training folds of about 120 patients" in summary["strengths"][0]
 
 
+# ── Numerical helpers ───────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("sksurv_path", [True, False])
+def test_c_index_is_undefined_for_non_finite_risk_scores_or_times(monkeypatch, sksurv_path: bool) -> None:
+    from survival_toolkit import ml_models as ml
+
+    if sksurv_path and not ml.SKSURV_AVAILABLE:
+        pytest.skip("scikit-survival not installed")
+    monkeypatch.setattr(ml, "SKSURV_AVAILABLE", sksurv_path)
+    y = np.empty(6, dtype=[("event", bool), ("time", float)])
+    y["event"] = [True, True, False, True, False, True]
+    y["time"] = [1, 2, 3, 4, 5, 6]
+    assert ml._sksurv_c_index(y, np.array([6.0, 5, 4, 3, 2, 1])) == pytest.approx(1.0)
+    for risk in ([np.nan, 5, 4, 3, 2, 1.0], [6, 5, 4, 3, 2, np.nan], [np.inf, 5, 4, 3, 2, 1.0]):
+        assert ml._sksurv_c_index(y, np.array(risk)) is None
+    y_inf = y.copy()
+    y_inf["time"][5] = np.inf
+    assert ml._sksurv_c_index(y_inf, np.array([6.0, 5, 4, 3, 2, 1])) is None
+
+
+def _loop_breslow(times, status, linear_predictor):
+    """The per-event-time loop the vectorised Breslow estimator replaced."""
+    times = np.asarray(times, dtype=float)
+    status = np.asarray(status, dtype=float) > 0
+    risk = np.exp(np.clip(np.asarray(linear_predictor, dtype=float), -50.0, 50.0))
+    event_times = np.unique(times[status])
+    order = np.argsort(times, kind="mergesort")
+    reverse_cumsum = np.cumsum(risk[order][::-1])[::-1]
+    risk_set_sums = reverse_cumsum[np.searchsorted(times[order], event_times, side="left")]
+    deaths = np.array([np.sum(status & (times == value)) for value in event_times], dtype=float)
+    return event_times, np.exp(-np.cumsum(deaths / risk_set_sums))
+
+
+def test_breslow_baseline_counts_tied_deaths_exactly_as_the_loop_did() -> None:
+    from survival_toolkit.ml_models import _breslow_baseline_survival
+
+    rng = np.random.default_rng(0)
+    for n in (5, 200, 3000):
+        times = np.round(rng.exponential(20.0, n))  # many tied times
+        status = (rng.random(n) < 0.6).astype(float)
+        linear_predictor = rng.normal(size=n)
+        expected_times, expected_survival = _loop_breslow(times, status, linear_predictor)
+        event_times, survival = _breslow_baseline_survival(times, status, linear_predictor)
+        assert np.array_equal(event_times, expected_times)
+        assert np.array_equal(survival, expected_survival)
+
+
+def test_repeat_with_a_single_scored_fold_reports_no_spread() -> None:
+    from survival_toolkit.ml_models import _summarize_repeated_cv_rows
+
+    common = {"n_features": 3, "train_n": 80, "test_n": 20, "training_time_ms": 5.0}
+    summary = _summarize_repeated_cv_rows([
+        {"repeat": 1, "c_index": 0.70, **common},
+        {"repeat": 2, "c_index": 0.60, **common},
+        {"repeat": 2, "c_index": 0.64, **common},
+    ])
+    assert summary["repeat_results"][0]["c_index_std"] is None
+    assert summary["repeat_results"][1]["c_index_std"] == pytest.approx(float(np.std([0.60, 0.64], ddof=1)))
+
+
+@requires_sksurv
+def test_lasso_inner_cross_validation_stops_when_its_request_is_cancelled() -> None:
+    import threading
+
+    from survival_toolkit import ml_models as ml
+    from survival_toolkit.concurrency import cancellation_scope
+
+    df = make_example_dataset(seed=24, n_patients=200)
+    encoded, _, _ = ml._encode_train_test_features(df, df, ["age", "biomarker_score", "immune_index"])
+    cancelled = threading.Event()
+    cancelled.set()
+    with cancellation_scope(cancelled), pytest.raises(JobCancelledError):
+        ml._select_lasso_alpha(df.reset_index(drop=True), encoded.reset_index(drop=True), time_column="os_months",
+                               event_column="os_event", random_state=11)
+
+
 # ── Summaries and descriptions ──────────────────────────────────────────────
 
 

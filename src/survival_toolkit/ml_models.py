@@ -320,13 +320,19 @@ def _sksurv_c_index(
 ) -> float | None:
     """Compute Harrell's C-index via *sksurv* if available, else fall back
     to the pure-Python implementation from ``analysis.py``.
+
+    None when no pair is comparable, or when a risk score or time is not finite: such a
+    value has no rank, and scoring it anyway gives a meaningless C-index.
     """
     events = y_true["event"].astype(bool)
     times = y_true["time"].astype(float)
+    risk = np.asarray(risk_scores, dtype=float).reshape(-1)
+    if not (np.isfinite(risk).all() and np.isfinite(times).all()):
+        return None
 
     if SKSURV_AVAILABLE:
         try:
-            c_index, _, _, _, _ = concordance_index_censored(events, times, risk_scores)
+            c_index, _, _, _, _ = concordance_index_censored(events, times, risk)
             return _safe_float(c_index)
         except (ValueError, ZeroDivisionError):
             # No comparable pairs or all censored; fall through to the shared estimator.
@@ -335,7 +341,7 @@ def _sksurv_c_index(
     return _harrell_c_index(
         times,
         events.astype(int).astype(float),
-        risk_scores.astype(float),
+        risk,
     )
 
 
@@ -658,7 +664,8 @@ def _summarize_repeated_cv_rows(
         repeat_results.append({
             "repeat": repeat,
             "c_index": float(np.mean(c_values)),
-            "c_index_std": float(np.std(c_values, ddof=1)) if len(c_values) > 1 else 0.0,
+            # A single scored fold has no spread to report.
+            "c_index_std": float(np.std(c_values, ddof=1)) if len(c_values) > 1 else None,
             "c_index_median": float(np.median(c_values)),
             "ibs": float(np.mean(ibs_values)) if ibs_values else None,
             "null_ibs": float(np.mean(null_ibs_values)) if null_ibs_values else None,
@@ -932,7 +939,8 @@ def _breslow_baseline_survival(
     times_arr = np.asarray(times, dtype=float).reshape(-1)
     status_arr = np.asarray(status, dtype=float).reshape(-1) > 0
     risk = np.exp(np.clip(np.asarray(linear_predictor, dtype=float).reshape(-1), -50.0, 50.0))
-    event_times = np.unique(times_arr[status_arr])
+    # Distinct event times and the number of events at each, in one sort.
+    event_times, death_counts = np.unique(times_arr[status_arr], return_counts=True)
     if event_times.size == 0:
         return np.array([], dtype=float), np.array([], dtype=float)
     order = np.argsort(times_arr, kind="mergesort")
@@ -941,7 +949,7 @@ def _breslow_baseline_survival(
     reverse_cumsum = np.cumsum(risk[order][::-1])[::-1]
     first_at_or_after = np.searchsorted(sorted_times, event_times, side="left")
     risk_set_sums = reverse_cumsum[first_at_or_after]
-    deaths = np.array([np.sum(status_arr & (times_arr == value)) for value in event_times], dtype=float)
+    deaths = death_counts.astype(float)
     cumulative_hazard = np.cumsum(deaths / risk_set_sums)
     return event_times, np.exp(-cumulative_hazard)
 
@@ -1491,6 +1499,8 @@ def _select_lasso_alpha(
     if n_train >= 30 and stratum_counts.size >= 2 and n_splits >= 2:
         splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
         for inner_train_idx, inner_eval_idx in splitter.split(train_encoded, train_events):
+            # Each inner fold fits a whole Coxnet path, so a cancelled request stops between folds.
+            raise_if_cancelled()
             try:
                 inner_train_encoded, inner_eval_encoded = _drop_constant_train_columns(
                     train_encoded.iloc[inner_train_idx].reset_index(drop=True),
