@@ -151,7 +151,11 @@ def test_server_suggested_event_columns_are_offered_and_kept_out_of_covariates(t
         "marital_status": ["Married", "Single"] * 6,
         "age": [50, 61, 72, 45, 66, 58, 70, 49, 63, 55, 68, 59],
     })
-    assert {"OS", "PFI", "marital_status"} <= set(dataset["suggestions"]["event_columns"])
+    assert {"OS", "PFI"} <= set(dataset["suggestions"]["event_columns"])
+    # The server no longer suggests baseline "_status" columns such as marital_status as events; add it back as a
+    # stand-in for any suggestion whose values are not event coding, which the client must keep as a covariate.
+    assert "marital_status" not in dataset["suggestions"]["event_columns"]
+    dataset["suggestions"]["event_columns"] = [*dataset["suggestions"]["event_columns"], "marital_status"]
     result = _run_page(tmp_path, r"""
       await loadDataset(page, fixtures.dataset);
       const load = page.run(`({ event: refs.eventColumn.value, value: refs.eventPositiveValue.value,
