@@ -4793,21 +4793,24 @@ def _bootstrap_signature_metrics(
     skipped_resamples = 0
     p_values: list[float] = []
     hazard_ratios: list[float] = []
+    # The rules are row-wise, so a resampled row's membership is its cohort row's membership:
+    # the mask is evaluated once and indexed per resample.
+    cohort_mask = np.asarray(_signature_mask(frame, combo, operator=combo_operator), dtype=bool)
+    cohort_events = frame[event_column].to_numpy(dtype=int)
+    cohort_times = frame[time_column].to_numpy(dtype=float)
 
     for _ in range(n_iterations):
         raise_if_cancelled()
         sampled_idx = rng.integers(0, n_obs, size=sample_size)
-        sampled = frame.iloc[sampled_idx].reset_index(drop=True)
-
-        mask_values = _signature_mask(sampled, combo, operator=combo_operator)
+        mask_values = cohort_mask[sampled_idx]
         n_high = int(mask_values.sum())
         n_low = sample_size - n_high
         if n_high < resample_min_group or n_low < resample_min_group:
             skipped_resamples += 1
             continue
 
-        events = sampled[event_column].to_numpy(dtype=int)
-        times = sampled[time_column].to_numpy(dtype=float)
+        events = cohort_events[sampled_idx]
+        times = cohort_times[sampled_idx]
         if events[mask_values].sum() < resample_min_events or events[~mask_values].sum() < resample_min_events:
             skipped_resamples += 1
             continue
@@ -5167,20 +5170,23 @@ def _validation_signature_metrics(
     skipped_folds = 0
     p_values: list[float] = []
     hazard_ratios: list[float] = []
+    # Row-wise rules: evaluate the mask once on the cohort and index it per subsample.
+    cohort_mask = np.asarray(_signature_mask(frame, combo, operator=combo_operator), dtype=bool)
+    cohort_events = frame[event_column].to_numpy(dtype=int)
+    cohort_times = frame[time_column].to_numpy(dtype=float)
 
     for _ in range(n_iterations):
         raise_if_cancelled()
         holdout_idx = rng.choice(n_obs, size=holdout_size, replace=False)
-        sampled = frame.iloc[holdout_idx].reset_index(drop=True)
-        mask_values = _signature_mask(sampled, combo, operator=combo_operator)
+        mask_values = cohort_mask[holdout_idx]
         n_high = int(mask_values.sum())
         n_low = holdout_size - n_high
         if n_high < min_group_size or n_low < min_group_size:
             skipped_folds += 1
             continue
 
-        events = sampled[event_column].to_numpy(dtype=int)
-        times = sampled[time_column].to_numpy(dtype=float)
+        events = cohort_events[holdout_idx]
+        times = cohort_times[holdout_idx]
         if events[mask_values].sum() < min_events_per_group or events[~mask_values].sum() < min_events_per_group:
             skipped_folds += 1
             continue
