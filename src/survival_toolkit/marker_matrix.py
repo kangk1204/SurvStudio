@@ -6,7 +6,8 @@ stored here, and matched to the patients of whichever dataset the marker evaluat
 on through an ID column. Two layouts are read: one row per marker with one column per
 patient (as GEO and TCGA distribute expression), or one row per patient with one column
 per marker. The first column holds the marker names or patient IDs; a header one field short
-of the data rows (R's ``write.table`` default) is read as missing that column's name. Text
+of the data rows (R's ``write.table`` default) is read as missing that column's name, and an
+empty last field on every data row (lines ending with a separator) is not a column. Text
 files may be gzip-compressed, as GEO and UCSC Xena serve them, and are decoded with the
 encodings the clinical-table loader accepts. TCGA sample barcodes (TCGA-05-4244-01A) are
 matched to patient barcodes (TCGA-05-4244) when the dataset holds the latter.
@@ -14,10 +15,12 @@ matched to patient barcodes (TCGA-05-4244) when the dataset holds the latter.
 
 from __future__ import annotations
 
+import codecs
 import csv
 import gzip
 import hashlib
 import io
+import itertools
 import re
 import secrets
 import shutil
@@ -25,9 +28,9 @@ import tempfile
 import threading
 import time
 import zlib
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from pathlib import Path
-from typing import Any, Callable, NamedTuple, Sequence
+from typing import Any, Callable, Iterator, NamedTuple, Sequence
 
 import numpy as np
 import pandas as pd
@@ -41,10 +44,13 @@ MATRIX_SUFFIXES = frozenset({".csv", ".tsv", ".txt", ".parquet"})
 ORIENTATIONS = ("auto", "markers_in_rows", "samples_in_rows")
 # A gzip-compressed text matrix is unpacked to a temporary file first; this bounds what it may unpack to.
 MAX_DECOMPRESSED_BYTES = 1024 * 1024 * 1024
-# The longest header (or first data) line read before parsing: 100,000 IDs of up to 160 characters.
+# The longest line read before parsing: a header of 100,000 IDs of up to 160 characters.
 MAX_HEADER_CHARS = 16 * 1024 * 1024
 # Rows or data columns beyond this exceed the limits of either layout.
 _MAX_DIMENSION = max(MAX_MATRIX_MARKERS, MAX_MATRIX_SAMPLES)
+# When both the first row and the first column hold dataset IDs (numeric gene IDs against numeric
+# patient IDs), an axis on which fewer than this share of the IDs match is taken to match by chance.
+_INCIDENTAL_MATCH_SHARE = 0.05
 
 _TCGA_PATIENT = re.compile(r"^TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}$", re.IGNORECASE)
 _TCGA_SAMPLE = re.compile(r"^(TCGA-[A-Z0-9]{2}-[A-Z0-9]{4})-(\d{2})([A-Z]?)(?:-.*)?$", re.IGNORECASE)
@@ -81,11 +87,21 @@ class _SampleMap(NamedTuple):
     note: str
 
 
+class _RowScan(NamedTuple):
+    """The data lines of a text matrix, from one pass over them."""
+
+    n_rows: int  # data rows; blank lines are skipped, as pandas skips them
+    width: int  # the number of fields on every data row
+    first_ends_empty: bool  # the first data row ends with an empty field
+    all_end_empty: bool  # every data row ends with an empty field
+
+
 def matrix_format(filename: str) -> tuple[str, bool]:
     """The table suffix of a matrix file name and whether it is gzip-compressed.
 
     "expr.tsv.gz" gives (".tsv", True); a bare "HiSeqV2.gz" gives ("", True), and its separator is
-    then read from the header line.
+    then read from the header line. A name without any suffix gives (".csv", False), so callers
+    accept it; ``read_marker_matrix`` also reads its separator from the header line.
     """
     suffixes = [suffix.lower() for suffix in Path(filename).suffixes]
     if suffixes and suffixes[-1] == ".gz":
@@ -126,8 +142,9 @@ def _gunzip(source: Path, target: Path) -> None:
 
 
 def _sniffed_suffix(path: Path) -> str:
+    """".tsv" when the first line (at most ``MAX_HEADER_CHARS`` characters of it) holds a tab, else ".csv"."""
     with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
-        first = handle.readline()
+        first = handle.readline(MAX_HEADER_CHARS + 1)
     return ".tsv" if "\t" in first else ".csv"
 
 
@@ -254,25 +271,33 @@ def _check_bounds(n_rows: int, n_columns: int) -> None:
         )
 
 
-def _count_data_lines(path: Path) -> int:
-    """Lines after the header, counted on the raw bytes; beyond what any layout holds, the count stops.
+def _count_data_lines(path: Path, encoding: str | None = None) -> int:
+    """Lines after the header; beyond what any layout holds, the count stops.
 
-    A line ends with "\\r\\n", "\\n" or a lone "\\r" (pandas splits on all three). Blank lines and
-    quoted line breaks count too, so this is an upper bound for the bound checks.
+    A line ends with "\\r\\n", "\\n" or a lone "\\r" (pandas splits on all three). UTF-16 text is
+    counted on its decoded characters, since a line end there takes two bytes and other characters
+    can hold the bytes of "\\n" and "\\r"; other encodings are counted on the raw bytes. Blank lines
+    and quoted line breaks count too, so this is an upper bound for the bound checks.
     """
+    if encoding is not None and codecs.lookup(encoding).name.startswith("utf-16"):
+        handle: Any = path.open("r", encoding=encoding, errors="strict", newline="")
+        feed, carriage, pair = "\n", "\r", "\r\n"
+    else:
+        handle = path.open("rb")
+        feed, carriage, pair = b"\n", b"\r", b"\r\n"
     feeds = returns = pairs = 0
-    last = b"\n"
-    with path.open("rb") as handle:
+    last = feed
+    with handle:
         while chunk := handle.read(1 << 20):
-            feeds += chunk.count(b"\n")
-            returns += chunk.count(b"\r")
+            feeds += chunk.count(feed)
+            returns += chunk.count(carriage)
             # A "\r\n" pair is one line end, also when a chunk boundary splits it.
-            pairs += chunk.count(b"\r\n") + (last == b"\r" and chunk[:1] == b"\n")
+            pairs += chunk.count(pair) + (last == carriage and chunk[:1] == feed)
             last = chunk[-1:]
             if feeds + returns - pairs > _MAX_DIMENSION + 1:
                 return _MAX_DIMENSION + 1
     lines = feeds + returns - pairs
-    if last not in (b"\n", b"\r"):
+    if last not in (feed, carriage):
         lines += 1
     return max(lines - 1, 0)
 
@@ -289,23 +314,114 @@ def _text_encodings(path: Path) -> list[str]:
     return list(dict.fromkeys("utf-8-sig" if encoding == "utf-8" else encoding for encoding in candidates))
 
 
-def _first_lines(path: Path, separator: str, encoding: str) -> tuple[list[str], int | None]:
-    """The header fields and the number of fields on the first data line, from lines of bounded length."""
-    lines = []
+def _bounded_lines(handle: Any) -> Iterator[str]:
+    """The lines of an open text file; a line longer than ``MAX_HEADER_CHARS`` is refused, not read."""
+    while line := handle.readline(MAX_HEADER_CHARS + 1):
+        if len(line) > MAX_HEADER_CHARS:
+            raise UserInputError(f"A line of the matrix is longer than {MAX_HEADER_CHARS:,} characters.")
+        yield line
+
+
+def _header_fields(path: Path, separator: str, encoding: str) -> list[str]:
+    """The fields of the header line."""
     with path.open("r", encoding=encoding, errors="strict", newline="") as handle:
-        for _ in range(2):
-            line = handle.readline(MAX_HEADER_CHARS + 1)
-            if len(line) > MAX_HEADER_CHARS:
-                raise UserInputError(f"A line of the matrix is longer than {MAX_HEADER_CHARS:,} characters.")
-            if not line:
-                break
-            lines.append(line)
+        line = next(_bounded_lines(handle), "")
     try:
-        rows = [next(csv.reader(io.StringIO(line), delimiter=separator), []) for line in lines]
+        fields = next(csv.reader(io.StringIO(line), delimiter=separator), [])
     except csv.Error as exc:
-        raise UserInputError("The first lines of the matrix could not be read as a table.") from exc
-    header = [field.strip() for field in rows[0]] if rows else []
-    return header, (len(rows[1]) if len(rows) > 1 else None)
+        raise UserInputError("The header line of the matrix could not be read as a table.") from exc
+    return [field.strip() for field in fields]
+
+
+def _scan_data_rows(path: Path, separator: str, encoding: str) -> _RowScan:
+    """Count the fields of every data line, in one pass over lines of bounded length.
+
+    pandas pads a line with fewer fields than the first one with missing values, so a line cut
+    short (by an interrupted download, say) would be read as missing measurements; every data
+    line must have the same number of fields. Lines are split by counting separators until the
+    first quote; from there the csv module reads the rest, since a quoted field may hold
+    separators and line breaks. Blank lines are skipped, as pandas skips them.
+    """
+    blank = " \t".replace(separator, "")
+    first_line_of: dict[int, int] = {}  # field count -> the first line that has it
+    counts: Counter[int] = Counter()
+    first_ends_empty = False
+    all_end_empty = True
+
+    def record(line_number: int, n_fields: int, ends_empty: bool) -> None:
+        nonlocal first_ends_empty, all_end_empty
+        if not counts:
+            first_ends_empty = ends_empty
+        all_end_empty = all_end_empty and ends_empty
+        first_line_of.setdefault(n_fields, line_number)
+        counts[n_fields] += 1
+
+    with path.open("r", encoding=encoding, errors="strict", newline="") as handle:
+        lines = _bounded_lines(handle)
+        next(lines, None)  # the header, read separately
+        line_number = 1
+        quoted_from: str | None = None
+        for line in lines:
+            line_number += 1
+            if '"' in line:
+                quoted_from = line
+                break
+            text = line.rstrip("\r\n")
+            if text.strip(blank):
+                record(line_number, text.count(separator) + 1, text.endswith(separator))
+        if quoted_from is not None:
+            reader = csv.reader(itertools.chain([quoted_from], lines), delimiter=separator)
+            offset = line_number - 1
+            record_start = line_number
+            try:
+                for fields in reader:
+                    if fields and (len(fields) > 1 or fields[0].strip(blank)):
+                        record(record_start, len(fields), fields[-1] == "")
+                    record_start = offset + reader.line_num + 1
+            except csv.Error as exc:
+                raise UserInputError(f"Line {record_start} of the matrix could not be read as a table ({exc}).") from exc
+    if not counts:
+        raise UserInputError("The matrix has a header but no data rows.")
+    # The most common field count is the table's; the first line that differs is the one reported.
+    width = max(counts, key=lambda n_fields: (counts[n_fields], -first_line_of[n_fields]))
+    if len(counts) > 1:
+        line_number, n_fields = min((line, n) for n, line in first_line_of.items() if n != width)
+        raise UserInputError(
+            f"Every row of the matrix must have as many fields as the header: line {line_number} has {n_fields} "
+            f"fields where most rows have {width}."
+        )
+    return _RowScan(sum(counts.values()), width, first_ends_empty, all_end_empty)
+
+
+def _aligned_header(header: list[str], rows: _RowScan) -> tuple[list[str], int]:
+    """The header matched to the data fields, and how many fields of each data row to read.
+
+    R's ``write.table`` writes no header field above the row names, so its header is one field
+    short of the data rows. A writer that ends every line with a separator gives each data row an
+    empty last field more than the header names (the header may end with one too); that field is
+    not a column. The two are told apart by the data rows: R's first row ends with a value.
+    """
+    width = rows.width
+    if rows.all_end_empty and (width == len(header) + 1 or (width == len(header) and header[-1] == "")):
+        return header[: width - 1], width - 1
+    if width == len(header) - 1 and header[-1] == "":
+        # Only the header line ends with a separator.
+        return header[:-1], width
+    if width == len(header) + 1:
+        if rows.first_ends_empty:
+            raise UserInputError(
+                "The data rows have one field more than the header, and the first of them ends with an empty field, so "
+                "either the header lacks the name of the ID column (as R's write.table writes it) or the rows end with a "
+                "separator. Add a name for the ID column to the header, or remove the separators at the ends of the rows."
+            )
+        # R's write.table writes no header field above the row names.
+        return ["", *header], width
+    if width != len(header):
+        raise UserInputError(
+            f"Every row of the matrix must have as many fields as the header: the header has {len(header)} and the "
+            f"data rows have {width}."
+        )
+    return header, width
 
 
 def _read_text(path: Path, separator: str, encoding: str, **options: Any) -> pd.DataFrame:
@@ -346,13 +462,30 @@ def _orientation(
     requested: str,
     patient_examples: Sequence[Any] = (),
 ) -> tuple[str, _SampleMap | None]:
-    """The layout, and a sample map when the matrix IDs match only as TCGA sample barcodes."""
+    """The layout, and a sample map when the matrix IDs match only as TCGA sample barcodes.
+
+    The dataset's IDs mark the axis that holds the samples. Numeric IDs can appear on both axes
+    (Entrez gene IDs 1, 2, 3 ... against patients numbered 1, 2, 3 ...), so the axes are compared
+    by the share of their IDs that match, not by the count; when both shares are more than
+    incidental, the layout has to be chosen.
+    """
     in_header = sum(1 for value in header_ids if id_key(value) in patient_keys)
     in_column = sum(1 for value in first_column_ids if id_key(value) in patient_keys)
     if in_header or in_column:
         if requested != "auto":
             return requested, None
-        return ("markers_in_rows" if in_header > in_column else "samples_in_rows"), None
+        if not (in_header and in_column):
+            return ("markers_in_rows" if in_header else "samples_in_rows"), None
+        header_matches = in_header / len(header_ids) >= _INCIDENTAL_MATCH_SHARE
+        column_matches = in_column / len(first_column_ids) >= _INCIDENTAL_MATCH_SHARE
+        if header_matches != column_matches:
+            return ("markers_in_rows" if header_matches else "samples_in_rows"), None
+        raise UserInputError(
+            f"Both the first row and the first column of the matrix hold IDs of the dataset ({in_header:,} of "
+            f"{len(header_ids):,} column names and {in_column:,} of {len(first_column_ids):,} row names), as numeric gene "
+            "IDs and numeric patient IDs can, so the layout cannot be told from the IDs. Choose the layout: one row per "
+            "marker or one row per patient."
+        )
     candidates = (("markers_in_rows", header_ids), ("samples_in_rows", first_column_ids))
     for layout, ids in candidates:
         if requested in ("auto", layout):
@@ -409,6 +542,9 @@ def read_marker_matrix(path: str | Path, filename: str, *, patient_ids: Sequence
             unpacked = plain.with_suffix(suffix)
             shutil.move(plain, unpacked)
             return _read_matrix_file(unpacked, suffix, filename, patient_ids=patient_ids, orientation=orientation)
+    if not Path(filename).suffixes:
+        # A name without a suffix, as UCSC Xena names its files (HiSeqV2): the header line tells the separator.
+        suffix = _sniffed_suffix(Path(path))
     if suffix not in MATRIX_SUFFIXES:
         raise UserInputError(f"Unsupported matrix file type '{suffix}'. Use CSV, TSV, TXT or Parquet, optionally gzip-compressed (.gz).")
     return _read_matrix_file(Path(path), suffix, filename, patient_ids=patient_ids, orientation=orientation)
@@ -430,7 +566,13 @@ def _read_matrix_file(path: Path, suffix: str, filename: str, *, patient_ids: Se
         if metadata is not None:
             # Checked before decompressing: the layout is not known yet, so both dimensions are bounded.
             _check_bounds(int(metadata.num_rows), max(int(metadata.num_columns) - 1, 0))
-        frame = pd.read_parquet(path)
+        try:
+            frame = pd.read_parquet(path)
+        except (ImportError, MemoryError):
+            raise
+        except Exception as exc:
+            # A readable footer over damaged column data.
+            raise UserInputError("The Parquet file could not be read.") from exc
         row_numbers_dropped = False
         if not isinstance(frame.index, pd.RangeIndex):
             # pandas stores a frame's index in the file. Gene names or patient IDs set as the index are
@@ -446,7 +588,8 @@ def _read_matrix_file(path: Path, suffix: str, filename: str, *, patient_ids: Se
         if frame.shape[1] < 2:
             raise UserInputError("The matrix needs an ID column and at least one data column.")
         frame = frame.set_index(frame.columns[0])
-        _check_shape(frame.shape[1], frame.shape[0])
+        # The layout is not known yet (and the file may have had no footer to check): bound both dimensions.
+        _check_bounds(*frame.shape)
         column_names = list(frame.columns)
         try:
             layout, sample_map = _orientation(column_names, list(frame.index), patient_keys, orientation, patient_examples)
@@ -458,18 +601,19 @@ def _read_matrix_file(path: Path, suffix: str, filename: str, *, patient_ids: Se
             ) from exc
     else:
         separator = _separator(suffix)
-        # Everything is bounded from the raw lines before pandas parses anything.
-        n_lines = _count_data_lines(path)
         last_error: Exception | None = None
         for encoding in _text_encodings(path):
             try:
-                header, first_width = _first_lines(path, separator, encoding)
+                # Everything is bounded from the raw lines before pandas parses anything.
+                n_lines = _count_data_lines(path, encoding)
+                header = _header_fields(path, separator, encoding)
                 if len(header) < 2:
                     raise UserInputError("The matrix needs an ID column and at least one data column.")
-                if first_width == len(header) + 1:
-                    # R's write.table writes no header field above the row names.
-                    header = ["", *header]
                 _check_bounds(n_lines, len(header) - 1)
+                rows = _scan_data_rows(path, separator, encoding)
+                header, n_fields = _aligned_header(header, rows)
+                if len(header) < 2:
+                    raise UserInputError("The matrix needs an ID column and at least one data column.")
                 first_column = _read_text(path, separator, encoding, usecols=[0]).iloc[:, 0].tolist()
             except UnicodeDecodeError as exc:
                 last_error = exc
@@ -482,10 +626,13 @@ def _read_matrix_file(path: Path, suffix: str, filename: str, *, patient_ids: Se
             raise UserInputError(f"The matrix file could not be decoded as text (tried {tried}). Save it as UTF-8 text.") from last_error
         layout, sample_map = _orientation(header[1:], first_column, patient_keys, orientation, patient_examples)
         n_data_columns = len(header) - 1
-        _check_shape(*((n_lines, n_data_columns) if layout == "markers_in_rows" else (n_data_columns, n_lines)))
+        # The data rows as pandas reads them (blank lines skipped), not the raw line count.
+        _check_shape(*((rows.n_rows, n_data_columns) if layout == "markers_in_rows" else (n_data_columns, rows.n_rows)))
         # IDs and marker names stay text, as in the orientation check above ("00101" is not 101 yet).
+        # An empty last field that every row ends with is left out.
+        options: dict[str, Any] = {"usecols": range(n_fields)} if n_fields < rows.width else {}
         try:
-            frame = _read_text(path, separator, encoding, index_col=0, low_memory=False)
+            frame = _read_text(path, separator, encoding, index_col=0, low_memory=False, **options)
         except UnicodeDecodeError as exc:
             raise UserInputError("The matrix holds characters that are not valid text in its encoding; save it as UTF-8 text.") from exc
         # Names come from the raw header (pandas would rename repeated fields "A", "A.1").
@@ -505,12 +652,12 @@ def _read_matrix_file(path: Path, suffix: str, filename: str, *, patient_ids: Se
     if layout == "markers_in_rows":
         marker_names = _unique_names(list(frame.index), "marker name", _name_key)
         sample_keys = _unique_names(column_names, "patient ID")
-        values = _numeric_block(frame, "patient").T.copy()
     else:
         sample_keys = _unique_names(list(frame.index), "patient ID")
         marker_names = _unique_names(column_names, "marker name", _name_key)
-        values = _numeric_block(frame, "marker")
+    # The exact shape, on the parsed table, before its values are converted.
     _check_shape(len(marker_names), len(sample_keys))
+    values = _numeric_block(frame, "patient").T.copy() if layout == "markers_in_rows" else _numeric_block(frame, "marker")
     digest = hashlib.sha256()
     digest.update("\x1f".join(marker_names).encode("utf-8"))
     digest.update("\x1f".join(sample_keys).encode("utf-8"))
