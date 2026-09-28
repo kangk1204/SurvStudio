@@ -47,6 +47,32 @@ def test_identical_rows_are_reported_for_continuous_panels_only() -> None:
     assert possible_duplicates(binary, [str(index) for index in range(200)])["identical"] == []
 
 
+def test_patients_missing_most_markers_are_listed_and_not_compared() -> None:
+    values = _expression(150, 400, seed=3)
+    labels = [f"P{index:03d}" for index in range(150)]
+    # Two patients without any measurement are "identical" and correlate perfectly once median-filled.
+    values[[40, 90]] = np.nan
+    values[60, :300] = np.nan  # 75% missing
+    values[70, :100] = np.nan  # 25% missing: still screened
+
+    report = possible_duplicates(values, labels)
+
+    assert report["identical"] == [] and report["pairs"] == []
+    assert report["mostly_missing"] == ["P040", "P060", "P090"] and report["n_mostly_missing"] == 3
+    assert report["checked"]
+    # A duplicated partly measured patient is still found as an identical row.
+    values[120] = values[70]
+    assert possible_duplicates(values, labels)["identical"] == [["P070", "P120"]]
+
+
+def test_identical_rows_are_found_when_rounding_leaves_a_negative_zero() -> None:
+    rng = np.random.default_rng(4)
+    values = rng.normal(size=(30, 25))
+    values[5] = values[3]
+    values[3, 0], values[5, 0] = 1e-10, -1e-10  # both round to zero, one of them to -0.0
+    assert possible_duplicates(values, [str(index) for index in range(30)])["identical"] == [["3", "5"]]
+
+
 def test_the_marker_evaluation_names_repeated_patients_by_their_id_column() -> None:
     rng = np.random.default_rng(5)
     n_patients, n_genes = 160, 300

@@ -15,6 +15,10 @@ Two checks, on the patients the evaluation uses:
   ``MIN_GAP`` above either one's next-best match. On 17 public breast and lung cancer cohorts (5,955 patients),
   this caught 15 of 21 confirmed repeated tumours and flagged no pair of different patients. The misses were
   tumours profiled three times or weakly measured.
+
+Patients missing more than ``MAX_MISSING_SHARE`` of the markers take part in neither check (two unmeasured
+profiles are equal, and median-filled ones correlate perfectly, without being the same tumour); they are
+listed separately.
 """
 
 from __future__ import annotations
@@ -32,19 +36,38 @@ MIN_R = 0.7
 MIN_GAP = 0.2
 MAX_PATIENTS = 6000
 MAX_LISTED = 100
+MAX_MISSING_SHARE = 0.5
 
 
 def possible_duplicates(values: np.ndarray, labels: Sequence[Any]) -> dict[str, Any]:
     """Screen a patients x markers array (NaN allowed) for identical and near-identical patients.
 
-    Returns ``{"checked", "markers_used", "note", "pairs", "identical", "n_pairs", "n_identical"}``: ``pairs``
-    holds each flagged pair (``a``, ``b``, correlation ``r``, ``gap``), strongest first; ``identical`` holds
-    groups of patients whose values are all equal; both lists stop at ``MAX_LISTED`` and the counts give the totals.
+    Returns ``{"checked", "markers_used", "note", "pairs", "identical", "n_pairs", "n_identical",
+    "mostly_missing", "n_mostly_missing"}``: ``pairs`` holds each flagged pair (``a``, ``b``, correlation ``r``,
+    ``gap``), strongest first; ``identical`` holds groups of patients whose values are all equal;
+    ``mostly_missing`` names the patients left out of both checks for missing more than ``MAX_MISSING_SHARE`` of
+    the markers. The lists stop at ``MAX_LISTED`` and the counts give the totals.
     """
     values = np.asarray(values, dtype=float)
     labels = [str(label) for label in labels]
+    report: dict[str, Any] = {
+        "checked": False,
+        "markers_used": 0,
+        "note": None,
+        "pairs": [],
+        "identical": [],
+        "n_pairs": 0,
+        "n_identical": 0,
+        "mostly_missing": [],
+        "n_mostly_missing": 0,
+    }
+    if values.shape[1]:
+        sparse = np.isnan(values).mean(axis=1) > MAX_MISSING_SHARE
+        if sparse.any():
+            report.update(mostly_missing=[labels[index] for index in np.flatnonzero(sparse)[:MAX_LISTED]], n_mostly_missing=int(sparse.sum()))
+            values = values[~sparse]
+            labels = [label for label, drop in zip(labels, sparse) if not drop]
     n_patients, n_markers = values.shape
-    report: dict[str, Any] = {"checked": False, "markers_used": 0, "note": None, "pairs": [], "identical": [], "n_pairs": 0, "n_identical": 0}
     if n_patients < 3:
         report["note"] = "Too few patients to compare."
         return report
@@ -54,7 +77,8 @@ def possible_duplicates(values: np.ndarray, labels: Sequence[Any]) -> dict[str, 
     distinct = np.array([np.unique(column[~np.isnan(column)]).size for column in sampled.T]) if n_markers else np.zeros(0)
     if n_markers >= MIN_IDENTICAL_MARKERS and np.median(distinct) >= MIN_DISTINCT_VALUES:
         groups: dict[bytes, list[str]] = defaultdict(list)
-        rounded = np.round(np.where(np.isnan(values), np.inf, values), 9)
+        # Adding 0.0 turns -0.0 (a tiny negative value rounded) into 0.0, which has other bytes.
+        rounded = np.round(np.where(np.isnan(values), np.inf, values), 9) + 0.0
         for label, row in zip(labels, rounded):
             groups[row.tobytes()].append(label)
         identical = [members for members in groups.values() if len(members) > 1]
