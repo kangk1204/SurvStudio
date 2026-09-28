@@ -26,6 +26,9 @@
 - The leaderboard note is one line (what is shown, the ranking rule and the interval basis); tie methods, metric asymmetries and exclusions fold under "Method notes".
 - Marker columns with more than 20% missing values or a single value start unchecked and are labelled ("31% missing"), and when no selected marker is usable the error names each one and why. On the TCGA-LUAD sample the default run no longer fails on its two sparsely recorded numeric columns.
 - A marker matrix that cannot be unpacked because the temporary folder is full or over quota says so and suggests TMPDIR, instead of calling the file damaged.
+- Validating a locked marker model now opens with its C-index in the external cohort beside the clinical covariates alone, with the gain and its interval in the panel title, above the per-marker hazard ratios.
+- The Markers Run button is enabled by an attached marker matrix with no column ticked, and follows every change to the selection (it stayed enabled after Clear).
+- `marker_screen.fit_cox` ends as not converged when a diverging fit leaves the information matrix non-finite, instead of raising from numpy's least squares and failing a whole screen. This happened on a heavy-tailed gene in one genome-wide simulation replicate.
 
 ### New
 
