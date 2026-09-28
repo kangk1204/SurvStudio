@@ -257,17 +257,22 @@ def _check_bounds(n_rows: int, n_columns: int) -> None:
 def _count_data_lines(path: Path) -> int:
     """Lines after the header, counted on the raw bytes; beyond what any layout holds, the count stops.
 
-    Blank lines and quoted line breaks count too, so this is an upper bound for the bound checks.
+    A line ends with "\\r\\n", "\\n" or a lone "\\r" (pandas splits on all three). Blank lines and
+    quoted line breaks count too, so this is an upper bound for the bound checks.
     """
-    lines = 0
+    feeds = returns = pairs = 0
     last = b"\n"
     with path.open("rb") as handle:
         while chunk := handle.read(1 << 20):
-            lines += chunk.count(b"\n")
+            feeds += chunk.count(b"\n")
+            returns += chunk.count(b"\r")
+            # A "\r\n" pair is one line end, also when a chunk boundary splits it.
+            pairs += chunk.count(b"\r\n") + (last == b"\r" and chunk[:1] == b"\n")
             last = chunk[-1:]
-            if lines > _MAX_DIMENSION + 1:
+            if feeds + returns - pairs > _MAX_DIMENSION + 1:
                 return _MAX_DIMENSION + 1
-    if last != b"\n":
+    lines = feeds + returns - pairs
+    if last not in (b"\n", b"\r"):
         lines += 1
     return max(lines - 1, 0)
 

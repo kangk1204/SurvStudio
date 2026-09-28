@@ -331,6 +331,19 @@ def test_text_matrices_are_bounded_before_pandas_parses_them(tmp_path: Path, mon
     tall.write_text("gene\tP000\n" + "g\t1\n" * 250_000, encoding="utf-8")
     with pytest.raises(UserInputError, match="more than 100,000 rows"):
         read_marker_matrix(tall, "tall.tsv", patient_ids=["P000"])
+    # Carriage returns alone end lines too (old Mac files), and pandas would read every one of them.
+    tall.write_bytes(b"gene\tP000\r" + b"g\t1\r" * 250_000)
+    with pytest.raises(UserInputError, match="more than 100,000 rows"):
+        read_marker_matrix(tall, "tall.tsv", patient_ids=["P000"])
+    # Windows line ends count once each, also where a read chunk splits one; mixed ends all count.
+    counted = tmp_path / "counted.tsv"
+    counted.write_bytes(b"gene\tP000\r\n" + b"g\t1\r\n" * 300_000)
+    assert marker_matrix._count_data_lines(counted) == 100_001
+    counted.write_bytes(b"gene\tP\r\n" + b"g\t1\r\n" * 1000 + b"g\t2\r" * 10 + b"g\t3\n" * 5 + b"g\t4")
+    assert marker_matrix._count_data_lines(counted) == 1016
+    split = tmp_path / "split.tsv"
+    split.write_bytes(b"h" * ((1 << 20) - 1) + b"\r\n" + b"g\t1\r\n" * 3)
+    assert marker_matrix._count_data_lines(split) == 3
     wide = tmp_path / "wide.tsv"
     wide.write_text("gene\t" + "\t".join(f"P{index}" for index in range(100_001)) + "\n", encoding="utf-8")
     with pytest.raises(UserInputError, match="more than 100,000 data columns"):
