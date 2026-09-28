@@ -55,9 +55,11 @@ function buttonsForScope(scope) {
       refs.clearCoxCovariatesButton,
       refs.selectAllCoxCategoricalsButton,
       refs.clearCoxCategoricalsButton,
+      refs.selectAllCoxStrataButton,
+      refs.clearCoxStrataButton,
     ];
   }
-  if (scope === "tables") return [refs.runCohortTableButton];
+  if (scope === "tables") return [refs.runCohortTableButton, refs.selectAllCohortVariablesButton, refs.clearCohortVariablesButton];
   if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];
   if (scope === "derive") return [refs.deriveButton];
   return [];
@@ -877,10 +879,12 @@ function selectedCheckboxValues(container) {
   return [...container.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
 }
 
+// With `visibleOnly` (the Select all buttons), the items a search filter shows plus those already ticked: a
+// filter narrows what Select all adds, never what stays selected.
 function allCheckboxValues(container, { visibleOnly = false } = {}) {
   if (!container) return [];
   return [...container.querySelectorAll('input[type="checkbox"]')]
-    .filter((input) => !visibleOnly || !input.closest(".check-item")?.classList.contains("hidden-by-filter"))
+    .filter((input) => !visibleOnly || input.checked || !input.closest(".check-item")?.classList.contains("hidden-by-filter"))
     .map((input) => input.value);
 }
 
@@ -918,10 +922,17 @@ function renderCoxCovariateWarning({ kept = null, removed = [] } = {}) {
   refs.coxCovariateWarning.className = "event-warning event-warning-warning";
 }
 
-function shouldAutoCategorizeCoxCovariate(columnName) {
-  const meta = getColumnMeta(columnName);
+// The rule the ML/DL lists and the covariate defaults of a new dataset use: text or two-valued columns, and
+// numeric ones with few distinct values (stage coded 1-4), are categorical. A covariate ticked later follows
+// it too, so its coding no longer depends on whether it came first in the file.
+function isAutoCategoricalColumnMeta(meta) {
   if (!meta) return false;
-  return meta.kind === "categorical" || meta.kind === "binary";
+  return ["categorical", "binary"].includes(meta.kind)
+    || (meta.n_unique != null && meta.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD);
+}
+
+function shouldAutoCategorizeCoxCovariate(columnName) {
+  return isAutoCategoricalColumnMeta(getColumnMeta(columnName));
 }
 
 function syncCoxCovariateSelection({

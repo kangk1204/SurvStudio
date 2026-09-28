@@ -363,6 +363,67 @@ def test_a_restored_endpoint_gets_its_own_warnings(tmp_path: Path) -> None:
 # ── Column lists ───────────────────────────────────────────────
 
 
+def test_select_all_with_a_search_filter_adds_to_the_selection(tmp_path: Path) -> None:
+    """#5: "Select all" while searching replaced the selection with the matching items."""
+    dataset = _profile("genes", {
+        "time": [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60],
+        "event": [0, 1] * 6,
+        "age": [50, 60, 70, 80, 55, 65, 75, 85, 52, 62, 72, 82],
+        "sex": ["M", "F"] * 6,
+        "gene_a": [1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 1.2, 2.3, 3.4],
+        "gene_b": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2],
+    })
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.run("setCheckedValues(refs.covariateChecklist, ['age', 'sex']); setCheckedValues(refs.cohortVariableChecklist, ['age'])");
+      page.change("#covariateSearchInput", "gene");
+      page.run("refs.selectAllCoxCovariatesButton.click()");
+      page.change("#cohortVariableSearchInput", "gene");
+      page.run("refs.selectAllCohortVariablesButton.click()");
+      return { covariates: page.run("selectedCheckboxValues(refs.covariateChecklist)"), table: page.run("selectedCheckboxValues(refs.cohortVariableChecklist)") };
+    """, dataset=dataset)
+
+    assert result == {"covariates": ["age", "sex", "gene_a", "gene_b"], "table": ["age", "gene_a", "gene_b"]}
+
+
+def test_a_cox_covariate_ticked_later_is_categorical_by_the_ml_rule(tmp_path: Path) -> None:
+    """#12: "stage" coded 1-4 was categorical only when it happened to be among the first covariates."""
+    dataset = _profile("order", {
+        "time": [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60],
+        "event": [0, 1] * 6,
+        "age": [50, 60, 70, 80, 55, 65, 75, 85, 52, 62, 72, 82],
+        "bmi": [20, 25, 30, 35, 21, 22, 23, 24, 26, 27, 28, 29],
+        "x1": [1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 1.2, 2.3, 3.4],
+        "x2": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2],
+        "stage": [1, 2, 3, 4] * 3,
+    })
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const load = page.run("({ covariates: currentCoxSelections().covariates, ml: selectedCheckboxValues(refs.modelCategoricalChecklist) })");
+      page.run("refs.covariateChecklist.querySelector('input[value=\"stage\"]').checked = true");
+      page.change("#covariateChecklist input[value='stage']");
+      return { load, cox: page.run("currentCoxSelections().categoricalCovariates") };
+    """, dataset=dataset)
+
+    assert result["load"] == {"covariates": ["age", "bmi", "x1", "x2"], "ml": ["stage"]}
+    assert result["cox"] == ["stage"]
+
+
+def test_bulk_list_buttons_wait_for_their_run(tmp_path: Path) -> None:
+    """#25: the Cox strata and Table 1 list buttons stayed enabled while their analysis ran."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const states = () => page.run(`[refs.selectAllCoxStrataButton, refs.clearCoxStrataButton,
+        refs.selectAllCohortVariablesButton, refs.clearCohortVariablesButton].map((button) => button.disabled)`);
+      page.run("setScopeBusy('cox', true, refs.runCoxButton); setScopeBusy('tables', true, refs.runCohortTableButton)");
+      const busy = states();
+      page.run("setScopeBusy('cox', false, refs.runCoxButton); setScopeBusy('tables', false, refs.runCohortTableButton)");
+      return { busy, idle: states() };
+    """, dataset=_categorical_dataset())
+
+    assert result == {"busy": [True, True, True, True], "idle": [False, False, False, False]}
+
+
 # ── Workspace chrome ───────────────────────────────────────────
 
 
