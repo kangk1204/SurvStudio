@@ -567,6 +567,21 @@ def test_a_clinical_model_that_cannot_be_fitted_is_not_blamed_on_a_marker(monkey
     ]
 
 
+# 14: a horizon past the development follow-up is flagged.
+
+
+def test_a_horizon_past_the_last_development_event_is_noted() -> None:
+    recipe = _copy_recipe()
+    last = recipe["model"]["baseline"]["times"][-1]
+    external = _copy_cohort(2)
+    at_default = validate_locked_recipe(external, recipe, n_bootstrap=0)
+    assert not any("past the last event time" in note for note in at_default["notes"])
+    beyond = validate_locked_recipe(external, recipe, n_bootstrap=0, horizon=2.0 * last)
+    # The absolute risks are still reported; before, nothing warned that they rest on a flat baseline.
+    assert beyond["metrics"]["expected_risk"] is not None
+    assert any(f"past the last event time of the development cohort ({last:g})" in note for note in beyond["notes"])
+
+
 # 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
 
 

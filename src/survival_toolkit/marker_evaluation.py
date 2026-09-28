@@ -1965,6 +1965,12 @@ def validate_locked_recipe(
             "SurvStudio version and lost its precision at this horizon, so absolute risks, observed/expected risk and the "
             "Brier score are not reported. Lock the model again to get them."
         )
+    last_event_time = float(baseline["times"][-1]) if baseline and len(baseline["times"]) else None
+    if predicted is not None and last_event_time is not None and target > last_event_time:
+        notes.append(
+            f"The horizon ({target:g}) is past the last event time of the development cohort ({last_event_time:g}); the locked "
+            "baseline hazard stays flat after it, so the predicted risks at this horizon are likely too low."
+        )
     if predicted is not None:
         observed_survival = _km_survival_at(time, event, target)
         weights, alive = _ipcw_brier_weights(time, event, np.array([target]), support_times=time, support_events=event)
