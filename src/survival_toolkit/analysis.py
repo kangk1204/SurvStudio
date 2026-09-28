@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import csv
 import hashlib
 import io
@@ -29,7 +30,7 @@ from statsmodels.nonparametric.smoothers_lowess import lowess
 
 from survival_toolkit.concurrency import raise_if_cancelled, suppressed_warnings
 from survival_toolkit.encoding import reject_numeric_text_features
-from survival_toolkit.errors import ColumnNotFoundError, user_input_boundary
+from survival_toolkit.errors import ColumnNotFoundError, must_propagate, user_input_boundary
 
 TRUE_TOKENS = {
     "1",
@@ -73,12 +74,15 @@ KM_WEIGHT_MAP = {
     "tarone_ware": "tw",
     "fleming_harrington": "fh",
 }
-TERM_CATEGORICAL_PATTERN = re.compile(r'C\(Q\("(?P<var>.+)"\)\)\[T\.(?P<level>.+)\]')
-TERM_NUMERIC_PATTERN = re.compile(r'Q\("(?P<var>.+)"\)')
+# DOTALL: category levels may contain line breaks.
+TERM_CATEGORICAL_PATTERN = re.compile(r'C\(Q\("(?P<var>.+)"\)\)\[T\.(?P<level>.+)\]', re.DOTALL)
+TERM_NUMERIC_PATTERN = re.compile(r'Q\("(?P<var>.+)"\)', re.DOTALL)
 _MAX_EXP_INPUT = math.log(np.finfo(float).max)
 _MIN_EXP_INPUT = math.log(np.finfo(float).tiny)
 MAX_MODEL_FEATURE_CANDIDATES = 1000
 COX_CONDITION_NUMBER_WARN_THRESHOLD = 1e10
+# Same bound as the Kaplan-Meier group limit: more levels means an identifier or free text.
+_COX_MAX_CATEGORICAL_LEVELS = 50
 _MODEL_FEATURE_ID_PATTERN = re.compile(r"^(patient_id|sample_id|subject_id|id|barcode|uuid|cohort)$", re.IGNORECASE)
 _EVENT_NAME_PATTERNS = (
     re.compile(r"event"),
@@ -93,7 +97,32 @@ _EVENT_NAME_PATTERNS = (
     re.compile(r"progress"),
     re.compile(r"failure"),
 )
-_SURVIVAL_ENDPOINT_ABBREVIATIONS = {"os", "pfs", "dfs", "rfs", "efs", "tts", "tte", "dss", "css", "mfs", "dmfs"}
+_SURVIVAL_ENDPOINT_ABBREVIATIONS = {
+    "os",
+    "pfs",
+    "dfs",
+    "rfs",
+    "efs",
+    "tts",
+    "tte",
+    "dss",
+    "css",
+    "mfs",
+    "dmfs",
+    # TCGA Pan-Cancer Clinical Data Resource endpoints and common time-to-X abbreviations.
+    "pfi",
+    "dfi",
+    "ttp",
+    "ttf",
+    "ttr",
+    "ttnt",
+    "ffs",
+    "lrfs",
+    "drfs",
+}
+# "<word> free" names a survival endpoint: disease-free, progression-free, ... survival.
+_ENDPOINT_FREE_PHRASE_WORDS = ("disease", "progression", "recurrence", "relapse", "event", "metastasis", "failure")
+_OBSERVATION_TOKENS = {"obs", "observation", "observed"}
 _TIME_UNIT_TOKENS = {"day", "days", "week", "weeks", "month", "months", "year", "years"}
 _TIME_CONTEXT_TOKENS = {
     "time",
@@ -186,6 +215,50 @@ _BASELINE_STATUS_PATTERNS = (
     re.compile(r"arm"),
     re.compile(r"cohort"),
     re.compile(r"horth"),
+    # Biomarker, receptor, and clinical-state "status" columns (her2_status, msi_status,
+    # nodal_status, performance_status, ...) are baseline characteristics, not outcomes.
+    re.compile(r"her2"),
+    re.compile(r"(^|[^a-z0-9])(er|pr|pgr|ar)([^a-z0-9]|$)"),
+    re.compile(r"(^|[^a-z0-9])(msi|mss|mmr|dmmr|pmmr|idh|idh1|idh2|ebv|p16|cimp|atrx|tert)([^a-z0-9]|$)"),
+    re.compile(r"mgmt"),
+    re.compile(r"hpv"),
+    re.compile(r"p53"),
+    re.compile(r"brca"),
+    re.compile(r"pd.?l1"),
+    re.compile(r"codel"),
+    re.compile(r"methyl"),
+    re.compile(r"amplif"),
+    re.compile(r"fusion"),
+    re.compile(r"express"),
+    re.compile(r"marker"),
+    re.compile(r"mutant"),
+    re.compile(r"receptor"),
+    re.compile(r"hormone"),
+    re.compile(r"nodal"),
+    re.compile(r"(^|[^a-z0-9])(node|nodes|ln)([^a-z0-9]|$)"),
+    re.compile(r"lymph"),
+    re.compile(r"menopaus"),
+    re.compile(r"performance"),
+    re.compile(r"ecog"),
+    re.compile(r"karnofsky"),
+    re.compile(r"(^|[^a-z0-9])(kps|ps)([^a-z0-9]|$)"),
+    re.compile(r"(^|[^a-z0-9])race([^a-z0-9]|$)"),
+    re.compile(r"ethnic"),
+)
+# Words that name the event itself. A baseline-looking name that also carries one of these
+# ("treatment_failure", "progression_on_therapy") can still be an event column.
+_STRONG_EVENT_NAME_PATTERNS = (
+    re.compile(r"event"),
+    re.compile(r"death"),
+    re.compile(r"dead"),
+    re.compile(r"died"),
+    re.compile(r"deceas"),
+    re.compile(r"mort"),
+    re.compile(r"relaps"),
+    re.compile(r"recur"),
+    re.compile(r"progress"),
+    re.compile(r"failure"),
+    re.compile(r"vital"),
 )
 
 
@@ -208,9 +281,25 @@ def make_unique_columns(columns: Iterable[Any]) -> list[str]:
 
 _CSV_DELIMITER_CANDIDATES = ",;\t|"
 _DECIMAL_COMMA_PATTERN = re.compile(r"^-?\d{1,3}(\.\d{3})*,\d+$|^-?\d+,\d+$")
+# Every value of a decimal-comma column: optional "." thousands groups, optional ",decimals".
+_DECIMAL_COMMA_VALUE_PATTERN = re.compile(r"^[+-]?(\d{1,3}(\.\d{3})+|\d+)(,\d+)?$")
+# A number written with "," thousands separators and an optional "." decimal part ("12,345.5").
+_COMMA_GROUPED_NUMBER_PATTERN = re.compile(r"^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$")
+# A value of a column formatted with "," thousands separators (plain numbers are allowed too).
+_COMMA_THOUSANDS_VALUE_PATTERN = re.compile(r"^[+-]?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$")
+# "1,234" with a non-zero leading group and exact 3-digit groups also reads as a thousands-grouped
+# integer; which reading applies is decided from the rest of the file.
+_AMBIGUOUS_COMMA_INTEGER_PATTERN = re.compile(r"^[+-]?[1-9]\d{0,2}(,\d{3})+$")
+# The same ambiguity with "." ("1.234" is 1234 in a European export), plain integers allowed.
+_DOT_THOUSANDS_VALUE_PATTERN = re.compile(r"^[+-]?([1-9]\d{0,2}(\.\d{3})+|\d+)$")
+# A number with a "." decimal part; "12.5" or "0.25" can only be a decimal mark.
+_DOT_DECIMAL_VALUE_PATTERN = re.compile(r"^[+-]?\d*\.\d+$")
 # Bytes inspected to pick the text encoding and the delimiter; the full file is then
 # parsed by pandas in streaming mode instead of being decoded into one Python string.
 _TEXT_SNIFF_BYTES = 1024 * 1024
+# The delimiter is chosen from at most this many records and characters of that sample.
+_DELIMITER_SNIFF_MAX_RECORDS = 50
+_DELIMITER_SNIFF_MAX_CHARS = 64 * 1024
 # Share of non-ASCII characters that must be Hangul syllables before a byte stream that
 # is not UTF-8 is read as Korean CP949 (the default "CSV" export of Korean Excel).
 _CP949_HANGUL_SHARE = 0.5
@@ -231,11 +320,30 @@ class UploadShapeError(ValueError):
 
 
 def _trim_to_line_boundary(sample: bytes, *, complete: bool) -> bytes:
-    """Cut a byte sample after its last newline so no multibyte character is split."""
+    """Cut a byte sample after its last newline so no multibyte character is split.
+
+    Only valid for encodings in which the byte 0x0A always means a newline (UTF-8, CP949,
+    single-byte code pages); UTF-16 samples are decoded with ``_decode_text_sample``.
+    """
     if complete:
         return sample
     cut = sample.rfind(b"\n")
     return sample[: cut + 1] if cut >= 0 else sample
+
+
+def _decode_text_sample(sample: bytes, encoding: str, *, complete: bool) -> str:
+    """Decode the sniffed prefix of a text file and cut it after its last complete line.
+
+    An incremental decoder leaves a character split by the sample boundary undecoded instead
+    of failing, which works for every encoding, including UTF-16, where a newline is two
+    bytes and cutting after a single 0x0A byte would split a code unit.
+    """
+    decoder = codecs.getincrementaldecoder(encoding)(errors="strict")
+    text = decoder.decode(sample, final=complete)
+    if complete:
+        return text
+    cut = text.rfind("\n")
+    return text[: cut + 1] if cut >= 0 else text
 
 
 def _hangul_share(text: str) -> float:
@@ -278,13 +386,72 @@ def _text_encoding_candidates(sample: bytes, *, complete: bool) -> list[str]:
     return ["cp1252", "latin-1"]
 
 
+def _delimiter_counts_per_record(text: str) -> list[dict[str, int]]:
+    """Delimiter counts outside double quotes for each record of a text sample.
+
+    A single linear pass (quoted fields may span lines). ``csv.Sniffer`` was used before, but
+    its quote-detection regexes scale quadratically on crafted input.
+    """
+    truncated = len(text) > _DELIMITER_SNIFF_MAX_CHARS
+    sample = text[:_DELIMITER_SNIFF_MAX_CHARS].replace("\r\n", "\n").replace("\r", "\n")
+    records: list[dict[str, int]] = []
+    counts = dict.fromkeys(_CSV_DELIMITER_CANDIDATES, 0)
+    in_quotes = False
+    has_content = False
+    for char in sample:
+        if char == '"':
+            in_quotes = not in_quotes
+            has_content = True
+        elif char == "\n" and not in_quotes:
+            if has_content:
+                records.append(counts)
+                if len(records) >= _DELIMITER_SNIFF_MAX_RECORDS:
+                    return records
+            counts = dict.fromkeys(_CSV_DELIMITER_CANDIDATES, 0)
+            has_content = False
+        elif not in_quotes and char in counts:
+            counts[char] += 1
+            has_content = True
+        elif not char.isspace():
+            has_content = True
+    # A record cut by the character cap is incomplete, so it is left out.
+    if has_content and not truncated:
+        records.append(counts)
+    return records
+
+
 def _sniff_delimiter(text: str, default: str) -> str:
-    sample = "\n".join(text.splitlines()[:50])
-    try:
-        # Restrict candidates so a single-column file is never split on a letter.
-        return csv.Sniffer().sniff(sample, delimiters=_CSV_DELIMITER_CANDIDATES).delimiter
-    except csv.Error:
+    """Pick the delimiter whose count per record is the most consistent.
+
+    Ties go to the delimiter with more fields per record, then to ``default``. Only the
+    candidates in ``_CSV_DELIMITER_CANDIDATES`` are considered, so a single-column file is
+    never split on a letter; without any candidate the default is returned.
+    """
+    records = _delimiter_counts_per_record(text)
+    if not records:
         return default
+    preference = [default, *(candidate for candidate in _CSV_DELIMITER_CANDIDATES if candidate != default)]
+    best_key: tuple[float, int, int] | None = None
+    best_delimiter = default
+    for rank, delimiter in enumerate(preference):
+        if delimiter not in _CSV_DELIMITER_CANDIDATES:
+            continue
+        per_record = [record[delimiter] for record in records]
+        positive = [count for count in per_record if count > 0]
+        if not positive:
+            continue
+        frequency: dict[int, int] = {}
+        for count in positive:
+            frequency[count] = frequency.get(count, 0) + 1
+        mode_count = max(frequency, key=lambda count: (frequency[count], count))
+        consistency = sum(1 for count in per_record if count == mode_count) / len(per_record)
+        if consistency < 0.5:
+            continue
+        key = (consistency, mode_count, -rank)
+        if best_key is None or key > best_key:
+            best_key = key
+            best_delimiter = delimiter
+    return best_delimiter
 
 
 def _is_text_series(series: pd.Series) -> bool:
@@ -367,7 +534,7 @@ def _read_csv_with_fallback(
     last_error: Exception | None = None
     for encoding in _text_encoding_candidates(sample, complete=complete):
         try:
-            sample_text = _trim_to_line_boundary(sample, complete=complete).decode(encoding)
+            sample_text = _decode_text_sample(sample, encoding, complete=complete)
         except UnicodeDecodeError as exc:
             last_error = exc
             continue
@@ -426,17 +593,135 @@ def _parse_delimited_text(
         max_columns=max_columns,
         max_cells=max_cells,
     )
-    if delimiter != ",":
-        # European-style exports (";" separated) often use decimal commas; if
-        # text columns are mostly decimal-comma numbers, read them as numbers.
-        text_columns = [column for column in frame.columns if _is_text_series(frame[column])]
-        decimal_like = [
-            column
-            for column in text_columns
-            if frame[column].dropna().astype(str).str.strip().str.match(_DECIMAL_COMMA_PATTERN).mean() > 0.8
-        ]
-        if decimal_like:
-            frame = _read(nrows=nrows, decimal=",", thousands=".")
+
+    def _read_raw_text(positions: list[int]) -> pd.DataFrame:
+        return _read(nrows=nrows, dtype=str, usecols=positions)
+
+    return _convert_formatted_number_columns(frame, delimiter=delimiter, read_raw_text=_read_raw_text)
+
+
+def _non_empty_text(series: pd.Series) -> pd.Series:
+    text = series.dropna().astype(str).str.strip()
+    return text[text != ""]
+
+
+def _set_parsed_column(frame: pd.DataFrame, column: Any, numbers: pd.Series) -> bool:
+    """Store ``numbers`` (normalized text of the non-missing values) as a numeric column.
+
+    Nothing changes unless every value parses. Like pandas, a column without missing values
+    whose numbers have no decimal part becomes int64; everything else becomes float64.
+    """
+    parsed = pd.to_numeric(numbers.astype(object), errors="coerce")
+    parsed_values = parsed.to_numpy(dtype=float, na_value=np.nan)
+    if not bool(np.isfinite(parsed_values).all()):
+        return False
+    integers = (
+        len(parsed_values) == len(frame)
+        and not bool(numbers.str.contains(".", regex=False).any())
+        and bool(np.all(np.abs(parsed_values) < 2**53))
+    )
+    if integers:
+        frame[column] = parsed_values.astype(np.int64)
+        return True
+    values = np.full(len(frame), np.nan, dtype=float)
+    values[frame.index.get_indexer(parsed.index)] = parsed_values
+    frame[column] = values
+    return True
+
+
+def _convert_formatted_number_columns(
+    frame: pd.DataFrame,
+    *,
+    delimiter: str,
+    read_raw_text: Any = None,
+) -> pd.DataFrame:
+    """Parse columns that hold formatted numbers, one column at a time.
+
+    * In comma-separated files, a column of quoted numbers with thousands separators
+      ("1,234", as Excel exports formatted numbers) is parsed as numbers.
+    * In files not separated by commas (European ";" exports, tab-separated text), a text
+      column whose values are mostly decimal-comma numbers ("12,5", "1.234,5") is parsed with
+      "," as the decimal mark and "." as the thousands separator. Only such columns change:
+      dot-decimal columns and other text (dotted dates such as "01.02.2020") are left alone.
+      Values such as "1,234" or "1.234" read either way; they follow the rest of the file:
+      comma values are thousands-grouped integers when the file otherwise uses "." decimals,
+      and dot values are thousands-grouped integers (as the European export wrote them) when
+      the file uses "," decimals. ``read_raw_text(positions)`` returns the raw text of the
+      given columns, which the dot check needs because pandas already parsed "1.234" as 1.234.
+
+    A column is converted only when every non-missing value parses; otherwise it stays as read.
+    """
+    if delimiter == ",":
+        for column in list(frame.columns):
+            series = frame[column]
+            if not _is_text_series(series):
+                continue
+            text = _non_empty_text(series)
+            if text.empty or not bool(text.str.contains(",", regex=False).any()):
+                continue
+            if bool(text.str.fullmatch(_COMMA_THOUSANDS_VALUE_PATTERN).all()):
+                _set_parsed_column(frame, column, text.str.replace(",", "", regex=False))
+        return frame
+
+    comma_columns: dict[Any, tuple[pd.Series, bool]] = {}
+    for column in frame.columns:
+        series = frame[column]
+        if not _is_text_series(series):
+            continue
+        text = _non_empty_text(series)
+        if text.empty or not text.str.match(_DECIMAL_COMMA_PATTERN).mean() > 0.8:
+            continue
+        if not bool(text.str.fullmatch(_DECIMAL_COMMA_VALUE_PATTERN).all()):
+            continue
+        has_comma = text.str.contains(",", regex=False)
+        ambiguous = not bool(text.str.contains(".", regex=False).any()) and bool(
+            text[has_comma].str.fullmatch(_AMBIGUOUS_COMMA_INTEGER_PATTERN).all()
+        )
+        comma_columns[column] = (text, ambiguous)
+    if not comma_columns:
+        return frame
+
+    # A semicolon-separated export or an unambiguous "12,5" means "," is the decimal mark.
+    comma_decimals = delimiter == ";" or any(not ambiguous for _, ambiguous in comma_columns.values())
+    dot_decimals = False
+    dot_thousands_columns: dict[Any, pd.Series] = {}
+    other_columns = [
+        column
+        for column in frame.columns
+        if column not in comma_columns and not is_bool_dtype(frame[column])
+        and (is_numeric_dtype(frame[column]) or _is_text_series(frame[column]))
+    ]
+    raw: pd.DataFrame | None = None
+    positions = sorted(int(frame.columns.get_loc(column)) for column in other_columns)
+    if positions and read_raw_text is not None:
+        try:
+            raw = read_raw_text(positions)
+        except (ValueError, pd.errors.ParserError, csv.Error):
+            raw = None
+        # Only trust the raw text when it lines up with the parsed columns.
+        if raw is not None and [str(name) for name in raw.columns] != [str(frame.columns[position]) for position in positions]:
+            raw = None
+    if raw is not None:
+        for offset, position in enumerate(positions):
+            column = frame.columns[position]
+            text = _non_empty_text(raw.iloc[:, offset])
+            dotted = text.str.contains(".", regex=False)
+            if text.empty or not bool(dotted.any()):
+                continue
+            if bool(text.str.fullmatch(_DOT_THOUSANDS_VALUE_PATTERN).all()):
+                dot_thousands_columns[column] = text
+            elif is_numeric_dtype(frame[column]) and bool(text[dotted].str.fullmatch(_DOT_DECIMAL_VALUE_PATTERN).any()):
+                dot_decimals = True
+
+    for column, (text, ambiguous) in comma_columns.items():
+        if ambiguous and dot_decimals and not comma_decimals:
+            numbers = text.str.replace(",", "", regex=False)
+        else:
+            numbers = text.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+        _set_parsed_column(frame, column, numbers)
+    if comma_decimals and not dot_decimals:
+        for column, text in dot_thousands_columns.items():
+            _set_parsed_column(frame, column, text.str.replace(".", "", regex=False))
     return frame
 
 
@@ -659,7 +944,7 @@ def _endpoint_family_from_column_name(name: str) -> str | None:
     for family, phrase in phrase_families:
         if _tokens_contain_phrase(tokens, phrase):
             return family
-    for family in ("os", "pfs", "dfs", "rfs", "efs", "tts", "tte", "dss", "css"):
+    for family in ("os", "pfs", "dfs", "rfs", "efs", "tts", "tte", "dss", "css", "pfi", "dfi"):
         if family in token_set:
             return family
     return None
@@ -722,15 +1007,27 @@ def _looks_like_survival_time_column_name(name: str) -> bool:
         return False
     has_time_units = bool(token_set & _TIME_UNIT_TOKENS)
     has_abbreviation = bool(token_set & _SURVIVAL_ENDPOINT_ABBREVIATIONS)
+    has_time_keyword = "time" in token_set
     has_followup = (
         "followup" in token_set
         or _tokens_contain_phrase(tokens, ("follow", "up"))
         or "fu" in token_set
         or "fup" in token_set
     )
-    has_survival_context = has_abbreviation or "survival" in token_set or "surv" in token_set or has_followup
+    # "Disease Free (Months)", "Recurrence Free Months": "<word> free" names an endpoint.
+    has_free_phrase = any(_tokens_contain_phrase(tokens, (word, "free")) for word in _ENDPOINT_FREE_PHRASE_WORDS)
+    # "overall_time", "obs_time": an overall or observation time, but only together with a
+    # time word ("overall_response" or "observed_value" are not times).
+    has_qualified_time = bool(token_set & ({"overall"} | _OBSERVATION_TOKENS)) and (has_time_keyword or has_time_units)
+    has_survival_context = (
+        has_abbreviation
+        or "survival" in token_set
+        or "surv" in token_set
+        or has_followup
+        or has_free_phrase
+        or has_qualified_time
+    )
     has_event_context = bool(token_set & _OUTCOME_CONTEXT_TOKENS)
-    has_time_keyword = "time" in token_set
     has_duration_keyword = "duration" in token_set
     has_generic_time_context = has_time_keyword or has_duration_keyword
 
@@ -770,6 +1067,63 @@ def _looks_like_baseline_status_column(name: str) -> bool:
     if not normalized:
         return False
     return any(pattern.search(normalized) for pattern in _BASELINE_STATUS_PATTERNS)
+
+
+def _name_has_strong_event_word(name: str) -> bool:
+    normalized = _normalize_column_label(name)
+    return bool(normalized) and any(pattern.search(normalized) for pattern in _STRONG_EVENT_NAME_PATTERNS)
+
+
+def _is_baseline_named_column(name: str) -> bool:
+    """A baseline-looking name without a word that names the event itself.
+
+    "her2_status" or "treatment_arm" are baseline characteristics; "treatment_failure" and
+    "progression_on_therapy" name an event despite their baseline words.
+    """
+    return _looks_like_baseline_status_column(name) and not _name_has_strong_event_word(name)
+
+
+def _unique_non_missing_values(series: pd.Series) -> list[Any]:
+    """Distinct non-missing values, so per-value Python checks run once per level, not per cell."""
+    valid = series.dropna()
+    try:
+        return list(pd.unique(valid))
+    except TypeError:  # unhashable cells
+        return valid.tolist()
+
+
+def _numeric_unique_values(series: pd.Series) -> np.ndarray | None:
+    """Sorted distinct values when every non-missing value is a number, else None."""
+    if not isinstance(series, pd.Series):  # a duplicated column label selects a frame
+        return None
+    valid = series.dropna()
+    if valid.empty:
+        return None
+    if is_bool_dtype(series):
+        return np.unique(valid.to_numpy(dtype=float))
+    numeric = pd.to_numeric(valid, errors="coerce")
+    if bool(numeric.isna().any()):
+        return None
+    return np.unique(numeric.to_numpy(dtype=float, na_value=np.nan))
+
+
+def _values_decode_as_event_coding(series: pd.Series) -> bool:
+    """True when the values read as an event indicator.
+
+    That is booleans, numbers coded 0/1 (or 1/2), or labels with a recognized outcome meaning
+    (dead/alive, relapse, progression, censored, ...). Two-valued biomarker labels such as
+    Positive/Negative, MSI-H/MSS, or Mutant/Wildtype do not qualify.
+    """
+    if series.dropna().empty:
+        return False
+    if is_bool_dtype(series):
+        return True
+    numeric_values = _numeric_unique_values(series)
+    if numeric_values is not None:
+        observed = set(numeric_values.tolist()) if numeric_values.size <= 2 else None
+        return observed is not None and (observed <= {0.0, 1.0} or observed <= {1.0, 2.0})
+    families = {_outcome_status_value_family(value) for value in _unique_non_missing_values(series)}
+    return bool(families - {None})
 
 
 def _outcome_status_value_family(value: Any) -> str | None:
@@ -831,16 +1185,16 @@ def _has_ambiguous_competing_event_tokens(tokens: Sequence[str]) -> bool:
 
 
 def _looks_like_event_outcome_column(name: str, series: pd.Series) -> bool:
-    if not _is_event_like_column_name(name) or _looks_like_baseline_status_column(name):
+    """An event/status-named column whose values decode as event coding.
+
+    Baseline-looking names (biomarker, receptor, or clinical "status" columns such as
+    her2_status or nodal_status) are not outcomes unless the name also names the event
+    ("treatment_failure"), and two-valued labels that are not event coding
+    (Positive/Negative, MSI-H/MSS) never make a column an outcome.
+    """
+    if not _is_event_like_column_name(name) or _is_baseline_named_column(name):
         return False
-    if looks_binary(series):
-        return True
-    families = {
-        family
-        for family in (_outcome_status_value_family(value) for value in series.dropna().unique().tolist())
-        if family is not None
-    }
-    return bool(families)
+    return _values_decode_as_event_coding(series)
 
 
 def _has_recognizable_event_coding(series: pd.Series) -> bool:
@@ -848,20 +1202,19 @@ def _has_recognizable_event_coding(series: pd.Series) -> bool:
     if valid.empty:
         return False
 
-    numeric_series = pd.to_numeric(valid, errors="coerce")
-    if numeric_series.notna().sum() == len(valid):
-        observed_numeric = {float(value) for value in numeric_series.astype(float).unique().tolist()}
-        if observed_numeric in ({0.0, 1.0}, {1.0, 2.0}):
-            return True
-        if len(observed_numeric) == 1 and next(iter(observed_numeric)) in {0.0, 1.0, 2.0}:
-            return True
+    numeric_values = _numeric_unique_values(series)
+    if numeric_values is not None:
+        if numeric_values.size <= 2:
+            observed_numeric = set(numeric_values.tolist())
+            if observed_numeric in ({0.0, 1.0}, {1.0, 2.0}):
+                return True
+            if len(observed_numeric) == 1 and next(iter(observed_numeric)) in {0.0, 1.0, 2.0}:
+                return True
+        # Among plain numbers only 1 reads as an event token (0 means censored).
+        return bool(np.any(numeric_values == 1.0))
 
-    families = {
-        family
-        for family in (_outcome_status_value_family(value) for value in valid.unique().tolist())
-        if family is not None
-    }
-    return bool(families - {"censor"})
+    families = {_outcome_status_value_family(value) for value in _unique_non_missing_values(series)}
+    return bool(families - {None, "censor"})
 
 
 def _model_feature_candidate_columns_from_metadata(
@@ -876,9 +1229,10 @@ def _model_feature_candidate_columns_from_metadata(
     for column in columns:
         if _MODEL_FEATURE_ID_PATTERN.fullmatch(column):
             continue
-        if column in suggested_time_set:
+        # Time suggestions leave out 0/1 columns, so time-like names are checked directly too.
+        if column in suggested_time_set or _looks_like_survival_time_column_name(column):
             continue
-        if column in binary_set and _is_event_like_column_name(column) and not _looks_like_baseline_status_column(column):
+        if column in binary_set and _is_event_like_column_name(column) and not _is_baseline_named_column(column):
             continue
         candidates.append(column)
     return candidates
@@ -1105,24 +1459,19 @@ def looks_binary(series: pd.Series) -> bool:
     if inference_error == "multistate":
         return False
 
-    numeric_series = pd.to_numeric(valid, errors="coerce")
-    if numeric_series.notna().sum() == len(valid):
-        observed_numeric = {float(value) for value in numeric_series.astype(float).tolist()}
-        return len(observed_numeric) == 2
+    numeric_values = _numeric_unique_values(series)
+    if numeric_values is not None:
+        return int(numeric_values.size) == 2
 
-    normalized = valid.map(_normalize_token)
-    normalized_non_missing = normalized.dropna()
-    if len(normalized_non_missing) == len(valid):
-        observed_families = {
-            family
-            for family in (_outcome_status_value_family(token) for token in normalized_non_missing.tolist())
-            if family is not None
-        }
+    # Per-value checks run once per distinct value, not once per cell.
+    tokens = [_normalize_token(value) for value in _unique_non_missing_values(series)]
+    if all(token is not None for token in tokens):
+        token_set = set(tokens)
+        observed_families = {_outcome_status_value_family(token) for token in token_set} - {None}
         if not observed_families:
-            observed_tokens = set(normalized_non_missing.tolist())
-            return len(observed_tokens) == 2
+            return len(token_set) == 2
         event_families = observed_families - {"censor"}
-        return len(event_families) == 1 and bool(event_families)
+        return len(event_families) == 1
 
     return int(valid.nunique(dropna=True)) == 2
 
@@ -1143,22 +1492,31 @@ def _try_coerce_binary_event(series: pd.Series) -> tuple[pd.Series | None, str |
         if unique_floats.issubset({0.0, 1.0}):
             out.loc[valid] = numeric_series.loc[valid].astype(float)
             return out, None
+        # Every value is a number, and numbers other than 0 and 1 carry no event meaning
+        # (a decimal such as "1.5" must not be split into the tokens "1" and "5").
+        return None, "unrecognized"
 
-    normalized_families = series.map(_outcome_status_value_family)
+    # Families are looked up once per distinct value instead of once per cell.
+    unique_values = _unique_non_missing_values(series)
+    try:
+        family_by_value = {value: _outcome_status_value_family(value) for value in unique_values}
+        normalized_families = series.map(family_by_value)
+    except TypeError:  # unhashable cells
+        family_by_value = None
+        normalized_families = series.map(_outcome_status_value_family)
     mapped = pd.Series(np.nan, index=series.index, dtype=float)
-    mapped.loc[normalized_families.eq("censor")] = 0.0
-    mapped.loc[normalized_families.notna() & normalized_families.ne("censor")] = 1.0
+    mapped.loc[normalized_families.eq("censor").to_numpy(dtype=bool, na_value=False)] = 0.0
+    mapped.loc[(normalized_families.notna() & normalized_families.ne("censor")).to_numpy(dtype=bool, na_value=False)] = 1.0
     if mapped.loc[valid].notna().sum() == int(valid.sum()):
-        observed_tokens = sorted({
-            token
-            for token in series.loc[valid].map(_normalize_token).dropna().astype(str).tolist()
-        })
+        observed_tokens = sorted(
+            {token for token in (_normalize_token(value) for value in unique_values) if token is not None}
+        )
         if _has_ambiguous_competing_event_tokens(observed_tokens):
             return None, "multistate"
-        observed_families = {
-            family
-            for family in normalized_families.loc[valid].dropna().astype(str).tolist()
-        }
+        if family_by_value is not None:
+            observed_families = {str(family) for family in family_by_value.values() if family is not None}
+        else:
+            observed_families = {family for family in normalized_families.loc[valid].dropna().astype(str).tolist()}
         event_families = observed_families - {"censor"}
         if len(event_families) > 1:
             return None, "multistate"
@@ -1187,10 +1545,16 @@ def find_event_equivalent_columns(
     equivalents: set[str] = set()
     reference_values = reference.to_numpy(dtype=float, na_value=np.nan)
     for column in df.columns:
-        if column == event_column or _looks_like_baseline_status_column(column):
+        if column == event_column or _is_baseline_named_column(str(column)):
             continue
         series = df[column]
-        if not looks_binary(series) and not _has_recognizable_event_coding(series):
+        if is_numeric_dtype(series) and not is_bool_dtype(series):
+            # A numeric column can only restate the event when it is coded 0/1; checking that
+            # first keeps wide numeric uploads (thousands of gene columns) cheap.
+            numeric_values = _numeric_unique_values(series)
+            if numeric_values is None or numeric_values.size > 2 or not set(numeric_values.tolist()) <= {0.0, 1.0}:
+                continue
+        elif not looks_binary(series) and not _has_recognizable_event_coding(series):
             continue
         try:
             candidate = coerce_event(series)
@@ -1205,18 +1569,39 @@ def find_event_equivalent_columns(
     return equivalents
 
 
+def _is_zero_one_indicator(series: pd.Series) -> bool:
+    """True when every non-missing value is 0 or 1: an indicator, never a follow-up duration."""
+    numeric_values = _numeric_unique_values(series)
+    return numeric_values is not None and 0 < numeric_values.size <= 2 and set(numeric_values.tolist()) <= {0.0, 1.0}
+
+
+def _is_endpoint_abbreviation_name(name: str) -> bool:
+    """A name that is just an endpoint abbreviation, such as the TCGA CDR columns OS, PFI, DSS."""
+    tokens = _column_name_tokens(name)
+    return len(tokens) == 1 and tokens[0] in _SURVIVAL_ENDPOINT_ABBREVIATIONS
+
+
 def suggest_columns(df: pd.DataFrame) -> dict[str, list[str]]:
     columns = list(df.columns)
     # "censor"-named columns are not suggested: they usually code 1 = censored.
     event_tokens = ("event", "status", "death", "progress", "relapse")
+    # A 0/1 column is an event indicator even when its name reads like an endpoint ("OS").
     time_columns = [
         column
         for column in columns
-        if _looks_like_survival_time_column_name(column)
+        if _looks_like_survival_time_column_name(column) and not _is_zero_one_indicator(df[column])
+    ]
+    keyword_event_columns = set(_column_keywords(columns, event_tokens))
+    event_columns = [
+        column
+        for column in columns
+        if (column in keyword_event_columns and not _is_baseline_named_column(str(column)))
+        # TCGA Pan-Cancer CDR style: "OS", "PFI", "DFI", "DSS" hold the 0/1 events.
+        or (_is_endpoint_abbreviation_name(str(column)) and _is_zero_one_indicator(df[column]))
     ]
     suggestions = {
         "time_columns": time_columns,
-        "event_columns": _column_keywords(columns, event_tokens),
+        "event_columns": event_columns,
         "group_columns": _column_keywords(columns, ("group", "arm", "treatment", "stage", "sex", "risk", "cluster")),
     }
     return suggestions
@@ -1430,38 +1815,69 @@ def _reject_calendar_date_time_column(series: pd.Series, time_column: str) -> No
             raise ValueError(message)
 
 
-def _validate_time_column_choice(df: pd.DataFrame, time_column: str) -> None:
+def _reject_event_indicator_time_column(series: pd.Series, time_column: str) -> None:
+    """A "time" column that holds only 0 and 1 is an event indicator, not follow-up time."""
+    numeric_values = _numeric_unique_values(series)
+    if numeric_values is not None and numeric_values.size == 2 and set(numeric_values.tolist()) == {0.0, 1.0}:
+        raise ValueError(
+            f'"{time_column}" holds only the values 0 and 1, which looks like an event indicator rather than '
+            "follow-up time. Choose the column with the time to the event or last follow-up."
+        )
+
+
+def _validate_time_column_choice(df: pd.DataFrame, time_column: str) -> str | None:
+    """Check the chosen time column; return a caution when its name does not look like time.
+
+    Calendar dates and 0/1 indicators are refused. A name that the heuristics do not
+    recognize as follow-up time is allowed (standard endpoints are named in many ways), but
+    the returned note is shown with the results so an unusual choice stays visible.
+    """
     _require_dataframe_columns(df, [time_column])
     _reject_calendar_date_time_column(df[time_column], time_column)
-    likely_time_columns = suggest_columns(df).get("time_columns", [])
-    if likely_time_columns and time_column not in likely_time_columns:
-        examples = ", ".join(likely_time_columns[:3])
-        raise ValueError(
-            f'"{time_column}" does not look like a survival follow-up time column. '
-            f"Choose one of the likely time columns instead: {examples}."
+    _reject_event_indicator_time_column(df[time_column], time_column)
+    likely_time_columns = [column for column in suggest_columns(df).get("time_columns", []) if column != time_column]
+    if likely_time_columns and not _looks_like_survival_time_column_name(time_column):
+        examples = ", ".join(str(column) for column in likely_time_columns[:3])
+        return (
+            f'"{time_column}" does not look like a survival follow-up time column (columns that do: {examples}). '
+            "Check that it holds the time from the start of follow-up to the event or last follow-up."
         )
+    return None
 
 
 _CENSORING_NAME_TOKENS = {"censor", "censored", "cens", "censoring"}
 _EVENT_NAME_OVERRIDE_TOKENS = {"event", "death", "dead", "died", "status", "vital"}
+# Codes that carry no event meaning of their own: under a "censored" name, 1/Yes/True means censored.
+_GENERIC_BINARY_CODE_TOKENS = {"0", "1", "yes", "no", "y", "n", "true", "false", "t", "f"}
+
+
+def _has_only_generic_binary_codes(series: pd.Series) -> bool:
+    if is_bool_dtype(series):
+        return not series.dropna().empty
+    numeric_values = _numeric_unique_values(series)
+    if numeric_values is not None:
+        return numeric_values.size <= 2 and set(numeric_values.tolist()) <= {0.0, 1.0}
+    tokens = {str(value).strip().lower() for value in _unique_non_missing_values(series)}
+    return bool(tokens) and tokens <= _GENERIC_BINARY_CODE_TOKENS
 
 
 def reject_censoring_indicator_event_column(df: pd.DataFrame, event_column: str) -> None:
-    """Refuse a numeric 0/1 column whose name says it flags censoring.
+    """Refuse a generically coded column whose name says it flags censoring.
 
-    SurvStudio treats 1 as the event. A column named like "censored" usually
-    codes 1 = censored, so reading it directly would invert the whole analysis.
+    SurvStudio treats 1 as the event. A column named like "censored" coded 0/1, Yes/No,
+    Y/N, or True/False usually means 1/Yes/True = censored, so reading it directly would
+    invert the whole analysis. Columns whose values name the outcome themselves
+    ("Dead"/"Alive") are left to the regular event checks.
     """
     tokens = set(_column_name_tokens(str(event_column)))
     if not tokens & _CENSORING_NAME_TOKENS or tokens & _EVENT_NAME_OVERRIDE_TOKENS:
         return
-    numeric = pd.to_numeric(df[event_column], errors="coerce").dropna()
-    if numeric.empty or not set(np.unique(numeric.astype(float))) <= {0.0, 1.0}:
+    if not _has_only_generic_binary_codes(df[event_column]):
         return
     raise ValueError(
-        f'"{event_column}" looks like a censoring indicator (usually 1 = censored), but SurvStudio needs an '
-        "event indicator (1 = event). Add a recoded column such as event = 1 - "
-        f"{event_column} and select that instead."
+        f'"{event_column}" looks like a censoring indicator (usually 1, Yes, or True = censored), but SurvStudio '
+        "needs an event indicator (1 = event). Add a recoded column such as event = 1 - "
+        f"{event_column} (Yes -> 0, No -> 1) and select that instead."
     )
 
 
@@ -1469,11 +1885,17 @@ def _validate_event_column_choice(df: pd.DataFrame, event_column: str) -> None:
     _require_dataframe_columns(df, [event_column])
     reject_censoring_indicator_event_column(df, event_column)
     series = df[event_column]
-    likely_event_columns = [
-        column for column in df.columns if _looks_like_event_outcome_column(column, df[column])
-    ]
-    if event_column in likely_event_columns:
+    if _looks_like_event_outcome_column(event_column, series):
         return
+
+    def _likely_event_examples() -> str:
+        # Scanning every column is only needed for the error message.
+        likely_event_columns = [
+            column
+            for column in df.columns
+            if column != event_column and _looks_like_event_outcome_column(column, df[column])
+        ]
+        return ", ".join(str(column) for column in likely_event_columns[:3])
 
     if not looks_binary(series):
         if _is_event_like_column_name(event_column):
@@ -1483,8 +1905,12 @@ def _validate_event_column_choice(df: pd.DataFrame, event_column: str) -> None:
             "Choose a 0/1-style event column or recode it before survival analysis."
         )
 
-    if _looks_like_baseline_status_column(event_column):
-        examples = ", ".join(column for column in likely_event_columns[:3] if column != event_column)
+    # The baseline veto applies unless the name also names the event and the values decode
+    # as event coding ("treatment_failure" coded 0/1 is an event column).
+    if _looks_like_baseline_status_column(event_column) and not (
+        _name_has_strong_event_word(event_column) and _values_decode_as_event_coding(series)
+    ):
+        examples = _likely_event_examples()
         hint = f" Choose one of the likely event columns instead: {examples}." if examples else ""
         raise ValueError(
             f'"{event_column}" looks more like a baseline characteristic than a survival event column.{hint}'
@@ -1496,7 +1922,7 @@ def _validate_event_column_choice(df: pd.DataFrame, event_column: str) -> None:
     if _is_event_like_column_name(event_column):
         return
 
-    examples = ", ".join(column for column in likely_event_columns[:3] if column != event_column)
+    examples = _likely_event_examples()
     if examples:
         raise ValueError(
             f'"{event_column}" does not look like a survival event column. '
@@ -1506,6 +1932,106 @@ def _validate_event_column_choice(df: pd.DataFrame, event_column: str) -> None:
         f'"{event_column}" does not look like a survival event column. '
         "Use a true event indicator or recode the dataset before survival analysis."
     )
+
+
+# Text that means "no value" in a time column (TCGA exports write "[Not Available]" and similar).
+_MISSING_VALUE_TOKENS = {
+    "",
+    "na",
+    "n/a",
+    "nan",
+    "null",
+    "none",
+    "nr",
+    ".",
+    "-",
+    "--",
+    "?",
+    "#n/a",
+    "missing",
+    "unknown",
+    "not available",
+    "not reported",
+    "[not available]",
+    "[not applicable]",
+    "[not reported]",
+    "[not evaluated]",
+    "[unknown]",
+    "[discrepancy]",
+}
+
+
+def _coerce_survival_time_values(series: pd.Series, time_column: str) -> pd.Series:
+    """Follow-up times as floats; text that is not a number is an error, never "missing".
+
+    Numbers written with thousands separators ("1,234", as Excel exports formatted numbers)
+    are parsed, and common missing-value markers ("NA", "[Not Available]") are missing.
+    Anything else (for example "12 months" or a decimal comma "12,5") is refused with
+    examples, instead of silently dropping those patients as rows with missing time.
+    """
+    if is_bool_dtype(series) or is_numeric_dtype(series):
+        numeric = pd.to_numeric(series, errors="coerce")
+        return pd.Series(numeric.to_numpy(dtype=float, na_value=np.nan), index=series.index)
+    numeric = pd.to_numeric(series, errors="coerce")
+    values = pd.Series(numeric.to_numpy(dtype=float, na_value=np.nan), index=series.index)
+    failed = (series.notna() & values.isna()).to_numpy(dtype=bool)
+    if not failed.any():
+        return values
+    text = series[failed].astype(str).str.strip()
+    positions = np.flatnonzero(failed)
+    stripped_numbers = pd.to_numeric(text, errors="coerce")
+    grouped = text.str.fullmatch(_COMMA_GROUPED_NUMBER_PATTERN).to_numpy(dtype=bool, na_value=False)
+    grouped_numbers = pd.to_numeric(text.str.replace(",", "", regex=False), errors="coerce")
+    recovered = np.where(grouped, grouped_numbers.to_numpy(dtype=float, na_value=np.nan), stripped_numbers.to_numpy(dtype=float, na_value=np.nan))
+    missing_like = text.str.lower().isin(_MISSING_VALUE_TOKENS).to_numpy(dtype=bool)
+    unparsed = np.isnan(recovered) & ~missing_like
+    if unparsed.any():
+        bad_values = list(dict.fromkeys(text.to_numpy()[unparsed].tolist()))
+        examples = ", ".join(f'"{value}"' for value in bad_values[:5])
+        raise ValueError(
+            f'"{time_column}" has {int(unparsed.sum())} value(s) that are not numbers, such as {examples}. '
+            "Recode them as numbers (leave a cell blank when the time is missing) before survival analysis; "
+            "they are not treated as missing values."
+        )
+    parsed_values = values.to_numpy(dtype=float, copy=True)
+    parsed_values[positions] = recovered
+    return pd.Series(parsed_values, index=series.index)
+
+
+def _reject_outcome_dependent_missing_time(frame: pd.DataFrame, time_column: str, event_column: str) -> None:
+    """Refuse a time column that is missing for (nearly) every row of one outcome.
+
+    GDC/TCGA exports carry days_to_death only for patients who died; selecting it as the time
+    column would keep only deaths and drive the survival curve to zero. The mirror case
+    (a last-follow-up column that is empty for the deaths) drops the events instead.
+    """
+    event = frame[event_column]
+    valid_event = event.notna().to_numpy(dtype=bool)
+    missing_time = frame[time_column].isna().to_numpy(dtype=bool) & valid_event
+    n_missing = int(missing_time.sum())
+    if n_missing < 5:
+        return
+    event_values = event.to_numpy(dtype=float, na_value=np.nan)
+    censored = valid_event & (event_values == 0.0)
+    events = valid_event & (event_values == 1.0)
+    n_censored, n_events = int(censored.sum()), int(events.sum())
+    missing_censored = int((missing_time & censored).sum())
+    missing_events = int((missing_time & events).sum())
+    if n_censored and missing_censored >= 0.95 * n_missing and missing_censored >= 0.5 * n_censored:
+        raise ValueError(
+            f'"{time_column}" is missing for {missing_censored} of {n_censored} censored rows but for only '
+            f"{missing_events} of {n_events} rows with an event, so the analysis would keep mostly events and "
+            "underestimate survival. Censored patients need their last follow-up time: build one follow-up time "
+            "column first (for example days_to_death for patients who died and days_to_last_follow_up for everyone "
+            "else) and select that column."
+        )
+    if n_events and missing_events >= 0.95 * n_missing and missing_events >= 0.5 * n_events:
+        raise ValueError(
+            f'"{time_column}" is missing for {missing_events} of {n_events} rows with an event but for only '
+            f"{missing_censored} of {n_censored} censored rows, so the analysis would drop most events and "
+            "overestimate survival. Build one follow-up time column first (the event time for patients with the "
+            "event and the last follow-up time for everyone else) and select that column."
+        )
 
 
 def _cohort_frame(
@@ -1519,24 +2045,41 @@ def _cohort_frame(
     if time_column == event_column:
         raise ValueError("The survival time column and event column must be different.")
     _validate_endpoint_family_pair(time_column, event_column)
-    extra_columns = list(extra_columns or [])
+    extra_columns = list(dict.fromkeys(extra_columns or []))
+    for column in extra_columns:
+        if column in (time_column, event_column):
+            role = "survival time" if column == time_column else "event"
+            raise ValueError(
+                f'"{column}" is the {role} column, so it cannot also be used as a grouping variable, '
+                "covariate, stratum, or candidate feature."
+            )
     required_columns = [time_column, event_column, *extra_columns]
     _require_dataframe_columns(df, required_columns)
-    _validate_time_column_choice(df, time_column)
+    time_column_note = _validate_time_column_choice(df, time_column)
     _validate_event_column_choice(df, event_column)
     frame = df[required_columns].copy()
-    frame[time_column] = pd.to_numeric(frame[time_column], errors="coerce")
+    frame[time_column] = _coerce_survival_time_values(frame[time_column], time_column)
+    if not bool(frame[time_column].notna().any()):
+        raise ValueError(f'"{time_column}" has no usable values: every follow-up time is missing.')
     frame[event_column] = coerce_event(frame[event_column], event_positive_value=event_positive_value)
+    _reject_outcome_dependent_missing_time(frame, time_column, event_column)
+    raw_censored_rows = int((frame[event_column] == 0).sum())
     for column in extra_columns:
         if not is_numeric_dtype(frame[column]):
             frame[column] = frame[column].astype("string")
     drop_subset = required_columns if drop_missing_extra_columns else [time_column, event_column]
-    inf_row_mask = np.zeros(len(frame), dtype=bool)
-    for column in drop_subset:
+    time_values = frame[time_column].to_numpy(dtype=float)
+    outcome_inf_mask = np.isinf(time_values)
+    extra_inf_mask = np.zeros(len(frame), dtype=bool)
+    for column in extra_columns:
         series = frame[column]
-        if is_numeric_dtype(series):
-            numeric_values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
-            inf_row_mask |= np.isinf(numeric_values)
+        if is_numeric_dtype(series) and not is_bool_dtype(series):
+            extra_values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+            extra_inf_mask |= np.isinf(extra_values)
+    inf_row_mask = outcome_inf_mask | extra_inf_mask if drop_missing_extra_columns else outcome_inf_mask
+    # Rows with a usable outcome whose selected inputs hold +/-Inf (for example log(0) of an
+    # expression value); Cox reports them apart from rows dropped for the outcome itself.
+    outcome_valid = np.isfinite(time_values) & (time_values >= 0) & frame[event_column].notna().to_numpy(dtype=bool)
     frame = frame.replace([np.inf, -np.inf], np.nan)
     # +/-Inf values were just coerced to missing, so rows_with_infinite_values is a
     # subset of dropped_missing_rows (summaries report it as "including ...").
@@ -1545,19 +2088,31 @@ def _cohort_frame(
         frame = frame.dropna()
     else:
         frame = frame.dropna(subset=[time_column, event_column])
+    if frame.empty:
+        raise ValueError("No analyzable rows remain after removing missing values.")
     positive_mask = _ensure_positive_times(frame[time_column])
     frame = frame.loc[positive_mask].copy()
     source_row_index = frame.index.copy()
     frame = frame.reset_index(drop=True)
     frame.attrs["rows_with_infinite_values"] = int(inf_row_mask.sum())
+    frame.attrs["rows_with_infinite_outcome"] = int(outcome_inf_mask.sum())
+    frame.attrs["rows_with_infinite_extra_values"] = int((extra_inf_mask & outcome_valid).sum())
     frame.attrs["dropped_missing_rows"] = int(missing_row_mask.sum())
     frame.attrs["dropped_nonpositive_time_rows"] = int((~positive_mask).sum())
     frame.attrs["source_row_index"] = source_row_index.tolist()
     frame.attrs["row_mask_hash"] = _row_mask_hash(source_row_index)
+    if time_column_note:
+        frame.attrs["time_column_note"] = time_column_note
     if frame.empty:
         raise ValueError("No analyzable rows remain after removing missing values.")
     if frame[event_column].sum() == 0:
         raise ValueError("No events were found after preprocessing the event column.")
+    if raw_censored_rows >= 3 and int((frame[event_column] == 0).sum()) == 0:
+        raise ValueError(
+            f"All {raw_censored_rows} censored rows were removed (missing or negative {time_column} values, or "
+            "missing values in the selected columns), so only events would remain and the survival estimates would "
+            f"be biased toward zero. Check how {time_column} was built: censored patients need their last follow-up time."
+        )
     return frame
 
 
@@ -1806,6 +2361,17 @@ def _diagnostic_lowess_trend(y_sorted: np.ndarray, x_sorted: np.ndarray) -> np.n
     return trend
 
 
+def _is_martingale_screen_candidate(series: pd.Series) -> bool:
+    """A continuous covariate: numeric, not boolean, and with more than two distinct values.
+
+    The functional-form screen asks whether the log hazard is linear in the covariate, which
+    is moot for a 0/1 or other two-valued variable.
+    """
+    if not pd.api.types.is_numeric_dtype(series) or is_bool_dtype(series):
+        return False
+    return int(series.dropna().nunique()) > 2
+
+
 def _cox_martingale_plot_data(
     frame: pd.DataFrame,
     martingale_residuals: np.ndarray,
@@ -1828,7 +2394,7 @@ def _cox_martingale_plot_data(
         if covariate in categorical_set or covariate not in frame.columns:
             continue
         series = frame[covariate]
-        if not pd.api.types.is_numeric_dtype(series):
+        if not _is_martingale_screen_candidate(series):
             continue
         x_values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
         valid = np.isfinite(x_values) & np.isfinite(residual_array)
@@ -2059,6 +2625,7 @@ def _cox_stability_snapshot(
     stability_warnings: list[str] = []
     risky_levels: list[dict[str, Any]] = []
     constant_design_columns: list[dict[str, str]] = []
+    high_cardinality_categoricals: list[dict[str, Any]] = []
     categorical_set = {str(column) for column in categorical_covariates}
     for column in covariates:
         if column not in frame.columns:
@@ -2073,6 +2640,12 @@ def _cox_stability_snapshot(
                 stability_warnings.append(
                     f'{column} has only one observed level after missing-value filtering, so Cox PH cannot estimate a contrast for it.'
                 )
+            elif int(observed_levels) > _COX_MAX_CATEGORICAL_LEVELS:
+                high_cardinality_categoricals.append({"column": str(column), "levels": int(observed_levels)})
+                stability_warnings.append(
+                    f"{column} has {int(observed_levels)} observed levels, which looks like an identifier or free text rather "
+                    f"than a categorical covariate; Cox fitting accepts at most {_COX_MAX_CATEGORICAL_LEVELS} levels per categorical covariate."
+                )
             continue
         numeric = pd.to_numeric(series, errors="coerce")
         finite = numeric[np.isfinite(numeric)]
@@ -2084,10 +2657,14 @@ def _cox_stability_snapshot(
     for column in categorical_covariates:
         if column not in frame.columns:
             continue
-        grouped = frame.groupby(column, dropna=True, observed=False)[event_column].agg(["size", "sum"])
+        # Observed levels only: a category with no rows left after missing-value filtering is
+        # neither the fitted reference nor a level with one-sided outcomes.
+        grouped = frame.groupby(column, dropna=True, observed=True)[event_column].agg(["size", "sum"])
+        grouped = grouped[grouped["size"] > 0]
         categories = list(frame[column].cat.categories) if hasattr(frame[column], "cat") else []
-        if categories:
-            reference_level = str(categories[0])
+        observed_categories = [category for category in categories if category in grouped.index]
+        if observed_categories:
+            reference_level = str(observed_categories[0])
             if reference_level in grouped.index:
                 reference_row = grouped.loc[reference_level]
                 reference_count = int(reference_row["size"])
@@ -2154,8 +2731,34 @@ def _cox_stability_snapshot(
         "stability_warnings": stability_warnings,
         "risky_levels": risky_levels,
         "constant_design_columns": constant_design_columns,
+        "high_cardinality_categoricals": high_cardinality_categoricals,
         "strata_snapshot": strata_snapshot,
     }
+
+
+def _reject_oversized_cox_design(stability_snapshot: dict[str, Any]) -> None:
+    """Refuse a Cox design that cannot be estimated before the design matrix is built.
+
+    An identifier or free-text column used as a categorical covariate would expand into one
+    dummy column per row (an n x n design that takes minutes and gigabytes to fit), and a
+    model with at least as many coefficients as events cannot be estimated at all.
+    """
+    too_many_levels = list(stability_snapshot.get("high_cardinality_categoricals") or [])
+    if too_many_levels:
+        first = too_many_levels[0]
+        raise ValueError(
+            f'"{first["column"]}" has {int(first["levels"])} observed levels, which looks like an identifier or free text '
+            f"rather than a categorical covariate. Cox regression accepts at most {_COX_MAX_CATEGORICAL_LEVELS} levels per "
+            "categorical covariate: remove it or recode it into a few clinically meaningful groups."
+        )
+    parameters = int(stability_snapshot.get("estimated_parameters") or 0)
+    events = int(stability_snapshot.get("events") or 0)
+    if parameters >= events:
+        raise ValueError(
+            f"The Cox model would estimate {parameters} coefficient(s) from only {events} event(s). Remove covariates "
+            "or collapse categorical levels so that there are fewer coefficients than events (ideally at least 10 "
+            "events per coefficient)."
+        )
 
 
 def _cox_constant_design_message(stability_snapshot: dict[str, Any]) -> str | None:
@@ -2576,13 +3179,10 @@ def _km_scientific_summary(
     min_group_n = min(int(row["N"]) for row in summary_rows)
     min_group_events = min(int(row["Events"]) for row in summary_rows)
     total_events = int(cohort_summary["events"])
-    rmst_ci_available = all(
-        row.get("RMST CI lower") is not None and row.get("RMST CI upper") is not None
-        for row in summary_rows
-    )
     dropped_nonpositive_time_rows = int(cohort_summary.get("dropped_nonpositive_time_rows") or 0)
     dropped_missing_rows = int(cohort_summary.get("dropped_missing_rows") or 0)
     rows_with_infinite_values = int(cohort_summary.get("rows_with_infinite_values") or 0)
+    time_column_note = str(cohort_summary.get("time_column_note") or "").strip()
 
     strengths = [
         "Kaplan-Meier estimation uses Greenwood standard errors with log-log confidence intervals.",
@@ -2600,9 +3200,13 @@ def _km_scientific_summary(
     # Notes that hold for every KM run are shown but do not lower the status; only data-driven cautions do.
     standing_cautions = len(cautions)
 
+    single_group = bool(group_column) and group_count < 2
     if group_column and not outcome_informed_group:
-        test_name = _weighted_test_label(test_payload["test"], fh_p=fh_p) if test_payload else "weighted"
-        strengths.append(f"Global {test_name} comparison was run across {group_count} groups.")
+        if test_payload is not None:
+            test_name = _weighted_test_label(test_payload["test"], fh_p=fh_p)
+            strengths.append(f"Global {test_name} comparison was run across {group_count} groups.")
+        elif not single_group:
+            strengths.append("Survival was estimated per group; between-group hypothesis tests were not run for this grouping.")
         if (
             rmst_horizon is not None
             and display_horizon is not None
@@ -2622,6 +3226,12 @@ def _km_scientific_summary(
     else:
         strengths.append("This run estimates a single cohort without between-group multiple testing.")
 
+    if single_group:
+        cautions.append(
+            f"Only one group of {group_column} remained in the analyzable cohort, so no between-group comparison was run."
+        )
+    if time_column_note:
+        cautions.append(time_column_note)
     if total_events < 20:
         cautions.append("Fewer than 20 total events limits precision of survival contrasts.")
     if min_group_n < 15:
@@ -2630,10 +3240,6 @@ def _km_scientific_summary(
         cautions.append("At least one group has fewer than 5 events, so median survival and p-values may be unstable.")
     if cohort_summary["median_follow_up"] is None:
         cautions.append("Median follow-up could not be estimated from the censoring distribution.")
-    if not rmst_ci_available:
-        cautions.append(
-            "At least one RMST confidence interval was not estimable because the KM risk set was exhausted at an event time; interpret RMST point estimates descriptively."
-        )
     if dropped_nonpositive_time_rows:
         cautions.append(
             f"{dropped_nonpositive_time_rows} row(s) with negative survival time were excluded before KM estimation."
@@ -2652,7 +3258,10 @@ def _km_scientific_summary(
         cautions.append("This grouping was derived using outcome information, so treat the KM figure as exploratory rather than confirmatory.")
         next_steps.append("Report the selection procedure and any selection-adjusted p-value from the cutpoint or signature workflow instead of a fresh raw log-rank test.")
         if rmst_contrast is not None and rmst_contrast.get("estimate") is not None:
-            cautions.append("Two-group RMST contrast is shown descriptively on the selected split; a fresh Wald p-value is intentionally withheld.")
+            cautions.append(
+                "Two-group RMST contrast is shown descriptively on the selected split; a fresh Wald p-value is intentionally withheld, "
+                "and so is its confidence interval, because the split was chosen using the outcome."
+            )
     elif group_column and test_payload:
         if float(test_payload["p_value"]) < 0.05:
             headline = f"Global {_weighted_test_label(test_payload['test'], fh_p=fh_p)} testing suggests survival differs across groups."
@@ -2660,6 +3269,12 @@ def _km_scientific_summary(
         else:
             headline = f"Global {_weighted_test_label(test_payload['test'], fh_p=fh_p)} testing does not show clear survival separation across groups."
             next_steps.append("Do not treat visual curve separation alone as evidence if the global test is not significant.")
+    elif single_group:
+        headline = f"Only one group of {group_column} was observed, so survival was estimated for a single cohort without a between-group test."
+        next_steps.append(f"Check {group_column}: every analyzable row has the same value, so it cannot compare subcohorts.")
+    elif group_column:
+        headline = "Survival was estimated per group without a between-group hypothesis test."
+        next_steps.append("Run the between-group test before comparing the curves formally.")
     else:
         headline = "Single-cohort survival was estimated without a between-group hypothesis test."
         next_steps.append("Use a grouping variable to compare subcohorts formally.")
@@ -2740,7 +3355,28 @@ _COX_EXTERNAL_NOTE = (
     "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; "
     "validate the final specification on a separate cohort outside this run."
 )
-_COX_STANDING_NOTES = frozenset({*_COX_ASSUMPTION_NOTES, _COX_APPARENT_C_NOTE, _COX_C_INTERVAL_NOTE, _COX_EXTERNAL_NOTE})
+_COX_COMPLETE_CASE_NOTE = (
+    "Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates."
+)
+_COX_STRATA_COMPLETE_CASE_NOTE = (
+    "Changing the covariate set or strata set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected inputs."
+)
+_COX_STRATA_TERMS_NOTE = (
+    "Stratified variables are used only for stratum-specific baseline hazards and do not receive hazard-ratio estimates."
+)
+# How the complete-case rule and stratification work holds for every such fit; rows actually
+# dropped are reported by their own data-driven caution.
+_COX_STANDING_NOTES = frozenset(
+    {
+        *_COX_ASSUMPTION_NOTES,
+        _COX_APPARENT_C_NOTE,
+        _COX_C_INTERVAL_NOTE,
+        _COX_EXTERNAL_NOTE,
+        _COX_COMPLETE_CASE_NOTE,
+        _COX_STRATA_COMPLETE_CASE_NOTE,
+        _COX_STRATA_TERMS_NOTE,
+    }
+)
 
 
 class _CoxTermAlerts(NamedTuple):
@@ -2807,7 +3443,7 @@ def _cox_ill_conditioned_number(model_stats: dict[str, Any]) -> float | None:
 def _cox_strata_notes(model_stats: dict[str, Any], strata_columns: list[str], notes: _SummaryNotes) -> None:
     strengths, cautions, next_steps = notes
     if not strata_columns:
-        cautions.append("Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.")
+        cautions.append(_COX_COMPLETE_CASE_NOTE)
         return
     n_strata = _safe_float(model_stats.get("n_strata"))
     zero_event_strata_count = int(model_stats.get("zero_event_strata_count") or 0)
@@ -2816,15 +3452,13 @@ def _cox_strata_notes(model_stats: dict[str, Any], strata_columns: list[str], no
     high_cardinality_numeric_strata_columns = _nonempty_strings(
         model_stats.get("high_cardinality_numeric_strata_columns")
     )
-    cautions.append(
-        "Changing the covariate set or strata set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected inputs."
-    )
+    cautions.append(_COX_STRATA_COMPLETE_CASE_NOTE)
     strengths.append(
         f"Baseline hazards were stratified by {_summarize_labels(strata_columns, max_items=3)}, so those variables are not reported as hazard-ratio terms."
     )
     if n_strata is not None:
         strengths.append(f"The fitted stratified Cox specification used {int(n_strata)} observed strata combination(s).")
-    cautions.append("Stratified variables are used only for stratum-specific baseline hazards and do not receive hazard-ratio estimates.")
+    cautions.append(_COX_STRATA_TERMS_NOTE)
     if zero_event_strata_count:
         cautions.append(
             f"{zero_event_strata_count} observed stratum/strata had zero events, so the stratified Cox fit can look more stable than the within-stratum information actually supports."
@@ -2859,6 +3493,14 @@ def _cox_input_quality_notes(
     _, cautions, next_steps = notes
     dropped_nonpositive_time_rows = int(model_stats.get("dropped_nonpositive_time_rows") or 0)
     rows_with_infinite_values = int(model_stats.get("rows_with_infinite_values") or 0)
+    rows_with_infinite_outcome = int(model_stats.get("rows_with_infinite_outcome_values") or 0)
+    time_column_note = str(model_stats.get("time_column_note") or "").strip()
+    if time_column_note:
+        cautions.append(time_column_note)
+    if rows_with_infinite_outcome:
+        cautions.append(
+            f"{rows_with_infinite_outcome} row(s) with a +/-Inf survival time were excluded before the outcome-valid cohort was formed."
+        )
     if dropped_rows:
         drop_message = f"{int(dropped_rows)} outcome-valid rows were excluded because at least one selected Cox input was missing."
         if outcome_rows is not None and outcome_rows > 0:
@@ -3201,9 +3843,10 @@ def _signature_scientific_summary(
     ]
     cautions: list[str] = []
     next_steps: list[str] = []
-    cautions.append(
+    # Notes that hold for every signature search are shown but do not lower the status.
+    standing_notes: list[str] = [
         "Stability score is a composite heuristic that mixes significance, effect size, replication support, and parsimony; its weights are expert-set and not independently validated."
-    )
+    ]
 
     permutation_iterations = int(search_space.get("permutation_iterations") or 0)
     validation_iterations = int(search_space.get("validation_iterations") or 0)
@@ -3211,7 +3854,8 @@ def _signature_scientific_summary(
 
     if permutation_iterations > 0:
         strengths.append(
-            "Permutation p-values are search-adjusted: each shuffle re-scores every tested signature and keeps the maximum statistic (Westfall-Young), so they account for selecting the best rule."
+            "Permutation p-values are search-adjusted: each shuffle re-scores every tested signature that meets the group-size rule "
+            "(applying the event rule within the shuffle) and keeps the maximum statistic (Westfall-Young), so they account for selecting the best rule."
         )
         min_attainable = 1.0 / (permutation_iterations + 1.0)
         if min_attainable > float(search_space["significance_level"]):
@@ -3220,8 +3864,22 @@ def _signature_scientific_summary(
             )
     if validation_iterations > 0:
         strengths.append("Within-cohort resampling replication was checked for top-ranked candidates.")
-        cautions.append(
+        standing_notes.append(
             "Resampling replication folds are subsamples of the same cohort used to discover the signature, so they measure stability, not independent validation."
+        )
+    time_column_note = str(search_space.get("time_column_note") or "").strip()
+    if time_column_note:
+        cautions.append(time_column_note)
+    skipped_candidates = [item for item in search_space.get("skipped_candidates") or [] if isinstance(item, dict)]
+    if skipped_candidates:
+        described = "; ".join(f"{item.get('column')} ({item.get('reason')})" for item in skipped_candidates[:4])
+        more = f" and {len(skipped_candidates) - 4} more" if len(skipped_candidates) > 4 else ""
+        cautions.append(f"Some candidates produced no usable rule and were not searched: {described}{more}.")
+    unevaluated = int(search_space.get("robustness_unevaluated_signatures") or 0)
+    if unevaluated:
+        cautions.append(
+            f"{unevaluated} further rule(s) passed the BH threshold but were not screened for robustness, because enough "
+            "significant signatures were already found in rank order or the robustness cap was reached; they are listed as not significant."
         )
 
     support = _safe_float(best_split.get("Bootstrap support (p<alpha)"))
@@ -3246,11 +3904,11 @@ def _signature_scientific_summary(
         )
     analyzable_n = search_space.get("n_rows_analyzed")
     if analyzable_n is not None:
-        cautions.append(
+        standing_notes.append(
             f"Signature discovery used {int(analyzable_n)} analyzable rows after dropping missing candidate values; changing the candidate set can change the search cohort."
         )
     else:
-        cautions.append(
+        standing_notes.append(
             "Signature discovery uses the analyzable subset after dropping missing candidate values; changing the candidate set can change the search cohort."
         )
     if permutation_iterations == 0 and validation_iterations == 0:
@@ -3319,7 +3977,8 @@ def _signature_scientific_summary(
         "status": status,
         "headline": headline,
         "strengths": strengths,
-        "cautions": cautions,
+        # Data-driven cautions lead; the notes that hold for every search follow.
+        "cautions": cautions + standing_notes,
         "next_steps": next_steps,
         "metrics": [
             {"label": "Tested combos", "value": int(search_space["tested_combinations"])},
@@ -3417,7 +4076,7 @@ def _append_realized_group_share_note(
     summary: dict[str, Any],
     counts: Sequence[dict[str, Any]],
 ) -> None:
-    non_missing = [row for row in counts if str(row.get("group")) != "Missing"]
+    non_missing = [row for row in counts if not row.get("unassigned") and str(row.get("group")) not in _UNASSIGNED_GROUP_LABELS]
     total = sum(int(row.get("n", 0) or 0) for row in non_missing)
     if total <= 0:
         return
@@ -3684,15 +4343,46 @@ def _derived_group_column_name(df: pd.DataFrame, new_column_name: str | None, de
     return requested_name
 
 
-def _group_counts(labels: pd.Series) -> list[dict[str, Any]]:
-    return (
-        labels.fillna("Missing")
-        .value_counts(dropna=False)
-        .sort_index()
-        .rename_axis("group")
-        .reset_index(name="n")
-        .to_dict(orient="records")
-    )
+_MISSING_GROUP_LABEL = "Missing"
+_EXCLUDED_GROUP_LABEL = "Excluded (middle range)"
+# Count entries for rows without a group; group labels may not reuse these names.
+_UNASSIGNED_GROUP_LABELS = frozenset({_MISSING_GROUP_LABEL, _EXCLUDED_GROUP_LABEL})
+
+
+def _validate_group_labels(lower_label: Any, upper_label: Any) -> None:
+    labels = [str(lower_label if lower_label is not None else "").strip(), str(upper_label if upper_label is not None else "").strip()]
+    if not all(labels):
+        raise ValueError("Group labels must not be empty.")
+    if labels[0] == labels[1]:
+        raise ValueError(f'The lower and upper group labels must differ (both are "{labels[0]}").')
+    reserved = {label.lower() for label in _UNASSIGNED_GROUP_LABELS}
+    for label in labels:
+        if label.lower() in reserved:
+            raise ValueError(
+                f'"{label}" is reserved for rows without a group. Choose another group label.'
+            )
+
+
+def _group_counts(labels: pd.Series, *, excluded_mask: np.ndarray | None = None) -> list[dict[str, Any]]:
+    """Rows per group, then separate entries for rows without a group.
+
+    Rows whose source value is missing are counted as "Missing" and rows left out by design
+    (the middle range of an extreme split) as "Excluded (middle range)"; both entries carry
+    ``"unassigned": True`` and never merge with a group of the same name.
+    """
+    present = labels.dropna()
+    counts: list[dict[str, Any]] = [
+        {"group": str(group), "n": int(n)}
+        for group, n in present.astype(str).value_counts().sort_index().items()
+    ]
+    unassigned = labels.isna().to_numpy(dtype=bool)
+    excluded = unassigned & excluded_mask if excluded_mask is not None else np.zeros(len(labels), dtype=bool)
+    missing = unassigned & ~excluded
+    if excluded.any():
+        counts.append({"group": _EXCLUDED_GROUP_LABEL, "n": int(excluded.sum()), "unassigned": True})
+    if missing.any():
+        counts.append({"group": _MISSING_GROUP_LABEL, "n": int(missing.sum()), "unassigned": True})
+    return counts
 
 
 @user_input_boundary
@@ -3717,11 +4407,15 @@ def derive_group_column(
             f'"{source_column}" looks like a survival endpoint column. '
             "Do not derive groups from survival time or event indicators."
         )
+    if method in {"median_split", "optimal_cutpoint"}:
+        _validate_group_labels(lower_label, upper_label)
     raw_source = df[source_column]
-    numeric_series = pd.to_numeric(raw_source, errors="coerce")
-    non_finite_count = int(np.isinf(numeric_series.astype(float)).sum()) if numeric_series.notna().any() else 0
+    coerced_source = pd.to_numeric(raw_source, errors="coerce")
+    # Plain float64 (nullable Int64/Float64/boolean NA -> NaN), so comparisons stay boolean.
+    numeric_series = pd.Series(coerced_source.to_numpy(dtype=float, na_value=np.nan), index=raw_source.index)
+    non_finite_count = int(np.isinf(numeric_series.to_numpy()).sum())
     numeric_series = numeric_series.replace([np.inf, -np.inf], np.nan)
-    non_numeric_count = int((raw_source.notna() & pd.to_numeric(raw_source, errors="coerce").isna()).sum())
+    non_numeric_count = int((raw_source.notna().to_numpy(dtype=bool) & coerced_source.isna().to_numpy(dtype=bool)).sum())
     usable = numeric_series.dropna()
     if usable.empty:
         raise ValueError(f"{source_column} does not contain numeric values that can be split.")
@@ -3780,7 +4474,11 @@ def derive_group_column(
     updated = df.copy()
     updated[column_name] = label_series
 
-    counts = _group_counts(updated[column_name])
+    # Rows with a usable source value but no label were left out by the method (the middle
+    # range of an extreme split); they are counted apart from rows with a missing source value.
+    excluded_by_method = (numeric_series.notna() & label_series.isna()).to_numpy(dtype=bool)
+    counts = _group_counts(updated[column_name], excluded_mask=excluded_by_method)
+    summary["missing_count"] = int(numeric_series.isna().sum())
     summary["column_name"] = column_name
     summary["outcome_informed"] = outcome_informed
     summary["counts"] = counts
@@ -3807,17 +4505,30 @@ def derive_group_column(
     return updated, column_name, summary
 
 
+_SIGNATURE_MAX_CATEGORICAL_LEVELS = 8
+
+
 def _build_candidate_indicators(
     frame: pd.DataFrame,
     candidate_columns: Sequence[str],
     min_group_size: int,
+    skipped: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
+    """Binary rules for each candidate: numeric quartile thresholds or one level vs the rest.
+
+    When ``skipped`` is given, every candidate that yields no rule is appended to it with the
+    reason, so the search can report it instead of dropping the column silently.
+    """
     indicators: list[dict[str, Any]] = []
     for column in candidate_columns:
         series = frame[column]
+        n_before = len(indicators)
+        reason = ""
         # Booleans are categorical flags (quantiles of True/False are undefined).
         if is_numeric_dtype(series) and not is_bool_dtype(series):
-            numeric = pd.to_numeric(series, errors="coerce")
+            numeric = pd.Series(
+                pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, na_value=np.nan), index=series.index
+            )
             quantile_candidates = (0.25, 0.5, 0.75)
             seen_thresholds: set[float] = set()
             for quantile in quantile_candidates:
@@ -3840,32 +4551,64 @@ def _build_candidate_indicators(
                             "label": f"{column} > Q{int(quantile * 100)}({cutoff:.3f})",
                         }
                     )
-            continue
-
-        values = series.astype("string")
-        counts = values.value_counts(dropna=True)
-        if counts.empty:
-            continue
-        if int(counts.shape[0]) > 8:
-            continue
-        reference = str(counts.idxmax())
-        for level in counts.index.tolist():
-            level_text = str(level)
-            if level_text == reference:
-                continue
-            mask = values == level_text
-            n_positive = int(mask.sum())
-            if min_group_size <= n_positive <= (len(mask) - min_group_size):
-                indicators.append(
-                    {
-                        "column": column,
-                        "kind": "categorical_level",
-                        "level": level_text,
-                        "reference": reference,
-                        "label": f'{column} == "{level_text}"',
-                    }
+            reason = (
+                f"no quartile threshold leaves at least {int(min_group_size)} rows on both sides"
+                if numeric.notna().any()
+                else "no numeric values"
+            )
+        else:
+            values = series.astype("string")
+            counts = values.value_counts(dropna=True)
+            if counts.empty:
+                reason = "no non-missing values"
+            elif int(counts.shape[0]) > _SIGNATURE_MAX_CATEGORICAL_LEVELS:
+                reason = (
+                    f"{int(counts.shape[0])} levels; categorical candidates may have at most "
+                    f"{_SIGNATURE_MAX_CATEGORICAL_LEVELS}"
                 )
+            elif int(counts.shape[0]) < 2:
+                reason = "only one observed level"
+            else:
+                reference = str(counts.idxmax())
+                for level in counts.index.tolist():
+                    level_text = str(level)
+                    if level_text == reference:
+                        continue
+                    mask = values == level_text
+                    n_positive = int(mask.sum())
+                    if min_group_size <= n_positive <= (len(mask) - min_group_size):
+                        indicators.append(
+                            {
+                                "column": column,
+                                "kind": "categorical_level",
+                                "level": level_text,
+                                "reference": reference,
+                                "label": f'{column} == "{level_text}"',
+                            }
+                        )
+                reason = (
+                    f"no level other than the most common one has between {int(min_group_size)} and "
+                    f"{len(values) - int(min_group_size)} rows"
+                )
+        if skipped is not None and len(indicators) == n_before:
+            skipped.append({"column": str(column), "reason": reason})
     return indicators
+
+
+def _indicator_definition(indicator: dict[str, Any]) -> dict[str, Any]:
+    """A JSON-ready copy of one signature rule with its exact threshold or level."""
+    definition: dict[str, Any] = {
+        "column": str(indicator["column"]),
+        "kind": str(indicator["kind"]),
+        "label": str(indicator.get("label", "")),
+    }
+    if indicator["kind"] == "numeric_gt":
+        definition["threshold"] = float(indicator["threshold"])
+        definition["quantile"] = float(indicator["quantile"])
+    elif indicator["kind"] == "categorical_level":
+        definition["level"] = str(indicator["level"])
+        definition["reference"] = str(indicator["reference"])
+    return definition
 
 
 def _evaluate_indicator(df: pd.DataFrame, indicator: dict[str, Any]) -> pd.Series:
@@ -3908,7 +4651,9 @@ def _signature_cox_metrics(
     times: np.ndarray,
     events: np.ndarray,
     mask: np.ndarray,
+    alpha: float = 0.05,
 ) -> dict[str, float | None]:
+    """Signature+ vs signature- hazard ratio with a (1 - alpha) confidence interval."""
     cox_frame = pd.DataFrame(
         {
             "__time": np.asarray(times, dtype=float),
@@ -3923,7 +4668,7 @@ def _signature_cox_metrics(
         ties="efron",
     )
     cox_results = cox_model.fit(disp=False)
-    conf_int = np.asarray(cox_results.conf_int(), dtype=float)
+    conf_int = np.asarray(cox_results.conf_int(alpha=alpha), dtype=float)
     return {
         "Hazard ratio (signature+ vs -)": _safe_exp_or_none(cox_results.params[0]),
         "HR CI lower": _safe_exp_or_none(conf_int[0, 0]),
@@ -3931,7 +4676,7 @@ def _signature_cox_metrics(
     }
 
 
-def _stability_score(row: dict[str, Any]) -> float:
+def _stability_score(row: dict[str, Any], significance_level: float = 0.05) -> float:
     # Composite score balancing significance, robustness, effect size, and parsimony.
     bh_p = max(float(row["BH adjusted p"]), 1e-12)
     significance_score = min(-math.log10(bh_p), 10.0)
@@ -3949,7 +4694,8 @@ def _stability_score(row: dict[str, Any]) -> float:
     permutation_p = row["Permutation p"]
     permutation_penalty = 0.0
     if permutation_p is not None:
-        permutation_penalty = max(float(permutation_p) - 0.05, 0.0)
+        # Only the part of the permutation p-value above the chosen alpha is penalized.
+        permutation_penalty = max(float(permutation_p) - float(significance_level), 0.0)
     complexity_penalty = 0.18 * max(int(row["Rule count"]) - 1, 0)
     return float(
         significance_score
@@ -4014,7 +4760,16 @@ def _bootstrap_signature_metrics(
     random_seed: int,
     significance_level: float,
     observed_hazard_ratio: float | None = None,
+    min_events_per_group: int = 1,
 ) -> dict[str, float | int | None]:
+    """Bootstrap support for one signature.
+
+    The group-size and event minimums were set on the full cohort, so they are scaled to the
+    resample size (as the resampling-replication check does). Support and direction
+    consistency are shares of all requested resamples: a resample that had to be skipped
+    (too few rows or events on one side, or a failed fit) counts as a failure, so frequent
+    skipping cannot inflate the support of an unstable rule.
+    """
     if n_iterations <= 0:
         return {
             "Bootstrap support (p<alpha)": None,
@@ -4028,6 +4783,10 @@ def _bootstrap_signature_metrics(
     n_obs = int(frame.shape[0])
     sample_size = int(math.ceil(n_obs * sample_fraction))
     sample_size = min(max(sample_size, min_group_size * 2), n_obs)
+    sample_share = sample_size / max(n_obs, 1)
+    resample_min_group = min(int(min_group_size), max(4, int(math.ceil(min_group_size * sample_share))))
+    resample_min_events = min(int(min_events_per_group), max(2, int(math.ceil(min_events_per_group * sample_share))))
+    resample_min_events = max(resample_min_events, 1)
     rng = np.random.default_rng(random_seed)
     significant_count = 0
     valid_resamples = 0
@@ -4043,13 +4802,13 @@ def _bootstrap_signature_metrics(
         mask_values = _signature_mask(sampled, combo, operator=combo_operator)
         n_high = int(mask_values.sum())
         n_low = sample_size - n_high
-        if n_high < min_group_size or n_low < min_group_size:
+        if n_high < resample_min_group or n_low < resample_min_group:
             skipped_resamples += 1
             continue
 
         events = sampled[event_column].to_numpy(dtype=int)
         times = sampled[time_column].to_numpy(dtype=float)
-        if events[mask_values].sum() == 0 or events[~mask_values].sum() == 0:
+        if events[mask_values].sum() < resample_min_events or events[~mask_values].sum() < resample_min_events:
             skipped_resamples += 1
             continue
 
@@ -4071,7 +4830,9 @@ def _bootstrap_signature_metrics(
             cox_results = cox_model.fit(disp=False)
         except MemoryError:
             raise
-        except Exception:
+        except Exception as exc:
+            if must_propagate(exc):
+                raise
             skipped_resamples += 1
             continue
 
@@ -4081,7 +4842,7 @@ def _bootstrap_signature_metrics(
         hr = _safe_exp_or_none(cox_results.params[0])
         if hr is not None:
             hazard_ratios.append(hr)
-        if p_float < significance_level:
+        if p_float <= significance_level:
             significant_count += 1
 
     if valid_resamples == 0:
@@ -4094,26 +4855,83 @@ def _bootstrap_signature_metrics(
             "Bootstrap skipped resamples": int(skipped_resamples),
         }
 
+    requested = int(n_iterations)
     direction_consistency = None
     if hazard_ratios:
         hr_array = np.asarray(hazard_ratios, dtype=float)
         if observed_hazard_ratio is not None and math.isfinite(float(observed_hazard_ratio)):
-            # Share of resamples that keep the observed effect direction.
+            # Share of requested resamples that keep the observed effect direction.
             observed_harmful = float(observed_hazard_ratio) >= 1.0
-            direction_consistency = float(np.mean((hr_array >= 1.0) == observed_harmful))
+            direction_consistency = float(np.sum((hr_array >= 1.0) == observed_harmful) / requested)
         else:
             direction_consistency = float(
-                max(float(np.mean(hr_array >= 1.0)), float(np.mean(hr_array < 1.0)))
+                max(float(np.sum(hr_array >= 1.0)), float(np.sum(hr_array < 1.0))) / requested
             )
 
     return {
-        "Bootstrap support (p<alpha)": float(significant_count / valid_resamples),
+        "Bootstrap support (p<alpha)": float(significant_count / requested),
         "Bootstrap median HR": float(np.median(hazard_ratios)) if hazard_ratios else None,
         "Bootstrap median p": float(np.median(p_values)),
         "Bootstrap HR direction consistency": direction_consistency,
         "Bootstrap valid resamples": int(valid_resamples),
         "Bootstrap skipped resamples": int(skipped_resamples),
     }
+
+
+# Upper bound on rows x groupings materialised at once by the vectorized log-rank helpers
+# (each block creates a few float64 arrays of this many cells).
+_LOGRANK_BLOCK_CELLS = 2_000_000
+
+
+class _LogrankOutcome(NamedTuple):
+    """The outcome side of a two-group log-rank test, sorted by time once."""
+
+    order: np.ndarray
+    sorted_events: np.ndarray
+    first_index: np.ndarray
+    has_event: np.ndarray
+    n_at_risk: np.ndarray
+    deaths: np.ndarray
+
+
+def _logrank_outcome(times: np.ndarray, events: np.ndarray) -> _LogrankOutcome:
+    times_arr = np.asarray(times, dtype=float)
+    events_arr = np.asarray(events, dtype=float)
+    order = np.argsort(times_arr, kind="mergesort")
+    sorted_times = times_arr[order]
+    sorted_events = events_arr[order]
+    _, first_index = np.unique(sorted_times, return_index=True)
+    at_risk_total = sorted_times.size - first_index
+    deaths_total = np.add.reduceat(sorted_events, first_index)
+    has_event = deaths_total > 0
+    return _LogrankOutcome(
+        order=order,
+        sorted_events=sorted_events,
+        first_index=first_index,
+        has_event=has_event,
+        n_at_risk=at_risk_total[has_event].astype(float)[:, np.newaxis],
+        deaths=deaths_total[has_event].astype(float)[:, np.newaxis],
+    )
+
+
+def _logrank_chisq_sorted(outcome: _LogrankOutcome, sorted_masks: np.ndarray) -> np.ndarray:
+    """Chi-square per column of masks whose rows are already in ``outcome.order``."""
+    mask_arr = np.asarray(sorted_masks, dtype=float)
+    at_risk_group = np.cumsum(mask_arr[::-1], axis=0)[::-1][outcome.first_index]
+    deaths_group = np.add.reduceat(mask_arr * outcome.sorted_events[:, np.newaxis], outcome.first_index, axis=0)
+    n = outcome.n_at_risk
+    d = outcome.deaths
+    n1 = at_risk_group[outcome.has_event]
+    o1 = deaths_group[outcome.has_event]
+    share = n1 / n
+    expected = d * share
+    with np.errstate(divide="ignore", invalid="ignore"):
+        variance = d * share * (1.0 - share) * np.where(n > 1.0, (n - d) / (n - 1.0), 0.0)
+    numerator = np.sum(o1 - expected, axis=0) ** 2
+    denominator = np.sum(variance, axis=0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        statistic = np.where(denominator > 0.0, numerator / denominator, 0.0)
+    return np.asarray(statistic, dtype=float)
 
 
 def _vectorized_logrank_chisq(
@@ -4125,36 +4943,21 @@ def _vectorized_logrank_chisq(
 
     ``masks`` is an ``(n, k)`` boolean matrix; column ``j`` defines group 1 of
     the ``j``-th comparison. Matches ``statsmodels.duration.survfunc.survdiff``
-    (unweighted log-rank with the hypergeometric variance).
+    (unweighted log-rank with the hypergeometric variance). Columns are processed in
+    blocks so memory stays bounded for large ``n * k``.
     """
-    times_arr = np.asarray(times, dtype=float)
-    events_arr = np.asarray(events, dtype=float)
-    mask_arr = np.asarray(masks, dtype=float)
+    mask_arr = np.asarray(masks)
     if mask_arr.ndim == 1:
         mask_arr = mask_arr[:, np.newaxis]
-    order = np.argsort(times_arr, kind="mergesort")
-    sorted_times = times_arr[order]
-    sorted_events = events_arr[order]
-    sorted_masks = mask_arr[order]
-    unique_times, first_index = np.unique(sorted_times, return_index=True)
-    at_risk_total = sorted_times.size - first_index
-    at_risk_group = np.cumsum(sorted_masks[::-1], axis=0)[::-1][first_index]
-    deaths_total = np.add.reduceat(sorted_events, first_index)
-    deaths_group = np.add.reduceat(sorted_masks * sorted_events[:, np.newaxis], first_index, axis=0)
-    has_event = deaths_total > 0
-    n = at_risk_total[has_event].astype(float)[:, np.newaxis]
-    d = deaths_total[has_event].astype(float)[:, np.newaxis]
-    n1 = at_risk_group[has_event]
-    o1 = deaths_group[has_event]
-    share = n1 / n
-    expected = d * share
-    with np.errstate(divide="ignore", invalid="ignore"):
-        variance = d * share * (1.0 - share) * np.where(n > 1.0, (n - d) / (n - 1.0), 0.0)
-    numerator = np.sum(o1 - expected, axis=0) ** 2
-    denominator = np.sum(variance, axis=0)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        statistic = np.where(denominator > 0.0, numerator / denominator, 0.0)
-    return np.asarray(statistic, dtype=float)
+    outcome = _logrank_outcome(times, events)
+    n_rows, n_columns = mask_arr.shape
+    block = max(1, _LOGRANK_BLOCK_CELLS // max(int(n_rows), 1))
+    sorted_masks = mask_arr[outcome.order]
+    if n_columns <= block:
+        return _logrank_chisq_sorted(outcome, sorted_masks)
+    return np.concatenate(
+        [_logrank_chisq_sorted(outcome, sorted_masks[:, start : start + block]) for start in range(0, n_columns, block)]
+    )
 
 
 class ThresholdLogrankScan:
@@ -4260,33 +5063,57 @@ def _search_adjusted_permutation_p_values(
     """Westfall-Young max-statistic permutation p-values over the whole search.
 
     Each permutation shuffles outcomes against the covariates, re-scores every
-    candidate signature that passes the same event rule used in the search, and
-    records the maximum log-rank statistic. A signature's p-value is the share
-    of permutations whose best-of-search statistic reaches its own statistic,
+    candidate signature in ``masks`` that passes the event rule under the shuffled
+    outcome, and records the maximum log-rank statistic. A signature's p-value is the
+    share of permutations whose best-of-search statistic reaches its own statistic,
     so it accounts for having picked the best rule from many (FWER control).
+
+    ``masks`` must be the whole search family defined by the covariates alone (every
+    combination that meets the group-size rule), not only the combinations that met the
+    event rule on the observed outcome: that subset depends on the outcome, and using it
+    as the null family makes the p-values anti-conservative.
+
+    The outcome is sorted once and each shuffle reorders the mask rows instead; mask
+    columns are scored in blocks so memory stays bounded for large searches.
     """
     if n_iterations <= 0:
         return None, 0
     mask_arr = np.asarray(masks, dtype=bool)
+    if mask_arr.ndim == 1:
+        mask_arr = mask_arr[:, np.newaxis]
     events_arr = np.asarray(events, dtype=float)
     times_arr = np.asarray(times, dtype=float)
     observed = np.asarray(observed_stats, dtype=float)
+    if mask_arr.shape[1] == 0:
+        return None, 0
     total_events = float(events_arr.sum())
+    outcome = _logrank_outcome(times_arr, events_arr)
+    n_rows, n_columns = mask_arr.shape
+    block = max(1, _LOGRANK_BLOCK_CELLS // max(int(n_rows), 1))
+    positions = np.arange(n_rows)
+    inverse = np.empty(n_rows, dtype=np.intp)
     rng = np.random.default_rng(random_seed)
     max_stats: list[float] = []
     for _ in range(int(n_iterations)):
         raise_if_cancelled()
         permutation = rng.permutation(times_arr.size)
-        perm_times = times_arr[permutation]
-        perm_events = events_arr[permutation]
-        group_events = perm_events @ mask_arr
-        eligible = (group_events >= min_events_per_group) & ((total_events - group_events) >= min_events_per_group)
-        if not np.any(eligible):
-            continue
-        statistics = _vectorized_logrank_chisq(perm_times, perm_events, mask_arr[:, eligible])
-        finite = statistics[np.isfinite(statistics)]
-        if finite.size:
-            max_stats.append(float(np.max(finite)))
+        # Mask row i meets outcome row permutation[i]; with the outcome in time order,
+        # sorted outcome position j (row order[j]) meets mask row inverse[order[j]].
+        inverse[permutation] = positions
+        mask_rows = inverse[outcome.order]
+        best = -np.inf
+        for start in range(0, n_columns, block):
+            sorted_block = mask_arr[mask_rows, start : start + block]
+            group_events = outcome.sorted_events @ sorted_block
+            eligible = (group_events >= min_events_per_group) & ((total_events - group_events) >= min_events_per_group)
+            if not np.any(eligible):
+                continue
+            statistics = _logrank_chisq_sorted(outcome, sorted_block[:, eligible])
+            finite = statistics[np.isfinite(statistics)]
+            if finite.size:
+                best = max(best, float(np.max(finite)))
+        if np.isfinite(best):
+            max_stats.append(best)
     if not max_stats:
         return None, 0
     max_array = np.asarray(max_stats, dtype=float)
@@ -4374,10 +5201,12 @@ def _validation_signature_metrics(
                 ties="efron",
             )
             cox_results = cox_model.fit(disp=False)
-            conf_int = cox_results.conf_int()
+            conf_int = np.asarray(cox_results.conf_int(alpha=significance_level), dtype=float)
         except MemoryError:
             raise
-        except Exception:
+        except Exception as exc:
+            if must_propagate(exc):
+                raise
             skipped_folds += 1
             continue
 
@@ -4410,7 +5239,15 @@ def _validation_signature_metrics(
     }
 
 
+# Tested family: combinations that meet the group-size rule, which depends on the covariates
+# only, so the cap (and the permutation null family) never depends on the outcome.
 _SIGNATURE_MAX_TESTED_COMBINATIONS = 5000
+# Every (combination, operator) evaluated counts toward this cap, so searches whose
+# combinations mostly fail the size rule ("and" rules on small groups) stay bounded too.
+_SIGNATURE_MAX_EVALUATED_COMBINATIONS = 100_000
+# Rows beyond the always-scored top of the ranking whose robustness is checked lazily, in
+# rank order, until enough significant signatures are found.
+_SIGNATURE_MAX_EXTRA_ROBUSTNESS_ROWS = 200
 _SIGNATURE_OPERATORS = {
     "and": ["AND"],
     "or": ["OR"],
@@ -4502,6 +5339,40 @@ def _signature_result_row(
     }
 
 
+def _combine_indicator_masks(
+    indicator_masks: Sequence[np.ndarray],
+    indices: Sequence[int],
+    operator: str,
+) -> np.ndarray:
+    parts = [indicator_masks[index] for index in indices]
+    combined = np.logical_and.reduce(parts) if operator == "AND" else np.logical_or.reduce(parts)
+    return np.asarray(combined, dtype=bool)
+
+
+class _SignatureScreen(NamedTuple):
+    """Result of screening every indicator combination."""
+
+    rows: list[dict[str, Any]]
+    combinations: list[dict[str, Any]]
+    truncated: bool
+    indicator_masks: list[np.ndarray]
+    # Every combination that met the group-size rule (the tested family), as
+    # (indicator indices, operator). The rule depends on the covariates only, so this family
+    # is the permutation null family.
+    family: list[tuple[tuple[int, ...], str]]
+    evaluated_combinations: int
+
+    def family_matrix(self) -> np.ndarray:
+        """Masks of the tested family as an (n, k) boolean matrix."""
+        n_rows = int(self.indicator_masks[0].shape[0]) if self.indicator_masks else 0
+        if not self.family:
+            return np.zeros((n_rows, 0), dtype=bool)
+        matrix = np.empty((n_rows, len(self.family)), dtype=bool)
+        for position, (indices, operator) in enumerate(self.family):
+            matrix[:, position] = _combine_indicator_masks(self.indicator_masks, indices, operator)
+        return matrix
+
+
 def _screen_signature_combinations(
     frame: pd.DataFrame,
     indicators: Sequence[dict[str, Any]],
@@ -4512,44 +5383,61 @@ def _screen_signature_combinations(
     operator: str,
     min_group_size: int,
     min_events_per_group: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+) -> _SignatureScreen:
     """Log-rank screen of every indicator combination up to max_size.
 
-    Returns the result rows, the (combo, operator) pair behind each row, and whether
-    the search stopped at the tested-combination cap.
+    Each indicator is evaluated once and combinations are built from those masks. The search
+    stops (``truncated``) when the size-feasible family reaches the tested-combination cap or
+    when the number of evaluated combinations reaches the evaluation cap; both counts depend
+    on the covariates only. Rows are the size-feasible combinations that also meet the event
+    rule on the observed outcome.
     """
     n_obs = int(frame.shape[0])
     times = frame[time_column].to_numpy(dtype=float)
     events = frame[event_column].to_numpy(dtype=int)
+    indicator_masks = [
+        _evaluate_indicator(frame, indicator).fillna(False).to_numpy(dtype=bool) for indicator in indicators
+    ]
     rows: list[dict[str, Any]] = []
     valid_combinations: list[dict[str, Any]] = []
+    family: list[tuple[tuple[int, ...], str]] = []
+    evaluated = 0
+
+    def _result(truncated: bool) -> _SignatureScreen:
+        return _SignatureScreen(rows, valid_combinations, truncated, indicator_masks, family, evaluated)
+
     for size in range(1, max_size + 1):
         # A single rule reads the same under AND and OR, so mixed mode tests it once.
         operator_list = ["AND"] if size == 1 and operator == "mixed" else _SIGNATURE_OPERATORS[operator]
-        for combo in itertools.combinations(indicators, size):
+        for combo_index in itertools.combinations(range(len(indicators)), size):
             raise_if_cancelled()
-            if len(rows) >= _SIGNATURE_MAX_TESTED_COMBINATIONS:
-                return rows, valid_combinations, True
+            combo = tuple(indicators[index] for index in combo_index)
             if len({part["column"] for part in combo}) != len(combo):
                 continue
             for combo_operator in operator_list:
-                if len(rows) >= _SIGNATURE_MAX_TESTED_COMBINATIONS:
-                    return rows, valid_combinations, True
-                mask = _signature_mask(frame, combo, operator=combo_operator)
+                if len(family) >= _SIGNATURE_MAX_TESTED_COMBINATIONS or evaluated >= _SIGNATURE_MAX_EVALUATED_COMBINATIONS:
+                    return _result(True)
+                evaluated += 1
+                mask = _combine_indicator_masks(indicator_masks, combo_index, combo_operator)
                 n_high = int(mask.sum())
                 if n_high < min_group_size or n_obs - n_high < min_group_size:
                     continue
+                family.append((tuple(combo_index), combo_operator))
                 if events[mask].sum() < min_events_per_group or events[~mask].sum() < min_events_per_group:
                     continue
                 try:
                     chisq, p_value = survdiff(times, events, np.where(mask, "Signature+", "Signature-"))
                 except MemoryError:
                     raise
-                except Exception:
+                except Exception as exc:
+                    if must_propagate(exc):
+                        raise
                     continue
-                valid_combinations.append({"combo": combo, "operator": combo_operator})
+                valid_combinations.append(
+                    {"combo": combo, "operator": combo_operator, "indicator_indices": tuple(combo_index)}
+                )
                 rows.append(_signature_result_row(combo, combo_operator, mask, times, events, chisq, p_value))
-    return rows, valid_combinations, False
+    return _result(False)
 
 
 def _signature_metric_candidates(
@@ -4557,11 +5445,13 @@ def _signature_metric_candidates(
     *,
     top_k: int,
     significance_level: float,
-) -> list[int]:
-    """Rows that get the expensive robustness metrics.
+) -> tuple[list[int], list[int]]:
+    """Rows that get the expensive robustness metrics, in primary rank order.
 
-    These are (a) the output candidates and (b) any combination that could plausibly
-    meet the configured significance rules.
+    ``always`` is the top of the ranking by (BH p, p, -chi-square), which holds the output
+    candidates. ``conditional`` holds the further rows that pass the BH threshold, the only
+    other rows that can be significant; they are checked lazily, in rank order, until enough
+    significant signatures are found or a cap is reached.
     """
     primary_ranked_idx = sorted(
         range(len(rows)),
@@ -4571,20 +5461,21 @@ def _signature_metric_candidates(
             -float(rows[idx]["Chi-square"]),
         ),
     )
-    candidates: set[int] = set(primary_ranked_idx[: min(len(primary_ranked_idx), max(80, top_k * 4))])
-    candidates.update(
-        idx for idx, row in enumerate(rows)
-        if float(row.get("BH adjusted p", 1.0)) <= float(significance_level)
-        or float(row.get("P value", 1.0)) <= float(significance_level)
-    )
-    return sorted(candidates)
+    n_always = min(len(primary_ranked_idx), max(80, top_k * 4))
+    always = primary_ranked_idx[:n_always]
+    conditional = [
+        idx
+        for idx in primary_ranked_idx[n_always:]
+        if float(rows[idx].get("BH adjusted p", 1.0)) <= float(significance_level)
+    ]
+    return always, conditional
 
 
 def _add_signature_robustness_metrics(
     frame: pd.DataFrame,
     rows: list[dict[str, Any]],
     valid_combinations: Sequence[dict[str, Any]],
-    metric_candidates: Sequence[int],
+    metric_candidates: tuple[Sequence[int], Sequence[int]] | Sequence[int],
     *,
     time_column: str,
     event_column: str,
@@ -4597,53 +5488,36 @@ def _add_signature_robustness_metrics(
     validation_fraction: float,
     significance_level: float,
     random_seed: int,
-) -> None:
-    """Fill in the Cox, bootstrap, permutation, and validation metrics of the screened rows."""
+    family_masks: np.ndarray | None = None,
+    top_k: int | None = None,
+    indicator_masks: Sequence[np.ndarray] | None = None,
+) -> dict[str, int]:
+    """Fill in the Cox, bootstrap, permutation, and validation metrics of the screened rows.
+
+    Permutation p-values are computed for every row against ``family_masks`` (all
+    size-feasible combinations). The other metrics are computed for the ``always`` rows and
+    then, lazily and in rank order, for the ``conditional`` rows until ``top_k`` significant
+    signatures are known or ``_SIGNATURE_MAX_EXTRA_ROBUSTNESS_ROWS`` extra rows were scored.
+    ``indicator_masks`` (from the screen) rebuild each row's mask without re-evaluating
+    its rules on the frame. Returns how many rows were scored and how many BH-passing rows
+    were left unscored.
+    """
     times = frame[time_column].to_numpy(dtype=float)
     events = frame[event_column].to_numpy(dtype=int)
-
-    for idx in metric_candidates:
-        combo = valid_combinations[idx]
-        mask = _signature_mask(frame, combo["combo"], operator=combo["operator"])
-        try:
-            rows[idx].update(_signature_cox_metrics(times, events, mask))
-        except MemoryError:
-            raise
-        except Exception as exc:
-            warnings.warn(
-                f"Skipping Cox robustness metrics for signature row {idx} due to: {exc}",
-                RuntimeWarning,
-            )
-            continue
-
-    if bootstrap_iterations > 0:
-        for idx in metric_candidates:
-            bootstrap_metrics = _bootstrap_signature_metrics(
-                frame=frame,
-                time_column=time_column,
-                event_column=event_column,
-                combo=valid_combinations[idx]["combo"],
-                combo_operator=valid_combinations[idx]["operator"],
-                min_group_size=min_group_size,
-                n_iterations=bootstrap_iterations,
-                sample_fraction=bootstrap_sample_fraction,
-                random_seed=random_seed + 1000 + idx,
-                significance_level=significance_level,
-                observed_hazard_ratio=_safe_float(rows[idx].get("Hazard ratio (signature+ vs -)")),
-            )
-            rows[idx].update(bootstrap_metrics)
+    if isinstance(metric_candidates, tuple) and len(metric_candidates) == 2 and not isinstance(metric_candidates[0], int):
+        always, conditional = list(metric_candidates[0]), list(metric_candidates[1])
+    else:
+        always, conditional = list(metric_candidates), []
 
     if permutation_iterations > 0:
-        all_masks = np.column_stack(
-            [
-                _signature_mask(frame, combo["combo"], operator=combo["operator"])
-                for combo in valid_combinations
-            ]
-        )
+        if family_masks is None:
+            family_masks = np.column_stack(
+                [_signature_mask(frame, combo["combo"], operator=combo["operator"]) for combo in valid_combinations]
+            )
         adjusted_perm_p, valid_perm = _search_adjusted_permutation_p_values(
             times,
             events,
-            all_masks,
+            family_masks,
             np.asarray([float(row["Chi-square"]) for row in rows], dtype=float),
             min_events_per_group=min_events_per_group,
             n_iterations=permutation_iterations,
@@ -4654,26 +5528,8 @@ def _add_signature_robustness_metrics(
             row["Permutation valid resamples"] = int(valid_perm)
             row["Permutation skipped resamples"] = max(0, int(permutation_iterations) - int(valid_perm))
 
-    if validation_iterations > 0:
-        for idx in metric_candidates:
-            validation_metrics = _validation_signature_metrics(
-                frame=frame,
-                time_column=time_column,
-                event_column=event_column,
-                combo=valid_combinations[idx]["combo"],
-                combo_operator=valid_combinations[idx]["operator"],
-                min_group_size=min_group_size,
-                min_events_per_group=min_events_per_group,
-                n_iterations=validation_iterations,
-                validation_fraction=validation_fraction,
-                significance_level=significance_level,
-                random_seed=random_seed + 3000 + idx,
-            )
-            rows[idx].update(validation_metrics)
-
-    for row in rows:
-        row["Stability score"] = _stability_score(row)
-        row["Statistically significant"] = _signature_is_significant(
+    def _is_significant(row: dict[str, Any]) -> bool:
+        return _signature_is_significant(
             row,
             significance_level=significance_level,
             require_permutation=permutation_iterations > 0,
@@ -4682,6 +5538,78 @@ def _add_signature_robustness_metrics(
             require_bootstrap_consistency=bootstrap_iterations > 0,
             min_bootstrap_consistency=0.6,
         )
+
+    def _score(idx: int) -> None:
+        combo = valid_combinations[idx]
+        if indicator_masks is not None and combo.get("indicator_indices") is not None:
+            mask = _combine_indicator_masks(indicator_masks, combo["indicator_indices"], combo["operator"])
+        else:
+            mask = _signature_mask(frame, combo["combo"], operator=combo["operator"])
+        try:
+            rows[idx].update(_signature_cox_metrics(times, events, mask, alpha=significance_level))
+        except MemoryError:
+            raise
+        except Exception as exc:
+            if must_propagate(exc):
+                raise
+            warnings.warn(
+                f"Skipping Cox robustness metrics for signature row {idx} due to: {exc}",
+                RuntimeWarning,
+            )
+        if bootstrap_iterations > 0:
+            rows[idx].update(
+                _bootstrap_signature_metrics(
+                    frame=frame,
+                    time_column=time_column,
+                    event_column=event_column,
+                    combo=combo["combo"],
+                    combo_operator=combo["operator"],
+                    min_group_size=min_group_size,
+                    n_iterations=bootstrap_iterations,
+                    sample_fraction=bootstrap_sample_fraction,
+                    random_seed=random_seed + 1000 + idx,
+                    significance_level=significance_level,
+                    observed_hazard_ratio=_safe_float(rows[idx].get("Hazard ratio (signature+ vs -)")),
+                    min_events_per_group=min_events_per_group,
+                )
+            )
+        if validation_iterations > 0:
+            rows[idx].update(
+                _validation_signature_metrics(
+                    frame=frame,
+                    time_column=time_column,
+                    event_column=event_column,
+                    combo=combo["combo"],
+                    combo_operator=combo["operator"],
+                    min_group_size=min_group_size,
+                    min_events_per_group=min_events_per_group,
+                    n_iterations=validation_iterations,
+                    validation_fraction=validation_fraction,
+                    significance_level=significance_level,
+                    random_seed=random_seed + 3000 + idx,
+                )
+            )
+
+    for idx in always:
+        _score(idx)
+    significant_found = sum(1 for idx in always if _is_significant(rows[idx]))
+    wanted = int(top_k) if top_k is not None else len(rows)
+    extra_scored = 0
+    for idx in conditional:
+        if significant_found >= wanted or extra_scored >= _SIGNATURE_MAX_EXTRA_ROBUSTNESS_ROWS:
+            break
+        _score(idx)
+        extra_scored += 1
+        if _is_significant(rows[idx]):
+            significant_found += 1
+
+    for row in rows:
+        row["Stability score"] = _stability_score(row, significance_level)
+        row["Statistically significant"] = _is_significant(row)
+    return {
+        "robustness_evaluated_signatures": len(always) + extra_scored,
+        "robustness_unevaluated_signatures": len(conditional) - extra_scored,
+    }
 
 
 def _apply_signature_column(
@@ -4752,12 +5680,19 @@ def discover_feature_signature(
     n_obs = int(frame.shape[0])
     min_group_size = max(8, int(math.ceil(n_obs * min_group_fraction)))
     min_events_per_group = max(3, int(math.ceil(n_obs * 0.03)))
-    indicators = _build_candidate_indicators(frame, unique_candidates, min_group_size=min_group_size)
+    skipped_candidates: list[dict[str, str]] = []
+    indicators = _build_candidate_indicators(
+        frame, unique_candidates, min_group_size=min_group_size, skipped=skipped_candidates
+    )
     if not indicators:
-        raise ValueError("No valid binary indicators could be generated from the selected features.")
+        reasons = "; ".join(f"{item['column']}: {item['reason']}" for item in skipped_candidates[:5])
+        raise ValueError(
+            "No valid binary indicators could be generated from the selected features"
+            + (f" ({reasons})." if reasons else ".")
+        )
 
     max_size = min(max_combination_size, len(indicators))
-    rows, valid_combinations, truncated = _screen_signature_combinations(
+    screen = _screen_signature_combinations(
         frame,
         indicators,
         time_column=time_column,
@@ -4767,6 +5702,7 @@ def discover_feature_signature(
         min_group_size=min_group_size,
         min_events_per_group=min_events_per_group,
     )
+    rows, valid_combinations, truncated = screen.rows, screen.combinations, screen.truncated
     if not rows:
         raise ValueError("No analyzable feature combinations passed minimum group/event requirements.")
 
@@ -4774,7 +5710,7 @@ def discover_feature_signature(
     for row, adj in zip(rows, adjusted, strict=True):
         row["BH adjusted p"] = adj
 
-    _add_signature_robustness_metrics(
+    robustness_counts = _add_signature_robustness_metrics(
         frame,
         rows,
         valid_combinations,
@@ -4790,6 +5726,11 @@ def discover_feature_signature(
         validation_fraction=validation_fraction,
         significance_level=significance_level,
         random_seed=random_seed,
+        # The permutation null family is every size-feasible combination, materialized only
+        # when permutations were requested.
+        family_masks=screen.family_matrix() if permutation_iterations > 0 else None,
+        top_k=top_k,
+        indicator_masks=screen.indicator_masks,
     )
 
     ranked_idx = sorted(
@@ -4817,8 +5758,15 @@ def discover_feature_signature(
         "n_rows_analyzed": n_obs,
         "row_mask_hash": str(frame.attrs.get("row_mask_hash") or ""),
         "candidate_columns": unique_candidates,
+        "skipped_candidates": skipped_candidates,
         "generated_indicators": int(len(indicators)),
         "tested_combinations": int(len(rows)),
+        "evaluated_combinations": int(screen.evaluated_combinations),
+        "size_feasible_combinations": int(len(screen.family)),
+        "permutation_family_size": int(len(screen.family)) if permutation_iterations > 0 else None,
+        "robustness_evaluated_signatures": int(robustness_counts["robustness_evaluated_signatures"]),
+        "robustness_unevaluated_signatures": int(robustness_counts["robustness_unevaluated_signatures"]),
+        "time_column_note": frame.attrs.get("time_column_note"),
         "truncated": truncated,
         "min_group_size": int(min_group_size),
         "min_events_per_group": int(min_events_per_group),
@@ -4865,6 +5813,9 @@ def discover_feature_signature(
         "operator": str(valid_combinations[best_idx]["operator"]),
         "features": list(best_row.get("Features", [])),
         "signature": str(best_row.get("Signature", "")),
+        # The exact rule definitions (full-precision thresholds), so the locked signature can
+        # be re-applied; the "signature" text rounds thresholds for display.
+        "rules": [_indicator_definition(indicator) for indicator in valid_combinations[best_idx]["combo"]],
         "positive_label": "Signature+",
         "negative_label": "Signature-",
         "statistically_significant": bool(best_row.get("Statistically significant")),
@@ -5016,21 +5967,29 @@ def _km_group_tests(
     """The global weighted log-rank test plus BH-adjusted pairwise tests."""
     time_values = frame[time_column].to_numpy(dtype=float)
     event_values = frame[event_column].to_numpy(dtype=int)
+    group_values = frame[group_column].astype(str).to_numpy()
     weight_type = KM_WEIGHT_MAP[logrank_weight]
     kwargs: dict[str, Any] = {"fh_p": fh_p} if weight_type == "fh" else {}
 
     def _weighted_test(mask: np.ndarray | None) -> tuple[float, float]:
-        rows = slice(None) if mask is None else mask
+        rows = np.ones(time_values.shape[0], dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
+        times, events, groups = time_values[rows], event_values[rows], group_values[rows]
+        # As R's survdiff does, groups with no one at risk at any event time (zero expected
+        # events) are left out of the test; with fewer than two groups left the statistic is 0.
+        event_times = times[events == 1]
+        if event_times.size == 0:
+            return 0.0, 1.0
+        first_event_time = float(event_times.min())
+        at_risk_groups = {str(label) for label in groups[times >= first_event_time]}
+        if len(at_risk_groups) < 2:
+            return 0.0, 1.0
+        if len(at_risk_groups) < len(set(groups.tolist())):
+            keep = np.isin(groups, sorted(at_risk_groups))
+            times, events, groups = times[keep], events[keep], groups[keep]
         # Fleming-Harrington weights take log(1 - d/n); when everyone still at risk has the
         # event that is log(0) = -inf, so S is 0 from then on, as intended.
         with np.errstate(divide="ignore"):
-            return survdiff(
-                time_values[rows],
-                event_values[rows],
-                frame.loc[rows, group_column].astype(str).to_numpy(),
-                weight_type=weight_type,
-                **kwargs,
-            )
+            return survdiff(times, events, groups, weight_type=weight_type, **kwargs)
 
     chisq, p_value = _weighted_test(None)
     test_payload = {
@@ -5065,6 +6024,7 @@ def _km_cohort_summary(frame: pd.DataFrame, *, time_column: str, event_column: s
         "dropped_missing_rows": int(frame.attrs.get("dropped_missing_rows", 0)),
         "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
         "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_values", 0)),
+        "time_column_note": frame.attrs.get("time_column_note"),
     }
 
 
@@ -5078,8 +6038,9 @@ def _km_rmst_contrast(
 ) -> dict[str, Any] | None:
     """Two-group RMST difference with a delta-method CI and Wald test (None otherwise).
 
-    The Wald test is withheld for outcome-informed groups, whose split was chosen on the
-    same outcome.
+    For outcome-informed groups, whose split was chosen on the same outcome, only the point
+    estimate is kept: the standard error, confidence interval, and Wald test would all treat
+    the selected split as if it had been fixed in advance.
     """
     if len(summary_rows) != 2 or len(rmst_stats_by_group) != 2:
         return None
@@ -5121,9 +6082,13 @@ def _km_rmst_contrast(
         rmst_contrast["ci_lower"] = _safe_float(estimate - z_value * se)
         rmst_contrast["ci_upper"] = _safe_float(estimate + z_value * se)
     if outcome_informed_group:
+        rmst_contrast["se"] = None
         rmst_contrast["z_statistic"] = None
         rmst_contrast["p_value"] = None
         rmst_contrast["p_value_method"] = None
+        rmst_contrast["ci_lower"] = None
+        rmst_contrast["ci_upper"] = None
+        rmst_contrast["inference_withheld"] = "outcome_informed_group"
     return rmst_contrast
 
 
@@ -5144,8 +6109,8 @@ def compute_km_analysis(
 ) -> dict[str, Any]:
     if not (0.0 < float(confidence_level) < 1.0):
         raise ValueError("confidence_level must be between 0 and 1.")
-    if max_time is not None and float(max_time) <= 0.0:
-        raise ValueError("max_time must be positive when provided.")
+    if max_time is not None and not (math.isfinite(float(max_time)) and float(max_time) > 0.0):
+        raise ValueError("max_time must be positive and finite when provided.")
     if int(risk_table_points) < 1:
         raise ValueError("risk_table_points must be at least 1.")
     if logrank_weight not in KM_WEIGHT_MAP:
@@ -5215,6 +6180,9 @@ def compute_km_analysis(
         curve_payloads.append(curve)
         rmst_stats_by_group.append(rmst_stats)
 
+    # A split chosen on the same outcome makes a fresh log-rank p-value invalid, so the test is
+    # never run for outcome-informed groups, whatever suppress_group_inference says.
+    suppress_group_inference = bool(suppress_group_inference or outcome_informed_group)
     test_payload = None
     pairwise_rows: list[dict[str, Any]] = []
     if group_column and len(group_labels) >= 2 and not suppress_group_inference:
@@ -5313,7 +6281,32 @@ def _resolve_cox_categorical_covariates(
     present = [column for column in covariates if column in df.columns]
     reject_numeric_text_features(df, present)
     explicit = list(dict.fromkeys(categorical_covariates or []))
+    covariate_set = set(covariates)
+    unselected = [str(column) for column in explicit if column not in covariate_set]
+    if unselected:
+        raise ValueError(
+            "Categorical covariates must also be selected as covariates: "
+            + ", ".join(unselected)
+            + ". Select them as covariates or remove the categorical flag."
+        )
     return explicit + [column for column in _categorical_candidates(df, present) if column not in explicit]
+
+
+def _cox_categorical(values: pd.Series, column: str) -> pd.Categorical:
+    """Categorical covariate whose first category is the Cox reference level.
+
+    Numeric-coded levels (60, 70, ..., 100) are ordered numerically, so the reference is the
+    smallest value rather than the lexicographically first label ("100").
+    """
+    string_values = values.astype("string")
+    categories = _ordered_unique_level_strings(string_values, column)
+    return pd.Categorical(string_values, categories=categories)
+
+
+def _as_float_covariate(values: pd.Series) -> pd.Series:
+    """A numeric covariate as float64; nullable Int64/Float64/boolean NA becomes NaN."""
+    numeric = pd.to_numeric(values, errors="coerce")
+    return pd.Series(numeric.to_numpy(dtype=float, na_value=np.nan), index=values.index)
 
 
 def _prepare_cox_frame(
@@ -5339,11 +6332,9 @@ def _prepare_cox_frame(
     source_row_index = _frame_source_row_index(frame)
     for column in covariates:
         if column in categorical_covariates:
-            string_values = frame[column].astype("string")
-            categories = _ordered_reference_categories(string_values.dropna().unique().tolist(), column)
-            frame[column] = pd.Categorical(string_values, categories=categories)
+            frame[column] = _cox_categorical(frame[column], column)
         else:
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+            frame[column] = _as_float_covariate(frame[column])
     frame = frame.replace([np.inf, -np.inf], np.nan)
     if drop_missing_covariates:
         base_attrs = dict(frame.attrs)
@@ -5411,6 +6402,41 @@ def _build_cox_formula(time_column: str, covariates: Sequence[str], categorical_
     return f"{quote_name(time_column)} ~ {' + '.join(terms)}"
 
 
+def _is_formula_safe_name(name: str) -> bool:
+    """A column name that round-trips through a patsy ``Q("...")`` term unchanged."""
+    text = str(name)
+    return '"' not in text and "\\" not in text and text.isprintable()
+
+
+def _cox_model_frame(
+    frame: pd.DataFrame,
+    time_column: str,
+    covariates: Sequence[str],
+    categorical_covariates: Sequence[str],
+) -> tuple[pd.DataFrame, str, dict[str, str]]:
+    """The data, formula, and alias map the Cox model is fitted on.
+
+    Plain names are used as they are. When a name holds a quote, a backslash, or a line
+    break (which the formula parser mangles or rejects), every term is fitted on a
+    formula-safe alias and ``column_by_alias`` maps the fitted terms back to the column names.
+    """
+    names = [time_column, *covariates]
+    if all(_is_formula_safe_name(name) for name in names):
+        return frame, _build_cox_formula(time_column, covariates, categorical_covariates), {}
+    alias_by_column = {column: f"__cox_term_{index}" for index, column in enumerate(covariates)}
+    time_alias = "__cox_time"
+    model_frame = pd.DataFrame({time_alias: frame[time_column]}, index=frame.index)
+    for column, alias in alias_by_column.items():
+        model_frame[alias] = frame[column]
+    categorical_set = set(categorical_covariates)
+    fit_formula = _build_cox_formula(
+        time_alias,
+        [alias_by_column[column] for column in covariates],
+        [alias_by_column[column] for column in covariates if column in categorical_set],
+    )
+    return model_frame, fit_formula, {alias: str(column) for column, alias in alias_by_column.items()}
+
+
 def _cox_design_condition_number(exog: Any) -> float | None:
     try:
         design = np.asarray(exog, dtype=float)
@@ -5471,6 +6497,12 @@ def _stage_level_key(value: Any) -> tuple[int, int, str] | None:
     return (0, stage_index, normalized)
 
 
+_NEGATED_MUTATION_LEVEL_PATTERN = re.compile(r"^(?:non|not|no|un)\s?(?:mutated|mutant|mutation)")
+_NEGATED_FINDING_LEVEL_PATTERN = re.compile(
+    r"^(?:non|not|no|un)\s?(?:detected|detectable|expressed|expression|methylated|amplified|amplification|altered)"
+)
+
+
 def _category_reference_sort_key(column: str, value: Any) -> tuple[Any, ...]:
     normalized, compact = _normalize_category_text(value)
     column_text, column_compact = _normalize_category_text(column)
@@ -5491,6 +6523,12 @@ def _category_reference_sort_key(column: str, value: Any) -> tuple[Any, ...]:
     if stage_key is not None:
         return (1, *stage_key)
 
+    # Negated labels are checked first: "Non-mutated" contains "mutated" but is the wild-type
+    # reference, and "Not detected" is the negative level.
+    if _NEGATED_MUTATION_LEVEL_PATTERN.match(normalized):
+        return (2, 0, normalized)
+    if _NEGATED_FINDING_LEVEL_PATTERN.match(normalized):
+        return (3, 0, normalized)
     if "wildtype" in compact or "wt" == compact:
         return (2, 0, normalized)
     if "mutated" in normalized or "mutant" in normalized:
@@ -5524,17 +6562,27 @@ def _reference_levels(frame: pd.DataFrame, categorical_covariates: Sequence[str]
     return output
 
 
-def _clean_term(term: str, reference_levels: dict[str, str]) -> tuple[str, str, str | None]:
+def _clean_term(
+    term: str,
+    reference_levels: dict[str, str],
+    column_by_alias: dict[str, str] | None = None,
+) -> tuple[str, str, str | None]:
+    """Variable, display label, and reference level of a fitted design term.
+
+    ``column_by_alias`` maps the formula-safe aliases the model was fitted on back to the
+    column names, so names with quotes, backslashes, or line breaks display as written.
+    """
+    aliases = column_by_alias or {}
     categorical_match = TERM_CATEGORICAL_PATTERN.match(term)
     if categorical_match:
-        variable = categorical_match.group("var")
+        variable = aliases.get(categorical_match.group("var"), categorical_match.group("var"))
         level = categorical_match.group("level")
         reference = reference_levels.get(variable)
         label = f"{variable}: {level} vs {reference}" if reference else f"{variable}: {level}"
         return variable, label, reference
     numeric_match = TERM_NUMERIC_PATTERN.match(term)
     if numeric_match:
-        variable = numeric_match.group("var")
+        variable = aliases.get(numeric_match.group("var"), numeric_match.group("var"))
         return variable, variable, None
     return term, term, None
 
@@ -5682,6 +6730,7 @@ def _cox_coefficient_rows(
     results: Any,
     reference_levels: dict[str, str],
     stability_snapshot: dict[str, Any],
+    column_by_alias: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], np.ndarray, float]:
     """Hazard-ratio table rows, fitted risk scores, and the partial log-likelihood.
 
@@ -5700,7 +6749,7 @@ def _cox_coefficient_rows(
 
     model_rows: list[dict[str, Any]] = []
     for idx, term in enumerate(results.model.exog_names):
-        variable, label, reference = _clean_term(term, reference_levels)
+        variable, label, reference = _clean_term(term, reference_levels, column_by_alias)
         beta = float(param_vector[idx])
         model_rows.append(
             {
@@ -5728,6 +6777,7 @@ def _cox_ph_diagnostics(
     strata_codes: np.ndarray | None,
     reference_levels: dict[str, str],
     stability_snapshot: dict[str, Any],
+    column_by_alias: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Grambsch-Therneau PH tests (per term and global) and scaled Schoenfeld residual panels."""
     raw_times = frame[time_column].to_numpy(dtype=float)
@@ -5755,7 +6805,7 @@ def _cox_ph_diagnostics(
         rho = ph_test["term_rho"][idx] if idx < len(ph_test["term_rho"]) else None
         chi_square = ph_test["term_statistics"][idx] if idx < len(ph_test["term_statistics"]) else None
         p_value = ph_test["term_p_values"][idx] if idx < len(ph_test["term_p_values"]) else None
-        _, label, _ = _clean_term(term, reference_levels)
+        _, label, _ = _clean_term(term, reference_levels, column_by_alias)
         diagnostic_rows.append(
             {
                 "Term": label,
@@ -5812,7 +6862,7 @@ def _cox_martingale_screen(
         for covariate in covariates
         if covariate not in categorical_names
         and covariate in frame.columns
-        and pd.api.types.is_numeric_dtype(frame[covariate])
+        and _is_martingale_screen_candidate(frame[covariate])
     ]
     martingale_residuals = _efron_martingale_residuals(
         np.asarray(results.model.exog, dtype=float),
@@ -5908,6 +6958,7 @@ def compute_cox_analysis(
     strata_columns: Sequence[str] | None = None,
     event_positive_value: Any = None,
 ) -> dict[str, Any]:
+    covariates = list(dict.fromkeys(covariates))
     _validate_cox_covariates(covariates)
     categorical_covariates = _resolve_cox_categorical_covariates(df, covariates, categorical_covariates)
     strata_columns = _normalize_cox_strata_columns(strata_columns, covariates, categorical_covariates)
@@ -5923,9 +6974,7 @@ def compute_cox_analysis(
     )
     frame = _cox_complete_case_frame(preview_frame, [*covariates, *strata_columns])
     for column in categorical_covariates:
-        string_values = frame[column].astype("string")
-        categories = _ordered_reference_categories(string_values.dropna().unique().tolist(), column)
-        frame[column] = pd.Categorical(string_values, categories=categories)
+        frame[column] = _cox_categorical(frame[column], column)
     formula = _build_cox_formula(time_column, covariates, categorical_covariates)
     status = frame[event_column].astype(int).to_numpy()
     strata_payload = _build_cox_strata_payload(frame, strata_columns)
@@ -5940,12 +6989,14 @@ def compute_cox_analysis(
     constant_design_message = _cox_constant_design_message(stability_snapshot)
     if constant_design_message:
         raise ValueError(constant_design_message)
-    model = PHReg.from_formula(formula, data=frame, status=status, strata=strata_payload["codes"], ties="efron")
+    _reject_oversized_cox_design(stability_snapshot)
+    model_frame, fit_formula, column_by_alias = _cox_model_frame(frame, time_column, covariates, categorical_covariates)
+    model = PHReg.from_formula(fit_formula, data=model_frame, status=status, strata=strata_payload["codes"], ties="efron")
     design_condition_number = _cox_design_condition_number(getattr(model, "exog", None))
     results = _fit_cox_model(model, stability_snapshot)
 
     reference_levels = _reference_levels(frame, categorical_covariates)
-    model_rows, risk_score, llf_value = _cox_coefficient_rows(results, reference_levels, stability_snapshot)
+    model_rows, risk_score, llf_value = _cox_coefficient_rows(results, reference_levels, stability_snapshot, column_by_alias)
     diagnostic_rows, diagnostic_plot_data, global_ph_screen = _cox_ph_diagnostics(
         results,
         frame,
@@ -5954,6 +7005,7 @@ def compute_cox_analysis(
         strata_codes=strata_payload["codes"],
         reference_levels=reference_levels,
         stability_snapshot=stability_snapshot,
+        column_by_alias=column_by_alias,
     )
     martingale_plot_data, martingale_note = _cox_martingale_screen(
         results,
@@ -5986,7 +7038,11 @@ def compute_cox_analysis(
         "row_mask_hash": str(frame.attrs.get("row_mask_hash") or ""),
         "outcome_row_mask_hash": str(preview_frame.attrs.get("row_mask_hash") or ""),
         "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
-        "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_values", 0)),
+        # Outcome-valid rows whose selected covariates or strata held +/-Inf (coerced to missing
+        # before complete-case filtering); rows with +/-Inf time never became outcome-valid.
+        "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_extra_values", 0)),
+        "rows_with_infinite_outcome_values": int(frame.attrs.get("rows_with_infinite_outcome", 0)),
+        "time_column_note": frame.attrs.get("time_column_note"),
         "events": n_events,
         "parameters": k_params,
         "events_per_parameter": float(n_events / k_params) if k_params else None,
@@ -6060,6 +7116,7 @@ def preview_cox_analysis_inputs(
 ) -> dict[str, Any]:
     if not covariates:
         raise ValueError("Select at least one covariate for the Cox model.")
+    covariates = list(dict.fromkeys(covariates))
     _validate_cox_covariates(covariates)
     categorical_covariates = _resolve_cox_categorical_covariates(df, covariates, categorical_covariates)
     strata_columns = _normalize_cox_strata_columns(strata_columns, covariates, categorical_covariates)
@@ -6080,6 +7137,10 @@ def preview_cox_analysis_inputs(
         if missing_count > 0:
             missing_by_covariate.append({"column": column, "missing_rows": missing_count})
     complete_case = _cox_complete_case_frame(preview_frame, input_columns)
+    # Levels are rebuilt on the complete-case rows, as the fit does, so the preview names the
+    # reference level the fit will use instead of a level whose rows were all dropped.
+    for column in categorical_covariates:
+        complete_case[column] = _cox_categorical(complete_case[column], column)
     strata_payload = _build_cox_strata_payload(complete_case, strata_columns)
     stability_snapshot = _cox_stability_snapshot(
         complete_case,
@@ -6114,7 +7175,7 @@ def preview_cox_analysis_inputs(
 
 @user_input_boundary
 def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_column: str | None = None) -> dict[str, Any]:
-    variables = [variable for variable in variables if variable != group_column]
+    variables = list(dict.fromkeys(variable for variable in variables if variable != group_column))
     if not variables:
         raise ValueError("Select at least one variable for the cohort summary table.")
     overall_label = "Overall (grouped subset)" if group_column else "Overall"
@@ -6124,17 +7185,21 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
     _require_dataframe_columns(df, columns)
     frame = df[columns].copy()
 
-    group_frames: OrderedDict[str, pd.DataFrame] = OrderedDict()
+    # Groups are row masks over one frame, so every variable is canonicalized once over the
+    # whole cohort and the per-group counts slice the same labels (a group whose values happen
+    # to be integer-valued must still match the "1.0" level of the cohort).
+    group_masks: OrderedDict[str, np.ndarray] = OrderedDict()
     if group_column:
         string_group = _canonical_level_strings(frame[group_column])
-        frame = frame.loc[string_group.notna()].copy()
-        string_group = _canonical_level_strings(frame[group_column])
-        group_frames[overall_label] = frame
+        keep = string_group.notna().to_numpy(dtype=bool)
+        frame = frame.loc[keep].copy()
+        string_group = string_group[keep]
+        group_masks[overall_label] = np.ones(len(frame), dtype=bool)
         group_labels = _sorted_group_labels(string_group, group_column)
         for label in group_labels:
-            group_frames[label] = frame.loc[string_group == label]
+            group_masks[label] = (string_group == label).to_numpy(dtype=bool, na_value=False)
     else:
-        group_frames[overall_label] = frame
+        group_masks[overall_label] = np.ones(len(frame), dtype=bool)
         group_labels = []
 
     rows: list[dict[str, Any]] = []
@@ -6142,7 +7207,7 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
         {
             "Variable": "Cohort size",
             "Statistic": "N",
-            **{label: int(group_frame.shape[0]) for label, group_frame in group_frames.items()},
+            **{label: int(mask.sum()) for label, mask in group_masks.items()},
         }
     )
 
@@ -6150,10 +7215,15 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
         series = frame[variable]
         is_boolean = is_bool_dtype(series)
         is_binary_numeric = (not is_boolean) and is_numeric_dtype(series) and _is_binary_numeric_series(series)
+        missing_row = {
+            "Variable": variable,
+            "Statistic": "Missing",
+            **{label: int(series[mask].isna().sum()) for label, mask in group_masks.items()},
+        }
         if is_numeric_dtype(series) and not is_binary_numeric and not is_boolean:
             row = {"Variable": variable, "Statistic": "Mean ± SD | Median [IQR]"}
-            for label, group_frame in group_frames.items():
-                values = pd.to_numeric(group_frame[variable], errors="coerce").dropna()
+            for label, mask in group_masks.items():
+                values = pd.to_numeric(series[mask], errors="coerce").dropna()
                 if values.empty:
                     row[label] = "NA"
                     continue
@@ -6165,38 +7235,20 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
                     f"{values.median():.2f} [{values.quantile(0.25):.2f}, {values.quantile(0.75):.2f}]"
                 )
             rows.append(row)
-            rows.append(
-                {
-                    "Variable": variable,
-                    "Statistic": "Missing",
-                    **{
-                        label: int(group_frame[variable].isna().sum())
-                        for label, group_frame in group_frames.items()
-                    },
-                }
-            )
+            rows.append(missing_row)
             continue
 
         source_series = _canonical_level_strings(series)
         levels = _ordered_level_strings(source_series, variable)
         for level in levels:
             row = {"Variable": variable, "Statistic": str(level)}
-            for label, group_frame in group_frames.items():
-                group_values = _canonical_level_strings(group_frame[variable])
+            for label, mask in group_masks.items():
+                group_values = source_series[mask]
                 denominator = int(group_values.notna().sum())
                 numerator = int((group_values == level).sum())
                 row[label] = f"{numerator} ({100.0 * numerator / denominator:.1f}%)" if denominator else f"{numerator} (NA)"
             rows.append(row)
-        rows.append(
-            {
-                "Variable": variable,
-                "Statistic": "Missing",
-                **{
-                    label: int(group_frame[variable].isna().sum())
-                    for label, group_frame in group_frames.items()
-                },
-            }
-        )
+        rows.append(missing_row)
 
     return {
         "columns": ["Variable", "Statistic", overall_label, *group_labels],
