@@ -1415,8 +1415,11 @@ def build_marker_stability_figure(result: dict[str, Any]) -> dict[str, Any]:
     direction = float(settings.get("robust_direction", 0.9))
     fig.add_vline(x=frequency, line_dash="dash", line_color=INK, line_width=1, opacity=0.5)
     fig.add_hline(y=direction, line_dash="dash", line_color=INK, line_width=1, opacity=0.5)
+    rule = f"Robust: family-wise p ≤ {float(settings.get('alpha', 0.05)):g}, selected in ≥ {frequency:.0%}, same direction in ≥ {direction:.0%}"
+    if not _family_wise_computed(result):
+        rule += "<br>No permutations were run, so no marker could be robust (family-wise p-values not computed)."
     fig.add_annotation(
-        text=f"Robust: family-wise p ≤ {float(settings.get('alpha', 0.05)):g}, selected in ≥ {frequency:.0%}, same direction in ≥ {direction:.0%}",
+        text=rule,
         xref="paper",
         yref="paper",
         x=0.99,
@@ -1509,13 +1512,36 @@ def build_marker_rank_figure(result: dict[str, Any], *, top: int = 25) -> dict[s
 
 
 _FUNNEL_GREY = "rgba(148,163,184,0.75)"
+_NOT_PERMUTED = "not computed (no permutations)"
+
+
+def _family_wise_computed(result: dict[str, Any]) -> bool:
+    """Whether the run computed family-wise p-values: it ran permutations (results that do not say so, any finite
+    family-wise p-value)."""
+    n_permutations = (result.get("null") or {}).get("n_permutations")
+    if n_permutations is not None:
+        return int(n_permutations) > 0
+    primary = str(result.get("primary_lens", "marginal"))
+    return any(
+        _finite_number((row.get(primary) or {}).get("p_fwer")) for row in result.get("marker_table", []) if isinstance(row.get(primary), dict)
+    )
+
+
+def _stability_assessed(result: dict[str, Any]) -> bool:
+    """Whether any subsample was evaluated (results that do not say so are taken to have had subsamples)."""
+    resampling = result.get("resampling") or {}
+    if resampling.get("stability_assessed") is not None:
+        return bool(resampling["stability_assessed"])
+    return int(resampling.get("n_valid") or 0) > 0 if "n_valid" in resampling else True
 
 
 def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
     """How many markers clear each successively stricter bar on the primary lens.
 
     Each bar is (up to permutation noise) a subset of the one above: a BH q-value is never below its p-value,
-    and a robust marker is a family-wise rejection by definition.
+    and a robust marker is a family-wise rejection by definition. A bar the run could not compute (family-wise
+    p-values and the robust tier without permutations, the robust tier without subsamples) has no count and a
+    ``note`` saying why, so it is not read as zero markers.
     """
     primary = str(result.get("primary_lens", "marginal"))
     settings = result.get("settings") or {}
@@ -1530,6 +1556,13 @@ def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
 
     tested = int(cohort.get("n_markers_evaluated") or len(stats))
     dropped = len(cohort.get("dropped_markers") or [])
+    permuted = _family_wise_computed(result)
+    if not permuted:
+        robust_note = _NOT_PERMUTED
+    elif not _stability_assessed(result):
+        robust_note = "not assessed (no subsamples)"
+    else:
+        robust_note = None
     stages = []
     if dropped:
         stages.append({"label": "Supplied", "count": tested + dropped, "color": "rgba(148,163,184,0.35)"})
@@ -1537,8 +1570,16 @@ def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
         {"label": "Tested", "count": tested, "color": _FUNNEL_GREY},
         {"label": f"p < {alpha:g}", "count": passing("p_value", alpha, strict=True), "color": _FUNNEL_GREY},
         {"label": f"FDR q ≤ {alpha:g}", "count": passing("q_bh", alpha), "color": GOLD},
-        {"label": f"Family-wise p ≤ {alpha:g}", "count": passing("p_fwer", alpha), "color": PLUM},
-        {"label": "Robust", "count": int((result.get("tier_counts") or {}).get("robust", 0)), "color": SAGE},
+        (
+            {"label": f"Family-wise p ≤ {alpha:g}", "count": passing("p_fwer", alpha), "color": PLUM}
+            if permuted
+            else {"label": f"Family-wise p ≤ {alpha:g}", "count": None, "color": _FUNNEL_GREY, "note": _NOT_PERMUTED}
+        ),
+        (
+            {"label": "Robust", "count": int((result.get("tier_counts") or {}).get("robust", 0)), "color": SAGE}
+            if robust_note is None
+            else {"label": "Robust", "count": None, "color": _FUNNEL_GREY, "note": robust_note}
+        ),
     ]
     return stages
 
@@ -1567,16 +1608,22 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
     # which keeps zero at zero; a small panel keeps plain counts.
     stages = marker_evidence_funnel(result)
     labels = [stage["label"] for stage in stages]
-    log_scale = max(stage["count"] for stage in stages) > 50
-    lengths = [float(np.log10(stage["count"] + 1)) if log_scale else float(stage["count"]) for stage in stages]
+    counts = [stage["count"] for stage in stages]
+    # A bar that was not computed has no length and says why beside it.
+    log_scale = max((count for count in counts if count is not None), default=0) > 50
+    lengths = [0.0 if count is None else float(np.log10(count + 1)) if log_scale else float(count) for count in counts]
     fig.add_trace(
         go.Bar(
             x=lengths,
             y=labels,
             orientation="h",
             marker={"color": [stage["color"] for stage in stages], "line": {"width": 0}},
-            customdata=[f"{stage['count']:,}" for stage in stages],
-            hovertemplate="%{y}: %{customdata} markers<extra></extra>",
+            customdata=[stage.get("note") if stage["count"] is None else f"{stage['count']:,}" for stage in stages],
+            hovertemplate=(
+                "%{y}: %{customdata} markers<extra></extra>"
+                if None not in counts
+                else [f"%{{y}}: {'%{customdata}' if count is None else '%{customdata} markers'}<extra></extra>" for count in counts]
+            ),
             showlegend=False,
         ),
         row=1,
@@ -1588,9 +1635,12 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
             x=[length + 0.025 * longest for length in lengths],
             y=labels,
             mode="text",
-            text=[f"<b>{stage['count']:,}</b>" for stage in stages],
+            text=[stage.get("note") if stage["count"] is None else f"<b>{stage['count']:,}</b>" for stage in stages],
             textposition="middle right",
-            textfont={"size": 13, "color": INK},
+            textfont={
+                "size": 13,
+                "color": INK if None not in counts else [INK if count is not None else "rgba(100,116,139,0.95)" for count in counts],
+            },
             hoverinfo="skip",
             showlegend=False,
         ),

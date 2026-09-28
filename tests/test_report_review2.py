@@ -5,7 +5,12 @@ from __future__ import annotations
 
 import math
 
-from survival_toolkit.plots import build_marker_replication_figure
+from survival_toolkit.plots import (
+    build_marker_replication_figure,
+    build_marker_stability_figure,
+    build_marker_summary_figure,
+    marker_evidence_funnel,
+)
 
 
 def _fit(hazard_ratio: float, low: float, high: float) -> dict:
@@ -70,3 +75,70 @@ def test_replication_forest_of_an_older_result_without_the_tested_fit_keeps_the_
     assert _drawn(figure) == {"old": 1.3, "plain": 0.8}
     assert "Not drawn" not in _annotation_text(figure)
     assert figure["layout"]["margin"]["b"] == 110
+
+
+# ── Evidence funnel ──────────────────────────────────────────────
+
+
+def _screen_result(**changes) -> dict:
+    """A marginal screen of five markers, as evaluate_markers returns it without permutations."""
+    result = {
+        "primary_lens": "marginal",
+        "marker_table": [
+            {"marker": f"m{index}", "tier": "not supported",
+             "marginal": {"p_value": 0.001, "q_bh": 0.004, "p_fwer": None, "q_perm": None,
+                          "selection_frequency": 0.9, "direction_consistency": 1.0}}
+            for index in range(5)
+        ],
+        "tier_counts": {"robust": 0, "suggestive": 0, "marginal only": 0, "not supported": 5},
+        "cohort": {"n_markers_evaluated": 5, "dropped_markers": []},
+        "settings": {"alpha": 0.05, "robust_frequency": 0.5, "robust_direction": 0.9},
+        "null": {"n_permutations": 0},
+        "resampling": {"n_valid": 20, "n_failed": 0, "stability_assessed": True},
+        "signature": {},
+    }
+    result.update(changes)
+    return result
+
+
+def _funnel_text(figure: dict) -> dict:
+    """Funnel label -> the text printed beside its bar."""
+    text = next(trace for trace in figure["data"] if trace.get("mode") == "text")
+    return dict(zip(text["y"], text["text"]))
+
+
+def test_evidence_funnel_does_not_count_family_wise_bars_that_were_never_computed() -> None:
+    result = _screen_result()
+
+    stages = {stage["label"]: stage for stage in marker_evidence_funnel(result)}
+    figure = build_marker_summary_figure(result)
+
+    assert stages["FDR q ≤ 0.05"]["count"] == 5
+    for label in ("Family-wise p ≤ 0.05", "Robust"):
+        assert stages[label]["count"] is None and stages[label]["note"] == "not computed (no permutations)"
+    printed = _funnel_text(figure)
+    assert printed["FDR q ≤ 0.05"] == "<b>5</b>"
+    assert printed["Family-wise p ≤ 0.05"] == printed["Robust"] == "not computed (no permutations)"
+    bars = next(trace for trace in figure["data"] if trace["type"] == "bar")
+    assert dict(zip(bars["y"], bars["x"]))["Robust"] == 0.0
+    # The stability figure's robust rule says it could not apply.
+    stability = build_marker_stability_figure(result)
+    assert "No permutations were run, so no marker could be robust" in _annotation_text(stability)
+
+
+def test_evidence_funnel_marks_the_robust_bar_not_assessed_without_subsamples() -> None:
+    table = [
+        {"marker": f"m{index}", "tier": "suggestive" if index < 2 else "not supported",
+         "marginal": {"p_value": 0.001, "q_bh": 0.004, "p_fwer": 0.01 if index < 2 else 0.2, "q_perm": 0.01}}
+        for index in range(5)
+    ]
+    result = _screen_result(
+        marker_table=table, null={"n_permutations": 99}, resampling={"n_valid": 0, "n_failed": 0, "stability_assessed": False}
+    )
+
+    stages = {stage["label"]: stage for stage in marker_evidence_funnel(result)}
+
+    assert stages["Family-wise p ≤ 0.05"]["count"] == 2
+    assert stages["Robust"]["count"] is None and stages["Robust"]["note"] == "not assessed (no subsamples)"
+    printed = _funnel_text(build_marker_summary_figure(result))
+    assert printed["Family-wise p ≤ 0.05"] == "<b>2</b>" and printed["Robust"] == "not assessed (no subsamples)"
