@@ -59,10 +59,12 @@ The locked test set is never used for fitting, preprocessing, tuning, early stop
 
 - **LASSO-Cox:** the penalty is chosen by inner stratified 5-fold cross-validation within each training partition.
 - **Deep models:** early stopping monitors a stratified 20% subset of the training partition that never receives gradient updates. The model is then refitted from scratch on the whole training partition for the selected number of epochs. The result records:
-  - `refit_epochs`, the number of epochs used for the refit,
+  - `refit_epochs`, the number of epochs used for the refit (also reported as `epochs_trained`, the epochs behind the reported model),
+  - `early_stopping_epochs`, the length of the early-stopping run that chose it,
   - `early_stopping_fit_samples` and `monitor_samples`, the rows used for early stopping,
   - `fit_samples`, the rows in the final fit.
 - **Holdout evaluation:** a stratified 70/30 holdout is shared by classical ML and deep models for the same seed.
+- **Deep-model threads:** every deep fit runs on one torch thread (`torch_num_threads` in the result), so a seed gives the same numbers whether folds run in parallel or one after another.
 
 ## 7. Reproducibility
 
