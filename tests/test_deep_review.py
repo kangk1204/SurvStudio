@@ -541,6 +541,54 @@ def test_comparison_rejects_settings_it_would_ignore() -> None:
         )
 
 
+# Locked-test refit failures (the D20 fix of the ML module, applied to the deep models) -----
+
+
+def test_locked_test_refit_failures_are_errors_but_keep_the_model_ranked(monkeypatch) -> None:
+    original = dm._run_deep_compare_task
+    failing: set[str] = set()
+
+    def _task(task):
+        if task["repeat"] is None and task["model_name"] in failing:
+            raise ValueError("refit on the development set failed")
+        return original(task)
+
+    monkeypatch.setattr(dm, "_run_deep_compare_task", _task)
+    df = make_example_dataset(seed=5, n_patients=100)
+    common = dict(
+        epochs=2, hidden_layers=[4], num_time_bins=5, included_models=["DeepSurv", "Neural MTLR"],
+        evaluation_strategy="repeated_cv", cv_folds=2, cv_repeats=1, locked_test_fraction=0.3, random_seed=4,
+    )
+    clean = dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, **common)
+    assert clean["errors"] == [] and clean["ranking_complete"]
+    selected, other = (row["model"] for row in clean["comparison_table"])
+
+    failing.update({other})
+    result = dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, **common)
+    assert result["errors"] == [{"model": other, "stage": "locked_test", "error": "refit on the development set failed"}]
+    assert result["ranking_complete"] is False
+    assert result["evaluation_mode"] == "repeated_cv"
+    rows = {row["model"]: row for row in result["comparison_table"]}
+    assert [row["model"] for row in result["comparison_table"]] == [selected, other]
+    assert rows[other]["rank"] == 2 and rows[other]["n_failures"] == 0 and rows[other]["c_index"] is not None
+    assert rows[other]["locked_test_c_index"] is None and rows[other]["locked_test_error"]
+    cautions = result["scientific_summary"]["cautions"]
+    assert any(caution.startswith(f"1 model(s) failed when refit on the development set") and caution.endswith("is blank.") for caution in cautions)
+
+    failing.update({selected})
+    both = dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, **common)
+    assert {error["model"] for error in both["errors"]} == {selected, other}
+    assert all(error["stage"] == "locked_test" for error in both["errors"])
+    first_cautions = both["scientific_summary"]["cautions"][:2]
+    assert any(f"including the CV-selected model ({selected})" in caution for caution in first_cautions)
+
+
+def test_holdout_summary_points_to_bootstrap_intervals() -> None:
+    summary = dm._scientific_summary_dl("DeepSurv", 0.7, 100, 40, 30, 3, 10, [1.0, 0.9], "holdout")
+    assert any("bootstrap intervals over the test patients" in caution for caution in summary["cautions"])
+    assert not any("no confidence interval" in caution for caution in summary["cautions"])
+
+
 # E13 ------------------------------------------------------------------------
 
 

@@ -79,19 +79,22 @@ def test_deep_model_source_uses_type_checked_bases_adamw_and_inference_mode() ->
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
-def test_seed_torch_aligns_numpy_and_python_random_streams() -> None:
+def test_seed_torch_seeds_torch_and_leaves_global_numpy_and_python_random_states_alone() -> None:
+    import torch
     import survival_toolkit.deep_models as deep_models
 
+    numpy_state = np.random.get_state()
+    python_state = random.getstate()
     deep_models._seed_torch(123)
-    numpy_first = np.random.rand(3)
-    python_first = [random.random() for _ in range(3)]
-
+    torch_first = torch.rand(3)
     deep_models._seed_torch(123)
-    numpy_second = np.random.rand(3)
-    python_second = [random.random() for _ in range(3)]
+    torch_second = torch.rand(3)
 
-    assert np.allclose(numpy_first, numpy_second)
-    assert python_first == python_second
+    assert torch.equal(torch_first, torch_second)
+    # A concurrent analysis sampling from these (for example Kernel SHAP) is not disturbed.
+    after = np.random.get_state()
+    assert after[0] == numpy_state[0] and np.array_equal(after[1], numpy_state[1]) and after[2:] == numpy_state[2:]
+    assert random.getstate() == python_state
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")

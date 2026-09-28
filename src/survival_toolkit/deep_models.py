@@ -16,7 +16,6 @@ import gc
 import math
 import multiprocessing as mp
 import os
-import random
 import subprocess
 import threading
 import time
@@ -127,8 +126,12 @@ def _require_sklearn() -> None:
 
 
 def _seed_torch(random_seed: int) -> None:
-    np.random.seed(random_seed)
-    random.seed(random_seed)
+    """Seed torch for one training run.
+
+    NumPy's and Python's global random states are left alone: the deep models draw only
+    from torch generators and seeded local NumPy generators, and reseeding the process-wide
+    state would disturb concurrent analyses that sample from it (for example Kernel SHAP).
+    """
     torch.manual_seed(random_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(random_seed)
@@ -1634,7 +1637,8 @@ def _scientific_summary_dl(
 
     if evaluation_mode == "holdout":
         cautions.append(
-            "Deterministic holdout reports one split only, so no confidence interval or standard deviation is shown."
+            "A deterministic holdout scores one split, and the point estimate alone does not show its uncertainty; "
+            "judge it by the bootstrap intervals over the test patients of a model comparison or by repeated cross-validation."
         )
 
     if len(loss_history) >= 5:
@@ -2584,6 +2588,13 @@ def _deep_repeated_cv_comparison(
         cv_repeats=cv_repeats,
         locked_results=locked_results if use_locked_test else None,
     )
+    # A model whose refit on the development set fails has no locked-test estimate. That is an
+    # error of the run, but its cross-validation result still ranks it.
+    locked_errors = [
+        {"model": model_name, "stage": "locked_test", "error": str(locked_results[model_name]["error"])}
+        for model_name, _, _ in trainer_specs
+        if (locked_results.get(model_name) or {}).get("error") is not None
+    ]
     cohort_counts: dict[str, Any] = {
         "n_patients": int(clean_frame.shape[0]),
         "n_events": int(clean_frame[event_column].sum()),
@@ -2614,6 +2625,7 @@ def _deep_repeated_cv_comparison(
         fold_results=fold_results,
         dropped_nonpositive_time_rows=dropped_nonpositive_time_rows,
         cohort_counts=cohort_counts,
+        locked_errors=locked_errors,
     )
     if parallel_execution_note:
         result["parallel_execution_note"] = parallel_execution_note
@@ -3057,9 +3069,16 @@ def _finalize_deep_comparison(
     fold_results: list[dict[str, Any]] | None = None,
     dropped_nonpositive_time_rows: int = 0,
     cohort_counts: dict[str, Any] | None = None,
+    locked_errors: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
-    """Rank the compared models and build the shared comparison payload and summary."""
+    """Rank the compared models and build the shared comparison payload and summary.
+
+    ``errors`` are fits left out of the ranking (or of a model's CV aggregate);
+    ``locked_errors`` are locked-test refits that failed for models that stay ranked. Both
+    are reported in ``errors`` and make the ranking incomplete.
+    """
     cohort_counts = dict(cohort_counts or {})
+    locked_errors = list(locked_errors)
     if not comparison:
         raise ValueError(
             "All deep-learning models failed to train. Errors: "
@@ -3190,6 +3209,22 @@ def _finalize_deep_comparison(
             0,
             "Models were ranked by development-set repeated CV; report the locked-test C-index of the CV-selected model as the independent performance estimate, not the best locked-test value across models.",
         )
+    if locked_errors:
+        failed_names = ", ".join(str(error["model"]) for error in locked_errors)
+        selected_failed = any(str(error["model"]) == best["model"] for error in locked_errors)
+        locked_caution = (
+            f"{len(locked_errors)} model(s) failed when refit on the development set and scored on the locked test set "
+            f"({failed_names}); their locked-test C-index is blank"
+            + (
+                f", including the CV-selected model ({best['model']}), so this run has no untouched-test estimate to report."
+                if selected_failed
+                else "."
+            )
+        )
+        if selected_failed:
+            cautions.insert(0, locked_caution)
+        else:
+            cautions.append(locked_caution)
     from survival_toolkit.analysis import duplicate_identifier_caution
 
     duplicate_caution = duplicate_identifier_caution(df)
@@ -3234,13 +3269,14 @@ def _finalize_deep_comparison(
             {"label": metric_name, "value": best.get("c_index")},
             {"label": "Evaluation mode", "value": result_evaluation_mode},
             {"label": "Dropped for negative time", "value": int(dropped_nonpositive_time_rows) or None},
-            {"label": "Failures", "value": len(errors)},
+            {"label": "Failures", "value": len(errors) + len(locked_errors)},
         ],
     }
+    all_errors = [*errors, *locked_errors]
     result = {
         "comparison_table": comparison,
-        "errors": errors,
-        "ranking_complete": not errors and not unranked_rows and all(row.get("c_index") is not None for row in ranked_rows),
+        "errors": all_errors,
+        "ranking_complete": not all_errors and not unranked_rows and all(row.get("c_index") is not None for row in ranked_rows),
         "evaluation_mode": result_evaluation_mode,
         "n_patients": cohort_counts.get("n_patients"),
         "n_events": cohort_counts.get("n_events"),
