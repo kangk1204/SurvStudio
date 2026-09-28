@@ -216,3 +216,84 @@ def test_legacy_excel_content_is_routed_by_signature_whatever_its_suffix(monkeyp
     monkeypatch.setattr(app_module, "load_dataframe_from_path", lambda *args, **kwargs: loaded.copy())
     accepted = client.post("/api/upload", files={"file": ("legacy.xlsx", payload, "application/octet-stream")})
     assert accepted.status_code == 200, accepted.text
+
+
+# ── Replay and provenance notes stay within the export note limit ──
+
+
+def _wide_request_config(n_features: int = 250, *, name_length: int = 15) -> dict:
+    return {
+        "model_type": "compare",
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "event_positive_value": 1,
+        "features": [f"ENSG{index:0{name_length - 4}d}" for index in range(n_features)],
+        "categorical_features": [f"CAT{index:0{name_length - 3}d}" for index in range(n_features)],
+        "evaluation_strategy": "holdout",
+        "random_state": 42,
+        "n_estimators": 100,
+        "max_depth": None,
+        "learning_rate": 0.1,
+        "random_seed": 7,
+        "epochs": 10,
+        "batch_size": 32,
+        "hidden_layers": [16],
+        "dropout": 0.1,
+        "early_stopping_patience": 5,
+        "early_stopping_min_delta": 0.0,
+    }
+
+
+def test_replay_notes_of_wide_comparisons_fit_the_export_note_limit() -> None:
+    config = _wide_request_config()
+    for notes in (
+        app_module._ml_replay_notes(config, dataset_filename="tcga_expression.csv"),
+        app_module._dl_replay_notes(config, dataset_filename="tcga_expression.csv", resolved_analysis={"evaluation_note": "x" * 5000}),
+    ):
+        assert notes and all(len(note) <= 4000 for note in notes), [len(note) for note in notes]
+        features_note = next(note for note in notes if note.startswith("Replay features:"))
+        assert "ENSG00000000000" in features_note and "250 in total" in features_note
+        response = client.post(
+            "/api/export-table",
+            json={"rows": [{"Model": "RSF", "C-index": 0.71}], "format": "csv", "style": "journal", "notes": notes},
+        )
+        assert response.status_code == 200, response.text
+
+
+def test_short_replay_feature_lists_are_written_in_full() -> None:
+    notes = app_module._ml_replay_notes(
+        {"features": ["age", "stage"], "categorical_features": ["stage"]}, dataset_filename="cohort.csv"
+    )
+    assert "Replay features: age, stage." in notes
+    assert "Replay categorical features: stage." in notes
+
+
+@pytest.mark.parametrize("fmt", ["csv", "xlsx", "markdown", "latex", "docx"])
+def test_provenance_notes_of_wide_configs_are_summarised(fmt: str) -> None:
+    config = _wide_request_config(1000, name_length=30)
+    notes = app_module._export_provenance_notes(
+        {"dataset_hash": "abc123", "request_config": config, "analysis": {"evaluation_mode": "holdout", "folds": list(range(500))}}
+    )
+    assert all(len(note) <= 4000 for note in notes), [len(note) for note in notes]
+    replay = next(note for note in notes if note.startswith("Replay request_config:"))
+    assert "1,000 in total" in replay and '"random_state": 42' in replay
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [{"Model": "RSF", "C-index": 0.71}],
+            "format": fmt,
+            "style": "journal",
+            "provenance": {"dataset_hash": "abc123", "request_config": config},
+        },
+    )
+    assert response.status_code == 200, response.text
+    if fmt == "xlsx":
+        from openpyxl import load_workbook
+
+        worksheet = load_workbook(io.BytesIO(response.content)).active
+        assert all(len(str(cell.value or "")) <= 4000 for row in worksheet.iter_rows() for cell in row)
+
+
+def test_small_provenance_configs_are_recorded_verbatim() -> None:
+    notes = app_module._export_provenance_notes({"request_config": {"model_type": "compare", "features": ["age"]}})
+    assert 'Replay request_config: {"features": ["age"], "model_type": "compare"}' in notes

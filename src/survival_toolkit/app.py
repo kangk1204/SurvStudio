@@ -2384,6 +2384,69 @@ def _ingest_uploaded_file(path: Path, filename: str) -> dict[str, Any]:
     return _store_loaded_dataframe(dataframe, filename=filename, source="upload", copy_dataframe=False)
 
 
+# Longest table note an export accepts (TableExportRequest.notes). The replay and provenance notes
+# the server writes itself stay within it, so an export never refuses the server's own notes.
+_MAX_EXPORT_NOTE_CHARS = 4000
+# Room kept after the listed names for the count of those left out.
+_NAME_LIST_COUNT_ROOM = 64
+# Items of each list a JSON replay note keeps, tried in turn until the note fits the limit.
+_REPLAY_JSON_LIST_ITEMS = (50, 20, 5, 0)
+
+
+def _capped_note(text: str) -> str:
+    """``text`` cut to the export note limit and marked where it was cut."""
+
+    if len(text) <= _MAX_EXPORT_NOTE_CHARS:
+        return text
+    marker = " ... (truncated)"
+    return text[: _MAX_EXPORT_NOTE_CHARS - len(marker)] + marker
+
+
+def _name_list_note(label: str, names: Sequence[str]) -> str:
+    """``"<label>: a, b, c."``; when that passes the note limit, the first names that fit and a count of the rest."""
+
+    full = f"{label}: " + ", ".join(names) + "."
+    if len(full) <= _MAX_EXPORT_NOTE_CHARS:
+        return full
+    budget = _MAX_EXPORT_NOTE_CHARS - len(label) - _NAME_LIST_COUNT_ROOM
+    shown: list[str] = []
+    used = 0
+    for name in names:
+        used += len(name) + 2
+        if used > budget:
+            break
+        shown.append(name)
+    listed = ", ".join(shown) + ", and " if shown else ""
+    return _capped_note(f"{label}: {listed}{len(names) - len(shown):,} more ({len(names):,} in total).")
+
+
+def _shortened_lists(value: Any, keep: int) -> Any:
+    """``value`` with every list longer than ``keep`` items cut to its first items and a count of the rest."""
+
+    if isinstance(value, dict):
+        return {key: _shortened_lists(item, keep) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        items = [_shortened_lists(item, keep) for item in value[:keep]]
+        if len(value) > keep:
+            items.append(f"... and {len(value) - keep:,} more ({len(value):,} in total)")
+        return items
+    return value
+
+
+def _replay_json_note(label: str, payload: dict[str, Any]) -> str:
+    """``"<label>: <payload as JSON>"``; long lists (such as wide feature sets) are summarised to fit the note limit."""
+
+    def _note(value: Any) -> str:
+        return f"{label}: " + json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+
+    text = _note(payload)
+    for keep in _REPLAY_JSON_LIST_ITEMS:
+        if len(text) <= _MAX_EXPORT_NOTE_CHARS:
+            break
+        text = _note(_shortened_lists(payload, keep))
+    return _capped_note(text)
+
+
 def _replay_dataset_note(request_config: dict[str, Any], *, dataset_filename: str) -> str:
     return (
         "Replay dataset: "
@@ -2397,9 +2460,9 @@ def _replay_feature_notes(request_config: dict[str, Any]) -> list[str]:
     features = [str(value) for value in request_config.get("features") or []]
     categorical = [str(value) for value in request_config.get("categorical_features") or []]
     if features:
-        notes.append("Replay features: " + ", ".join(features) + ".")
+        notes.append(_name_list_note("Replay features", features))
     if categorical:
-        notes.append("Replay categorical features: " + ", ".join(categorical) + ".")
+        notes.append(_name_list_note("Replay categorical features", categorical))
     return notes
 
 
@@ -2424,11 +2487,12 @@ def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -
         if request_config.get("locked_test_fraction"):
             settings.append(f"locked_test_fraction={request_config.get('locked_test_fraction')}")
 
-    return [
+    notes = [
         _replay_dataset_note(request_config, dataset_filename=dataset_filename),
         "Replay settings: " + "; ".join(settings) + ".",
         *_replay_feature_notes(request_config),
     ]
+    return [_capped_note(note) for note in notes]
 
 
 def _dl_replay_notes(
@@ -2482,7 +2546,7 @@ def _dl_replay_notes(
         if actual_note:
             notes.append("Reported evaluation note: " + actual_note)
     notes.extend(_replay_feature_notes(request_config))
-    return notes
+    return [_capped_note(note) for note in notes]
 
 
 def _attach_manuscript_notes(
@@ -2504,27 +2568,23 @@ def _export_provenance_notes(provenance: dict[str, Any] | None) -> list[str]:
 
     Results changed between releases (for example the 0.2.0 statistical fixes), so every
     analysis export records which version produced it and, when known, which stored
-    dataset. Plain table exports without provenance stay data-only.
+    dataset. Plain table exports without provenance stay data-only. Each note stays within
+    the export note limit: long lists in the replayed settings (a wide feature set) are
+    summarised by their first items and a count.
     """
     if not provenance:
         return []
     notes: list[str] = [f"Generated with SurvStudio {SURVSTUDIO_VERSION}."]
     dataset_hash = str(provenance.get("dataset_hash") or "").strip()
     if dataset_hash:
-        notes.append(f"Dataset fingerprint: {dataset_hash}.")
+        notes.append(_capped_note(f"Dataset fingerprint: {dataset_hash}."))
     request_config = provenance.get("request_config")
     if isinstance(request_config, dict) and request_config:
-        notes.append(
-            "Replay request_config: "
-            + json.dumps(request_config, sort_keys=True, default=str, ensure_ascii=False)
-        )
+        notes.append(_replay_json_note("Replay request_config", request_config))
 
     analysis_meta = provenance.get("analysis")
     if isinstance(analysis_meta, dict) and analysis_meta:
-        notes.append(
-            "Replay analysis metadata: "
-            + json.dumps(analysis_meta, sort_keys=True, default=str, ensure_ascii=False)
-        )
+        notes.append(_replay_json_note("Replay analysis metadata", analysis_meta))
 
     return notes
 
