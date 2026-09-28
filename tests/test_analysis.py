@@ -851,9 +851,26 @@ def test_km_analysis_keeps_rmst_ci_when_risk_set_is_exhausted() -> None:
 def test_km_rmst_standard_errors_match_survrm2_convention_on_tcga() -> None:
     df = pd.read_csv(Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "data" / "tcga_luad_upload_ready.csv")
     result = compute_km_analysis(df, "os_months", "os_event", "stage_group")
+    # Reference values from R 4 with survival 3.8.6: survfit(Surv(os_months, os_event) ~ 1) per stage
+    # group, restricted at the shortest group follow-up (88.07 months), with the variance formula of
+    # survRM2::rmst1 (Greenwood terms d / (n (n - d)) weighted by the squared area after each event
+    # time, no n / (n - 1) correction). survRM2 was not installed, so its rmst1 formula was applied to
+    # the survfit output directly.
+    reference = {
+        "Stage I": (61.3004096782, 2.5986477879),
+        "Stage II": (43.6288937667, 3.8330724375),
+        "Stage III": (35.8646347781, 4.2409324037),
+        "Stage IV": (32.0596143644, 6.0489523150),
+    }
+    assert result["rmst_horizon"] == pytest.approx(88.07)
+    z_value = 1.959963984540054  # two-sided 95% normal quantile
+    assert sorted(row["Group"] for row in result["summary_table"]) == sorted(reference)
     for row in result["summary_table"]:
-        assert row["RMST SE"] is not None and row["RMST SE"] > 0.0
-        assert row["RMST CI lower"] < row["RMST"] < row["RMST CI upper"]
+        rmst, se = reference[row["Group"]]
+        assert row["RMST"] == pytest.approx(rmst, rel=1e-9)
+        assert row["RMST SE"] == pytest.approx(se, rel=1e-9)
+        assert row["RMST CI lower"] == pytest.approx(rmst - z_value * se, rel=1e-9)
+        assert row["RMST CI upper"] == pytest.approx(rmst + z_value * se, rel=1e-9)
 
 
 def test_km_group_curves_stop_at_each_group_last_follow_up() -> None:

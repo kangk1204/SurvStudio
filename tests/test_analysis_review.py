@@ -3,6 +3,7 @@ summaries, and the signature search)."""
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Any
 
@@ -117,11 +118,45 @@ def test_text_time_values_that_are_not_numbers_are_refused_not_dropped() -> None
     assert km["cohort"]["time_max"] == pytest.approx(1234.5)
 
 
-def test_delimiter_sniffing_is_linear_on_crafted_input_and_still_detects_delimiters() -> None:
-    crafted = "\n".join([',"a' * 700] * 50)
-    start = time.perf_counter()
-    analysis._sniff_delimiter(crafted * 2, ",")
-    assert time.perf_counter() - start < 1.0
+def _traced_line_count(function: Any, *args: Any) -> int:
+    """Python lines executed inside ``function`` itself: a deterministic measure of its work."""
+    code = function.__code__
+    count = 0
+
+    def _tracer(frame: Any, event: str, arg: Any) -> Any:
+        nonlocal count
+        if frame.f_code is not code:
+            return None
+        if event == "line":
+            count += 1
+        return _tracer
+
+    previous = sys.gettrace()
+    sys.settrace(_tracer)
+    try:
+        function(*args)
+    finally:
+        sys.settrace(previous)
+    return count
+
+
+def test_delimiter_sniffing_is_linear_on_crafted_input_and_still_detects_delimiters(monkeypatch) -> None:
+    # csv.Sniffer's quote regexes are quadratic on crafted input, so the sniffer must not use it.
+    class _NoSniffer:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise AssertionError("csv.Sniffer must not be used")
+
+    monkeypatch.setattr(analysis.csv, "Sniffer", _NoSniffer)
+    record = ',"a' * 700 + "\n"  # a crafted record of 2,101 characters
+    assert analysis._sniff_delimiter(record * 100, ",") == ","
+    # One pass per character: twice the text takes about twice the work ...
+    small = _traced_line_count(analysis._delimiter_counts_per_record, record * 8)
+    double = _traced_line_count(analysis._delimiter_counts_per_record, record * 16)
+    assert 1.8 * small <= double <= 2.2 * small
+    # ... and the scan stops at the character cap, however long the text is.
+    assert len(record * 40) > analysis._DELIMITER_SNIFF_MAX_CHARS
+    capped = _traced_line_count(analysis._delimiter_counts_per_record, record * 40)
+    assert _traced_line_count(analysis._delimiter_counts_per_record, record * 400) == capped
     assert analysis._sniff_delimiter("a;b;c\n1,5;2;3\n4;5,5;6\n", ",") == ";"
     assert analysis._sniff_delimiter('name,age\n"Smith, John",40\n"Doe, Jane",41\n', ";") == ","
     assert analysis._sniff_delimiter("a\tb\n1\tx|y\n2\tz|w\n", ",") == "\t"
