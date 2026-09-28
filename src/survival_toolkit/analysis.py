@@ -2308,19 +2308,22 @@ def _validate_time_column_choice(df: pd.DataFrame, time_column: str) -> str | No
 
     Calendar dates and 0/1 indicators are refused. A name that the heuristics do not
     recognize as follow-up time is allowed (standard endpoints are named in many ways), but
-    the returned note is shown with the results so an unusual choice stays visible.
+    the returned note is shown with the results so an unusual choice stays visible, also when
+    no other column looks like a follow-up time.
     """
     _require_dataframe_columns(df, [time_column])
     _reject_calendar_date_time_column(df[time_column], time_column)
     _reject_event_indicator_time_column(df[time_column], time_column)
+    if _looks_like_survival_time_column_name(time_column):
+        return None
     likely_time_columns = [column for column in suggest_columns(df).get("time_columns", []) if column != time_column]
-    if likely_time_columns and not _looks_like_survival_time_column_name(time_column):
-        examples = ", ".join(str(column) for column in likely_time_columns[:3])
-        return (
-            f'"{time_column}" does not look like a survival follow-up time column (columns that do: {examples}). '
-            "Check that it holds the time from the start of follow-up to the event or last follow-up."
-        )
-    return None
+    alternatives = ""
+    if likely_time_columns:
+        alternatives = f" (columns that do: {', '.join(str(column) for column in likely_time_columns[:3])})"
+    return (
+        f'"{time_column}" does not look like a survival follow-up time column{alternatives}. '
+        "Check that it holds the time from the start of follow-up to the event or last follow-up."
+    )
 
 
 _CENSORING_NAME_TOKENS = {"censor", "censored", "cens", "censoring"}
@@ -2468,26 +2471,42 @@ def _coerce_survival_time_values(series: pd.Series, time_column: str) -> pd.Seri
     return pd.Series(parsed_values, index=series.index)
 
 
-def _reject_outcome_dependent_missing_time(frame: pd.DataFrame, time_column: str, event_column: str) -> None:
-    """Refuse a time column that is missing for (nearly) every row of one outcome.
+# Missing follow-up times that depend on the outcome. Refused: at least half of one outcome's rows
+# lack a time and that share is at least 4 times the other outcome's. Cautioned: one share is at
+# least 20% and at least twice the other.
+_OUTCOME_MISSING_TIME_REFUSE_SHARE = 0.5
+_OUTCOME_MISSING_TIME_REFUSE_RATIO = 4.0
+_OUTCOME_MISSING_TIME_CAUTION_SHARE = 0.2
+_OUTCOME_MISSING_TIME_CAUTION_RATIO = 2.0
+
+
+def _reject_outcome_dependent_missing_time(frame: pd.DataFrame, time_column: str, event_column: str) -> str | None:
+    """Refuse a time column that is missing mostly for one outcome; return a caution for a milder imbalance.
 
     GDC/TCGA exports carry days_to_death only for patients who died; selecting it as the time
     column would keep only deaths and drive the survival curve to zero. The mirror case
-    (a last-follow-up column that is empty for the deaths) drops the events instead.
+    (a last-follow-up column that is empty for the deaths) drops the events instead. The share
+    of rows without a time is compared between censored rows and rows with an event, so a few
+    missing event times cannot hide that most censored rows lack one.
     """
     event = frame[event_column]
     valid_event = event.notna().to_numpy(dtype=bool)
     missing_time = frame[time_column].isna().to_numpy(dtype=bool) & valid_event
     n_missing = int(missing_time.sum())
     if n_missing < 5:
-        return
+        return None
     event_values = event.to_numpy(dtype=float, na_value=np.nan)
     censored = valid_event & (event_values == 0.0)
     events = valid_event & (event_values == 1.0)
     n_censored, n_events = int(censored.sum()), int(events.sum())
     missing_censored = int((missing_time & censored).sum())
     missing_events = int((missing_time & events).sum())
-    if n_censored and missing_censored >= 0.95 * n_missing and missing_censored >= 0.5 * n_censored:
+    censored_share = missing_censored / n_censored if n_censored else 0.0
+    event_share = missing_events / n_events if n_events else 0.0
+    if (
+        censored_share >= _OUTCOME_MISSING_TIME_REFUSE_SHARE
+        and censored_share >= _OUTCOME_MISSING_TIME_REFUSE_RATIO * event_share
+    ):
         raise ValueError(
             f'"{time_column}" is missing for {missing_censored} of {n_censored} censored rows but for only '
             f"{missing_events} of {n_events} rows with an event, so the analysis would keep mostly events and "
@@ -2495,13 +2514,22 @@ def _reject_outcome_dependent_missing_time(frame: pd.DataFrame, time_column: str
             "column first (for example days_to_death for patients who died and days_to_last_follow_up for everyone "
             "else) and select that column."
         )
-    if n_events and missing_events >= 0.95 * n_missing and missing_events >= 0.5 * n_events:
+    if event_share >= _OUTCOME_MISSING_TIME_REFUSE_SHARE and event_share >= _OUTCOME_MISSING_TIME_REFUSE_RATIO * censored_share:
         raise ValueError(
             f'"{time_column}" is missing for {missing_events} of {n_events} rows with an event but for only '
             f"{missing_censored} of {n_censored} censored rows, so the analysis would drop most events and "
             "overestimate survival. Build one follow-up time column first (the event time for patients with the "
             "event and the last follow-up time for everyone else) and select that column."
         )
+    higher, lower = max(censored_share, event_share), min(censored_share, event_share)
+    if higher >= _OUTCOME_MISSING_TIME_CAUTION_SHARE and higher >= _OUTCOME_MISSING_TIME_CAUTION_RATIO * lower:
+        direction = "underestimated" if censored_share > event_share else "overestimated"
+        return (
+            f'"{time_column}" is missing for {missing_censored} of {n_censored} censored rows and for '
+            f"{missing_events} of {n_events} rows with an event. Rows without a time are left out, so survival may "
+            f"be {direction}; check that every patient has a follow-up time (the event time or the last follow-up)."
+        )
+    return None
 
 
 def _cohort_frame(
@@ -2532,7 +2560,8 @@ def _cohort_frame(
     if not bool(frame[time_column].notna().any()):
         raise ValueError(f'"{time_column}" has no usable values: every follow-up time is missing.')
     frame[event_column] = coerce_event(frame[event_column], event_positive_value=event_positive_value)
-    _reject_outcome_dependent_missing_time(frame, time_column, event_column)
+    missing_time_note = _reject_outcome_dependent_missing_time(frame, time_column, event_column)
+    time_column_note = " ".join(note for note in (time_column_note, missing_time_note) if note) or None
     raw_censored_rows = int((frame[event_column] == 0).sum())
     for column in extra_columns:
         if not is_numeric_dtype(frame[column]):

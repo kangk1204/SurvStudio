@@ -426,6 +426,47 @@ def test_baseline_status_columns_are_not_outcomes_unless_their_values_name_one()
     assert km["cohort"]["events"] == int((frame["diabetes_status"] == "Yes").sum())
 
 
+def _missing_time_frame(missing_censored: int, missing_events: int, seed: int = 0) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    times = rng.exponential(30, 200).round(1) + 0.1
+    events = np.r_[np.zeros(100, dtype=int), np.ones(100, dtype=int)]
+    times[:missing_censored] = np.nan
+    times[100 : 100 + missing_events] = np.nan
+    return pd.DataFrame({"os_months": times, "os_event": events})
+
+
+def test_time_missing_for_most_censored_rows_is_refused_despite_a_few_missing_event_times() -> None:
+    # 60 of 100 censored rows but only 4 of 100 event rows lack a time.
+    with pytest.raises(ValueError, match="missing for 60 of 100 censored rows but for only 4 of 100 rows with an event"):
+        _cohort_frame(_missing_time_frame(60, 4), "os_months", "os_event")
+    with pytest.raises(ValueError, match="missing for 60 of 100 rows with an event but for only 4 of 100 censored"):
+        _cohort_frame(_missing_time_frame(4, 60), "os_months", "os_event")
+
+
+def test_clearly_outcome_dependent_missing_time_brings_a_caution() -> None:
+    frame = _missing_time_frame(30, 5)
+    cohort = _cohort_frame(frame, "os_months", "os_event")
+    note = cohort.attrs["time_column_note"]
+    assert "missing for 30 of 100 censored rows and for 5 of 100 rows with an event" in note
+    assert "underestimated" in note
+    km = compute_km_analysis(frame, "os_months", "os_event")
+    assert any("30 of 100 censored rows" in caution for caution in km["scientific_summary"]["cautions"])
+    assert km["scientific_summary"]["status"] != "robust"
+    # Missing times unrelated to the outcome bring no caution.
+    assert "time_column_note" not in _cohort_frame(_missing_time_frame(10, 10), "os_months", "os_event").attrs
+
+
+def test_unusual_time_column_brings_a_caution_even_without_alternatives() -> None:
+    rng = np.random.default_rng(6)
+    frame = pd.DataFrame({"tumour_size": rng.uniform(1, 9, 40).round(2), "os_event": rng.integers(0, 2, 40)})
+    cohort = _cohort_frame(frame, "tumour_size", "os_event")
+    assert cohort.attrs["time_column_note"].startswith('"tumour_size" does not look like a survival follow-up time column.')
+    km = compute_km_analysis(frame, "tumour_size", "os_event")
+    assert any("tumour_size" in caution for caution in km["scientific_summary"]["cautions"])
+    renamed = frame.rename(columns={"tumour_size": "os_months"})
+    assert "time_column_note" not in _cohort_frame(renamed, "os_months", "os_event").attrs
+
+
 def test_generic_time_to_event_names_pair_with_any_endpoint() -> None:
     analysis._validate_endpoint_family_pair("tte", "os_event")
     analysis._validate_endpoint_family_pair("tts", "pfs_event")
