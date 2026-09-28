@@ -6,9 +6,13 @@ from __future__ import annotations
 import math
 
 from survival_toolkit.plots import (
+    build_cox_forest_figure,
+    build_km_figure,
+    build_loss_curve_figure,
     build_marker_replication_figure,
     build_marker_stability_figure,
     build_marker_summary_figure,
+    build_time_dependent_importance_figure,
     marker_evidence_funnel,
 )
 from survival_toolkit.reporting import marker_results_paragraph, remark_checklist, tripod_ai_checklist
@@ -435,3 +439,101 @@ def test_tripod_hyperparameters_describe_the_models_that_ran_with_their_actual_s
         "stopping early after 10 epochs without improvement on a monitoring subset drawn from each training partition; each "
         "network was then refit on the whole training partition for the number of epochs early stopping selected."
     ) in dl_methods
+
+
+# ── Other figures ────────────────────────────────────────────────
+
+
+def _km_curve(group: str) -> dict:
+    return {
+        "group": group,
+        "timeline": [0.0, 10.0, 20.0],
+        "survival": [1.0, 0.8, 0.6],
+        "ci_lower": [1.0, 0.7, 0.5],
+        "ci_upper": [1.0, 0.9, 0.7],
+        "censor_times": [],
+        "censor_survival": [],
+    }
+
+
+def test_km_curves_keep_a_distinct_style_for_each_of_up_to_fifty_groups() -> None:
+    plain = [f"G{index:02d}" for index in range(50)]
+    with_high_and_low = ["High", "Low", *plain[:48]]
+
+    for groups in (plain, with_high_and_low):
+        figure = build_km_figure({"curves": [_km_curve(group) for group in groups], "test": None, "display_horizon": 20.0})
+        curves = [trace for trace in figure["data"] if trace.get("name") in set(groups)]
+        styles = {(trace["line"]["color"], trace["line"]["dash"], (trace.get("marker") or {}).get("symbol")) for trace in curves}
+        assert len(curves) == len(styles) == len(groups)
+
+
+def test_km_note_names_the_test_the_analysis_ran() -> None:
+    from survival_toolkit.analysis import compute_km_analysis
+    from survival_toolkit.sample_data import make_example_dataset
+
+    analysis = compute_km_analysis(
+        make_example_dataset(), "os_months", "os_event", group_column="treatment", event_positive_value=1,
+        logrank_weight="fleming_harrington", fh_p=0.5,
+    )
+    weighted = _annotation_text(build_km_figure(analysis))
+    # A result without the analysis's label keeps a readable name for the test.
+    plain = _annotation_text(build_km_figure({"curves": [_km_curve("A")], "test": {"test": "logrank", "p_value": 0.04}, "display_horizon": 20.0}))
+
+    assert "Fleming-Harrington (fh_p=0.5) test: p" in weighted
+    assert "Log-rank test: p = 0.040" in plain
+
+
+def test_time_dependent_heatmap_puts_the_most_important_feature_at_the_top() -> None:
+    figure = build_time_dependent_importance_figure(
+        {"features": ["age", "stage", "biomarker"], "eval_times": [12.0, 24.0], "importance_matrix": [[0.1, 0.2, 0.5], [0.2, 0.1, 0.4]]},
+        top_n=3,
+    )
+
+    # Rows are listed most important first and the axis runs top-down, so the first row is drawn at the top.
+    assert figure["data"][0]["y"] == ["biomarker", "age", "stage"]
+    assert figure["layout"]["yaxis"]["autorange"] == "reversed"
+
+
+def test_stability_figure_draws_the_coloured_tiers_over_the_grey_points_and_lists_them_first() -> None:
+    def row(name: str, tier: str) -> dict:
+        return {"marker": name, "tier": tier, "marginal": {"selection_frequency": 0.9, "direction_consistency": 1.0, "p_fwer": 0.01}}
+
+    figure = build_marker_stability_figure(
+        {
+            "primary_lens": "marginal",
+            "settings": {"alpha": 0.05, "robust_frequency": 0.5, "robust_direction": 0.9},
+            "null": {"n_permutations": 99},
+            "marker_table": [row("R1", "robust"), row("S1", "suggestive"), row("N1", "not supported")],
+        }
+    )
+
+    # Plotly draws later traces on top; the legend follows the ranks.
+    assert [trace["name"] for trace in figure["data"]] == ["not supported", "suggestive", "robust"]
+    ranks = {trace["name"]: trace["legendrank"] for trace in figure["data"]}
+    assert ranks["robust"] < ranks["suggestive"] < ranks["not supported"]
+
+
+def test_cox_forest_names_the_terms_it_cannot_draw() -> None:
+    figure = build_cox_forest_figure(
+        {
+            "results_table": [
+                {"Label": "age", "Hazard ratio": 1.1, "CI lower": 1.01, "CI upper": 1.2, "P value": 0.01},
+                {"Label": "stage: IV vs I", "Hazard ratio": float("inf"), "CI lower": 0.9, "CI upper": float("inf"), "P value": 0.02},
+                {"Label": "grade", "Hazard ratio": None, "CI lower": None, "CI upper": None, "P value": None},
+            ]
+        }
+    )
+
+    assert figure["data"][0]["y"] == ["age"]
+    assert "Not drawn (no finite hazard ratio or interval): stage: IV vs I, grade" in _annotation_text(figure)
+    assert figure["layout"]["margin"]["b"] > 70
+
+
+def test_loss_curve_best_epoch_skips_missing_monitor_values() -> None:
+    nothing = build_loss_curve_figure([1.0, 0.9, 0.8], monitor_loss_history=[math.nan] * 3, monitor_label="Monitor C-index", monitor_goal="max")
+    gap_min = build_loss_curve_figure([1.0, 0.9, 0.8], monitor_loss_history=[math.nan, 0.9, 0.8])
+    gap_max = build_loss_curve_figure([1.0, 0.9, 0.8], monitor_loss_history=[math.nan, 0.61, 0.58], monitor_goal="max")
+
+    assert "Best monitor epoch" not in _annotation_text(nothing) and not nothing["layout"].get("shapes")
+    assert "Best monitor epoch: 3" in _annotation_text(gap_min)
+    assert "Best monitor epoch: 2" in _annotation_text(gap_max)
