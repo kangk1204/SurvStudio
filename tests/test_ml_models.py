@@ -2125,7 +2125,10 @@ def test_unseen_categorical_levels_are_reported() -> None:
 
     train = pd.DataFrame({"site": ["A", "A", "B"]})
     evaluation = pd.DataFrame({"site": ["A", "C", None, "C"]})
-    assert _unseen_category_rows(train, evaluation, ["site"]) == 2
+    # Two unseen levels, and a missing value the training rows never had: the encoder has no
+    # missing-value column then, so that row is scored as the reference level as well.
+    assert _unseen_category_rows(train, evaluation, ["site"]) == 3
+    assert _unseen_category_rows(pd.DataFrame({"site": ["A", None, "B"]}), evaluation, ["site"]) == 2
 
 
 def test_ipcw_brier_weights_follow_the_events_first_convention() -> None:

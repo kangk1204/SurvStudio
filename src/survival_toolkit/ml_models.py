@@ -296,19 +296,6 @@ def _transform_feature_encoder(
     return _transform_shared_feature_encoder(df, encoder, output="dataframe")
 
 
-def _encode_features(
-    df: pd.DataFrame,
-    features: Sequence[str],
-    categorical_features: Sequence[str] | None = None,
-) -> pd.DataFrame:
-    """One-hot encode categorical features, leave numeric ones intact.
-
-    Returns a new DataFrame suitable for sklearn-style estimators.
-    """
-    encoder = _fit_feature_encoder(df, features, categorical_features)
-    return _transform_feature_encoder(df, encoder)
-
-
 def _sksurv_c_index(
     y_true: np.ndarray,
     risk_scores: np.ndarray,
@@ -1160,18 +1147,24 @@ def _unseen_category_rows(
     eval_frame: pd.DataFrame,
     categorical_features: Sequence[str],
 ) -> int:
-    """Evaluation rows carrying a categorical level never seen in training.
+    """Evaluation rows that the encoder fitted on ``train_frame`` scores as the reference level
+    although their categorical value is not the reference level.
 
-    Their unknown-level indicator is constant (zero) in training, so it is
-    dropped and those rows are scored as if they had the reference level.
+    The shared encoder has no unknown-level column, so a level never seen in training is
+    scored as the reference level. It has a missing-value column only when the training rows
+    contain missing values, so without one a missing evaluation value is scored as the
+    reference level too.
     """
     affected = pd.Series(False, index=eval_frame.index)
     for feature in categorical_features:
         if feature not in train_frame.columns or feature not in eval_frame.columns:
             continue
-        train_levels = set(train_frame[feature].dropna().astype(str))
+        train_values = train_frame[feature]
+        train_levels = set(train_values.dropna().astype(str))
         eval_values = eval_frame[feature]
         affected |= eval_values.notna() & ~eval_values.astype(str).isin(train_levels)
+        if not bool(train_values.isna().any()):
+            affected |= eval_values.isna()
     return int(affected.sum())
 
 
@@ -1236,8 +1229,41 @@ def _unseen_category_caution(n_rows: int, scope: str) -> str | None:
     if n_rows <= 0:
         return None
     return (
-        f"{n_rows} {scope} row(s) had a categorical level that never occurs in the corresponding training data; "
-        "the models score those rows as the reference level. Merge rare levels before modeling."
+        f"{n_rows} {scope} row(s) had a categorical level that never occurs in the corresponding training data "
+        "(or a missing categorical value where the training data have none); the models score those rows as the "
+        "reference level. Merge rare levels and recode missing values before modeling."
+    )
+
+
+def _median_imputed_counts(
+    frame: pd.DataFrame,
+    features: Sequence[str],
+    categorical_features: Sequence[str] | None,
+) -> dict[str, int]:
+    """Rows per numeric feature whose value is missing or infinite, which the shared encoder
+    replaces by the median of the training rows."""
+    present = [feature for feature in features if feature in frame.columns]
+    if not present:
+        return {}
+    selected, _, numeric_features = coerce_feature_subset(frame, present, categorical_features)
+    counts: dict[str, int] = {}
+    for column in numeric_features:
+        values = pd.to_numeric(selected[column], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+        n_missing = int((~np.isfinite(values)).sum())
+        if n_missing:
+            counts[str(column)] = n_missing
+    return counts
+
+
+def _median_imputation_caution(counts: dict[str, int]) -> str | None:
+    if not counts:
+        return None
+    shown = ", ".join(f"{feature} ({n_rows})" for feature, n_rows in list(counts.items())[:10])
+    if len(counts) > 10:
+        shown += f", and {len(counts) - 10} more feature(s)"
+    return (
+        f"{sum(counts.values())} missing numeric value(s) were replaced by the median of the training rows before "
+        f"modeling: {shown}. Median imputation assumes the values are missing at random."
     )
 
 
@@ -1993,6 +2019,16 @@ def _prepare_training_matrices(
     matrices["y_train"] = _prepare_sksurv_data(matrices["train_frame"], time_column, event_column)
     matrices["y_eval"] = _prepare_sksurv_data(matrices["eval_frame"], time_column, event_column)
     matrices["y_full"] = _prepare_sksurv_data(matrices["full_frame"], time_column, event_column)
+    matrices["imputed_numeric_counts"] = _median_imputed_counts(frame, features, categorical_features)
+    matrices["unseen_category_rows"] = (
+        _unseen_category_rows(
+            matrices["train_frame"],
+            matrices["eval_frame"],
+            _resolved_categorical_features(frame, features, categorical_features),
+        )
+        if matrices["evaluation_mode"] == "holdout"
+        else 0
+    )
     return matrices
 
 
@@ -2059,6 +2095,7 @@ def _fitted_model_result(
     counts = _cohort_counts(matrices, event_column)
     feature_names = list(matrices["train_encoded"].columns)
     c_index = _sksurv_c_index(matrices["y_eval"], np.asarray(evaluation_risk_scores, dtype=float))
+    imputed_counts = dict(matrices.get("imputed_numeric_counts") or {})
     scientific_summary = _scientific_summary_ml(
         model_name=model_name,
         c_index=c_index,
@@ -2071,7 +2108,11 @@ def _fitted_model_result(
         n_fit_patients=counts["n_fit_patients"],
         n_fit_events=counts["n_fit_events"],
         extra_strengths=extra_strengths,
-        extra_cautions=extra_cautions,
+        extra_cautions=[
+            *(extra_cautions or []),
+            _unseen_category_caution(int(matrices.get("unseen_category_rows") or 0), "evaluation"),
+            _median_imputation_caution(imputed_counts),
+        ],
     )
     if brier_computed:
         scientific_summary = _augment_scientific_summary_with_brier(scientific_summary, brier_result)
@@ -2098,6 +2139,8 @@ def _fitted_model_result(
         "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
         "calibration_metrics": brier_result,
         "feature_names": feature_names,
+        # Missing (or infinite) values per numeric feature, replaced by the training rows' median.
+        "imputed_numeric_values": imputed_counts,
         "scientific_summary": scientific_summary,
         "_model": model,
         "_X_encoded": matrices["full_encoded"],
@@ -2637,6 +2680,10 @@ def compare_survival_models(
     )
     if unseen_caution:
         scientific_summary["cautions"].append(unseen_caution)
+    imputed_counts = _median_imputed_counts(frame, features, categorical_features)
+    imputation_caution = _median_imputation_caution(imputed_counts)
+    if imputation_caution:
+        scientific_summary["cautions"].append(imputation_caution)
 
     result = {
         "comparison_table": comparison,
@@ -2660,6 +2707,7 @@ def compare_survival_models(
         "holdout_fraction": DEFAULT_HOLDOUT_FRACTION if evaluation_mode == "holdout" else None,
         "split_seed": int(random_state),
         "evaluation_split_fingerprint": split_fingerprint,
+        "imputed_numeric_values": imputed_counts,
         "scientific_summary": scientific_summary,
         "test_predictions": (
             _test_prediction_block(frame, eval_positions, test_frame, time_column, event_column, predictions)
@@ -3317,6 +3365,7 @@ def cross_validate_survival_models(
     )
     reject_numeric_text_features(frame, features, list(categorical_features or []))
     resolved_categorical = _resolved_categorical_features(frame, features, categorical_features)
+    imputed_counts = _median_imputed_counts(frame, features, categorical_features)
     n_patients = int(frame.shape[0])
     n_events = int(frame[event_column].sum())
     source_rows = _frame_source_rows(frame)
@@ -3618,6 +3667,7 @@ def cross_validate_survival_models(
             else 0,
             "locked-test",
         ),
+        _median_imputation_caution(imputed_counts),
     ):
         if caution:
             scientific_summary["cautions"].append(caution)
@@ -3645,6 +3695,7 @@ def cross_validate_survival_models(
         # Test folds without a comparable pair of patients, skipped for every model alike.
         "n_skipped_folds": len(skipped_folds),
         "skipped_folds": skipped_folds,
+        "imputed_numeric_values": imputed_counts,
         "split_seed": int(random_state),
         "locked_test_fraction": float(locked_test_fraction) if use_locked_test else None,
         "n_development_patients": int(dev_frame.shape[0]),
@@ -5067,6 +5118,11 @@ def counterfactual_survival(
     analysis_frame = result.get("_analysis_frame")
     if analysis_frame is None or not set(features).issubset(set(analysis_frame.columns)):
         analysis_frame = frame
+    if encoder is None:
+        # A trained result without its fitted encoder: rebuild it once from the observed rows,
+        # never from a scenario frame, where a categorical target holds a single value and
+        # would lose its indicator columns (every patient scored as the reference level).
+        encoder = _fit_feature_encoder(analysis_frame, features, cat_feats)
     # The fitted encoder decides how the model saw the target: text columns are one-hot
     # encoded even when the request did not list them as categorical.
     target_is_categorical = target_feature in _encoder_categorical_features(encoder, cat_feats)
@@ -5099,14 +5155,7 @@ def counterfactual_survival(
                 )
             frame_variant[target_feature] = float(numeric_value)
 
-        if encoder is not None:
-            encoded = _transform_feature_encoder(frame_variant, encoder)
-            return _apply_feature_scaler(
-                encoded.reindex(columns=X_original.columns, fill_value=0.0).fillna(0.0),
-                feature_scaler,
-            )
-
-        encoded = _encode_features(frame_variant, features, cat_feats)
+        encoded = _transform_feature_encoder(frame_variant, encoder)
         return _apply_feature_scaler(
             encoded.reindex(columns=X_original.columns, fill_value=0.0).fillna(0.0),
             feature_scaler,

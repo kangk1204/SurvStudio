@@ -375,6 +375,77 @@ def test_cutpoint_scan_records_count_marker_groups_and_the_result_counts_risk_gr
     assert result["n_low"] == above and result["n_high"] == n - above
 
 
+# ── Reference-level scoring and median imputation ───────────────────────────
+
+
+def _holdout_rows(df: pd.DataFrame, features: list[str], n_rows: int) -> list:
+    from survival_toolkit import ml_models as ml
+    from survival_toolkit.analysis import _cohort_frame
+
+    frame = _cohort_frame(df, "os_months", "os_event", extra_columns=features, drop_missing_extra_columns=False)
+    _, eval_positions, mode = ml._split_train_test_positions(frame, "os_event", random_state=42)
+    assert mode == "holdout"
+    return [frame.attrs["source_row_index"][position] for position in eval_positions[:n_rows]]
+
+
+def test_missing_categorical_values_only_in_evaluation_rows_are_cautioned(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=20, n_patients=260).copy()
+    features = ["age", "biomarker_score", "stage"]
+    df["stage"] = df["stage"].astype(object)
+    df.loc[_holdout_rows(df, features, 6), "stage"] = None
+    _patch_fits(monkeypatch, ml)
+    result = ml.compare_survival_models(df, "os_months", "os_event", features, categorical_features=["stage"])
+    cautions = [text for text in result["scientific_summary"]["cautions"] if "never occurs" in text]
+    assert cautions and cautions[0].startswith("6 evaluation row(s) had a categorical level that never occurs")
+    assert "missing categorical value" in cautions[0]
+
+
+@requires_sksurv
+def test_median_imputed_numeric_values_are_counted_and_reported(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=21, n_patients=160).copy()
+    features = ["age", "biomarker_score", "stage"]
+    df.loc[df.index[:5], "age"] = np.nan
+    df.loc[df.index[5:7], "biomarker_score"] = np.inf
+    expected = {"age": 5, "biomarker_score": 2}
+
+    single = ml.train_gradient_boosted_survival(df, "os_months", "os_event", features, n_estimators=5,
+                                                compute_importance=False, compute_brier=False)
+    _patch_fits(monkeypatch, ml)
+    comparison = ml.compare_survival_models(df, "os_months", "os_event", features)
+    cv = ml.cross_validate_survival_models(df, "os_months", "os_event", features, cv_folds=2, cv_repeats=1)
+    for result in (single, comparison, cv):
+        assert result["imputed_numeric_values"] == expected
+        assert any(
+            text.startswith("7 missing numeric value(s) were replaced by the median of the training rows before modeling: "
+                            "age (5), biomarker_score (2).")
+            for text in result["scientific_summary"]["cautions"]
+        )
+
+
+@requires_sksurv
+def test_counterfactual_without_a_fitted_encoder_keeps_the_categorical_target_levels() -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=20, n_patients=200)
+    features = ["age", "biomarker_score", "stage"]
+    fitted = ml.train_random_survival_forest(df, "os_months", "os_event", features, categorical_features=["stage"],
+                                             n_estimators=10, random_state=1, compute_importance=False, compute_brier=False)
+    without_encoder = {key: value for key, value in fitted.items() if key != "_feature_encoder"}
+
+    def run(trained, value):
+        return ml.counterfactual_survival(df, "os_months", "os_event", features, categorical_features=["stage"],
+                                          target_feature="stage", original_value="I", counterfactual_value=value,
+                                          trained_result=trained)["risk_change_pct"]
+
+    # Encoding a one-level scenario frame dropped the stage columns, so every level scored as the reference level.
+    assert run(without_encoder, "IV") != pytest.approx(run(without_encoder, "II"))
+    assert run(without_encoder, "IV") == pytest.approx(run(fitted, "IV"))
+
+
 # ── Rankings without a C-index ──────────────────────────────────────────────
 
 
