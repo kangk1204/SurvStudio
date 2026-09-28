@@ -5,9 +5,11 @@ tab lists and profiles. An omics matrix with thousands of markers is uploaded se
 stored here, and matched to the patients of whichever dataset the marker evaluation runs
 on through an ID column. Two layouts are read: one row per marker with one column per
 patient (as GEO and TCGA distribute expression), or one row per patient with one column
-per marker. The first column holds the marker names or patient IDs. Text files may be
-gzip-compressed, as GEO and UCSC Xena serve them. TCGA sample barcodes (TCGA-05-4244-01A)
-are matched to patient barcodes (TCGA-05-4244) when the dataset holds the latter.
+per marker. The first column holds the marker names or patient IDs; a header one field short
+of the data rows (R's ``write.table`` default) is read as missing that column's name. Text
+files may be gzip-compressed, as GEO and UCSC Xena serve them, and are decoded with the
+encodings the clinical-table loader accepts. TCGA sample barcodes (TCGA-05-4244-01A) are
+matched to patient barcodes (TCGA-05-4244) when the dataset holds the latter.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import csv
 import gzip
 import hashlib
+import io
 import re
 import secrets
 import shutil
@@ -24,7 +27,7 @@ import time
 import zlib
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, NamedTuple, Sequence
+from typing import Any, Callable, NamedTuple, Sequence
 
 import numpy as np
 import pandas as pd
@@ -38,10 +41,26 @@ MATRIX_SUFFIXES = frozenset({".csv", ".tsv", ".txt", ".parquet"})
 ORIENTATIONS = ("auto", "markers_in_rows", "samples_in_rows")
 # A gzip-compressed text matrix is unpacked to a temporary file first; this bounds what it may unpack to.
 MAX_DECOMPRESSED_BYTES = 1024 * 1024 * 1024
+# The longest header (or first data) line read before parsing: 100,000 IDs of up to 160 characters.
+MAX_HEADER_CHARS = 16 * 1024 * 1024
+# Rows or data columns beyond this exceed the limits of either layout.
+_MAX_DIMENSION = max(MAX_MATRIX_MARKERS, MAX_MATRIX_SAMPLES)
 
 _TCGA_PATIENT = re.compile(r"^TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}$", re.IGNORECASE)
 _TCGA_SAMPLE = re.compile(r"^(TCGA-[A-Z0-9]{2}-[A-Z0-9]{4})-(\d{2})([A-Z]?)(?:-.*)?$", re.IGNORECASE)
-_TCGA_TUMOUR_TYPES = {"01": "primary tumour", "02": "recurrent tumour", "03": "primary blood cancer", "05": "additional primary", "06": "metastatic", "07": "additional metastatic"}
+_TCGA_TUMOUR_TYPES = {
+    "01": "primary tumour",
+    "02": "recurrent tumour",
+    "03": "primary blood cancer",
+    "04": "recurrent blood cancer",
+    "05": "additional primary",
+    "06": "metastatic",
+    "07": "additional metastatic",
+    "08": "tumour-derived cells",
+    "09": "primary blood cancer (bone marrow)",
+}
+# Digit-only IDs, and whole numbers written with a decimal point ("101.0").
+_WHOLE_NUMBER_TEXT = re.compile(r"^[0-9]+(?:\.0*)?$")
 
 
 class MarkerMatrix(NamedTuple):
@@ -112,14 +131,31 @@ def _sniffed_suffix(path: Path) -> str:
     return ".tsv" if "\t" in first else ".csv"
 
 
+def _tcga_sample_kind(sample_type: str) -> str:
+    """TCGA sample-type codes by range: 01-09 tumour, 10-19 normal tissue, 20-29 control, others (cell lines, xenografts)."""
+    code = int(sample_type)
+    if 1 <= code <= 9:
+        return "tumour"
+    if 10 <= code <= 19:
+        return "normal-tissue"
+    if 20 <= code <= 29:
+        return "control"
+    return "other"
+
+
 def _tcga_sample_map(ids: Sequence[Any], patient_keys: set[str]) -> _SampleMap | None:
     """TCGA sample barcodes matched to the dataset's patient barcodes: one tumour sample per patient.
 
-    Normal-tissue (10-19) and control (20-29) samples are left out. A patient with several tumour
-    samples keeps the lowest sample type (01, primary tumour, first) and then the first vial.
+    Normal-tissue (10-19), control (20-29) and other (30 and above) samples are left out. A patient
+    with several tumour samples keeps the lowest sample type (01, primary tumour, first) and then the
+    first vial. Barcodes are compared without regard to case; the dataset's spelling is kept.
     """
     if not patient_keys or sum(1 for key in patient_keys if _TCGA_PATIENT.match(key)) < 0.8 * len(patient_keys):
         return None
+    dataset_key: dict[str, str] = {}
+    for key in sorted(patient_keys):
+        if _TCGA_PATIENT.match(key):
+            dataset_key.setdefault(key.upper(), key)
     chosen: dict[str, tuple[str, str, int]] = {}
     left_out: dict[str, int] = {}
     parsed = 0
@@ -128,12 +164,13 @@ def _tcga_sample_map(ids: Sequence[Any], patient_keys: set[str]) -> _SampleMap |
         if not match:
             continue
         parsed += 1
-        patient, sample_type, vial = match.group(1).upper(), match.group(2), match.group(3).upper()
-        if sample_type not in _TCGA_TUMOUR_TYPES:
-            kind = "normal-tissue" if sample_type.startswith("1") else "control"
+        sample_type, vial = match.group(2), match.group(3).upper()
+        kind = _tcga_sample_kind(sample_type)
+        if kind != "tumour":
             left_out[kind] = left_out.get(kind, 0) + 1
             continue
-        if patient not in patient_keys:
+        patient = dataset_key.get(match.group(1).upper())
+        if patient is None:
             continue
         current = chosen.get(patient)
         if current is None or (sample_type, vial) < current[:2]:
@@ -148,7 +185,7 @@ def _tcga_sample_map(ids: Sequence[Any], patient_keys: set[str]) -> _SampleMap |
     used: dict[str, int] = {}
     for _, (sample_type, _, _) in ordered:
         used[sample_type] = used.get(sample_type, 0) + 1
-    used_text = ", ".join(f"{count} {_TCGA_TUMOUR_TYPES[code]} ({code})" for code, count in sorted(used.items()))
+    used_text = ", ".join(f"{count} {_TCGA_TUMOUR_TYPES.get(code, 'tumour')} ({code})" for code, count in sorted(used.items()))
     left_text = ", ".join(f"{count} {kind}" for kind, count in sorted(left_out.items()))
     note = f"TCGA sample barcodes were matched to patient barcodes: used {used_text} sample(s)" + (f"; left out {left_text} sample(s)." if left_text else ".")
     return _SampleMap(positions=[item[1][2] for item in ordered], keys=[item[0] for item in ordered], note=note)
@@ -160,13 +197,40 @@ def _examples(values: Sequence[Any], limit: int = 3) -> str:
 
 
 def id_key(value: Any) -> str | None:
-    """Patient IDs compared as text, so 101, 101.0 and "101" match; blanks match nothing."""
-    if value is None or (isinstance(value, float) and not np.isfinite(value)):
+    """Patient IDs compared as text, so 101, 101.0, "101" and "00101" match; blanks match nothing.
+
+    Digit-only IDs (and whole numbers written with a decimal point) lose their leading zeros:
+    the clinical-table loader reads "00101" as the number 101, while a matrix keeps it as text.
+    """
+    if value is None:
         return None
-    if isinstance(value, (float, np.floating)) and float(value).is_integer():
-        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        if not np.isfinite(value):
+            return None
+        if float(value).is_integer():
+            return str(int(value))
     if isinstance(value, (int, np.integer)):
         return str(int(value))
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if _WHOLE_NUMBER_TEXT.match(text):
+        return str(int(text.split(".", 1)[0]))
+    return text or None
+
+
+def _name_key(value: Any) -> str | None:
+    """Marker names as written (numbers as id_key writes them, so a column named 7157.0 reads as 7157)."""
+    if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, (bool, np.bool_)):
+        return id_key(value)
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
     text = str(value).strip()
     return text or None
 
@@ -175,19 +239,87 @@ def _separator(suffix: str) -> str:
     return "\t" if suffix in {".tsv", ".txt"} else ","
 
 
-def _text_shape(path: Path, separator: str) -> tuple[list[str], int]:
-    """Header fields and number of data lines, read without parsing the table."""
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        header = next(csv.reader(handle, delimiter=separator), [])
+def _check_bounds(n_rows: int, n_columns: int) -> None:
+    """Limits that hold for either layout, checked before the table is parsed (its layout is not known yet)."""
+    if max(n_rows, n_columns) > _MAX_DIMENSION:
+        which = "rows" if n_rows > _MAX_DIMENSION else "data columns"
+        raise UserInputError(
+            f"The matrix has more than {_MAX_DIMENSION:,} {which}; SurvStudio reads at most "
+            f"{MAX_MATRIX_MARKERS:,} markers and {MAX_MATRIX_SAMPLES:,} patients."
+        )
+    if n_rows * n_columns > MAX_MATRIX_CELLS:
+        raise UserInputError(
+            f"The matrix has {n_rows:,} rows and {n_columns:,} data columns; SurvStudio reads at most "
+            f"{MAX_MATRIX_CELLS:,} values. Keep fewer markers, for example the most variable ones."
+        )
+
+
+def _count_data_lines(path: Path) -> int:
+    """Lines after the header, counted on the raw bytes; beyond what any layout holds, the count stops.
+
+    Blank lines and quoted line breaks count too, so this is an upper bound for the bound checks.
+    """
     lines = 0
     last = b"\n"
     with path.open("rb") as handle:
         while chunk := handle.read(1 << 20):
             lines += chunk.count(b"\n")
             last = chunk[-1:]
+            if lines > _MAX_DIMENSION + 1:
+                return _MAX_DIMENSION + 1
     if last != b"\n":
         lines += 1
-    return [field.strip() for field in header], max(lines - 1, 0)
+    return max(lines - 1, 0)
+
+
+def _text_encodings(path: Path) -> list[str]:
+    """Encodings to try, in the order the clinical-table loader tries them."""
+    from survival_toolkit.analysis import _TEXT_SNIFF_BYTES, _text_encoding_candidates
+
+    with path.open("rb") as handle:
+        sample = handle.read(_TEXT_SNIFF_BYTES + 1)
+    complete = len(sample) <= _TEXT_SNIFF_BYTES
+    candidates = _text_encoding_candidates(sample[:_TEXT_SNIFF_BYTES], complete=complete)
+    # utf-8-sig also reads files without a byte-order mark and drops one that is there.
+    return list(dict.fromkeys("utf-8-sig" if encoding == "utf-8" else encoding for encoding in candidates))
+
+
+def _first_lines(path: Path, separator: str, encoding: str) -> tuple[list[str], int | None]:
+    """The header fields and the number of fields on the first data line, from lines of bounded length."""
+    lines = []
+    with path.open("r", encoding=encoding, errors="strict", newline="") as handle:
+        for _ in range(2):
+            line = handle.readline(MAX_HEADER_CHARS + 1)
+            if len(line) > MAX_HEADER_CHARS:
+                raise UserInputError(f"A line of the matrix is longer than {MAX_HEADER_CHARS:,} characters.")
+            if not line:
+                break
+            lines.append(line)
+    try:
+        rows = [next(csv.reader(io.StringIO(line), delimiter=separator), []) for line in lines]
+    except csv.Error as exc:
+        raise UserInputError("The first lines of the matrix could not be read as a table.") from exc
+    header = [field.strip() for field in rows[0]] if rows else []
+    return header, (len(rows[1]) if len(rows) > 1 else None)
+
+
+def _read_text(path: Path, separator: str, encoding: str, **options: Any) -> pd.DataFrame:
+    """The data lines under the header (read separately), with the first column kept as text."""
+    try:
+        return pd.read_csv(
+            path,
+            sep=separator,
+            header=None,
+            skiprows=1,
+            dtype={0: str},
+            encoding=encoding,
+            encoding_errors="strict",
+            **options,
+        )
+    except pd.errors.EmptyDataError as exc:
+        raise UserInputError("The matrix has a header but no data rows.") from exc
+    except pd.errors.ParserError as exc:
+        raise UserInputError("Every row of the matrix must have as many fields as the header.") from exc
 
 
 def _check_shape(n_markers: int, n_samples: int) -> None:
@@ -229,10 +361,10 @@ def _orientation(
     )
 
 
-def _unique_names(values: Sequence[Any], what: str) -> tuple[str, ...]:
+def _unique_names(values: Sequence[Any], what: str, key_of: Callable[[Any], str | None] = id_key) -> tuple[str, ...]:
     names = []
     for value in values:
-        key = id_key(value)
+        key = key_of(value)
         if key is None:
             raise UserInputError(f"The matrix has a blank {what}.")
         names.append(key)
@@ -292,33 +424,70 @@ def _read_matrix_file(path: Path, suffix: str, filename: str, *, patient_ids: Se
             raise UserInputError("The Parquet file could not be read.") from exc
         if metadata is not None:
             # Checked before decompressing: the layout is not known yet, so both dimensions are bounded.
-            n_rows, n_columns = int(metadata.num_rows), max(int(metadata.num_columns) - 1, 0)
-            if n_rows * n_columns > MAX_MATRIX_CELLS or max(n_rows, n_columns) > MAX_MATRIX_SAMPLES:
-                raise UserInputError(
-                    f"The matrix has {n_rows:,} rows and {n_columns:,} data columns; SurvStudio reads at most "
-                    f"{MAX_MATRIX_CELLS:,} values. Keep fewer markers, for example the most variable ones."
-                )
+            _check_bounds(int(metadata.num_rows), max(int(metadata.num_columns) - 1, 0))
         frame = pd.read_parquet(path)
+        row_numbers_dropped = False
+        if not isinstance(frame.index, pd.RangeIndex):
+            # pandas stores a frame's index in the file. Gene names or patient IDs set as the index are
+            # the ID column; an unnamed integer index is the row numbers of a filtered frame.
+            if frame.index.nlevels == 1 and frame.index.name is None and pd.api.types.is_integer_dtype(frame.index):
+                frame = frame.reset_index(drop=True)
+                row_numbers_dropped = True
+            else:
+                try:
+                    frame = frame.reset_index()
+                except ValueError as exc:
+                    raise UserInputError("The Parquet file's index has the same name as one of its columns; rename one of them.") from exc
         if frame.shape[1] < 2:
             raise UserInputError("The matrix needs an ID column and at least one data column.")
         frame = frame.set_index(frame.columns[0])
         _check_shape(frame.shape[1], frame.shape[0])
         column_names = list(frame.columns)
-        layout, sample_map = _orientation(column_names, list(frame.index), patient_keys, orientation, patient_examples)
+        try:
+            layout, sample_map = _orientation(column_names, list(frame.index), patient_keys, orientation, patient_examples)
+        except UserInputError as exc:
+            if not row_numbers_dropped:
+                raise
+            raise UserInputError(
+                f"{exc} The file's unnamed integer index was read as row numbers; give the index a name, or store the IDs as the first column."
+            ) from exc
     else:
         separator = _separator(suffix)
-        header, n_lines = _text_shape(path, separator)
-        if len(header) < 2:
-            raise UserInputError("The matrix needs an ID column and at least one data column.")
-        first_column = pd.read_csv(path, sep=separator, usecols=[0], dtype=str, encoding="utf-8-sig").iloc[:, 0].tolist()
+        # Everything is bounded from the raw lines before pandas parses anything.
+        n_lines = _count_data_lines(path)
+        last_error: Exception | None = None
+        for encoding in _text_encodings(path):
+            try:
+                header, first_width = _first_lines(path, separator, encoding)
+                if len(header) < 2:
+                    raise UserInputError("The matrix needs an ID column and at least one data column.")
+                if first_width == len(header) + 1:
+                    # R's write.table writes no header field above the row names.
+                    header = ["", *header]
+                _check_bounds(n_lines, len(header) - 1)
+                first_column = _read_text(path, separator, encoding, usecols=[0]).iloc[:, 0].tolist()
+            except UnicodeDecodeError as exc:
+                last_error = exc
+                continue
+            break
+        else:
+            from survival_toolkit.analysis import TEXT_ENCODING_LABELS
+
+            tried = ", ".join(dict.fromkeys(TEXT_ENCODING_LABELS.get(encoding, encoding) for encoding in _text_encodings(path)))
+            raise UserInputError(f"The matrix file could not be decoded as text (tried {tried}). Save it as UTF-8 text.") from last_error
         layout, sample_map = _orientation(header[1:], first_column, patient_keys, orientation, patient_examples)
         n_data_columns = len(header) - 1
         _check_shape(*((n_lines, n_data_columns) if layout == "markers_in_rows" else (n_data_columns, n_lines)))
-        frame = pd.read_csv(path, sep=separator, index_col=0, encoding="utf-8-sig", low_memory=False)
-        # pandas renames repeated header fields ("A", "A.1"), so names come from the raw header.
+        # IDs and marker names stay text, as in the orientation check above ("00101" is not 101 yet).
+        try:
+            frame = _read_text(path, separator, encoding, index_col=0, low_memory=False)
+        except UnicodeDecodeError as exc:
+            raise UserInputError("The matrix holds characters that are not valid text in its encoding; save it as UTF-8 text.") from exc
+        # Names come from the raw header (pandas would rename repeated fields "A", "A.1").
         column_names = header[1:]
         if len(column_names) != frame.shape[1]:
             raise UserInputError("Every row of the matrix must have as many fields as the header.")
+        frame.columns = column_names
 
     if sample_map is not None:
         # Only the matched tumour samples are kept, under the patients' barcodes.
@@ -329,12 +498,12 @@ def _read_matrix_file(path: Path, suffix: str, filename: str, *, patient_ids: Se
             frame = frame.iloc[sample_map.positions]
             frame.index = list(sample_map.keys)
     if layout == "markers_in_rows":
-        marker_names = _unique_names(list(frame.index), "marker name")
+        marker_names = _unique_names(list(frame.index), "marker name", _name_key)
         sample_keys = _unique_names(column_names, "patient ID")
         values = _numeric_block(frame, "patient").T.copy()
     else:
         sample_keys = _unique_names(list(frame.index), "patient ID")
-        marker_names = _unique_names(column_names, "marker name")
+        marker_names = _unique_names(column_names, "marker name", _name_key)
         values = _numeric_block(frame, "marker")
     _check_shape(len(marker_names), len(sample_keys))
     digest = hashlib.sha256()

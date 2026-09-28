@@ -218,3 +218,125 @@ def test_tcga_sample_barcodes_are_matched_to_patient_barcodes(tmp_path: Path) ->
     assert read_marker_matrix(path, "wide.csv", patient_ids=patients).sample_keys == matrix.sample_keys
     exact = read_marker_matrix(path, "wide.csv", patient_ids=samples)
     assert exact.id_note == "" and len(exact.sample_keys) == len(samples)
+
+
+def test_tcga_sample_types_are_classified_by_range_and_barcodes_by_letters(tmp_path: Path) -> None:
+    # Lower-case barcodes in the dataset; 04 and 09 are tumour types, 50 is a cell line.
+    patients = ["tcga-ab-0001", "tcga-ab-0002", "tcga-ab-0003", "tcga-ab-0004"]
+    samples = ["TCGA-AB-0001-09A", "TCGA-AB-0002-04", "TCGA-AB-0003-50", "TCGA-AB-0003-01", "TCGA-AB-0004-20"]
+    path = tmp_path / "tcga.tsv"
+    _expression(samples, n_genes=3).to_csv(path, sep="\t", index_label="sample")
+
+    matrix = read_marker_matrix(path, "tcga.tsv", patient_ids=patients)
+
+    # The dataset's own spelling is kept, so its rows match.
+    assert matrix.sample_keys == ("tcga-ab-0001", "tcga-ab-0002", "tcga-ab-0003")
+    assert match_summary(matrix, patients)["n_matched"] == 3
+    assert "1 recurrent blood cancer (04)" in matrix.id_note and "(09)" in matrix.id_note
+    assert "1 other" in matrix.id_note and "1 control" in matrix.id_note
+
+
+def test_patient_ids_with_leading_zeros_match_the_numbers_the_loader_reads(tmp_path: Path) -> None:
+    from survival_toolkit.analysis import load_dataframe
+
+    ids = [f"{index:05d}" for index in range(1, 31)]
+    clinical = load_dataframe(_clinical().assign(patient_id=ids).to_csv(index=False).encode("utf-8"), "clinical.csv")
+    # The loader reads "00001" as the number 1 ...
+    assert clinical["patient_id"].iloc[0] == 1
+    genes = _expression(ids)
+    for layout, frame in (("markers_in_rows", genes), ("samples_in_rows", genes.T)):
+        path = tmp_path / f"{layout}.csv"
+        frame.to_csv(path, index_label="id")
+        # ... while the matrix keeps the text; both sides compare as the same key.
+        matrix = read_marker_matrix(path, "m.csv", patient_ids=clinical["patient_id"].tolist())
+        assert matrix.orientation == layout
+        assert matrix.sample_keys[:2] == ("1", "2")
+        assert match_summary(matrix, clinical["patient_id"].tolist())["n_matched"] == 30
+    assert id_key("00101") == id_key(101) == id_key(101.0) == id_key("101.0") == id_key(" 101 ") == "101"
+    assert id_key("A0101") == "A0101" and id_key("1.5") == "1.5" and id_key(pd.NA) is None and id_key(" ") is None
+
+
+def test_parquet_matrices_keep_a_stored_pandas_index(tmp_path: Path) -> None:
+    clinical = _clinical()
+    patients = clinical["patient_id"].tolist()
+    genes = _expression(patients, n_genes=6).round(3)
+    genes.index.name = "gene"
+
+    # to_parquet stores the index: here the gene names, one row per gene.
+    genes.to_parquet(tmp_path / "indexed.parquet")
+    matrix = read_marker_matrix(tmp_path / "indexed.parquet", "indexed.parquet", patient_ids=patients)
+    assert matrix.orientation == "markers_in_rows"
+    assert matrix.marker_names == tuple(f"GENE{index}" for index in range(6))
+    assert matrix.sample_keys == tuple(patients)
+    assert matrix.values[0] == pytest.approx(genes["P000"].to_numpy(dtype=np.float32))
+
+    # One row per patient with the patient IDs as an unnamed index.
+    by_patient = genes.T
+    by_patient.index.name = None
+    by_patient.to_parquet(tmp_path / "patients.parquet")
+    matrix = read_marker_matrix(tmp_path / "patients.parquet", "patients.parquet", patient_ids=patients)
+    assert matrix.orientation == "samples_in_rows" and matrix.sample_keys == tuple(patients)
+
+    # A filtered frame stores its row numbers as an unnamed integer index; they are not IDs.
+    filtered = genes.reset_index().iloc[[0, 2, 3, 5]]
+    filtered.to_parquet(tmp_path / "filtered.parquet")
+    matrix = read_marker_matrix(tmp_path / "filtered.parquet", "filtered.parquet", patient_ids=patients)
+    assert matrix.marker_names == ("GENE0", "GENE2", "GENE3", "GENE5") and len(matrix.sample_keys) == 30
+
+    # Numeric patient IDs in an unnamed index look like row numbers; the error says how to fix that.
+    numeric = _expression([str(index) for index in range(100, 130)]).T
+    numeric.index = list(range(100, 130))
+    numeric.to_parquet(tmp_path / "numeric.parquet")
+    with pytest.raises(UserInputError, match="unnamed integer index was read as row numbers"):
+        read_marker_matrix(tmp_path / "numeric.parquet", "numeric.parquet", patient_ids=list(range(100, 130)))
+
+
+def test_r_write_table_matrices_without_a_row_name_header_are_read(tmp_path: Path) -> None:
+    clinical = _clinical()
+    patients = clinical["patient_id"].tolist()
+    genes = _expression(patients).round(3)
+    # R's write.table default: the header lists the column names only, one field short of each row.
+    text = "\t".join(patients) + "\n" + "".join(f"{gene}\t" + "\t".join(f"{value}" for value in row) + "\n" for gene, row in genes.iterrows())
+    path = tmp_path / "r_default.tsv"
+    path.write_text(text, encoding="utf-8")
+
+    matrix = read_marker_matrix(path, "r_default.tsv", patient_ids=patients)
+
+    assert matrix.orientation == "markers_in_rows"
+    assert matrix.sample_keys == tuple(patients) and matrix.marker_names[:2] == ("GENE0", "GENE1")
+    assert matrix.values[:, 3] == pytest.approx(genes.loc["GENE3"].to_numpy(dtype=np.float32))
+
+
+def test_matrices_in_other_text_encodings_are_read(tmp_path: Path) -> None:
+    clinical = _clinical()
+    patients = clinical["patient_id"].tolist()
+    genes = _expression(patients, n_genes=4)
+    genes.index = ["GENE0", "CD274 (PD-L1) µg", "Café", "GENE3"]
+    for encoding in ("cp1252", "utf-16", "utf-8-sig"):
+        path = tmp_path / f"{encoding}.csv"
+        path.write_bytes(genes.to_csv(index_label="gene").encode(encoding))
+        matrix = read_marker_matrix(path, "m.csv", patient_ids=patients)
+        assert matrix.marker_names == ("GENE0", "CD274 (PD-L1) µg", "Café", "GENE3"), encoding
+        assert matrix.values[:, 2] == pytest.approx(genes.loc["Café"].to_numpy(dtype=np.float32))
+
+
+def test_text_matrices_are_bounded_before_pandas_parses_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from survival_toolkit import marker_matrix
+
+    def never(*args, **kwargs):
+        raise AssertionError("pandas parsed a matrix that the bound checks should have refused")
+
+    monkeypatch.setattr(marker_matrix.pd, "read_csv", never)
+    tall = tmp_path / "tall.tsv"
+    tall.write_text("gene\tP000\n" + "g\t1\n" * 250_000, encoding="utf-8")
+    with pytest.raises(UserInputError, match="more than 100,000 rows"):
+        read_marker_matrix(tall, "tall.tsv", patient_ids=["P000"])
+    wide = tmp_path / "wide.tsv"
+    wide.write_text("gene\t" + "\t".join(f"P{index}" for index in range(100_001)) + "\n", encoding="utf-8")
+    with pytest.raises(UserInputError, match="more than 100,000 data columns"):
+        read_marker_matrix(wide, "wide.tsv", patient_ids=["P0"])
+    monkeypatch.setattr(marker_matrix, "MAX_MATRIX_CELLS", 500)
+    cells = tmp_path / "cells.tsv"
+    _expression([f"P{index:03d}" for index in range(30)], n_genes=20).to_csv(cells, sep="\t", index_label="gene")
+    with pytest.raises(UserInputError, match="at most 500 values"):
+        read_marker_matrix(cells, "cells.tsv", patient_ids=["P000"])
