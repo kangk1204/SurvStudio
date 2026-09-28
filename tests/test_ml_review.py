@@ -46,7 +46,8 @@ def test_counterfactual_resolves_numeric_level_text_and_refuses_unknown_levels()
     fitted = ml.train_random_survival_forest(
         df, "os_months", "os_event", features, categorical_features=["grade"], n_estimators=30, random_state=1
     )
-    assert fitted["_feature_encoder"]["categorical_mappings"]["grade"]["all_levels"] == ["1.0", "2.0", "3.0"]
+    # The shared encoder stores whole-number codes of a float column as canonical labels ("3", not "3.0").
+    assert fitted["_feature_encoder"]["categorical_mappings"]["grade"]["all_levels"] == ["1", "2", "3"]
 
     def run(value, original=None):
         return ml.counterfactual_survival(
@@ -54,19 +55,19 @@ def test_counterfactual_resolves_numeric_level_text_and_refuses_unknown_levels()
             original_value=original, counterfactual_value=value, trained_result=fitted,
         )
 
-    as_level = run("3.0")
-    # 3 and "3" name the level "3.0" of the float-coded column instead of falling back to the reference level.
-    for value in (3, "3", 3.0, " 3.0 "):
+    as_level = run("3")
+    # 3, 3.0 and "3.0" name the level "3" of the float-coded column instead of falling back to the reference level.
+    for value in (3, "3.0", 3.0, " 3.0 ", " 3 "):
         result = run(value)
         assert result["risk_change_pct"] == pytest.approx(as_level["risk_change_pct"])
-        assert "to 3.0" in result["scientific_summary"]["headline"]
+        assert "to 3" in result["scientific_summary"]["headline"]
     assert as_level["risk_change_pct"] > 5.0
 
     for bad in ("9 (does not exist)", "Stage 4", 4):
-        with pytest.raises(ValueError, match="is not a level of 'grade'.*'1.0', '2.0', '3.0'"):
+        with pytest.raises(ValueError, match="is not a level of 'grade'.*'1', '2', '3'"):
             run(bad)
     with pytest.raises(ValueError, match="is not a level of 'grade'"):
-        run("3.0", original="unknown")
+        run("3", original="unknown")
 
 
 @requires_sksurv

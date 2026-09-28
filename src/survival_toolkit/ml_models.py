@@ -1145,8 +1145,8 @@ def _resolve_category_level(feature_encoder: dict[str, Any] | None, feature: str
     """The encoder level that a requested value of a categorical feature names.
 
     A value the model never saw would be encoded as the reference level, so it is refused.
-    Numeric text matches a level of the same number ("3" matches "3.0" of a float-coded
-    column).
+    Numbers and numeric text match a level of the same number (3, 3.0 and "3.0" match the
+    canonical level "3" of a whole-number code column).
     """
     mapping = {}
     if isinstance(feature_encoder, dict):
