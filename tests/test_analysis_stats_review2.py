@@ -885,3 +885,46 @@ def test_library_calls_check_the_settings_the_api_checks() -> None:
             analysis.compute_km_analysis(df, "os_months", "os_event", logrank_weight="fleming_harrington", fh_p=power)
     with pytest.raises(ValueError, match="risk_table_points must be between 1 and 100"):
         analysis.compute_km_analysis(df, "os_months", "os_event", risk_table_points=1000)
+
+
+# ---------------------------------------------------------------------------------------
+# Cox reporting (R5#13, R5#16)
+
+
+def test_cox_tables_follow_the_covariate_order() -> None:
+    from survival_toolkit.sample_data import make_example_dataset
+
+    df = make_example_dataset(seed=23, n_patients=160)
+    result = compute_cox_analysis(df, "os_months", "os_event", ["age", "stage", "biomarker_score", "treatment"])
+    expected = ["age", "stage: II vs I", "stage: III vs I", "stage: IV vs I", "biomarker_score", "treatment: Standard vs Combination"]
+    assert [row["Label"] for row in result["results_table"]] == expected
+    assert [row["Term"] for row in result["diagnostics_table"]] == [*expected, "Global PH test (Grambsch-Therneau)"]
+    assert [panel["term"] for panel in result["diagnostics_plot_data"]] == expected
+    # The same fit: reordering the covariates only reorders the rows.
+    reordered = compute_cox_analysis(df, "os_months", "os_event", ["treatment", "biomarker_score", "stage", "age"])
+    by_label = {row["Label"]: row["Beta"] for row in reordered["results_table"]}
+    assert [by_label[row["Label"]] for row in result["results_table"]] == pytest.approx(
+        [row["Beta"] for row in result["results_table"]], rel=1e-9
+    )
+    assert [row["Label"] for row in reordered["results_table"]][:2] == ["treatment: Standard vs Combination", "biomarker_score"]
+
+
+def test_cox_helpers_let_programming_errors_through() -> None:
+    class _BrokenDesign:
+        def __array__(self, dtype=None, copy=None):
+            raise AttributeError("'Design' object has no attribute 'values'")
+
+    with pytest.raises(AttributeError):
+        analysis._cox_design_condition_number(_BrokenDesign())
+    assert analysis._cox_design_condition_number(np.array([[1.0, np.nan]])) is None
+
+    class _Model:
+        @staticmethod
+        def loglike(params):
+            raise KeyError("strata")
+
+    class _Results:
+        model = _Model()
+
+    with pytest.raises(KeyError):
+        analysis._cox_likelihood_ratio_test(_Results(), -10.0, 1)

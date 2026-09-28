@@ -7258,23 +7258,16 @@ def _validate_cox_covariates(covariates: Sequence[str]) -> None:
 def _normalize_cox_strata_columns(
     strata_columns: Sequence[str] | None,
     covariates: Sequence[str],
-    categorical_covariates: Sequence[str],
 ) -> list[str]:
+    # Categorical covariates are always selected covariates too (see
+    # _resolve_cox_categorical_covariates), so this check also covers them.
     normalized = list(dict.fromkeys(str(column) for column in (strata_columns or []) if str(column).strip()))
     covariate_set = {str(column) for column in covariates}
-    categorical_set = {str(column) for column in categorical_covariates}
     overlap = sorted(set(normalized) & covariate_set)
     if overlap:
         joined = ", ".join(overlap)
         raise ValueError(
             f"Strata variables cannot also be included as Cox covariates ({joined}). "
-            "Use each variable only once in the Cox specification."
-        )
-    categorical_overlap = sorted(set(normalized) & categorical_set)
-    if categorical_overlap:
-        joined = ", ".join(categorical_overlap)
-        raise ValueError(
-            f"Strata variables cannot also be marked as categorical covariates ({joined}). "
             "Use each variable only once in the Cox specification."
         )
     return normalized
@@ -7330,13 +7323,21 @@ def _cox_model_frame(
 def _cox_design_condition_number(exog: Any) -> float | None:
     try:
         design = np.asarray(exog, dtype=float)
-    except Exception:
+    except MemoryError:
+        raise
+    except Exception as exc:
+        if must_propagate(exc):
+            raise
         return None
     if design.ndim != 2 or design.size == 0 or not np.isfinite(design).all():
         return None
     try:
         condition_number = float(np.linalg.cond(design))
-    except Exception:
+    except MemoryError:
+        raise
+    except Exception as exc:
+        if must_propagate(exc):
+            raise
         return None
     if not math.isfinite(condition_number):
         return None
@@ -7743,13 +7744,32 @@ def _cox_complete_case_frame(preview_frame: pd.DataFrame, columns: Sequence[str]
     return frame
 
 
+def _cox_term_order(
+    term_names: Sequence[str],
+    reference_levels: dict[str, str],
+    column_by_alias: dict[str, str] | None,
+    covariates: Sequence[str] | None,
+) -> list[int]:
+    """Positions of the fitted terms in the order the covariates were selected.
+
+    The formula parser puts categorical terms before numeric ones; the tables follow the
+    user's covariate order instead, keeping the levels of each categorical together.
+    """
+    if not covariates:
+        return list(range(len(term_names)))
+    position = {str(column): index for index, column in enumerate(covariates)}
+    variables = [str(_clean_term(term, reference_levels, column_by_alias)[0]) for term in term_names]
+    return sorted(range(len(term_names)), key=lambda index: (position.get(variables[index], len(position)), index))
+
+
 def _cox_coefficient_rows(
     results: Any,
     reference_levels: dict[str, str],
     stability_snapshot: dict[str, Any],
     column_by_alias: dict[str, str] | None = None,
+    covariates: Sequence[str] | None = None,
 ) -> tuple[list[dict[str, Any]], np.ndarray, float]:
-    """Hazard-ratio table rows, fitted risk scores, and the partial log-likelihood.
+    """Hazard-ratio table rows (in covariate order), fitted risk scores, and the partial log-likelihood.
 
     A fit with any non-finite estimate is rejected with a stability explanation.
     """
@@ -7765,8 +7785,9 @@ def _cox_coefficient_rows(
         raise ValueError(_cox_nonfinite_estimate_message(stability_snapshot))
 
     model_rows: list[dict[str, Any]] = []
-    for idx, term in enumerate(results.model.exog_names):
-        variable, label, reference = _clean_term(term, reference_levels, column_by_alias)
+    term_names = list(results.model.exog_names)
+    for idx in _cox_term_order(term_names, reference_levels, column_by_alias, covariates):
+        variable, label, reference = _clean_term(term_names[idx], reference_levels, column_by_alias)
         beta = float(param_vector[idx])
         model_rows.append(
             {
@@ -7795,8 +7816,9 @@ def _cox_ph_diagnostics(
     reference_levels: dict[str, str],
     stability_snapshot: dict[str, Any],
     column_by_alias: dict[str, str] | None = None,
+    covariates: Sequence[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-    """Grambsch-Therneau PH tests (per term and global) and scaled Schoenfeld residual panels."""
+    """Grambsch-Therneau PH tests (per term, in covariate order, and global) and scaled Schoenfeld residual panels."""
     raw_times = frame[time_column].to_numpy(dtype=float)
     schoenfeld = _efron_schoenfeld_residuals(
         np.asarray(results.model.exog, dtype=float),
@@ -7817,7 +7839,9 @@ def _cox_ph_diagnostics(
     ph_test = _cox_grambsch_therneau_test(schoenfeld, cov_matrix, log_time)
     diagnostic_rows: list[dict[str, Any]] = []
     diagnostic_plot_data: list[dict[str, Any]] = []
-    for idx, term in enumerate(results.model.exog_names):
+    term_names = list(results.model.exog_names)
+    for idx in _cox_term_order(term_names, reference_levels, column_by_alias, covariates):
+        term = term_names[idx]
         valid = np.isfinite(scaled_schoenfeld[:, idx]) & np.isfinite(log_time)
         rho = ph_test["term_rho"][idx] if idx < len(ph_test["term_rho"]) else None
         chi_square = ph_test["term_statistics"][idx] if idx < len(ph_test["term_statistics"]) else None
@@ -7904,12 +7928,15 @@ def _cox_martingale_screen(
 def _cox_likelihood_ratio_test(results: Any, llf_value: float, k_params: int) -> dict[str, Any]:
     """Overall likelihood-ratio test of the fitted model against the null model."""
     llnull_raw = getattr(results, "llnull", None)
-    if llnull_raw is None:
+    loglike = getattr(getattr(results, "model", None), "loglike", None)
+    if llnull_raw is None and callable(loglike):
         try:
-            llnull_raw = results.model.loglike(np.zeros(k_params, dtype=float))
+            llnull_raw = loglike(np.zeros(k_params, dtype=float))
         except MemoryError:
             raise
-        except Exception:
+        except Exception as exc:
+            if must_propagate(exc):
+                raise
             llnull_raw = None
     llnull_value = _safe_float(llnull_raw)
     lr_statistic = None
@@ -7978,7 +8005,7 @@ def compute_cox_analysis(
     covariates = list(dict.fromkeys(covariates))
     _validate_cox_covariates(covariates)
     categorical_covariates = _resolve_cox_categorical_covariates(df, covariates, categorical_covariates)
-    strata_columns = _normalize_cox_strata_columns(strata_columns, covariates, categorical_covariates)
+    strata_columns = _normalize_cox_strata_columns(strata_columns, covariates)
     preview_frame = _prepare_cox_frame(
         df,
         time_column=time_column,
@@ -8013,7 +8040,9 @@ def compute_cox_analysis(
     results = _fit_cox_model(model, stability_snapshot)
 
     reference_levels = _reference_levels(frame, categorical_covariates)
-    model_rows, risk_score, llf_value = _cox_coefficient_rows(results, reference_levels, stability_snapshot, column_by_alias)
+    model_rows, risk_score, llf_value = _cox_coefficient_rows(
+        results, reference_levels, stability_snapshot, column_by_alias, covariates
+    )
     diagnostic_rows, diagnostic_plot_data, global_ph_screen = _cox_ph_diagnostics(
         results,
         frame,
@@ -8023,6 +8052,7 @@ def compute_cox_analysis(
         reference_levels=reference_levels,
         stability_snapshot=stability_snapshot,
         column_by_alias=column_by_alias,
+        covariates=covariates,
     )
     martingale_plot_data, martingale_note = _cox_martingale_screen(
         results,
@@ -8142,7 +8172,7 @@ def preview_cox_analysis_inputs(
     covariates = list(dict.fromkeys(covariates))
     _validate_cox_covariates(covariates)
     categorical_covariates = _resolve_cox_categorical_covariates(df, covariates, categorical_covariates)
-    strata_columns = _normalize_cox_strata_columns(strata_columns, covariates, categorical_covariates)
+    strata_columns = _normalize_cox_strata_columns(strata_columns, covariates)
     preview_frame = _prepare_cox_frame(
         df,
         time_column=time_column,
