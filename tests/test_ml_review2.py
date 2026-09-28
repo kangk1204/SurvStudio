@@ -722,6 +722,23 @@ def test_median_imputed_numeric_values_are_counted_and_reported(monkeypatch) -> 
 
 
 @requires_sksurv
+def test_results_name_the_features_coded_as_categorical(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=21, n_patients=160)
+    features = ["age", "biomarker_score", "stage"]
+    # "stage" is text, so it is reference-coded although the request declares no categorical feature.
+    single = ml.train_gradient_boosted_survival(df, "os_months", "os_event", features, categorical_features=[],
+                                                n_estimators=5, compute_importance=False, compute_brier=False)
+    _patch_fits(monkeypatch, ml)
+    comparison = ml.compare_survival_models(df, "os_months", "os_event", features, categorical_features=[])
+    cv = ml.cross_validate_survival_models(df, "os_months", "os_event", features, categorical_features=[], cv_folds=2,
+                                           cv_repeats=1)
+    for result in (single, comparison, cv):
+        assert result["categorical_features"] == ["stage"]
+
+
+@requires_sksurv
 def test_counterfactual_without_a_fitted_encoder_keeps_the_categorical_target_levels() -> None:
     from survival_toolkit import ml_models as ml
 

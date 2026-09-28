@@ -2053,12 +2053,10 @@ def _prepare_training_matrices(
     matrices["y_eval"] = _prepare_sksurv_data(matrices["eval_frame"], time_column, event_column)
     matrices["y_full"] = _prepare_sksurv_data(matrices["full_frame"], time_column, event_column)
     matrices["imputed_numeric_counts"] = _median_imputed_counts(frame, features, categorical_features)
+    # Declared categorical features plus the text features the encoder one-hot codes.
+    matrices["categorical_features"] = _resolved_categorical_features(frame, features, categorical_features)
     matrices["unseen_category_rows"] = (
-        _unseen_category_rows(
-            matrices["train_frame"],
-            matrices["eval_frame"],
-            _resolved_categorical_features(frame, features, categorical_features),
-        )
+        _unseen_category_rows(matrices["train_frame"], matrices["eval_frame"], matrices["categorical_features"])
         if matrices["evaluation_mode"] == "holdout"
         else 0
     )
@@ -2172,6 +2170,8 @@ def _fitted_model_result(
         "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
         "calibration_metrics": brier_result,
         "feature_names": feature_names,
+        # The features coded as categorical (declared ones plus text features), reference-coded.
+        "categorical_features": list(matrices.get("categorical_features") or []),
         # Missing (or infinite) values per numeric feature, replaced by the training rows' median.
         "imputed_numeric_values": imputed_counts,
         "scientific_summary": scientific_summary,
@@ -2732,14 +2732,9 @@ def compare_survival_models(
     duplicate_caution = duplicate_identifier_caution(df)
     if duplicate_caution:
         scientific_summary["cautions"].insert(0, duplicate_caution)
+    resolved_categorical = _resolved_categorical_features(frame, features, categorical_features)
     unseen_caution = _unseen_category_caution(
-        _unseen_category_rows(
-            train_frame,
-            test_frame,
-            _resolved_categorical_features(frame, features, categorical_features),
-        )
-        if evaluation_mode == "holdout"
-        else 0,
+        _unseen_category_rows(train_frame, test_frame, resolved_categorical) if evaluation_mode == "holdout" else 0,
         "evaluation",
     )
     if unseen_caution:
@@ -2752,6 +2747,8 @@ def compare_survival_models(
     result = {
         "comparison_table": comparison,
         "errors": errors,
+        # The features coded as categorical (declared ones plus text features), reference-coded.
+        "categorical_features": resolved_categorical,
         "ranking_complete": (
             len(errors) == 0
             and len(comparison) == len(model_specs)
@@ -3743,6 +3740,8 @@ def cross_validate_survival_models(
         "fold_results": fold_results,
         "repeat_results": [row["repeat_results"] for row in comparison],
         "errors": all_errors,
+        # The features coded as categorical (declared ones plus text features), reference-coded.
+        "categorical_features": list(resolved_categorical),
         "ranking_complete": not all_errors and all(row.get("c_index") is not None for row in comparison),
         # Models left out of (or incomplete in) the cross-validation ranking: models that could
         # not run, failed on a fold, or lack a fold the other models were scored on. A model
