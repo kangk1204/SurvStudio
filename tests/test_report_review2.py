@@ -11,7 +11,7 @@ from survival_toolkit.plots import (
     build_marker_summary_figure,
     marker_evidence_funnel,
 )
-from survival_toolkit.reporting import marker_results_paragraph, remark_checklist
+from survival_toolkit.reporting import marker_results_paragraph, remark_checklist, tripod_ai_checklist
 
 _REQUEST = {"time_column": "os_time", "event_column": "os_event", "event_positive_value": 1}
 
@@ -340,3 +340,98 @@ def test_remark_describes_the_shrinkage_of_each_subsamples_strongest_marker() ->
         "in the patients left out, the log hazard ratio of each subsample's strongest marker (the one with the largest "
         "score statistic, whether or not it was selected) was on average 62% of its value in the subsample"
     ) in text
+
+
+# ── TRIPOD+AI text ───────────────────────────────────────────────
+
+
+def _ml(rows: list[dict], *, mode: str = "holdout", **changes) -> dict:
+    result = {
+        "family": "ml",
+        "comparison_table": rows,
+        "errors": [],
+        "n_patients": 400,
+        "n_events": 150,
+        "evaluation_mode": mode,
+        "evaluation_split_fingerprint": "fp",
+        "request_config": {"time_column": "t", "event_column": "e", "event_positive_value": 1, "features": ["age", "grade"],
+                           "categorical_features": ["grade"], "n_estimators": 100, "max_depth": None, "learning_rate": 0.1},
+    }
+    result.update(changes)
+    return result
+
+
+def _dl_mixed() -> dict:
+    return {
+        "family": "dl",
+        "evaluation_mode": "mixed_holdout_apparent",
+        "n_patients": 400,
+        "n_events": 150,
+        "evaluation_split_fingerprint": "fp",
+        "comparison_table": [
+            {"model": "DeepSurv", "c_index": 0.66, "evaluation_mode": "holdout", "comparable_for_ranking": True},
+            {"model": "DeepHit", "c_index": 0.91, "evaluation_mode": "apparent", "comparable_for_ranking": False},
+        ],
+        "errors": [],
+        "request_config": {"time_column": "t", "event_column": "e", "event_positive_value": 1, "features": ["age"], "categorical_features": [],
+                           "epochs": 100, "learning_rate": 0.001, "hidden_layers": [64], "dropout": 0.1, "batch_size": 64,
+                           "early_stopping_patience": 10},
+    }
+
+
+def test_tripod_limitations_say_when_performance_is_apparent() -> None:
+    apparent = _ml([{"model": "Cox PH", "c_index": 0.74, "evaluation_mode": "apparent"},
+                    {"model": "Random Survival Forest", "c_index": 0.91, "evaluation_mode": "apparent"}], mode="apparent")
+    holdout = _ml([{"model": "Cox PH", "c_index": 0.70, "evaluation_mode": "holdout"}])
+
+    apparent_items = _items(tripod_ai_checklist([apparent]))
+    only_apparent = apparent_items["26"]["text"]
+    mixed = _items(tripod_ai_checklist([_dl_mixed()]))["26"]["text"]
+    internal = _items(tripod_ai_checklist([holdout]))["26"]["text"]
+
+    assert only_apparent.startswith(
+        "Performance is apparent: every model was scored on the patients used for fitting, which is optimistic."
+    )
+    assert "comes from internal validation" not in only_apparent
+    assert apparent_items["16"]["text"] == (
+        "Performance was estimated by scoring the models on the patients used for fitting (apparent performance, which is optimistic)."
+    )
+    assert mixed.startswith(
+        "Performance comes from internal validation in one data set, except for DeepHit, which was scored on the patients "
+        "used for fitting (apparent performance, which is optimistic); an external cohort is needed to judge transportability."
+    )
+    assert internal.startswith("Performance comes from internal validation in one data set; an external cohort is needed")
+
+
+def test_tripod_predictors_say_text_predictors_were_coded_as_categorical() -> None:
+    declared_only = _items(tripod_ai_checklist([_ml([{"model": "Cox PH", "c_index": 0.7}])]))["9"]["text"]
+    resolved = _items(tripod_ai_checklist([_ml([{"model": "Cox PH", "c_index": 0.7}], categorical_features=["grade", "site"])]))["9"]["text"]
+
+    assert declared_only.startswith("2 predictors: age, grade; categorical: grade. Any predictor stored as text was also reference-coded")
+    # A result that names the categorical predictors it resolved is quoted as it is.
+    assert resolved.startswith("2 predictors: age, grade; categorical: grade, site. Describe")
+
+
+def test_tripod_hyperparameters_describe_the_models_that_ran_with_their_actual_settings() -> None:
+    cox_only = _ml(
+        [{"model": "Cox PH", "c_index": 0.7}],
+        errors=[{"model": name, "error": "scikit-survival is not installed."}
+                for name in ("LASSO-Cox", "Random Survival Forest", "Gradient Boosted Survival")],
+    )
+    trees = _ml([{"model": "Random Survival Forest", "c_index": 0.72}, {"model": "Gradient Boosted Survival", "c_index": 0.71}])
+    deep = _ml([{"model": "Random Survival Forest", "c_index": 0.72}, {"model": "Gradient Boosted Survival", "c_index": 0.71}],
+               request_config={**trees["request_config"], "max_depth": 4})
+
+    cox_methods = tripod_ai_checklist([cox_only])["methods"]
+    tree_methods = tripod_ai_checklist([trees])["methods"]
+    dl_methods = tripod_ai_checklist([_dl_mixed()])["methods"]
+
+    assert "Random survival forests" not in cox_methods and "gradient boosting" not in cox_methods and "LASSO-Cox penalty" not in cox_methods
+    # Without a depth the forests grow unlimited trees and boosting uses its default depth of 3.
+    assert "Random survival forests used 100 trees without a depth limit; gradient boosting used 100 trees of maximum depth 3 with learning rate 0.1." in tree_methods
+    assert "LASSO-Cox" not in tree_methods
+    assert "Random survival forests used 100 trees of maximum depth 4; gradient boosting used 100 trees of maximum depth 4" in tripod_ai_checklist([deep])["methods"]
+    assert (
+        "stopping early after 10 epochs without improvement on a monitoring subset drawn from each training partition; each "
+        "network was then refit on the whole training partition for the number of epochs early stopping selected."
+    ) in dl_methods

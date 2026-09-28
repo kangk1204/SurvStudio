@@ -654,6 +654,15 @@ def _layers_text(layers: Any) -> str:
     return f"{len(sizes)} hidden layers ({', '.join(sizes[:-1])} and {sizes[-1]} units)"
 
 
+def _fitted_models(result: dict[str, Any]) -> set[str]:
+    """Models fitted at least once; a model whose every fold failed, or that only has an error, never ran."""
+    return {
+        str(row.get("model"))
+        for row in _rows(result)
+        if (n_evaluations := _n_evaluations(result, row)) is None or n_evaluations > 0
+    }
+
+
 def _hyperparameter_text(result: dict[str, Any]) -> str:
     request = result.get("request_config") or {}
     if not request:
@@ -664,19 +673,30 @@ def _hyperparameter_text(result: dict[str, Any]) -> str:
             f"{_layers_text(request.get('hidden_layers'))}, dropout {request.get('dropout')} and batch size {request.get('batch_size')}"
         )
         if request.get("early_stopping_patience"):
+            # The deep-model trainers refit on the rows the monitoring subset held out (refit_on_training_partition).
             text += (
                 f", stopping early after {request.get('early_stopping_patience')} epochs without improvement on a monitoring subset "
-                "drawn from each training partition"
+                "drawn from each training partition; each network was then refit on the whole training partition for the number of "
+                "epochs early stopping selected"
             )
         return text + "."
-    text = f"Random survival forests and gradient boosting used {request.get('n_estimators')} trees"
-    if request.get("max_depth") is not None:
-        text += f" with maximum depth {request.get('max_depth')}"
-    return (
-        text
-        + f" (learning rate {request.get('learning_rate')} for boosting); the LASSO-Cox penalty was chosen by inner cross-validation, "
-        "stratified by event status, within each training partition."
-    )
+    # Only the models that ran: without scikit-survival, for example, Cox PH is the only one.
+    from survival_toolkit.ml_models import _GBS_DEFAULT_MAX_DEPTH
+
+    fitted = _fitted_models(result)
+    trees, depth = request.get("n_estimators"), request.get("max_depth")
+    parts = []
+    if "Random Survival Forest" in fitted:
+        parts.append(f"random survival forests used {trees} trees " + ("without a depth limit" if depth is None else f"of maximum depth {depth}"))
+    if "Gradient Boosted Survival" in fitted:
+        # An empty depth gives boosting its shallow default, not fully grown trees.
+        parts.append(
+            f"gradient boosting used {trees} trees of maximum depth {_GBS_DEFAULT_MAX_DEPTH if depth is None else depth} "
+            f"with learning rate {request.get('learning_rate')}"
+        )
+    if "LASSO-Cox" in fitted:
+        parts.append("the LASSO-Cox penalty was chosen by inner cross-validation, stratified by event status, within each training partition")
+    return _capitalized("; ".join(parts)) + "." if parts else ""
 
 
 def _incomplete_row(row: dict[str, Any]) -> bool:
@@ -748,7 +768,36 @@ def _evaluation_text(result: dict[str, Any]) -> str:
             f"{_holdout_text(result)} for {_names(holdout_models)}; {_names(apparent_models)} fell back to apparent performance "
             f"on the patients used for fitting, which is optimistic, and {'was' if len(apparent_models) == 1 else 'were'} not ranked"
         )
-    return "the patients used for fitting (apparent performance, which is optimistic)"
+    return "scoring the models on the patients used for fitting (apparent performance, which is optimistic)"
+
+
+def _apparent_models(result: dict[str, Any]) -> list[str]:
+    """Models whose C-index is apparent performance on the patients used for fitting, as ``_evaluation_text`` reads
+    the evaluation mode."""
+    mode = str(result.get("evaluation_mode", ""))
+    if mode.startswith("repeated_cv") or mode == "holdout":
+        return []
+    if mode == "mixed_holdout_apparent":
+        return [str(row.get("model")) for row in _rows(result) if str(row.get("evaluation_mode")) != "holdout"]
+    return [str(row.get("model")) for row in _rows(result)]
+
+
+def _limitations_text(results: Sequence[dict[str, Any]], locked_text: str) -> str:
+    """Where the performance comes from: internal validation, apparent performance, or both."""
+    apparent = [name for result in results for name in _apparent_models(result)]
+    models = [str(row.get("model")) for result in results for row in _rows(result)]
+    if models and len(apparent) == len(models):
+        return (
+            "Performance is apparent: every model was scored on the patients used for fitting, which is optimistic. Internal "
+            "validation (a holdout set or cross-validation) and an external cohort are needed to judge the models."
+        )
+    text = "Performance comes from internal validation in one data set" + locked_text
+    if apparent:
+        text += (
+            f", except for {_names(apparent)}, which {'was' if len(apparent) == 1 else 'were'} scored on the patients used for "
+            "fitting (apparent performance, which is optimistic)"
+        )
+    return text + "; an external cohort is needed to judge transportability."
 
 
 def _evaluation_sentence(results: Sequence[dict[str, Any]]) -> str:
@@ -944,7 +993,14 @@ def tripod_ai_checklist(results: Sequence[dict[str, Any]], *, dataset: dict[str,
     def features(result: dict[str, Any]) -> list[Any]:
         return list((result.get("request_config") or {}).get("features") or [])
 
+    def resolved_categorical(result: dict[str, Any]) -> bool:
+        return isinstance(result.get("categorical_features"), (list, tuple))
+
     def categorical(result: dict[str, Any]) -> list[Any]:
+        # The encoder also reference-codes every predictor stored as text; a result that lists the categorical
+        # predictors it resolved is quoted, otherwise the request names only the declared ones.
+        if resolved_categorical(result):
+            return list(result["categorical_features"])
         return list((result.get("request_config") or {}).get("categorical_features") or [])
 
     def participants(result: dict[str, Any]) -> str:
@@ -984,7 +1040,9 @@ def tripod_ai_checklist(results: Sequence[dict[str, Any]], *, dataset: dict[str,
                   results,
                   lambda result: f"{_count(len(features(result)), 'predictor')}: {_names(features(result), limit=30)}; categorical: {_names(categorical(result))}",
               ))
-              + ". Describe how and when they were measured."),
+              + "."
+              + ("" if all(resolved_categorical(result) for result in results) else " Any predictor stored as text was also reference-coded as a categorical predictor.")
+              + " Describe how and when they were measured."),
         _item("10", "Methods", "Sample size", "partly",
               _capitalized(_by_family(
                   results,
@@ -1016,8 +1074,7 @@ def tripod_ai_checklist(results: Sequence[dict[str, Any]], *, dataset: dict[str,
         _item("24", "Results", "Model updating", "author", "Report any model updating, or state that none was done."),
         _item("25", "Discussion", "Interpretation", "author", "Give an overall interpretation, including fairness where relevant."),
         _item("26", "Discussion", "Limitations", "partly",
-              "Performance comes from internal validation in one data set" + locked_text
-              + "; an external cohort is needed to judge transportability."
+              _limitations_text(results, locked_text)
               + (
                   f" Choosing the best of {n_ranked} models on the same data makes its C-index optimistic (the winner's curse); "
                   + ("report the chosen model's locked-test C-index." if all_locked else "judge it on data that played no part in the choice.")
