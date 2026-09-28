@@ -5772,12 +5772,28 @@ class ThresholdLogrankScan:
     def scan(self, marker: np.ndarray, cutpoints: np.ndarray) -> dict[str, np.ndarray]:
         """Statistics, group sizes, and event counts of "marker > c" for each cutpoint.
 
-        ``cutpoints`` must be sorted ascending. Returns arrays of length ``len(cutpoints)``:
+        Returns arrays of length ``len(cutpoints)``, in the order the cutpoints are given:
         ``statistic`` (chi-square, 0 where the variance is zero), ``n_high`` and
-        ``events_high`` (rows and events above the cutpoint).
+        ``events_high`` (rows and events above the cutpoint). Every subject needs a marker
+        value and every cutpoint must be a number.
         """
         marker_arr = np.asarray(marker, dtype=float).reshape(-1)
         cut_arr = np.asarray(cutpoints, dtype=float).reshape(-1)
+        if marker_arr.shape[0] != self.n:
+            raise ValueError(f"The marker has {marker_arr.shape[0]} values for {self.n} subjects.")
+        if bool(np.isnan(marker_arr).any()) or bool(np.isnan(cut_arr).any()):
+            # A missing marker would sort above every cutpoint and count as "high".
+            raise ValueError("A threshold scan needs a marker value for every subject and numeric cutpoints.")
+        order = np.argsort(cut_arr, kind="mergesort")
+        if np.any(order != np.arange(order.size)):
+            # The counts below read cutpoints in ascending order; report in the caller's order.
+            sorted_result = self._scan_sorted(marker_arr, cut_arr[order])
+            positions = np.empty_like(order)
+            positions[order] = np.arange(order.size)
+            return {key: values[positions] for key, values in sorted_result.items()}
+        return self._scan_sorted(marker_arr, cut_arr)
+
+    def _scan_sorted(self, marker_arr: np.ndarray, cut_arr: np.ndarray) -> dict[str, np.ndarray]:
         n_cut = int(cut_arr.size)
         # rank_i = number of cutpoints strictly below marker_i, so marker_i > c_j iff j < rank_i.
         rank = np.searchsorted(cut_arr, marker_arr, side="left")
@@ -6697,18 +6713,24 @@ def _nice_time_ticks(horizon: float, points: int) -> list[float]:
     return [min(round(index * step, decimals), float(horizon)) for index in range(count)]
 
 
+def _plain_number_text(value: float) -> str:
+    """A number in positional notation without trailing zeros ("1000000", "0.5", "0")."""
+    return np.format_float_positional(float(value), trim="-")
+
+
 def _risk_tick_labels(ticks: Sequence[float]) -> list[str]:
     """Readable, unique column labels for risk-table tick times.
 
     Labels use two decimals when that keeps them distinct and more digits otherwise, so
-    ticks on a very short horizon never collapse onto one column key.
+    ticks on a very short horizon never collapse onto one column key. Large times keep all
+    their digits ("1000000", not "1e+06").
     """
     values = [float(tick) for tick in ticks]
     for decimals in range(2, 16):
-        labels = [f"{round(value, decimals):g}" for value in values]
+        labels = [_plain_number_text(round(value, decimals)) for value in values]
         if len(set(labels)) == len(labels):
             return labels
-    return [f"{value:.17g}" for value in values]
+    return [_plain_number_text(value) for value in values]
 
 
 def _km_group_estimates(

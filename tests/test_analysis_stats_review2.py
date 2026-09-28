@@ -928,3 +928,38 @@ def test_cox_helpers_let_programming_errors_through() -> None:
 
     with pytest.raises(KeyError):
         analysis._cox_likelihood_ratio_test(_Results(), -10.0, 1)
+
+
+# ---------------------------------------------------------------------------------------
+# Threshold scan and risk-table labels (R5#14, R5#19)
+
+
+def test_threshold_scan_reports_cutpoints_in_the_given_order_and_refuses_missing_markers() -> None:
+    from statsmodels.duration.survfunc import survdiff
+
+    times = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+    events = np.array([1, 1, 0, 1, 1, 0, 1, 1])
+    marker = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 7.0])
+    scan = analysis.ThresholdLogrankScan(times, events)
+    cuts = np.array([4.5, 2.5, 6.5])
+    result = scan.scan(marker, cuts)
+    for index, cut in enumerate(cuts):
+        high = marker > cut
+        assert result["n_high"][index] == high.sum()
+        assert result["events_high"][index] == events[high].sum()
+        assert result["statistic"][index] == pytest.approx(survdiff(times, events, np.where(high, "a", "b"))[0], rel=1e-10)
+    with pytest.raises(ValueError, match="marker value for every subject"):
+        scan.scan(np.where(np.arange(8) == 2, np.nan, marker), cuts)
+    with pytest.raises(ValueError, match="7 values for 8 subjects"):
+        scan.scan(marker[:7], cuts)
+
+
+def test_risk_table_labels_never_use_exponent_notation() -> None:
+    assert analysis._risk_tick_labels([0.0, 500000.0, 1000000.0, 1500000.0]) == ["0", "500000", "1000000", "1500000"]
+    assert analysis._risk_tick_labels([0.0, 0.5, 1.0]) == ["0", "0.5", "1"]
+    frame = pd.DataFrame({"time": np.linspace(1e5, 3e6, 40), "event": [1, 0] * 20})
+    risk_table = analysis.compute_km_analysis(frame, "time", "event")["risk_table"]
+    labels = risk_table["columns"][1:]
+    assert not any("e" in label for label in labels)
+    assert [float(label) for label in labels] == pytest.approx(risk_table["times"])
+    assert labels[-1] == "3000000"
