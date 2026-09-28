@@ -366,10 +366,11 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
     silent: true,
   });
   renderSelect(refs.groupColumn, columnNames, { includeBlank: true, blankLabel: "Overall only", selected: null });
-  // Display settings from a previous dataset (max time in its units, its time unit) must not carry over.
+  // Display settings from a previous dataset (max time in its units, its time unit) must not carry over, and
+  // neither do its variable selections: a new dataset starts from its own defaults.
   if (refs.maxTime) refs.maxTime.value = "";
   applyAutomaticTimeUnitLabel({ force: true });
-  refreshVariableSelections();
+  refreshVariableSelections({ useDefaults: true });
   updateDatasetBadge();
   renderSharedFeatureSummary();
   renderDatasetPreview();

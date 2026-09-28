@@ -7225,7 +7225,7 @@ def test_marker_frontend_runs_the_evaluation_and_validates_the_locked_model() ->
     assert 'if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];' in text
     assert 'if (goal === "markers") {' in text
     assert "markers: state.markers," in text
-    assert "refreshMarkerSelections();" in text
+    assert "refreshMarkerSelections({ useDefaults });" in text
     assert "syncMarkerDownloadButtons();" in text
     assert "clearMarkerOutputs();" in text
     assert 'invalidateRequestTokens(["markers", "markerValidation"]);' in text

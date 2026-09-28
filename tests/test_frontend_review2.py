@@ -1271,6 +1271,60 @@ def test_dead_code_of_the_second_review_is_gone() -> None:
     assert "scrollToAnalysisResult" not in body and "WorkspaceCard" not in body
 
 
+# ── Variable selections ─────────────────────────────────────────
+
+
+def test_selections_start_from_defaults_for_a_new_dataset_and_stay_as_chosen_otherwise(tmp_path: Path, example_dataset: dict) -> None:
+    """R14 note: another dataset starts from the defaults; an endpoint change or a derived snapshot keeps the choices,
+    including lists the user emptied (no silent re-ticking of defaults)."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const lists = () => page.run(`({ cox: selectedCheckboxValues(refs.covariateChecklist), features: selectedCheckboxValues(refs.modelFeatureChecklist),
+        dlFeatures: selectedCheckboxValues(refs.dlModelFeatureChecklist), mlCategoricals: selectedCheckboxValues(refs.modelCategoricalChecklist),
+        dlCategoricals: selectedCheckboxValues(refs.dlModelCategoricalChecklist), markers: selectedCheckboxValues(refs.markerChecklist),
+        table: selectedCheckboxValues(refs.cohortVariableChecklist) })`);
+      const defaults = lists();
+      page.run("setCheckedValues(refs.covariateChecklist, ['age']); setSharedModelFeatureSelection(['age']); setCheckedValues(refs.cohortVariableChecklist, ['age']);");
+      await loadDataset(page, { ...fixtures.dataset, dataset_id: "another-cohort" });
+      const anotherDataset = lists();
+      // Emptied lists stay empty through an endpoint change.
+      page.run("setSharedModelFeatureSelection(['age', 'stage']); setCheckedValues(refs.modelCategoricalChecklist, []); setCheckedValues(refs.dlModelCategoricalChecklist, []);");
+      page.run("refs.clearMarkersButton.click()");
+      page.change("#eventColumn", "pfs_event");
+      await page.settle();
+      const afterEndpoint = lists();
+      page.run("setSharedModelFeatureSelection([])");
+      page.change("#eventColumn", "os_event");
+      await page.settle();
+      const emptiedFeatures = lists();
+      // A derived snapshot of the same data keeps the choices too.
+      page.run("setSharedModelFeatureSelection(['age', 'stage']); setCheckedValues(refs.modelCategoricalChecklist, []); setCheckedValues(refs.dlModelCategoricalChecklist, []);");
+      const columns = [...fixtures.dataset.columns, { name: "age__median_split", kind: "categorical", n_unique: 2, unique_preview: ["Low", "High"], missing: 0, non_missing: 360 }];
+      page.fetchHandler = (request) => (request.url.endsWith("/api/derive-group")
+        ? { status: 200, body: { ...fixtures.dataset, dataset_id: "derived-snapshot", columns, derived_column: "age__median_split", derive_summary: { method: "median_split", counts: [] } } }
+        : { status: 500, body: { detail: "unexpected" } });
+      page.run("activateTab('cox'); refs.derivePanel.classList.remove('hidden'); refs.deriveButton.click()");
+      await page.settle();
+      const afterDerive = lists();
+      // Create refreshes the lists once more after the snapshot (applyControlSnapshot's own re-ticking of
+      // categorical flags is the workspace part's): emptied flags stay empty there.
+      page.run("setCheckedValues(refs.modelCategoricalChecklist, []); setCheckedValues(refs.dlModelCategoricalChecklist, []); refreshVariableSelections();");
+      return { defaults, anotherDataset, afterEndpoint, emptiedFeatures, afterDerive, afterRefresh: lists(), dataset: page.run("state.dataset.dataset_id") };
+    """, dataset=example_dataset)
+
+    defaults = result["defaults"]
+    assert len(defaults["cox"]) == 4 and len(defaults["features"]) > 1 and len(defaults["table"]) > 1 and defaults["markers"]
+    assert result["anotherDataset"] == defaults
+    assert result["afterEndpoint"]["features"] == ["age", "stage"]
+    assert result["afterEndpoint"]["mlCategoricals"] == [] and result["afterEndpoint"]["dlCategoricals"] == []
+    assert result["afterEndpoint"]["markers"] == []
+    assert result["emptiedFeatures"]["features"] == [] and result["emptiedFeatures"]["dlFeatures"] == []
+    assert result["dataset"] == "derived-snapshot"
+    assert result["afterDerive"]["features"] == ["age", "stage"]
+    assert result["afterRefresh"]["features"] == ["age", "stage"]
+    assert result["afterRefresh"]["mlCategoricals"] == [] and result["afterRefresh"]["dlCategoricals"] == []
+
+
 # ── Derived groupings ───────────────────────────────────────────
 
 

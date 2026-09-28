@@ -86,32 +86,39 @@ function sharedModelCategoricalCandidates() {
     .map((column) => column.name);
 }
 
-function refreshVariableSelections() {
+// A newly loaded dataset (`useDefaults`) starts every list from its defaults, whatever columns it shares by
+// name with the previous one. Otherwise (an endpoint change, a derived snapshot of the same data, a restored
+// page) each list keeps the columns the user chose that are still on offer, a list the user emptied included.
+function refreshVariableSelections({ useDefaults = false } = {}) {
   if (!state.dataset) return;
   const availableCovariates = modelFeatureCandidateColumns();
-  const previousCovariates = selectedCheckboxValues(refs.covariateChecklist).filter((v) => availableCovariates.includes(v));
-  const previousCategoricals = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => availableCovariates.includes(v));
-  const previousStrata = selectedCheckboxValues(refs.strataChecklist).filter((v) => availableCovariates.includes(v));
-  const previousModelFeatures = selectedCheckboxValues(refs.modelFeatureChecklist).filter((v) => availableCovariates.includes(v));
-  const previousModelCategoricals = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => availableCovariates.includes(v));
-  const previousDlModelCategoricals = selectedCheckboxValues(refs.dlModelCategoricalChecklist).filter((v) => availableCovariates.includes(v));
-  const previousTableVars = selectedCheckboxValues(refs.cohortVariableChecklist).filter((v) => availableCovariates.includes(v));
+  const kept = (container, defaults) => (useDefaults
+    ? defaults
+    : selectedCheckboxValues(container).filter((value) => availableCovariates.includes(value)));
   const defaultCategoricals = state.dataset.columns
     .filter((c) => ["categorical", "binary"].includes(c.kind) || (c.n_unique != null && c.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD))
     .map((c) => c.name)
     .filter((name) => availableCovariates.includes(name));
   const defaultModelFeatures = availableCovariates.slice(0, DEFAULT_MODEL_FEATURE_SELECTION_LIMIT);
-  renderChecklist(refs.covariateChecklist, availableCovariates, previousCovariates.length ? previousCovariates : availableCovariates.slice(0, 4));
-  renderChecklist(refs.categoricalChecklist, availableCovariates, previousCategoricals.length ? previousCategoricals : defaultCategoricals);
-  renderChecklist(refs.strataChecklist, availableCovariates, previousStrata);
-  renderChecklist(refs.modelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
-  renderChecklist(refs.modelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
-  renderChecklist(refs.dlModelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
-  renderChecklist(refs.dlModelCategoricalChecklist, availableCovariates, previousDlModelCategoricals.length ? previousDlModelCategoricals : defaultCategoricals);
-  renderChecklist(refs.cohortVariableChecklist, availableCovariates, previousTableVars.length ? previousTableVars : availableCovariates.slice(0, 6));
+  // Every previous selection is read before any list is rebuilt.
+  const covariates = kept(refs.covariateChecklist, availableCovariates.slice(0, 4));
+  const categoricals = kept(refs.categoricalChecklist, defaultCategoricals);
+  const strata = kept(refs.strataChecklist, []);
+  const modelFeatures = kept(refs.modelFeatureChecklist, defaultModelFeatures);
+  const modelCategoricals = kept(refs.modelCategoricalChecklist, defaultCategoricals);
+  const dlModelCategoricals = kept(refs.dlModelCategoricalChecklist, defaultCategoricals);
+  const tableVariables = kept(refs.cohortVariableChecklist, availableCovariates.slice(0, 6));
+  renderChecklist(refs.covariateChecklist, availableCovariates, covariates);
+  renderChecklist(refs.categoricalChecklist, availableCovariates, categoricals);
+  renderChecklist(refs.strataChecklist, availableCovariates, strata);
+  renderChecklist(refs.modelFeatureChecklist, availableCovariates, modelFeatures);
+  renderChecklist(refs.modelCategoricalChecklist, availableCovariates, modelCategoricals);
+  renderChecklist(refs.dlModelFeatureChecklist, availableCovariates, modelFeatures);
+  renderChecklist(refs.dlModelCategoricalChecklist, availableCovariates, dlModelCategoricals);
+  renderChecklist(refs.cohortVariableChecklist, availableCovariates, tableVariables);
   const numericOptions = state.dataset.numeric_columns.filter((c) => !isSurvivalOutcomeLikeColumn(c));
   renderSelect(refs.deriveSource, numericOptions, { selected: numericOptions.includes(refs.deriveSource.value) ? refs.deriveSource.value : numericOptions[0] || null });
-  refreshMarkerSelections();
+  refreshMarkerSelections({ useDefaults });
   renderSharedFeatureSummary();
   renderCoxPreviewLine();
 }

@@ -113,19 +113,21 @@ function markerExclusionNote(name) {
 }
 
 // Markers are numeric columns; clinical covariates start from the Cox selection and are left out of the markers.
-function refreshMarkerSelections() {
+// Like the other lists (refreshVariableSelections), a newly loaded dataset starts from the defaults and any other
+// refresh keeps the user's choices, an emptied list included.
+function refreshMarkerSelections({ useDefaults = false } = {}) {
   if (!state.dataset || !refs.markerChecklist || !refs.markerClinicalChecklist) return;
   const markerCandidates = markerCandidateColumns();
   const clinicalCandidates = modelFeatureCandidateColumns();
   const previousMarkers = selectedCheckboxValues(refs.markerChecklist).filter((value) => markerCandidates.includes(value));
   const previousClinical = selectedCheckboxValues(refs.markerClinicalChecklist).filter((value) => clinicalCandidates.includes(value));
-  const clinical = previousMarkers.length || previousClinical.length
-    ? previousClinical
-    : currentCoxSelections().covariates.filter((value) => clinicalCandidates.includes(value));
+  const clinical = useDefaults
+    ? currentCoxSelections().covariates.filter((value) => clinicalCandidates.includes(value))
+    : previousClinical;
   // A Map, so a column named "constructor" or "toString" has no note unless it earned one.
   const notes = new Map(markerCandidates.map((value) => [value, markerExclusionNote(value)]).filter(([, note]) => note));
   // Columns the evaluation would drop start unchecked, so the default run does not fail on them.
-  const markers = previousMarkers.length ? previousMarkers : markerCandidates.filter((value) => !clinical.includes(value) && !notes.has(value));
+  const markers = useDefaults ? markerCandidates.filter((value) => !clinical.includes(value) && !notes.has(value)) : previousMarkers;
   renderChecklist(refs.markerChecklist, markerCandidates, markers, notes);
   renderChecklist(refs.markerClinicalChecklist, clinicalCandidates, clinical);
   refreshMarkerMatrixControls();
