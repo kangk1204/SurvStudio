@@ -491,8 +491,9 @@ function updateResultVisibility() {
   reveal(refs.signatureInsightBoard?.closest(".table-card"), signatureInsight);
   reveal(refs.signatureShell?.closest(".table-card"), signatureTable);
 
-  const coxDiagnosticsPlot = hasRenderedPlot(refs.coxDiagnosticsPlot);
-  const coxMartingalePlot = hasRenderedPlot(refs.coxMartingalePlot);
+  // A diagnostic that could not be computed shows its explanation (a message plot) like a plot.
+  const coxDiagnosticsPlot = hasRenderedPlot(refs.coxDiagnosticsPlot) || hasPlotMessage(refs.coxDiagnosticsPlot);
+  const coxMartingalePlot = hasRenderedPlot(refs.coxMartingalePlot) || hasPlotMessage(refs.coxMartingalePlot);
   const coxInsight = hasRenderedInsight(refs.coxInsightBoard);
   const coxResults = hasRenderedTable(refs.coxResultsShell);
   const coxDiagnostics = hasRenderedTable(refs.coxDiagnosticsShell);

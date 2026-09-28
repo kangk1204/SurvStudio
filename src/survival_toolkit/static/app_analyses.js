@@ -378,6 +378,8 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   showWorkspace();
   if (scrollToTop) scrollWorkspaceEntryToTop();
   renderWorkspaceChrome();
+  // The default Cox covariates get their usable-row preview without waiting for a change.
+  scheduleCoxPreview({ delay: 0 });
 }
 
 function clearSignatureSummary() {

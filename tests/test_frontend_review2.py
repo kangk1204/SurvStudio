@@ -999,6 +999,54 @@ def test_a_validation_without_a_figure_clears_the_previous_replication_plot(tmp_
     assert result == {"first": {"data": True, "hidden": False}, "second": {"data": False, "hidden": True}}
 
 
+# ── Cox ─────────────────────────────────────────────────────────
+
+
+_COX_PREVIEW = r"""
+  const coxPreview = { status: 200, body: { preview: { analyzable_rows: 350, outcome_rows: 360, dropped_rows: 10, events: 250, estimated_parameters: 4, events_per_parameter: 62.5 } } };
+"""
+
+
+def test_cox_diagnostics_that_are_unavailable_say_why(tmp_path: Path, example_dataset: dict) -> None:
+    """R13-13: the "unavailable" explanations of the diagnostics and martingale panels are shown, not hidden."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+    """ + _COX_PREVIEW + r"""
+      page.fetchHandler = (request) => {
+        if (request.url.endsWith("/api/cox-preview")) return coxPreview;
+        if (!request.url.endsWith("/api/cox")) return { status: 500, body: { detail: "unexpected" } };
+        return { status: 200, body: {
+          analysis: { results_table: [{ Variable: "stage", "Hazard ratio": 1.4 }], diagnostics_table: [],
+            model_stats: { n: 360, events: 250, parameters: 3, martingale_note: "No continuous covariates to screen for functional form." } },
+          figure: { data: [{ x: [1], y: [1] }], layout: {} }, request_config: request.json() } };
+      };
+      page.run("activateTab('cox'); refs.runCoxButton.click()");
+      await page.settle();
+      const panel = (name) => page.run(`({ hidden: refs.${name}.classList.contains("result-hidden"),
+        cardHidden: refs.${name}.closest(".table-card").classList.contains("result-hidden"), text: refs.${name}.textContent.trim() })`);
+      return { diagnostics: panel("coxDiagnosticsPlot"), martingale: panel("coxMartingalePlot") };
+    """, dataset=example_dataset)
+
+    assert result["diagnostics"] == {"hidden": False, "cardHidden": False, "text": "Scaled Schoenfeld residual screening was unavailable for this fit."}
+    assert result["martingale"] == {"hidden": False, "cardHidden": False, "text": "No continuous covariates to screen for functional form."}
+
+
+def test_the_cox_preview_is_shown_as_soon_as_a_dataset_loads(tmp_path: Path, example_dataset: dict) -> None:
+    """R13-14: the default Cox covariates get their usable-row preview without a click."""
+    result = _run_page(tmp_path, _COX_PREVIEW + r"""
+      page.fetchHandler = (request) => (request.url.endsWith("/api/cox-preview") ? coxPreview : { status: 500, body: { detail: "unexpected" } });
+      await loadDataset(page, fixtures.dataset);
+      await page.settle();
+      return {
+        previews: page.requests.filter((request) => request.url.endsWith("/api/cox-preview")).length,
+        line: page.run("refs.coxPreviewLine.textContent"),
+      };
+    """, dataset=example_dataset)
+
+    assert result["previews"] == 1
+    assert result["line"].startswith("350 of 360 patients usable (10 dropped for missing values)")
+
+
 # ── Derived groupings ───────────────────────────────────────────
 
 
