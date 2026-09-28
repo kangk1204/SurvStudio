@@ -840,3 +840,31 @@ def test_apparent_evaluation_reports_no_holdout_c_index() -> None:
     assert result["holdout_c_index"] is None
     assert result["c_index"] == result["apparent_c_index"]
 
+
+# R8#7 / R8#13: dead helpers and optional imports -------------------------------------------
+
+
+def test_the_module_loads_when_an_optional_library_fails_with_a_dll_error(monkeypatch) -> None:
+    import builtins
+    from pathlib import Path
+
+    module_path = Path(dm.__file__)
+    real_import = builtins.__import__
+
+    def _dll_failure(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "torch" or name.startswith("torch.") or name.startswith("sksurv"):
+            raise OSError("[WinError 126] The specified module could not be found")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _dll_failure)
+    namespace: dict[str, object] = {"__name__": "deep_models_dll_failure_test", "__file__": str(module_path)}
+    exec(compile(module_path.read_text(encoding="utf-8"), str(module_path), "exec"), namespace, namespace)
+    assert namespace["TORCH_AVAILABLE"] is False
+    assert namespace["_SKSURV_METRICS_AVAILABLE"] is False
+
+
+def test_the_unused_preprocessing_helpers_are_gone() -> None:
+    # The holdout path fits its encoder on the training rows (test_deep_models spies on it).
+    assert not hasattr(dm, "_prepare_deep_data")
+    assert not hasattr(dm, "_survival_after_event_bins")
+

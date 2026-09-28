@@ -20,6 +20,15 @@ def _torch_available() -> bool:
         return False
 
 
+def _full_cohort_tensors(df: pd.DataFrame, features: list[str], categorical_features: list[str] | None = None) -> dict:
+    """Tensors of the whole cleaned cohort from one encoder, for tests that pass their own split."""
+    import survival_toolkit.deep_models as deep_models
+
+    frame = deep_models._coerce_deep_frame(df, "os_months", "os_event", features, categorical_features)
+    encoder = deep_models._fit_deep_encoder(frame, features, categorical_features)
+    return deep_models._transform_deep_frame(frame, time_column="os_months", event_column="os_event", encoder=encoder)
+
+
 class _InlineFuture:
     def __init__(self, *, result=None, error: Exception | None = None) -> None:
         self._result = result
@@ -212,10 +221,14 @@ def test_deep_trainers_avoid_full_cohort_preprocessing_for_holdout(
 ) -> None:
     import survival_toolkit.deep_models as deep_models
 
-    def _raise_if_called(*args, **kwargs):
-        raise AssertionError("_prepare_deep_data should not be used for holdout preprocessing.")
+    fitted_rows: list[int] = []
+    original_fit = deep_models._fit_deep_encoder
 
-    monkeypatch.setattr(deep_models, "_prepare_deep_data", _raise_if_called)
+    def _spy(frame, *args, **kwargs):
+        fitted_rows.append(int(frame.shape[0]))
+        return original_fit(frame, *args, **kwargs)
+
+    monkeypatch.setattr(deep_models, "_fit_deep_encoder", _spy)
 
     df = make_example_dataset(seed=19, n_patients=60)
     features = ["age", "biomarker_score", "immune_index"]
@@ -238,6 +251,8 @@ def test_deep_trainers_avoid_full_cohort_preprocessing_for_holdout(
     assert result["evaluation_mode"].startswith("holdout")
     assert result["training_samples"] < result["n_samples"]
     assert result["evaluation_samples"] < result["n_samples"]
+    # Scaling and category levels are fitted once, on the training rows only.
+    assert fitted_rows == [result["training_samples"]]
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -904,15 +919,10 @@ def test_deepsurv_reports_full_batch_metadata_and_monitor_c_index() -> None:
 def test_survival_vae_eval_is_deterministic() -> None:
     import torch
 
-    from survival_toolkit.deep_models import SurvivalVAENet, _prepare_deep_data
+    from survival_toolkit.deep_models import SurvivalVAENet
 
     df = make_example_dataset(seed=13, n_patients=20)
-    data = _prepare_deep_data(
-        df,
-        time_column="os_months",
-        event_column="os_event",
-        features=["age", "biomarker_score", "immune_index"],
-    )
+    data = _full_cohort_tensors(df, ["age", "biomarker_score", "immune_index"])
     model = SurvivalVAENet(data["n_features"], hidden_dim=16, latent_dim=4, dropout=0.1)
     model.eval()
     x = data["X_tensor"][:4]
@@ -1175,12 +1185,7 @@ def test_deepsurv_uses_internal_monitor_subset_not_eval_fold(monkeypatch) -> Non
     import survival_toolkit.deep_models as deep_models
 
     df = make_example_dataset(seed=52, n_patients=20)
-    prepared = deep_models._prepare_deep_data(
-        df,
-        time_column="os_months",
-        event_column="os_event",
-        features=["age", "biomarker_score", "immune_index"],
-    )
+    prepared = _full_cohort_tensors(df, ["age", "biomarker_score", "immune_index"])
     n_samples = int(prepared["n_samples"])
     evaluation_split = {
         "train_idx": np.arange(0, n_samples - 4, dtype=int),
@@ -1262,12 +1267,7 @@ def test_deepsurv_holdout_artifacts_use_evaluation_subset(monkeypatch) -> None:
     import survival_toolkit.deep_models as deep_models
 
     df = make_example_dataset(seed=52, n_patients=20)
-    prepared = deep_models._prepare_deep_data(
-        df,
-        time_column="os_months",
-        event_column="os_event",
-        features=["age", "biomarker_score", "immune_index"],
-    )
+    prepared = _full_cohort_tensors(df, ["age", "biomarker_score", "immune_index"])
     n_samples = int(prepared["n_samples"])
     eval_idx = np.arange(n_samples - 4, n_samples, dtype=int)
     evaluation_split = {
@@ -2172,15 +2172,15 @@ def test_scientific_summary_dl_reports_non_estimable_c_index_honestly() -> None:
     assert any("could not be computed" in caution.lower() for caution in summary["cautions"])
 
 
-def test_prepare_deep_data_rejects_non_numeric_values_in_numeric_features() -> None:
-    from survival_toolkit.deep_models import _prepare_deep_data
+def test_deep_inputs_reject_non_numeric_values_in_numeric_features() -> None:
+    from survival_toolkit.deep_models import _prepare_deep_training_inputs
 
     df = make_example_dataset(seed=88, n_patients=40)
     df["age"] = df["age"].astype(object)
     df.loc[df.index[0], "age"] = "forty"
 
     with pytest.raises(ValueError, match="non-numeric"):
-        _prepare_deep_data(
+        _prepare_deep_training_inputs(
             df,
             time_column="os_months",
             event_column="os_event",
@@ -2260,12 +2260,7 @@ def test_neural_mtlr_feature_importance_uses_expected_time_risk_target(monkeypat
     import survival_toolkit.deep_models as deep_models
 
     df = make_example_dataset(seed=47, n_patients=64)
-    prepared = deep_models._prepare_deep_data(
-        df,
-        time_column="os_months",
-        event_column="os_event",
-        features=["age", "biomarker_score", "immune_index"],
-    )
+    prepared = _full_cohort_tensors(df, ["age", "biomarker_score", "immune_index"])
     n_samples = int(prepared["n_samples"])
     eval_idx = np.arange(n_samples - 5, n_samples, dtype=int)
     evaluation_split = {
@@ -2395,12 +2390,7 @@ def test_discrete_time_models_report_eval_tail_bucket_overflow(
     df.loc[eval_idx, "os_months"] = train_horizon + np.array([12.0, 18.0, 24.0, 30.0], dtype=float)
     df.loc[eval_idx, "os_event"] = np.array([1, 0, 1, 0], dtype=int)
 
-    prepared = deep_models._prepare_deep_data(
-        df,
-        time_column="os_months",
-        event_column="os_event",
-        features=["age", "biomarker_score", "immune_index"],
-    )
+    prepared = _full_cohort_tensors(df, ["age", "biomarker_score", "immune_index"])
     evaluation_split = {
         "train_idx": train_idx,
         "eval_idx": eval_idx,

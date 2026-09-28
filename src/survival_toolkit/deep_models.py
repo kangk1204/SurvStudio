@@ -49,11 +49,13 @@ from survival_toolkit.evaluation import (
 )
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
 
+# An optional dependency also counts as missing when its compiled libraries fail to load (on
+# Windows a missing or mismatched DLL raises OSError rather than ImportError).
 try:
     from sklearn.model_selection import StratifiedKFold
 
     _SKLEARN_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
     StratifiedKFold = None
     _SKLEARN_AVAILABLE = False
 
@@ -64,14 +66,14 @@ try:
     from torch.utils.data import DataLoader, TensorDataset
 
     TORCH_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
     TORCH_AVAILABLE = False
 
 try:
     from sksurv.metrics import concordance_index_censored as _sksurv_concordance
 
     _SKSURV_METRICS_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
     _SKSURV_METRICS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -648,32 +650,6 @@ def _transform_deep_frame(
         "n_samples": int(x_array.shape[0]),
         "n_features": int(x_array.shape[1]),
     }
-
-
-def _prepare_deep_data(
-    df: pd.DataFrame,
-    time_column: str,
-    event_column: str,
-    features: Sequence[str],
-    categorical_features: Sequence[str] | None = None,
-    event_positive_value: Any = None,
-) -> dict[str, Any]:
-    """Prepare data for deep models using a single-cohort fitted encoder."""
-    frame = _coerce_deep_frame(
-        df,
-        time_column=time_column,
-        event_column=event_column,
-        features=features,
-        categorical_features=categorical_features,
-        event_positive_value=event_positive_value,
-    )
-    encoder = _fit_deep_encoder(frame, features, categorical_features)
-    return _transform_deep_frame(
-        frame,
-        time_column=time_column,
-        event_column=event_column,
-        encoder=encoder,
-    )
 
 
 def _prepare_deep_split_data(
@@ -1398,12 +1374,6 @@ def _expected_time_risk(pmf_with_tail: torch.Tensor, time_grid: torch.Tensor) ->
     return -(pmf_with_tail * time_grid.reshape(1, -1)).sum(dim=1)
 
 
-def _survival_after_event_bins(pmf_with_tail: torch.Tensor) -> torch.Tensor:
-    """Return survival after each event bin end, preserving tail mass."""
-    event_pmf = pmf_with_tail[:, :-1]
-    return 1.0 - torch.cumsum(event_pmf, dim=1)
-
-
 def _build_evaluation_split(
     events: np.ndarray,
     random_seed: int,
@@ -2053,10 +2023,10 @@ def _training_run_metadata(
 def _serialized_torch_training(func: Callable[..., Any]) -> Callable[..., Any]:
     """Run deep-learning training one call at a time in this process, on pinned torch threads.
 
-    ``_seed_torch`` seeds process-wide generators (numpy, ``random``, torch) and weight
-    initialisation and dropout draw from them, so two trainings interleaved on server
-    threads would consume each other's random numbers and the same seed would not
-    reproduce. Worker processes of the parallel repeated-CV path each have their own lock.
+    ``_seed_torch`` seeds torch's process-wide generator, and weight initialisation and
+    dropout draw from it, so two trainings interleaved on server threads would consume each
+    other's random numbers and the same seed would not reproduce. Worker processes of the
+    parallel repeated-CV path each have their own lock.
 
     A job queued behind another training keeps polling its cancellation signal while it
     waits, so a cancelled request does not hold a heavy-job slot until the lock frees.
@@ -3930,8 +3900,7 @@ def evaluate_single_deep_survival_model(
             df, latent_dim=latent_dim, hidden_layers=hidden_layers, n_clusters=n_clusters, **shared_kwargs
         ),
     }
-    if model_type not in trainer_map:
-        raise ValueError(f"Unknown model type: {model_type}")
+    # ``_canonical_deep_model_name`` above already refused an unknown model type.
     result = trainer_map[model_type]()
     result.pop("holdout_risk", None)
     return result
@@ -5195,7 +5164,8 @@ def train_survival_transformer(
     with torch.inference_mode():
         attention_weights = model.get_attention_weights(x_sample)
 
-    # Per-feature attention score: average attention received by each feature across layers
+    # Per-feature attention score: the share of attention each feature receives in the last layer
+    # (averaged over heads and the sampled patients).
     feature_attention: list[dict[str, Any]] = []
     if attention_weights:
         last_layer_attn = np.array(attention_weights[-1])  # (n_features, n_features)
