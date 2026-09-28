@@ -222,7 +222,7 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
     const evalLabel = compareEvaluationLabel(payload.analysis, evaluationMode);
     const mlMetricLabel = repeatedCvLike ? "Mean C-index" : "C-index";
     const mlLead = comparisonRows.length && !rankOne
-      ? "No model was CV-selected (no complete cross-validation aggregate)"
+      ? (repeatedCvLike ? "No model was CV-selected (no complete cross-validation aggregate)" : "No model was ranked")
       : `Screening top model=${formatValue(bestRow.model)}, ${mlMetricLabel}=${formatValue(bestRow.c_index)}`;
     refs.mlMetaBanner.textContent = `${mlLead}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}${lockedTestBannerSuffix(payload.analysis, rankOne)}`;
     refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
@@ -592,7 +592,9 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
       ? ", rerun a single architecture with Run Analysis while keeping repeated CV selected"
       : "";
     const dlLead = dlRows.length && !rankOne
-      ? "No model was CV-selected (no complete cross-validation aggregate)"
+      ? (dlEvalMode === "repeated_cv" || dlEvalMode === "repeated_cv_incomplete"
+        ? "No model was CV-selected (no complete cross-validation aggregate)"
+        : "No model was ranked")
       : `${dlBestLabel}=${formatValue(bestRow.model)}, ${dlMetricLabel}=${formatValue(bestRow.c_index)}`;
     refs.dlMetaBanner.textContent = `${dlLead}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(dlRows.length)}${lockedTestBannerSuffix(payload.analysis, rankOne)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
     refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
