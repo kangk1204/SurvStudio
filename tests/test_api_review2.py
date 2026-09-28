@@ -765,6 +765,107 @@ def test_cohort_table_outcome_restriction_keeps_the_validation_message(time_colu
     assert "could not be processed" not in _detail(table)
 
 
+# ── Request validation: surrogates, strict coercion, number ranges ──
+
+
+def _post_raw(path: str, body: str):
+    lenient = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    return lenient.post(path, content=body.encode(), headers={"Content-Type": "application/json"})
+
+
+def test_unpaired_surrogates_are_refused_with_a_readable_422() -> None:
+    import json
+
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    base = f'"dataset_id":"{dataset_id}","time_column":"os_months","event_column":"os_event"'
+    cases = [
+        ("/api/cox", "{" + base + r',"covariates":["age\ud800"]}'),
+        ("/api/kaplan-meier", "{" + base + r',"event_positive_value":"x\ud800"}'),
+        ("/api/kaplan-meier", "{" + base + r',"time_unit_label":"Mo\ud800"}'),
+        ("/api/kaplan-meier", '{"dataset_id":"%s","time_column":"os_\\ud800","event_column":"os_event"}' % dataset_id),
+        ("/api/export-table", r'{"rows":[{"a":1}],"format":"latex","caption":"Table \ud800 1"}'),
+        ("/api/export-table", r'{"rows":[{"a":1}],"format":"x\udc00"}'),
+    ]
+    for path, body in cases:
+        response = _post_raw(path, body)
+        assert response.status_code == 422, (path, body, response.status_code, response.text[:200])
+        payload = json.loads(response.content.decode("utf-8"))
+        assert payload["detail"]
+
+
+def test_error_details_escape_unpaired_surrogates() -> None:
+    from fastapi import HTTPException
+
+    from survival_toolkit.errors import UserInputError
+
+    with pytest.raises(HTTPException) as excinfo:
+        app_module.fail_bad_request(UserInputError('Column not found in dataset: "age\ud800".'))
+    assert excinfo.value.detail == 'Column not found in dataset: "age\\ud800".'
+    excinfo.value.detail.encode("utf-8")
+
+
+def test_request_fields_are_coerced_strictly_with_one_column_name_rule() -> None:
+    from pydantic import ValidationError
+
+    base = {"dataset_id": "demo", "time_column": "os_months", "event_column": "os_event"}
+    for build in (
+        lambda: app_module.CoxRequest(**base, covariates={"age": 1, "stage": 2}),
+        lambda: app_module.CoxRequest(**base, covariates=["age", None]),
+        lambda: app_module.CoxRequest(**base, covariates=["age", 3]),
+        lambda: app_module.DeriveGroupRequest(dataset_id="demo", source_column="age", method="median_split", lower_label=None),
+        lambda: app_module.DeriveGroupRequest(dataset_id="demo", source_column="age", method="median_split", upper_label=5),
+        lambda: app_module.KaplanMeierRequest(**{**base, "time_column": "os\nmonths"}),
+        lambda: app_module.KaplanMeierRequest(**{**base, "event_column": None}),
+        lambda: app_module.OptimalCutpointRequest(**base, variable=["age"]),
+        lambda: app_module.SignatureSearchRequest(**base, candidate_columns=["age", None]),
+        lambda: app_module.CohortTableRequest(dataset_id="demo", variables="age"),
+        lambda: app_module.MarkerValidationRequest(dataset_id="demo", recipe={}, column_mapping={"a": 1}),
+    ):
+        with pytest.raises(ValidationError):
+            build()
+
+    km = app_module.KaplanMeierRequest(**{**base, "time_column": " os_months ", "group_column": "  "})
+    assert (km.time_column, km.group_column) == ("os_months", None)
+    table = app_module.CohortTableRequest(dataset_id="demo", variables=[" age ", "age", "stage"], time_column="")
+    assert table.variables == ["age", "stage"] and table.time_column is None
+    search = app_module.SignatureSearchRequest(**base, candidate_columns=[" age", "age "])
+    assert search.candidate_columns == ["age"]
+    validation = app_module.MarkerValidationRequest(dataset_id="demo", recipe={}, column_mapping={" GENE1 ": " gene_1 "})
+    assert validation.column_mapping == {"GENE1": "gene_1"}
+    derive = app_module.DeriveGroupRequest(dataset_id="demo", source_column=" age ", method="median_split", time_column="")
+    assert (derive.source_column, derive.time_column) == ("age", None)
+
+
+def test_event_codes_must_be_numbers_a_column_can_hold_exactly() -> None:
+    from pydantic import ValidationError
+
+    base = {"dataset_id": "demo", "time_column": "os_months", "event_column": "os_event"}
+    assert app_module.KaplanMeierRequest(**base, event_positive_value=2**53).event_positive_value == 2**53
+    for value in (2**53 + 1, 10**20, -(10**400)):
+        with pytest.raises(ValidationError):
+            app_module.KaplanMeierRequest(**base, event_positive_value=value)
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    response = _post_raw(
+        "/api/kaplan-meier",
+        '{"dataset_id":"%s","time_column":"os_months","event_column":"os_event","event_positive_value":1%s}' % (dataset_id, "0" * 400),
+    )
+    assert response.status_code == 422, response.text[:200]
+
+
+@pytest.mark.parametrize("field", ["time", "risk"])
+def test_prediction_blocks_with_integers_beyond_float_range_are_422(field: str) -> None:
+    huge = "1" + "0" * 400
+    time_values = f"[1,2,{huge}]" if field == "time" else "[1,2,3]"
+    risk_values = f"[0.1,0.2,{huge}]" if field == "risk" else "[0.1,0.2,0.3]"
+    body = (
+        '{"predictions":[{"row_ids":["a","b","c"],"time":%s,"event":[1,0,1],"risk":{"Cox PH":%s}}]}'
+        % (time_values, risk_values)
+    )
+    response = _post_raw("/api/model-comparison-intervals", body)
+    assert response.status_code == 422, response.text[:200]
+    assert "finite" in _detail(response)
+
+
 # ── Request body limits on JSON routes ──────────────────────────
 
 

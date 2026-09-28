@@ -511,6 +511,18 @@ _LATEX_ESCAPE_TABLE = str.maketrans(
 )
 
 
+# A lone UTF-16 surrogate (a valid JSON escape such as "\ud800") cannot be written as UTF-8.
+_SURROGATE_PATTERN = re.compile("[\ud800-\udfff]")
+# Largest magnitude up to which every integer has an exact float value (and so can match a data value).
+_MAX_EXACT_FLOAT_INT = 2**53
+
+
+def _json_safe_text(text: str) -> str:
+    """``text`` with unpaired UTF-16 surrogates written as ``\\udxxx`` escapes, which a UTF-8 response can carry."""
+
+    return text.encode("utf-8", "backslashreplace").decode("utf-8") if _SURROGATE_PATTERN.search(text) else text
+
+
 def _normalize_optional_text_field(
     value: Any,
     *,
@@ -526,7 +538,24 @@ def _normalize_optional_text_field(
         raise ValueError(f"{field_name} must not be empty.")
     if _CONTROL_CHAR_PATTERN.search(text):
         raise ValueError(f"{field_name} must not contain control characters.")
+    if _SURROGATE_PATTERN.search(text):
+        raise ValueError(f"{field_name} must be valid Unicode text (it holds an unpaired surrogate).")
     return text
+
+
+def _normalize_column_name(value: Any, *, field_name: str, optional: bool = False) -> str | None:
+    """A column name from a request: text, trimmed, without control characters or unpaired surrogates.
+
+    An optional field reads null or blank text as "no column"; a required one refuses them.
+    """
+
+    if value is None or (optional and isinstance(value, str) and not value.strip()):
+        if optional:
+            return None
+        raise ValueError(f"{field_name} must name a column.")
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a column name (text).")
+    return _normalize_optional_text_field(value, field_name=field_name)
 
 
 def _normalize_event_positive_value(value: Any) -> Any:
@@ -536,6 +565,9 @@ def _normalize_event_positive_value(value: Any) -> Any:
         if isinstance(value, str):
             text = _normalize_optional_text_field(value, field_name="event_positive_value")
             return text
+        if not isinstance(value, bool) and abs(value) > _MAX_EXACT_FLOAT_INT:
+            # A numeric column holds floats, so a larger code could never match its values exactly.
+            raise ValueError("event_positive_value must be a number of at most 2^53 in magnitude.")
         return value
     if isinstance(value, float):
         if not np.isfinite(value):
@@ -547,17 +579,15 @@ def _normalize_event_positive_value(value: Any) -> Any:
 def _normalize_unique_name_list(value: Any, *, field_name: str) -> list[str]:
     if value is None:
         return []
-    if isinstance(value, (str, bytes)):
+    if not isinstance(value, (list, tuple)):
         raise ValueError(f"{field_name} must be a list of column names.")
-    try:
-        raw_values = list(value)
-    except TypeError as exc:  # pragma: no cover - defensive branch
-        raise ValueError(f"{field_name} must be a list of column names.") from exc
 
     normalized: list[str] = []
     seen: set[str] = set()
-    for raw_value in raw_values:
-        text = _normalize_optional_text_field(raw_value, field_name=field_name)
+    for raw_value in value:
+        if not isinstance(raw_value, str):
+            raise ValueError(f"{field_name} must list column names as text.")
+        text = _normalize_column_name(raw_value, field_name=field_name)
         if text is None or text in seen:
             continue
         seen.add(text)
@@ -580,6 +610,18 @@ def _validate_subset_names(
         )
 
 
+# Request fields that name one dataset column; every model normalises them the same way.
+_COLUMN_NAME_FIELDS = (
+    "time_column",
+    "event_column",
+    "group_column",
+    "source_column",
+    "variable",
+    "target_feature",
+    "marker_matrix_id_column",
+)
+
+
 class _DatasetRequestModel(BaseModel):
     # NaN/Infinity (accepted by Python's JSON parser) are never valid analysis settings.
     model_config = ConfigDict(allow_inf_nan=False)
@@ -593,6 +635,14 @@ class _DatasetRequestModel(BaseModel):
         if len(text) > 64:
             raise ValueError("dataset_id must be 64 characters or fewer.")
         return text
+
+    @field_validator(*_COLUMN_NAME_FIELDS, mode="before", check_fields=False)
+    @classmethod
+    def validate_column_name(cls, value: Any, info: Any) -> str | None:
+        # A field with a default (a grouping column, an optional outcome) reads blank as no column.
+        field = cls.model_fields.get(info.field_name)
+        optional = field is not None and not field.is_required()
+        return _normalize_column_name(value, field_name=info.field_name, optional=optional)
 
 
 class _EventPositiveValueRequestModel(_DatasetRequestModel):
@@ -932,11 +982,11 @@ class DeriveGroupRequest(_EventPositiveValueRequestModel):
     @field_validator("lower_label", "upper_label", mode="before")
     @classmethod
     def validate_group_label(cls, value: Any) -> str:
-        text = str(value).strip()
-        if not text:
+        if not isinstance(value, str):
+            raise ValueError("Group labels must be text.")
+        text = _normalize_optional_text_field(value, field_name="Group labels")
+        if text is None:  # pragma: no cover - text values are never None
             raise ValueError("Group labels must not be empty.")
-        if _CONTROL_CHAR_PATTERN.search(text):
-            raise ValueError("Group labels must not contain control characters.")
         return text
 
 
@@ -999,10 +1049,10 @@ class CohortTableRequest(_EventPositiveValueRequestModel):
     event_column: str | None = None
     event_positive_value: Any = 1
 
-    @field_validator("time_column", "event_column", mode="before")
+    @field_validator("variables", mode="before")
     @classmethod
-    def validate_outcome_column(cls, value: Any, info: Any) -> str | None:
-        return _normalize_optional_text_field(value, field_name=info.field_name, allow_empty_as_none=True)
+    def validate_variables(cls, value: Any) -> list[str]:
+        return _normalize_unique_name_list(value, field_name="variables")
 
     @model_validator(mode="after")
     def validate_outcome_pair(self) -> "CohortTableRequest":
@@ -1029,6 +1079,11 @@ class SignatureSearchRequest(_EventPositiveValueRequestModel):
     combination_operator: Literal["and", "or", "mixed"] = "mixed"
     random_seed: int = Field(default=20260311, ge=0, le=2**32 - 1)
     new_column_name: str | None = Field(default=None, max_length=200)
+
+    @field_validator("candidate_columns", mode="before")
+    @classmethod
+    def validate_candidate_columns(cls, value: Any) -> list[str]:
+        return _normalize_unique_name_list(value, field_name="candidate_columns")
 
     @field_validator("new_column_name", mode="before")
     @classmethod
@@ -1201,12 +1256,35 @@ class MarkerValidationRequest(_EventPositiveValueRequestModel):
     # "within_cohort" rescales each marker to its development distribution (a cohort from another platform).
     marker_scaling: Literal["as_measured", "within_cohort"] = "as_measured"
 
+    @field_validator("column_mapping", mode="before")
+    @classmethod
+    def validate_column_mapping(cls, value: Any) -> dict[str, str]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("column_mapping must map recipe column names to dataset column names.")
+        return {
+            _normalize_column_name(key, field_name="column_mapping"): _normalize_column_name(target, field_name="column_mapping")
+            for key, target in value.items()
+        }
+
 
 _MAX_INTERVAL_MODELS_PER_BLOCK = 50
 
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_finite_number(value: Any) -> bool:
+    """A JSON number with a finite float value; an integer too large for a float is not one."""
+
+    if not _is_number(value):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _check_prediction_block(block: dict[str, Any], index: int) -> None:
@@ -1226,7 +1304,7 @@ def _check_prediction_block(block: dict[str, Any], index: int) -> None:
     time_values = block.get("time")
     if not isinstance(time_values, list) or len(time_values) != n_rows:
         raise ValueError(f"{where}: time must be a list with one value per patient.")
-    if not all(_is_number(value) and math.isfinite(value) and value >= 0 for value in time_values):
+    if not all(_is_finite_number(value) and value >= 0 for value in time_values):
         raise ValueError(f"{where}: every time must be a finite, non-negative number.")
     event_values = block.get("event")
     if not isinstance(event_values, list) or len(event_values) != n_rows:
@@ -1241,7 +1319,7 @@ def _check_prediction_block(block: dict[str, Any], index: int) -> None:
     for name, values in risk.items():
         if not isinstance(values, list) or len(values) != n_rows:
             raise ValueError(f"{where}: the risk scores of '{name}' must be a list with one value per patient.")
-        if not all(_is_number(value) and math.isfinite(value) for value in values):
+        if not all(_is_finite_number(value) for value in values):
             raise ValueError(f"{where}: every risk score of '{name}' must be a finite number.")
 
 
@@ -2745,10 +2823,11 @@ def fail_bad_request(exc: Exception) -> NoReturn:
     if isinstance(exc, JobCancelledError):
         # 499 (client closed request): the page abandoned this request, nobody reads the body.
         logger.info("Request cancelled by its client: %s", exc)
-        raise HTTPException(status_code=499, detail=str(exc)) from exc
+        raise HTTPException(status_code=499, detail=_json_safe_text(str(exc))) from exc
     if isinstance(exc, UserInputError):
+        # Messages can quote request text (a column name), which may hold an unpaired surrogate.
         status_code = 404 if isinstance(exc, NotFoundError) else 400
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise HTTPException(status_code=status_code, detail=_json_safe_text(str(exc))) from exc
     exc_info = (type(exc), exc, exc.__traceback__)
     if isinstance(exc, MemoryError):
         logger.error("Request ran out of memory", exc_info=exc_info)
@@ -2780,10 +2859,10 @@ def fail_bad_request(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=status_code, detail=detail) from exc
     if isinstance(exc, ImportError):
         logger.error("A package the request needs could not be imported", exc_info=exc_info)
-        raise HTTPException(status_code=503, detail=_dependency_error_detail(exc)) from exc
+        raise HTTPException(status_code=503, detail=_json_safe_text(_dependency_error_detail(exc))) from exc
     if isinstance(exc, InternalAnalysisError):
         logger.error("Unexpected internal analysis error", exc_info=exc_info)
-        raise HTTPException(status_code=500, detail=str(exc) or InternalAnalysisError.default_message) from exc
+        raise HTTPException(status_code=500, detail=_json_safe_text(str(exc)) or InternalAnalysisError.default_message) from exc
     if isinstance(exc, ValueError):
         logger.warning("Request failed with an untyped ValueError", exc_info=exc_info)
         raise HTTPException(status_code=400, detail=_UNPROCESSABLE_REQUEST_DETAIL) from exc
@@ -2844,8 +2923,6 @@ _COUNT_LABEL_TOKENS = frozenset(
         "iterations",
     }
 )
-# Largest integer every value up to which a float holds exactly.
-_MAX_EXACT_FLOAT_INT = 2**53
 
 
 def _is_count_column(column: Any) -> bool:
@@ -3425,14 +3502,19 @@ def _docx_package(body_parts: list[str]) -> bytes:
 
 
 def _json_safe_error_payload(value: Any) -> Any:
-    """Replace non-finite floats (e.g. an echoed NaN input) so the 422 body can be serialized."""
+    """Replace non-finite floats (e.g. an echoed NaN input) and escape unpaired surrogates, so the 422 body can be serialized."""
 
     if isinstance(value, float) and not math.isfinite(value):
         if value != value:
             return "NaN"
         return "Infinity" if value > 0 else "-Infinity"
+    if isinstance(value, str):
+        return _json_safe_text(value)
     if isinstance(value, dict):
-        return {key: _json_safe_error_payload(item) for key, item in value.items()}
+        return {
+            (_json_safe_text(key) if isinstance(key, str) else key): _json_safe_error_payload(item)
+            for key, item in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return [_json_safe_error_payload(item) for item in value]
     return value
@@ -4701,14 +4783,6 @@ class CounterfactualRequest(_FeatureSelectionRequestModel):
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = Field(default=42, ge=0, le=2**32 - 1)
 
-    @field_validator("target_feature", mode="before")
-    @classmethod
-    def validate_target_feature(cls, value: Any) -> str:
-        text = _normalize_optional_text_field(value, field_name="target_feature")
-        if text is None:
-            raise ValueError("target_feature must not be empty or null.")
-        return text
-
     @field_validator("original_value", "counterfactual_value", mode="before")
     @classmethod
     def validate_feature_value(cls, value: Any, info: Any) -> Any:
@@ -4749,14 +4823,6 @@ class PDPRequest(_FeatureSelectionRequestModel):
     max_depth: int | None = Field(default=None, ge=1, le=64)
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = Field(default=42, ge=0, le=2**32 - 1)
-
-    @field_validator("target_feature", mode="before")
-    @classmethod
-    def validate_target_feature(cls, value: Any) -> str:
-        text = _normalize_optional_text_field(value, field_name="target_feature")
-        if text is None:
-            raise ValueError("target_feature must not be empty or null.")
-        return text
 
     @model_validator(mode="after")
     def validate_target_feature_membership(self) -> "PDPRequest":
