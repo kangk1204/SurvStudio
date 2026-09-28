@@ -56,7 +56,6 @@ from survival_toolkit.analysis import (
     ensure_model_feature_candidate_limit,
     find_event_equivalent_columns,
     load_dataframe_from_path,
-    make_unique_columns,
     preview_rows,
     preview_cox_analysis_inputs,
     profile_dataframe,
@@ -2229,12 +2228,28 @@ def _clean_column_labels(dataframe: pd.DataFrame) -> pd.DataFrame:
 
     Excel headers often carry a line break (Alt+Enter). Request fields refuse control
     characters in column names, so such a column would load but could not be analysed.
+    Names that need no cleaning keep their spelling (the loader has made them unique); a
+    cleaned name that would repeat one of them, or an earlier cleaned name, gets a suffix,
+    so a column never takes over the name of another.
     """
 
     names = [str(column) for column in dataframe.columns]
     if not any(_CONTROL_CHAR_PATTERN.search(name) for name in names):
         return dataframe
-    dataframe.columns = make_unique_columns(_HEADER_CONTROL_RUN_PATTERN.sub(" ", name).strip() for name in names)
+    taken = {name for name in names if not _CONTROL_CHAR_PATTERN.search(name)}
+    cleaned_names: list[str] = []
+    for name in names:
+        if not _CONTROL_CHAR_PATTERN.search(name):
+            cleaned_names.append(name)
+            continue
+        base = _HEADER_CONTROL_RUN_PATTERN.sub(" ", name).strip() or "unnamed"
+        candidate, counter = base, 1
+        while candidate in taken:
+            counter += 1
+            candidate = f"{base}_{counter}"
+        taken.add(candidate)
+        cleaned_names.append(candidate)
+    dataframe.columns = cleaned_names
     return dataframe
 
 

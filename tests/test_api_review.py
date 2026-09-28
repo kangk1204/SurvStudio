@@ -690,8 +690,9 @@ def test_excel_headers_with_line_breaks_become_usable_column_names() -> None:
 
 
 def test_cleaned_header_names_stay_unique() -> None:
-    frame = pd.DataFrame(columns=["a\nb", "a b", "c"])
-    assert list(app_module._clean_column_labels(frame).columns) == ["a b", "a b_2", "c"]
+    # The column already named "a b" keeps its name; the cleaned one takes the suffix.
+    frame = pd.DataFrame(columns=["a\nb", "a b", "c", "a\tb"])
+    assert list(app_module._clean_column_labels(frame).columns) == ["a b_2", "a b", "c", "a b_3"]
 
 
 # ── Work bounds on other endpoints ─────────────────────────────

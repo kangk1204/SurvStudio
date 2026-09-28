@@ -422,3 +422,25 @@ def test_journal_p_values_just_below_the_threshold_never_print_as_it() -> None:
     for value in (0.0499999951, 0.04999999999999999):
         text = app_module._format_journal_p_value(value)
         assert float(text) < 0.05, text
+
+
+# ── Header clean-up keeps the names that needed none ────────────
+
+
+def test_cleaned_headers_never_take_the_name_of_an_untouched_column() -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.append(["Overall survival\n(months)", "Overall survival (months)", "Death", "Age\nat\ndiagnosis"])
+    for index in range(60):
+        worksheet.append([1000.0 + index, float(index + 1), index % 2, 50.0 + index])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+
+    upload = client.post("/api/upload", files={"file": ("headers.xlsx", buffer.getvalue(), "application/octet-stream")})
+    assert upload.status_code == 200, upload.text
+    names = [column["name"] for column in upload.json()["columns"]]
+    assert names == ["Overall survival (months)_2", "Overall survival (months)", "Death", "Age at diagnosis"]
+    frame = app_module.store.get(upload.json()["dataset_id"], copy_dataframe=False).dataframe
+    assert frame["Overall survival (months)"].tolist()[:3] == [1.0, 2.0, 3.0]
+    assert frame["Overall survival (months)_2"].tolist()[:3] == [1000.0, 1001.0, 1002.0]
