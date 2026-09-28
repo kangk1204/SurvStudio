@@ -1368,6 +1368,52 @@ def test_select_all_with_a_search_filter_adds_the_shown_items(tmp_path: Path, ex
     assert result["markers"] == ["biomarker_score", "immune_index"]
 
 
+# ── Behaviour behind source-text tests (R13-8) ─────────────────
+
+
+def test_km_banner_and_tables_format_p_values_as_p_values(tmp_path: Path, example_dataset: dict) -> None:
+    """test_app.py checks the formatter's source text; here the page shows "p<0.001", "p=0.012" and "<0.001"."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      let pValue = 0.0004;
+      page.fetchHandler = (request) => ({ status: 200, body: {
+        analysis: { summary_table: [{ Group: "All", N: 360 }], risk_table: { rows: [], columns: [] },
+          pairwise_table: [{ Comparison: "A vs B", "P value": pValue, "Hazard ratio": 0.0004 }], cohort: { n: 360, events: 250 },
+          test: { test: "Log-rank", p_value: pValue } },
+        figure: { data: [{ x: [0], y: [1] }], layout: {} }, request_config: request.json() } });
+      page.run("refs.runKmButton.click()");
+      await page.settle();
+      const small = { banner: page.run("refs.kmMetaBanner.textContent"), cells: page.run("refs.kmPairwiseShell.querySelectorAll('td').map((td) => td.textContent)") };
+      pValue = 0.0123;
+      page.run("refs.runKmButton.click()");
+      await page.settle();
+      return { small, larger: page.run("refs.kmMetaBanner.textContent") };
+    """, dataset=example_dataset)
+
+    assert result["small"]["banner"].endswith("Log-rank p<0.001")
+    assert result["small"]["cells"] == ["A vs B", "<0.001", "4.00e-4"]
+    assert result["larger"].endswith("Log-rank p=0.012")
+
+
+def test_a_run_cancelled_by_an_endpoint_change_never_lands(tmp_path: Path, example_dataset: dict) -> None:
+    """test_app.py checks the request-token source text; here a KM run in flight is aborted and leaves no result."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const hold = deferred();
+      page.fetchHandler = (request) => (request.url.endsWith("/api/kaplan-meier") ? hold.promise : { status: 500, body: { detail: "unexpected" } });
+      page.run("refs.runKmButton.click()");
+      await page.settle(3);
+      const km = page.requests.find((request) => request.url.endsWith("/api/kaplan-meier"));
+      page.change("#eventColumn", "pfs_event");
+      hold.resolve({ status: 200, body: { analysis: { summary_table: [], risk_table: { rows: [], columns: [] }, pairwise_table: [], cohort: { n: 1 } },
+        figure: { data: [{ x: [0], y: [1] }], layout: {} }, request_config: km.json() } });
+      await page.settle();
+      return { aborted: km.signal.aborted, km: page.run("state.km"), plotted: page.run("Boolean(refs.kmPlot.data)"), busy: page.run("isScopeBusy('km')"), toasts: page.toasts() };
+    """, dataset=example_dataset)
+
+    assert result == {"aborted": True, "km": None, "plotted": False, "busy": False, "toasts": []}
+
+
 # ── Derived groupings ───────────────────────────────────────────
 
 
