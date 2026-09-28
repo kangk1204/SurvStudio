@@ -4,8 +4,9 @@
 
 // ── ML Models ──────────────────────────────────────────────────
 
+// A run records its result mode (runtime.resultPreference) only once its result is in: a run that fails or
+// is cancelled leaves the result of the other mode current and shown (preferredResultMode).
 async function runMlModel() {
-  runtime.resultPreference.ml = "single";
   if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {
     throw new Error("Run Analysis uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.");
   }
@@ -55,6 +56,7 @@ async function runMlModel() {
   loading.finish();
   const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
   state.ml = payload;
+  runtime.resultPreference.ml = "single";
   setPanelResultMode(refs.mlPanel, "single");
   refs.downloadMlComparisonButton.disabled = true;
   if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = true;
@@ -131,7 +133,6 @@ async function runMlModel() {
 }
 
 async function runCompareModels({ suppressCompletionToast = false, compareGroupId = null, compareSource = "single_family_compare" } = {}) {
-  runtime.resultPreference.ml = "compare";
   const base = currentBaseConfig();
   const { features, categoricalFeatures } = currentSharedModelSelections("ml");
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
@@ -181,6 +182,7 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
     loading.finish();
     tagComparePayload(payload, compareGroupId || nextCompareRunGroupId("ml-compare"), compareSource);
     state.ml = payload;
+    runtime.resultPreference.ml = "compare";
     runtime.compareCache.ml = payload;
     setPanelResultMode(refs.mlPanel, "compare");
 
@@ -322,7 +324,6 @@ async function runUnifiedPredictiveComparison() {
 // ── Deep Learning ──────────────────────────────────────────────
 
 async function runDlModel() {
-  runtime.resultPreference.dl = "single";
   const base = currentBaseConfig();
   validateDlControls();
   const { features, categoricalFeatures } = currentSharedModelSelections("dl");
@@ -371,6 +372,7 @@ async function runDlModel() {
     loading.finish();
     const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
     state.dl = payload;
+    runtime.resultPreference.dl = "single";
     setPanelResultMode(refs.dlPanel, "single");
     const stats = payload.analysis || {};
 
@@ -466,7 +468,6 @@ async function runDlModel() {
 }
 
 async function runDlCompareModels({ suppressCompletionToast = false, compareGroupId = null, compareSource = "single_family_compare" } = {}) {
-  runtime.resultPreference.dl = "compare";
   const base = currentBaseConfig();
   validateDlControls({ compare: true });
   const { features, categoricalFeatures } = currentSharedModelSelections("dl");
@@ -514,6 +515,7 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
     loading.finish();
     tagComparePayload(payload, compareGroupId || nextCompareRunGroupId("dl-compare"), compareSource);
     state.dl = payload;
+    runtime.resultPreference.dl = "compare";
     runtime.compareCache.dl = payload;
     setPanelResultMode(refs.dlPanel, "compare");
 

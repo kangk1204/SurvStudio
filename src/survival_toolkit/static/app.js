@@ -516,7 +516,7 @@ function updateResultVisibility() {
 
   ["ml", "dl"].forEach((goal) => {
     const isMl = goal === "ml";
-    const resultMode = runtime.resultPreference?.[goal] || "single";
+    const resultMode = preferredResultMode(goal);
     const importancePlot = isMl ? refs.mlImportancePlot : refs.dlImportancePlot;
     const secondPlot = isMl ? refs.mlShapPlot : refs.dlLossPlot;
     const comparisonPlot = isMl ? refs.mlComparisonPlot : refs.dlComparisonPlot;

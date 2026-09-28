@@ -648,9 +648,14 @@ function normalizedPredictiveFamily(family) {
   return family === "dl" ? "dl" : "ml";
 }
 
+// The mode (one model, or a comparison) of the ML or DL result the page holds, or of the last finished run
+// when it holds none. Currency and visibility follow the result actually held, so a run that fails (or is
+// still running) never hides the still-valid result of the other mode.
 function preferredResultMode(goal) {
-  if (goal === "ml" || goal === "dl") return runtime.resultPreference?.[goal] || "single";
-  return "single";
+  if (goal !== "ml" && goal !== "dl") return "single";
+  const payload = goal === "ml" ? state.ml : state.dl;
+  if (payload) return payloadRepresentsCompareRun(payload) ? "compare" : "single";
+  return runtime.resultPreference?.[goal] || "single";
 }
 
 const ANALYSIS_GOALS = ["km", "cox", "markers", "predictive", "tables", "ml", "dl"];

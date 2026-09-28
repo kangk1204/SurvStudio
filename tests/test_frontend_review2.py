@@ -82,3 +82,97 @@ def test_stale_locked_test_board_notes_the_rank_one_model_it_ranks_first(
     assert result["stale"] is True
     assert result["rows"][0] == ["1", "DeepHit"]
     assert "The locked-test refit of the rank-1 model (DeepHit) failed" in result["note"]
+
+
+# ── Result mode after a failed run ──────────────────────────────
+
+
+_DL_SINGLE_HANDLER = r"""
+  const dlSingle = (request) => ({ status: 200, body: {
+    figures: { importance: { data: [{ type: "bar", x: [0.3], y: ["age"] }], layout: { height: 360 } },
+               loss: { data: [{ x: [1, 2], y: [1, 0.5] }], layout: { height: 360 } } },
+    analysis: { c_index: 0.7, evaluation_mode: "holdout", epochs_trained: 20 },
+    request_config: request.json(),
+  } });
+  const mlSingle = (request) => ({ status: 200, body: {
+    importance_figure: { data: [{ type: "bar", x: [0.3], y: ["age"] }], layout: { height: 360 } },
+    analysis: { model_stats: { c_index: 0.7, evaluation_mode: "holdout", n_patients: 360, n_features: 4 } },
+    request_config: request.json(),
+  } });
+"""
+
+
+def test_a_failed_compare_all_phase_keeps_the_single_result_current_and_shown(
+    tmp_path: Path, example_dataset: dict, compare_payloads: dict
+) -> None:
+    """R13-3/R15-3: after the DL phase fails, the restored DeepSurv result is current, not stale, and shown."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+    """ + _DL_SINGLE_HANDLER + r"""
+      page.fetchHandler = (request) => (request.url.endsWith("/api/deep-model") ? dlSingle(request) : { status: 500, body: { detail: "unexpected" } });
+      page.run("activateTab('benchmark'); reviewBenchmarkModel('deepsurv', 'single'); refs.runPredictiveWorkbenchButton.click()");
+      await page.settle();
+      page.run("closePredictiveWorkbench()");
+      page.fetchHandler = (request) => {
+        if (request.url.endsWith("/api/ml-model")) return { status: 200, body: { analysis: fixtures.compare.ml, request_config: request.json() } };
+        if (request.url.endsWith("/api/deep-model")) return { status: 400, body: { detail: "All deep models failed to train." } };
+        if (request.url.endsWith("/api/model-comparison-intervals")) return { status: 200, body: fixtures.compare.intervals };
+        return { status: 500, body: { detail: "unexpected" } };
+      };
+      page.run("refs.runPredictiveCompareAllButton.click()");
+      await page.settle(60);
+      const after = page.run(`({ single: panelModeForPayload(state.dl) === "single", mode: preferredResultMode("dl"),
+        current: Boolean(currentGoalResult("dl")), stale: refs.dlImportancePlot.classList.contains("plot-stale") })`);
+      page.run("reviewBenchmarkModel('deepsurv', 'single')");
+      return {
+        after,
+        shown: page.run("Boolean(selectedPredictiveSingleResult('dl'))"),
+        gridHidden: page.run("refs.dlImportancePlot.closest('.ml-plots-grid').classList.contains('hidden')"),
+        plotHidden: page.run("refs.dlImportancePlot.classList.contains('result-hidden')"),
+      };
+    """, dataset=example_dataset, compare=compare_payloads)
+
+    assert result == {
+        "after": {"single": True, "mode": "single", "current": True, "stale": False},
+        "shown": True,
+        "gridHidden": False,
+        "plotHidden": False,
+    }
+
+
+def test_a_failed_run_of_one_mode_keeps_the_result_of_the_other_mode(
+    tmp_path: Path, example_dataset: dict, compare_payloads: dict
+) -> None:
+    """R13-3: a failed ML comparison leaves the RSF result current; a failed RSF run leaves the comparison current."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+    """ + _DL_SINGLE_HANDLER + r"""
+      const snapshot = () => page.run(`({ mode: preferredResultMode("ml"), current: Boolean(currentGoalResult("ml")),
+        stale: refs.mlImportancePlot.classList.contains("plot-stale"), hidden: refs.mlImportancePlot.classList.contains("result-hidden") })`);
+      page.fetchHandler = (request) => (request.url.endsWith("/api/ml-model") ? mlSingle(request) : { status: 500, body: { detail: "unexpected" } });
+      page.run("activateTab('benchmark'); reviewBenchmarkModel('rsf', 'single'); refs.runPredictiveWorkbenchButton.click()");
+      await page.settle();
+      const trained = snapshot();
+      page.fetchHandler = () => ({ status: 500, body: { detail: "compare failed on the server" } });
+      await page.run("withLoading(refs.runCompareButton, runCompareModels)");
+      await page.settle();
+      const afterFailedCompare = snapshot();
+      page.fetchHandler = (request) => (request.url.endsWith("/api/ml-model")
+        ? { status: 200, body: { analysis: fixtures.compare.ml, request_config: request.json() } }
+        : { status: 500, body: { detail: "unexpected" } });
+      await page.run("withLoading(refs.runCompareButton, runCompareModels)");
+      await page.settle();
+      page.fetchHandler = () => ({ status: 500, body: { detail: "the forest failed" } });
+      await page.run("withLoading(refs.runMlButton, runMlModel)");
+      await page.settle();
+      return {
+        trained,
+        afterFailedCompare,
+        afterFailedSingle: page.run(`({ mode: preferredResultMode("ml"), current: Boolean(currentGoalResult("ml")),
+          comparison: Boolean(currentGoalResult("ml")?.analysis?.comparison_table) })`),
+      };
+    """, dataset=example_dataset, compare=compare_payloads)
+
+    assert result["trained"] == {"mode": "single", "current": True, "stale": False, "hidden": False}
+    assert result["afterFailedCompare"] == result["trained"]
+    assert result["afterFailedSingle"] == {"mode": "compare", "current": True, "comparison": True}

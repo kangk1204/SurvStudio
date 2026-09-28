@@ -261,7 +261,7 @@ function currentPredictiveModelKey() {
 
 function selectedPredictiveSingleResult(goal) {
   if (!["ml", "dl"].includes(goal)) return null;
-  if ((runtime.resultPreference?.[goal] || "single") !== "single") return null;
+  if (preferredResultMode(goal) !== "single") return null;
   const payload = currentGoalResult(goal);
   if (!payload) return null;
   const requestConfig = payload.request_config || payload.analysis?.request_config || null;
@@ -324,11 +324,14 @@ function panelModeForPayload(payload) {
 function restorePredictiveFamilyAfterFailedCompare(goal, previousPayload) {
   const panel = goal === "ml" ? refs.mlPanel : refs.dlPanel;
   const previousWasCompare = payloadRepresentsCompareRun(previousPayload);
+  const restored = previousWasCompare ? null : (previousPayload || null);
   if (goal === "ml") {
-    state.ml = previousWasCompare ? null : (previousPayload || null);
+    state.ml = restored;
   } else {
-    state.dl = previousWasCompare ? null : (previousPayload || null);
+    state.dl = restored;
   }
+  // The result mode follows the restored result, so a restored single-model result stays current and shown.
+  runtime.resultPreference[goal] = "single";
   setPanelResultMode(panel, previousWasCompare ? "idle" : panelModeForPayload(previousPayload));
 }
 
@@ -820,7 +823,7 @@ function syncBenchmarkWorkbenchVisibility() {
 function renderPredictiveWorkbench() {
   const family = normalizedPredictiveFamily(runtime.predictiveFamily);
   const selectedModel = predictiveModelMeta(currentPredictiveModelKey());
-  const familyMode = runtime.resultPreference?.[family] || "single";
+  const familyMode = preferredResultMode(family);
   const unifiedWorkspaceActive = activeTabName() === "benchmark";
   runtime.predictiveFamily = family;
 
@@ -942,8 +945,8 @@ function syncPredictiveWorkbenchCompareVisibility() {
   const dlManuscriptCard = refs.dlManuscriptShell?.closest(".table-card");
   const mlHasPlot = hasRenderedPlot(refs.mlComparisonPlot);
   const dlHasPlot = hasRenderedPlot(refs.dlComparisonPlot);
-  const mlCompareActive = (runtime.resultPreference?.ml || "single") === "compare";
-  const dlCompareActive = (runtime.resultPreference?.dl || "single") === "compare";
+  const mlCompareActive = preferredResultMode("ml") === "compare";
+  const dlCompareActive = preferredResultMode("dl") === "compare";
 
   refs.mlComparisonPlot?.classList.toggle("hidden", suppressCompare || !mlCompareActive || !mlHasPlot);
   refs.dlComparisonPlot?.classList.toggle("hidden", suppressCompare || !dlCompareActive || !dlHasPlot);
