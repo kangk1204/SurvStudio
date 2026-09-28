@@ -280,6 +280,17 @@
       return benchmarkExcludedRowsForPayload(goal, payload, { paramsSource: currentOnly ? "current" : "latest" });
     }
 
+    // Screen-rank order of the leaderboard, for current and stale-snapshot rows alike: rankable rows first,
+    // then the higher C-index, then family and model name.
+    function compareScreenRankRows(left, right) {
+      const comparableDelta = Number(Boolean(right.comparableForRanking)) - Number(Boolean(left.comparableForRanking));
+      if (comparableDelta !== 0) return comparableDelta;
+      const safeLeft = left.numericCIndex ?? -Infinity;
+      const safeRight = right.numericCIndex ?? -Infinity;
+      if (safeRight !== safeLeft) return safeRight - safeLeft;
+      return left.family.localeCompare(right.family) || left.model.localeCompare(right.model);
+    }
+
     function unifiedBenchmarkRows({ currentOnly = true } = {}) {
       const families = ["ml", "dl"];
       const rows = families.flatMap((goal) => benchmarkRowsFromPayload(
@@ -287,14 +298,7 @@
         benchmarkComparePayload(goal, { currentOnly }),
         { paramsSource: currentOnly ? "current" : "latest" },
       ));
-      return rows.sort((left, right) => {
-        const comparableDelta = Number(Boolean(right.comparableForRanking)) - Number(Boolean(left.comparableForRanking));
-        if (comparableDelta !== 0) return comparableDelta;
-        const safeLeft = left.numericCIndex ?? -Infinity;
-        const safeRight = right.numericCIndex ?? -Infinity;
-        if (safeRight !== safeLeft) return safeRight - safeLeft;
-        return left.family.localeCompare(right.family) || left.model.localeCompare(right.model);
-      });
+      return rows.sort(compareScreenRankRows);
     }
 
     function familyGroupedRows(rows) {
@@ -334,11 +338,13 @@
         ml: benchmarkSnapshotComparePayload("ml"),
         dl: benchmarkSnapshotComparePayload("dl"),
       };
+      // Ranked like the current rows, so the screen rank, the rank-1 marker, the chart order and the notes
+      // about the rank-1 model follow the leaderboard order on a stale board too.
       const snapshotRowsRaw = ["ml", "dl"].flatMap((goal) => benchmarkRowsFromPayload(
         goal,
         snapshotPayloads[goal],
         { statusOverride: "Stale reference", paramsSource: "snapshot" },
-      ));
+      )).sort(compareScreenRankRows);
       const snapshotFamilies = ["ml", "dl"].filter((goal) => comparisonRowsFromPayload(snapshotPayloads[goal]).length > 0);
       const staleFamilies = ["ml", "dl"].filter((goal) => benchmarkCompareRows(goal).length > 0 && benchmarkCompareRows(goal, { currentOnly: true }).length === 0);
       const excludedByFamily = Object.fromEntries(
