@@ -1365,13 +1365,13 @@ class TableExportRequest(BaseModel):
     @field_validator("columns")
     @classmethod
     def validate_columns(cls, value: list[str]) -> list[str]:
+        # Names keep their spelling, so they still match the row keys; the writers turn control
+        # characters (a line break in a group value that became a column) into spaces.
         cleaned: list[str] = []
         for column in value:
             text = str(column)
             if len(text) > 4000:
                 raise ValueError("Each export column name must be 4000 characters or fewer.")
-            if _CONTROL_CHAR_PATTERN.search(text):
-                raise ValueError("Export column names must not contain control characters.")
             cleaned.append(text)
         return cleaned
 
@@ -2711,7 +2711,61 @@ def _format_journal_p_value(value: float) -> str:
         # Never let rounding move a p-value across the conventional 0.05 threshold (0.0496 -> "0.050").
         if (float(text) < _JOURNAL_SIGNIFICANCE_THRESHOLD) == below_threshold:
             return text
-    return f"{value:.3g}" if below_threshold else f"{value:.3f}"
+    # Only a p-value within 5e-9 below the threshold gets here; the shortest exact text keeps it below.
+    return repr(float(value)) if below_threshold else f"{value:.3f}"
+
+
+# Words of a column label that mark whole-number counts ("Events, n", "Rank", "Number at risk"),
+# which journal style keeps as integers.
+_COUNT_LABEL_TOKENS = frozenset(
+    {
+        "n",
+        "number",
+        "count",
+        "counts",
+        "total",
+        "rank",
+        "events",
+        "patients",
+        "subjects",
+        "samples",
+        "cases",
+        "rows",
+        "folds",
+        "repeats",
+        "evaluations",
+        "failures",
+        "seed",
+        "seeds",
+        "epochs",
+        "iterations",
+    }
+)
+# Largest integer every value up to which a float holds exactly.
+_MAX_EXACT_FLOAT_INT = 2**53
+
+
+def _is_count_column(column: Any) -> bool:
+    tokens = re.sub(r"[\s_\-.,;:()/%]+", " ", str(column or "").lower()).split()
+    return any(token in _COUNT_LABEL_TOKENS for token in tokens)
+
+
+def _journal_number_value(value: Any, column: Any) -> Any:
+    """A whole number in a measurement column as a float, so journal style formats it like its neighbours.
+
+    Browsers serialise 1.0 as 1, so a C-index or a P value of exactly 1 (or 0) arrives as an
+    integer. Counts and ranks keep their integers.
+    """
+
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and column is not None
+        and abs(value) <= _MAX_EXACT_FLOAT_INT
+        and not _is_count_column(column)
+    ):
+        return float(value)
+    return value
 
 
 def _format_journal_number(value: float) -> str:
@@ -2728,6 +2782,8 @@ def _format_export_value(value: Any, style: str, column: Any = None) -> str:
         return ""
     if isinstance(value, bool):
         return "Yes" if value else "No"
+    if style == "journal":
+        value = _journal_number_value(value, column)
     if isinstance(value, (int, float)):
         if isinstance(value, float):
             if not math.isfinite(value):
@@ -2828,6 +2884,13 @@ def _clean_export_characters(text: str) -> str:
     return _EXPORT_ILLEGAL_CHAR_PATTERN.sub(" ", text)
 
 
+def _export_header_text(column: Any) -> str:
+    """A column name as the exports write it: a run of control characters (a line break in a group
+    value that became a column) becomes one space."""
+
+    return _clean_export_characters(_HEADER_CONTROL_RUN_PATTERN.sub(" ", str(column))).strip()
+
+
 def _is_number_like_cell(text: str) -> bool:
     """True for signed numeric summaries like "-0.42 ± 1.00" or "-1.2 (-2.0 to -0.4)".
 
@@ -2864,8 +2927,17 @@ def _sanitize_csv_cell(value: Any) -> str:
     return text
 
 
+def _markdown_literal(text: str) -> str:
+    """Text that Markdown shows as written, escaped as reporting.checklist_markdown does: characters
+    that open raw HTML become entities and backslashes are doubled."""
+
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\\", "\\\\")
+
+
 def _sanitize_markdown_cell(value: Any, style: str, column: Any = None) -> str:
-    return _normalize_export_text(value, style, column).replace("|", "\\|")
+    # GFM removes one backslash before a pipe inside a table cell, so backslashes are doubled first and
+    # a pipe then becomes \| : "a\|b" stays one cell reading a\|b, and "a|b" one cell reading a|b.
+    return _markdown_literal(_normalize_export_text(value, style, column)).replace("|", "\\|")
 
 
 def _clean_export_note(note: Any) -> str:
@@ -2898,7 +2970,7 @@ def _export_rows_to_csv(
         writer.writerow([_sanitize_csv_cell(f"# {_export_template_profile(template)['notes_heading']}:")])
         for note in clean_notes:
             writer.writerow([_sanitize_csv_cell(f"# - {note}")])
-    writer.writerow([_sanitize_csv_cell(column) for column in resolved_columns])
+    writer.writerow([_sanitize_csv_cell(_export_header_text(column)) for column in resolved_columns])
     for row in rows:
         writer.writerow(
             [
@@ -2919,6 +2991,8 @@ def _xlsx_cell(value: Any, style: str, column: Any) -> tuple[Any, str | None]:
 
     if value is None or isinstance(value, bool):
         return _xlsx_text_cell(_format_export_value(value, style, column))
+    if style == "journal":
+        value = _journal_number_value(value, column)
     if isinstance(value, int):
         return value, None
     if isinstance(value, float):
@@ -2983,7 +3057,7 @@ def _export_rows_to_xlsx(
         _write_row([_xlsx_text_cell(resolved_caption)])
         current_row += 1
 
-    _write_row([_xlsx_text_cell(column) for column in resolved_columns])
+    _write_row([_xlsx_text_cell(_export_header_text(column)) for column in resolved_columns])
     for row in rows:
         _write_row([_xlsx_cell(row.get(column), style, column) for column in resolved_columns])
 
@@ -3012,9 +3086,9 @@ def _export_rows_to_markdown(
         raise UserInputError("No rows available for export.")
     resolved_columns = _export_columns(rows, columns)
     template_profile = _export_template_profile(template)
-    resolved_caption = _resolve_export_caption(caption, template)
-    clean_notes = [clean_note for note in notes if (clean_note := _clean_export_note(note))]
-    header = f"| {' | '.join(_sanitize_markdown_cell(column, 'plain') for column in resolved_columns)} |"
+    resolved_caption = _markdown_literal(_clean_export_note(_resolve_export_caption(caption, template)))
+    clean_notes = [_markdown_literal(clean_note) for note in notes if (clean_note := _clean_export_note(note))]
+    header = f"| {' | '.join(_sanitize_markdown_cell(_export_header_text(column), 'plain') for column in resolved_columns)} |"
     divider = f"| {' | '.join(['---'] * len(resolved_columns))} |"
     body = [
         "| "
@@ -3053,8 +3127,11 @@ def _export_rows_to_latex(
     template_profile = _export_template_profile(template)
     resolved_caption = _resolve_export_caption(caption, template)
     column_spec = "l" * len(resolved_columns)
+    # Every row opens with an empty group: "\\" and "\midrule" read a "[" (or "*") that follows them,
+    # even on the next line, as their own argument, which a cell such as "[0.61, 0.74]" would supply.
     body = [
-        " & ".join(_latex_escape(_normalize_export_text(row.get(column), style, column)) for column in resolved_columns)
+        "{}"
+        + " & ".join(_latex_escape(_normalize_export_text(row.get(column), style, column)) for column in resolved_columns)
         + r" \\"
         for row in rows
     ]
@@ -3065,7 +3142,7 @@ def _export_rows_to_latex(
         f"\\caption{{{_latex_escape(resolved_caption)}}}",
         f"\\begin{{tabular}}{{{column_spec}}}",
         "\\toprule",
-        " & ".join(_latex_escape(column) for column in resolved_columns) + r" \\",
+        "{}" + " & ".join(_latex_escape(_export_header_text(column)) for column in resolved_columns) + r" \\",
         "\\midrule",
         *body,
         "\\bottomrule",
@@ -3145,7 +3222,10 @@ def _docx_table(
     )
     header_row = (
         "<w:tr>"
-        + "".join(_docx_cell(column, width=width, bold=True) for column, width in zip(resolved_columns, column_widths))
+        + "".join(
+            _docx_cell(_export_header_text(column), width=width, bold=True)
+            for column, width in zip(resolved_columns, column_widths)
+        )
         + "</w:tr>"
     )
     body_rows = [

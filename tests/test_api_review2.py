@@ -297,3 +297,128 @@ def test_provenance_notes_of_wide_configs_are_summarised(fmt: str) -> None:
 def test_small_provenance_configs_are_recorded_verbatim() -> None:
     notes = app_module._export_provenance_notes({"request_config": {"model_type": "compare", "features": ["age"]}})
     assert 'Replay request_config: {"features": ["age"], "model_type": "compare"}' in notes
+
+
+# ── Export writers: headers, LaTeX rows, Markdown cells, journal numbers ──
+
+
+def _cohort_with_multiline_groups() -> str:
+    rng = np.random.default_rng(0)
+    n = 120
+    histology = np.where(rng.random(n) < 0.5, "Adenocarcinoma\n(NOS)", "Squamous")
+    lines = ["os_months,os_event,age,histology"]
+    for index in range(n):
+        lines.append(f'{rng.exponential(30) + 0.5:.2f},{int(rng.random() < 0.6)},{rng.normal(60, 10):.1f},"{histology[index]}"')
+    upload = client.post("/api/upload", files={"file": ("cohort.csv", "\n".join(lines).encode(), "text/csv")})
+    assert upload.status_code == 200, upload.text
+    return upload.json()["dataset_id"]
+
+
+@pytest.mark.parametrize("fmt", ["csv", "xlsx", "markdown", "latex", "docx"])
+def test_server_produced_column_names_with_line_breaks_export_with_spaces(fmt: str) -> None:
+    dataset_id = _cohort_with_multiline_groups()
+    table = client.post("/api/cohort-table", json={"dataset_id": dataset_id, "variables": ["age"], "group_column": "histology"})
+    assert table.status_code == 200, table.text
+    analysis = table.json()["analysis"]
+    assert any("\n" in column for column in analysis["columns"])
+
+    response = client.post(
+        "/api/export-table",
+        json={"rows": analysis["rows"], "columns": analysis["columns"], "format": fmt, "style": "plain", "caption": "Cohort summary"},
+    )
+    assert response.status_code == 200, response.text
+    if fmt == "xlsx":
+        from openpyxl import load_workbook
+
+        worksheet = load_workbook(io.BytesIO(response.content)).active
+        text = "\n".join(str(cell.value) for row in worksheet.iter_rows() for cell in row if cell.value is not None)
+    elif fmt == "docx":
+        text = zipfile.ZipFile(io.BytesIO(response.content)).read("word/document.xml").decode("utf-8")
+    else:
+        text = response.text
+    assert "Adenocarcinoma (NOS)" in text
+    assert "Adenocarcinoma\n(NOS)" not in text
+
+
+def test_latex_rows_cannot_be_read_as_optional_arguments() -> None:
+    hazard = "Hazard\nratio\t(HR)"
+    response = client.post(
+        "/api/export-table",
+        json={
+            "rows": [{"CI": "[0.61, 0.74]", hazard: 1.2}, {"CI": "*0.50 to 0.90", hazard: 1.1}],
+            "columns": ["CI", hazard],
+            "format": "latex",
+            "style": "plain",
+        },
+    )
+    assert response.status_code == 200, response.text
+    lines = response.text.splitlines()
+    start = lines.index("\\toprule")
+    end = lines.index("\\bottomrule")
+    table_rows = [line for line in lines[start + 1 : end] if line != "\\midrule"]
+    # "\\" and "\midrule" read a following "[" (or "*") as their own argument; an empty group ends that.
+    assert table_rows and all(line.startswith("{}") for line in table_rows), table_rows
+    assert table_rows[0] == "{}CI & Hazard ratio (HR) \\\\"
+
+
+def _gfm_cells(row: str) -> list[str]:
+    """Split a Markdown table row the way a renderer that honours every backslash escape does."""
+    cells, current, escaped = [], "", False
+    for character in row.strip().strip("|"):
+        if escaped:
+            current += character
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == "|":
+            cells.append(current.strip())
+            current = ""
+        else:
+            current += character
+    cells.append(current.strip())
+    return cells
+
+
+def test_markdown_cells_keep_pipes_backslashes_and_markup_literal() -> None:
+    rows = [{"Term": "a\\|b", "Level": "x|y", "Note": "<b>bold</b> & p<0.05", "C:\\path": 1}]
+    response = client.post("/api/export-table", json={"rows": rows, "format": "markdown", "style": "plain"})
+    assert response.status_code == 200, response.text
+    table = [line for line in response.text.splitlines() if line.startswith("|")]
+    header, body = _gfm_cells(table[0]), _gfm_cells(table[2])
+    assert header == ["Term", "Level", "Note", "C:\\path"]
+    assert body == ["a\\|b", "x|y", "&lt;b&gt;bold&lt;/b&gt; &amp; p&lt;0.05", "1"]
+
+
+def test_journal_style_formats_whole_numbers_of_measurement_columns() -> None:
+    # The browser sends 1.0 as 1 and 0.0 as 0; counts and ranks stay whole numbers.
+    rows = [
+        {"Rank": 1, "Model": "A", "C-index": 0.7123, "P value": 0.0312, "Events, n": 45, "Training Time, ms": 1234.5},
+        {"Rank": 2, "Model": "B", "C-index": 1, "P value": 1, "Events, n": 40, "Training Time, ms": 1234},
+        {"Rank": 3, "Model": "C", "C-index": 0.5, "P value": 0, "Events, n": 12, "Training Time, ms": 99.0},
+    ]
+    csv_text = client.post("/api/export-table", json={"rows": rows, "format": "csv", "style": "journal"}).text
+    import csv as csv_module
+
+    parsed = list(csv_module.reader(io.StringIO(csv_text.lstrip("\ufeff"))))
+    header_index = next(index for index, row in enumerate(parsed) if row and row[0] == "Rank")
+    body = parsed[header_index + 1 :]
+    assert body[1] == ["2", "B", "1.000", "1.000", "40", "1234.000"]
+    assert body[2] == ["3", "C", "0.500", "<0.001", "12", "99.000"]
+
+    from openpyxl import load_workbook
+
+    xlsx = client.post("/api/export-table", json={"rows": rows, "format": "xlsx", "style": "journal"})
+    worksheet = load_workbook(io.BytesIO(xlsx.content)).active
+    second = [cell for cell in worksheet[3]]
+    assert second[0].value == 2 and second[0].number_format == "General"
+    assert second[2].value == 1.0 and second[2].number_format == "0.000"
+    assert second[3].value == 1.0 and second[3].number_format == "0.000"
+    assert second[4].value == 40 and second[4].number_format == "General"
+    third = [cell for cell in worksheet[4]]
+    assert third[3].value == "<0.001"
+
+
+def test_journal_p_values_just_below_the_threshold_never_print_as_it() -> None:
+    for value in (0.0499999951, 0.04999999999999999):
+        text = app_module._format_journal_p_value(value)
+        assert float(text) < 0.05, text
