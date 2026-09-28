@@ -470,3 +470,179 @@ def test_deep_rows_and_tables_carry_event_counts() -> None:
 
     single = dm.train_deepsurv(df, "os_months", "os_event", FEATURES, random_seed=3, **TINY)
     assert single["training_events"] + single["evaluation_events"] == holdout["n_events"]
+
+
+# R8#8 / R9#12 / R9#6 / R9#7 / R9#14 and the R8 notes: fold execution -----------------------
+
+
+def _seed_stub(*args, **kwargs):
+    """A trainer whose C-index depends only on the fold's seed (so every fold differs)."""
+    seed = int(kwargs["random_seed"])
+    split = kwargs["evaluation_split"]
+    return {
+        "c_index": 0.55 + (seed % 97) / 1000.0 + 1e-9 * seed,
+        "evaluation_mode": "holdout",
+        "epochs_trained": 1,
+        "n_features": 3,
+        "training_samples": len(split["train_idx"]),
+        "evaluation_samples": len(split["eval_idx"]),
+    }
+
+
+def test_fold_results_are_summarised_in_a_fixed_order(monkeypatch) -> None:
+    _install_stubs(monkeypatch, train_deepsurv=_seed_stub, train_deephit=_seed_stub)
+    original = dm._run_deep_fold_tasks
+
+    def _completion_order(fold_splits, build_task, *, fold_results, errors, parallel_jobs):
+        # Parallel workers finish in any order; simulate the reverse of the submission order.
+        note = original(fold_splits, build_task, fold_results=fold_results, errors=errors, parallel_jobs=1)
+        fold_results.reverse()
+        errors.reverse()
+        return note
+
+    df = make_example_dataset(seed=12, n_patients=100)
+    common = dict(included_models=["DeepSurv", "DeepHit"], evaluation_strategy="repeated_cv", cv_folds=5, cv_repeats=2, random_seed=7)
+    sequential = dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, **common)
+    monkeypatch.setattr(dm, "_run_deep_fold_tasks", _completion_order)
+    shuffled = dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, **common)
+
+    def _keys(result):
+        return [(row["repeat"], row["fold"], row["model"]) for row in result["fold_results"]]
+
+    assert _keys(shuffled) == _keys(sequential) == sorted(_keys(sequential), key=lambda key: (key[0], key[1], key[2] != "DeepSurv"))
+    assert [repr(row["c_index"]) for row in shuffled["comparison_table"]] == [repr(row["c_index"]) for row in sequential["comparison_table"]]
+
+
+def _optimizer_with_invalid_learning_rate(original):
+    def _optimizer(model, learning_rate):
+        if isinstance(model, dm.DeepSurvNet):
+            return torch.optim.AdamW(model.parameters(), lr=-1.0)  # ValueError raised inside torch
+        return original(model, learning_rate)
+
+    return _optimizer
+
+
+@pytest.mark.parametrize("strategy", ["holdout", "repeated_cv"])
+def test_model_failures_keep_the_library_message_and_are_logged(monkeypatch, caplog, strategy) -> None:
+    monkeypatch.setattr(dm, "_make_optimizer", _optimizer_with_invalid_learning_rate(dm._make_optimizer))
+    df = make_example_dataset(seed=4, n_patients=80)
+    with caplog.at_level("ERROR", logger="survival_toolkit.deep_models"):
+        result = dm.compare_deep_survival_models(
+            df, "os_months", "os_event", FEATURES, hidden_layers=[4], epochs=1, num_time_bins=5,
+            included_models=["DeepSurv", "Neural MTLR"], evaluation_strategy=strategy, cv_folds=2, cv_repeats=1,
+        )
+    assert result["errors"] and all(error["model"] == "DeepSurv" for error in result["errors"])
+    assert all("Invalid learning rate" in error["error"] for error in result["errors"])
+    logged = [record for record in caplog.records if record.name == "survival_toolkit.deep_models" and record.exc_info]
+    assert len(logged) == len(result["errors"])
+    assert all("DeepSurv" in record.getMessage() for record in logged)
+
+
+def test_memory_errors_end_the_run_instead_of_being_recorded_as_model_failures(monkeypatch) -> None:
+    def _out_of_memory(*args, **kwargs):
+        raise MemoryError()
+
+    _install_stubs(monkeypatch, train_deepsurv=_out_of_memory)
+    df = make_example_dataset(seed=4, n_patients=80)
+    with pytest.raises(MemoryError):
+        dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, included_models=["DeepSurv", "DeepHit"])
+    with pytest.raises(MemoryError):
+        _cv(df, included_models=["DeepHit", "DeepSurv"])
+    wrapped = dm.InternalAnalysisError()
+    wrapped.__cause__ = MemoryError()
+    assert dm._must_propagate_deep(MemoryError()) and dm._must_propagate_deep(wrapped)
+    with pytest.raises(MemoryError):
+        dm._record_fold_error([], "DeepSurv", 1, 1, MemoryError())
+
+
+def test_the_first_fold_task_is_released_after_a_sequential_fallback(monkeypatch) -> None:
+    import gc
+    import weakref
+
+    refs: list[weakref.ref] = []
+    alive_at_start: list[list[bool]] = []
+
+    def _fold_runner(task):
+        gc.collect()
+        alive_at_start.append([ref() is not None for ref in refs])
+        refs.append(weakref.ref(task["prepared_data"]["X_tensor"]))
+        row = {
+            "model": "DeepSurv", "repeat": task["repeat"], "fold": task["fold"], "c_index": 0.6, "evaluation_mode": "holdout",
+            "epochs_trained": 1, "training_samples": 50, "evaluation_samples": 20, "n_features": 3, "training_time_ms": 1.0,
+        }
+        return {"fold_results": [row], "errors": []}
+
+    monkeypatch.setattr(dm, "_run_deep_compare_fold_task", _fold_runner)
+    monkeypatch.setattr(dm, "_available_cpu_count", lambda: 2)
+    monkeypatch.setattr(dm, "_estimate_deep_compare_task_bytes", lambda task: 10**12)  # "payload too large"
+    result = _cv(make_example_dataset(seed=16, n_patients=90), included_models=["DeepSurv"], parallel_jobs=2)
+    result_folds = [(row["repeat"], row["fold"]) for row in result["fold_results"]]
+    assert result_folds == [(1, 1), (1, 2)]
+    assert "too large" in result["parallel_execution_note"]
+    assert alive_at_start == [[], [False]]
+
+
+class _BreakingExecutor:
+    """In-process executor whose first fold's future fails like a worker killed for memory."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.submitted: list[tuple[int, int]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def submit(self, fn, task):
+        from concurrent.futures import Future
+        from concurrent.futures.process import BrokenProcessPool
+
+        self.submitted.append((task["repeat"], task["fold"]))
+        future: Future = Future()
+        if (task["repeat"], task["fold"]) == (1, 1):
+            future.set_exception(BrokenProcessPool("A process in the process pool was terminated abruptly"))
+        else:
+            future.set_result(fn(task))
+        return future
+
+
+@pytest.mark.parametrize("memory_after_crash, rerun", [(64 * 1024**3, True), (1024**2, False), (None, False)])
+def test_folds_of_a_crashed_worker_are_rerun_only_when_they_fit_in_memory(monkeypatch, memory_after_crash, rerun) -> None:
+    probes = iter([64 * 1024**3])
+    monkeypatch.setattr(dm, "_available_system_memory_bytes", lambda: next(probes, memory_after_crash))
+    monkeypatch.setattr(dm, "_available_cpu_count", lambda: 2)
+    monkeypatch.setattr(dm, "ProcessPoolExecutor", _BreakingExecutor)
+    _install_stubs(monkeypatch)
+    result = dm.compare_deep_survival_models(
+        make_example_dataset(seed=16, n_patients=90), "os_months", "os_event", FEATURES, included_models=["DeepSurv"],
+        evaluation_strategy="repeated_cv", cv_folds=3, cv_repeats=1, parallel_jobs=2, random_seed=5,
+    )
+    folds = [(row["repeat"], row["fold"]) for row in result["fold_results"]]
+    if rerun:
+        assert folds == [(1, 1), (1, 2), (1, 3)] and result["errors"] == []
+        assert "reran the 2 unfinished fold(s) sequentially" in result["parallel_execution_note"]
+    else:
+        assert folds == [(1, 2)]
+        assert [(error["repeat"], error["fold"]) for error in result["errors"]] == [(1, 1), (1, 3)]
+        assert all("was not rerun in the SurvStudio process" in error["error"] for error in result["errors"])
+        assert "were not rerun" in result["parallel_execution_note"]
+        assert result["comparison_table"][0]["rank"] is None
+
+
+def test_a_locked_test_refit_without_a_holdout_estimate_is_described_as_such(monkeypatch) -> None:
+    def _fallback(*args, **kwargs):
+        return {"c_index": 0.6, "evaluation_mode": "holdout_fallback_apparent", "n_features": 3}
+
+    monkeypatch.setattr(dm, "train_deepsurv", _fallback)
+    task = {
+        "model_name": "DeepSurv", "extra_kwargs": {}, "repeat": None, "fold": None, "seed": 1, "split_seed": 1, "monitor_seed": 1,
+        "time_column": "os_months", "event_column": "os_event", "features": ["age"], "categorical_features": [],
+        "event_positive_value": 1, "learning_rate": 0.001, "epochs": 1, "batch_size": 8, "early_stopping_patience": None,
+        "early_stopping_min_delta": 0.0, "prepared_data": {}, "evaluation_split": {}, "monitor_indices": None,
+        "require_holdout_evaluation": True,
+    }
+    with pytest.raises(ValueError, match="The locked test set did not give a clean holdout evaluation"):
+        dm._run_deep_compare_task(task)
+    with pytest.raises(ValueError, match="Deep repeated-CV fold did not retain a clean holdout evaluation"):
+        dm._run_deep_compare_task({**task, "repeat": 1, "fold": 2})

@@ -13,6 +13,7 @@ All functions return plain dicts (JSON-serializable) suitable for FastAPI respon
 from __future__ import annotations
 
 import gc
+import logging
 import math
 import multiprocessing as mp
 import os
@@ -72,6 +73,8 @@ try:
     _SKSURV_METRICS_AVAILABLE = True
 except ImportError:
     _SKSURV_METRICS_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import torch.nn as _torch_nn
@@ -168,13 +171,31 @@ def _must_propagate_deep(exc: BaseException) -> bool:
 
     The public trainers turn a ``TypeError`` raised by SurvStudio code (a coding bug) into an
     ``InternalAnalysisError``; per-model and per-fold fallbacks must re-raise it instead of
-    recording an ordinary model failure. Worker processes mark such errors before they are
-    pickled back to the parent, because pickling drops ``__cause__``.
+    recording an ordinary model failure. Running out of memory also ends the run: the next
+    model or fold would only exhaust the memory again. Worker processes mark such errors
+    before they are pickled back to the parent, because pickling drops ``__cause__``.
     """
-    if getattr(exc, _MUST_PROPAGATE_MARK, False) or must_propagate(exc):
+    if isinstance(exc, MemoryError) or getattr(exc, _MUST_PROPAGATE_MARK, False) or must_propagate(exc):
         return True
     cause = exc.__cause__
-    return isinstance(exc, InternalAnalysisError) and cause is not None and must_propagate(cause)
+    return (
+        isinstance(exc, InternalAnalysisError)
+        and cause is not None
+        and (isinstance(cause, MemoryError) or must_propagate(cause))
+    )
+
+
+def _failure_message(exc: BaseException) -> str:
+    """The message recorded for a failed fit.
+
+    The trainers' input boundary replaces an error raised inside a library with a generic
+    internal-error message that points to the server log; the library's own message (the
+    cause) says what went wrong, as the ML module's model failures do. The full traceback is
+    logged where the failure is recorded.
+    """
+    cause = exc.__cause__ if isinstance(exc, InternalAnalysisError) else None
+    source = cause if cause is not None else exc
+    return str(source).strip() or type(source).__name__
 
 
 def _mark_must_propagate(exc: BaseException) -> None:
@@ -232,6 +253,12 @@ def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
     )
     evaluation_mode = str(result.get("evaluation_mode", "unknown"))
     if task.get("require_holdout_evaluation") and evaluation_mode != "holdout":
+        if task.get("repeat") is None:
+            # The refit on the development set, scored on the locked test set.
+            raise ValueError(
+                "The locked test set did not give a clean holdout evaluation of the model refit on the development set "
+                f"(reported '{evaluation_mode}'), so its locked-test C-index is blank."
+            )
         raise ValueError(
             "Deep repeated-CV fold did not retain a clean holdout evaluation "
             f"(reported '{evaluation_mode}')."
@@ -300,12 +327,17 @@ def _run_deep_compare_fold_task(task: dict[str, Any]) -> dict[str, Any]:
             if _must_propagate_deep(exc):
                 _mark_must_propagate(exc)
                 raise
+            # Logged here, where the traceback and the cause still exist (a worker's exceptions
+            # lose their cause when they are pickled back to the parent).
+            logger.exception(
+                "Deep-learning model %s failed in repeated-CV repeat %s, fold %s.", model_name, task["repeat"], task["fold"]
+            )
             errors.append(
                 {
                     "model": model_name,
                     "repeat": task["repeat"],
                     "fold": task["fold"],
-                    "error": str(exc),
+                    "error": _failure_message(exc),
                 }
             )
     return {"fold_results": fold_results, "errors": errors}
@@ -2371,10 +2403,27 @@ class _DeepRunSettings(NamedTuple):
         }
 
 
-def _record_fold_error(errors: list[dict[str, Any]], model_name: str, repeat: Any, fold: Any, exc: BaseException) -> None:
+def _record_fold_failure(
+    errors: list[dict[str, Any]],
+    model_names: Sequence[str],
+    repeat: Any,
+    fold: Any,
+    exc: BaseException,
+) -> None:
+    """Record one failed fold for each named model; errors that must propagate are re-raised.
+
+    The failure is logged once with its traceback, and the recorded message keeps the cause
+    of a library error (``_failure_message``).
+    """
     if _must_propagate_deep(exc):
         raise exc
-    errors.append({"model": model_name, "repeat": repeat, "fold": fold, "error": str(exc)})
+    logger.exception("Deep-learning repeated-CV repeat %s, fold %s failed.", repeat, fold, exc_info=exc)
+    message = _failure_message(exc)
+    errors.extend({"model": str(name), "repeat": repeat, "fold": fold, "error": message} for name in model_names)
+
+
+def _record_fold_error(errors: list[dict[str, Any]], model_name: str, repeat: Any, fold: Any, exc: BaseException) -> None:
+    _record_fold_failure(errors, [model_name], repeat, fold, exc)
 
 
 @user_input_boundary
@@ -2543,7 +2592,8 @@ def _deep_holdout_comparison(
         except Exception as exc:
             if _must_propagate_deep(exc):
                 raise
-            errors.append({"model": model_name, "error": str(exc)})
+            logger.exception("Deep-learning model %s failed in the holdout comparison.", model_name)
+            errors.append({"model": model_name, "error": _failure_message(exc)})
     events = shared_data["event_tensor"].detach().cpu().numpy().reshape(-1)
     train_rows = np.asarray(shared_eval_split["train_idx"], dtype=int)
     eval_rows = np.asarray(shared_eval_split["eval_idx"], dtype=int)
@@ -2702,8 +2752,9 @@ def _deep_repeated_cv_comparison(
                 event_positive_value=settings.event_positive_value,
             )
         except Exception as exc:
-            for model_spec in model_specs:
-                _record_fold_error(errors, model_spec["model_name"], split["repeat"], split["fold"], exc)
+            _record_fold_failure(
+                errors, [spec["model_name"] for spec in model_specs], split["repeat"], split["fold"], exc
+            )
             return None
         return {
             "repeat": split["repeat"],
@@ -2730,6 +2781,15 @@ def _deep_repeated_cv_comparison(
         errors=errors,
         parallel_jobs=parallel_jobs,
     )
+    # Parallel folds finish in any order. Summing the fold C-indices in a fixed order (repeat,
+    # fold, model) makes parallel and sequential runs give bit-identical aggregates.
+    model_order = {str(spec["model_name"]): position for position, spec in enumerate(model_specs)}
+
+    def _fold_order(item: dict[str, Any]) -> tuple[int, int, int]:
+        return (int(item.get("repeat") or 0), int(item.get("fold") or 0), model_order.get(str(item.get("model")), len(model_order)))
+
+    fold_results.sort(key=_fold_order)
+    errors.sort(key=_fold_order)
 
     locked_results: dict[str, dict[str, Any]] = {}
     locked_predictions: dict[str, Any] | None = None
@@ -2832,8 +2892,9 @@ def _collect_fold_task_result(
         return
     if exc is None:
         return
-    for model_spec in task_meta["model_specs"]:
-        _record_fold_error(errors, model_spec["model_name"], task_meta["repeat"], task_meta["fold"], exc)
+    _record_fold_failure(
+        errors, [spec["model_name"] for spec in task_meta["model_specs"]], task_meta["repeat"], task_meta["fold"], exc
+    )
 
 
 def _run_fold_tasks_sequentially(
@@ -2842,9 +2903,14 @@ def _run_fold_tasks_sequentially(
     *,
     fold_results: list[dict[str, Any]],
     errors: list[dict[str, Any]],
-    initial_task: dict[str, Any] | None = None,
+    initial_tasks: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Run fold tasks one at a time, building each task's tensors only when it is due."""
+    """Run fold tasks one at a time, building each task's tensors only when it is due.
+
+    ``initial_tasks`` holds tasks already built (the first fold, when a parallel run fell
+    back to sequential folds). They are popped from the list, so once run their tensors are
+    freed instead of staying referenced for the rest of the run.
+    """
 
     def _run(task: dict[str, Any]) -> None:
         raise_if_cancelled()
@@ -2855,9 +2921,10 @@ def _run_fold_tasks_sequentially(
         else:
             _collect_fold_task_result(task, fold_results=fold_results, errors=errors, task_result=task_result)
 
-    if initial_task is not None:
-        _run(initial_task)
-        initial_task = None
+    while initial_tasks:
+        task = initial_tasks.pop(0)
+        _run(task)
+        del task
         gc.collect()
     for split in fold_splits:
         task = build_task(split)
@@ -2952,7 +3019,8 @@ def _run_deep_fold_tasks(
 
     Returns a note when parallel execution was requested but fell back to sequential. A
     worker that dies (for example killed for memory) does not end the run: the folds it
-    left unfinished are rerun sequentially. Cancellation is checked every
+    left unfinished are rerun sequentially when the memory guard says one fold fits in this
+    process, and are otherwise reported as failed folds. Cancellation is checked every
     ``_CANCELLATION_POLL_SECONDS`` and terminates the workers.
     """
     remaining = list(fold_splits)
@@ -2974,44 +3042,46 @@ def _run_deep_fold_tasks(
     if first_task is None:
         return None
 
+    model_names = [str(spec["model_name"]) for spec in first_task.get("model_specs") or []]
     estimated_task_bytes = _estimate_deep_compare_task_bytes(first_task)
+    training_bytes = _estimate_fold_task_training_bytes(first_task, fold_splits)
+
+    def _sequential_from_first_task(note: str) -> str:
+        nonlocal first_task
+        # Handed over in a list and released here, so the first fold's tensors are freed
+        # once it has run instead of staying referenced for the whole sequential run.
+        initial_tasks = [first_task]
+        first_task = None
+        _run_fold_tasks_sequentially(
+            remaining, build_task, fold_results=fold_results, errors=errors, initial_tasks=initial_tasks
+        )
+        return note
+
     estimated_inflight_bytes = estimated_task_bytes * max_workers
     if estimated_inflight_bytes >= _DEEP_COMPARE_PARALLEL_MAX_INFLIGHT_BYTES:
-        note = (
+        return _sequential_from_first_task(
             "Parallel repeated-CV execution was disabled because fold payloads were too large "
             f"for safe multi-process buffering ({estimated_inflight_bytes / (1024 ** 2):.1f} MiB estimated in flight "
             f"across {max_workers} worker(s)); SurvStudio fell back to sequential folds."
         )
-        _run_fold_tasks_sequentially(
-            remaining, build_task, fold_results=fold_results, errors=errors, initial_task=first_task
-        )
-        return note
     available_memory = _available_system_memory_bytes()
     if available_memory is None:
-        note = (
+        return _sequential_from_first_task(
             "Parallel repeated-CV execution was disabled because available system memory "
             "could not be determined for this runtime; SurvStudio fell back to sequential folds."
         )
-        _run_fold_tasks_sequentially(
-            remaining, build_task, fold_results=fold_results, errors=errors, initial_task=first_task
-        )
-        return note
     estimated_parallel_bytes = _estimate_parallel_deep_compare_memory_bytes(
         payload_bytes=estimated_task_bytes,
         max_workers=max_workers,
-        training_bytes=_estimate_fold_task_training_bytes(first_task, fold_splits),
+        training_bytes=training_bytes,
     )
     if estimated_parallel_bytes >= available_memory:
-        note = (
+        return _sequential_from_first_task(
             "Parallel repeated-CV execution was disabled because available system memory "
             f"({available_memory / (1024 ** 2):.1f} MiB) was below the estimated worker footprint "
             f"({estimated_parallel_bytes / (1024 ** 2):.1f} MiB including process startup overhead and model training); "
             "SurvStudio fell back to sequential folds."
         )
-        _run_fold_tasks_sequentially(
-            remaining, build_task, fold_results=fold_results, errors=errors, initial_task=first_task
-        )
-        return note
 
     pool_broken = False
     try:
@@ -3067,6 +3137,7 @@ def _run_deep_fold_tasks(
             if pool_broken:
                 _abandon_process_pool(executor)
     except (NotImplementedError, PermissionError, OSError) as exc:
+        first_task = None  # an unsubmitted first fold is rebuilt below when it is due
         # Keep folds that already finished and rerun only the rest, so no fold is counted twice.
         _run_fold_tasks_sequentially(
             _unfinished_fold_splits(fold_splits, fold_results, errors),
@@ -3079,7 +3150,37 @@ def _run_deep_fold_tasks(
             f"SurvStudio fell back to sequential folds ({type(exc).__name__})."
         )
     if pool_broken:
+        first_task = None
         unfinished = _unfinished_fold_splits(fold_splits, fold_results, errors)
+        # The worker was most likely killed for memory. Rerunning its folds in this (server)
+        # process is only safe when the memory guard says one fold fits here.
+        needed_bytes = estimated_task_bytes + training_bytes + _DEEP_COMPARE_PARALLEL_MEMORY_RESERVE_BYTES
+        available_after = _available_system_memory_bytes()
+        if unfinished and (available_after is None or needed_bytes >= available_after):
+            memory_text = (
+                "could not be determined"
+                if available_after is None
+                else f"({available_after / (1024 ** 2):.1f} MiB) was below the estimated footprint of one fold "
+                f"({needed_bytes / (1024 ** 2):.1f} MiB)"
+            )
+            message = (
+                "A parallel repeated-CV worker process stopped unexpectedly (for example, it ran out of memory), and this "
+                f"fold was not rerun in the SurvStudio process because the available memory {memory_text}."
+            )
+            logger.error(
+                "Deep-learning repeated CV: %d unfinished fold(s) not rerun after a worker process stopped: %s",
+                len(unfinished),
+                message,
+            )
+            for split in unfinished:
+                errors.extend(
+                    {"model": name, "repeat": split["repeat"], "fold": split["fold"], "error": message} for name in model_names
+                )
+            return (
+                "A parallel repeated-CV worker process stopped unexpectedly (for example, it ran out of memory); its "
+                f"{len(unfinished)} unfinished fold(s) were not rerun because the available memory {memory_text}, "
+                "and they are reported as failed folds."
+            )
         _run_fold_tasks_sequentially(unfinished, build_task, fold_results=fold_results, errors=errors)
         return (
             "A parallel repeated-CV worker process stopped unexpectedly (for example, it ran out of memory); "
@@ -3117,7 +3218,9 @@ def _deep_locked_test_results(
     except Exception as exc:
         if _must_propagate_deep(exc):
             raise
-        return {str(spec["model_name"]): {"error": str(exc)} for spec in model_specs}, None
+        logger.exception("Preparing the deep-learning locked-test evaluation failed.")
+        message = _failure_message(exc)
+        return {str(spec["model_name"]): {"error": message} for spec in model_specs}, None
     for model_spec in model_specs:
         model_name = str(model_spec["model_name"])
         try:
@@ -3141,7 +3244,8 @@ def _deep_locked_test_results(
         except Exception as exc:
             if _must_propagate_deep(exc):
                 raise
-            locked_results[model_name] = {"error": str(exc)}
+            logger.exception("Deep-learning model %s failed when refit on the development set for the locked test.", model_name)
+            locked_results[model_name] = {"error": _failure_message(exc)}
     risks = {
         name: (None, risk)
         for name, result in locked_results.items()
