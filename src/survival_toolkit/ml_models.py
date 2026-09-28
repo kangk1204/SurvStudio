@@ -915,7 +915,8 @@ def _cox_ph_survival_predictor(results: Any, exog: pd.DataFrame | np.ndarray) ->
 
 
 def _brier_failure_must_propagate(exc: BaseException) -> bool:
-    """Failures the optional Brier metrics must not swallow: bugs, cancellation, exhausted memory.
+    """Failures a per-model fallback or the optional Brier metrics must not swallow: bugs,
+    cancellation, exhausted memory.
 
     ``compute_integrated_brier_score`` wraps its own ``TypeError``s in an
     ``InternalAnalysisError``, so the original exception is checked too.
@@ -926,6 +927,17 @@ def _brier_failure_must_propagate(exc: BaseException) -> bool:
     return isinstance(exc, InternalAnalysisError) and cause is not None and (
         isinstance(cause, MemoryError) or must_propagate(cause)
     )
+
+
+def _failure_message(exc: BaseException) -> str:
+    """The message recorded for a failed model or fold; the exception type when the message is empty."""
+    return str(exc).strip() or type(exc).__name__
+
+
+# Failures of the optional Brier metrics that come from the data (no IPCW support, a
+# singular or overflowing baseline); anything else, such as an IndexError or a
+# ZeroDivisionError, is a bug and propagates.
+_EXPECTED_BRIER_FAILURES = (ValueError, np.linalg.LinAlgError, FloatingPointError)
 
 
 def _maybe_compute_brier_metrics(
@@ -944,11 +956,26 @@ def _maybe_compute_brier_metrics(
             support_times=support_times,
             support_events=support_events,
         )
-    except Exception as exc:
+    except _EXPECTED_BRIER_FAILURES as exc:
         if _brier_failure_must_propagate(exc):
             raise
         warnings.warn(
             f"Integrated Brier Score / Brier Skill Score could not be computed: {exc}",
+            RuntimeWarning,
+        )
+        return None
+
+
+def _survival_predictor_or_none(build: Any) -> Any:
+    """``build()``, the survival-function predictor of a fitted model; None (with a warning) when
+    the data do not allow one, so only the Brier metrics are lost, never the model."""
+    try:
+        return build()
+    except _EXPECTED_BRIER_FAILURES as exc:
+        if _brier_failure_must_propagate(exc):
+            raise
+        warnings.warn(
+            f"Integrated Brier Score / Brier Skill Score could not be computed because survival-function predictions were unavailable: {exc}",
             RuntimeWarning,
         )
         return None
@@ -971,15 +998,8 @@ def _maybe_compute_sksurv_brier_metrics(
             RuntimeWarning,
         )
         return None
-    try:
-        predicted_survival_fn = _sksurv_survival_predictor(model, X, alpha=alpha)
-    except Exception as exc:
-        if _brier_failure_must_propagate(exc):
-            raise
-        warnings.warn(
-            f"Integrated Brier Score / Brier Skill Score could not be computed because survival-function predictions were unavailable: {exc}",
-            RuntimeWarning,
-        )
+    predicted_survival_fn = _survival_predictor_or_none(lambda: _sksurv_survival_predictor(model, X, alpha=alpha))
+    if predicted_survival_fn is None:
         return None
     return _maybe_compute_brier_metrics(
         times,
@@ -2449,9 +2469,9 @@ def compare_survival_models(
                 "test_events": result.get("test_events"),
             })
         except Exception as exc:
-            if must_propagate(exc):
+            if _brier_failure_must_propagate(exc):
                 raise
-            errors.append({"model": model_name, "error": str(exc)})
+            errors.append({"model": model_name, "error": _failure_message(exc)})
 
     if not comparison:
         raise ValueError(
@@ -2680,12 +2700,20 @@ def _fit_evaluate_cox_split(
         )
 
     y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
-    brier_result = _maybe_compute_brier_metrics(
-        test_times,
-        test_status,
-        _cox_ph_survival_predictor(results, test_encoded.to_numpy(dtype=float)),
-        support_times=train_times,
-        support_events=train_status,
+    # As for the scikit-survival models, a baseline that cannot be built only blanks the Brier metrics.
+    predicted_survival_fn = _survival_predictor_or_none(
+        lambda: _cox_ph_survival_predictor(results, test_encoded.to_numpy(dtype=float))
+    )
+    brier_result = (
+        None
+        if predicted_survival_fn is None
+        else _maybe_compute_brier_metrics(
+            test_times,
+            test_status,
+            predicted_survival_fn,
+            support_times=train_times,
+            support_events=train_status,
+        )
     )
     return _fold_result(
         model="Cox PH",
@@ -3236,13 +3264,13 @@ def cross_validate_survival_models(
                         "test_events": result["test_events"],
                     })
                 except Exception as exc:
-                    if must_propagate(exc):
+                    if _brier_failure_must_propagate(exc):
                         raise
                     errors.append({
                         "model": model_name,
                         "repeat": repeat_idx + 1,
                         "fold": fold_idx,
-                        "error": str(exc),
+                        "error": _failure_message(exc),
                     })
 
     locked_results: dict[str, dict[str, Any]] = {}
@@ -3262,9 +3290,9 @@ def cross_validate_survival_models(
                     **extra_kwargs,
                 )
             except Exception as exc:
-                if must_propagate(exc):
+                if _brier_failure_must_propagate(exc):
                     raise
-                locked_results[model_name] = {"error": str(exc)}
+                locked_results[model_name] = {"error": _failure_message(exc)}
 
     comparison: list[dict[str, Any]] = []
     for model_name, _, _ in model_specs:
@@ -3533,7 +3561,10 @@ def compute_shap_values(
     try:
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(X_array)
-    except Exception:
+    except Exception as exc:
+        # Exhausted memory, cancellation and bugs are not an unsupported model.
+        if _brier_failure_must_propagate(exc):
+            raise
         # scikit-survival estimators are often unsupported by TreeExplainer.
         # Fall back to a capped KernelExplainer run only for moderate feature
         # counts. High-dimensional Kernel SHAP is too unstable for reporting.
