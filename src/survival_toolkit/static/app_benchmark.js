@@ -125,6 +125,14 @@
       return SPLIT_NOTES[board?.splitMismatchReason] || SPLIT_NOTES.differ;
     }
     const LOCKED_TEST_RANKING_NOTE = "Ranking uses development-set cross-validation; the locked-test C-index of the rank-1 model is the independent estimate to report.";
+    const LOCKED_TEST_FAMILY_RANKING_NOTE = "Within each family, ranking uses development-set cross-validation; the locked-test C-index of that family's rank-1 model is its independent estimate to report.";
+
+    // The same note in the summary and under the table: with the cross-family ranking withheld, each family
+    // has its own rank-1 model.
+    function lockedTestRankingNote(board) {
+      if (!board.hasLockedTest) return "";
+      return board.withholdCrossFamilyRanking ? LOCKED_TEST_FAMILY_RANKING_NOTE : LOCKED_TEST_RANKING_NOTE;
+    }
 
     function comparePayloadGroupId(payload) {
       return String(payload?._client_compare_group_id || payload?.analysis?._client_compare_group_id || "").trim();
@@ -404,7 +412,8 @@
       const rawVisibleRows = showingStaleBoard ? snapshotRowsRaw : rawCurrentRows;
       const missingMetricCount = rawVisibleRows.filter((row) => row.numericCIndex === null).length;
       const nonComparableCount = rawVisibleRows.filter((row) => !row.comparableForRanking).length;
-      const predictiveBusy = isScopeBusy("predictive") || isScopeBusy("ml") || isScopeBusy("dl");
+      // Only Compare All builds the board; a single-model run (or a family's own comparison) leaves it shown.
+      const predictiveBusy = isScopeBusy("predictive");
       const pendingFamilies = ["ml", "dl"].filter((goal) => !currentFamilies.includes(goal));
       const board = {
         currentRows,
@@ -490,6 +499,7 @@
 
       const intervals = board.intervals?.status === "ready" ? board.intervals.result : null;
       const intervalByModel = new Map((intervals?.rows || []).map((row) => [String(row.model), row]));
+      const referenceName = intervalReferenceName(intervals);
       const valueOf = (row) => {
         const interval = intervalByModel.get(String(row.model));
         if (interval?.c_index != null) return Number(interval.c_index);
@@ -557,7 +567,7 @@
             : undefined,
           customdata: members.map((row, index) => [
             intervalRangeText(intervalsOf[index]?.c_index_ci),
-            deltaText(intervalsOf[index]),
+            deltaText(intervalsOf[index], referenceName),
             benchmarkEvaluationLabel(row.evaluation_mode),
             screenRank.has(row) ? String(screenRank.get(row)) : "not ranked",
           ]),
@@ -577,7 +587,7 @@
       const showChance = Math.min(...lows) < 0.58;
       const low = showChance ? Math.min(...lows, 0.5) : Math.min(...lows);
       const high = Math.max(...highs);
-      const reference = intervalByModel.get("Cox PH");
+      const reference = referenceName ? intervalByModel.get(referenceName) : null;
       const shapes = showChance
         ? [{ type: "line", yref: "paper", y0: 0, y1: 1, xref: "x", x0: 0.5, x1: 0.5, line: { color: "rgba(90, 103, 118, 0.7)", width: 1.2, dash: "dot" } }]
         : [];
@@ -586,7 +596,7 @@
         : [];
       if (reference?.c_index != null) {
         shapes.push({ type: "line", yref: "paper", y0: 0, y1: 1, xref: "x", x0: reference.c_index, x1: reference.c_index, line: { color: "rgba(34, 72, 156, 0.6)", width: 1.2, dash: "dash" } });
-        annotations.push({ xref: "x", x: reference.c_index, yref: "paper", y: 1, yanchor: "bottom", text: "Cox PH", showarrow: false, font: { size: 11, color: "rgba(34, 72, 156, 0.95)" } });
+        annotations.push({ xref: "x", x: reference.c_index, yref: "paper", y: 1, yanchor: "bottom", text: referenceName, showarrow: false, font: { size: 11, color: "rgba(34, 72, 156, 0.95)" } });
       }
       const layout = {
         title: {
@@ -644,10 +654,17 @@
         : "";
     }
 
-    function deltaText(row) {
-      if (!row || row.delta_vs_reference == null) return row && String(row.model) === "Cox PH" ? "Reference model" : "";
+    // The model the intervals' paired differences (ΔC) are taken against: Cox PH when the board has it, else none.
+    function intervalReferenceName(intervals) {
+      const reference = intervals?.reference;
+      return reference === null || reference === undefined || reference === "" ? "" : String(reference);
+    }
+
+    function deltaText(row, referenceName) {
+      if (!referenceName) return "";
+      if (!row || row.delta_vs_reference == null) return row && String(row.model) === referenceName ? "Reference model" : "";
       const sign = Number(row.delta_vs_reference) >= 0 ? "+" : "";
-      return `ΔC vs Cox PH: ${sign}${Number(row.delta_vs_reference).toFixed(3)} ${intervalRangeText(row.delta_ci)}`;
+      return `ΔC vs ${referenceName}: ${sign}${Number(row.delta_vs_reference).toFixed(3)} ${intervalRangeText(row.delta_ci)}`;
     }
 
     // The test-set predictions behind the visible board, when its families scored one shared test set.
@@ -676,8 +693,15 @@
 
     // A failed interval request is tried again on a later render, after a pause that doubles with each
     // failure (5 s, 10 s, ... up to a minute), so a passing server hiccup does not hide the intervals for good.
+    // Only a network failure or a server error (5xx) is retried: a request the server refused (4xx) would be
+    // refused again.
     const INTERVAL_RETRY_BASE_MS = 5000;
     const INTERVAL_RETRY_MAX_MS = 60000;
+
+    function intervalErrorIsRetryable(error) {
+      const status = Number(error?.status);
+      return !Number.isFinite(status) || status >= 500;
+    }
 
     // Bootstrap intervals for the visible board, fetched once per board and kept in runtime.
     function boardIntervals(board) {
@@ -685,7 +709,7 @@
       if (!blocks) return null;
       const key = boardIntervalKey(board);
       const cached = runtime.benchmarkIntervals?.key === key ? runtime.benchmarkIntervals : null;
-      if (cached && !(cached.status === "error" && Date.now() >= cached.retryAt)) return cached;
+      if (cached && !(cached.status === "error" && cached.retryable && Date.now() >= cached.retryAt)) return cached;
       const failures = cached?.status === "error" ? cached.failures : 0;
       runtime.benchmarkIntervals = { key, status: "loading", failures };
       fetchJSON("/api/model-comparison-intervals", { method: "POST", body: JSON.stringify({ predictions: blocks }) })
@@ -702,6 +726,7 @@
             status: "error",
             error: error?.message || String(error),
             failures: failures + 1,
+            retryable: intervalErrorIsRetryable(error),
             retryAt: Date.now() + retryDelay,
           };
           requestBoardRender();
@@ -722,10 +747,13 @@
 
     function intervalDetail(board) {
       if (board.intervals?.status !== "ready") return "";
-      const paired = "ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients, so a model whose ΔC interval contains 0 is not distinguishable from Cox PH on this split.";
+      const referenceName = intervalReferenceName(board.intervals.result);
+      const paired = referenceName
+        ? `ΔC vs ${referenceName} is paired: every draw scores all models on the same resampled patients, so a model whose ΔC interval contains 0 is not distinguishable from ${referenceName} on this split.`
+        : "";
       // The server caps the draws by a work budget and says so; the reader should know the intervals used fewer.
       const budget = board.intervals.result?.bootstrap_note;
-      return budget ? `${paired} ${budget}` : paired;
+      return [paired, budget].filter(Boolean).join(" ");
     }
 
     // One line stays in view; everything a reader needs only when writing up folds into "Method notes".
@@ -758,7 +786,7 @@
       if (board.missingMetricCount) {
         cautionParts.push(`${board.missingMetricCount} row(s) have no numeric C-index.`);
       }
-      if (board.hasLockedTest && !board.withholdCrossFamilyRanking) cautionParts.push(LOCKED_TEST_RANKING_NOTE);
+      if (board.hasLockedTest) cautionParts.push(lockedTestRankingNote(board));
       cautionParts.push(...benchmarkMethodologyNotes(board));
       ["ml", "dl"].forEach((goal) => {
         const copy = excludedModelsCopy(goal, board.excludedByFamily?.[goal], {
@@ -943,7 +971,7 @@
       if (board.showingStaleBoard) {
         leadParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the leaderboard.");
       }
-      if (board.hasLockedTest) leadParts.push(LOCKED_TEST_RANKING_NOTE);
+      if (board.hasLockedTest) leadParts.push(lockedTestRankingNote(board));
       // A failed locked-test refit leaves the model ranked by cross-validation but without an independent estimate.
       const lockedTestFailures = board.visibleRows.filter((row) => row.lockedTestError);
       if (board.hasLockedTest && lockedTestFailures.length) {
@@ -979,6 +1007,7 @@
 
       const intervals = board.intervals?.status === "ready" ? board.intervals.result : null;
       const intervalByModel = new Map((intervals?.rows || []).map((row) => [String(row.model), row]));
+      const referenceName = intervalReferenceName(intervals);
       const rankLabel = board.hasMixedEvaluation ? "Family rank" : "Screen rank";
       const displayedRankLabel = board.withholdCrossFamilyRanking ? "Family rank" : rankLabel;
       let screenRank = 0;
@@ -998,7 +1027,7 @@
               <th>Model</th>
               <th>${board.hasLockedTest ? "CV C-index (development)" : "C-index"}</th>
               ${board.hasLockedTest ? "<th>Locked-test C-index</th>" : ""}
-              ${intervals ? `<th>${board.hasLockedTest ? "Locked-test 95% CI" : "95% CI"}</th><th>ΔC vs Cox PH (95% CI)</th>` : ""}
+              ${intervals ? `<th>${board.hasLockedTest ? "Locked-test 95% CI" : "95% CI"}</th>${referenceName ? `<th>ΔC vs ${escapeHtml(referenceName)} (95% CI)</th>` : ""}` : ""}
               <th>Evaluation</th>
               <th>Status</th>
               <th class="benchmark-review-column">Review</th>
@@ -1015,7 +1044,7 @@
                 <td>${escapeHtml(formatValue(row.model))}</td>
                 <td>${escapeHtml(formatValue(row.c_index))}</td>
                 ${board.hasLockedTest ? `<td>${row.hasLockedTest ? escapeHtml(formatValue(row.locked_test_c_index)) : "—"}${row.lockedTestError ? `<div class="benchmark-row-note" title="${escapeHtml(row.lockedTestError)}">Locked-test refit failed; ranked by CV</div>` : ""}</td>` : ""}
-                ${intervals ? intervalCells(intervalByModel.get(String(row.model))) : ""}
+                ${intervals ? intervalCells(intervalByModel.get(String(row.model)), referenceName) : ""}
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>
                 <td class="benchmark-review-column"><span class="benchmark-action-slot" data-benchmark-action-slot="${index}"></span></td>
@@ -1034,12 +1063,15 @@
       });
     }
 
-    function intervalCells(row) {
-      if (!row) return "<td>—</td><td>—</td>";
+    // The 95% CI cell, and the ΔC cell when the intervals have a reference model.
+    function intervalCells(row, referenceName) {
+      if (!row) return referenceName ? "<td>—</td><td>—</td>" : "<td>—</td>";
+      const interval = `<td>${escapeHtml(intervalRangeText(row.c_index_ci).replace("(95% ", "").replace(")", ""))}</td>`;
+      if (!referenceName) return interval;
       const delta = row.delta_vs_reference == null
-        ? (String(row.model) === "Cox PH" ? "reference" : "—")
+        ? (String(row.model) === referenceName ? "reference" : "—")
         : `${Number(row.delta_vs_reference) >= 0 ? "+" : ""}${Number(row.delta_vs_reference).toFixed(3)} ${intervalRangeText(row.delta_ci).replace("95% ", "")}`;
-      return `<td>${escapeHtml(intervalRangeText(row.c_index_ci).replace("(95% ", "").replace(")", ""))}</td><td>${escapeHtml(delta)}</td>`;
+      return `${interval}<td>${escapeHtml(delta)}</td>`;
     }
 
     function renderBenchmarkBoard() {

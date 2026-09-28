@@ -508,6 +508,14 @@ function isSupersededRequestError(error) {
   return Boolean(error?.superseded) || error?.name === "AbortError";
 }
 
+// An error of an answered request keeps its HTTP status, so a caller can tell a refused request (4xx, which
+// would be refused again) from a server failure (5xx); a network failure has no status.
+function httpError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
 async function fetchJSON(url, options = {}) {
   // Spread the caller's options first so their own headers cannot drop the JSON content type.
   const { headers: callerHeaders, ...fetchOptions } = options;
@@ -539,7 +547,7 @@ async function fetchJSON(url, options = {}) {
       const genericMessage = response.ok
         ? "The server returned an invalid JSON response."
         : (rawText.trim() || "Request failed.");
-      throw new Error(genericMessage);
+      throw httpError(genericMessage, response.status);
     }
   }
   if (!response.ok) {
@@ -551,9 +559,9 @@ async function fetchJSON(url, options = {}) {
       const datasetName = state.dataset?.filename || state.dataset?.dataset_id || "current cohort";
       goHome({ syncHistory: true, historyMode: "replace" });
       setRuntimeBanner(`The previously loaded cohort (${datasetName}) is no longer available on the server. Reload it to continue.`, "warning");
-      throw new Error("The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.");
+      throw httpError("The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.", response.status);
     }
-    throw new Error(message);
+    throw httpError(message, response.status);
   }
   return payload;
 }

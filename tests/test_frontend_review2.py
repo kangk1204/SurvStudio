@@ -134,6 +134,135 @@ def test_stale_locked_test_board_notes_the_rank_one_model_it_ranks_first(
     assert "The locked-test refit of the rank-1 model (DeepHit) failed" in result["note"]
 
 
+def test_a_single_model_run_does_not_hide_the_leaderboard(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:
+    """R15-7: only Compare All puts the board in its "in progress" state; a DeepSurv run leaves it shown."""
+    result = _run_page(tmp_path, _compare_all_script(r"""
+      const hold = deferred();
+      const board = () => page.run(`({ rows: refs.benchmarkComparisonShell.querySelectorAll("tbody tr").length,
+        summary: refs.benchmarkSummaryGrid.textContent.replace(/\s+/g, " ").trim(), plotHidden: refs.benchmarkComparisonPlot.classList.contains("hidden") })`);
+      const before = board();
+      page.fetchHandler = (request) => (request.url.endsWith("/api/deep-model")
+        ? hold.promise.then(() => ({ status: 500, body: { detail: "stopped" } }))
+        : { status: 500, body: { detail: "unexpected" } });
+      page.run("reviewBenchmarkModel('deepsurv', 'single'); refs.runPredictiveWorkbenchButton.click()");
+      await page.settle(3);
+      page.run("closePredictiveWorkbench()");
+      await page.settle(3);
+      const during = board();
+      hold.resolve();
+      await page.settle();
+      return { before, during };
+    """), dataset=example_dataset, compare=compare_payloads)
+
+    assert result["before"]["rows"] == 5
+    assert result["during"]["rows"] == 5
+    assert result["during"]["plotHidden"] is False
+    assert "still running" not in result["during"]["summary"]
+    assert "in progress" not in result["during"]["summary"]
+
+
+def test_a_board_without_cox_ph_shows_no_delta_c_column(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:
+    """R15-8: the ΔC column and its note follow the intervals' reference; a DL-only board has none."""
+    dl_only = client.post("/api/model-comparison-intervals", json={"predictions": [compare_payloads["dl"]["test_predictions"]]})
+    assert dl_only.status_code == 200, dl_only.text
+    assert dl_only.json()["reference"] is None
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.fetchHandler = (request) => {
+        if (request.url.endsWith("/api/ml-model")) return { status: 400, body: { detail: "All models failed to train." } };
+        if (request.url.endsWith("/api/deep-model")) return { status: 200, body: { analysis: fixtures.compare.dl, request_config: request.json() } };
+        if (request.url.endsWith("/api/model-comparison-intervals")) return { status: 200, body: fixtures.dlOnly };
+        return { status: 500, body: { detail: "unexpected" } };
+      };
+      page.run("activateTab('benchmark'); refs.runPredictiveCompareAllButton.click()");
+      await page.settle(60);
+      return {
+        headers: page.run("refs.benchmarkComparisonShell.querySelectorAll('th').map((th) => th.textContent.trim())"),
+        cells: page.run("refs.benchmarkComparisonShell.querySelectorAll('tbody tr')[0].children.length"),
+        note: page.run("refs.benchmarkTableNote.textContent"),
+        shapes: page.run("(refs.benchmarkComparisonPlot.layout?.shapes || []).length"),
+      };
+    """, dataset=example_dataset, compare=compare_payloads, dlOnly=dl_only.json())
+
+    assert "95% CI" in result["headers"]
+    assert not any("ΔC" in header for header in result["headers"])
+    assert result["cells"] == len(result["headers"])
+    assert "ΔC vs Cox PH is paired" not in result["note"]
+
+    with_cox = _run_page(tmp_path, _compare_all_script(r"""
+      return {
+        headers: headers(),
+        cells: page.run("refs.benchmarkComparisonShell.querySelectorAll('tbody tr')[0].children.length"),
+        note: page.run("refs.benchmarkTableNote.textContent"),
+      };
+    """), dataset=example_dataset, compare=compare_payloads)
+    assert "ΔC vs Cox PH (95% CI)" in with_cox["headers"]
+    assert with_cox["cells"] == len(with_cox["headers"])
+    assert "ΔC vs Cox PH is paired" in with_cox["note"]
+
+
+def _interval_failure_script(failure: str) -> str:
+    """Compare All whose first interval request fails as `failure` returns; later ones succeed."""
+    return r"""
+      await loadDataset(page, fixtures.dataset);
+      let intervalCalls = 0;
+      page.fetchHandler = (request) => {
+        if (request.url.endsWith("/api/ml-model")) return { status: 200, body: { analysis: fixtures.compare.ml, request_config: request.json() } };
+        if (request.url.endsWith("/api/deep-model")) return { status: 200, body: { analysis: fixtures.compare.dl, request_config: request.json() } };
+        if (request.url.endsWith("/api/model-comparison-intervals")) {
+          intervalCalls += 1;
+          return intervalCalls === 1 ? """ + failure + r""" : { status: 200, body: fixtures.compare.intervals };
+        }
+        return { status: 500, body: { detail: "unexpected" } };
+      };
+      page.run("activateTab('benchmark'); refs.runPredictiveCompareAllButton.click()");
+      await page.settle(60);
+      const afterFailure = page.run("runtime.benchmarkIntervals.status");
+      // Past any retry pause: the board is rendered again.
+      page.run("runtime.benchmarkIntervals.retryAt = 0; renderBenchmarkBoard();");
+      await page.settle();
+      return { afterFailure, after: page.run("runtime.benchmarkIntervals.status"), calls: intervalCalls };
+    """
+
+
+@pytest.mark.parametrize(
+    ("failure", "retried"),
+    [
+        ('{ status: 422, body: { detail: "Every test patient needs one event indicator of 0 or 1." } }', False),
+        ('Promise.reject(new TypeError("Failed to fetch"))', True),
+        ('{ status: 502, body: { detail: "bad gateway" } }', True),
+    ],
+)
+def test_interval_requests_are_retried_only_after_network_or_server_errors(
+    tmp_path: Path, example_dataset: dict, compare_payloads: dict, failure: str, retried: bool
+) -> None:
+    """R15-9: a request the server refused (4xx) would be refused again, so it is not retried."""
+    result = _run_page(tmp_path, _interval_failure_script(failure), dataset=example_dataset, compare=compare_payloads)
+
+    assert result["afterFailure"] == "error"
+    assert result == {"afterFailure": "error", "after": "ready" if retried else "error", "calls": 2 if retried else 1}
+
+
+def test_the_locked_test_ranking_note_is_the_same_in_summary_and_table(
+    tmp_path: Path, example_dataset: dict, compare_payloads: dict
+) -> None:
+    """R15-14: with the cross-family ranking withheld, both notes speak of each family's rank-1 model."""
+    compare = _locked_test_compare(compare_payloads, failed=False)
+    compare["dl"]["evaluation_split_fingerprint"] = "another-split"
+    result = _run_page(tmp_path, _compare_all_script(r"""
+      return {
+        withheld: page.run("benchmarkBoardState().withholdCrossFamilyRanking"),
+        summary: page.run("refs.benchmarkSummaryGrid.textContent"),
+        note: page.run("refs.benchmarkTableNote.textContent"),
+      };
+    """), dataset=example_dataset, compare=compare)
+
+    assert result["withheld"] is True
+    for text in (result["summary"], result["note"]):
+        assert "the locked-test C-index of the rank-1 model is the independent estimate" not in text
+        assert "Within each family, ranking uses development-set cross-validation" in text
+
+
 # ── Result mode after a failed run ──────────────────────────────
 
 

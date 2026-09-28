@@ -4881,7 +4881,8 @@ def test_benchmark_board_warns_about_cross_family_tie_methods_and_ibs_asymmetry(
     assert "Cox PH and LASSO-Cox use Efron" in benchmark_js
     assert "DeepSurv, Survival Transformer, and Survival VAE use Breslow" in benchmark_js
     assert "ML comparison rows may include IBS / Brier Skill Score, but DL comparison rows currently report C-index only" in benchmark_js
-    assert "ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients" in benchmark_js
+    # Named after the intervals' reference model, Cox PH when the board has it (tests/test_frontend_review2.py).
+    assert "ΔC vs ${referenceName} is paired: every draw scores all models on the same resampled patients" in benchmark_js
     assert "/api/model-comparison-intervals" in benchmark_js
 
 
