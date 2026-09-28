@@ -1547,8 +1547,9 @@ def test_compare_deep_survival_models_supports_parallel_repeated_cv(monkeypatch)
     import survival_toolkit.deep_models as deep_models
 
     monkeypatch.setattr(deep_models, "ProcessPoolExecutor", _InlineExecutor)
-    monkeypatch.setattr(deep_models, "wait", lambda futures, return_when=None: (set(futures), set()))
+    monkeypatch.setattr(deep_models, "wait", lambda futures, timeout=None, return_when=None: (set(futures), set()))
     monkeypatch.setattr(deep_models, "_available_system_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr(deep_models, "_available_cpu_count", lambda: 2)
 
     df = make_example_dataset(seed=16, n_patients=48)
     result = deep_models.compare_deep_survival_models(
@@ -1591,8 +1592,9 @@ def test_parallel_repeated_cv_is_reproducible_with_fixed_seed(monkeypatch) -> No
     import survival_toolkit.deep_models as deep_models
 
     monkeypatch.setattr(deep_models, "ProcessPoolExecutor", _InlineExecutor)
-    monkeypatch.setattr(deep_models, "wait", lambda futures, return_when=None: (set(futures), set()))
+    monkeypatch.setattr(deep_models, "wait", lambda futures, timeout=None, return_when=None: (set(futures), set()))
     monkeypatch.setattr(deep_models, "_available_system_memory_bytes", lambda: 8 * 1024 * 1024 * 1024)
+    monkeypatch.setattr(deep_models, "_available_cpu_count", lambda: 2)
 
     df = make_example_dataset(seed=18, n_patients=48)
     common = dict(
@@ -1670,6 +1672,7 @@ def test_compare_deep_survival_models_disables_parallel_cv_when_fold_payloads_ar
         "_estimate_deep_compare_task_bytes",
         lambda task: deep_models._DEEP_COMPARE_PARALLEL_MAX_INFLIGHT_BYTES,
     )
+    monkeypatch.setattr(deep_models, "_available_cpu_count", lambda: 2)
 
     class _UnexpectedExecutor:
         def __init__(self, *args, **kwargs) -> None:
@@ -1780,6 +1783,7 @@ def test_compare_deep_survival_models_disables_parallel_cv_when_available_memory
     monkeypatch.setattr(deep_models, "_prepare_deep_split_data", _fake_prepare)
     monkeypatch.setattr(deep_models, "_estimate_deep_compare_task_bytes", lambda task: 1024)
     monkeypatch.setattr(deep_models, "_available_system_memory_bytes", lambda: 64 * 1024 * 1024)
+    monkeypatch.setattr(deep_models, "_available_cpu_count", lambda: 2)
 
     class _UnexpectedExecutor:
         def __init__(self, *args, **kwargs) -> None:
@@ -1890,6 +1894,7 @@ def test_compare_deep_survival_models_disables_parallel_cv_when_available_memory
     monkeypatch.setattr(deep_models, "_prepare_deep_split_data", _fake_prepare)
     monkeypatch.setattr(deep_models, "_estimate_deep_compare_task_bytes", lambda task: 1024)
     monkeypatch.setattr(deep_models, "_available_system_memory_bytes", lambda: None)
+    monkeypatch.setattr(deep_models, "_available_cpu_count", lambda: 2)
     monkeypatch.setattr(
         deep_models,
         "_estimate_parallel_deep_compare_memory_bytes",
@@ -1992,6 +1997,7 @@ def test_available_system_memory_bytes_is_none_when_no_probe_answers(monkeypatch
         "_windows_available_memory_bytes",
         "_sysconf_available_bytes",
         "_vm_stat_available_bytes",
+        "_cgroup_available_memory_bytes",
     ):
         monkeypatch.setattr(deep_models, probe, lambda: None)
     assert deep_models._available_system_memory_bytes() is None

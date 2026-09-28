@@ -21,10 +21,11 @@ import subprocess
 import threading
 import time
 import warnings
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, BrokenExecutor, ProcessPoolExecutor, wait
+from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterator, NamedTuple, Sequence
 
 import numpy as np
 import pandas as pd
@@ -34,8 +35,8 @@ from survival_toolkit.encoding import (
     reject_numeric_text_features,
     transform_feature_encoder as _transform_shared_feature_encoder,
 )
-from survival_toolkit.concurrency import cancellation_requested, raise_if_cancelled
-from survival_toolkit.errors import must_propagate, user_input_boundary
+from survival_toolkit.concurrency import raise_if_cancelled
+from survival_toolkit.errors import InternalAnalysisError, must_propagate, user_input_boundary
 from survival_toolkit.evaluation import (
     DEFAULT_HOLDOUT_FRACTION,
     evaluation_split_fingerprint,
@@ -93,6 +94,19 @@ _DEEP_COMPARE_PARALLEL_MAX_INFLIGHT_BYTES = 512 * 1024 * 1024
 _DEEP_COMPARE_PARALLEL_WORKER_OVERHEAD_BYTES = 650 * 1024 * 1024
 _DEEP_COMPARE_PARALLEL_MEMORY_RESERVE_BYTES = 256 * 1024 * 1024
 _TRANSFORMER_MAX_ATTENTION_BYTES = 2 * 1024 * 1024 * 1024
+# Most trainable parameters a deep network may have. Training keeps about five float32 copies
+# (weights, gradients, two AdamW moments, best-epoch checkpoint): roughly 400 MB at this limit.
+_DEEP_MAX_PARAMETERS = 20_000_000
+# Hidden layers used when a caller passes none, shared by the single-model and comparison paths.
+_DEFAULT_HIDDEN_LAYERS: tuple[int, ...] = (64, 64)
+# Every deep-learning fit runs with this many intra-op torch threads, in this process and in
+# parallel repeated-CV workers alike: floating-point reductions depend on the thread count, so
+# a machine-dependent default would make the same seed give different results.
+_DEEP_TORCH_NUM_THREADS = 1
+# How often a waiting job re-checks cancellation (training lock, parallel repeated-CV folds).
+_CANCELLATION_POLL_SECONDS = 0.5
+# Seeds derived as seed + offset wrap into the range numpy and scikit-learn accept.
+_SEED_MODULUS = 2**32
 # Serialises deep-learning training in this process (see _serialized_torch_training).
 _TORCH_TRAINING_LOCK = threading.RLock()
 
@@ -129,6 +143,56 @@ def _seed_torch(random_seed: int) -> None:
 
 def _clip_gradients(model: nn.Module, max_norm: float = 1.0) -> None:
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
+
+
+def _derived_seed(base_seed: int, offset: int = 0) -> int:
+    """``base_seed + offset`` wrapped into [0, 2**32), the range numpy and scikit-learn accept.
+
+    Equal to the plain sum whenever it does not overflow, so ordinary seeds keep their fold
+    assignments and training seeds.
+    """
+    return int((int(base_seed) + int(offset)) % _SEED_MODULUS)
+
+
+_MUST_PROPAGATE_MARK = "_survstudio_must_propagate"
+
+
+def _must_propagate_deep(exc: BaseException) -> bool:
+    """``must_propagate`` for the deep-model fallbacks, seeing through ``user_input_boundary``.
+
+    The public trainers turn a ``TypeError`` raised by SurvStudio code (a coding bug) into an
+    ``InternalAnalysisError``; per-model and per-fold fallbacks must re-raise it instead of
+    recording an ordinary model failure. Worker processes mark such errors before they are
+    pickled back to the parent, because pickling drops ``__cause__``.
+    """
+    if getattr(exc, _MUST_PROPAGATE_MARK, False) or must_propagate(exc):
+        return True
+    cause = exc.__cause__
+    return isinstance(exc, InternalAnalysisError) and cause is not None and must_propagate(cause)
+
+
+def _mark_must_propagate(exc: BaseException) -> None:
+    try:
+        setattr(exc, _MUST_PROPAGATE_MARK, True)
+    except (AttributeError, TypeError):
+        pass
+
+
+@contextmanager
+def _pinned_torch_threads() -> Iterator[None]:
+    """Train with ``_DEEP_TORCH_NUM_THREADS`` intra-op torch threads and restore the previous count."""
+    if not TORCH_AVAILABLE:
+        yield
+        return
+    previous = int(torch.get_num_threads())
+    changed = previous != _DEEP_TORCH_NUM_THREADS
+    if changed:
+        torch.set_num_threads(_DEEP_TORCH_NUM_THREADS)
+    try:
+        yield
+    finally:
+        if changed:
+            torch.set_num_threads(previous)
 
 
 def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
@@ -181,17 +245,19 @@ def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
         "training_samples": result.get("training_samples"),
         "evaluation_samples": result.get("evaluation_samples"),
         "epochs_trained": result.get("epochs_trained"),
+        "early_stopping_epochs": result.get("early_stopping_epochs"),
         **({"holdout_risk": result.get("holdout_risk")} if task.get("keep_holdout_risk") else {}),
     }
 
 
 def _run_deep_compare_fold_task(task: dict[str, Any]) -> dict[str, Any]:
+    """Train every model of one repeated-CV fold (in this process or in a worker process).
+
+    Torch threads are pinned by the trainers themselves (``_serialized_torch_training``), so a
+    fold gives the same result in a worker as in the sequential path.
+    """
     fold_results: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    threads = task.get("torch_num_threads")
-    if threads and TORCH_AVAILABLE and mp.parent_process() is not None:
-        # Only inside a worker process: the parent sizes this so workers share the cores.
-        torch.set_num_threads(max(1, int(threads)))
     for model_spec in task["model_specs"]:
         model_name = str(model_spec["model_name"])
         try:
@@ -223,7 +289,8 @@ def _run_deep_compare_fold_task(task: dict[str, Any]) -> dict[str, Any]:
                 )
             )
         except Exception as exc:
-            if must_propagate(exc):
+            if _must_propagate_deep(exc):
+                _mark_must_propagate(exc)
                 raise
             errors.append(
                 {
@@ -301,7 +368,8 @@ def _coerce_deep_frame(
 
     ``event_already_coded`` marks frames that already went through this function (their
     event column is 0/1). Re-reading a 0/1 column against the user's original event label
-    (for example "Dead") would fail or mis-code the events.
+    (for example "Dead") would fail or mis-code the events. Such split passes also keep the
+    feature types decided on the full cleaned frame.
     """
     _require_torch()
 
@@ -325,12 +393,27 @@ def _coerce_deep_frame(
             f"{missing_preview}."
         )
 
+    from survival_toolkit.analysis import (
+        _validate_endpoint_family_pair,
+        _validate_event_column_choice,
+        _validate_time_column_choice,
+        coerce_event,
+    )
+
+    if not event_already_coded:
+        # The outcome checks of the ML cohort builder (analysis._cohort_frame): a matched
+        # endpoint pair, a follow-up duration rather than calendar dates, and a real event
+        # indicator (not a censoring flag).
+        _validate_endpoint_family_pair(time_column, event_column)
+        _validate_time_column_choice(df, time_column)
+        _validate_event_column_choice(df, event_column)
+
     categorical_features = list(categorical_features or [])
     frame = df[required_columns].copy()
     frame = frame.replace([np.inf, -np.inf], np.nan)
-    frame[time_column] = pd.to_numeric(frame[time_column], errors="coerce")
-
-    from survival_toolkit.analysis import coerce_event, reject_censoring_indicator_event_column
+    # Text such as "inf" only becomes infinite here; drop it like the ML cohort builder does,
+    # so both modules analyse (and split) the same rows.
+    frame[time_column] = pd.to_numeric(frame[time_column], errors="coerce").replace([np.inf, -np.inf], np.nan)
 
     if event_already_coded:
         coded_events = pd.to_numeric(frame[event_column], errors="coerce")
@@ -338,14 +421,19 @@ def _coerce_deep_frame(
             raise ValueError("Internal error: a cleaned deep-learning frame must carry a 0/1 event column.")
         frame[event_column] = coded_events.astype(float)
     else:
-        reject_censoring_indicator_event_column(frame, event_column)
         frame[event_column] = coerce_event(frame[event_column], event_positive_value=event_positive_value)
-    reject_numeric_text_features(frame, features)
+        # Split passes skip this: the full frame was checked, and the training split is
+        # checked again by the shared encoder, exactly as for the ML models.
+        reject_numeric_text_features(frame, features)
     for col in features:
         if col in categorical_features:
             frame[col] = frame[col].astype("string")
             continue
         raw_values = frame[col]
+        if event_already_coded and isinstance(raw_values.dtype, pd.StringDtype):
+            # Categorical on the full cleaned frame: a split whose rows happen to hold only
+            # number-like levels must not turn it into a numeric column.
+            continue
         numeric_values = pd.to_numeric(raw_values, errors="coerce")
         if bool((raw_values.notna() & numeric_values.isna()).any()):
             # Text that is not a number with a few stray values (rejected above) is a
@@ -373,6 +461,11 @@ def _coerce_deep_frame(
             f"Need at least {min_samples} samples for deep learning models."
         )
     return frame
+
+
+def _categorical_feature_columns(frame: pd.DataFrame, features: Sequence[str]) -> list[str]:
+    """Features a cleaned frame treats as categorical (``_coerce_deep_frame`` stores them as text)."""
+    return [column for column in features if isinstance(frame[column].dtype, pd.StringDtype)]
 
 
 def _fit_deep_encoder(
@@ -453,8 +546,12 @@ def _prepare_deep_split_data(
 
     ``train_df`` and ``eval_df`` are slices of a frame already cleaned by
     ``_coerce_deep_frame``, so their event column is 0/1; ``event_positive_value`` is
-    accepted for signature compatibility and not re-applied.
+    accepted for signature compatibility and not re-applied. The returned split records how
+    many evaluation rows carry a categorical level the training rows never show
+    (``unseen_category_rows``).
     """
+    from survival_toolkit.ml_models import _unseen_category_rows
+
     del event_positive_value
     train_frame = _coerce_deep_frame(
         train_df,
@@ -501,6 +598,7 @@ def _prepare_deep_split_data(
         "numeric_feature_indices": list(train_data.get("numeric_feature_indices", [])),
     }
     del train_data, eval_data  # free per-split tensors now that combined tensors are built
+    categorical_columns = _categorical_feature_columns(train_frame, features)
     evaluation_split = {
         "train_idx": np.arange(train_n, dtype=int),
         "eval_idx": np.arange(train_n, train_n + eval_n, dtype=int),
@@ -511,6 +609,8 @@ def _prepare_deep_split_data(
             f"Reported C-index is computed on an external fold with {train_n} training samples "
             f"and {eval_n} evaluation samples."
         ),
+        # The encoder scores these rows as the reference level (see ml_models._unseen_category_rows).
+        "unseen_category_rows": _unseen_category_rows(train_frame, eval_frame, categorical_columns),
     }
     return (
         {
@@ -630,12 +730,47 @@ def _sysconf_available_bytes() -> int | None:
         return None
 
 
+_CGROUP_MEMORY_FILES = (
+    # cgroup v2: the group's limit ("max" when unlimited) and its current usage.
+    (Path("/sys/fs/cgroup/memory.max"), Path("/sys/fs/cgroup/memory.current")),
+    # cgroup v1: an unlimited group reports a huge page-counter maximum instead.
+    (Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"), Path("/sys/fs/cgroup/memory/memory.usage_in_bytes")),
+)
+
+
+def _cgroup_available_memory_bytes() -> int | None:
+    """Memory left under a cgroup (container) memory limit, or ``None`` when no limit applies.
+
+    Inside a container ``MemAvailable`` describes the host, so a worker pool sized from it
+    alone can exceed the container's limit and be killed.
+    """
+    for limit_path, usage_path in _CGROUP_MEMORY_FILES:
+        try:
+            raw_limit = limit_path.read_text(encoding="ascii", errors="ignore").strip()
+        except OSError:
+            continue
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            continue  # "max": no limit at this level
+        if limit <= 0 or limit >= 1 << 60:
+            continue
+        try:
+            usage = int(usage_path.read_text(encoding="ascii", errors="ignore").strip())
+        except (OSError, ValueError):
+            usage = 0
+        return max(0, limit - usage)
+    return None
+
+
 def _available_system_memory_bytes() -> int | None:
     """Memory available to new worker processes, or ``None`` when it cannot be determined.
 
     Probes run from the most to the least accurate; each returns ``None`` on platforms
-    where it does not apply (for example ``vm_stat`` exists only on macOS).
+    where it does not apply (for example ``vm_stat`` exists only on macOS). A cgroup
+    memory limit, when present, caps the result.
     """
+    system_available: int | None = None
     for probe in (
         _proc_meminfo_available_bytes,
         _windows_available_memory_bytes,
@@ -644,15 +779,33 @@ def _available_system_memory_bytes() -> int | None:
     ):
         available = probe()
         if available is not None:
-            return available
-    return None
+            system_available = available
+            break
+    cgroup_available = _cgroup_available_memory_bytes()
+    if cgroup_available is None:
+        return system_available
+    if system_available is None:
+        return cgroup_available
+    return min(system_available, cgroup_available)
 
 
-def _estimate_parallel_deep_compare_memory_bytes(*, payload_bytes: int, max_workers: int) -> int:
-    return int(
-        (payload_bytes + _DEEP_COMPARE_PARALLEL_WORKER_OVERHEAD_BYTES) * max(1, max_workers)
-        + _DEEP_COMPARE_PARALLEL_MEMORY_RESERVE_BYTES
-    )
+def _available_cpu_count() -> int:
+    """CPUs this process may run on (its affinity mask where the platform exposes one)."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
+
+
+def _estimate_parallel_deep_compare_memory_bytes(
+    *,
+    payload_bytes: int,
+    max_workers: int,
+    training_bytes: int = 0,
+) -> int:
+    """Memory for ``max_workers`` workers, each holding one fold payload and training one model."""
+    per_worker = int(payload_bytes) + _DEEP_COMPARE_PARALLEL_WORKER_OVERHEAD_BYTES + max(0, int(training_bytes))
+    return int(per_worker * max(1, max_workers) + _DEEP_COMPARE_PARALLEL_MEMORY_RESERVE_BYTES)
 
 
 def _transformer_feedforward_dim(d_model: int) -> int:
@@ -711,6 +864,148 @@ def _guard_transformer_attention_budget(
     )
 
 
+def _validated_hidden_layers(hidden_layers: Sequence[Any] | None) -> list[int]:
+    """Hidden-layer widths as positive ints; ``None`` gives the shared default."""
+    if hidden_layers is None:
+        return list(_DEFAULT_HIDDEN_LAYERS)
+    widths: list[int] = []
+    for width in hidden_layers:
+        if isinstance(width, bool) or not isinstance(width, (int, np.integer)) or int(width) <= 0:
+            raise ValueError("Hidden layers must contain positive integers only.")
+        widths.append(int(width))
+    return widths
+
+
+def _mlp_parameter_count(in_features: int, widths: Sequence[int]) -> tuple[int, int]:
+    """Parameters of a stack of Linear layers (weights and biases) and its output width."""
+    total = 0
+    previous = int(in_features)
+    for width in widths:
+        total += previous * int(width) + int(width)
+        previous = int(width)
+    return total, previous
+
+
+def _estimate_deep_parameter_count(
+    model_name: str,
+    *,
+    n_features: int,
+    hidden_layers: Sequence[Any] | None = None,
+    num_time_bins: int = 50,
+    d_model: int = 64,
+    n_layers: int = 2,
+    latent_dim: int = 8,
+) -> int:
+    """Exact trainable-parameter count of the network a trainer would build (Python ints, no allocation)."""
+    n_features = int(n_features)
+    if model_name == "Survival Transformer":
+        width = int(d_model)
+        # Per encoder layer: attention in/out projections (4d^2 + 4d), the 4d feed-forward
+        # block (8d^2 + 5d) and two layer norms (4d).
+        per_layer = 12 * width * width + 13 * width
+        return 2 * width + n_features * width + max(0, int(n_layers)) * per_layer + width + 1
+    widths = _validated_hidden_layers(hidden_layers)
+    body, last_width = _mlp_parameter_count(n_features, widths)
+    if model_name == "DeepSurv":
+        return body + last_width + 1
+    if model_name in {"DeepHit", "Neural MTLR"}:
+        outputs = int(num_time_bins) + 1  # observed bins plus the tail bucket
+        return body + last_width * outputs + outputs
+    if model_name == "Survival VAE":
+        if not widths:
+            raise ValueError("Survival VAE needs at least one hidden layer.")
+        latent = int(latent_dim)
+        posterior_heads = 2 * (last_width * latent + latent)
+        decoder, decoder_width = _mlp_parameter_count(latent, list(reversed(widths)))
+        decoder += decoder_width * n_features + n_features
+        risk_hidden = max(widths[-1] // 2, 1)
+        survival_head = latent * risk_hidden + risk_hidden + risk_hidden + 1
+        return body + posterior_heads + decoder + survival_head
+    raise ValueError(f"Unknown deep model type: {model_name}")
+
+
+def _guard_deep_parameter_budget(model_name: str, *, n_features: int, **architecture: Any) -> None:
+    """Refuse a network above ``_DEEP_MAX_PARAMETERS`` before any of it is allocated."""
+    n_parameters = _estimate_deep_parameter_count(model_name, n_features=n_features, **architecture)
+    if n_parameters <= _DEEP_MAX_PARAMETERS:
+        return
+    if model_name == "Survival Transformer":
+        shape = f"width {int(architecture.get('d_model', 64))} and {int(architecture.get('n_layers', 2))} layer(s)"
+        advice = "Use a smaller transformer width or fewer layers"
+    else:
+        shape = f"hidden layers {_validated_hidden_layers(architecture.get('hidden_layers'))}"
+        advice = "Use fewer or narrower hidden layers"
+    raise ValueError(
+        f"{model_name} with {shape} on {int(n_features)} encoded input feature(s) would have "
+        f"{n_parameters:,} trainable parameters; SurvStudio trains at most {_DEEP_MAX_PARAMETERS:,}. {advice}."
+    )
+
+
+def _estimate_deep_training_bytes(
+    model_name: str,
+    extra_kwargs: dict[str, Any],
+    *,
+    training_samples: int,
+    total_samples: int,
+    n_features: int,
+    batch_size: int,
+) -> int:
+    """Rough float32 peak of training one model in a worker.
+
+    Parameters count five times (weights, gradients, two AdamW moments, best-epoch
+    checkpoint). Activations are those of the largest batch the model back-propagates
+    through: the whole training partition for the full-batch models (DeepSurv, VAE,
+    Transformer), all rows scored at once for monitoring and evaluation otherwise.
+    """
+    architecture_keys = {"hidden_layers", "num_time_bins", "d_model", "n_layers", "latent_dim"}
+    architecture = {key: value for key, value in extra_kwargs.items() if key in architecture_keys}
+    n_parameters = _estimate_deep_parameter_count(model_name, n_features=n_features, **architecture)
+    parameter_bytes = 5 * 4 * n_parameters
+    if model_name == "Survival Transformer":
+        activation_bytes = _estimate_transformer_attention_bytes(
+            training_samples=training_samples,
+            n_features=n_features,
+            n_heads=int(extra_kwargs.get("n_heads", 4)),
+            n_layers=int(extra_kwargs.get("n_layers", 2)),
+            d_model=int(extra_kwargs.get("d_model", 64)),
+        )
+    else:
+        hidden_width = sum(_validated_hidden_layers(extra_kwargs.get("hidden_layers")))
+        if model_name == "Survival VAE":
+            row_width = 2 * n_features + 2 * hidden_width + 4 * int(extra_kwargs.get("latent_dim", 8))
+            rows = training_samples
+        elif model_name == "DeepSurv":
+            row_width = n_features + hidden_width + 1
+            rows = training_samples
+        else:
+            row_width = n_features + hidden_width + 3 * (int(extra_kwargs.get("num_time_bins", 50)) + 1)
+            rows = max(int(batch_size), int(total_samples))
+        # Layer outputs, ReLU/dropout masks and their gradients.
+        activation_bytes = 3 * 4 * max(1, int(rows)) * row_width
+    return int(parameter_bytes + activation_bytes)
+
+
+def _reject_leaky_evaluation_split(evaluation_split: dict[str, Any], *, n_samples: int) -> None:
+    """Refuse a caller-supplied split whose evaluation rows are also training rows.
+
+    Apparent evaluation (training rows = evaluation rows by design) is exempt; every other
+    mode needs disjoint partitions inside the ``n_samples`` rows they index.
+    """
+    train_rows = np.asarray(evaluation_split["train_idx"], dtype=int).ravel()
+    eval_rows = np.asarray(evaluation_split["eval_idx"], dtype=int).ravel()
+    for name, rows in (("train_idx", train_rows), ("eval_idx", eval_rows)):
+        if rows.size and (int(rows.min()) < 0 or int(rows.max()) >= int(n_samples)):
+            raise ValueError(f"evaluation_split {name} addresses rows outside the {int(n_samples)} prepared rows.")
+    if str(evaluation_split.get("evaluation_mode")) == "apparent":
+        return
+    shared_rows = np.intersect1d(train_rows, eval_rows)
+    if shared_rows.size:
+        raise ValueError(
+            f"evaluation_split puts {int(shared_rows.size)} row(s) in both train_idx and eval_idx; "
+            "a holdout evaluation needs disjoint training and evaluation rows."
+        )
+
+
 def _prepare_deep_training_inputs(
     df: pd.DataFrame | None,
     *,
@@ -725,11 +1020,14 @@ def _prepare_deep_training_inputs(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Prepare deep-model tensors with holdout preprocessing fit on train rows only."""
     if prepared_data is not None:
-        resolved_split = evaluation_split if evaluation_split is not None else _build_holdout_split(
-            prepared_data["event_tensor"].detach().cpu().numpy().astype(int).ravel(),
-            random_seed,
-        )
-        return prepared_data, resolved_split
+        if evaluation_split is None:
+            # A split drawn now could not have been respected by the preprocessing already
+            # fitted into ``prepared_data`` (scaling and levels would include evaluation rows).
+            raise ValueError(
+                "prepared_data must be passed together with the evaluation_split it was prepared for."
+            )
+        _reject_leaky_evaluation_split(evaluation_split, n_samples=int(prepared_data["X_tensor"].shape[0]))
+        return prepared_data, evaluation_split
     if df is None:
         raise ValueError("Raw dataframe input is required when prepared_data is not provided.")
 
@@ -746,6 +1044,8 @@ def _prepare_deep_training_inputs(
         random_seed,
         source_rows=clean_frame.attrs.get("source_row_index"),
     )
+    if evaluation_split is not None:
+        _reject_leaky_evaluation_split(resolved_split, n_samples=int(clean_frame.shape[0]))
 
     if str(resolved_split.get("evaluation_mode")) == "holdout":
         train_idx = np.asarray(resolved_split["train_idx"], dtype=int)
@@ -811,9 +1111,9 @@ def _compute_c_index_torch(
 ) -> float | None:
     """Compute Harrell's concordance index from torch tensors.
 
-    Delegates to sksurv.metrics.concordance_index_censored when available
-    (O(n log n) via sorted comparisons), falling back to a pure-NumPy O(n²)
-    loop only when sksurv is not installed.
+    Delegates to sksurv.metrics.concordance_index_censored when available and
+    otherwise (or if sksurv fails) to SurvStudio's own O(n log n) Harrell C
+    (``analysis._harrell_c_index``), which uses the same tie convention.
     """
     risk_np = risk_scores.detach().cpu().numpy().ravel()
     time_np = times.detach().cpu().numpy().ravel()
@@ -835,8 +1135,8 @@ def _compute_c_index_torch(
             return float(result[0])
         except (ImportError, RuntimeError, TypeError, ValueError, ZeroDivisionError) as exc:
             warnings.warn(
-                "scikit-survival concordance computation failed; falling back to the internal O(n^2) concordance routine. "
-                f"Reason: {exc}",
+                "scikit-survival concordance computation failed; falling back to SurvStudio's internal "
+                f"O(n log n) Harrell C. Reason: {exc}",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -1249,12 +1549,21 @@ def _scientific_summary_dl(
     evaluation_note: str | None = None,
     dropped_nonpositive_time_rows: int = 0,
     refit_note: str | None = None,
+    reported_epochs: int | None = None,
+    unseen_category_rows: int = 0,
 ) -> dict[str, Any]:
-    """Build an insight board dict for deep learning models."""
+    """Build an insight board dict for deep learning models.
+
+    ``loss_history`` is the early-stopping run; ``reported_epochs`` (when given) is the
+    number of epochs behind the reported weights, which differs after a refit.
+    """
+    from survival_toolkit.ml_models import _unseen_category_caution
+
     metric_name = _metric_name_for_evaluation(evaluation_mode)
     c_val = float(c_index) if c_index is not None else None
 
-    epochs_trained = int(len(loss_history))
+    early_stopping_epochs = int(len(loss_history))
+    epochs_trained = int(reported_epochs) if reported_epochs is not None else early_stopping_epochs
 
     if c_val is None:
         status = "review"
@@ -1292,6 +1601,9 @@ def _scientific_summary_dl(
         cautions.append(
             f"{int(dropped_nonpositive_time_rows)} row(s) with negative survival time were excluded before deep-model preprocessing."
         )
+    unseen_caution = _unseen_category_caution(int(unseen_category_rows), "evaluation") if evaluation_mode == "holdout" else None
+    if unseen_caution:
+        cautions.append(unseen_caution)
 
     if train_samples < 100:
         cautions.append("Sample size is small for a deep learning model; results may be unreliable.")
@@ -1380,6 +1692,11 @@ def _scientific_summary_dl(
             {"label": "Features", "value": n_features},
             {"label": "Epochs", "value": epochs_trained or epochs},
             {"label": "Final loss", "value": float(loss_history[-1]) if loss_history else None},
+            *(
+                [{"label": "Early-stopping epochs", "value": early_stopping_epochs}]
+                if early_stopping_epochs and early_stopping_epochs != epochs_trained
+                else []
+            ),
         ],
     }
 
@@ -1485,18 +1802,28 @@ def _training_run_metadata(
 
 
 def _serialized_torch_training(func: Callable[..., Any]) -> Callable[..., Any]:
-    """Run deep-learning training one call at a time in this process.
+    """Run deep-learning training one call at a time in this process, on pinned torch threads.
 
     ``_seed_torch`` seeds process-wide generators (numpy, ``random``, torch) and weight
     initialisation and dropout draw from them, so two trainings interleaved on server
     threads would consume each other's random numbers and the same seed would not
     reproduce. Worker processes of the parallel repeated-CV path each have their own lock.
+
+    A job queued behind another training keeps polling its cancellation signal while it
+    waits, so a cancelled request does not hold a heavy-job slot until the lock frees.
+    Training runs with ``_DEEP_TORCH_NUM_THREADS`` intra-op threads in every path.
     """
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        with _TORCH_TRAINING_LOCK:
-            return func(*args, **kwargs)
+        raise_if_cancelled()
+        while not _TORCH_TRAINING_LOCK.acquire(timeout=_CANCELLATION_POLL_SECONDS):
+            raise_if_cancelled()
+        try:
+            with _pinned_torch_threads():
+                return func(*args, **kwargs)
+        finally:
+            _TORCH_TRAINING_LOCK.release()
 
     return wrapper
 
@@ -1511,6 +1838,8 @@ class _DeepTrainingContext(NamedTuple):
     monitor_idx: Any | None
     evaluation_mode: str
     evaluation_note: str
+    # Evaluation rows with a categorical level the training rows never show (holdout only).
+    unseen_category_rows: int = 0
 
     @property
     def x_all(self) -> Any:
@@ -1559,17 +1888,28 @@ def _prepare_deep_training_context(
         events=data["event_tensor"],
         random_seed=random_seed,
     )
+    if monitor_idx is not None:
+        outside_training = ~torch.isin(monitor_idx, train_idx)
+        if bool(outside_training.any()):
+            # Early stopping on evaluation rows would select the epoch on the rows that are
+            # then scored, an optimistic (leaky) holdout estimate.
+            raise ValueError(
+                f"monitor_indices contain {int(outside_training.sum())} row(s) outside the training "
+                "partition; early-stopping monitor rows must be a subset of train_idx."
+            )
     if not _early_stopping_active(early_stopping_patience):
         monitor_idx = None
     fit_idx, monitor_idx = _fit_rows_excluding_monitor(train_idx, monitor_idx, data["event_tensor"])
+    evaluation_mode = str(eval_split["evaluation_mode"])
     return _DeepTrainingContext(
         data=data,
         train_idx=train_idx,
         eval_idx=eval_idx,
         fit_idx=fit_idx,
         monitor_idx=monitor_idx,
-        evaluation_mode=str(eval_split["evaluation_mode"]),
+        evaluation_mode=evaluation_mode,
         evaluation_note=str(eval_split["evaluation_note"]),
+        unseen_category_rows=int(eval_split.get("unseen_category_rows", 0) or 0) if evaluation_mode == "holdout" else 0,
     )
 
 
@@ -1687,7 +2027,12 @@ def _deep_training_fields(
     monitor_goal: str,
     random_seed: int,
 ) -> dict[str, Any]:
-    """Seeds, histories, early-stopping metadata, and sample counts shared by every trainer."""
+    """Seeds, histories, early-stopping metadata, and sample counts shared by every trainer.
+
+    ``epochs_trained`` counts the epochs behind the reported weights (the refit, or the
+    restored best epoch); ``early_stopping_epochs`` is how long the early-stopping run
+    lasted, the length of ``loss_history`` and ``monitor_history``.
+    """
     meta = _training_run_metadata(
         first.loss_history,
         first.monitor_history,
@@ -1698,6 +2043,12 @@ def _deep_training_fields(
     )
     refitted = bool(refit_info["refit_on_training_partition"])
     final_rows = context.train_idx if refitted else context.fit_idx
+    if refitted:
+        reported_epochs = int(len(final.loss_history))
+    elif meta["restored_best_checkpoint"]:
+        reported_epochs = int(meta["best_monitor_epoch"])
+    else:
+        reported_epochs = int(meta["epochs_trained"])
     return {
         "training_seed": random_seed,
         "split_seed": random_seed,
@@ -1708,9 +2059,11 @@ def _deep_training_fields(
         "best_monitor_epoch": meta["best_monitor_epoch"],
         "stopped_early": meta["stopped_early"],
         "max_epochs_requested": meta["max_epochs_requested"],
-        "epochs_trained": meta["epochs_trained"],
+        "epochs_trained": reported_epochs,
+        "early_stopping_epochs": meta["epochs_trained"],
         "refit_on_training_partition": refitted,
         "refit_epochs": refit_info["refit_epochs"],
+        "torch_num_threads": int(torch.get_num_threads()),
         "n_samples": context.data["n_samples"],
         "training_samples": int(context.train_idx.numel()),
         # Rows behind the reported weights (the whole training partition after a refit).
@@ -1852,7 +2205,7 @@ class _DeepRunSettings(NamedTuple):
 
 
 def _record_fold_error(errors: list[dict[str, Any]], model_name: str, repeat: Any, fold: Any, exc: BaseException) -> None:
-    if must_propagate(exc):
+    if _must_propagate_deep(exc):
         raise exc
     errors.append({"model": model_name, "repeat": repeat, "fold": fold, "error": str(exc)})
 
@@ -1897,7 +2250,13 @@ def compare_deep_survival_models(
     """
     _require_torch()
 
-    hidden_layers = hidden_layers if hidden_layers is not None else [64, 64]
+    if evaluation_strategy not in {"holdout", "repeated_cv"}:
+        raise ValueError(
+            f"Unknown deep-learning evaluation strategy '{evaluation_strategy}'; use 'holdout' or 'repeated_cv'."
+        )
+    if evaluation_strategy != "repeated_cv" and locked_test_fraction is not None:
+        raise ValueError("A locked test set is only available with repeated cross-validation.")
+    hidden_layers = _validated_hidden_layers(hidden_layers)
     trainer_specs = _deep_trainer_specs(
         hidden_layers=hidden_layers,
         dropout=dropout,
@@ -2000,13 +2359,14 @@ def _deep_holdout_comparison(
                 "split_seed": result.get("split_seed"),
                 "monitor_seed": result.get("monitor_seed"),
                 "epochs_trained": result.get("epochs_trained"),
+                "early_stopping_epochs": result.get("early_stopping_epochs"),
                 "n_features": result.get("n_features"),
                 "training_samples": result.get("training_samples"),
                 "evaluation_samples": result.get("evaluation_samples"),
                 "training_time_ms": training_time_ms,
             })
         except Exception as exc:
-            if must_propagate(exc):
+            if _must_propagate_deep(exc):
                 raise
             errors.append({"model": model_name, "error": str(exc)})
     result = _finalize_deep_comparison(
@@ -2023,8 +2383,22 @@ def _deep_holdout_comparison(
             "evaluation_split_fingerprint": shared_eval_split.get("evaluation_split_fingerprint"),
         },
     )
+    if str(shared_eval_split.get("evaluation_mode")) == "holdout":
+        _append_unseen_category_cautions(
+            result, [(int(shared_eval_split.get("unseen_category_rows", 0) or 0), "evaluation")]
+        )
     result["test_predictions"] = _deep_prediction_block(shared_data, shared_eval_split, holdout_risks)
     return result
+
+
+def _append_unseen_category_cautions(result: dict[str, Any], counts: Sequence[tuple[int, str]]) -> None:
+    """Add the ML module's unseen-category caution for each (row count, scope) pair."""
+    from survival_toolkit.ml_models import _unseen_category_caution
+
+    for n_rows, scope in counts:
+        caution = _unseen_category_caution(int(n_rows), scope)
+        if caution:
+            result["scientific_summary"]["cautions"].append(caution)
 
 
 def _deep_prediction_block(
@@ -2095,28 +2469,38 @@ def _deep_repeated_cv_comparison(
             + (" of the development set." if use_locked_test else ".")
         )
 
+    from survival_toolkit.ml_models import _unseen_category_rows
+
     model_specs = [
         {"model_name": model_name, "extra_kwargs": extra_kwargs}
         for model_name, _trainer, extra_kwargs in trainer_specs
     ]
+    categorical_columns = _categorical_feature_columns(clean_frame, settings.features)
     design_splits: list[tuple[np.ndarray, np.ndarray]] = []
+    unseen_fold_rows = 0
     # Collect only split indices (cheap numpy arrays - no tensors).
     fold_splits: list[dict[str, Any]] = []
     for repeat_idx in range(cv_repeats):
+        # Derived seeds wrap at 2**32 so a seed near the maximum still works; ordinary seeds
+        # give the same folds as the ML module's repeated CV.
+        repeat_seed = _derived_seed(random_seed, repeat_idx)
         splitter = StratifiedKFold(
             n_splits=cv_folds,
             shuffle=True,
-            random_state=random_seed + repeat_idx,
+            random_state=repeat_seed,
         )
         for fold_idx, (train_rows, eval_rows) in enumerate(splitter.split(dev_frame, events), start=1):
             design_splits.append((dev_positions[train_rows], dev_positions[eval_rows]))
+            unseen_fold_rows += _unseen_category_rows(
+                dev_frame.iloc[train_rows], dev_frame.iloc[eval_rows], categorical_columns
+            )
             fold_splits.append({
                 "repeat": repeat_idx + 1,
                 "fold": fold_idx,
-                "seed_base": random_seed + repeat_idx * cv_folds + fold_idx,
+                "seed_base": _derived_seed(random_seed, repeat_idx * cv_folds + fold_idx),
                 # The StratifiedKFold random_state that produced this fold.
-                "split_seed": random_seed + repeat_idx,
-                "monitor_seed": random_seed + repeat_idx,
+                "split_seed": repeat_seed,
+                "monitor_seed": repeat_seed,
                 "train_rows": train_rows,
                 "eval_rows": eval_rows,
             })
@@ -2169,6 +2553,7 @@ def _deep_repeated_cv_comparison(
     locked_results: dict[str, dict[str, Any]] = {}
     locked_predictions: dict[str, Any] | None = None
     locked_note: str | None = None
+    locked_test_frame: pd.DataFrame | None = None
     if use_locked_test:
         design_splits.append((dev_positions, test_positions))
         locked_test_frame = clean_frame.iloc[test_positions].reset_index(drop=True)
@@ -2231,6 +2616,18 @@ def _deep_repeated_cv_comparison(
     if parallel_execution_note:
         result["parallel_execution_note"] = parallel_execution_note
         result["scientific_summary"]["cautions"].append(parallel_execution_note)
+    _append_unseen_category_cautions(
+        result,
+        [
+            (unseen_fold_rows, "cross-validation evaluation (summed over folds)"),
+            (
+                _unseen_category_rows(dev_frame, locked_test_frame, categorical_columns)
+                if locked_test_frame is not None
+                else 0,
+                "locked-test",
+            ),
+        ],
+    )
     result["locked_test_predictions"] = locked_predictions
     return result
 
@@ -2285,6 +2682,75 @@ def _run_fold_tasks_sequentially(
         gc.collect()
 
 
+def _unfinished_fold_splits(
+    fold_splits: Sequence[dict[str, Any]],
+    fold_results: Sequence[dict[str, Any]],
+    errors: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Folds with neither a result nor a recorded error, so a rerun counts no fold twice."""
+    finished = {
+        (int(item["repeat"]), int(item["fold"]))
+        for item in [*fold_results, *errors]
+        if item.get("repeat") is not None and item.get("fold") is not None
+    }
+    return [split for split in fold_splits if (int(split["repeat"]), int(split["fold"])) not in finished]
+
+
+def _estimate_fold_task_training_bytes(task: dict[str, Any], fold_splits: Sequence[dict[str, Any]]) -> int:
+    """Largest single-model training footprint of a fold task, sized for the largest training fold."""
+    prepared = task.get("prepared_data")
+    split = task.get("evaluation_split")
+    if not isinstance(prepared, dict) or not isinstance(split, dict):
+        return 0
+    try:
+        n_features = int(prepared["n_features"])
+        total_samples = int(prepared["n_samples"])
+        training_samples = int(np.asarray(split["train_idx"]).size)
+    except (KeyError, TypeError, ValueError):
+        return 0
+    largest_training = max([training_samples, *(len(item["train_rows"]) for item in fold_splits if "train_rows" in item)])
+    estimates = [0]
+    for spec in task.get("model_specs") or []:
+        try:
+            estimates.append(
+                _estimate_deep_training_bytes(
+                    str(spec["model_name"]),
+                    dict(spec.get("extra_kwargs") or {}),
+                    training_samples=largest_training,
+                    total_samples=total_samples + (largest_training - training_samples),
+                    n_features=n_features,
+                    batch_size=int(task.get("batch_size", 64)),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue  # a model this estimate does not know; its trainer validates it
+    return max(estimates)
+
+
+def _abandon_process_pool(executor: Any) -> None:
+    """Stop a worker pool now: cancel queued folds and terminate the running workers.
+
+    Used when a run ends early (cancellation, a crashed worker, an error that must
+    propagate) so abandoned folds stop using CPU and memory instead of running to the end.
+    """
+    processes = list((getattr(executor, "_processes", None) or {}).values())
+    shutdown = getattr(executor, "shutdown", None)
+    if callable(shutdown):
+        shutdown(wait=False, cancel_futures=True)
+    for process in processes:
+        try:
+            if process.is_alive():
+                process.terminate()
+        except (OSError, ValueError):
+            continue  # already exited or closed
+    deadline = time.monotonic() + 5.0
+    for process in processes:
+        try:
+            process.join(timeout=max(0.0, deadline - time.monotonic()))
+        except (AssertionError, OSError, ValueError):
+            continue
+
+
 def _run_deep_fold_tasks(
     fold_splits: list[dict[str, Any]],
     build_task: Callable[[dict[str, Any]], dict[str, Any] | None],
@@ -2295,14 +2761,24 @@ def _run_deep_fold_tasks(
 ) -> str | None:
     """Run every repeated-CV fold, in worker processes when it is safe to.
 
-    Returns a note when parallel execution was requested but fell back to sequential.
+    Returns a note when parallel execution was requested but fell back to sequential. A
+    worker that dies (for example killed for memory) does not end the run: the folds it
+    left unfinished are rerun sequentially. Cancellation is checked every
+    ``_CANCELLATION_POLL_SECONDS`` and terminates the workers.
     """
     remaining = list(fold_splits)
     if parallel_jobs <= 1 or len(remaining) <= 1:
         _run_fold_tasks_sequentially(remaining, build_task, fold_results=fold_results, errors=errors)
         return None
 
-    max_workers = min(max(1, parallel_jobs), len(remaining))
+    cpu_count = _available_cpu_count()
+    max_workers = min(max(1, parallel_jobs), len(remaining), cpu_count)
+    if max_workers <= 1:
+        _run_fold_tasks_sequentially(remaining, build_task, fold_results=fold_results, errors=errors)
+        return (
+            f"Parallel repeated-CV execution was disabled because only {cpu_count} CPU is available "
+            "to SurvStudio; folds ran sequentially."
+        )
     first_task: dict[str, Any] | None = None
     while remaining and first_task is None:
         first_task = build_task(remaining.pop(0))
@@ -2334,12 +2810,13 @@ def _run_deep_fold_tasks(
     estimated_parallel_bytes = _estimate_parallel_deep_compare_memory_bytes(
         payload_bytes=estimated_task_bytes,
         max_workers=max_workers,
+        training_bytes=_estimate_fold_task_training_bytes(first_task, fold_splits),
     )
     if estimated_parallel_bytes >= available_memory:
         note = (
             "Parallel repeated-CV execution was disabled because available system memory "
             f"({available_memory / (1024 ** 2):.1f} MiB) was below the estimated worker footprint "
-            f"({estimated_parallel_bytes / (1024 ** 2):.1f} MiB including process startup overhead); "
+            f"({estimated_parallel_bytes / (1024 ** 2):.1f} MiB including process startup overhead and model training); "
             "SurvStudio fell back to sequential folds."
         )
         _run_fold_tasks_sequentially(
@@ -2347,15 +2824,12 @@ def _run_deep_fold_tasks(
         )
         return note
 
-    # Each worker gets an equal share of the cores; otherwise every worker's torch
-    # thread pool would claim all of them and oversubscribe the machine.
-    threads_per_worker = max(1, (os.cpu_count() or 1) // max_workers)
+    pool_broken = False
     try:
         with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp.get_context("spawn")) as executor:
             future_meta: dict[Any, dict[str, Any]] = {}
 
             def _submit(task: dict[str, Any]) -> None:
-                task["torch_num_threads"] = threads_per_worker
                 future = executor.submit(_run_deep_compare_fold_task, task)
                 future_meta[future] = {
                     "repeat": task["repeat"],
@@ -2372,41 +2846,55 @@ def _run_deep_fold_tasks(
                     del task
                     gc.collect()
 
-            _submit(first_task)
-            first_task = None
-            gc.collect()
-            _refill()
-            while future_meta:
-                if cancellation_requested():
-                    # Drop queued folds; folds already running finish in their workers.
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    raise_if_cancelled()
-                done, _pending = wait(set(future_meta), return_when=FIRST_COMPLETED)
-                for future in done:
-                    meta = future_meta.pop(future)
-                    try:
-                        task_result = future.result()
-                    except Exception as exc:
-                        _collect_fold_task_result(meta, fold_results=fold_results, errors=errors, exc=exc)
-                    else:
-                        _collect_fold_task_result(meta, fold_results=fold_results, errors=errors, task_result=task_result)
+            try:
+                _submit(first_task)
+                first_task = None
+                gc.collect()
                 _refill()
+                while future_meta:
+                    raise_if_cancelled()  # the handler below terminates the workers
+                    done, _pending = wait(
+                        set(future_meta), timeout=_CANCELLATION_POLL_SECONDS, return_when=FIRST_COMPLETED
+                    )
+                    for future in done:
+                        meta = future_meta.pop(future)
+                        try:
+                            task_result = future.result()
+                        except BrokenExecutor:
+                            # The worker died; this fold is rerun sequentially below.
+                            pool_broken = True
+                        except Exception as exc:
+                            _collect_fold_task_result(meta, fold_results=fold_results, errors=errors, exc=exc)
+                        else:
+                            _collect_fold_task_result(meta, fold_results=fold_results, errors=errors, task_result=task_result)
+                    if pool_broken:
+                        break
+                    _refill()
+            except BrokenExecutor:
+                pool_broken = True  # submit() refuses work once a worker has died
+            except BaseException:
+                _abandon_process_pool(executor)
+                raise
+            if pool_broken:
+                _abandon_process_pool(executor)
     except (NotImplementedError, PermissionError, OSError) as exc:
         # Keep folds that already finished and rerun only the rest, so no fold is counted twice.
-        finished = {
-            (int(item["repeat"]), int(item["fold"]))
-            for item in [*fold_results, *errors]
-            if item.get("repeat") is not None and item.get("fold") is not None
-        }
-        unfinished = [
-            split
-            for split in fold_splits
-            if (int(split["repeat"]), int(split["fold"])) not in finished
-        ]
-        _run_fold_tasks_sequentially(unfinished, build_task, fold_results=fold_results, errors=errors)
+        _run_fold_tasks_sequentially(
+            _unfinished_fold_splits(fold_splits, fold_results, errors),
+            build_task,
+            fold_results=fold_results,
+            errors=errors,
+        )
         return (
             "Parallel repeated-CV execution was unavailable in this runtime; "
             f"SurvStudio fell back to sequential folds ({type(exc).__name__})."
+        )
+    if pool_broken:
+        unfinished = _unfinished_fold_splits(fold_splits, fold_results, errors)
+        _run_fold_tasks_sequentially(unfinished, build_task, fold_results=fold_results, errors=errors)
+        return (
+            "A parallel repeated-CV worker process stopped unexpectedly (for example, it ran out of memory); "
+            f"SurvStudio reran the {len(unfinished)} unfinished fold(s) sequentially."
         )
     return None
 
@@ -2438,7 +2926,7 @@ def _deep_locked_test_results(
         )
         locked_monitor = _build_monitor_indices(locked_split["train_idx"], locked_data["event_tensor"], random_seed)
     except Exception as exc:
-        if must_propagate(exc):
+        if _must_propagate_deep(exc):
             raise
         return {str(spec["model_name"]): {"error": str(exc)} for spec in model_specs}, None
     for model_spec in model_specs:
@@ -2462,7 +2950,7 @@ def _deep_locked_test_results(
                 }
             )
         except Exception as exc:
-            if must_propagate(exc):
+            if _must_propagate_deep(exc):
                 raise
             locked_results[model_name] = {"error": str(exc)}
     risks = {
@@ -2476,6 +2964,11 @@ def _deep_locked_test_results(
             "eval_row_ids": [row_labels[position] for position in locked_split["eval_source_positions"]],
         }
     return locked_results, _deep_prediction_block(locked_data, locked_split, risks)
+
+
+def _mean_epochs(rows: Sequence[dict[str, Any]], key: str) -> int | None:
+    values = [float(row[key]) for row in rows if row.get(key) is not None]
+    return int(round(float(np.mean(values)))) if values else None
 
 
 def _summarize_deep_cv_rows(
@@ -2532,6 +3025,7 @@ def _summarize_deep_cv_rows(
             "split_seeds": sorted({int(item["split_seed"]) for item in holdout_rows if item.get("split_seed") is not None}),
             "monitor_seeds": sorted({int(item["monitor_seed"]) for item in holdout_rows if item.get("monitor_seed") is not None}),
             "epochs_trained": int(round(np.mean([item["epochs_trained"] for item in holdout_rows]))) if holdout_rows else None,
+            "early_stopping_epochs": _mean_epochs(holdout_rows, "early_stopping_epochs"),
         }
         if locked_results is not None:
             locked = locked_results.get(model_name) or {}
@@ -2747,6 +3241,9 @@ def _finalize_deep_comparison(
         "n_events": cohort_counts.get("n_events"),
         "split_seed": int(random_seed),
         "evaluation_split_fingerprint": cohort_counts.get("evaluation_split_fingerprint"),
+        # Intra-op torch threads of every fit (fixed, so results do not depend on the machine
+        # or on parallel versus sequential folds).
+        "torch_num_threads": _DEEP_TORCH_NUM_THREADS,
         "scientific_summary": summary,
         "insight_board": summary,
     }
@@ -2824,6 +3321,10 @@ def evaluate_single_deep_survival_model(
     multi-model comparison does.
     """
     canonical_name = _canonical_deep_model_name(model_type)
+    if evaluation_strategy not in {"holdout", "repeated_cv"}:
+        raise ValueError(
+            f"Unknown deep-learning evaluation strategy '{evaluation_strategy}'; use 'holdout' or 'repeated_cv'."
+        )
     if evaluation_strategy == "repeated_cv":
         compare_result = compare_deep_survival_models(
             df=df,
@@ -2908,6 +3409,7 @@ def evaluate_single_deep_survival_model(
             "n_failures": row.get("n_failures"),
             "n_features": row.get("n_features"),
             "epochs_trained": row.get("epochs_trained"),
+            "early_stopping_epochs": row.get("early_stopping_epochs"),
             "training_time_ms": row.get("training_time_ms"),
             "training_seed": row.get("training_seed"),
             "split_seed": row.get("split_seed"),
@@ -2917,6 +3419,7 @@ def evaluate_single_deep_survival_model(
             "monitor_seeds": row.get("monitor_seeds", []),
             "repeat_results": row.get("repeat_results", []),
             "parallel_execution_note": compare_result.get("parallel_execution_note"),
+            "torch_num_threads": compare_result.get("torch_num_threads"),
             "comparison_table": [dict(row)],
             "fold_results": [
                 fold_row for fold_row in compare_result.get("fold_results", [])
@@ -3089,7 +3592,7 @@ def train_deepsurv(
       training partition (``refit_on_training_partition``).
     """
     _require_torch()
-    hidden_layers = hidden_layers if hidden_layers is not None else [64, 64]
+    hidden_layers = _validated_hidden_layers(hidden_layers)
     context = _prepare_deep_training_context(
         df,
         time_column=time_column,
@@ -3105,6 +3608,7 @@ def train_deepsurv(
     )
     data = context.data
     x_all, t_all, e_all = context.x_all, context.t_all, context.e_all
+    _guard_deep_parameter_budget("DeepSurv", n_features=int(data["n_features"]), hidden_layers=hidden_layers)
 
     def _fit_phase(rows: torch.Tensor, monitor_rows: torch.Tensor | None, max_epochs: int, patience: int | None) -> _FitPhase:
         _seed_torch(random_seed)
@@ -3252,6 +3756,8 @@ def train_deepsurv(
         evaluation_note,
         dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
+        reported_epochs=int(training_fields["epochs_trained"]),
+        unseen_category_rows=context.unseen_category_rows,
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
@@ -3424,7 +3930,7 @@ def train_deephit(
     predicted_survival_curves, and feature_importance.
     """
     _require_torch()
-    hidden_layers = hidden_layers if hidden_layers is not None else [64, 64]
+    hidden_layers = _validated_hidden_layers(hidden_layers)
     context = _prepare_deep_training_context(
         df,
         time_column=time_column,
@@ -3441,6 +3947,9 @@ def train_deephit(
     data = context.data
     x_all, t_all, e_all = context.x_all, context.t_all, context.e_all
     all_times_np = t_all.detach().cpu().numpy()
+    _guard_deep_parameter_budget(
+        "DeepHit", n_features=int(data["n_features"]), hidden_layers=hidden_layers, num_time_bins=num_time_bins
+    )
 
     def _fit_phase(rows: torch.Tensor, monitor_rows: torch.Tensor | None, max_epochs: int, patience: int | None) -> _FitPhase:
         _seed_torch(random_seed)
@@ -3602,6 +4111,8 @@ def train_deephit(
         evaluation_note,
         dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
+        reported_epochs=int(training_fields["epochs_trained"]),
+        unseen_category_rows=context.unseen_category_rows,
     )
 
     return {
@@ -3726,7 +4237,8 @@ def train_neural_mtlr(
     predicted_survival_curves, calibration_data, and feature_importance.
     """
     _require_torch()
-    hidden_layers = hidden_layers if hidden_layers is not None else [64]
+    # The same default architecture as the multi-model comparison.
+    hidden_layers = _validated_hidden_layers(hidden_layers)
     context = _prepare_deep_training_context(
         df,
         time_column=time_column,
@@ -3743,6 +4255,9 @@ def train_neural_mtlr(
     data = context.data
     x_all, t_all, e_all = context.x_all, context.t_all, context.e_all
     all_times_np = t_all.detach().cpu().numpy()
+    _guard_deep_parameter_budget(
+        "Neural MTLR", n_features=int(data["n_features"]), hidden_layers=hidden_layers, num_time_bins=num_time_bins
+    )
 
     def _fit_phase(rows: torch.Tensor, monitor_rows: torch.Tensor | None, max_epochs: int, patience: int | None) -> _FitPhase:
         _seed_torch(random_seed)
@@ -3942,6 +4457,8 @@ def train_neural_mtlr(
         evaluation_note,
         dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
+        reported_epochs=int(training_fields["epochs_trained"]),
+        unseen_category_rows=context.unseen_category_rows,
     )
 
     return {
@@ -4158,6 +4675,9 @@ def train_survival_transformer(
     )
     if d_model % n_heads != 0:
         raise ValueError("Transformer width must be divisible by attention heads.")
+    _guard_deep_parameter_budget(
+        "Survival Transformer", n_features=int(data["n_features"]), d_model=int(d_model), n_layers=int(n_layers)
+    )
 
     def _fit_phase(rows: torch.Tensor, monitor_rows: torch.Tensor | None, max_epochs: int, patience: int | None) -> _FitPhase:
         _seed_torch(random_seed)
@@ -4270,6 +4790,8 @@ def train_survival_transformer(
         evaluation_note,
         dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
+        reported_epochs=int(training_fields["epochs_trained"]),
+        unseen_category_rows=context.unseen_category_rows,
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
@@ -4327,7 +4849,7 @@ class SurvivalVAENet(_TorchModuleBase):
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
-        hidden_layers = list(hidden_layers or ([hidden_dim] if hidden_dim is not None else [64]))
+        hidden_layers = list(hidden_layers or ([hidden_dim] if hidden_dim is not None else _DEFAULT_HIDDEN_LAYERS))
         encoder_layers: list[nn.Module] = []
         prev_dim = in_features
         for layer_dim in hidden_layers:
@@ -4563,7 +5085,10 @@ def train_survival_vae(
       objective is optimized on the full training partition each epoch.
     """
     _require_torch()
-    hidden_layers = list(hidden_layers or ([hidden_dim] if hidden_dim is not None else [64]))
+    # ``hidden_dim`` is the older single-layer spelling; the default matches the comparison's.
+    hidden_layers = _validated_hidden_layers(
+        hidden_layers or ([hidden_dim] if hidden_dim is not None else _DEFAULT_HIDDEN_LAYERS)
+    )
     context = _prepare_deep_training_context(
         df,
         time_column=time_column,
@@ -4581,6 +5106,9 @@ def train_survival_vae(
     x_all, t_all, e_all = context.x_all, context.t_all, context.e_all
     categorical_feature_indices = list(data.get("categorical_feature_indices", []))
     numeric_feature_indices = list(data.get("numeric_feature_indices", []))
+    _guard_deep_parameter_budget(
+        "Survival VAE", n_features=int(data["n_features"]), hidden_layers=hidden_layers, latent_dim=latent_dim
+    )
 
     def _fit_phase(rows: torch.Tensor, monitor_rows: torch.Tensor | None, max_epochs: int, patience: int | None) -> _FitPhase:
         _seed_torch(random_seed)
@@ -4743,6 +5271,8 @@ def train_survival_vae(
         evaluation_note,
         dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
+        reported_epochs=int(training_fields["epochs_trained"]),
+        unseen_category_rows=context.unseen_category_rows,
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
