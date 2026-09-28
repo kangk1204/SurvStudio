@@ -1793,19 +1793,23 @@ def _scientific_summary_dl(
     unseen_category_rows: int = 0,
     dropped_missing_outcome_rows: int = 0,
     time_column_note: str | None = None,
+    reported_loss_history: Sequence[float] | None = None,
 ) -> dict[str, Any]:
     """Build an insight board dict for deep learning models.
 
     ``loss_history`` is the early-stopping run; ``reported_epochs`` (when given) is the
     number of epochs behind the reported weights, which differs after a refit.
-    ``dropped_missing_outcome_rows`` and ``time_column_note`` come from the cohort builder
-    (``_cohort_summary_fields``).
+    ``reported_loss_history`` (when given) holds the training losses of the reported weights
+    (the refit, or the early-stopping run up to the restored epoch): the final loss and the
+    loss-trend notes describe it. ``dropped_missing_outcome_rows`` and ``time_column_note``
+    come from the cohort builder (``_cohort_summary_fields``).
     """
     metric_name = _metric_name_for_evaluation(evaluation_mode)
     c_val = float(c_index) if c_index is not None else None
 
     early_stopping_epochs = int(len(loss_history))
     epochs_trained = int(reported_epochs) if reported_epochs is not None else early_stopping_epochs
+    reported_losses = [float(value) for value in (loss_history if reported_loss_history is None else reported_loss_history)]
 
     if c_val is None:
         status = "review"
@@ -1829,7 +1833,7 @@ def _scientific_summary_dl(
         )
         + f" with {n_features} features.",
     ]
-    if len(loss_history) >= 2 and loss_history[-1] < loss_history[0]:
+    if len(reported_losses) >= 2 and reported_losses[-1] < reported_losses[0]:
         strengths.append("Training loss decreased over epochs, indicating successful optimization.")
     if refit_note:
         strengths.append(refit_note)
@@ -1879,8 +1883,8 @@ def _scientific_summary_dl(
             "judge it by the bootstrap intervals over the test patients of a model comparison or by repeated cross-validation."
         )
 
-    if len(loss_history) >= 5:
-        tail = loss_history[-5:]
+    if len(reported_losses) >= 5:
+        tail = reported_losses[-5:]
         if max(tail) - min(tail) < 1e-6:
             cautions.append("Loss plateaued in the final epochs; model may benefit from more epochs or a learning rate change.")
     if model_name == "DeepSurv":
@@ -1936,7 +1940,7 @@ def _scientific_summary_dl(
             {"label": "Evaluation samples", "value": eval_samples},
             {"label": "Features", "value": n_features},
             {"label": "Epochs", "value": epochs_trained or epochs},
-            {"label": "Final loss", "value": float(loss_history[-1]) if loss_history else None},
+            {"label": "Final loss", "value": reported_losses[-1] if reported_losses else None},
             *(
                 [{"label": "Early-stopping epochs", "value": early_stopping_epochs}]
                 if early_stopping_epochs and early_stopping_epochs != epochs_trained
@@ -2241,12 +2245,14 @@ def _fit_with_refit(
     first run selects the number of epochs, a fresh model (same seed) is fitted on the
     whole training partition for that many epochs.
 
-    Returns ``(final_phase, early_stopping_phase, refit_info)``.
+    Returns ``(final_phase, early_stopping_phase, refit_info)``. When the monitor subset could
+    not be scored (``monitor_used`` false), no epoch was selected and the refit trains for the
+    full number of epochs; the monitor rows still join the fit.
     """
     first = fit_phase(context.fit_idx, context.monitor_idx, epochs, patience)
     held_out_rows = context.monitor_idx is not None and int(context.fit_idx.numel()) < int(context.train_idx.numel())
     if not (refit and held_out_rows):
-        return first, first, {"refit_on_training_partition": False, "refit_epochs": None}
+        return first, first, {"refit_on_training_partition": False, "refit_epochs": None, "monitor_used": first.monitor_used}
     meta = _training_run_metadata(
         first.loss_history,
         first.monitor_history,
@@ -2257,7 +2263,7 @@ def _fit_with_refit(
     )
     refit_epochs = int(meta["best_monitor_epoch"] or len(first.loss_history))
     final = fit_phase(context.train_idx, None, refit_epochs, None)
-    return final, first, {"refit_on_training_partition": True, "refit_epochs": refit_epochs}
+    return final, first, {"refit_on_training_partition": True, "refit_epochs": refit_epochs, "monitor_used": first.monitor_used}
 
 
 def _deep_training_fields(
@@ -2331,18 +2337,34 @@ def _deep_fit_summary_counts(
     context: _DeepTrainingContext,
     refit_info: dict[str, Any],
 ) -> tuple[int, int, str | None]:
-    """Rows, events, and a refit note for the scientific summary of the reported model."""
+    """Rows, events, and a refit note for the scientific summary of the reported model.
+
+    The note says that early stopping picked the epoch count, so it is only given when the
+    monitor subset produced a value to pick it on.
+    """
     refitted = bool(refit_info["refit_on_training_partition"])
     final_rows = context.train_idx if refitted else context.fit_idx
     events = int(context.e_all[final_rows].sum().item())
     note = None
-    if refitted:
+    if refitted and refit_info.get("monitor_used", True):
         note = (
             f"Early stopping picked epoch {refit_info['refit_epochs']} on a held-out monitor subset of "
             f"{int(context.monitor_idx.numel())} training rows; the reported model was then refit on all "
             f"{int(context.train_idx.numel())} training rows for that many epochs."
         )
     return int(final_rows.numel()), events, note
+
+
+def _reported_loss_history(
+    first: _FitPhase,
+    final: _FitPhase,
+    refit_info: dict[str, Any],
+    reported_epochs: int,
+) -> list[float]:
+    """Training losses of the reported weights: the refit, or the early-stopping run up to the restored epoch."""
+    if refit_info["refit_on_training_partition"]:
+        return list(final.loss_history)
+    return list(first.loss_history[: max(int(reported_epochs), 0)])
 
 
 def _holdout_and_apparent_c_index(
@@ -2358,8 +2380,13 @@ def _holdout_and_apparent_c_index(
     apparent_c_index = _compute_c_index_torch(
         risk_scores[context.train_idx], context.t_all[context.train_idx], context.e_all[context.train_idx]
     )
-    holdout_c_index = _compute_c_index_torch(
-        risk_scores[context.eval_idx], context.t_all[context.eval_idx], context.e_all[context.eval_idx]
+    # In apparent mode the evaluation rows are the training rows, so there is no holdout estimate.
+    holdout_c_index = (
+        _compute_c_index_torch(
+            risk_scores[context.eval_idx], context.t_all[context.eval_idx], context.e_all[context.eval_idx]
+        )
+        if context.evaluation_mode == "holdout"
+        else None
     )
     c_index = holdout_c_index if holdout_c_index is not None else apparent_c_index
     evaluation_mode = context.evaluation_mode
@@ -4165,6 +4192,7 @@ def train_deepsurv(
         evaluation_note,
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
+        reported_loss_history=_reported_loss_history(first, final, refit_info, int(training_fields["epochs_trained"])),
         unseen_category_rows=context.unseen_category_rows,
         **_cohort_summary_fields(data),
     )
@@ -4527,6 +4555,7 @@ def train_deephit(
         evaluation_note,
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
+        reported_loss_history=_reported_loss_history(first, final, refit_info, int(training_fields["epochs_trained"])),
         unseen_category_rows=context.unseen_category_rows,
         **_cohort_summary_fields(data),
     )
@@ -4866,6 +4895,7 @@ def train_neural_mtlr(
         evaluation_note,
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
+        reported_loss_history=_reported_loss_history(first, final, refit_info, int(training_fields["epochs_trained"])),
         unseen_category_rows=context.unseen_category_rows,
         **_cohort_summary_fields(data),
     )
@@ -5203,6 +5233,7 @@ def train_survival_transformer(
         evaluation_note,
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
+        reported_loss_history=_reported_loss_history(first, final, refit_info, int(training_fields["epochs_trained"])),
         unseen_category_rows=context.unseen_category_rows,
         **_cohort_summary_fields(data),
     )
@@ -5694,6 +5725,7 @@ def train_survival_vae(
         evaluation_note,
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
+        reported_loss_history=_reported_loss_history(first, final, refit_info, int(training_fields["epochs_trained"])),
         unseen_category_rows=context.unseen_category_rows,
         **_cohort_summary_fields(data),
     )

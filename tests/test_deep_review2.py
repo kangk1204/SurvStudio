@@ -790,3 +790,53 @@ def test_the_mtlr_calibration_interpolates_the_first_bin_from_its_edge() -> None
     np.testing.assert_allclose(dm._survival_at_reference_time(survival, bin_edges, 25.0, num_time_bins=2), [0.35, 0.7])
     np.testing.assert_allclose(dm._survival_at_reference_time(survival, bin_edges, 5.0, num_time_bins=2), [1.0, 1.0])
 
+
+# R8#9 / R8#10 / R8#11: what the single-model summary says about the reported model ---------
+
+
+def test_no_early_stopping_note_when_the_monitor_never_produced_a_value() -> None:
+    df = make_example_dataset(seed=4, n_patients=120)
+    data, split = dm._prepare_deep_training_inputs(
+        df, time_column="os_months", event_column="os_event", features=FEATURES, random_seed=1
+    )
+    times, events = data["time_tensor"].numpy(), data["event_tensor"].numpy()
+    train = np.asarray(split["train_idx"])
+    train_events, train_censored = train[events[train] == 1], train[events[train] == 0]
+    # One event, the latest of the training rows, plus censored rows before it: no comparable pair.
+    latest_event = train_events[np.argmax(times[train_events])]
+    monitor = np.concatenate([[latest_event], train_censored[times[train_censored] < times[latest_event]][:6]])
+    with pytest.warns(RuntimeWarning):
+        result = dm.train_deepsurv(
+            None, "os_months", "os_event", FEATURES, hidden_layers=[4], epochs=3, early_stopping_patience=2,
+            prepared_data=data, evaluation_split=split, monitor_indices=monitor, random_seed=1,
+        )
+    assert result["monitor_history"] == [] and result["best_monitor_epoch"] is None
+    # The monitor rows still join the fit, for the full number of epochs.
+    assert result["refit_on_training_partition"] and result["epochs_trained"] == 3
+    assert not any("Early stopping picked epoch" in strength for strength in result["scientific_summary"]["strengths"])
+
+
+def test_the_final_loss_is_that_of_the_reported_model() -> None:
+    df = make_example_dataset(seed=7, n_patients=150)
+    result = dm.train_deepsurv(df, "os_months", "os_event", FEATURES, hidden_layers=[4], epochs=4, early_stopping_patience=2, random_seed=5)
+    assert result["refit_on_training_partition"]
+    assert _metrics(result)["Final loss"] == pytest.approx(result["refit_loss_history"][-1])
+    assert result["refit_loss_history"][-1] != pytest.approx(result["loss_history"][-1])
+
+    first = dm._FitPhase(None, [3.0, 2.0, 1.0, 0.5], [0.6, 0.7, 0.65, 0.64], True)
+    final = dm._FitPhase(None, [2.5, 1.5], [], False)
+    assert dm._reported_loss_history(first, final, {"refit_on_training_partition": True}, 2) == [2.5, 1.5]
+    # Without a refit the restored checkpoint is that of epoch 2.
+    assert dm._reported_loss_history(first, first, {"refit_on_training_partition": False}, 2) == [3.0, 2.0]
+    summary = dm._scientific_summary_dl(
+        "DeepSurv", 0.7, 100, 30, 40, 3, 4, first.loss_history, "holdout", reported_epochs=2, reported_loss_history=[3.0, 2.0],
+    )
+    assert {metric["label"]: metric["value"] for metric in summary["metrics"]}["Final loss"] == 2.0
+
+
+def test_apparent_evaluation_reports_no_holdout_c_index() -> None:
+    result = dm.train_deepsurv(make_example_dataset(seed=2, n_patients=16), "os_months", "os_event", FEATURES, **TINY)
+    assert result["evaluation_mode"] == "apparent"
+    assert result["holdout_c_index"] is None
+    assert result["c_index"] == result["apparent_c_index"]
+
