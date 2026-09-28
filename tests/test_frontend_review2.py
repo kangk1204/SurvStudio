@@ -667,6 +667,80 @@ def test_unticking_all_event_columns_is_an_endpoint_change(tmp_path: Path) -> No
     assert "30 events" in result["afterTick"]
 
 
+# ── Exports ─────────────────────────────────────────────────────
+
+
+def test_comparison_exports_send_scalar_cells_only(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:
+    """R13-9: per-repeat and per-fold detail never reaches the CSV (the server would write it as a Python literal)."""
+    compare = {key: value for key, value in compare_payloads.items()}
+    ml = dict(compare_payloads["ml"])
+    ml["comparison_table"] = [
+        {**row, "repeat_results": [{"repeat": 1, "c_index": 0.7}], "fold_results": [{"fold": 1, "c_index": 0.7}], "extra": {"a": 1}}
+        for row in compare_payloads["ml"]["comparison_table"]
+    ]
+    compare["ml"] = ml
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.fetchHandler = (request) => {
+        if (request.url.endsWith("/api/ml-model")) return { status: 200, body: { analysis: fixtures.compare.ml, request_config: request.json() } };
+        if (request.url.endsWith("/api/export-table")) return { status: 200, body: "csv" };
+        return { status: 500, body: { detail: "unexpected" } };
+      };
+      await page.run("withLoading(refs.runCompareButton, runCompareModels)");
+      await page.settle();
+      page.run("refs.downloadMlComparisonButton.click()");
+      await page.settle();
+      const sent = page.requests.find((request) => request.url.endsWith("/api/export-table")).json();
+      return { columns: sent.columns, keys: [...new Set(sent.rows.flatMap((row) => Object.keys(row)))], rows: sent.rows.length };
+    """, dataset=example_dataset, compare=compare)
+
+    assert result["rows"] == 3
+    for name in ("repeat_results", "fold_results", "extra"):
+        assert name not in result["columns"] and name not in result["keys"]
+    assert {"model", "c_index", "rank"} <= set(result["columns"])
+
+
+def test_the_table_one_csv_is_exported_by_the_server_with_its_provenance(tmp_path: Path, example_dataset: dict) -> None:
+    """R13-10: the CSV goes through /api/export-table like the XLSX, so it carries the dataset's provenance."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const table = { columns: ["Variable", "Statistic", "Overall", "Test positive"],
+        rows: [{ Variable: "Cohort size", Statistic: "N", Overall: 360, "Test positive": 45 }], row_mask_hash: "rows" };
+      page.fetchHandler = (request) => {
+        if (request.url.endsWith("/api/cohort-table")) return { status: 200, body: { analysis: table, request_config: request.json() } };
+        if (request.url.endsWith("/api/export-table")) return { status: 200, body: "csv" };
+        return { status: 500, body: { detail: "unexpected" } };
+      };
+      page.run("activateTab('tables'); refs.runCohortTableButton.click()");
+      await page.settle();
+      page.run("refs.downloadCohortTableButton.click()");
+      await page.settle();
+      const request = page.requests.find((item) => item.url.endsWith("/api/export-table"));
+      return { sent: request ? request.json() : null, downloads: page.downloads.length };
+    """, dataset=example_dataset)
+
+    sent = result["sent"]
+    assert sent is not None
+    assert sent["format"] == "csv" and sent["style"] == "plain"
+    assert sent["columns"] == ["Variable", "Statistic", "Overall", "Test positive"]
+    assert sent["rows"] == [{"Variable": "Cohort size", "Statistic": "N", "Overall": 360, "Test positive": 45}]
+    assert sent["provenance"]["dataset_hash"] == example_dataset["dataset_hash"]
+    assert result["downloads"] == 1
+
+
+def test_a_refused_checklist_export_names_the_field_the_server_rejected(tmp_path: Path) -> None:
+    """R13-19: the validation detail of a 422 (a list) reaches the user instead of a generic message."""
+    result = _run_page(tmp_path, r"""
+      page.fetchHandler = () => ({ status: 422, body: { detail: [{ loc: ["body", "format"], msg: "Input should be 'docx' or 'markdown'" }] } });
+      const refused = await page.run("downloadChecklist({ guideline: 'REMARK' }, 'pdf', 'remark').then(() => 'ok', (error) => error.message)");
+      page.fetchHandler = () => ({ status: 500, body: "<html>proxy error</html>" });
+      const unreadable = await page.run("downloadChecklist({ guideline: 'REMARK' }, 'docx', 'remark').then(() => 'ok', (error) => error.message)");
+      return { refused, unreadable };
+    """)
+
+    assert result == {"refused": "format: Input should be 'docx' or 'markdown'", "unreadable": "Checklist export failed."}
+
+
 # ── Markers ─────────────────────────────────────────────────────
 
 

@@ -523,14 +523,14 @@ async function downloadChecklist(report, format, stem) {
     body: JSON.stringify({ ...report, format }),
   });
   if (!response.ok) {
-    let message = "Checklist export failed.";
+    // The server's detail, a validation list (422) included; a body that is not JSON keeps the generic message.
+    let payload = {};
     try {
-      const detail = (await response.json())?.detail;
-      if (typeof detail === "string" && detail.trim()) message = detail.trim();
+      payload = JSON.parse(await response.text());
     } catch {
-      // Keep the generic message when the error body is not JSON.
+      payload = {};
     }
-    throw new Error(message);
+    throw new Error(extractErrorMessage(payload, "Checklist export failed."));
   }
   triggerBlobDownload(buildDownloadFilename(stem, format === "docx" ? "docx" : "md"), await response.blob());
 }
@@ -711,6 +711,14 @@ function buildSignatureTableExportPayload(rows, caption, resultPayload = null) {
   };
 }
 
+// Exported rows hold scalar cells only: the per-repeat and per-fold detail of a comparison (repeat_results,
+// fold_results) and any other nested value would reach the file as a Python literal.
+function scalarExportRows(rows) {
+  return (rows || []).map((row) => Object.fromEntries(
+    Object.entries(row || {}).filter(([, value]) => value === null || typeof value !== "object"),
+  ));
+}
+
 function buildComparisonTableExportPayload(rows, caption, resultPayload = null) {
   const resultPayloadForHash = resultPayload;
   const analysis = resultPayload?.analysis || {};
@@ -718,9 +726,10 @@ function buildComparisonTableExportPayload(rows, caption, resultPayload = null) 
   if (analysis?.evaluation_mode === "mixed_holdout_apparent") {
     extraNotes.push("This comparison mixes holdout-comparable models with apparent-only screening rows. Do not treat the ranking as a single external-validation table.");
   }
+  const exportRows = scalarExportRows(rows);
   return {
-    rows: rows || [],
-    columns: exportColumnsFromRows(rows || []),
+    rows: exportRows,
+    columns: exportColumnsFromRows(exportRows),
     format: "csv",
     style: "plain",
     caption,

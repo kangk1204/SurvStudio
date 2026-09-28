@@ -170,16 +170,15 @@ function wireDownloads() {
     if (!requireCurrentPlotForExport(refs.coxPlot, payload)) return;
     downloadPlotImage(refs.coxPlot, buildDownloadFilename("cox_forest", "svg").replace(/\.svg$/, ""), "svg");
   });
+  // Exported by the server like the XLSX and the other tables, so the file records the dataset it came from.
   refs.downloadCohortTableButton.addEventListener("click", () => {
     const payload = state.cohort;
     if (!requireCurrentResultForExport("tables", { payload })) return;
-    const exportPayload = buildCohortTableExportPayload("csv");
-    downloadCsv(
+    void downloadServerTable(
       buildDownloadFilename("cohort_summary", "csv", { includeGroup: true, group: cohortTableOutputGroup() }),
-      payload?.analysis?.rows,
-      payload?.analysis?.columns,
-      { caption: exportPayload.caption, notes: exportPayload.notes },
-    );
+      buildCohortTableExportPayload("csv"),
+      "text/csv;charset=utf-8;",
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.addEventListener("click", () => {
     const payload = state.cohort;
