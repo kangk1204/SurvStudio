@@ -615,3 +615,75 @@ def test_median_follow_up_uses_the_same_rule_on_the_reverse_curve() -> None:
     assert follow_up(pd.Series([1.0, 2.0, 3.0, 4.0]), pd.Series([0, 0, 1, 1])) == pytest.approx(2.0)
     km = analysis.compute_km_analysis(pd.DataFrame({"t": np.arange(1.0, 7.0), "e": [0, 0, 0, 0, 1, 1]}), "t", "e")
     assert km["cohort"]["median_follow_up"] == pytest.approx(3.5)
+
+
+# ---------------------------------------------------------------------------------------
+# Harrell's C (R5#8, R5#9, R5#18, R5#20)
+
+
+def _naive_harrell_c(time: np.ndarray, event: np.ndarray, risk: np.ndarray) -> float:
+    """Every ordered pair: comparable when the earlier time is an event, or when both times are
+    equal and only the first subject had the event; tied risks count one half."""
+    concordant = comparable = 0.0
+    for i, j in itertools.permutations(range(time.shape[0]), 2):
+        if event[i] != 1 or not (time[j] > time[i] or (time[j] == time[i] and event[j] != 1)):
+            continue
+        comparable += 1.0
+        concordant += 1.0 if risk[i] > risk[j] else 0.5 if risk[i] == risk[j] else 0.0
+    return concordant / comparable
+
+
+def test_harrell_c_counts_tied_times_and_risks_like_the_pairwise_definition() -> None:
+    from survival_toolkit.marker_screen import harrell_c_many
+
+    rng = np.random.default_rng(4)
+    for n in (6, 25, 60):
+        time = rng.integers(1, 6, n).astype(float)
+        event = (rng.random(n) < 0.6).astype(int)
+        event[0] = 1
+        risk = np.round(rng.normal(size=n), 1)
+        expected = _naive_harrell_c(time, event, risk)
+        assert analysis._harrell_c_index(time, event, risk) == pytest.approx(expected, abs=1e-15)
+        assert harrell_c_many(time, event, risk)[0] == pytest.approx(expected, abs=1e-15)
+
+
+def test_harrell_c_refuses_a_missing_time_instead_of_looping_forever() -> None:
+    with pytest.raises(ValueError, match="survival time for every row"):
+        analysis._harrell_c_index(np.array([1.0, np.nan, 3.0, 4.0]), np.array([1, 0, 1, 0]), np.array([0.3, 0.1, 0.2, 0.4]))
+
+
+def test_c_index_bootstrap_keeps_its_values_and_stops_when_cancelled(monkeypatch) -> None:
+    rng = np.random.default_rng(12)
+    n = 150
+    time = np.round(rng.exponential(10, n), 0) + 1
+    event = (rng.random(n) < 0.6).astype(int)
+    risk = np.round(rng.normal(size=n), 1)
+    result = analysis._harrell_c_index_bootstrap_ci(time, event, risk, n_bootstrap=60, random_seed=3)
+    # The same resamples scored by the reference count.
+    draws = np.random.default_rng(3)
+    scores = []
+    for _ in range(60):
+        rows = draws.integers(0, n, size=n)
+        if event[rows].sum() == 0:
+            continue
+        scores.append(analysis._harrell_c_index(time[rows], event[rows], risk[rows]))
+    lower, upper = np.quantile(np.asarray(scores), [0.025, 0.975])
+    assert (result["c_index_ci_lower"], result["c_index_ci_upper"]) == pytest.approx((lower, upper), abs=1e-15)
+
+    def _cancelled() -> None:
+        raise JobCancelledError("stop")
+
+    monkeypatch.setattr(analysis, "raise_if_cancelled", _cancelled)
+    with pytest.raises(JobCancelledError):
+        analysis._harrell_c_index_bootstrap_ci(time, event, risk, n_bootstrap=60, random_seed=3)
+
+
+def test_cox_names_a_c_index_interval_level_only_when_an_interval_exists() -> None:
+    frame = pd.DataFrame(
+        {"time": [2.0, 4.0, 5.0, 7.0, 9.0, 11.0, 12.0, 15.0], "event": [1, 0, 1, 1, 0, 1, 0, 0], "x": [3.0, 1.0, 0.5, 2.0, 2.5, 1.5, 0.2, 0.1]}
+    )
+    with pytest.warns(RuntimeWarning, match="bootstrap CI skipped"):
+        stats = compute_cox_analysis(frame, "time", "event", ["x"])["model_stats"]
+    assert stats["c_index"] is not None
+    assert stats["c_index_ci_lower"] is None and stats["c_index_ci_upper"] is None
+    assert stats["c_index_ci_level"] is None and stats["c_index_ci_method"] is None

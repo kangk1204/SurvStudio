@@ -7508,6 +7508,12 @@ def _harrell_c_index_counts(
     event_values: np.ndarray,
     risk_score: np.ndarray,
 ) -> tuple[float, float]:
+    time_values = np.asarray(time_values, dtype=float)
+    event_values = np.asarray(event_values)
+    risk_score = np.asarray(risk_score, dtype=float)
+    if bool(np.isnan(time_values).any()):
+        # A missing time equals no other time, so the tie scan below would never advance.
+        raise ValueError("Harrell's C-index needs a survival time for every row; drop rows with a missing time first.")
     event_mask = event_values == 1
     if int(np.sum(event_mask)) == 0:
         return 0.0, 0.0
@@ -7583,6 +7589,14 @@ def _harrell_c_index_bootstrap_ci(
     confidence_level: float = 0.95,
     random_seed: int = 20260311,
 ) -> dict[str, float | None]:
+    """Percentile bootstrap interval of Harrell's C on fixed risk scores.
+
+    Each resample is scored with ``harrell_c_many`` (sorted prefix counts, O(n log^2 n)), which
+    gives exactly the same value as ``_harrell_c_index`` including tied times and risks, and the
+    loop stops when the request is cancelled.
+    """
+    from survival_toolkit.marker_screen import harrell_c_many
+
     if n_bootstrap <= 1:
         return {"c_index_std": None, "c_index_ci_lower": None, "c_index_ci_upper": None}
 
@@ -7601,13 +7615,15 @@ def _harrell_c_index_bootstrap_ci(
     rng = np.random.default_rng(int(random_seed))
     boot_scores: list[float] = []
     for _ in range(int(n_bootstrap)):
+        raise_if_cancelled()
         sample_idx = rng.integers(0, n_obs, size=n_obs)
         sample_events = event_array[sample_idx]
         if int(sample_events.sum()) == 0:
             continue
-        score = _harrell_c_index(time_array[sample_idx], sample_events, risk_array[sample_idx])
-        if score is not None and math.isfinite(score):
-            boot_scores.append(float(score))
+        # NaN when a resample has no comparable pair.
+        score = float(harrell_c_many(time_array[sample_idx], sample_events, risk_array[sample_idx])[0])
+        if math.isfinite(score):
+            boot_scores.append(score)
 
     min_valid_boot = max(10, int(n_bootstrap * 0.3))
     if len(boot_scores) < min_valid_boot:
@@ -7946,6 +7962,11 @@ def compute_cox_analysis(
         stratified=bool(strata_columns),
     )
     c_index = c_index_fields["c_index"]
+    c_index_interval_computed = (
+        c_index is not None
+        and _safe_float(c_index_fields["c_index_ci_lower"]) is not None
+        and _safe_float(c_index_fields["c_index_ci_upper"]) is not None
+    )
 
     model_stats = {
         "n": n_obs,
@@ -7980,8 +8001,9 @@ def compute_cox_analysis(
         "c_index_std": _safe_float(c_index_fields["c_index_std"]),
         "c_index_ci_lower": _safe_float(c_index_fields["c_index_ci_lower"]),
         "c_index_ci_upper": _safe_float(c_index_fields["c_index_ci_upper"]),
-        "c_index_ci_level": 0.95 if c_index is not None else None,
-        "c_index_ci_method": "bootstrap_percentile_fixed_score" if c_index is not None else None,
+        # Level and method describe an interval, so they are set only when one was computed.
+        "c_index_ci_level": 0.95 if c_index_interval_computed else None,
+        "c_index_ci_method": "bootstrap_percentile_fixed_score" if c_index_interval_computed else None,
         "c_index_label": c_index_fields["c_index_label"],
         "evaluation_mode": c_index_fields["evaluation_mode"],
         "tie_method": "efron",
