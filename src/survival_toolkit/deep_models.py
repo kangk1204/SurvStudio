@@ -1332,6 +1332,20 @@ def _compute_c_index_torch(
     return _harrell_c_index(time_np.astype(float), event_np.astype(int), risk_np.astype(float))
 
 
+def _has_comparable_pair(times: Any, events: Any) -> bool:
+    """Whether Harrell's C-index is defined on these patients at all, for any model.
+
+    A pair is comparable when an event is followed by a longer follow-up (or by a censoring at
+    the same time); without one, every model's C-index is undefined. Times are compared as the
+    float32 values the deep models score, as in the ML module's check.
+    """
+    from survival_toolkit.analysis import _harrell_c_index
+
+    time_values = np.asarray(times, dtype=np.float32).astype(float).reshape(-1)
+    event_values = np.asarray(events, dtype=float).reshape(-1)
+    return _harrell_c_index(time_values, event_values, np.zeros(time_values.size, dtype=float)) is not None
+
+
 def _survival_from_log_cumulative_hazard(log_cumulative_hazard: np.ndarray) -> np.ndarray:
     """S = exp(-H) from log H: 1 where log H is -inf (no hazard), 0 where it is +inf or large.
 
@@ -2773,6 +2787,9 @@ def _deep_repeated_cv_comparison(
     categorical_columns = _categorical_feature_columns(clean_frame, settings.features)
     design_splits: list[tuple[np.ndarray, np.ndarray]] = []
     unseen_fold_rows = 0
+    dev_times = dev_frame[settings.time_column].to_numpy(dtype=float)
+    # Test folds without a comparable pair of patients, skipped for every model alike.
+    skipped_folds: list[dict[str, int]] = []
     # Collect only split indices (cheap numpy arrays - no tensors).
     fold_splits: list[dict[str, Any]] = []
     for repeat_idx in range(cv_repeats):
@@ -2786,6 +2803,12 @@ def _deep_repeated_cv_comparison(
         )
         for fold_idx, (train_rows, eval_rows) in enumerate(splitter.split(dev_frame, events), start=1):
             design_splits.append((dev_positions[train_rows], dev_positions[eval_rows]))
+            if not _has_comparable_pair(dev_times[eval_rows], events[eval_rows]):
+                # No event in this test fold is followed by a longer follow-up, so the C-index is
+                # undefined for every model alike: the fold is skipped for all of them (as in the
+                # ML module) instead of leaving every model incomplete.
+                skipped_folds.append({"repeat": repeat_idx + 1, "fold": fold_idx})
+                continue
             unseen_fold_rows += _unseen_category_rows(
                 dev_frame.iloc[train_rows], dev_frame.iloc[eval_rows], categorical_columns
             )
@@ -2799,6 +2822,13 @@ def _deep_repeated_cv_comparison(
                 "train_rows": train_rows,
                 "eval_rows": eval_rows,
             })
+    n_total_folds = cv_folds * cv_repeats
+    n_scored_folds = n_total_folds - len(skipped_folds)
+    if n_scored_folds == 0:
+        raise ValueError(
+            "No cross-validation test fold had a comparable pair of patients (an event followed by a longer "
+            "follow-up), so the C-index is undefined in every fold. Use fewer folds or a cohort with more events."
+        )
 
     fold_results: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -2886,6 +2916,7 @@ def _deep_repeated_cv_comparison(
         cv_folds=cv_folds,
         cv_repeats=cv_repeats,
         locked_results=locked_results if use_locked_test else None,
+        n_scored_folds=n_scored_folds,
     )
     # A model whose refit on the development set fails has no locked-test estimate. That is an
     # error of the run, but its cross-validation result still ranks it.
@@ -2902,7 +2933,20 @@ def _deep_repeated_cv_comparison(
             design_splits,
             kind="repeated_cv+locked_test" if use_locked_test else "repeated_cv",
         ),
+        # Test folds without a comparable pair of patients, skipped for every model alike (the
+        # shared manuscript tables add a note for them).
+        "n_skipped_folds": len(skipped_folds),
+        "skipped_folds": skipped_folds,
     }
+    skipped_fold_cautions = (
+        [
+            f"{len(skipped_folds)} of {n_total_folds} cross-validation test folds had no comparable pair of patients "
+            "(no event followed by a longer follow-up), so the C-index is undefined there for every model; those folds "
+            f"were skipped for all models alike, and the cross-validated means use the other {n_scored_folds} folds."
+        ]
+        if skipped_folds
+        else []
+    )
     if use_locked_test:
         cohort_counts.update({
             "locked_test_fraction": float(locked_test_fraction),
@@ -2926,17 +2970,20 @@ def _deep_repeated_cv_comparison(
         cohort_counts=cohort_counts,
         locked_errors=locked_errors,
         parallel_execution_note=parallel_execution_note,
-        extra_cautions=_unseen_category_cautions(
-            [
-                (unseen_fold_rows, "cross-validation evaluation (summed over folds)"),
-                (
-                    _unseen_category_rows(dev_frame, locked_test_frame, categorical_columns)
-                    if locked_test_frame is not None
-                    else 0,
-                    "locked-test",
-                ),
-            ]
-        ),
+        extra_cautions=[
+            *skipped_fold_cautions,
+            *_unseen_category_cautions(
+                [
+                    (unseen_fold_rows, "cross-validation evaluation (summed over folds)"),
+                    (
+                        _unseen_category_rows(dev_frame, locked_test_frame, categorical_columns)
+                        if locked_test_frame is not None
+                        else 0,
+                        "locked-test",
+                    ),
+                ]
+            ),
+        ],
     )
     # The features one-hot coded after the whole-cohort typing decision (declared plus auto-coded).
     result["categorical_features"] = list(categorical_columns)
@@ -3350,15 +3397,19 @@ def _summarize_deep_cv_rows(
     cv_folds: int,
     cv_repeats: int,
     locked_results: dict[str, dict[str, Any]] | None,
+    n_scored_folds: int | None = None,
 ) -> list[dict[str, Any]]:
     """One comparison row per model from its repeated-CV folds (and locked test, if any).
 
     Fold rows are always clean holdout estimates: ``_run_deep_compare_task`` records a fold
     that fell back to apparent evaluation as a failed fold, so failures are the only reason a
-    model misses folds.
+    model misses folds. A model is complete when it was scored on every one of the
+    ``n_scored_folds`` folds that had a comparable pair (all folds by default); folds skipped
+    for every model alike do not make a model incomplete.
     """
     from survival_toolkit.ml_models import _summarize_repeated_cv_rows, repeated_cv_row_fields
 
+    expected_evaluations = cv_folds * cv_repeats if n_scored_folds is None else int(n_scored_folds)
     comparison: list[dict[str, Any]] = []
     for model_name, _, _ in trainer_specs:
         model_rows = [
@@ -3369,7 +3420,6 @@ def _summarize_deep_cv_rows(
             and str(row.get("evaluation_mode", "holdout")) == "holdout"
         ]
         n_failures = sum(1 for err in errors if err["model"] == model_name)
-        expected_evaluations = cv_folds * cv_repeats
         summary = (
             _summarize_repeated_cv_rows(
                 model_rows,
@@ -3381,7 +3431,7 @@ def _summarize_deep_cv_rows(
             if model_rows
             else None
         )
-        incomplete = (len(model_rows) + n_failures) < expected_evaluations or n_failures > 0
+        incomplete = len(model_rows) < expected_evaluations or n_failures > 0
         if summary is None and n_failures == 0:
             continue
 
@@ -3681,6 +3731,8 @@ def _finalize_deep_comparison(
         "n_fit_events",
         "n_evaluation_patients",
         "n_evaluation_events",
+        "n_skipped_folds",
+        "skipped_folds",
         "locked_test_fraction",
         "n_development_patients",
         "n_development_events",
@@ -3869,6 +3921,8 @@ def evaluate_single_deep_survival_model(
             "insight_board": summary,
         }
         for key in (
+            "n_skipped_folds",
+            "skipped_folds",
             "locked_test_fraction",
             "n_development_patients",
             "n_development_events",

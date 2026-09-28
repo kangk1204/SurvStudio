@@ -955,3 +955,108 @@ def test_index_errors_raised_by_survstudio_code_end_the_run(monkeypatch) -> None
         wrapped.__cause__ = exc
     assert not dm._must_propagate_deep(wrapped)
 
+
+# Repeated-CV test folds without a comparable pair (the ML module's R7#1 fix, mirrored) -------
+
+
+def _late_event_cohort(n: int = 40, n_events: int = 6) -> pd.DataFrame:
+    """Events only at the longest follow-up times: a test fold with a single event has no comparable pair."""
+    rng = np.random.default_rng(5)
+    time = np.arange(1.0, n + 1.0)
+    event = np.zeros(n, dtype=int)
+    event[-n_events:] = 1
+    return pd.DataFrame({"time": time, "event": event, "x": rng.normal(size=n), "z": rng.normal(size=n)})
+
+
+def _feature_c_index_stub(trained: list[tuple[np.ndarray, np.ndarray]]):
+    """A trainer whose holdout C-index is Harrell's C of the first encoded feature on the evaluation rows.
+
+    Like the real trainers, it falls back to apparent evaluation when the evaluation rows have no
+    comparable pair.
+    """
+
+    def _run(*args, **kwargs):
+        data, split = kwargs["prepared_data"], kwargs["evaluation_split"]
+        eval_idx = torch.as_tensor(split["eval_idx"], dtype=torch.long)
+        times, events = data["time_tensor"][eval_idx], data["event_tensor"][eval_idx]
+        trained.append((times.numpy(), events.numpy()))
+        c_index = dm._compute_c_index_torch(data["X_tensor"][eval_idx, 0], times, events)
+        return {
+            "c_index": c_index,
+            "evaluation_mode": "holdout" if c_index is not None else "holdout_fallback_apparent",
+            "epochs_trained": 1,
+            "n_features": int(data["n_features"]),
+            "training_samples": len(split["train_idx"]),
+            "evaluation_samples": len(split["eval_idx"]),
+        }
+
+    return _run
+
+
+def test_repeated_cv_skips_folds_without_a_comparable_pair_for_every_model_alike(monkeypatch) -> None:
+    import survival_toolkit.ml_models as ml_models
+
+    trained: list[tuple[np.ndarray, np.ndarray]] = []
+    stub = _feature_c_index_stub(trained)
+    _install_stubs(monkeypatch, train_deepsurv=stub, train_deephit=stub)
+    tables_saw: list[object] = []
+    original_tables = ml_models.build_manuscript_result_tables
+
+    def _tables(result):
+        tables_saw.append(result.get("n_skipped_folds"))
+        return original_tables(result)
+
+    monkeypatch.setattr(ml_models, "build_manuscript_result_tables", _tables)
+    result = dm.compare_deep_survival_models(
+        _late_event_cohort(), "time", "event", ["x", "z"], included_models=["DeepSurv", "DeepHit"],
+        evaluation_strategy="repeated_cv", cv_folds=5, cv_repeats=3, random_seed=42,
+    )
+    # Six events in five stratified folds: four folds per repeat hold a single event, which no
+    # patient in its fold outlives, so the C-index is undefined there for every model.
+    assert result["n_skipped_folds"] == 12 and len(result["skipped_folds"]) == 12
+    assert len(trained) == 2 * 3 and all(dm._has_comparable_pair(times, events) for times, events in trained)
+    assert result["evaluation_mode"] == "repeated_cv"
+    assert result["errors"] == [] and result["ranking_complete"] is True
+    for row in result["comparison_table"]:
+        assert row["c_index"] is not None and row["n_evaluations"] == 3 and row["evaluation_mode"] == "repeated_cv"
+    assert [row["rank"] for row in result["comparison_table"]] == [1, 2]
+    cautions = result["scientific_summary"]["cautions"]
+    assert any(text.startswith("12 of 15 cross-validation test folds had no comparable pair") for text in cautions)
+    assert not any("failed or fell back" in text for text in cautions)
+    # The shared manuscript tables see the skipped folds before they are built (and note them).
+    assert tables_saw == [12]
+
+
+def test_repeated_cv_refuses_when_no_fold_has_a_comparable_pair(monkeypatch) -> None:
+    stub = _feature_c_index_stub([])
+    _install_stubs(monkeypatch, train_deepsurv=stub)
+    # Five events in five folds: every test fold holds exactly one event and nobody outlives it.
+    with pytest.raises(UserInputError, match="No cross-validation test fold had a comparable pair.*fewer folds or a cohort with more events"):
+        dm.compare_deep_survival_models(
+            _late_event_cohort(n_events=5), "time", "event", ["x", "z"], included_models=["DeepSurv"],
+            evaluation_strategy="repeated_cv", cv_folds=5, cv_repeats=2,
+        )
+
+
+def test_a_fold_where_only_one_model_lacks_a_c_index_stays_that_models_failure(monkeypatch) -> None:
+    _install_stubs(monkeypatch, train_deepsurv=_stub(0.74, mode_first="holdout_fallback_apparent"))
+    result = _cv(make_example_dataset(seed=17, n_patients=80), included_models=["DeepSurv", "DeepHit"])
+    assert result["n_skipped_folds"] == 0 and result["skipped_folds"] == []
+    rows = {row["model"]: row for row in result["comparison_table"]}
+    assert rows["DeepSurv"]["c_index"] is None and rows["DeepSurv"]["n_failures"] == 1 and rows["DeepSurv"]["rank"] is None
+    assert rows["DeepHit"]["c_index"] is not None and rows["DeepHit"]["rank"] == 1
+    assert [(error["model"], error["repeat"], error["fold"]) for error in result["errors"]] == [("DeepSurv", 1, 1)]
+
+
+def test_skipped_folds_with_real_training_and_in_the_single_model_result() -> None:
+    df = _late_event_cohort()
+    common = dict(evaluation_strategy="repeated_cv", cv_folds=5, cv_repeats=1, epochs=1, hidden_layers=[4], random_seed=42)
+    compared = dm.compare_deep_survival_models(df, "time", "event", ["x", "z"], included_models=["DeepSurv"], **common)
+    assert compared["n_skipped_folds"] == 4 and compared["evaluation_mode"] == "repeated_cv"
+    assert compared["comparison_table"][0]["c_index"] is not None and compared["comparison_table"][0]["n_evaluations"] == 1
+    single = dm.evaluate_single_deep_survival_model(
+        "deepsurv", df=df, time_column="time", event_column="event", features=["x", "z"], **common
+    )
+    assert single["n_skipped_folds"] == 4 and single["skipped_folds"] == compared["skipped_folds"]
+    assert single["c_index"] == compared["comparison_table"][0]["c_index"]
+
