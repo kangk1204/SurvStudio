@@ -5081,7 +5081,8 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
             "Selection frequency": stats["selection_frequency"],
             "Direction consistency": stats["direction_consistency"],
             "Median rank": stats["median_rank"],
-            "Rank 95% interval": None if low is None or high is None else f"{low:.0f}-{high:.0f}",
+            # "1 to 3", not "1-3", which a spreadsheet opens as a date.
+            "Rank 95% interval": None if low is None or high is None else f"{low:.0f} to {high:.0f}",
         }
         if primary == "added_value":
             display["LR test P"] = exact.get("lr_p")

@@ -600,6 +600,26 @@ def _locked_recipe() -> tuple[str, dict]:
     return dataset_id, response.json()["analysis"]["locked_recipe"]
 
 
+def test_marker_rank_intervals_read_as_ranges_not_dates() -> None:
+    import re
+
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    body = {
+        "dataset_id": dataset_id,
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "marker_columns": ["biomarker_score", "immune_index", "age"],
+        "n_permutations": 9,
+        "n_resamples": 4,
+        "random_seed": 7,
+    }
+    response = client.post("/api/marker-evaluation", json=body)
+    assert response.status_code == 200, response.text
+    intervals = [row["Rank 95% interval"] for row in response.json()["display_table"]]
+    # A spreadsheet opens "1-3" as a date.
+    assert intervals and all(re.fullmatch(r"\d+ to \d+", value) for value in intervals), intervals
+
+
 def test_incomplete_recipes_are_user_errors_but_library_lookup_errors_are_not(monkeypatch: pytest.MonkeyPatch) -> None:
     import copy
 
