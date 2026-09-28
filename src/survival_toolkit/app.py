@@ -1910,25 +1910,74 @@ def _text_too_large(text_size: int) -> HTTPException:
 def _parquet_text_bytes(path: Path, limit: int) -> int:
     """Decoded size of the text and binary columns of a Parquet file, counted until it passes ``limit``.
 
-    Columns are read with their dictionaries kept, so a value stored once and used by many rows
-    is measured, not materialised, once per row.
+    Every column that does not hold numbers, dates, times or booleans decodes to a text or bytes
+    value per cell, whatever its Arrow type: plain, large or view strings and binaries, fixed-size
+    binaries, or dictionaries of them. Text columns are read with their dictionaries kept, so a
+    value stored once and used by many rows is measured, not materialised, once per row; a
+    fixed-size binary column is measured from its width, without reading it. Other text-holding
+    types (extension types such as JSON) cannot be read that way and are refused.
     """
 
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
-    def _is_text(data_type: Any) -> bool:
-        if pa.types.is_dictionary(data_type):
+    def _is_extension(data_type: Any) -> bool:
+        while pa.types.is_dictionary(data_type):
             data_type = data_type.value_type
-        return any(
-            check(data_type)
-            for check in (pa.types.is_string, pa.types.is_large_string, pa.types.is_binary, pa.types.is_large_binary)
+        return isinstance(data_type, pa.BaseExtensionType)
+
+    def _value_type(data_type: Any) -> Any:
+        # A dictionary column holds its value type; an extension type (UUID, ...) its storage type.
+        while True:
+            if pa.types.is_dictionary(data_type):
+                data_type = data_type.value_type
+            elif isinstance(data_type, pa.BaseExtensionType):
+                data_type = data_type.storage_type
+            else:
+                return data_type
+
+    def _holds_text(data_type: Any) -> bool:
+        value_type = _value_type(data_type)
+        return not any(
+            check(value_type)
+            for check in (
+                pa.types.is_integer,
+                pa.types.is_floating,
+                pa.types.is_decimal,
+                pa.types.is_boolean,
+                pa.types.is_temporal,
+                pa.types.is_null,
+            )
         )
+
+    def _read_as_dictionary(data_type: Any) -> bool:
+        # Byte-array columns of these types come back as dictionaries when read with read_dictionary;
+        # an extension type comes back as itself, with every value materialised.
+        return not _is_extension(data_type) and any(
+            check(_value_type(data_type))
+            for check in (
+                pa.types.is_string,
+                pa.types.is_large_string,
+                pa.types.is_binary,
+                pa.types.is_large_binary,
+                pa.types.is_string_view,
+                pa.types.is_binary_view,
+            )
+        )
+
+    def _value_lengths(array: Any) -> Any:
+        if pa.types.is_dictionary(array.type):
+            return pc.take(_value_lengths(array.dictionary), array.indices)
+        if pa.types.is_string_view(array.type) or pa.types.is_binary_view(array.type):
+            # The length kernel does not read the view layouts; plain binary holds the same bytes.
+            array = array.cast(pa.large_binary())
+        return pc.binary_length(array)
 
     parquet_file = pq.ParquetFile(path)
     try:
         schema = parquet_file.schema_arrow
+        n_rows = int(parquet_file.metadata.num_rows)
     finally:
         parquet_file.close()
     nested = [field.name for field in schema if pa.types.is_nested(field.type)]
@@ -1938,22 +1987,27 @@ def _parquet_text_bytes(path: Path, limit: int) -> int:
             + ", ".join(str(name) for name in nested[:5])
             + ". Flatten them or export the table as CSV."
         )
-    text_columns = [field.name for field in schema if _is_text(field.type)]
-    if not text_columns:
-        return 0
+    text_fields = [field for field in schema if _holds_text(field.type)]
+    fixed_width = [field for field in text_fields if pa.types.is_fixed_size_binary(_value_type(field.type))]
+    text_columns = [field.name for field in text_fields if _read_as_dictionary(field.type)]
+    unsupported = [field for field in text_fields if field not in fixed_width and field.name not in text_columns]
+    if unsupported:
+        raise UserInputError(
+            "Parquet columns of these types are not supported: "
+            + ", ".join(f"{field.name} ({field.type})" for field in unsupported[:5])
+            + ". Store them as plain text columns or export the table as CSV."
+        )
+    # Each cell of a fixed-size binary column decodes to its full width.
+    total = sum(n_rows * int(_value_type(field.type).byte_width) for field in fixed_width)
+    if total > limit or not text_columns:
+        return total
     reader = pq.ParquetFile(path, read_dictionary=text_columns)
-    total = 0
     try:
         for row_group in range(reader.metadata.num_row_groups):
             table = reader.read_row_group(row_group, columns=text_columns)
             for column in table.columns:
                 for chunk in column.chunks:
-                    if pa.types.is_dictionary(chunk.type):
-                        lengths = pc.binary_length(chunk.dictionary)
-                        size = pc.sum(pc.take(lengths, chunk.indices)).as_py()
-                    else:
-                        size = pc.sum(pc.binary_length(chunk)).as_py()
-                    total += int(size or 0)
+                    total += int(pc.sum(_value_lengths(chunk)).as_py() or 0)
                     if total > limit:
                         return total
     finally:
@@ -1992,7 +2046,66 @@ def _dataframe_text_chars(dataframe: pd.DataFrame, limit: int) -> int:
     return total
 
 
-_XML_PROLOG_BYTES = 4096
+# Most members an .xlsx container may hold: a workbook has a few dozen parts, one with many sheets
+# or images a few thousand.
+_MAX_XLSX_MEMBERS = 10_000
+_XML_READ_CHUNK_BYTES = 64 * 1024
+# How an XML part can start in the encodings XML parsers detect: a UTF-8 or UTF-16 byte order
+# mark, UTF-16 text without one, or (after optional whitespace) "<".
+_XML_PART_SIGNATURES = (b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff", b"\x00<")
+
+
+class _XmlRootReached(Exception):
+    """Ends the prolog scan of an XML part at its root element."""
+
+
+def _is_xml_part(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
+    """True when a workbook member starts like an XML document, whatever its name.
+
+    openpyxl finds the shared strings through the content types and the sheets through the
+    workbook relationships, which may give parts any extension, so parts are recognised by their
+    content. Images and other binary members never start like XML.
+    """
+
+    with archive.open(info) as handle:
+        head = handle.read(1024)
+    if not head:
+        return False
+    stripped = head.lstrip(b" \t\r\n")
+    return not stripped or stripped.startswith(b"<") or head.startswith(_XML_PART_SIGNATURES)
+
+
+def _xml_part_declares_document_type(handle: Any) -> bool:
+    """True when an XML part declares a document type or an entity before its root element.
+
+    The part is parsed up to its root element in whatever encoding it declares, so a declaration
+    after a long comment or in UTF-16 text is found too; a part that cannot be parsed that far
+    raises the parser's error.
+    """
+
+    from xml.parsers import expat
+
+    parser = expat.ParserCreate()
+    declared = False
+
+    def _declaration(*_args: Any) -> None:
+        nonlocal declared
+        declared = True
+        raise _XmlRootReached
+
+    def _root(*_args: Any) -> None:
+        raise _XmlRootReached
+
+    parser.StartDoctypeDeclHandler = _declaration
+    parser.EntityDeclHandler = _declaration
+    parser.StartElementHandler = _root
+    try:
+        while chunk := handle.read(_XML_READ_CHUNK_BYTES):
+            parser.Parse(chunk, False)
+        parser.Parse(b"", True)
+    except _XmlRootReached:
+        pass
+    return declared
 
 
 def _iter_xml_elements(handle: Any, wanted: frozenset[str]) -> Any:
@@ -2024,19 +2137,28 @@ def _xlsx_text_chars(path: Path, limit: int) -> int:
     """Characters that the shared-string cells of a workbook decode to, counted until the count passes ``limit``.
 
     A shared string is stored once but every cell that uses it becomes its own text value
-    when the sheet is read, so the declared part sizes do not bound the parsed text.
+    when the sheet is read, so the declared part sizes do not bound the parsed text. Parts are
+    recognised by their content, not their names: every XML part is checked for document type
+    declarations and scanned for shared-string cells. The declared sizes of all parts are
+    capped before this runs, and the zip reader never inflates a part past its declared size.
     """
 
+    import xml.etree.ElementTree as ElementTree
     from array import array
 
     shared_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
     with zipfile.ZipFile(path) as archive:
-        names = [info.filename for info in archive.infolist() if info.filename.lower().endswith(".xml")]
+        members = [info for info in archive.infolist() if not info.is_dir()]
+        if len(members) > _MAX_XLSX_MEMBERS:
+            raise UserInputError(
+                f"Failed to read Excel file: the workbook holds {len(members):,} parts; SurvStudio reads workbooks "
+                f"with at most {_MAX_XLSX_MEMBERS:,}. Export the sheet as CSV instead."
+            )
+        names = [info.filename for info in members if _is_xml_part(archive, info)]
         for name in names:
             with archive.open(name) as handle:
-                prolog = handle.read(_XML_PROLOG_BYTES).upper()
-            if b"<!DOCTYPE" in prolog or b"<!ENTITY" in prolog:
-                raise UserInputError("Failed to read Excel file: the workbook contains XML declarations that are not allowed.")
+                if _xml_part_declares_document_type(handle):
+                    raise UserInputError("Failed to read Excel file: the workbook contains XML declarations that are not allowed.")
         shared_parts: list[str] = []
         if "[Content_Types].xml" in names:
             # openpyxl locates the shared strings through the content types.
@@ -2060,18 +2182,23 @@ def _xlsx_text_chars(path: Path, limit: int) -> int:
             if name in (shared_name, "[Content_Types].xml"):
                 continue
             with archive.open(name) as handle:
-                for cell in _iter_xml_elements(handle, frozenset({"c"})):
-                    if cell.get("t") != "s":
-                        continue
-                    value = next((child.text for child in cell if child.tag.rpartition("}")[2] == "v"), None)
-                    try:
-                        index = int(str(value).strip())
-                    except ValueError:
-                        continue
-                    if 0 <= index < len(lengths):
-                        total += lengths[index]
-                        if total > limit:
-                            return total
+                try:
+                    for cell in _iter_xml_elements(handle, frozenset({"c"})):
+                        if cell.get("t") != "s":
+                            continue
+                        value = next((child.text for child in cell if child.tag.rpartition("}")[2] == "v"), None)
+                        try:
+                            index = int(str(value).strip())
+                        except ValueError:
+                            continue
+                        if 0 <= index < len(lengths):
+                            total += lengths[index]
+                            if total > limit:
+                                return total
+                except ElementTree.ParseError:
+                    # A part that is not well-formed (legacy VML drawings can be) is read no further by
+                    # the workbook reader either, so the cells before the error are all it can decode.
+                    continue
     return total
 
 
@@ -2137,7 +2264,9 @@ def _guard_compressed_upload(path: Path, filename: str) -> None:
 
     suffix = Path(filename).suffix.lower()
     container = _excel_container(path) if suffix in {".xlsx", ".xls"} else None
-    if suffix == ".xls" and container == "xls":
+    # The reader picks its engine from the content, so the checks follow the content as well: a
+    # legacy workbook named .xlsx is read as .xls, and a zip workbook named .xls as .xlsx.
+    if container == "xls":
         try:
             text_chars = _xls_text_chars(path, _MAX_UPLOAD_TEXT_CHARS)
         except MemoryError:
@@ -2148,7 +2277,6 @@ def _guard_compressed_upload(path: Path, filename: str) -> None:
         if text_chars > _MAX_UPLOAD_TEXT_CHARS:
             raise _text_too_large(text_chars)
         return
-    # A workbook named .xls that is really a zip is read as .xlsx, so it gets the same checks.
     if suffix == ".xlsx" or container == "zip":
         try:
             with zipfile.ZipFile(path) as archive:
