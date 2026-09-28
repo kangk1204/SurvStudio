@@ -392,7 +392,8 @@ def test_a_locked_marker_model_refuses_an_external_numeric_covariate_coded_as_te
     external["age"] = external["age"].astype(object)
     external.loc[:39, "age"] = "."  # a SAS-style missing code for 40 patients
 
-    with pytest.raises(UserInputError, match=r'"age" was numeric when the model was fitted, but 40 of its values'):
+    # Validation checks the clinical covariates before the encoder does, with a message about the external data.
+    with pytest.raises(UserInputError, match=r'Clinical covariate "age" holds 40 value\(s\) in the external dataset that are not numbers'):
         validate_locked_recipe(external, result["locked_recipe"], n_bootstrap=0)
 
 
