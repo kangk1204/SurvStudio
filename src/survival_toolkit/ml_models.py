@@ -99,6 +99,17 @@ _TREE_N_JOBS = -1
 # Gradient boosting relies on shallow base learners; "auto" (None) resolves to
 # this depth instead of fully grown trees.
 _GBS_DEFAULT_MAX_DEPTH = 3
+# Seeds derived as seed + offset wrap into the range numpy and scikit-learn accept.
+_SEED_MODULUS = 2**32
+
+
+def _derived_seed(base_seed: int, offset: int = 0) -> int:
+    """``base_seed + offset`` wrapped into [0, 2**32), as in the deep-learning models.
+
+    Equal to the plain sum whenever it does not overflow, so ordinary seeds keep their fold
+    assignments and training seeds.
+    """
+    return int((int(base_seed) + int(offset)) % _SEED_MODULUS)
 
 
 def _resolve_gbs_max_depth(max_depth: int | None) -> int:
@@ -321,6 +332,17 @@ def _sksurv_c_index(
     )
 
 
+def _has_comparable_pair(times: Any, events: Any) -> bool:
+    """Whether Harrell's C-index is defined on these patients at all, for any model.
+
+    A pair is comparable when an event is followed by a longer follow-up (or by a censoring
+    at the same time); without one, every model's C-index is undefined.
+    """
+    time_values = np.asarray(times, dtype=float).reshape(-1)
+    event_values = np.asarray(events, dtype=float).reshape(-1)
+    return _harrell_c_index(time_values, event_values, np.zeros(time_values.size, dtype=float)) is not None
+
+
 _PERMUTATION_IMPORTANCE_MAX_ROWS = 300
 PERMUTATION_IMPORTANCE_METHOD = (
     "Permutation importance: mean drop in Harrell's C-index on the evaluation rows when a raw feature is "
@@ -444,10 +466,14 @@ def _scientific_summary_ml(
     n_fit_events: int | None = None,
     extra_strengths: Sequence[str] | None = None,
     extra_cautions: Sequence[str] | None = None,
+    counts_are_fold_means: bool = False,
 ) -> dict[str, Any]:
     """Generate an insight-board payload (headline, strengths, cautions,
     next_steps, metrics, status) following the same shape as
     ``_km_scientific_summary`` in *analysis.py*.
+
+    With ``counts_are_fold_means`` the fitting and evaluation counts are the mean sizes of
+    the cross-validation training and test folds, and the text says so.
     """
     metric_name = _metric_name_for_evaluation(evaluation_mode)
     eval_n = int(n_evaluation_patients if n_evaluation_patients is not None else n_patients)
@@ -455,10 +481,17 @@ def _scientific_summary_ml(
     fit_n = int(n_fit_patients if n_fit_patients is not None else n_patients)
     fit_events = int(n_fit_events if n_fit_events is not None else n_events)
     feature_text = "an unknown number of" if n_features is None else str(int(n_features))
-    strengths: list[str] = [
-        f"{model_name} was trained with {feature_text} feature(s) on {fit_n} patients ({fit_events} events).",
-        f"{metric_name} was estimated on {eval_n} patients ({eval_events} events).",
-    ]
+    if counts_are_fold_means:
+        strengths: list[str] = [
+            f"{model_name} was trained with {feature_text} feature(s) on training folds of about {fit_n} patients "
+            f"({fit_events} events) each.",
+            f"{metric_name} was estimated on test folds of about {eval_n} patients ({eval_events} events) each.",
+        ]
+    else:
+        strengths = [
+            f"{model_name} was trained with {feature_text} feature(s) on {fit_n} patients ({fit_events} events).",
+            f"{metric_name} was estimated on {eval_n} patients ({eval_events} events).",
+        ]
     cautions: list[str] = []
     next_steps: list[str] = []
 
@@ -535,8 +568,8 @@ def _scientific_summary_ml(
         "metrics": [
             {"label": "Patients", "value": n_patients},
             {"label": "Events", "value": n_events},
-            {"label": "Training patients", "value": fit_n},
-            {"label": "Training events", "value": fit_events},
+            {"label": "Mean training-fold patients" if counts_are_fold_means else "Training patients", "value": fit_n},
+            {"label": "Mean training-fold events" if counts_are_fold_means else "Training events", "value": fit_events},
             {"label": "Features", "value": n_features},
             {"label": metric_name, "value": _safe_float(c_index)},
             {"label": "Evaluation mode", "value": evaluation_mode},
@@ -3027,6 +3060,12 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             table_notes.append(
                 "This comparison is labeled repeated-CV incomplete because one or more apparent-fallback or failed folds were excluded from the aggregate."
             )
+        n_skipped_folds = int(result.get("n_skipped_folds") or 0)
+        if n_skipped_folds:
+            table_notes.append(
+                f"{n_skipped_folds} test fold(s) had no comparable pair of patients, so no model has a C-index there; "
+                "they were skipped for every model alike, and Evaluations, n counts the folds that were scored."
+            )
         if include_provenance:
             table_notes.append(
                 "Training, split, and monitor seed columns record the exact repeated-CV partitioning used for replay under the same model settings."
@@ -3212,27 +3251,37 @@ def cross_validate_survival_models(
         )
 
     model_specs = _ml_model_specs(n_estimators=n_estimators, max_depth=max_depth, learning_rate=learning_rate)
-    errors: list[dict[str, Any]] = []
+    # Models that could not run at all are listed apart from fold-level failures.
+    unavailable_errors: list[dict[str, Any]] = []
     if not SKSURV_AVAILABLE:
-        errors = [
+        unavailable_errors = [
             {"model": "LASSO-Cox", "error": "scikit-survival is not installed."},
             {"model": "Random Survival Forest", "error": "scikit-survival is not installed."},
             {"model": "Gradient Boosted Survival", "error": "scikit-survival is not installed."},
         ]
+    errors: list[dict[str, Any]] = []
     fold_results: list[dict[str, Any]] = []
     design_splits: list[tuple[np.ndarray, np.ndarray]] = []
+    skipped_folds: list[dict[str, int]] = []
     unseen_fold_rows = 0
 
     for repeat_idx in range(cv_repeats):
+        repeat_seed = _derived_seed(random_state, repeat_idx)
         splitter = StratifiedKFold(
             n_splits=cv_folds,
             shuffle=True,
-            random_state=random_state + repeat_idx,
+            random_state=repeat_seed,
         )
         for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(dev_frame, events), start=1):
             design_splits.append((dev_positions[train_idx], dev_positions[test_idx]))
             train_frame = dev_frame.iloc[train_idx].reset_index(drop=True)
             test_frame = dev_frame.iloc[test_idx].reset_index(drop=True)
+            if not _has_comparable_pair(test_frame[time_column], test_frame[event_column]):
+                # No event in this test fold is followed by a longer follow-up, so the C-index is
+                # undefined for every model alike: the fold is skipped for all of them instead of
+                # leaving every model incomplete.
+                skipped_folds.append({"repeat": repeat_idx + 1, "fold": fold_idx})
+                continue
             unseen_fold_rows += _unseen_category_rows(train_frame, test_frame, resolved_categorical)
             for model_name, fit_fn, extra_kwargs in model_specs:
                 raise_if_cancelled()
@@ -3244,9 +3293,18 @@ def cross_validate_survival_models(
                         event_column=event_column,
                         features=features,
                         categorical_features=categorical_features,
-                        random_state=random_state + repeat_idx,
+                        random_state=repeat_seed,
                         **extra_kwargs,
                     )
+                    if result["c_index"] is None:
+                        # The fold has comparable pairs, so only this model's scores are at fault.
+                        errors.append({
+                            "model": model_name,
+                            "repeat": repeat_idx + 1,
+                            "fold": fold_idx,
+                            "error": "The C-index could not be computed on this test fold because the model's risk "
+                            "scores were not all finite.",
+                        })
                     fold_results.append({
                         "model": model_name,
                         "repeat": repeat_idx + 1,
@@ -3273,6 +3331,14 @@ def cross_validate_survival_models(
                         "error": _failure_message(exc),
                     })
 
+    n_total_folds = cv_folds * cv_repeats
+    n_scored_folds = n_total_folds - len(skipped_folds)
+    if n_scored_folds == 0:
+        raise ValueError(
+            "No cross-validation test fold had a comparable pair of patients (an event followed by a longer "
+            "follow-up), so the C-index is undefined in every fold. Use fewer folds or a cohort with more events."
+        )
+
     locked_results: dict[str, dict[str, Any]] = {}
     if use_locked_test and locked_test_frame is not None:
         design_splits.append((dev_positions, test_positions))
@@ -3298,9 +3364,10 @@ def cross_validate_survival_models(
     for model_name, _, _ in model_specs:
         model_rows = [row for row in fold_results if row["model"] == model_name and row["c_index"] is not None]
         n_failures = sum(1 for err in errors if err["model"] == model_name)
-        expected_evaluations = cv_folds * cv_repeats
         summary = _summarize_repeated_cv_rows(model_rows) if model_rows else None
-        incomplete = (len(model_rows) + n_failures) < expected_evaluations or n_failures > 0
+        # Complete means scored on every fold that had a comparable pair; folds skipped for
+        # every model alike do not make a model incomplete.
+        incomplete = len(model_rows) < n_scored_folds or n_failures > 0
         if summary is None and n_failures == 0:
             continue
         active_counts = [float(row["n_active_features"]) for row in model_rows if row.get("n_active_features") is not None]
@@ -3341,6 +3408,8 @@ def cross_validate_survival_models(
     mean_train_events = int(round(np.mean([row["train_events"] for row in fold_results]))) if fold_results else n_events
     mean_test_events = int(round(np.mean([row["test_events"] for row in fold_results]))) if fold_results else n_events
     best = comparison[0]
+    # Only fold-level failures make the cross-validation incomplete; models that could not run
+    # at all are reported apart.
     aggregate_mode = (
         "repeated_cv_incomplete"
         if errors or any(str(row.get("evaluation_mode")) == "repeated_cv_incomplete" for row in comparison)
@@ -3374,6 +3443,18 @@ def cross_validate_survival_models(
         if (locked_results.get(model_name) or {}).get("error") is not None
     ]
     extra_cautions: list[str] = [f"{len(errors)} fold-level fit(s) failed."] if errors else []
+    if unavailable_errors:
+        extra_cautions.append(
+            f"{len(unavailable_errors)} model(s) were not evaluated because scikit-survival is not installed ("
+            + ", ".join(str(error["model"]) for error in unavailable_errors)
+            + ")."
+        )
+    if skipped_folds:
+        extra_cautions.append(
+            f"{len(skipped_folds)} of {n_total_folds} cross-validation test folds had no comparable pair of patients "
+            "(no event followed by a longer follow-up), so the C-index is undefined there for every model; those folds "
+            f"were skipped for all models alike, and the cross-validated means use the other {n_scored_folds} folds."
+        )
     if locked_errors:
         failed_names = ", ".join(error["model"] for error in locked_errors)
         extra_cautions.append(
@@ -3398,6 +3479,7 @@ def cross_validate_survival_models(
         n_fit_events=mean_train_events,
         extra_strengths=extra_strengths,
         extra_cautions=extra_cautions or None,
+        counts_are_fold_means=True,
     )
     scientific_summary = _augment_scientific_summary_with_brier(
         scientific_summary,
@@ -3432,7 +3514,7 @@ def cross_validate_survival_models(
         if caution:
             scientific_summary["cautions"].append(caution)
 
-    all_errors = [*errors, *locked_errors]
+    all_errors = [*unavailable_errors, *errors, *locked_errors]
     fingerprint_kind = "repeated_cv+locked_test" if use_locked_test else "repeated_cv"
     result = {
         "comparison_table": comparison,
@@ -3440,14 +3522,21 @@ def cross_validate_survival_models(
         "repeat_results": [row["repeat_results"] for row in comparison],
         "errors": all_errors,
         "ranking_complete": not all_errors and all(row.get("c_index") is not None for row in comparison),
-        # Models left out of (or incomplete in) the cross-validation ranking; a model whose
-        # locked-test refit failed is still ranked and appears only in ``errors``.
-        "excluded_models": sorted({str(error["model"]) for error in errors}),
+        # Models left out of (or incomplete in) the cross-validation ranking: models that could
+        # not run, failed on a fold, or lack a fold the other models were scored on. A model
+        # whose locked-test refit failed is still ranked and appears only in ``errors``.
+        "excluded_models": sorted(
+            {str(error["model"]) for error in [*unavailable_errors, *errors]}
+            | {str(row["model"]) for row in comparison if row.get("evaluation_mode") == "repeated_cv_incomplete"}
+        ),
         "n_patients": n_patients,
         "n_events": n_events,
         "evaluation_mode": aggregate_mode,
         "cv_folds": cv_folds,
         "cv_repeats": cv_repeats,
+        # Test folds without a comparable pair of patients, skipped for every model alike.
+        "n_skipped_folds": len(skipped_folds),
+        "skipped_folds": skipped_folds,
         "split_seed": int(random_state),
         "locked_test_fraction": float(locked_test_fraction) if use_locked_test else None,
         "n_development_patients": int(dev_frame.shape[0]),
