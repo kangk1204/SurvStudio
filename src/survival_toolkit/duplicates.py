@@ -12,9 +12,9 @@ Two checks, on the patients the evaluation uses:
 * near-identical profiles (panels of at least ``MIN_MARKERS`` markers): each marker is z-scored over the
   patients, the ``TOP_MARKERS`` most variable ones are kept, and patients are compared by Pearson correlation.
   A pair is flagged when the two are each other's best match, correlate at least ``MIN_R``, and stand at least
-  ``MIN_GAP`` above either one's next-best match. On public breast and lung cancer cohorts this caught 14 of 19
-  confirmed repeated tumours and flagged no pair of different patients; the misses were tumours profiled three
-  times or weakly measured.
+  ``MIN_GAP`` above either one's next-best match. On 17 public breast and lung cancer cohorts (5,955 patients),
+  this caught 15 of 21 confirmed repeated tumours and flagged no pair of different patients. The misses were
+  tumours profiled three times or weakly measured.
 """
 
 from __future__ import annotations
