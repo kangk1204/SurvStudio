@@ -196,6 +196,37 @@ def test_training_splits_keep_categorical_text_even_when_their_levels_look_numer
     assert seen and all("x" in categorical for categorical in seen)
 
 
+def test_results_name_the_categorical_features_actually_used() -> None:
+    rng = np.random.default_rng(8)
+    n = 90
+    df = pd.DataFrame({
+        "os_months": rng.exponential(20, n) + 0.1,
+        "os_event": rng.integers(0, 2, n),
+        "age": rng.normal(60, 10, n),
+        "sex": rng.choice(["F", "M"], n),
+        "grade": rng.choice(["1", "2", "3"], n).astype(object),
+        "codes": rng.choice(["1", "2", "3"], n).astype(object),
+        "cat": pd.Categorical(rng.choice([1, 2], n)),
+        "score_text": [f"{value:.2f}" for value in rng.normal(size=n)],
+    })
+    df.loc[0, "grade"] = "unknown"
+    features = ["age", "sex", "grade", "codes", "cat", "score_text"]
+    expected = ["sex", "grade", "codes", "cat"]  # declared ("codes"), inferred text, and a pandas Categorical
+    common = dict(categorical_features=["codes"], epochs=1, hidden_layers=[4])
+    assert dm.train_deepsurv(df, "os_months", "os_event", features, batch_size=16, **common)["categorical_features"] == expected
+    for strategy in ("holdout", "repeated_cv"):
+        compared = dm.compare_deep_survival_models(
+            df, "os_months", "os_event", features, included_models=["DeepSurv"], evaluation_strategy=strategy,
+            cv_folds=2, cv_repeats=1, **common,
+        )
+        assert compared["categorical_features"] == expected
+    single = dm.evaluate_single_deep_survival_model(
+        "deepsurv", df=df, time_column="os_months", event_column="os_event", features=features,
+        evaluation_strategy="repeated_cv", cv_folds=2, cv_repeats=1, **common,
+    )
+    assert single["categorical_features"] == expected
+
+
 def test_duplicate_feature_names_get_a_clear_message() -> None:
     df = make_example_dataset(seed=4, n_patients=60)
     with pytest.raises(UserInputError, match="listed more than once: age"):

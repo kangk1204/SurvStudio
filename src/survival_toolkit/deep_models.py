@@ -641,6 +641,8 @@ def _transform_deep_frame(
         "event_tensor": torch.from_numpy(frame[event_column].values.astype(np.float32)),
         "feature_names": list(encoder["feature_names"]),
         "scaler_params": dict(encoder["scaler_params"]),
+        # Input columns the encoder one-hot codes (declared plus auto-coded), for reporting.
+        "categorical_features": list(encoder.get("categorical_features", [])),
         "categorical_feature_indices": list(encoder.get("categorical_feature_indices", [])),
         "numeric_feature_indices": list(encoder.get("numeric_feature_indices", [])),
         "n_samples": int(x_array.shape[0]),
@@ -736,6 +738,7 @@ def _prepare_deep_split_data(
     feature_meta = {
         "feature_names": list(train_data["feature_names"]),
         "scaler_params": dict(train_data["scaler_params"]),
+        "categorical_features": list(train_data.get("categorical_features", [])),
         "categorical_feature_indices": list(train_data.get("categorical_feature_indices", [])),
         "numeric_feature_indices": list(train_data.get("numeric_feature_indices", [])),
     }
@@ -2271,6 +2274,11 @@ def _deep_training_fields(
         "training_events": int(context.e_all[context.train_idx].sum().item()),
         "evaluation_events": int(context.e_all[context.eval_idx].sum().item()),
         "n_features": context.data["n_features"],
+        # Input columns that were one-hot coded (declared plus auto-coded); None for
+        # caller-prepared tensors that do not record them.
+        "categorical_features": (
+            None if context.data.get("categorical_features") is None else list(context.data["categorical_features"])
+        ),
     }
 
 
@@ -2619,6 +2627,8 @@ def _deep_holdout_comparison(
             [(int(shared_eval_split.get("unseen_category_rows", 0) or 0) if holdout_split else 0, "evaluation")]
         ),
     )
+    # The features one-hot coded after the whole-cohort typing decision (declared plus auto-coded).
+    result["categorical_features"] = list(shared_data.get("categorical_features") or [])
     result["test_predictions"] = _deep_prediction_block(shared_data, shared_eval_split, holdout_risks)
     return result
 
@@ -2874,6 +2884,8 @@ def _deep_repeated_cv_comparison(
             ]
         ),
     )
+    # The features one-hot coded after the whole-cohort typing decision (declared plus auto-coded).
+    result["categorical_features"] = list(categorical_columns)
     result["locked_test_predictions"] = locked_predictions
     return result
 
@@ -3791,6 +3803,7 @@ def evaluate_single_deep_survival_model(
             "monitor_seeds": row.get("monitor_seeds", []),
             "repeat_results": row.get("repeat_results", []),
             "parallel_execution_note": compare_result.get("parallel_execution_note"),
+            "categorical_features": compare_result.get("categorical_features"),
             "torch_num_threads": compare_result.get("torch_num_threads"),
             "comparison_table": [dict(row)],
             "fold_results": [
