@@ -287,7 +287,7 @@ def test_marker_evaluation_flags_a_patient_profiled_twice_by_patient_id(tmp_path
     duplicates = payload["analysis"]["duplicates"]
     ids = frame["patient_id"].tolist()
     assert duplicates["checked"] and [(pair["a"], pair["b"]) for pair in duplicates["pairs"]] == [(ids[15], ids[200])]
-    assert "flagged 1 pair(s)" in payload["report"]["results"]
+    assert "flagged 1 pair of patients with near-identical profiles" in payload["report"]["results"]
     # Two markers in the table: too few to compare profiles, so nothing is claimed.
     small = client.post("/api/marker-evaluation", json=_marker_request(dataset["dataset_id"])).json()["analysis"]["duplicates"]
     assert not small["checked"] and small["pairs"] == []
