@@ -36,14 +36,18 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Bio-Informatics",
   "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
+# The app imports pydantic (v2 API: ConfigDict, field_validator, model_validator) and starlette
+# directly, so both are declared rather than left to fastapi, which also accepts pydantic 1.
 dependencies = [
   "fastapi>=0.115.0",
   "jinja2>=3.1.4",
   "numpy>=1.26.0",
   "pandas>=2.2.2",
   "plotly>=6.0.0",
+  "pydantic>=2.0",
   "python-multipart>=0.0.9",
   "scipy>=1.13.0",
+  "starlette>=0.37.2",
   "statsmodels>=0.14.4",
   "uvicorn[standard]>=0.32.0",
 ]

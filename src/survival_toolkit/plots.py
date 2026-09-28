@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 
+from survival_toolkit.reporting import signature_is_clinical_only
+
 PAPER = "#ffffff"
 INK = "#1a2332"
 ACCENT = "#c94e33"
@@ -54,7 +56,7 @@ def escape_plotly_template_text(value: Any) -> str:
 
 
 def _format_p_value(value: Any) -> str:
-    if not isinstance(value, (int, float)) or not np.isfinite(float(value)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(float(value)):
         return "NA"
     p_value = float(value)
     if p_value < 0.0:
@@ -64,10 +66,14 @@ def _format_p_value(value: Any) -> str:
     if p_value < 0.001:
         return "<0.001"
     text = f"{p_value:.3f}"
-    # Never let rounding push a p-value across the conventional 0.05 threshold
-    # (for example 0.0496 -> "0.050").
-    if p_value < 0.05 <= float(text):
-        text = f"{p_value:.4f}"
+    # Never let rounding push a p-value across the conventional 0.05 threshold: show more
+    # digits until the printed value stays below it (0.0496 -> "0.0496", 0.04996 -> "0.04996").
+    digits = 3
+    while p_value < 0.05 <= float(text):
+        digits += 1
+        if digits > 17:
+            return "<0.05"
+        text = f"{p_value:.{digits}f}"
     return text
 
 
@@ -213,6 +219,29 @@ def _log_axis_ticks(values: list[Any]) -> dict[str, Any]:
     return {"tickmode": "array", "tickvals": ticks, "ticktext": [f"{tick:g}" for tick in ticks]}
 
 
+def _as_finite_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _finite_pairs(x_values: Any, y_values: Any) -> tuple[list[float], list[float]]:
+    """The points whose x and y are both finite numbers, kept together so a gap in one list cannot
+    shift the other."""
+    xs: list[float] = []
+    ys: list[float] = []
+    for x_value, y_value in zip(x_values or [], y_values or []):
+        x_number, y_number = _as_finite_float(x_value), _as_finite_float(y_value)
+        if x_number is not None and y_number is not None:
+            xs.append(x_number)
+            ys.append(y_number)
+    return xs, ys
+
+
 def _diagnostic_residual_axis_range(
     residual_values: list[float],
     trend_values: list[float],
@@ -242,13 +271,32 @@ def _diagnostic_residual_axis_range(
     return candidate_range
 
 
+_KM_RESERVED_COLORS = {"high": ACCENT, "high risk": ACCENT, "low": SLATE, "low risk": SLATE}
+
+
 def _km_group_color(label: Any, fallback_index: int) -> str:
     normalized = str(label or "").strip().lower()
-    if normalized in {"high", "high risk"}:
-        return ACCENT
-    if normalized in {"low", "low risk"}:
-        return SLATE
-    return PALETTE[fallback_index % len(PALETTE)]
+    return _KM_RESERVED_COLORS.get(normalized, PALETTE[fallback_index % len(PALETTE)])
+
+
+def _km_group_colors(labels: list[Any]) -> list[str]:
+    """One colour per group: red for High and blue for Low whatever their order, and the other groups
+    cycle through the palette without those two colours when a High or Low group is on the plot (so a
+    three-group Intermediate curve is not drawn in High's red)."""
+    normalized = [str(label or "").strip().lower() for label in labels]
+    reserved = {_KM_RESERVED_COLORS[name] for name in normalized if name in _KM_RESERVED_COLORS}
+    if not reserved:
+        return [_km_group_color(label, index) for index, label in enumerate(labels)]
+    others = [color for color in PALETTE if color not in reserved]
+    colors = []
+    next_other = 0
+    for name in normalized:
+        if name in _KM_RESERVED_COLORS:
+            colors.append(_KM_RESERVED_COLORS[name])
+        else:
+            colors.append(others[next_other % len(others)])
+            next_other += 1
+    return colors
 
 
 def _km_group_dash(label: Any, fallback_index: int) -> str:
@@ -264,11 +312,14 @@ def _km_group_dash(label: Any, fallback_index: int) -> str:
 def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", show_confidence_bands: bool = True) -> dict[str, Any]:
     fig = go.Figure()
     confidence_level = float(km_result.get("confidence_level", 0.95) or 0.95)
-    confidence_percent = max(1, round(confidence_level * 100))
+    # :g keeps a 97.5% band from being printed as 98%.
+    confidence_percent = f"{confidence_level * 100:g}"
     unit_template = escape_plotly_template_text(time_unit_label)
+    curve_colors = _km_group_colors([curve["group"] for curve in km_result["curves"]])
+    color_by_group = {str(curve["group"]): color for curve, color in zip(km_result["curves"], curve_colors)}
     for idx, curve in enumerate(km_result["curves"]):
         label = curve["group"]
-        color = _km_group_color(label, idx)
+        color = curve_colors[idx]
         display_label = escape_plotly_text(label)
         template_label = escape_plotly_template_text(label)
         if show_confidence_bands:
@@ -354,8 +405,9 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
             text="<b>Number at risk</b>", xref="paper", yref="paper", x=0, y=0, xanchor="right", yanchor="top",
             xshift=-label_shift, yshift=-(risk_top - row_height), showarrow=False, font={"size": 12, "color": INK}, align="right",
         )
+        row_colors = _km_group_colors([row["group"] for row in risk_rows])
         for index, (row, label) in enumerate(zip(risk_rows, labels, strict=True)):
-            color = _km_group_color(row["group"], index)
+            color = color_by_group.get(str(row["group"]), row_colors[index])
             shift = -(risk_top + row_height * index)
             fig.add_annotation(
                 text=label, xref="paper", yref="paper", x=0, y=0, xanchor="right", yanchor="top",
@@ -550,10 +602,8 @@ def build_cox_diagnostics_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
     for panel_index, panel in enumerate(panels):
         row = (panel_index // cols) + 1
         col = (panel_index % cols) + 1
-        x_values = [float(value) for value in panel.get("log_time") or [] if value is not None]
-        y_values = [float(value) for value in panel.get("residual") or [] if value is not None]
-        trend_x = [float(value) for value in panel.get("trend_log_time") or [] if value is not None]
-        trend_y = [float(value) for value in panel.get("trend_residual") or [] if value is not None]
+        x_values, y_values = _finite_pairs(panel.get("log_time"), panel.get("residual"))
+        trend_x, trend_y = _finite_pairs(panel.get("trend_log_time"), panel.get("trend_residual"))
         rho = panel.get("schoenfeld_rho")
         p_value = panel.get("p_value")
         marker_color = ACCENT if isinstance(p_value, (int, float)) and np.isfinite(float(p_value)) and float(p_value) < 0.05 else SLATE
@@ -670,10 +720,8 @@ def build_cox_martingale_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
     for panel_index, panel in enumerate(panels):
         row = (panel_index // cols) + 1
         col = (panel_index % cols) + 1
-        x_values = [float(value) for value in panel.get("value") or [] if value is not None]
-        y_values = [float(value) for value in panel.get("residual") or [] if value is not None]
-        trend_x = [float(value) for value in panel.get("trend_value") or [] if value is not None]
-        trend_y = [float(value) for value in panel.get("trend_residual") or [] if value is not None]
+        x_values, y_values = _finite_pairs(panel.get("value"), panel.get("residual"))
+        trend_x, trend_y = _finite_pairs(panel.get("trend_value"), panel.get("trend_residual"))
 
         fig.add_trace(
             go.Scatter(
@@ -757,7 +805,8 @@ def build_cutpoint_scan_figure(result: dict[str, Any], variable_name: str = "Var
 
     cutpoints = [row["cutpoint"] for row in scan]
     statistics = [row["statistic"] for row in scan]
-    optimal = result.get("optimal_cutpoint")
+    # find_optimal_cutpoint names it optimal_cutpoint; the "Make groups" derive summary names it cutoff.
+    optimal = result.get("optimal_cutpoint", result.get("cutoff"))
 
     fig = go.Figure()
     fig.add_trace(
@@ -1256,74 +1305,6 @@ def build_time_dependent_importance_figure(
     return figure_to_json(fig)
 
 
-# ── XAI: Calibration plot ─────────────────────────────────────
-
-
-def build_calibration_figure(calibration_data: dict[str, Any]) -> dict[str, Any]:
-    """Scatter plot of predicted vs observed survival probability.
-
-    Parameters
-    ----------
-    calibration_data : dict
-        Output of ``compute_calibration_data`` with keys
-        ``predicted`` and ``observed`` (parallel lists of floats).
-    """
-    predicted: list[float] = calibration_data.get("predicted", [])
-    observed: list[float] = calibration_data.get("observed", [])
-
-    if not predicted or not observed:
-        return figure_to_json(go.Figure())
-
-    fig = go.Figure()
-
-    # 45-degree perfect calibration reference line
-    fig.add_trace(
-        go.Scatter(
-            x=[0, 1],
-            y=[0, 1],
-            mode="lines",
-            line={"dash": "dash", "width": 1.5, "color": INK},
-            opacity=0.5,
-            showlegend=False,
-            name="Perfect calibration",
-            hoverinfo="skip",
-        )
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=predicted,
-            y=observed,
-            mode="markers",
-            marker={"size": 8, "color": SLATE, "line": {"width": 1, "color": INK}},
-            name="Calibration",
-            hovertemplate="Predicted: %{x:.3f}<br>Observed: %{y:.3f}<extra></extra>",
-        )
-    )
-
-    fig.update_layout(
-        **_COMMON_LAYOUT,
-        margin={"l": 70, "r": 30, "t": 80, "b": 70},
-        title={
-            "text": "Calibration Plot",
-            "font": {"family": "Source Serif 4, serif", "size": 22, "color": INK},
-            "x": 0.02,
-        },
-        height=480,
-    )
-    fig.update_xaxes(
-        title="Predicted survival probability",
-        range=[0, 1.02],
-        **_COMMON_AXES,
-    )
-    fig.update_yaxes(
-        title="Observed survival probability",
-        range=[0, 1.02],
-        **_COMMON_AXES,
-    )
-    return figure_to_json(fig)
-
-
 # ── XAI: Partial Dependence Plot ──────────────────────────────
 
 
@@ -1513,7 +1494,16 @@ def build_marker_rank_figure(result: dict[str, Any], *, top: int = 25) -> dict[s
                          tickmode="array", tickvals=ticks, ticktext=[f"{value:,}" for value in ticks], **_COMMON_AXES)
     else:
         fig.update_xaxes(title=title, range=[0.5, highest + 0.5], **_COMMON_AXES)
-    fig.update_yaxes(automargin=True, tickmode="array", tickvals=labels, ticktext=display_labels, **_COMMON_AXES)
+    # Rows are drawn by rank (strongest at the top), not in the order the tier traces list them.
+    fig.update_yaxes(
+        automargin=True,
+        tickmode="array",
+        tickvals=labels,
+        ticktext=display_labels,
+        categoryorder="array",
+        categoryarray=labels,
+        **_COMMON_AXES,
+    )
     return figure_to_json(fig)
 
 
@@ -1562,7 +1552,11 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
         cols=2,
         column_widths=[0.55, 0.45],
         horizontal_spacing=0.2,
-        subplot_titles=("Markers clearing each bar", "C-index of the selected-marker model"),
+        subplot_titles=(
+            "Markers clearing each bar",
+            # With no marker selected the model holds the clinical covariates only.
+            "C-index of the clinical-only model" if signature_is_clinical_only(signature) else "C-index of the selected-marker model",
+        ),
     )
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 14, "color": INK, "family": "Sora, sans-serif"}
@@ -1680,7 +1674,8 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
     rows = []
     for row in validation.get("markers", []):
         tested = row.get("adjusted") or row.get("marginal")
-        if tested and all(isinstance(tested.get(key), (int, float)) and tested[key] > 0 for key in ("hazard_ratio", "ci_lower", "ci_upper")):
+        # Finite and positive, as the Cox forest requires: an infinite bound cannot be drawn on a log axis.
+        if tested and all(_finite_number(tested.get(key)) and tested[key] > 0 for key in ("hazard_ratio", "ci_lower", "ci_upper")):
             rows.append((row, tested))
     rows.reverse()
     labels = [str(row["marker"]) for row, _ in rows]
@@ -1749,7 +1744,6 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
         fig.update_xaxes(visible=False, row=1, col=1)
         fig.update_yaxes(visible=False, row=1, col=1)
 
-    fig.add_vline(x=1.0, line_color=INK, line_width=1.5, opacity=0.75, row=2, col=1)
     for name, color, belongs in groups:
         members = [(row, tested) for row, tested in rows if belongs(row)]
         if not members:
@@ -1777,7 +1771,10 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
             row=2,
             col=1,
         )
-    if not rows:
+    if rows:
+        # Added after the markers: Plotly leaves a line out of a subplot that has no traces yet.
+        fig.add_vline(x=1.0, line_color=INK, line_width=1.5, opacity=0.75, row=2, col=1)
+    else:
         fig.add_annotation(
             text="No finite external hazard ratios to plot.",
             xref="x2 domain",
@@ -1791,5 +1788,16 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
     fig.update_layout(margin={"b": 110}, legend={"orientation": "h", "yanchor": "top", "y": -88 / area, "xanchor": "left", "x": 0.0})
     bounds = [tested[key] for _, tested in rows for key in ("ci_lower", "ci_upper")]
     fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_log_axis_ticks([1.0, *bounds]), row=2, col=1, **_COMMON_AXES)
-    fig.update_yaxes(automargin=True, tickmode="array", tickvals=labels, ticktext=display_labels, row=2, col=1, **_COMMON_AXES)
+    # Markers keep the recipe's order (first at the top) instead of being grouped by replication status.
+    fig.update_yaxes(
+        automargin=True,
+        tickmode="array",
+        tickvals=labels,
+        ticktext=display_labels,
+        categoryorder="array",
+        categoryarray=labels,
+        row=2,
+        col=1,
+        **_COMMON_AXES,
+    )
     return figure_to_json(fig)

@@ -773,6 +773,12 @@ def test_format_p_value_never_rounds_across_the_nominal_threshold() -> None:
     assert _format_p_value(0.2) == "0.200"
     assert _p_value_expression(0.0004) == "p < 0.001"
     assert _p_value_expression(0.012, "Adj. p") == "Adj. p = 0.012"
+    # More digits until the printed value stays below 0.05.
+    assert _format_p_value(0.04996) == "0.04996"
+    assert _format_p_value(0.049996) == "0.049996"
+    assert _p_value_expression(0.04996) == "p = 0.04996"
+    assert _format_p_value(0.05) == "0.050"
+    assert _format_p_value(True) == "NA"
 
 
 def test_km_confidence_band_is_drawn_as_steps() -> None:
@@ -881,3 +887,172 @@ def test_build_km_figure_prints_numbers_at_risk_under_the_axis() -> None:
 
     without_table = build_km_figure({key: value for key, value in km_result.items() if key != "risk_table"})
     assert not any("Number at risk" in annotation["text"] for annotation in without_table["layout"]["annotations"])
+
+
+def _km_curve(group: str) -> dict:
+    return {
+        "group": group,
+        "timeline": [0.0, 10.0, 20.0],
+        "survival": [1.0, 0.8, 0.6],
+        "ci_lower": [1.0, 0.7, 0.5],
+        "ci_upper": [1.0, 0.9, 0.7],
+        "censor_times": [],
+        "censor_survival": [],
+    }
+
+
+def test_km_three_groups_give_intermediate_its_own_colour() -> None:
+    from survival_toolkit.plots import ACCENT, SLATE, _km_group_colors
+
+    groups = ["High", "Intermediate", "Low"]
+    figure = build_km_figure(
+        {
+            "curves": [_km_curve(group) for group in groups],
+            "test": None,
+            "confidence_level": 0.975,
+            "display_horizon": 24.0,
+            "risk_table": {
+                "columns": ["Group", "0", "10"],
+                "rows": [{"Group": group, "0": 30, "10": 20} for group in groups],
+                "times": [0.0, 10.0],
+            },
+        }
+    )
+
+    colours = {trace["name"]: trace["line"]["color"] for trace in figure["data"] if trace.get("mode") == "lines"}
+    assert colours["High"] == ACCENT and colours["Low"] == SLATE
+    assert colours["Intermediate"] not in {ACCENT, SLATE}
+    risk_labels = {annotation["text"]: annotation["font"]["color"] for annotation in figure["layout"]["annotations"] if annotation["text"] in colours}
+    assert risk_labels == colours
+    # A 97.5% band is not rounded to 98%.
+    assert any("Shaded bands: 97.5% pointwise CI" in annotation["text"] for annotation in figure["layout"]["annotations"])
+    # Plots without a High or Low group keep the palette order.
+    assert _km_group_colors(["Stage I", "Stage II"]) == [SLATE, ACCENT]
+    assert _km_group_colors(["high risk", "Other", "low risk"])[1] not in {ACCENT, SLATE}
+
+
+def test_cutpoint_scan_marks_the_cutoff_of_a_make_groups_summary() -> None:
+    from survival_toolkit.analysis import derive_group_column
+    from survival_toolkit.sample_data import make_example_dataset
+
+    _, _, summary = derive_group_column(
+        make_example_dataset(),
+        source_column="biomarker_score",
+        method="optimal_cutpoint",
+        time_column="os_months",
+        event_column="os_event",
+        event_positive_value=1,
+        permutation_iterations=20,
+    )
+    assert "optimal_cutpoint" not in summary
+
+    figure = build_cutpoint_scan_figure(summary, variable_name="biomarker_score")
+
+    stars = [trace for trace in figure["data"] if trace.get("mode") == "markers"]
+    assert len(stars) == 1 and stars[0]["x"] == [summary["cutoff"]]
+    assert figure["layout"]["shapes"][0]["x0"] == summary["cutoff"]
+    assert any("Adj. p" in annotation["text"] for annotation in figure["layout"]["annotations"])
+
+
+def test_marker_rank_figure_draws_the_strongest_marker_at_the_top() -> None:
+    from survival_toolkit.plots import build_marker_rank_figure
+
+    def row(name: str, tier: str, median: float, low: float, high: float) -> dict:
+        return {"marker": name, "tier": tier, "marginal": {"median_rank": median, "rank_interval": [low, high]}}
+
+    figure = build_marker_rank_figure(
+        {
+            "primary_lens": "marginal",
+            "marker_table": [
+                row("rank1", "robust", 1, 1, 2),
+                row("rank2", "robust", 2, 1, 3),
+                row("rank3", "suggestive", 3, 2, 5),
+                row("rank4", "not supported", 4, 3, 7),
+                row("rank5", "suggestive", 5, 3, 8),
+                row("rank6", "not supported", 6, 4, 9),
+            ],
+        }
+    )
+
+    yaxis = figure["layout"]["yaxis"]
+    # Categories run bottom to top, so the strongest marker is last.
+    assert yaxis["categoryorder"] == "array"
+    assert yaxis["categoryarray"] == ["rank6", "rank5", "rank4", "rank3", "rank2", "rank1"]
+
+
+def test_marker_replication_figure_keeps_the_marker_order_and_skips_infinite_intervals() -> None:
+    from survival_toolkit.plots import build_marker_replication_figure
+
+    def row(name: str, hr: float, low: float, high: float, replicated: bool, same: bool) -> dict:
+        return {
+            "marker": name,
+            "marginal": {"hazard_ratio": hr, "ci_lower": low, "ci_upper": high},
+            "replicated": replicated,
+            "same_direction": same,
+            "replication_p_holm": 0.01,
+        }
+
+    figure = build_marker_replication_figure(
+        {
+            "markers": [
+                row("lock1", 1.1, 0.9, 1.3, False, True),
+                row("lock2", 1.8, 1.4, 2.3, True, True),
+                row("lock3", 0.8, 0.6, 1.05, False, False),
+                row("lock4", 1.5, 1.2, 1.9, True, True),
+                row("lock5", 2.0, 0.5, float("inf"), False, True),
+            ],
+            "metrics": {"c_index": 0.7, "clinical_only_c_index": 0.62},
+        }
+    )
+
+    assert figure["layout"]["yaxis2"]["categoryorder"] == "array"
+    assert figure["layout"]["yaxis2"]["categoryarray"] == ["lock4", "lock3", "lock2", "lock1"]
+    plotted = {label for trace in figure["data"] for label in trace.get("y") or [] if str(label).startswith("lock")}
+    assert plotted == {"lock1", "lock2", "lock3", "lock4"}
+    # The reference line at HR = 1 is drawn in the forest (Plotly skips lines added to a subplot without traces).
+    assert any(shape.get("xref") == "x2" and shape.get("x0") == 1.0 for shape in figure["layout"]["shapes"])
+
+
+def test_residual_panels_drop_points_with_a_missing_coordinate_as_pairs() -> None:
+    diagnostics = build_cox_diagnostics_figure(
+        {
+            "diagnostics_plot_data": [
+                {
+                    "term": "age",
+                    "log_time": [0.1, None, 0.3, 0.4, 0.5],
+                    "residual": [1.0, 2.0, None, 4.0, float("nan")],
+                    "trend_log_time": [0.1, 0.4],
+                    "trend_residual": [0.5, None],
+                    "p_value": 0.2,
+                    "schoenfeld_rho": 0.1,
+                }
+            ]
+        }
+    )
+    points = diagnostics["data"][0]
+    assert points["x"] == [0.1, 0.4] and points["y"] == [1.0, 4.0]
+
+    martingale = build_cox_martingale_figure(
+        {"martingale_plot_data": [{"term": "age", "value": [50.0, None, 70.0], "residual": [0.2, 0.4, None]}]}
+    )
+    points = martingale["data"][0]
+    assert points["x"] == [50.0] and points["y"] == [0.2]
+
+
+def test_marker_summary_names_a_model_without_markers_as_the_clinical_model() -> None:
+    from survival_toolkit.plots import build_marker_summary_figure
+
+    base = {
+        "primary_lens": "added_value",
+        "marker_table": [],
+        "cohort": {"n_markers_evaluated": 3},
+        "tier_counts": {},
+        "settings": {"alpha": 0.05},
+    }
+
+    clinical_only = build_marker_summary_figure({**base, "signature": {"markers": [], "apparent_c": 0.72, "optimism_corrected_c": 0.71}})
+    with_markers = build_marker_summary_figure({**base, "signature": {"markers": ["m1"], "apparent_c": 0.75}})
+
+    titles = [annotation["text"] for annotation in clinical_only["layout"]["annotations"]]
+    assert "C-index of the clinical-only model" in titles
+    assert "C-index of the selected-marker model" in [annotation["text"] for annotation in with_markers["layout"]["annotations"]]

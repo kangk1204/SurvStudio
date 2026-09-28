@@ -494,6 +494,7 @@ If `python -m survival_toolkit` does not start the server, check:
 - If your machine only has Python `3.10`, bootstrap Python `3.11` first with the `Project-local Conda fallback` section.
 - Browser E2E testing is optional and uses the separate `e2e` extra.
 - The app itself does not need Playwright.
+- SurvStudio is written for pandas copy-on-write, the only mode in pandas 3. With pandas 2.x, `import survival_toolkit` switches copy-on-write on for the whole Python session, so chained assignment (`df["a"][0] = 1`) in your own code no longer changes `df`; use pandas 3, or a separate session, if your code relies on it.
 
 ## First 5 Minutes
 
@@ -720,6 +721,9 @@ So before analysis, it is better if your file has:
 Text and numeric features:
 - text columns (for example `stage` or `smoking_status`) are used as categorical variables by Cox PH, the ML models, and the deep models, even if you do not mark them categorical
 - a column that is numeric except for a few stray text values (for example `unknown` in an `age` column) is refused as a model feature in every module; recode those cells as blank so the column stays numeric (a blank is handled as missing)
+- a text column with more than 50 distinct values is refused as a feature unless you mark it categorical: it is usually numbers stored as text (values such as `<0.1`, or decimal commas) or a patient ID, and would otherwise add one column per value
+- a column you mark categorical is used as categorical even when its values look numeric
+- numeric category codes are the same levels whether a column was read as whole numbers or as decimals (`1` and `1.0`; one blank cell makes pandas read a code column as decimals), so a model locked on one cohort scores another cohort's codes correctly
 - the reference (baseline) level of a categorical variable follows the clinical ordering (stage I before II, never smoker before current smoker) or numeric order for numeric-looking codes (`2` before `10`)
 
 ### One Row Per Patient
@@ -918,7 +922,7 @@ Markers with more than 90% of patients at one value are left out before testing 
 
 For every marker it reports:
 - two Cox score-test lenses: marginal association, and added value over the clinical covariates you name (the primary lens whenever clinical covariates are given)
-- Westfall–Young step-down permutation p-values (family-wise error over all markers) and permutation FDR q-values. The added-value null permutes the marker residuals left after projecting on the clinical covariates (Freedman–Lane), so a marker that merely tracks a clinical factor is not called prognostic
+- Westfall–Young step-down permutation p-values (family-wise error over all markers) and permutation FDR q-values. The added-value null permutes the residuals of each marker after regression on the clinical covariates (the Smith method; Winkler et al., NeuroImage 2014;92:381–397), so a marker that merely tracks a clinical factor is not called prognostic
 - the whole procedure rerun on event-stratified 63.2% subsamples: selection frequency, rank interval, and direction consistency
 - a tier from pre-declared rules:
   - `robust`: Westfall–Young p ≤ 0.05, selected in at least 50% of subsamples, same direction in at least 90%
@@ -926,7 +930,7 @@ For every marker it reports:
   - `marginal only`: associated on its own but not beyond the clinical covariates
   - `not supported`
 
-It also screens the patients for repeated samples. Public expression cohorts often hold the same tumour twice, and a patient in the data twice can sit on both sides of a subsample split and flatter the internal estimates. On panels of at least 200 markers, two patients are flagged when their profiles over the 5,000 most variable markers are each other's best match, correlate at least 0.7, and stand 0.2 above either one's next-best match. Patients with identical values are flagged too. Flagged pairs lead the cautions, named by the patient ID column, and the verdict stays at review until one sample per patient is kept. On 17 public breast and lung cancer cohorts (5,955 patients), the screen found 15 of 21 confirmed repeated tumours and flagged no pair of different patients.
+It also screens the patients for repeated samples. Public expression cohorts often hold the same tumour twice, and a patient in the data twice can sit on both sides of a subsample split and flatter the internal estimates. On panels of at least 200 markers, two patients are flagged when their profiles over the 5,000 most variable markers are each other's best match, correlate at least 0.7, and stand 0.2 above either one's next-best match. Patients with identical values on every marker are flagged too, on panels of at least 20 markers that take many distinct values (on binary panels such as mutation calls, patients share profiles by chance). Flagged pairs lead the cautions, named by the patient ID column, and the verdict stays at review until one sample per patient is kept. On 17 public breast and lung cancer cohorts (5,955 patients), the screen found 15 of 21 confirmed repeated tumours and flagged no pair of different patients.
 
 For a signature built from the selected markers it reports the apparent C-index, an optimism-corrected C-index, the C-index on left-out rows next to that of the clinical covariates alone, and how much the top marker's effect shrinks outside the rows that selected it (the "winner's curse" of picking the strongest marker). The signature is then locked into a recipe (encoders, coefficients, baseline survival, and a SHA-256 hash) that can be applied unchanged to an external cohort:
 
