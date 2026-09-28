@@ -55,6 +55,8 @@ def test_trailing_separator_on_data_rows_does_not_shift_column_labels() -> None:
     assert frame["id"].tolist() == [f"P{i}" for i in range(8)]
     assert frame["time"].tolist() == list(range(10, 18))
     assert frame["gene_a"].tolist() == [round(1.5 * i, 2) for i in range(8)]
+    spaced = load_dataframe(("\n".join(lines).replace(",\n", ", \n") + " ").encode(), "trailing.csv")
+    assert spaced.columns.tolist() == ["id", "time", "event", "age", "gene_a"]
 
 
 def test_rows_wider_than_the_header_in_different_ways_are_refused() -> None:
@@ -370,14 +372,15 @@ def test_death_alive_and_censoring_flags_are_outcome_columns() -> None:
             "vital": np.where(dead == 1, "Dead", "Alive"),
             "censored": 1 - dfs_event,
             "studied": rng.integers(0, 2, n),  # holds "died" only as a substring
+            "vitals_abnormal": rng.integers(0, 2, n),
             "age": rng.integers(40, 80, n),
         }
     )
     flagged = {"dead", "deceased", "died", "alive", "vital", "censored"}
     assert flagged <= _survival_outcome_like_columns(frame)
-    assert "studied" not in _survival_outcome_like_columns(frame)
+    assert not {"studied", "vitals_abnormal"} & _survival_outcome_like_columns(frame)
     assert not flagged & set(model_feature_candidate_columns(frame))
-    assert {"studied", "age"} <= set(model_feature_candidate_columns(frame))
+    assert {"studied", "vitals_abnormal", "age"} <= set(model_feature_candidate_columns(frame))
     # The censoring flag is the complement of the event it censors.
     assert "censored" in find_event_equivalent_columns(frame, "dfs_event")
     assert {"alive", "vital", "deceased", "died"} <= find_event_equivalent_columns(frame, "dead")

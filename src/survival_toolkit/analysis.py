@@ -91,7 +91,7 @@ _EVENT_NAME_PATTERNS = (
     re.compile(r"deceas"),
     re.compile(r"mort"),
     re.compile(r"status$"),
-    re.compile(r"vital"),
+    re.compile(r"vital_?status"),
     re.compile(r"survival_status"),
     re.compile(r"outcome_status"),
     re.compile(r"relapse"),
@@ -100,9 +100,9 @@ _EVENT_NAME_PATTERNS = (
     re.compile(r"failure"),
     re.compile(r"censor"),
 )
-# Outcome words matched as whole name tokens: as substrings they would also match "studied" or
-# "deadline". "cens" is a common short name of a censoring flag.
-_OUTCOME_NAME_TOKENS = {"dead", "died", "alive", "survived", "cens"}
+# Outcome words matched as whole name tokens: as substrings they would also match "studied",
+# "deadline" or "vitals". "cens" is a common short name of a censoring flag.
+_OUTCOME_NAME_TOKENS = {"dead", "died", "alive", "survived", "vital", "cens"}
 _SURVIVAL_ENDPOINT_ABBREVIATIONS = {
     "os",
     "pfs",
@@ -808,7 +808,11 @@ def _parse_delimited_text(
 
     frame = _convert_formatted_number_columns(frame, delimiter=delimiter, read_raw_text=_read_raw_text)
     if layout == "trailing" and names is not None:
-        empty_extras = [name for name in names[len(header_names) :] if bool(frame[name].isna().all())]
+        empty_extras = [
+            name
+            for name in names[len(header_names) :]
+            if bool((frame[name].isna() | frame[name].astype(str).str.strip().eq("")).all())
+        ]
         frame = frame.drop(columns=empty_extras)
     return frame
 
@@ -856,7 +860,10 @@ def _float_column_may_hide_dot_groups(series: pd.Series) -> bool:
 
 def _ambiguous_number_message(column: Any, text: pd.Series, mixed_evidence: tuple[Any, Any] | None) -> str:
     patterns = (_AMBIGUOUS_COMMA_NUMBER_PATTERN, _AMBIGUOUS_DOT_NUMBER_PATTERN)
-    example = next(str(value) for value in text if any(pattern.fullmatch(str(value)) for pattern in patterns))
+    example = next(
+        (str(value) for value in text if any(pattern.fullmatch(str(value)) for pattern in patterns)),
+        str(text.iloc[0]),
+    )
     separator = "," if "," in example else "."
     if mixed_evidence is not None:
         reason = (
