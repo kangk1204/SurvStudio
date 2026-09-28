@@ -77,6 +77,7 @@ from survival_toolkit.errors import (
 )
 from survival_toolkit.evaluation import c_index_intervals, merge_prediction_blocks
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
+from survival_toolkit.marker_screen import _PAIRWISE_LIMIT as _C_INDEX_PAIRWISE_LIMIT
 from survival_toolkit.marker_matrix import (
     MATRIX_SUFFIXES,
     MAX_DECOMPRESSED_BYTES,
@@ -1245,12 +1246,31 @@ class ModelComparisonIntervalsRequest(BaseModel):
         return blocks
 
 
-# Work (events x patients x models) of all bootstrap draws of one request, so it stays within
-# tens of seconds. It is a hard cap: a large test set gets fewer draws (and a note), and one too
-# large for the minimum number of draws is refused.
-_INTERVAL_WORK_BUDGET = 3_000_000_000
+# Work units (see _c_index_draw_work; about 3 ns each on one laptop core) of all bootstrap draws of
+# one request, so it stays within about half a minute: 2,500 test patients scored by 10 models get
+# 1,000 draws. It is a hard cap: a larger test set gets fewer draws (and a note), and one too large
+# for the minimum number of draws is refused.
+_INTERVAL_WORK_BUDGET = 12_000_000_000
 # Fewest draws that still give a usable 95% percentile interval (the request minimum).
 _INTERVAL_MIN_DRAWS = 100
+
+
+def _c_index_draw_work(n_patients: int, n_events: int, n_models: int) -> int:
+    """Work units of one bootstrap draw of Harrell's C for ``n_models`` risk columns.
+
+    Mirrors ``marker_screen.harrell_c_many``: when events x patients is at most its pairwise
+    limit it compares every event with every patient, and otherwise it counts pairs from sorted
+    blocks, about (patients + 2 x events) x log2(patients)^2 operations per column. One column
+    more stands for the per-draw work that does not depend on the number of models.
+    """
+
+    n = max(int(n_patients), 1)
+    events = min(max(int(n_events), 1), n)
+    columns = max(int(n_models), 1) + 1
+    if events * n <= _C_INDEX_PAIRWISE_LIMIT:
+        return columns * events * n
+    log_n = math.log2(n)
+    return int(columns * (n + 2 * events) * log_n * log_n)
 
 
 class DesignAuditCohort(BaseModel):
@@ -3630,6 +3650,7 @@ def _reject_overlong_matrix_text(path: Path, *, compressed: bool) -> None:
 
 @app.post("/api/marker-matrix")
 async def upload_marker_matrix(
+    request: Request,
     file: UploadFile = File(...),
     dataset_id: str = Form(..., max_length=128),
     id_column: str = Form(..., max_length=512),
@@ -3685,7 +3706,9 @@ async def upload_marker_matrix(
                 **summary,
             }
 
-        return await _run_job(_ingest)
+        # Parsing a matrix of up to 200 MB is heavy work: it queues with the other heavy jobs, holds the
+        # dataset, and never starts (or stops at the reader's checkpoints) once the page has gone away.
+        return await _run_dataset_job(dataset_id, _ingest, request=request, heavy=True)
     except HTTPException:
         raise
     except Exception as exc:
@@ -5093,15 +5116,25 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
         request_config = request_model.model_dump(exclude={"recipe"})
 
         def _run() -> dict[str, Any]:
+            recipe = request_model.recipe
+            # A stratified recipe is scored without bootstrap draws; the others share the interval work budget.
+            if recipe.get("strata_columns"):
+                n_bootstrap, bootstrap_note = int(request_model.n_bootstrap), None
+            else:
+                n_bootstrap, bootstrap_note = _validation_bootstrap_draws(
+                    int(stored.dataframe.shape[0]),
+                    2 if recipe.get("clinical_only_model") else 1,
+                    request_model.n_bootstrap,
+                )
             try:
                 validation = validate_locked_recipe(
                     stored.dataframe,
-                    request_model.recipe,
+                    recipe,
                     column_mapping=request_model.column_mapping,
                     event_positive_value=request_model.event_positive_value,
                     horizon=request_model.horizon,
                     alpha=request_model.alpha,
-                    n_bootstrap=request_model.n_bootstrap,
+                    n_bootstrap=n_bootstrap,
                     random_seed=request_model.random_seed,
                     marker_scaling=request_model.marker_scaling,
                 )
@@ -5115,6 +5148,8 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
                 if isinstance(exc, KeyError):
                     raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
                 raise UserInputError("The recipe is malformed; export it again from a marker evaluation.") from exc
+            if bootstrap_note and isinstance(validation.get("notes"), list):
+                validation["notes"].append(bootstrap_note)
             return _attach_dataset_hash(
                 {
                     "validation": validation,
@@ -5205,8 +5240,7 @@ async def checklist_export(request_model: ChecklistExportRequest) -> Response:
 def _interval_draws(n_patients: int, n_events: int, n_models: int, requested: int) -> tuple[int, str | None]:
     """Bootstrap draws that fit the work budget, and a note when that is fewer than requested."""
 
-    work_per_draw = max(n_events, 1) * max(n_patients, 1) * max(n_models, 1)
-    affordable = _INTERVAL_WORK_BUDGET // work_per_draw
+    affordable = _INTERVAL_WORK_BUDGET // _c_index_draw_work(n_patients, n_events, n_models)
     if affordable < _INTERVAL_MIN_DRAWS:
         raise UserInputError(
             f"The shared test set ({n_patients:,} patients, {n_events:,} events, {n_models} models) is too large for "
@@ -5219,6 +5253,31 @@ def _interval_draws(n_patients: int, n_events: int, n_models: int, requested: in
     return draws, (
         f"Bootstrap draws were limited to {draws} of the {requested} requested, so the intervals for "
         f"{n_patients:,} test patients ({n_events:,} events, {n_models} models) stay within the work budget."
+    )
+
+
+def _validation_bootstrap_draws(n_rows: int, n_models: int, requested: int) -> tuple[int, str | None]:
+    """Bootstrap draws of a locked-model validation that fit the interval work budget, and a note when fewer run.
+
+    The analysable rows and events of the external cohort are known only once the recipe is
+    applied, so every row counts as a patient with an event (an upper bound on the work). When not
+    even the minimum number of draws fits, the validation runs without intervals.
+    """
+
+    requested = int(requested)
+    if requested <= 0:
+        return 0, None
+    affordable = int(_INTERVAL_WORK_BUDGET // _c_index_draw_work(n_rows, n_rows, n_models))
+    if affordable >= requested:
+        return requested, None
+    if affordable < _INTERVAL_MIN_DRAWS:
+        return 0, (
+            f"The bootstrap intervals were not computed: {n_rows:,} patients need more work than the budget allows for "
+            f"{_INTERVAL_MIN_DRAWS} draws. The point estimates are reported."
+        )
+    return affordable, (
+        f"Bootstrap draws were limited to {affordable} of the {requested} requested, so the intervals for "
+        f"{n_rows:,} patients stay within the work budget."
     )
 
 
@@ -5241,6 +5300,12 @@ async def model_comparison_intervals(request_model: ModelComparisonIntervalsRequ
             payload = {**result, "n_shared": len(rows), "n_bootstrap_requested": int(request_model.n_bootstrap)}
             if note:
                 payload["bootstrap_note"] = note
+            if request_model.reference is not None and result.get("reference") is None:
+                compared = [str(row.get("model")) for row in result.get("rows", [])]
+                payload["reference_note"] = (
+                    f'No paired differences were computed: the reference model "{request_model.reference}" is not among '
+                    f"the compared models ({', '.join(compared[:10])}{', ...' if len(compared) > 10 else ''})."
+                )
             return payload
 
         return await _run_job(_run, request=request, heavy=True)

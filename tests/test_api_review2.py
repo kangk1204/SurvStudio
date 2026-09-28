@@ -676,3 +676,104 @@ def test_a_group_cut_from_an_outcome_informed_column_is_outcome_informed() -> No
     )
     assert km.status_code == 200, km.text
     assert km.json()["analysis"]["outcome_informed_group"] is True
+
+
+# ── Bootstrap budgets and long jobs ─────────────────────────────
+
+
+def _interval_block(n: int, n_models: int, *, seed: int = 1, reference: str = "Cox PH") -> dict:
+    rng = np.random.default_rng(seed)
+    signal = rng.normal(size=n)
+    event_time = rng.exponential(np.exp(-signal))
+    censor = rng.exponential(1.5, size=n)
+    names = [reference, *[f"Model {index}" for index in range(1, n_models)]]
+    return {
+        "row_ids": [f"r{index}" for index in range(n)],
+        "time": np.minimum(event_time, censor).round(4).tolist(),
+        "event": (event_time <= censor).astype(int).tolist(),
+        "risk": {name: (signal + rng.normal(scale=index + 0.5, size=n)).round(4).tolist() for index, name in enumerate(names)},
+    }
+
+
+def test_realistic_test_sets_get_bootstrap_intervals() -> None:
+    block = _interval_block(2500, 10)
+    response = client.post("/api/model-comparison-intervals", json={"predictions": [block], "n_bootstrap": 100})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["n"] == 2500 and payload["n_bootstrap"] == 100 and "bootstrap_note" not in payload
+    assert all(row["c_index_ci"][0] is not None for row in payload["rows"])
+
+
+def test_missing_reference_models_are_reported() -> None:
+    block = _interval_block(200, 2, reference="CoxPH")
+    response = client.post("/api/model-comparison-intervals", json={"predictions": [block], "n_bootstrap": 100})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["reference"] is None
+    assert '"Cox PH"' in payload["reference_note"] and "CoxPH" in payload["reference_note"]
+    named = client.post("/api/model-comparison-intervals", json={"predictions": [block], "n_bootstrap": 100, "reference": "CoxPH"})
+    assert named.json()["reference"] == "CoxPH" and "reference_note" not in named.json()
+    unpaired = client.post("/api/model-comparison-intervals", json={"predictions": [block], "n_bootstrap": 100, "reference": None})
+    assert "reference_note" not in unpaired.json()
+
+
+def test_validation_bootstrap_is_budgeted(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert app_module._validation_bootstrap_draws(1000, 2, 200) == (200, None)
+    draws, note = app_module._validation_bootstrap_draws(100_000, 2, 2000)
+    assert draws == 0 and "not computed" in note
+    draws, note = app_module._validation_bootstrap_draws(20_000, 2, 2000)
+    assert app_module._INTERVAL_MIN_DRAWS <= draws < 2000 and f"limited to {draws} of the 2000" in note
+
+    dataset_id, recipe = _locked_recipe()
+    seen: list[int] = []
+    original = app_module.validate_locked_recipe
+
+    def _recording(*args, **kwargs):
+        seen.append(kwargs["n_bootstrap"])
+        return original(*args, **kwargs)
+
+    n_rows = client.get(f"/api/dataset/{dataset_id}").json()["n_rows"]
+    n_models = 2 if recipe.get("clinical_only_model") else 1
+    per_draw = app_module._c_index_draw_work(n_rows, n_rows, n_models)
+    monkeypatch.setattr(app_module, "_INTERVAL_WORK_BUDGET", per_draw * 150)
+    monkeypatch.setattr(app_module, "validate_locked_recipe", _recording)
+    response = client.post("/api/marker-validation", json={"dataset_id": dataset_id, "recipe": recipe, "n_bootstrap": 400})
+    assert response.status_code == 200, response.text
+    assert seen == [150]
+    assert any("limited to 150 of the 400" in note for note in response.json()["validation"]["notes"])
+
+
+def test_marker_matrix_ingest_is_a_cancellable_heavy_job_on_a_leased_dataset(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    import pandas as pd
+
+    from survival_toolkit.sample_data import make_example_dataset
+
+    calls: list[dict] = []
+    leased: list[str] = []
+    original_job = app_module._run_job
+    original_lease = app_module.store.lease
+
+    async def _recording(job, **kwargs):
+        calls.append(kwargs)
+        return await original_job(job, **kwargs)
+
+    def _recording_lease(dataset_id: str):
+        leased.append(dataset_id)
+        return original_lease(dataset_id)
+
+    monkeypatch.setattr(app_module, "_run_job", _recording)
+    monkeypatch.setattr(app_module.store, "lease", _recording_lease)
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    frame = make_example_dataset()
+    table = pd.DataFrame(np.random.default_rng(3).normal(size=(len(frame), 4)), columns=[f"G{index}" for index in range(4)])
+    table.insert(0, "patient_id", frame["patient_id"].to_numpy())
+    path = tmp_path / "matrix.csv"
+    table.to_csv(path, index=False)
+    response = client.post(
+        "/api/marker-matrix",
+        data={"dataset_id": dataset_id, "id_column": "patient_id", "orientation": "samples_in_rows"},
+        files={"file": ("matrix.csv", path.read_bytes(), "text/csv")},
+    )
+    assert response.status_code == 200, response.text
+    assert calls and calls[-1]["heavy"] is True and calls[-1]["request"] is not None
+    assert dataset_id in leased

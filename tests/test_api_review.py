@@ -355,10 +355,21 @@ def test_interval_merge_problems_keep_their_message() -> None:
     assert "share no test patients" in _detail(response)
 
 
-def test_interval_bootstrap_budget_is_a_hard_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_interval_bootstrap_budget_accepts_realistic_sets_and_refuses_absurd_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+    from survival_toolkit.errors import UserInputError
+
+    # 2,500 test patients, 10 models and 1,000 draws (about 20 s of C-index work) run in full.
+    assert app_module._interval_draws(2500, 1250, 10, 1000) == (1000, None)
+    # A larger test set gets fewer draws, and says so.
+    draws, note = app_module._interval_draws(10_000, 5_000, 10, 1000)
+    assert app_module._INTERVAL_MIN_DRAWS <= draws < 1000 and f"limited to {draws} of the 1000" in note
+    # A whole 100,000-row cohort scored by 50 models cannot get even the minimum number of draws.
+    with pytest.raises(UserInputError, match="too large for bootstrap intervals"):
+        app_module._interval_draws(100_000, 50_000, 50, 1000)
+
     block = _prediction_block()
     n_patients, n_events = len(block["row_ids"]), int(sum(block["event"]))
-    work_per_draw = n_patients * n_events * 1
+    work_per_draw = app_module._c_index_draw_work(n_patients, n_events, 1)
 
     exact = client.post("/api/model-comparison-intervals", json={"predictions": [block], "n_bootstrap": 100})
     assert exact.status_code == 200
