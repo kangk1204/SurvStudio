@@ -793,7 +793,7 @@ def test_permutation_p_values_are_roughly_calibrated_under_the_null() -> None:
     assert hits / n_datasets <= 0.25
 
 
-def test_bootstrap_minimums_scale_with_the_resample_and_skips_count_as_failures() -> None:
+def test_bootstrap_resamples_use_an_estimability_floor_and_skips_count_as_failures() -> None:
     rng = np.random.default_rng(5)
     n = 400
     flag = np.zeros(n, dtype=int)
@@ -815,9 +815,11 @@ def test_bootstrap_minimums_scale_with_the_resample_and_skips_count_as_failures(
     )
     best = payload["best_split"]
     assert best["Signature"] == 'mut == "mutant"'
-    assert best["Bootstrap valid resamples"] > 30
+    # Resamples of 160 rows hold about 21 carriers: the discovery minimum of 40 rows is not
+    # re-applied, so none is skipped (a minimum scaled to 16 rows used to skip 5 of the 40).
+    assert best["Bootstrap valid resamples"] == 40 and best["Bootstrap skipped resamples"] == 0
     support = best["Bootstrap support (p<alpha)"]
-    assert support <= best["Bootstrap valid resamples"] / 40 + 1e-12
+    assert support * 40 == pytest.approx(round(support * 40)) and support >= 0.9
 
     metrics = analysis._bootstrap_signature_metrics(
         frame=pd.DataFrame({"time": [1.0, 2.0, 3.0, 4.0], "event": [1, 1, 0, 1], "flag": ["a", "b", "a", "b"]}),
@@ -833,6 +835,8 @@ def test_bootstrap_minimums_scale_with_the_resample_and_skips_count_as_failures(
     )
     valid = metrics["Bootstrap valid resamples"]
     assert valid + metrics["Bootstrap skipped resamples"] == 20
+    # Four rows resampled with replacement often leave a side with one row or no event.
+    assert metrics["Bootstrap skipped resamples"] > 0
     if metrics["Bootstrap HR direction consistency"] is not None:
         assert metrics["Bootstrap HR direction consistency"] <= valid / 20 + 1e-12
 

@@ -3303,7 +3303,8 @@ def _cox_constant_design_message(stability_snapshot: dict[str, Any]) -> str | No
     )
 
 
-def _cox_nonfinite_estimate_message(stability_snapshot: dict[str, Any]) -> str:
+def _cox_problem_signals(stability_snapshot: dict[str, Any]) -> str:
+    """The stability signals of the analyzable cohort as one sentence, or "" when there are none."""
     details: list[str] = []
     risky_levels = list(stability_snapshot.get("risky_levels") or [])
     epv = _safe_float(stability_snapshot.get("events_per_parameter"))
@@ -3342,11 +3343,14 @@ def _cox_nonfinite_estimate_message(stability_snapshot: dict[str, Any]) -> str:
             f'levels with only events or only censored rows such as {_summarize_labels(one_sided_examples, max_items=3)}'
         )
 
-    detail_text = f" Problem signals in the analyzable cohort: {'; '.join(details)}." if details else ""
+    return f" Problem signals in the analyzable cohort: {'; '.join(details)}." if details else ""
+
+
+def _cox_nonfinite_estimate_message(stability_snapshot: dict[str, Any]) -> str:
     return (
         "Cox PH fit produced non-finite estimates. This usually means redundant covariates, sparse categories, "
         "or quasi-complete separation. Remove overlapping variables or collapse sparse levels."
-        f"{detail_text}"
+        f"{_cox_problem_signals(stability_snapshot)}"
     )
 
 
@@ -3356,37 +3360,193 @@ def _cox_fit_failure_message(exc: Exception, stability_snapshot: dict[str, Any])
     if "converg" in lowered:
         return (
             "Cox PH fit did not converge cleanly. This usually means sparse strata, sparse categories, "
-            "quasi-separation, or an over-specified model for the available events. "
-            "Collapse sparse levels, reduce strata complexity, or simplify the covariate set. "
-            f"{_cox_nonfinite_estimate_message(stability_snapshot)}"
+            "quasi-separation (a level or covariate whose rows all have, or all lack, the event early), or an "
+            "over-specified model for the available events. "
+            "Collapse sparse levels, reduce strata complexity, or simplify the covariate set."
+            f"{_cox_problem_signals(stability_snapshot)}"
         )
     if "singular matrix" in lowered:
-        detail = _cox_nonfinite_estimate_message(stability_snapshot)
         return (
             "Cox PH fit failed because the design matrix is singular. This usually means redundant covariates, "
             "overlapping encodings of the same signal, or sparse categorical levels. "
-            "Remove one of the overlapping variables or collapse sparse levels. "
-            f"{detail}"
+            "Remove one of the overlapping variables or collapse sparse levels."
+            f"{_cox_problem_signals(stability_snapshot)}"
         )
     return _cox_nonfinite_estimate_message(stability_snapshot)
 
 
-def fit_phreg(model: PHReg) -> tuple[PHRegResults, bool]:
-    """Fit ``model`` exactly like ``PHReg.fit()`` and return ``(results, converged)``.
+# Newton-Raphson settings of R's coxph (coxph.control): the fit has converged when a full
+# Newton step changes the partial log-likelihood by at most eps relative to its value. R allows
+# 20 iterations, each step halving counting as one; a little more room is left here.
+_COX_NEWTON_EPS = 1e-9
+_COX_NEWTON_MAX_ITERATIONS = 50
+# A Cholesky pivot of the unit-diagonal information matrix below this marks the design as
+# singular (R's coxph.control toler.chol).
+_COX_CHOLESKY_TOLERANCE = float(np.finfo(float).eps) ** 0.75
+# R's check for coefficients that run to infinity after the log-likelihood has converged
+# (toler.inf = sqrt(eps)), with the step and the coefficient measured per SD of the covariate
+# as in the marker screen; a log hazard ratio above 10 per SD is taken to run away whatever the step.
+_COX_TOLER_INF = math.sqrt(_COX_NEWTON_EPS)
+_COX_MAX_LOG_HR_PER_SD = 10.0
 
-    ``PHReg.fit`` discards the optimizer's return values, so convergence used to be read
-    from a ConvergenceWarning captured with ``warnings.catch_warnings``. That swaps
-    process-wide state, so concurrent analyses in the server's thread pool could miss or
-    steal each other's warning. The optimizer's own ``converged`` flag is thread-safe.
-    Objects that only expose a statsmodels-style ``fit()`` are fitted as-is and treated
-    as converged.
+
+def _phreg_score_information(model: PHReg, beta: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+    """Score vector and information matrix (minus the Hessian) of ``model`` at ``beta``; None when not finite."""
+    score = np.asarray(model.score(beta), dtype=float).reshape(-1)
+    information = -np.atleast_2d(np.asarray(model.hessian(beta), dtype=float))
+    if not (np.all(np.isfinite(score)) and np.all(np.isfinite(information))):
+        return None
+    return score, information
+
+
+def _phreg_information_factor(information: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+    """Cholesky factor of the information matrix scaled to a unit diagonal, and the scale.
+
+    Scaling each coefficient by the square root of its information (as R's coxph scales the
+    covariates) keeps covariates on very different scales from spoiling the solve. None when
+    the matrix is not positive definite or a pivot falls below R's singularity tolerance.
+    """
+    diagonal = np.diag(information)
+    if diagonal.size == 0 or not np.all(diagonal > 0.0):
+        return None
+    scale = 1.0 / np.sqrt(diagonal)
+    scaled = information * np.outer(scale, scale)
+    try:
+        factor = np.linalg.cholesky((scaled + scaled.T) / 2.0)
+    except np.linalg.LinAlgError:
+        return None
+    if float(np.min(np.diag(factor))) ** 2 < _COX_CHOLESKY_TOLERANCE:
+        return None
+    return factor, scale
+
+
+def _phreg_solve(factor: tuple[np.ndarray, np.ndarray], right_hand_side: np.ndarray) -> np.ndarray:
+    """Solve ``information @ x = right_hand_side`` from the scaled Cholesky factor."""
+    lower, scale = factor
+    rhs = np.asarray(right_hand_side, dtype=float)
+    scaled_rhs = scale[:, None] * rhs if rhs.ndim == 2 else scale * rhs
+    solution = np.linalg.solve(lower.T, np.linalg.solve(lower, scaled_rhs))
+    return scale[:, None] * solution if rhs.ndim == 2 else scale * solution
+
+
+class _PHRegNewton(NamedTuple):
+    beta: np.ndarray
+    covariance: np.ndarray
+    converged: bool
+    iterations: int
+    # "converged", "singular_information", "non_finite", "iteration_limit", or "separated".
+    reason: str
+    separated: np.ndarray
+
+
+def _phreg_newton_raphson(model: PHReg) -> _PHRegNewton:
+    """Maximum partial-likelihood fit of ``model`` by Newton-Raphson with step halving, as R's coxph.
+
+    Starts at 0 and takes full Newton steps; whenever a step lowers the log-likelihood or makes it
+    non-finite, the step is halved (each halving uses one iteration, as in R). The fit has
+    converged when a full step changes the log-likelihood by at most ``_COX_NEWTON_EPS`` relative
+    to its value. Ties and strata are handled by the model's own ``loglike``, ``score``, and
+    ``hessian``. A singular or non-finite information matrix, the iteration limit, or a coefficient
+    that runs to infinity (monotone likelihood, where the log-likelihood converges but the
+    estimate does not exist) ends the fit as not converged.
+    """
+    n_params = int(model.exog.shape[1])
+    beta = np.zeros(n_params, dtype=float)
+    nan_covariance = np.full((n_params, n_params), np.nan)
+    no_flags = np.zeros(n_params, dtype=bool)
+
+    def _failed(reason: str, iterations: int, at: np.ndarray) -> _PHRegNewton:
+        return _PHRegNewton(at, nan_covariance, False, iterations, reason, no_flags)
+
+    if n_params == 0:
+        # The null model has nothing to estimate.
+        return _PHRegNewton(beta, np.zeros((0, 0)), True, 0, "converged", no_flags)
+    loglik = float(model.loglike(beta))
+    derivatives = _phreg_score_information(model, beta)
+    if not math.isfinite(loglik) or derivatives is None:
+        return _failed("non_finite", 0, beta)
+    factor = _phreg_information_factor(derivatives[1])
+    if factor is None:
+        return _failed("singular_information", 0, beta)
+    candidate = beta + _phreg_solve(factor, derivatives[0])
+    halving = False
+    converged = False
+    iterations = 0
+    for iterations in range(1, _COX_NEWTON_MAX_ITERATIONS + 1):
+        if not np.all(np.isfinite(candidate)):
+            return _failed("non_finite", iterations, beta)
+        candidate_loglik = float(model.loglike(candidate))
+        if (
+            math.isfinite(candidate_loglik)
+            and not halving
+            and abs(candidate_loglik - loglik) <= _COX_NEWTON_EPS * abs(candidate_loglik)
+        ):
+            beta, loglik = candidate, candidate_loglik
+            converged = True
+            break
+        if iterations == _COX_NEWTON_MAX_ITERATIONS:
+            break
+        if not math.isfinite(candidate_loglik) or candidate_loglik < loglik:
+            # Half of the previous increment, as R's coxph.
+            halving = True
+            candidate = (candidate + beta) / 2.0
+            continue
+        halving = False
+        beta, loglik = candidate, candidate_loglik
+        derivatives = _phreg_score_information(model, beta)
+        if derivatives is None:
+            return _failed("non_finite", iterations, beta)
+        factor = _phreg_information_factor(derivatives[1])
+        if factor is None:
+            return _failed("singular_information", iterations, beta)
+        candidate = beta + _phreg_solve(factor, derivatives[0])
+    if not converged:
+        return _failed("iteration_limit", iterations, beta)
+
+    derivatives = _phreg_score_information(model, beta)
+    factor = None if derivatives is None else _phreg_information_factor(derivatives[1])
+    if derivatives is None or factor is None:
+        return _failed("singular_information", iterations, beta)
+    covariance = _phreg_solve(factor, np.eye(n_params))
+    covariance = (covariance + covariance.T) / 2.0
+    pending = _phreg_solve(factor, derivatives[0])
+    spread = np.std(np.asarray(model.exog, dtype=float), axis=0)
+    with np.errstate(invalid="ignore", over="ignore"):
+        size = np.abs(beta) * spread
+        pending_size = np.abs(pending) * spread
+        separated = (size > _COX_MAX_LOG_HR_PER_SD) | (pending_size > _COX_TOLER_INF * np.maximum(size, 1.0))
+    separated &= spread > 0.0
+    if separated.any():
+        return _PHRegNewton(beta, covariance, False, iterations, "separated", separated)
+    return _PHRegNewton(beta, covariance, True, iterations, "converged", no_flags)
+
+
+def fit_phreg(model: PHReg) -> tuple[PHRegResults, bool]:
+    """Fit ``model`` by maximum partial likelihood and return ``(results, converged)``.
+
+    statsmodels' own ``PHReg.fit`` takes plain Newton steps from 0 without step halving, so a
+    strong effect of a rare binary covariate can overshoot and diverge to NaN coefficients that
+    were still flagged as converged. The fit here is a safeguarded Newton-Raphson that follows
+    R's coxph (see ``_phreg_newton_raphson``) on the model's own log-likelihood, score, and
+    Hessian, so Efron or Breslow ties and strata are handled exactly as statsmodels computes
+    them. ``converged`` is False for a singular information matrix, non-finite values, the
+    iteration limit, or a coefficient that runs to infinity; the results then hold the last
+    accepted coefficients. ``results.mle_retvals`` records the reason. The results carry the
+    inverse information as covariance, as ``PHReg.fit`` does. Objects that only expose a
+    statsmodels-style ``fit()`` are fitted as-is and treated as converged.
     """
     if not isinstance(model, PHReg):
         return model.fit(disp=False), True
     model.groups = None
-    raw = LikelihoodModel.fit(model, disp=False, warn_convergence=False)
-    converged = bool((getattr(raw, "mle_retvals", None) or {}).get("converged", True))
-    return PHRegResults(model, raw.params, raw.cov_params()), converged
+    fit = _phreg_newton_raphson(model)
+    results = PHRegResults(model, fit.beta, fit.covariance)
+    results.mle_retvals = {
+        "converged": fit.converged,
+        "iterations": fit.iterations,
+        "reason": fit.reason,
+        "separated": fit.separated.tolist(),
+    }
+    return results, fit.converged
 
 
 def _fit_cox_model(model: PHReg, stability_snapshot: dict[str, Any]):
@@ -3395,11 +3555,18 @@ def _fit_cox_model(model: PHReg, stability_snapshot: dict[str, Any]):
     except MemoryError:
         raise
     except Exception as exc:
+        if must_propagate(exc):
+            raise
         raise ValueError(_cox_fit_failure_message(exc, stability_snapshot)) from exc
     if not converged:
-        raise ValueError(
-            _cox_fit_failure_message(RuntimeError("Cox PH fit did not converge cleanly."), stability_snapshot)
+        retvals = getattr(results, "mle_retvals", None)
+        reason = retvals.get("reason") if isinstance(retvals, dict) else None
+        cause: Exception = (
+            np.linalg.LinAlgError("Singular matrix")
+            if reason == "singular_information"
+            else RuntimeError("Cox PH fit did not converge cleanly.")
         )
+        raise ValueError(_cox_fit_failure_message(cause, stability_snapshot))
     return results
 
 
@@ -4382,10 +4549,13 @@ def _signature_scientific_summary(
             "Permutation p-values are search-adjusted: each shuffle re-scores every tested signature that meets the group-size rule "
             "(applying the event rule within the shuffle) and keeps the maximum statistic (Westfall-Young), so they account for selecting the best rule."
         )
-        min_attainable = 1.0 / (permutation_iterations + 1.0)
+        # The p-value is (exceedances + 1) / (valid shuffles + 1), so its floor follows the
+        # shuffles that produced a statistic, not the number requested.
+        used_permutations = int(best_split.get("Permutation valid resamples") or 0) or permutation_iterations
+        min_attainable = 1.0 / (used_permutations + 1.0)
         if min_attainable > float(search_space["significance_level"]):
             cautions.append(
-                f"With {permutation_iterations} permutations the smallest attainable permutation p is {min_attainable:.3g}, above alpha; increase permutations or no signature can pass."
+                f"With {used_permutations} valid permutations the smallest attainable permutation p is {min_attainable:.3g}, above alpha; increase permutations or no signature can pass."
             )
     if validation_iterations > 0:
         strengths.append("Within-cohort resampling replication was checked for top-ranked candidates.")
@@ -4452,7 +4622,9 @@ def _signature_scientific_summary(
         cautions.append("Bootstrap resampling did not yield any valid signature resamples, so bootstrap stability support is unavailable.")
     elif bootstrap_iterations > 0 and bootstrap_skipped_resamples > 0:
         cautions.append(
-            f"Bootstrap screening used {bootstrap_valid_resamples} valid resamples and skipped {bootstrap_skipped_resamples}, so stability support is based on a reduced resampling subset."
+            f"Bootstrap screening skipped {bootstrap_skipped_resamples} of {bootstrap_iterations} resamples (a side with fewer "
+            f"than {_RESAMPLE_MIN_ROWS_PER_GROUP} rows or without an event, or a failed test); skipped resamples count against "
+            "bootstrap support and direction consistency."
         )
     if direction_consistency is not None and direction_consistency < 0.75:
         cautions.append("Bootstrap hazard-ratio direction is not consistently preserved.")
@@ -4462,7 +4634,9 @@ def _signature_scientific_summary(
         cautions.append("Resampling replication did not yield any analyzable subsamples, so replication support is unavailable.")
     elif validation_iterations > 0 and validation_skipped_folds > 0:
         cautions.append(
-            f"Resampling replication used {validation_valid_folds} valid subsamples and skipped {validation_skipped_folds}, so replication support is based on a reduced subset."
+            f"Resampling replication skipped {validation_skipped_folds} of {validation_iterations} subsamples (a side with "
+            f"fewer than {_RESAMPLE_MIN_ROWS_PER_GROUP} rows or without an event, or a failed test); skipped subsamples count "
+            "against replication support."
         )
     if permutation_p is not None and permutation_p > alpha:
         cautions.append("The search-adjusted permutation p-value exceeds alpha: the top signature is not distinguishable from the best rule expected under no association.")
@@ -5172,6 +5346,34 @@ def _signature_mask(
     return np.asarray(mask, dtype=bool)
 
 
+def _signature_hazard_ratio(
+    times: np.ndarray,
+    events: np.ndarray,
+    mask: np.ndarray,
+    alpha: float,
+) -> tuple[float | None, float | None, float | None]:
+    """Signature+ vs signature- Cox hazard ratio (Efron ties) and its (1 - alpha) confidence interval.
+
+    A fit that does not converge (for example a hazard ratio that runs to 0 or infinity because
+    one side has every event before the other side's) gives ``(None, None, None)``.
+    """
+    model = PHReg(
+        np.asarray(times, dtype=float),
+        np.asarray(mask, dtype=bool).astype(float)[:, np.newaxis],
+        status=np.asarray(events, dtype=int),
+        ties="efron",
+    )
+    results, converged = fit_phreg(model)
+    if not converged:
+        return None, None, None
+    conf_int = np.asarray(results.conf_int(alpha=alpha), dtype=float)
+    return (
+        _safe_exp_or_none(np.asarray(results.params, dtype=float)[0]),
+        _safe_exp_or_none(conf_int[0, 0]),
+        _safe_exp_or_none(conf_int[0, 1]),
+    )
+
+
 def _signature_cox_metrics(
     times: np.ndarray,
     events: np.ndarray,
@@ -5179,26 +5381,23 @@ def _signature_cox_metrics(
     alpha: float = 0.05,
 ) -> dict[str, float | None]:
     """Signature+ vs signature- hazard ratio with a (1 - alpha) confidence interval."""
-    cox_frame = pd.DataFrame(
-        {
-            "__time": np.asarray(times, dtype=float),
-            "__event": np.asarray(events, dtype=int),
-            "__signature": np.asarray(mask, dtype=bool).astype(float),
-        }
-    )
-    cox_model = PHReg.from_formula(
-        'Q("__time") ~ Q("__signature")',
-        data=cox_frame,
-        status=cox_frame["__event"],
-        ties="efron",
-    )
-    cox_results = cox_model.fit(disp=False)
-    conf_int = np.asarray(cox_results.conf_int(alpha=alpha), dtype=float)
+    hazard_ratio, ci_lower, ci_upper = _signature_hazard_ratio(times, events, mask, alpha)
     return {
-        "Hazard ratio (signature+ vs -)": _safe_exp_or_none(cox_results.params[0]),
-        "HR CI lower": _safe_exp_or_none(conf_int[0, 0]),
-        "HR CI upper": _safe_exp_or_none(conf_int[0, 1]),
+        "Hazard ratio (signature+ vs -)": hazard_ratio,
+        "HR CI lower": ci_lower,
+        "HR CI upper": ci_upper,
     }
+
+
+def _signature_logrank(times: np.ndarray, events: np.ndarray, mask: np.ndarray) -> tuple[float, float]:
+    """Log-rank chi-square of signature+ vs signature- and its upper-tail p-value (1 df).
+
+    The p-value comes from ``chi2.sf``: ``survdiff`` returns ``1 - chi2.cdf``, which rounds to
+    0 once the chi-square passes about 75.
+    """
+    chisq, _ = survdiff(times, events, np.where(mask, "Signature+", "Signature-"))
+    chisq = float(chisq)
+    return chisq, float(stats.chi2.sf(chisq, 1))
 
 
 def _stability_score(row: dict[str, Any], significance_level: float = 0.05) -> float:
@@ -5273,6 +5472,25 @@ def _signature_is_significant(
     return True
 
 
+# A bootstrap resample or replication fold is scored when each side of the signature has at
+# least this many rows and events: the log-rank test and the Cox hazard ratio need an event on
+# each side, and a side of a single row cannot vary. The discovery group-size and event rules
+# are not re-applied to the smaller draws (a rule at the minimum group size would then fail about
+# half of them by chance alone); skipped draws count against support instead.
+_RESAMPLE_MIN_ROWS_PER_GROUP = 2
+_RESAMPLE_MIN_EVENTS_PER_GROUP = 1
+
+
+def _resample_is_estimable(mask_values: np.ndarray, events: np.ndarray) -> bool:
+    n_positive = int(mask_values.sum())
+    n_negative = int(mask_values.shape[0]) - n_positive
+    if min(n_positive, n_negative) < _RESAMPLE_MIN_ROWS_PER_GROUP:
+        return False
+    events_positive = int(events[mask_values].sum())
+    events_negative = int(events[~mask_values].sum())
+    return min(events_positive, events_negative) >= _RESAMPLE_MIN_EVENTS_PER_GROUP
+
+
 def _bootstrap_signature_metrics(
     frame: pd.DataFrame,
     time_column: str,
@@ -5285,15 +5503,17 @@ def _bootstrap_signature_metrics(
     random_seed: int,
     significance_level: float,
     observed_hazard_ratio: float | None = None,
-    min_events_per_group: int = 1,
 ) -> dict[str, float | int | None]:
     """Bootstrap support for one signature.
 
-    The group-size and event minimums were set on the full cohort, so they are scaled to the
-    resample size (as the resampling-replication check does). Support and direction
-    consistency are shares of all requested resamples: a resample that had to be skipped
-    (too few rows or events on one side, or a failed fit) counts as a failure, so frequent
-    skipping cannot inflate the support of an unstable rule.
+    Each resample is scored when both sides of the signature have at least
+    ``_RESAMPLE_MIN_ROWS_PER_GROUP`` rows and ``_RESAMPLE_MIN_EVENTS_PER_GROUP`` event (the
+    minimum the log-rank test and the Cox hazard ratio need); the discovery group-size and
+    event rules are not re-applied to resamples. Support and direction consistency are shares
+    of all requested resamples: a resample that had to be skipped (too few rows or events on
+    one side, or a failed test) counts as a failure, so frequent skipping cannot inflate the
+    support of an unstable rule, and the number skipped is reported. A resample whose Cox fit
+    does not converge adds no hazard ratio, so it counts against direction consistency.
     """
     if n_iterations <= 0:
         return {
@@ -5308,10 +5528,6 @@ def _bootstrap_signature_metrics(
     n_obs = int(frame.shape[0])
     sample_size = int(math.ceil(n_obs * sample_fraction))
     sample_size = min(max(sample_size, min_group_size * 2), n_obs)
-    sample_share = sample_size / max(n_obs, 1)
-    resample_min_group = min(int(min_group_size), max(4, int(math.ceil(min_group_size * sample_share))))
-    resample_min_events = min(int(min_events_per_group), max(2, int(math.ceil(min_events_per_group * sample_share))))
-    resample_min_events = max(resample_min_events, 1)
     rng = np.random.default_rng(random_seed)
     significant_count = 0
     valid_resamples = 0
@@ -5328,34 +5544,15 @@ def _bootstrap_signature_metrics(
         raise_if_cancelled()
         sampled_idx = rng.integers(0, n_obs, size=sample_size)
         mask_values = cohort_mask[sampled_idx]
-        n_high = int(mask_values.sum())
-        n_low = sample_size - n_high
-        if n_high < resample_min_group or n_low < resample_min_group:
-            skipped_resamples += 1
-            continue
-
         events = cohort_events[sampled_idx]
-        times = cohort_times[sampled_idx]
-        if events[mask_values].sum() < resample_min_events or events[~mask_values].sum() < resample_min_events:
+        if not _resample_is_estimable(mask_values, events):
             skipped_resamples += 1
             continue
+        times = cohort_times[sampled_idx]
 
         try:
-            _, p_value = survdiff(times, events, np.where(mask_values, "Signature+", "Signature-"))
-            cox_frame = pd.DataFrame(
-                {
-                    "__time": times,
-                    "__event": events,
-                    "__signature": mask_values.astype(float),
-                }
-            )
-            cox_model = PHReg.from_formula(
-                'Q("__time") ~ Q("__signature")',
-                data=cox_frame,
-                status=cox_frame["__event"],
-                ties="efron",
-            )
-            cox_results = cox_model.fit(disp=False)
+            _, p_float = _signature_logrank(times, events, mask_values)
+            hr, _, _ = _signature_hazard_ratio(times, events, mask_values, significance_level)
         except MemoryError:
             raise
         except Exception as exc:
@@ -5365,9 +5562,7 @@ def _bootstrap_signature_metrics(
             continue
 
         valid_resamples += 1
-        p_float = float(p_value)
         p_values.append(p_float)
-        hr = _safe_exp_or_none(cox_results.params[0])
         if hr is not None:
             hazard_ratios.append(hr)
         if p_float <= significance_level:
@@ -5656,12 +5851,21 @@ def _validation_signature_metrics(
     combo: Sequence[dict[str, Any]],
     combo_operator: str,
     min_group_size: int,
-    min_events_per_group: int,
     n_iterations: int,
     validation_fraction: float,
     significance_level: float,
     random_seed: int,
+    observed_hazard_ratio: float | None = None,
 ) -> dict[str, float | int | None]:
+    """Within-cohort replication support for one signature.
+
+    Each of ``n_iterations`` random subsamples (``validation_fraction`` of the cohort, drawn
+    without replacement) is scored under the same estimability floor as the bootstrap. A fold
+    supports the signature when its log-rank p is at most alpha and its hazard-ratio interval
+    excludes 1 on the side of the discovery hazard ratio (``observed_hazard_ratio``; either
+    side when it is unknown). Support is the share of all requested folds, so skipped folds and
+    folds significant in the opposite direction count against it, as in the bootstrap.
+    """
     if n_iterations <= 0:
         return {
             "Validation support (p<alpha)": None,
@@ -5680,15 +5884,13 @@ def _validation_signature_metrics(
             "Validation median HR": None,
             "Validation median p": None,
             "Validation valid folds": 0,
-            "Validation skipped folds": 0,
+            "Validation skipped folds": int(n_iterations),
         }
     holdout_size = int(math.ceil(n_obs * validation_fraction))
     holdout_size = min(max(holdout_size, min_holdout), max_holdout)
-    # The discovery minimums were set on the full cohort; apply the same
-    # shares to the smaller resample instead of the absolute counts.
-    fold_share = holdout_size / max(n_obs, 1)
-    min_group_size = max(4, int(math.ceil(min_group_size * fold_share)))
-    min_events_per_group = max(2, int(math.ceil(min_events_per_group * fold_share)))
+    observed_harmful: bool | None = None
+    if observed_hazard_ratio is not None and math.isfinite(float(observed_hazard_ratio)):
+        observed_harmful = float(observed_hazard_ratio) >= 1.0
     rng = np.random.default_rng(random_seed)
     significant_count = 0
     valid_folds = 0
@@ -5704,35 +5906,15 @@ def _validation_signature_metrics(
         raise_if_cancelled()
         holdout_idx = rng.choice(n_obs, size=holdout_size, replace=False)
         mask_values = cohort_mask[holdout_idx]
-        n_high = int(mask_values.sum())
-        n_low = holdout_size - n_high
-        if n_high < min_group_size or n_low < min_group_size:
-            skipped_folds += 1
-            continue
-
         events = cohort_events[holdout_idx]
-        times = cohort_times[holdout_idx]
-        if events[mask_values].sum() < min_events_per_group or events[~mask_values].sum() < min_events_per_group:
+        if not _resample_is_estimable(mask_values, events):
             skipped_folds += 1
             continue
+        times = cohort_times[holdout_idx]
 
         try:
-            _, p_value = survdiff(times, events, np.where(mask_values, "Signature+", "Signature-"))
-            cox_frame = pd.DataFrame(
-                {
-                    "__time": times,
-                    "__event": events,
-                    "__signature": mask_values.astype(float),
-                }
-            )
-            cox_model = PHReg.from_formula(
-                'Q("__time") ~ Q("__signature")',
-                data=cox_frame,
-                status=cox_frame["__event"],
-                ties="efron",
-            )
-            cox_results = cox_model.fit(disp=False)
-            conf_int = np.asarray(cox_results.conf_int(alpha=significance_level), dtype=float)
+            _, p_float = _signature_logrank(times, events, mask_values)
+            hr, ci_low, ci_high = _signature_hazard_ratio(times, events, mask_values, significance_level)
         except MemoryError:
             raise
         except Exception as exc:
@@ -5741,15 +5923,13 @@ def _validation_signature_metrics(
             skipped_folds += 1
             continue
 
-        ci_low = _safe_exp_or_none(conf_int[0, 0])
-        ci_high = _safe_exp_or_none(conf_int[0, 1])
         valid_folds += 1
-        p_float = float(p_value)
         p_values.append(p_float)
-        hr = _safe_exp_or_none(cox_results.params[0])
         if hr is not None:
             hazard_ratios.append(hr)
-        if p_float <= significance_level and ci_low is not None and ci_high is not None and not (ci_low <= 1.0 <= ci_high):
+        if p_float > significance_level or ci_low is None or ci_high is None or ci_low <= 1.0 <= ci_high:
+            continue
+        if observed_harmful is None or (ci_low > 1.0) == observed_harmful:
             significant_count += 1
 
     if valid_folds == 0:
@@ -5762,7 +5942,7 @@ def _validation_signature_metrics(
         }
 
     return {
-        "Validation support (p<alpha)": float(significant_count / valid_folds),
+        "Validation support (p<alpha)": float(significant_count / int(n_iterations)),
         "Validation median HR": float(np.median(hazard_ratios)) if hazard_ratios else None,
         "Validation median p": float(np.median(p_values)),
         "Validation valid folds": int(valid_folds),
@@ -5957,7 +6137,7 @@ def _screen_signature_combinations(
                 if events[mask].sum() < min_events_per_group or events[~mask].sum() < min_events_per_group:
                     continue
                 try:
-                    chisq, p_value = survdiff(times, events, np.where(mask, "Signature+", "Signature-"))
+                    chisq, p_value = _signature_logrank(times, events, mask)
                 except MemoryError:
                     raise
                 except Exception as exc:
@@ -6087,6 +6267,7 @@ def _add_signature_robustness_metrics(
                 f"Skipping Cox robustness metrics for signature row {idx} due to: {exc}",
                 RuntimeWarning,
             )
+        observed_hazard_ratio = _safe_float(rows[idx].get("Hazard ratio (signature+ vs -)"))
         if bootstrap_iterations > 0:
             rows[idx].update(
                 _bootstrap_signature_metrics(
@@ -6100,8 +6281,7 @@ def _add_signature_robustness_metrics(
                     sample_fraction=bootstrap_sample_fraction,
                     random_seed=random_seed + 1000 + idx,
                     significance_level=significance_level,
-                    observed_hazard_ratio=_safe_float(rows[idx].get("Hazard ratio (signature+ vs -)")),
-                    min_events_per_group=min_events_per_group,
+                    observed_hazard_ratio=observed_hazard_ratio,
                 )
             )
         if validation_iterations > 0:
@@ -6113,11 +6293,11 @@ def _add_signature_robustness_metrics(
                     combo=combo["combo"],
                     combo_operator=combo["operator"],
                     min_group_size=min_group_size,
-                    min_events_per_group=min_events_per_group,
                     n_iterations=validation_iterations,
                     validation_fraction=validation_fraction,
                     significance_level=significance_level,
                     random_seed=random_seed + 3000 + idx,
+                    observed_hazard_ratio=observed_hazard_ratio,
                 )
             )
 
