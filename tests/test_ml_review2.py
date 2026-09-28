@@ -306,6 +306,77 @@ def test_repeated_cv_summary_describes_fold_means_and_models_that_could_not_run(
     assert "training folds of about 120 patients" in summary["strengths"][0]
 
 
+# ── Rankings without a C-index ──────────────────────────────────────────────
+
+
+def test_comparison_without_any_c_index_names_no_top_model_and_ranks_nothing(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+    from survival_toolkit.analysis import _cohort_frame
+
+    df = _late_event_cohort(n=40, n_events=4)
+    frame = _cohort_frame(df, "time", "event", extra_columns=["x", "z"], drop_missing_extra_columns=False)
+    _, eval_positions, mode = ml._split_train_test_positions(frame, "event", random_state=42)
+    holdout = frame.iloc[eval_positions]
+    # The holdout holds one event that no holdout patient outlives, so no model has a C-index.
+    assert mode == "holdout" and not ml._has_comparable_pair(holdout["time"], holdout["event"])
+
+    _patch_fits(monkeypatch, ml, **{name: _c_index_fit() for name in _FIT_FUNCTIONS})
+    result = ml.compare_survival_models(df, "time", "event", ["x", "z"])
+    assert all(row["c_index"] is None and row["rank"] is None for row in result["comparison_table"])
+    assert result["ranking_complete"] is False
+    assert result["excluded_models"] == sorted(row["model"] for row in result["comparison_table"])
+    summary = result["scientific_summary"]
+    assert "top:" not in summary["headline"]
+    assert any("no comparable pair" in text and "not ranked" in text for text in summary["cautions"])
+    assert not any("top-ranked model was selected" in text for text in summary["cautions"])
+    assert {row["Rank"] for row in result["manuscript_tables"]["model_performance_table"]} == {"Not ranked"}
+
+
+def test_repeated_cv_without_any_complete_model_names_no_cv_selected_model(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=27, n_patients=150)
+    first_fold: dict[str, tuple] = {}
+
+    def _fail_first_fold(train_frame, test_frame, **kwargs):
+        key = (len(train_frame), float(train_frame["os_months"].sum()))
+        first_fold.setdefault("key", key)
+        if key == first_fold["key"]:
+            raise ValueError("No non-constant encoded features remain")
+        return _fake_fit()(train_frame, test_frame, **kwargs)
+
+    _patch_fits(monkeypatch, ml, **{name: _fail_first_fold for name in _FIT_FUNCTIONS})
+    result = ml.cross_validate_survival_models(df, "os_months", "os_event", ["age", "biomarker_score"], cv_folds=3,
+                                               cv_repeats=1, random_state=11, locked_test_fraction=0.3)
+    assert all(row["c_index"] is None and row["rank"] is None for row in result["comparison_table"])
+    summary = result["scientific_summary"]
+    assert "top:" not in summary["headline"]
+    assert not any("CV-selected model (" in text for text in summary["strengths"] + summary["cautions"])
+    assert summary["cautions"][0].startswith("No model was scored on every cross-validation fold")
+    tables = result["manuscript_tables"]
+    assert {row["Rank"] for row in tables["model_performance_table"]} == {"Not ranked"}
+    assert not any("CV-selected (rank 1) model" in note for note in tables["table_notes"])
+    assert any(note.startswith("No model has a cross-validated C-index") for note in tables["table_notes"])
+    assert result["ranking_complete"] is False
+
+
+def test_comparisons_flag_missing_brier_metrics_of_the_top_model(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=27, n_patients=150)
+    _patch_fits(monkeypatch, ml)  # the fake fits report a C-index but no Brier metrics
+    comparison = ml.compare_survival_models(df, "os_months", "os_event", ["age", "biomarker_score"])
+    cv = ml.cross_validate_survival_models(df, "os_months", "os_event", ["age", "biomarker_score"], cv_folds=2, cv_repeats=1)
+    for result in (comparison, cv):
+        assert result["comparison_table"][0]["ibs"] is None
+        assert any("IBS / Brier Skill Score could not be computed" in text for text in result["scientific_summary"]["cautions"])
+    summary = ml._augment_scientific_summary_with_brier(
+        {"status": "robust", "headline": "h", "strengths": [], "cautions": [], "next_steps": [], "metrics": []},
+        {"ibs": None, "null_ibs": None, "brier_skill_score": None},
+    )
+    assert summary["status"] == "review" and summary["cautions"]
+
+
 def test_shap_tree_explainer_memory_errors_are_not_an_unsupported_model(monkeypatch) -> None:
     from survival_toolkit import ml_models as ml
 

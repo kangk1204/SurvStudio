@@ -1048,7 +1048,8 @@ def _augment_scientific_summary_with_brier(
     brier_result: dict[str, Any] | None,
 ) -> dict[str, Any]:
     scientific_summary = copy.deepcopy(scientific_summary)
-    if not brier_result:
+    # A comparison passes the top model's Brier fields, which are all None when they failed.
+    if not brier_result or _safe_float(brier_result.get("ibs")) is None:
         scientific_summary["cautions"].append(
             "IBS / Brier Skill Score could not be computed for this run, so calibration-error interpretation remains incomplete."
         )
@@ -2410,6 +2411,23 @@ def train_lasso_cox(
 # ===================================================================
 
 
+def _rank_by_c_index(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Sort comparison rows best C-index first and rank those that have a C-index.
+
+    Rows without a C-index come last with ``rank`` None (not ranked). Returns the top-ranked
+    row, or None when no row has a C-index, so no model can be named the best.
+    """
+    rows.sort(key=lambda row: row["c_index"] if row.get("c_index") is not None else -1.0, reverse=True)
+    rank = 0
+    for row in rows:
+        if row.get("c_index") is None:
+            row["rank"] = None
+        else:
+            rank += 1
+            row["rank"] = rank
+    return rows[0] if rows and rows[0].get("c_index") is not None else None
+
+
 @user_input_boundary
 def compare_survival_models(
     df: pd.DataFrame,
@@ -2512,19 +2530,32 @@ def compare_survival_models(
             + "; ".join(f"{e['model']}: {e['error']}" for e in errors)
         )
 
-    # Sort by C-index descending (None last)
-    comparison.sort(
-        key=lambda r: r["c_index"] if r["c_index"] is not None else -1.0,
-        reverse=True,
-    )
-
-    best = comparison[0]
+    best = _rank_by_c_index(comparison)
+    if best is not None:
+        ranking_caution = (
+            "The top-ranked model was selected and scored on the same evaluation split; treat this as screening "
+            "rather than final external validation."
+        )
+    else:
+        ranking_caution = (
+            "No model has a C-index on the evaluation split because "
+            + (
+                "its patients include no comparable pair (no event followed by a longer follow-up)"
+                if not _has_comparable_pair(test_frame[time_column], test_frame[event_column])
+                else "no model returned finite risk scores for it"
+            )
+            + ", so the models are not ranked."
+        )
     scientific_summary = _scientific_summary_ml(
-        model_name=f"Model Comparison Screening (top: {best['model']})",
-        c_index=best["c_index"],
+        model_name=(
+            f"Model Comparison Screening (top: {best['model']})" if best is not None else "Model Comparison Screening"
+        ),
+        c_index=None if best is None else best["c_index"],
         n_patients=n_patients,
         n_events=n_events,
-        n_features=best["n_features"],
+        n_features=(
+            best["n_features"] if best is not None else max(int(row.get("n_features") or 0) for row in comparison) or None
+        ),
         evaluation_mode=evaluation_mode,
         n_evaluation_patients=int(test_frame.shape[0]),
         n_evaluation_events=int(test_frame[event_column].sum()),
@@ -2534,18 +2565,19 @@ def compare_survival_models(
             f"{len(comparison)} model(s) trained and compared with {evaluation_mode} evaluation.",
         ],
         extra_cautions=[
-            "The top-ranked model was selected and scored on the same evaluation split; treat this as screening rather than final external validation.",
+            ranking_caution,
             f"{len(errors)} model(s) failed to train." if errors else None,
         ],
     )
-    scientific_summary = _augment_scientific_summary_with_brier(
-        scientific_summary,
-        {
-            "ibs": best.get("ibs"),
-            "null_ibs": best.get("null_ibs"),
-            "brier_skill_score": best.get("brier_skill_score"),
-        },
-    )
+    if best is not None:
+        scientific_summary = _augment_scientific_summary_with_brier(
+            scientific_summary,
+            {
+                "ibs": best.get("ibs"),
+                "null_ibs": best.get("null_ibs"),
+                "brier_skill_score": best.get("brier_skill_score"),
+            },
+        )
     duplicate_caution = duplicate_identifier_caution(df)
     if duplicate_caution:
         scientific_summary["cautions"].insert(0, duplicate_caution)
@@ -2565,8 +2597,15 @@ def compare_survival_models(
     result = {
         "comparison_table": comparison,
         "errors": errors,
-        "ranking_complete": len(errors) == 0 and len(comparison) == len(model_specs),
-        "excluded_models": sorted({str(error["model"]) for error in errors}),
+        "ranking_complete": (
+            len(errors) == 0
+            and len(comparison) == len(model_specs)
+            and all(row["c_index"] is not None for row in comparison)
+        ),
+        # Models left out of the ranking: failed fits and models without a C-index.
+        "excluded_models": sorted(
+            {str(error["model"]) for error in errors} | {str(row["model"]) for row in comparison if row["c_index"] is None}
+        ),
         "n_patients": n_patients,
         "n_events": n_events,
         "n_fit_patients": int(train_frame.shape[0]),
@@ -2984,6 +3023,15 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             return row.get("n_features")
         return f"{int(active)} active of {row.get('n_features')}"
 
+    def _rank_cell(row: dict[str, Any], position: int) -> Any:
+        """The row's rank (its position when the row carries none); a row without a C-index is not ranked."""
+        rank_value = row.get("rank", position)
+        if rank_value is None or _safe_float(row.get("c_index")) is None:
+            return "Not ranked"
+        return rank_value
+
+    any_c_index = any(_safe_float(row.get("c_index")) is not None for row in comparison_table)
+
     if repeated_cv_mode:
         interval_label = "Fold-level 2.5th-97.5th percentile range"
         include_provenance = any(
@@ -2996,7 +3044,7 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             interval_upper = _safe_float(row.get("c_index_interval_upper"))
             row_mode = str(row.get("evaluation_mode", evaluation_mode))
             manuscript_row = {
-                "Rank": rank,
+                "Rank": _rank_cell(row, rank),
                 "Model": row["model"],
                 "Validation Strategy": (
                     f"{row.get('cv_repeats', 1)}x{row.get('cv_folds', 1)} repeated stratified CV"
@@ -3055,6 +3103,8 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
             )
             table_notes.append(
                 "Models are ranked by development-set cross-validation. Report the locked-test C-index of the CV-selected (rank 1) model as the independent test performance."
+                if any_c_index
+                else "No model has a cross-validated C-index, so the models are not ranked and there is no CV-selected model whose locked-test C-index could be reported."
             )
         if evaluation_mode == "repeated_cv_incomplete":
             table_notes.append(
@@ -3081,9 +3131,8 @@ def build_manuscript_result_tables(result: dict[str, Any]) -> dict[str, Any]:
     else:
         row_modes = {str(row.get("evaluation_mode", evaluation_mode)) for row in comparison_table}
         for rank, row in enumerate(comparison_table, start=1):
-            rank_value = row.get("rank", rank)
             manuscript_row = {
-                "Rank": rank_value if rank_value is not None else "Not ranked",
+                "Rank": _rank_cell(row, rank),
                 "Model": row["model"],
                 "Validation Strategy": _manuscript_validation_strategy_label(str(row.get("evaluation_mode", evaluation_mode))),
                 "C-index": _safe_float(row.get("c_index")),
@@ -3402,12 +3451,12 @@ def cross_validate_survival_models(
             )
         )
 
-    comparison.sort(key=lambda row: row["c_index"] if row["c_index"] is not None else -1.0, reverse=True)
+    # None when no model was scored on every fold: then no model is named the top or CV-selected one.
+    best = _rank_by_c_index(comparison)
     mean_train_n = int(round(np.mean([row["train_n"] for row in fold_results]))) if fold_results else n_patients
     mean_test_n = int(round(np.mean([row["test_n"] for row in fold_results]))) if fold_results else n_patients
     mean_train_events = int(round(np.mean([row["train_events"] for row in fold_results]))) if fold_results else n_events
     mean_test_events = int(round(np.mean([row["test_events"] for row in fold_results]))) if fold_results else n_events
-    best = comparison[0]
     # Only fold-level failures make the cross-validation incomplete; models that could not run
     # at all are reported apart.
     aggregate_mode = (
@@ -3429,8 +3478,8 @@ def cross_validate_survival_models(
             float(locked_test_fraction),
         )
         extra_strengths.append(locked_note)
-        best_locked = best.get("locked_test_c_index")
-        if best_locked is not None:
+        best_locked = None if best is None else best.get("locked_test_c_index")
+        if best is not None and best_locked is not None:
             extra_strengths.append(
                 f"The CV-selected model ({best['model']}) reached a locked-test C-index of {best_locked:.3f}; "
                 "this single untouched-test estimate is the performance to report."
@@ -3462,16 +3511,24 @@ def cross_validate_survival_models(
             f"({failed_names}); their locked-test C-index is blank"
             + (
                 f", including the CV-selected model ({best['model']}), so this run has no untouched-test estimate to report."
-                if any(error["model"] == best["model"] for error in locked_errors)
+                if best is not None and any(error["model"] == best["model"] for error in locked_errors)
                 else "."
             )
         )
     scientific_summary = _scientific_summary_ml(
-        model_name=f"Repeated-CV Model Comparison Screening (top: {best['model']})",
-        c_index=best["c_index"],
+        model_name=(
+            f"Repeated-CV Model Comparison Screening (top: {best['model']})"
+            if best is not None
+            else "Repeated-CV Model Comparison Screening"
+        ),
+        c_index=None if best is None else best["c_index"],
         n_patients=n_patients,
         n_events=n_events,
-        n_features=best.get("n_features"),
+        n_features=(
+            best.get("n_features")
+            if best is not None
+            else max(int(row.get("n_features") or 0) for row in comparison) or None
+        ),
         evaluation_mode=aggregate_mode,
         n_evaluation_patients=mean_test_n,
         n_evaluation_events=mean_test_events,
@@ -3481,15 +3538,22 @@ def cross_validate_survival_models(
         extra_cautions=extra_cautions or None,
         counts_are_fold_means=True,
     )
-    scientific_summary = _augment_scientific_summary_with_brier(
-        scientific_summary,
-        {
-            "ibs": best.get("ibs"),
-            "null_ibs": best.get("null_ibs"),
-            "brier_skill_score": best.get("brier_skill_score"),
-        },
-    )
-    if use_locked_test:
+    if best is not None:
+        scientific_summary = _augment_scientific_summary_with_brier(
+            scientific_summary,
+            {
+                "ibs": best.get("ibs"),
+                "null_ibs": best.get("null_ibs"),
+                "brier_skill_score": best.get("brier_skill_score"),
+            },
+        )
+    if best is None:
+        scientific_summary["cautions"].insert(
+            0,
+            "No model was scored on every cross-validation fold, so the models are not ranked and there is no "
+            + ("CV-selected model whose locked-test C-index could be reported." if use_locked_test else "top-ranked model."),
+        )
+    elif use_locked_test:
         scientific_summary["cautions"].insert(
             0,
             "Models were ranked by development-set repeated CV; report the locked-test C-index of the CV-selected model as the independent performance estimate, not the best locked-test value across models.",
