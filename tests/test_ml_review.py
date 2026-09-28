@@ -315,17 +315,23 @@ def test_cox_rank_pruning_keeps_tiny_scale_features_and_drops_constant_combinati
     assert result["n_features"] == 3
 
 
-def test_cox_rank_pruning_order_does_not_change_a_full_rank_design() -> None:
+def test_cox_rank_pruning_after_standardising_keeps_the_columns_as_standardised_alone() -> None:
     from survival_toolkit import ml_models as ml
 
     df = make_example_dataset(seed=24, n_patients=200)
-    encoded, held_out, _ = ml._encode_train_test_features(df.iloc[:140], df.iloc[140:], ["age", "biomarker_score", "stage", "sex"], ["stage", "sex"])
-    old_train, old_eval = ml._drop_rank_deficient_train_columns(encoded, held_out)
-    old_train, old_eval, _, _ = ml._standardize_encoded_matrices(old_train, old_eval)
-    new_train, new_eval, _, _ = ml._standardize_encoded_matrices(encoded, held_out)
-    new_train, new_eval = ml._drop_rank_deficient_train_columns(new_train, new_eval)
-    pd.testing.assert_frame_equal(old_train, new_train, check_exact=True)
-    pd.testing.assert_frame_equal(old_eval, new_eval, check_exact=True)
+    # Age in months is a rescaled copy of age, so the design is rank-deficient and pruning must act.
+    df = df.assign(age_months=df["age"] * 12.0)
+    features = ["age", "age_months", "biomarker_score", "stage", "sex"]
+    encoded, held_out, _ = ml._encode_train_test_features(df.iloc[:140], df.iloc[140:], features, ["stage", "sex"])
+    std_train, std_eval, _, _ = ml._standardize_encoded_matrices(encoded, held_out)
+    pruned_train, pruned_eval = ml._drop_rank_deficient_train_columns(std_train, std_eval)
+    assert pruned_train.shape[1] == encoded.shape[1] - 1
+    assert ("age" in pruned_train.columns) != ("age_months" in pruned_train.columns)
+    # Standardising per column first leaves the kept columns exactly as standardising only them would.
+    kept = list(pruned_train.columns)
+    alone_train, alone_eval, _, _ = ml._standardize_encoded_matrices(encoded[kept], held_out[kept])
+    pd.testing.assert_frame_equal(pruned_train, alone_train, check_exact=True)
+    pd.testing.assert_frame_equal(pruned_eval, alone_eval, check_exact=True)
 
 
 # ── Validation of requests and settings ─────────────────────────────────────

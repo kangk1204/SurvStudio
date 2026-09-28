@@ -1040,12 +1040,20 @@ def test_time_dependent_importance_returns_time_major_matrix() -> None:
         time_column="os_months",
         event_column="os_event",
         features=["age", "biomarker_score", "immune_index"],
-        eval_times=[12.0, 24.0, 36.0],
+        eval_times=[12.0, 24.0],
+        n_estimators=20,
     )
     assert result["importance_matrix_orientation"] == "time_major"
-    assert len(result["importance_matrix"]) == len(result["eval_times"])
-    assert len(result["importance_matrix"][0]) == len(result["features"])
-    assert len(result["importance_matrix_feature_major"]) == len(result["features"])
+    # Two time points and three features, so a transposed matrix could not pass.
+    assert result["eval_times"] == [12.0, 24.0] and len(result["features"]) == 3
+    assert [len(row) for row in result["importance_matrix"]] == [3, 3]
+    assert [len(row) for row in result["importance_matrix_feature_major"]] == [2, 2, 2]
+    for time_index in range(2):
+        for feature_index in range(3):
+            assert (
+                result["importance_matrix"][time_index][feature_index]
+                == result["importance_matrix_feature_major"][feature_index][time_index]
+            )
 
 
 def test_counterfactual_survival_handles_zero_baseline_risk(monkeypatch) -> None:
@@ -1447,9 +1455,10 @@ def test_compute_shap_values_accepts_list_output_from_older_shap(monkeypatch) ->
 
         def shap_values(self, matrix):
             arr = np.asarray(matrix, dtype=float)
+            # Two outputs that rank the features in opposite orders.
             return [
-                np.zeros_like(arr),
-                np.ones_like(arr),
+                arr * np.array([3.0, 2.0, 1.0]),
+                arr * np.array([1.0, 2.0, 3.0]),
             ]
 
     monkeypatch.setattr(ml_models, "SHAP_AVAILABLE", True)
@@ -1465,8 +1474,10 @@ def test_compute_shap_values_accepts_list_output_from_older_shap(monkeypatch) ->
     result = ml_models.compute_shap_values(model, encoded, feature_names=list(encoded.columns))
 
     assert result["method"] == "tree"
-    assert result["feature_importance"][0]["feature"] == "a"
-    assert result["shap_summary"]
+    # The last output is used: mean |SHAP| of c = 3 * mean(2, 5, 8, 11) = 19.5 ranks it first.
+    assert [row["feature"] for row in result["feature_importance"]] == ["c", "b", "a"]
+    assert result["feature_importance"][0]["mean_abs_shap"] == pytest.approx(19.5)
+    assert result["shap_summary"][0]["shap_values"] == [6.0, 15.0, 24.0, 33.0]
 
 
 def test_compute_shap_values_requires_predict_callable(monkeypatch) -> None:
@@ -1553,10 +1564,10 @@ def test_tree_model_training_keeps_encoded_matrices_and_targets_aligned(
     import survival_toolkit.ml_models as ml_models
 
     train_encoded = pd.DataFrame({"age": [50.0, 60.0, 70.0]})
-    eval_encoded = pd.DataFrame({"age": [80.0, 90.0]})
+    eval_encoded = pd.DataFrame({"age": [80.0, 90.0, 75.0]})
     full_encoded = pd.concat([train_encoded, eval_encoded], ignore_index=True)
     train_frame = pd.DataFrame({"os_months": [10.0, 20.0, 30.0], "os_event": [1.0, 0.0, 1.0]})
-    eval_frame = pd.DataFrame({"os_months": [40.0, 50.0], "os_event": [0.0, 1.0]})
+    eval_frame = pd.DataFrame({"os_months": [40.0, 50.0, 60.0], "os_event": [1.0, 1.0, 0.0]})
     full_frame = pd.concat([train_frame, eval_frame], ignore_index=True)
 
     class _DummyTreeModel:
@@ -1571,7 +1582,8 @@ def test_tree_model_training_keeps_encoded_matrices_and_targets_aligned(
             return self
 
         def predict(self, X):
-            return np.linspace(0.1, 0.9, X.shape[0], dtype=float)
+            # The risk score is the age, so every score can be traced back to its row.
+            return np.asarray(X, dtype=float)[:, 0]
 
     monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
     monkeypatch.setattr(ml_models, model_attr, _DummyTreeModel)
@@ -1590,19 +1602,10 @@ def test_tree_model_training_keeps_encoded_matrices_and_targets_aligned(
             "feature_encoder": None,
         },
     )
-    monkeypatch.setattr(
-        ml_models,
-        "_prepare_sksurv_data",
-        lambda frame, time_column, event_column: np.array(
-            list(zip(frame[event_column].astype(bool), frame[time_column].astype(float), strict=False)),
-            dtype=[("event", bool), ("time", float)],
-        ),
-    )
-    monkeypatch.setattr(ml_models, "_sksurv_c_index", lambda y, scores: 0.61)
 
     train_fn = getattr(ml_models, train_fn_name)
     kwargs = {
-        "df": full_frame.assign(age=[50.0, 60.0, 70.0, 80.0, 90.0]),
+        "df": full_frame.assign(age=[50.0, 60.0, 70.0, 80.0, 90.0, 75.0]),
         "time_column": "os_months",
         "event_column": "os_event",
         "features": ["age"],
@@ -1614,6 +1617,14 @@ def test_tree_model_training_keeps_encoded_matrices_and_targets_aligned(
 
     assert result["_X_encoded"].shape[0] == result["_y"].shape[0] == full_frame.shape[0]
     assert result["_X_eval_encoded"].shape[0] == result["_y_eval"].shape[0] == eval_frame.shape[0]
+    # Row by row: scores and outcomes stay paired, so the holdout C-index is exactly the one of
+    # (risk 80, event at 40), (risk 90, event at 50), (risk 75, censored at 60): 2 of 3 pairs concordant.
+    assert result["evaluation_risk_scores"] == [80.0, 90.0, 75.0]
+    assert result["predicted_risk_scores"] == [50.0, 60.0, 70.0, 80.0, 90.0, 75.0]
+    assert result["_y_eval"]["time"].tolist() == [40.0, 50.0, 60.0]
+    assert result["_y_eval"]["event"].tolist() == [True, True, False]
+    assert result["_y"]["time"].tolist() == full_frame["os_months"].tolist()
+    assert result["model_stats"]["c_index"] == pytest.approx(2.0 / 3.0)
 
 
 def test_random_survival_forest_uses_parallel_tree_jobs(monkeypatch) -> None:
