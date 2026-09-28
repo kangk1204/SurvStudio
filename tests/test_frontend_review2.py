@@ -896,6 +896,63 @@ def test_the_left_out_c_index_of_an_unfitted_model_is_the_whole_procedures(tmp_p
     assert "The selected-marker model's apparent C-index is optimistic by about 0.030" in result["fitted"]
 
 
+def test_dropped_markers_are_grouped_by_their_reason_and_cohort_notes_are_shown(tmp_path: Path) -> None:
+    """Markers left out for infinite values get their own group, an unknown reason a generic one; the engine's
+    cohort notes are cautions, and data-derived text in them stays inert."""
+    result = _run_page(tmp_path, r"""
+      page.context.__payload = { analysis: {
+        primary_lens: "added_value",
+        tier_counts: { robust: 0, suggestive: 0 },
+        settings: { alpha: 0.05, robust_frequency: 0.5, robust_direction: 0.9 },
+        resampling: { n_valid: 5, fraction: 0.632, stability_assessed: true },
+        null: { n_permutations: 99, lens2_null: "smith" },
+        signature: {},
+        cohort: {
+          n: 300, events: 120, n_markers_evaluated: 12,
+          dropped_markers: [
+            { marker: "log_a", reason: "infinite values", n_infinite: 3 },
+            { marker: "log_b", reason: "infinite values", n_infinite: 1 },
+            { marker: "rare", reason: "near-constant (95% at one value)" },
+            { marker: "flat", reason: "constant" },
+            { marker: "sparse", reason: "40% missing" },
+            { marker: "odd", reason: "a reason added later" },
+          ],
+          notes: ["age_<b>x</b> was left out of the clinical model: collinear.", "No clinical covariate could be estimated, so the markers were evaluated without clinical adjustment."],
+        },
+      } };
+      const summary = page.run("markerSummary(__payload)");
+      page.run("renderInsightBoard(refs.markersInsightBoard, markerSummary(__payload), '')");
+      return { cautions: summary.cautions, html: page.run("refs.markersInsightBoard.innerHTML"), bold: page.run("refs.markersInsightBoard.querySelectorAll('b').length") };
+    """)
+
+    dropped = next(caution for caution in result["cautions"] if "left out before testing" in caution)
+    assert dropped.startswith("6 marker(s) were left out before testing: ")
+    assert "1 near-constant (most patients at one value, as for genes expressed in few patients)" in dropped
+    assert "2 constant or mostly missing" in dropped
+    assert "2 with infinite values (for example the log of 0; use log(x + 1) instead)" in dropped
+    assert "1 for another reason" in dropped
+    assert "age_<b>x</b> was left out of the clinical model: collinear." in result["cautions"]
+    assert "No clinical covariate could be estimated, so the markers were evaluated without clinical adjustment." in result["cautions"]
+    assert result["bold"] == 0 and "age_&lt;b&gt;x&lt;/b&gt;" in result["html"]
+
+
+def test_blank_marker_settings_use_the_shared_defaults(tmp_path: Path, example_dataset: dict) -> None:
+    """Blank Permutations, Subsamples and Seed send the workspace's MARKER_NUMERIC_DEFAULTS when it is defined."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.run("refs.markerPermutations.value = ''; refs.markerResamples.value = ''; refs.markerRandomSeed.value = '';");
+      const pick = () => page.run("(({ n_permutations, n_resamples, random_seed }) => ({ n_permutations, n_resamples, random_seed }))(markerRequestFields())");
+      const builtIn = pick();
+      page.run("var MARKER_NUMERIC_DEFAULTS = Object.freeze({ n_permutations: 999, n_resamples: 99, random_seed: 9 });");
+      return { builtIn, shared: pick() };
+    """, dataset=example_dataset)
+
+    assert result == {
+        "builtIn": {"n_permutations": 1000, "n_resamples": 200, "random_seed": 20260926},
+        "shared": {"n_permutations": 999, "n_resamples": 99, "random_seed": 9},
+    }
+
+
 _MATRIX = "{ matrix_id: 'm1', filename: 'expr.tsv', n_markers: 20, n_matched: 300, n_patients: 360, id_column: 'patient_id' }"
 
 

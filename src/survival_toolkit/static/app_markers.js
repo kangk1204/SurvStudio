@@ -166,18 +166,27 @@ function renderMarkerSelectionLine() {
     : "Choose at least one numeric marker, or attach a marker file such as gene expression.";
 }
 
+// The defaults of a blank Permutations, Subsamples or Seed field: the ones result currency uses
+// (MARKER_NUMERIC_DEFAULTS of the workspace part), read when called so the load order cannot matter.
+function markerNumericDefaults() {
+  return typeof MARKER_NUMERIC_DEFAULTS !== "undefined"
+    ? MARKER_NUMERIC_DEFAULTS
+    : { n_permutations: 1000, n_resamples: 200, random_seed: 20260926 };
+}
+
 function markerRequestFields() {
   const { markers, clinical, categorical } = currentMarkerSelections();
   const matrix = markerMatrixAttached() ? state.markerMatrix : null;
+  const defaults = markerNumericDefaults();
   return {
     marker_columns: markers,
     marker_matrix_id: matrix ? matrix.matrix_id : null,
     marker_matrix_id_column: matrix ? matrix.id_column : null,
     clinical_columns: clinical,
     categorical_clinical: categorical,
-    n_permutations: numericControlValue(refs.markerPermutations, 1000),
-    n_resamples: numericControlValue(refs.markerResamples, 200),
-    random_seed: numericControlValue(refs.markerRandomSeed, 20260926),
+    n_permutations: numericControlValue(refs.markerPermutations, defaults.n_permutations),
+    n_resamples: numericControlValue(refs.markerResamples, defaults.n_resamples),
+    random_seed: numericControlValue(refs.markerRandomSeed, defaults.random_seed),
     nonlinear_lens: refs.markerNonlinearLens?.value || "off",
   };
 }
@@ -273,14 +282,14 @@ function markerSummary(payload) {
     cautions.push(leftOut.text + (markerModelIsSelectedMarkers(signature) ? " The selected markers add little discrimination beyond the clinical covariates." : ""));
   }
   if ((cohort.dropped_markers || []).length) {
-    const dropped = cohort.dropped_markers;
-    const nearConstant = dropped.filter((item) => String(item.reason || "").startsWith("near-constant")).length;
-    cautions.push(
-      `${formatCount(dropped.length)} marker(s) were left out before testing: `
-      + `${formatCount(nearConstant)} near-constant (most patients at one value, as for genes expressed in few patients) `
-      + `and ${formatCount(dropped.length - nearConstant)} constant or mostly missing.`,
-    );
+    cautions.push(markerDroppedCaution(cohort.dropped_markers));
   }
+  // The engine's notes on the cohort: clinical columns it left out, markers with infinite values, a clinical
+  // model that could not be estimated.
+  (Array.isArray(cohort.notes) ? cohort.notes : []).forEach((note) => {
+    const text = String(note ?? "").trim();
+    if (text) cautions.push(text);
+  });
   if (Number(counts["marginal only"] || 0) > 0) {
     cautions.push(`${formatCount(counts["marginal only"])} marker(s) are associated with survival but add nothing beyond the clinical covariates.`);
   }
@@ -320,6 +329,31 @@ function markerSummary(payload) {
       ...(signature.optimism_corrected_c != null ? ["Report the optimism-corrected C-index rather than the apparent one."] : []),
     ],
   };
+}
+
+// The markers left out before testing, counted by the engine's reason; a reason this page does not know yet
+// counts as "another reason", never under a wrong one.
+const MARKER_DROP_GROUPS = [
+  { test: (reason) => reason.startsWith("near-constant"), label: "near-constant (most patients at one value, as for genes expressed in few patients)" },
+  { test: (reason) => reason === "constant" || /^\d+(?:\.\d+)?% missing$/.test(reason), label: "constant or mostly missing" },
+  { test: (reason) => reason === "infinite values", label: "with infinite values (for example the log of 0; use log(x + 1) instead)" },
+];
+
+function markerDroppedCaution(dropped) {
+  const counts = MARKER_DROP_GROUPS.map(() => 0);
+  let other = 0;
+  dropped.forEach((item) => {
+    const reason = String(item?.reason || "").trim();
+    const group = MARKER_DROP_GROUPS.findIndex((candidate) => candidate.test(reason));
+    if (group >= 0) counts[group] += 1;
+    else other += 1;
+  });
+  const parts = MARKER_DROP_GROUPS
+    .map((group, index) => (counts[index] ? `${formatCount(counts[index])} ${group.label}` : ""))
+    .filter(Boolean);
+  if (other) parts.push(`${formatCount(other)} for another reason`);
+  const listed = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
+  return `${formatCount(dropped.length)} marker(s) were left out before testing: ${listed}.`;
 }
 
 // Patients who look like the same tumour twice: identical values, or each other's clear best match.
