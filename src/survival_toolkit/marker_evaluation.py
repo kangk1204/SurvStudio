@@ -2004,7 +2004,9 @@ def validate_locked_recipe(
         development_sign = float(np.sign(recipe["marker_development_log_hr"][name]))
         same_direction = tested is not None and np.sign(tested["log_hr"]) == development_sign
         if tested is None:
-            one_sided.append(float("nan"))
+            # Still one of the family the locked model declared: whether its fit fails depends on the outcome,
+            # so leaving it out would shrink the Holm family in a data-dependent way. It counts as p = 1.
+            one_sided.append(1.0)
         else:
             half = tested["wald_p"] / 2.0
             one_sided.append(half if same_direction else 1.0 - half)
@@ -2017,9 +2019,12 @@ def validate_locked_recipe(
                 "tested": tested_lens if tested is not None else None,
             }
         )
+    # Markers the external dataset lacks are known to be missing before any outcome is seen, so they are not
+    # part of the family; one whose test could not be estimated is, and is reported as not estimable.
     for row, adjusted_p in zip(marker_rows, _holm(one_sided)):
-        row["replication_p_holm"] = _finite_or_none(adjusted_p)
-        row["replicated"] = bool(row["same_direction"] and adjusted_p is not None and np.isfinite(adjusted_p) and adjusted_p <= alpha)
+        estimable = row["tested"] is not None
+        row["replication_p_holm"] = _finite_or_none(adjusted_p) if estimable else None
+        row["replicated"] = bool(estimable and row["same_direction"] and np.isfinite(adjusted_p) and adjusted_p <= alpha)
 
     # JSON has no infinity or NaN (Starlette refuses them): every non-finite number is reported as None.
     return _json_ready(

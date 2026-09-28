@@ -118,7 +118,7 @@ def test_an_external_cohort_without_the_reference_level_replicates_the_true_mark
         reference = fit_cox(time, event, np.column_stack([base, external[row["marker"]].to_numpy()]))
         beta, se = reference.beta[-1], np.sqrt(reference.covariance[-1, -1])
         assert row["adjusted"]["log_hr"] == pytest.approx(beta, rel=1e-10)
-        assert row["adjusted"]["wald_p"] == pytest.approx(2.0 * stats.norm.sf(abs(beta / se)), rel=1e-8)
+        assert row["adjusted"]["wald_p"] == pytest.approx(2.0 * stats.norm.sf(abs(beta / se)), rel=1e-8, abs=0.0)
     replicated = {row["marker"]: row["replicated"] for row in report["markers"]}
     assert replicated["m0"] and replicated["m1"]
 
@@ -507,6 +507,29 @@ def test_a_dataset_index_with_repeated_labels_is_read_by_position() -> None:
     external = _copy_cohort(5, n=120).drop(columns=["age_copy"])
     report = validate_locked_recipe(external.set_axis([0] * len(external)), recipe, n_bootstrap=0)
     assert report["metrics"] == validate_locked_recipe(external, recipe, n_bootstrap=0)["metrics"]
+
+
+# 12: a replication test that cannot be estimated stays in the Holm family, at p = 1.
+
+
+def test_a_replication_that_cannot_be_estimated_keeps_its_place_in_the_holm_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    recipe = evaluate_markers(_graded_cohort(1, 300, ["1", "2", "3"], [0.3, 0.4, 0.3]), settings=_QUICK, **_GRADED)["locked_recipe"]
+    assert recipe["markers"] == ["m0", "m1"]
+    external = _graded_cohort(7, 300, ["1", "2", "3"], [0.3, 0.4, 0.3])
+    original = marker_evaluation._external_cox
+
+    def m1_fails(time, event, exog, strata, ties="efron"):
+        if exog.shape[1] > 1 and np.array_equal(exog[:, -1], external["m1"].to_numpy()):
+            return None
+        return original(time, event, exog, strata, ties)
+
+    monkeypatch.setattr(marker_evaluation, "_external_cox", m1_fails)
+    rows = {row["marker"]: row for row in validate_locked_recipe(external, recipe, n_bootstrap=0)["markers"]}
+    assert rows["m1"]["tested"] is None and rows["m1"]["replication_p_holm"] is None and not rows["m1"]["replicated"]
+    one_sided = rows["m0"]["adjusted"]["wald_p"] / 2.0
+    assert rows["m0"]["same_direction"]
+    # Before, m0 was adjusted as if the family held it alone (p = one_sided).
+    assert rows["m0"]["replication_p_holm"] == pytest.approx(min(1.0, 2.0 * one_sided), rel=1e-12, abs=0.0)
 
 
 # 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
