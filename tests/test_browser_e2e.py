@@ -1672,6 +1672,51 @@ def test_browser_cohort_table_sends_outcome_columns_and_shows_notes(browser_serv
         raise
 
 
+def test_browser_locked_marker_model_validates_on_an_external_cohort(browser_server: str, tmp_path: Path) -> None:
+    """The browser parses and re-serialises the locked recipe (18.0 becomes 18); validation must still accept it."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    from survival_toolkit.sample_data import make_example_dataset
+
+    external_path = tmp_path / "external_cohort.csv"
+    make_example_dataset(seed=7, n_patients=240).to_csv(external_path, index=False)
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _wait_for_workspace(page)
+            page.locator('[data-tab="markers"]').click()
+            _assert_tab_active(page, "markers")
+            page.locator("#panel-markers .options-details > summary").click()
+            page.locator("#markerPermutations").fill("99")
+            page.locator("#markerResamples").fill("10")
+            page.locator("#runMarkersButton").click()
+            page.wait_for_function("!document.getElementById('runMarkerValidationButton').disabled", timeout=120000)
+
+            page.locator("#markerValidationFile").set_input_files(str(external_path))
+            with page.expect_response(lambda response: "/api/marker-validation" in response.url, timeout=120000) as reply:
+                page.locator("#runMarkerValidationButton").click()
+            response = reply.value
+            assert response.status == 200, response.text()
+            page.wait_for_function(
+                "document.querySelector('#markerValidationShell table') !== null", timeout=60000
+            )
+            summary = page.locator("#markerValidationSummary").inner_text()
+            assert "edited after it was locked" not in summary
+            # The key-number labels are styled in capitals, so compare case-insensitively.
+            assert "240 patients" in summary and "markers replicated" in summary
+            assert "c-index" in summary.lower() and "brier skill" in summary.lower()
+
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
 def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str, tmp_path: Path) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
