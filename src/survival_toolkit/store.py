@@ -5,7 +5,7 @@ import hashlib
 import logging
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -42,15 +42,35 @@ class DatasetStore:
     active :meth:`lease` (a running analysis) are never expired or LRU-evicted, and
     eviction listeners are notified after a dataset leaves the store so per-dataset
     caches can be purged.
+
+    Metadata is deep-copied on the way in and out, except values stored under
+    ``shared_metadata_keys``: those hold large read-only caches (for example a column
+    profile) that callers never mutate in place, so they are shared by reference.
     """
 
-    def __init__(self, max_datasets: int = _MAX_DATASETS, ttl_seconds: int = _TTL_SECONDS) -> None:
+    def __init__(
+        self,
+        max_datasets: int = _MAX_DATASETS,
+        ttl_seconds: int = _TTL_SECONDS,
+        *,
+        shared_metadata_keys: Iterable[str] = (),
+    ) -> None:
         self._datasets: OrderedDict[str, StoredDataset] = OrderedDict()
         self._max_datasets = max_datasets
         self._ttl_seconds = ttl_seconds
         self._lock = threading.RLock()
         self._leases: dict[str, int] = {}
         self._eviction_listeners: list[Callable[[str], None]] = []
+        self._shared_metadata_keys = frozenset(str(key) for key in shared_metadata_keys)
+
+    def _copy_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        if not self._shared_metadata_keys:
+            return copy.deepcopy(metadata)
+        memo: dict[int, Any] = {}
+        return {
+            key: value if key in self._shared_metadata_keys else copy.deepcopy(value, memo)
+            for key, value in metadata.items()
+        }
 
     def add_eviction_listener(self, listener: Callable[[str], None]) -> None:
         """Call ``listener(dataset_id)`` when a dataset is expired, evicted, deleted or its table replaced."""
@@ -71,16 +91,27 @@ class DatasetStore:
                 except Exception:  # pragma: no cover - listeners must not break the store
                     logger.exception("Dataset eviction listener failed for %s", dataset_id)
 
+    def _touch(self, dataset_id: str) -> None:
+        """Mark a dataset as just used: refresh its idle TTL and move it to the LRU tail."""
+
+        stored = self._datasets.get(dataset_id)
+        if stored is not None:
+            stored.last_accessed = datetime.now(timezone.utc)
+            self._datasets.move_to_end(dataset_id)
+
     @contextmanager
     def lease(self, dataset_id: str) -> Iterator[None]:
         """Keep ``dataset_id`` from expiring or being LRU-evicted while a job uses it.
 
-        Releasing the lease refreshes the idle TTL, so a long run does not leave the
-        dataset about to expire. Unknown ids are tolerated (the lease is then a no-op).
+        Taking and releasing the lease both count as a use: the dataset moves to the
+        most-recently-used end and its idle TTL restarts, so the table a long job just
+        finished with is not the next one evicted. Unknown ids are tolerated (the lease
+        is then a no-op).
         """
 
         with self._lock:
             self._leases[dataset_id] = self._leases.get(dataset_id, 0) + 1
+            self._touch(dataset_id)
         try:
             yield
         finally:
@@ -90,9 +121,7 @@ class DatasetStore:
                     self._leases[dataset_id] = remaining
                 else:
                     self._leases.pop(dataset_id, None)
-                stored = self._datasets.get(dataset_id)
-                if stored is not None:
-                    stored.last_accessed = datetime.now(timezone.utc)
+                self._touch(dataset_id)
 
     def contains(self, dataset_id: str) -> bool:
         with self._lock:
@@ -159,7 +188,7 @@ class DatasetStore:
         # Hashing and copying are CPU-bound; do them before taking the store-wide lock.
         dataset_hash = self._dataframe_hash(dataframe)
         stored_dataframe = self._copy_dataframe(dataframe, copy_dataframe=copy_dataframe)
-        stored_metadata = copy.deepcopy(metadata or {})
+        stored_metadata = self._copy_metadata(metadata or {})
         stored_metadata["dataset_hash"] = dataset_hash
         with self._lock:
             evicted = self._evict_expired()
@@ -188,7 +217,7 @@ class DatasetStore:
             dataframe=self._copy_dataframe(stored.dataframe, copy_dataframe=copy_dataframe),
             created_at=stored.created_at,
             last_accessed=stored.last_accessed,
-            metadata=copy.deepcopy(stored.metadata),
+            metadata=self._copy_metadata(stored.metadata),
         )
 
     def get(self, dataset_id: str, *, copy_dataframe: bool = True) -> StoredDataset:
@@ -246,7 +275,7 @@ class DatasetStore:
                 self._datasets.move_to_end(dataset_id)
                 stored.last_accessed = datetime.now(timezone.utc)
                 stored.metadata = {
-                    **copy.deepcopy(metadata),
+                    **self._copy_metadata(metadata),
                     "dataset_hash": stored.metadata.get("dataset_hash") or self._dataframe_hash(stored.dataframe),
                 }
                 result = self._clone_stored(stored, copy_dataframe=False)

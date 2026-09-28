@@ -1941,9 +1941,10 @@ def test_upload_rejects_oversized_content_length_before_reading_body(monkeypatch
 
 
 def test_upload_stops_reading_chunked_body_past_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
     monkeypatch.setattr(app_module, "_MAX_UPLOAD_BYTES", 64)
     monkeypatch.setattr(app_module, "_UPLOAD_MULTIPART_OVERHEAD_BYTES", 256)
-    chunks_sent = {"count": 0}
     body = (
         b"--bnd\r\n"
         b'Content-Disposition: form-data; name="file"; filename="big.csv"\r\n'
@@ -1951,20 +1952,44 @@ def test_upload_stops_reading_chunked_body_past_the_limit(monkeypatch: pytest.Mo
         + b"a,b\n" + b"1,2\n" * 2000
         + b"\r\n--bnd--\r\n"
     )
+    chunks = [body[start : start + 128] for start in range(0, len(body), 128)]
+    state = {"sent": 0, "status": None, "body": b""}
 
-    def _chunks():
-        for start in range(0, len(body), 128):
-            chunks_sent["count"] += 1
-            yield body[start : start + 128]
+    # The ASGI app is driven directly: a test client would read the whole body before the app sees it.
+    async def receive() -> dict:
+        index = state["sent"]
+        state["sent"] = index + 1
+        return {"type": "http.request", "body": chunks[index], "more_body": index + 1 < len(chunks)}
 
-    response = client.post(
-        "/api/upload",
-        content=_chunks(),
-        headers={"Content-Type": "multipart/form-data; boundary=bnd"},
-    )
+    async def send(message: dict) -> None:
+        if message["type"] == "http.response.start":
+            state["status"] = message["status"]
+        elif message["type"] == "http.response.body":
+            state["body"] += message.get("body", b"")
 
-    assert response.status_code == 413
-    assert "200 MB limit" in response.json()["detail"]
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/upload",
+        "raw_path": b"/api/upload",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"127.0.0.1:8000"), (b"content-type", b"multipart/form-data; boundary=bnd")],
+        "client": ("127.0.0.1", 5555),
+        "server": ("127.0.0.1", 8000),
+    }
+    try:
+        asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=30))
+    except Exception:  # the server may still raise after the response was sent
+        pass
+
+    assert state["status"] == 413
+    assert b"200 MB limit" in state["body"]
+    # 320 bytes are allowed; reading stops a chunk past that instead of consuming all ~64 chunks.
+    assert state["sent"] <= 4 < len(chunks)
 
 
 def test_upload_rejects_xlsx_that_decompresses_past_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -7065,8 +7090,10 @@ def test_heavy_jobs_share_a_bounded_number_of_slots(monkeypatch: pytest.MonkeyPa
     import asyncio
     import threading
     import time
+    from concurrent.futures import ThreadPoolExecutor
 
-    monkeypatch.setattr(app_module, "_HEAVY_JOB_SLOTS", threading.BoundedSemaphore(1))
+    executor = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(app_module, "_HEAVY_JOB_EXECUTOR", executor)
     monkeypatch.setattr(app_module, "_DISCONNECT_POLL_SECONDS", 0.02)
     dataset_id = client.post("/api/load-example").json()["dataset_id"]
     lock = threading.Lock()
@@ -7086,7 +7113,10 @@ def test_heavy_jobs_share_a_bounded_number_of_slots(monkeypatch: pytest.MonkeyPa
             *(app_module._run_dataset_job(dataset_id, _job, heavy=True) for _ in range(3))
         )
 
-    assert asyncio.run(_run_three()) == [True, True, True]
+    try:
+        assert asyncio.run(_run_three()) == [True, True, True]
+    finally:
+        executor.shutdown(wait=True)
     assert state["peak"] == 1
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import csv
 import functools
@@ -15,6 +16,7 @@ import platform
 import re
 import socket
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 import signal
@@ -54,6 +56,7 @@ from survival_toolkit.analysis import (
     ensure_model_feature_candidate_limit,
     find_event_equivalent_columns,
     load_dataframe_from_path,
+    make_unique_columns,
     preview_rows,
     preview_cox_analysis_inputs,
     profile_dataframe,
@@ -62,11 +65,21 @@ from survival_toolkit.analysis import (
 from survival_toolkit import __version__ as SURVSTUDIO_VERSION
 from survival_toolkit.concurrency import cancellation_scope, raise_if_cancelled
 from survival_toolkit.design_audit import audit_design, design_from_dict
-from survival_toolkit.errors import InternalAnalysisError, JobCancelledError, NotFoundError, UserInputError
+from survival_toolkit.errors import (
+    InternalAnalysisError,
+    JobCancelledError,
+    NotFoundError,
+    UserInputError,
+    must_propagate,
+    user_input_boundary,
+)
 from survival_toolkit.evaluation import c_index_intervals, merge_prediction_blocks
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
 from survival_toolkit.marker_matrix import (
     MATRIX_SUFFIXES,
+    MAX_DECOMPRESSED_BYTES,
+    MAX_MATRIX_MARKERS,
+    MAX_MATRIX_SAMPLES,
     ORIENTATIONS,
     MarkerMatrixStore,
     match_summary,
@@ -312,7 +325,8 @@ class LocalRequestGuardMiddleware:
         await self.app(scope, receive, send)
 
 
-_UPLOAD_PATH = "/api/upload"
+# Every endpoint that receives a file: the table upload and the marker-matrix attachment.
+_UPLOAD_PATHS = frozenset({"/api/upload", "/api/marker-matrix"})
 _UPLOAD_TOO_LARGE_DETAIL = "Upload exceeds the 200 MB limit."
 # Allowance for multipart boundaries and part headers on top of the file-size limit.
 _UPLOAD_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
@@ -333,7 +347,7 @@ class UploadSizeLimitMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope.get("path") != _UPLOAD_PATH or scope.get("method") != "POST":
+        if scope["type"] != "http" or scope.get("path") not in _UPLOAD_PATHS or scope.get("method") != "POST":
             await self.app(scope, receive, send)
             return
         limit = _max_upload_request_bytes()
@@ -384,7 +398,10 @@ app.add_middleware(
 app.add_middleware(LocalRequestGuardMiddleware)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-store = DatasetStore()
+_DATASET_PROFILE_CACHE_KEY = "_dataset_profile_cache"
+# The cached column profile is large for wide tables and only ever read (then copied) by this
+# module, so the store shares it instead of deep-copying it on every dataset lookup.
+store = DatasetStore(shared_metadata_keys=(_DATASET_PROFILE_CACHE_KEY,))
 _MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
 _MAX_UPLOAD_ROWS = 100_000
 _MAX_UPLOAD_COLUMNS = 5_000
@@ -395,6 +412,23 @@ _MAX_UPLOAD_CELLS = 5_000_000
 # than the Parquet one; larger sheets should be exported as CSV.
 _MAX_XLSX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 _MAX_PARQUET_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+# A workbook shared string or a Parquet dictionary value is stored once but decodes once per
+# cell that uses it, so a small file can still decode to far more text than its declared size.
+# A parsed table may hold at most the text a 200 MB CSV upload could carry.
+_MAX_UPLOAD_TEXT_CHARS = 200 * 1024 * 1024
+# Upper bound on rows x model columns (after categorical coding) of one model design matrix.
+_MAX_DESIGN_CELLS = 25_000_000
+# Lower bound on the indicator combinations a signature search iterates (one indicator per
+# candidate); searches past it would run for hours.
+_MAX_SIGNATURE_COMBINATIONS = 1_000_000
+# Most columns an exported table may have (the same cap as the explicit ``columns`` list).
+_MAX_EXPORT_COLUMNS = 500
+# Most groups of a grouped cohort table (the Kaplan-Meier group limit).
+_MAX_COHORT_TABLE_GROUPS = 50
+# Most levels a categorical variable may list in a cohort table.
+_MAX_COHORT_TABLE_LEVELS = 200
+# Widest hidden layer a deep-learning request may ask for.
+_MAX_HIDDEN_LAYER_WIDTH = 1024
 _SHAP_SAFE_MODE_MAX_ENCODED_FEATURES = 80
 _SHAP_SAFE_MODE_MAX_RAW_FEATURES = 30
 _SIGNED_NUMERIC_CSV_LITERAL = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
@@ -411,7 +445,8 @@ _EXPORT_ILLEGAL_CHAR_PATTERN = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800
 _CSV_UTF8_BOM = "\ufeff"
 _CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
 _NOTE_CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-_DATASET_PROFILE_CACHE_KEY = "_dataset_profile_cache"
+# A run of control characters (for example an Excel Alt+Enter line break) with the spaces around it.
+_HEADER_CONTROL_RUN_PATTERN = re.compile(r"\s*[\x00-\x1f\x7f]+\s*")
 _LATEX_ESCAPE_TABLE = str.maketrans(
     {
         "\\": r"\textbackslash{}",
@@ -719,10 +754,12 @@ def _max_heavy_jobs() -> int:
     return configured if configured > 0 else 2
 
 
-# Model training, signature search, cutpoint permutation, and XAI jobs each use several
-# cores (and deep-learning comparisons can start worker processes), so only a few run at
-# once; later ones wait for a slot inside their worker thread.
-_HEAVY_JOB_SLOTS = threading.BoundedSemaphore(_max_heavy_jobs())
+# Model training, signature search, cutpoint permutation, marker and XAI jobs each use several
+# cores (and deep-learning comparisons can start worker processes), so only a few run at once.
+# They run on their own small executor: a heavy request that waits for its turn sits in this
+# executor's queue and holds no worker of the shared threadpool, which uploads, dataset views,
+# exports and light analyses keep using.
+_HEAVY_JOB_EXECUTOR = ThreadPoolExecutor(max_workers=_max_heavy_jobs(), thread_name_prefix="survstudio-heavy-job")
 _DISCONNECT_POLL_SECONDS = 0.5
 
 
@@ -734,6 +771,73 @@ async def _watch_for_disconnect(request: Request, cancel_event: threading.Event)
         await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
 
 
+def _json_ready_key(key: Any) -> Any:
+    return key.item() if isinstance(key, np.generic) else key
+
+
+def _json_ready(value: Any) -> Any:
+    """``value`` as plain JSON data: NumPy scalars and arrays become Python numbers and lists,
+    and NaN, +/-infinity and pandas missing markers become null.
+
+    The response encoder refuses non-finite floats and NumPy integer or boolean scalars, so a
+    result that carried one would otherwise fail as a bare server error after the analysis ran.
+    """
+
+    if isinstance(value, dict):
+        return {_json_ready_key(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, float):
+        return float(value) if math.isfinite(value) else None
+    if isinstance(value, np.ndarray):
+        return _json_ready(value.tolist())
+    if isinstance(value, np.generic):
+        item = value.item()
+        if isinstance(item, np.generic):  # no exact Python type (for example long double)
+            item = float(item) if isinstance(item, np.floating) else str(item)
+        return _json_ready(item)
+    if value is pd.NA or value is pd.NaT:
+        return None
+    return value
+
+
+async def _run_job(
+    job: Callable[[], _T],
+    *,
+    request: Request | None = None,
+    heavy: bool = False,
+) -> _T:
+    """Run a blocking job off the event loop and return its result as plain JSON data.
+
+    Light jobs use the shared threadpool. Heavy jobs queue on the heavy-job executor, so at
+    most a few run at once and waiting ones hold no shared worker. When ``request`` is given
+    and its client disconnects (for example the page cancelled the request), the job stops
+    at its next cancellation checkpoint or, if it is still queued, never starts.
+    """
+
+    cancel_event = threading.Event()
+
+    def _guarded() -> _T:
+        with cancellation_scope(cancel_event):
+            raise_if_cancelled()
+            return _json_ready(job())
+
+    watcher = asyncio.create_task(_watch_for_disconnect(request, cancel_event)) if request is not None else None
+    try:
+        if not heavy:
+            return await run_in_threadpool(_guarded)
+        future = _HEAVY_JOB_EXECUTOR.submit(contextvars.copy_context().run, _guarded)
+        try:
+            return await asyncio.wrap_future(future)
+        except asyncio.CancelledError:
+            # The request task itself was cancelled (for example at shutdown): stop the job too.
+            cancel_event.set()
+            raise
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+
+
 async def _run_dataset_job(
     dataset_id: str,
     job: Callable[[], _T],
@@ -741,35 +845,14 @@ async def _run_dataset_job(
     request: Request | None = None,
     heavy: bool = False,
 ) -> _T:
-    """Run a blocking analysis job in the threadpool while leasing its dataset.
+    """Run an analysis job (see :func:`_run_job`) while leasing its dataset.
 
-    The lease keeps the dataset from expiring (idle TTL) or being LRU-evicted mid-run and
-    refreshes its TTL when the job finishes. Heavy jobs wait for one of a few shared slots.
-    When ``request`` is given and its client disconnects (for example the page cancelled
-    the request), the job stops at its next cancellation checkpoint or never starts.
+    The lease keeps the dataset from expiring (idle TTL) or being LRU-evicted while the job
+    waits or runs, and marks it as just used when the job finishes.
     """
 
-    cancel_event = threading.Event()
-
-    def _guarded() -> _T:
-        with cancellation_scope(cancel_event):
-            if not heavy:
-                return job()
-            while not _HEAVY_JOB_SLOTS.acquire(timeout=_DISCONNECT_POLL_SECONDS):
-                raise_if_cancelled()
-            try:
-                raise_if_cancelled()
-                return job()
-            finally:
-                _HEAVY_JOB_SLOTS.release()
-
-    watcher = asyncio.create_task(_watch_for_disconnect(request, cancel_event)) if request is not None else None
-    try:
-        with store.lease(dataset_id):
-            return await run_in_threadpool(_guarded)
-    finally:
-        if watcher is not None:
-            watcher.cancel()
+    with store.lease(dataset_id):
+        return await _run_job(job, request=request, heavy=heavy)
 
 
 # ── Request models ──────────────────────────────────────────────
@@ -797,7 +880,7 @@ class DeriveGroupRequest(_EventPositiveValueRequestModel):
     event_positive_value: Any = 1
     min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
     permutation_iterations: int = Field(default=500, ge=0, le=500)
-    random_seed: int = 20260311
+    random_seed: int = Field(default=20260311, ge=0, le=2**32 - 1)
 
     @field_validator("new_column_name", mode="before")
     @classmethod
@@ -807,6 +890,25 @@ class DeriveGroupRequest(_EventPositiveValueRequestModel):
             field_name="Derived column names",
             allow_empty_as_none=True,
         )
+
+    @field_validator("cutoff", mode="before")
+    @classmethod
+    def validate_cutoff(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            text = value.strip()
+            if len(text) > 200:
+                raise ValueError("cutoff must be 200 characters or fewer.")
+            return text or None
+        return value
+
+    @model_validator(mode="after")
+    def validate_cutoff_method(self) -> "DeriveGroupRequest":
+        # Only percentile and extreme splits read a cutoff; any other method would silently ignore it.
+        if self.cutoff is not None and self.method not in {"percentile_split", "extreme_split"}:
+            raise ValueError(
+                f"cutoff applies only to percentile_split and extreme_split; leave it empty for {self.method}."
+            )
+        return self
 
     @field_validator("lower_label", "upper_label", mode="before")
     @classmethod
@@ -895,7 +997,7 @@ class SignatureSearchRequest(_EventPositiveValueRequestModel):
     time_column: str
     event_column: str
     event_positive_value: Any = 1
-    candidate_columns: list[str]
+    candidate_columns: list[str] = Field(max_length=_MAX_UPLOAD_COLUMNS)
     max_combination_size: int = Field(default=3, ge=1, le=4)
     top_k: int = Field(default=15, ge=3, le=50)
     min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
@@ -906,7 +1008,7 @@ class SignatureSearchRequest(_EventPositiveValueRequestModel):
     validation_fraction: float = Field(default=0.35, ge=0.2, le=0.6)
     significance_level: float = Field(default=0.05, gt=0.0, le=0.2)
     combination_operator: Literal["and", "or", "mixed"] = "mixed"
-    random_seed: int = Field(default=20260311, ge=0)
+    random_seed: int = Field(default=20260311, ge=0, le=2**32 - 1)
     new_column_name: str | None = Field(default=None, max_length=200)
 
     @field_validator("new_column_name", mode="before")
@@ -918,6 +1020,11 @@ class SignatureSearchRequest(_EventPositiveValueRequestModel):
             allow_empty_as_none=True,
         )
 
+    def minimum_combinations(self) -> int:
+        """Indicator combinations the search iterates at the least (one indicator per candidate)."""
+        n_candidates = len(dict.fromkeys(self.candidate_columns))
+        return sum(math.comb(n_candidates, size) for size in range(1, int(self.max_combination_size) + 1))
+
 
 class MLModelRequest(_FeatureSelectionRequestModel):
     dataset_id: str
@@ -928,7 +1035,7 @@ class MLModelRequest(_FeatureSelectionRequestModel):
     categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     model_type: Literal["rsf", "gbs", "lasso_cox", "compare"]
     n_estimators: int = Field(default=100, ge=10, le=1000)
-    max_depth: int | None = None
+    max_depth: int | None = Field(default=None, ge=1, le=64)
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = Field(default=42, ge=0, le=2**32 - 1)
     compute_shap: bool = False
@@ -979,6 +1086,8 @@ class DeepModelRequest(_FeatureSelectionRequestModel):
             raise ValueError("Hidden layers must contain at least one positive integer.")
         if any((not isinstance(layer, int)) or layer <= 0 for layer in value):
             raise ValueError("Hidden layers must contain positive integers only.")
+        if any(layer > _MAX_HIDDEN_LAYER_WIDTH for layer in value):
+            raise ValueError(f"Each hidden layer can have at most {_MAX_HIDDEN_LAYER_WIDTH} units.")
         return value
 
     @model_validator(mode="after")
@@ -1074,6 +1183,49 @@ class MarkerValidationRequest(_EventPositiveValueRequestModel):
     marker_scaling: Literal["as_measured", "within_cohort"] = "as_measured"
 
 
+_MAX_INTERVAL_MODELS_PER_BLOCK = 50
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _check_prediction_block(block: dict[str, Any], index: int) -> None:
+    """Shape and type checks of one ``test_predictions`` block, so a malformed block is a 422."""
+
+    where = f"Prediction block {index}"
+    row_ids = block.get("row_ids")
+    if not isinstance(row_ids, list) or not row_ids:
+        raise ValueError(f"{where} needs a non-empty row_ids list.")
+    n_rows = len(row_ids)
+    if n_rows > _MAX_UPLOAD_ROWS:
+        raise ValueError(f"{where} has {n_rows:,} patients; at most {_MAX_UPLOAD_ROWS:,} are supported.")
+    if not all(isinstance(row, (str, int)) and not isinstance(row, bool) for row in row_ids):
+        raise ValueError(f"{where}: row_ids must be text or integer patient row labels.")
+    if len({str(row) for row in row_ids}) != n_rows:
+        raise ValueError(f"{where}: row_ids repeat a patient.")
+    time_values = block.get("time")
+    if not isinstance(time_values, list) or len(time_values) != n_rows:
+        raise ValueError(f"{where}: time must be a list with one value per patient.")
+    if not all(_is_number(value) and math.isfinite(value) and value >= 0 for value in time_values):
+        raise ValueError(f"{where}: every time must be a finite, non-negative number.")
+    event_values = block.get("event")
+    if not isinstance(event_values, list) or len(event_values) != n_rows:
+        raise ValueError(f"{where}: event must be a list with one value per patient.")
+    if not all(isinstance(value, (int, float)) and value in (0, 1) for value in event_values):
+        raise ValueError(f"{where}: every event must be 0 (censored) or 1 (event).")
+    risk = block.get("risk")
+    if not isinstance(risk, dict) or not risk:
+        raise ValueError(f"{where}: risk must map each model name to its risk scores.")
+    if len(risk) > _MAX_INTERVAL_MODELS_PER_BLOCK:
+        raise ValueError(f"{where} has {len(risk)} models; at most {_MAX_INTERVAL_MODELS_PER_BLOCK} are supported.")
+    for name, values in risk.items():
+        if not isinstance(values, list) or len(values) != n_rows:
+            raise ValueError(f"{where}: the risk scores of '{name}' must be a list with one value per patient.")
+        if not all(_is_number(value) and math.isfinite(value) for value in values):
+            raise ValueError(f"{where}: every risk score of '{name}' must be a finite number.")
+
+
 class ModelComparisonIntervalsRequest(BaseModel):
     # The ``test_predictions`` (or ``locked_test_predictions``) blocks of ML and DL comparisons run on one split.
     model_config = ConfigDict(extra="forbid")
@@ -1083,9 +1235,20 @@ class ModelComparisonIntervalsRequest(BaseModel):
     n_bootstrap: int = Field(default=1000, ge=100, le=5000)
     random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
 
+    @field_validator("predictions")
+    @classmethod
+    def validate_prediction_blocks(cls, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        for index, block in enumerate(blocks, start=1):
+            _check_prediction_block(block, index)
+        return blocks
 
-# Bootstrap draws are cut back on large test sets so one request stays within tens of seconds.
+
+# Work (events x patients x models) of all bootstrap draws of one request, so it stays within
+# tens of seconds. It is a hard cap: a large test set gets fewer draws (and a note), and one too
+# large for the minimum number of draws is refused.
 _INTERVAL_WORK_BUDGET = 3_000_000_000
+# Fewest draws that still give a usable 95% percentile interval (the request minimum).
+_INTERVAL_MIN_DRAWS = 100
 
 
 class DesignAuditCohort(BaseModel):
@@ -1145,6 +1308,28 @@ class ComparisonForReport(BaseModel):
     analysis: dict[str, Any]
     request_config: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_report_fields(self) -> "ComparisonForReport":
+        # The checklist reads these fields of a comparison result; anything else is ignored.
+        table = self.analysis.get("comparison_table")
+        if table is not None:
+            if not isinstance(table, list) or not all(isinstance(row, dict) for row in table):
+                raise ValueError("analysis.comparison_table must be a list of model rows (objects).")
+            if len(table) > 500:
+                raise ValueError("analysis.comparison_table can have at most 500 model rows.")
+        for key in ("excluded_models", "errors"):
+            value = self.analysis.get(key)
+            if value is not None and not isinstance(value, list):
+                raise ValueError(f"analysis.{key} must be a list.")
+        fingerprint = self.analysis.get("evaluation_split_fingerprint")
+        if fingerprint is not None and not isinstance(fingerprint, str):
+            raise ValueError("analysis.evaluation_split_fingerprint must be text.")
+        for key in ("features", "categorical_features", "hidden_layers"):
+            value = self.request_config.get(key)
+            if value is not None and not isinstance(value, list):
+                raise ValueError(f"request_config.{key} must be a list.")
+        return self
+
 
 class TripodChecklistRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1198,6 +1383,23 @@ class TableExportRequest(BaseModel):
             field_name="caption",
             allow_empty_as_none=True,
         )
+
+    @model_validator(mode="after")
+    def validate_export_width(self) -> "TableExportRequest":
+        # Every row is written for every column, and the columns are the union of the given ones
+        # and all row keys, so the row keys count toward the same cap as ``columns``.
+        names: set[str] = set()
+        for group in (self.columns, *self.rows):
+            for name in group:
+                text = str(name)
+                if not text or text.startswith("_"):
+                    continue
+                names.add(text)
+                if len(names) > _MAX_EXPORT_COLUMNS:
+                    raise ValueError(
+                        f"An exported table can have at most {_MAX_EXPORT_COLUMNS} columns (row keys included)."
+                    )
+        return self
 
 
 # ── Helpers ─────────────────────────────────────────────────────
@@ -1332,7 +1534,7 @@ def dataset_response(dataset_id: str) -> dict[str, Any]:
     payload["preset_name"] = str(stored.metadata.get("preset_name")) if stored.metadata.get("preset_name") else None
     payload["derived_column_provenance"] = dict(stored.metadata.get("derived_column_provenance", {}))
     payload["dataset_hash"] = str(stored.metadata.get("dataset_hash") or "")
-    return payload
+    return _json_ready(payload)
 
 
 def _attach_dataset_hash(payload: dict[str, Any], stored: Any) -> dict[str, Any]:
@@ -1419,6 +1621,88 @@ def _reject_survival_outcome_feature_columns(
             f"Survival outcome columns cannot be used for {context}: "
             + ", ".join(offenders)
             + ". Use baseline covariates or biomarker features instead."
+        )
+
+
+# Values of the matrix block examined at once by the 0/1 scan below (float32, so about 16 MB).
+_MATRIX_BINARY_SCAN_CELLS = 4_000_000
+
+
+def _matrix_outcome_markers(
+    frame: pd.DataFrame,
+    markers: Sequence[str],
+    *,
+    event_column: str,
+    event_positive_value: Any,
+) -> list[str]:
+    """Markers of an attached matrix that are survival outcome columns.
+
+    The rules are those applied to dataset columns by `_reject_survival_outcome_feature_columns`:
+    outcome-like names, and columns that code the same events as the event column. Matrix
+    values are numbers, so only a marker whose values are all 0 or 1 can code the events; the
+    event comparison runs on those markers alone instead of on every marker of a wide matrix.
+    """
+
+    marker_names = [str(marker) for marker in markers]
+    marker_set = set(marker_names)
+    flagged = {str(column) for column in _survival_outcome_like_columns(frame)} & marker_set
+    zero_one: list[str] = []
+    step = max(1, _MATRIX_BINARY_SCAN_CELLS // max(int(frame.shape[0]), 1))
+    for start in range(0, len(marker_names), step):
+        raise_if_cancelled()
+        names = marker_names[start : start + step]
+        values = frame[names].to_numpy(dtype=np.float32, na_value=np.nan)
+        missing = np.isnan(values)
+        is_zero_one = np.all(missing | (values == 0.0) | (values == 1.0), axis=0) & ~np.all(missing, axis=0)
+        zero_one.extend(name for name, keep in zip(names, is_zero_one) if keep)
+    if zero_one:
+        flagged |= {
+            str(column)
+            for column in find_event_equivalent_columns(
+                frame[[event_column, *zero_one]],
+                event_column=event_column,
+                event_positive_value=event_positive_value,
+            )
+        } & marker_set
+    return sorted(flagged)
+
+
+def _encoded_width(frame: pd.DataFrame, features: Sequence[str], categorical_features: Sequence[str]) -> int:
+    """Model columns the features become: one per numeric feature, about one per level of a categorical one."""
+
+    categorical = {str(column) for column in categorical_features}
+    width = 0
+    for column in dict.fromkeys(str(feature) for feature in features):
+        if column not in frame.columns:
+            continue  # reported by the analysis itself
+        series = frame[column]
+        if column in categorical or not pd.api.types.is_numeric_dtype(series):
+            width += max(int(series.nunique(dropna=True)), 1)
+        else:
+            width += 1
+    return width
+
+
+def _reject_oversized_design(
+    stored: Any,
+    features: Sequence[str],
+    categorical_features: Sequence[str] = (),
+    *,
+    context: str,
+) -> None:
+    """Refuse a model whose design matrix (rows x columns after categorical coding) is too large to fit.
+
+    A categorical feature with thousands of levels (an ID or a free-text column) becomes
+    thousands of indicator columns, which no survival model can fit and which can exhaust memory.
+    """
+
+    n_rows = int(stored.dataframe.shape[0])
+    width = _encoded_width(stored.dataframe, features, categorical_features)
+    if n_rows * width > _MAX_DESIGN_CELLS:
+        raise UserInputError(
+            f"The {context} expand to about {width:,} model columns after categorical coding, "
+            f"{n_rows * width:,} values for {n_rows:,} rows; SurvStudio fits at most {_MAX_DESIGN_CELLS:,}. "
+            "Leave out high-cardinality categorical columns (for example IDs or free text) or recode them into a few groups."
         )
 
 
@@ -1611,11 +1895,261 @@ def _format_megabytes(n_bytes: int) -> str:
     return f"{n_bytes / (1024 * 1024):,.0f} MB"
 
 
+def _text_too_large(text_size: int) -> HTTPException:
+    logger.info("Rejected an upload holding at least %d characters of decoded text", text_size)
+    return HTTPException(
+        status_code=413,
+        detail=(
+            f"The uploaded table holds more than {_format_megabytes(_MAX_UPLOAD_TEXT_CHARS)} of text once decoded. "
+            f"SurvStudio accepts at most {_format_megabytes(_MAX_UPLOAD_TEXT_CHARS)} of text per table, the text of a "
+            "200 MB CSV file; remove long free-text columns before uploading."
+        ),
+    )
+
+
+def _parquet_text_bytes(path: Path, limit: int) -> int:
+    """Decoded size of the text and binary columns of a Parquet file, counted until it passes ``limit``.
+
+    Columns are read with their dictionaries kept, so a value stored once and used by many rows
+    is measured, not materialised, once per row.
+    """
+
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    def _is_text(data_type: Any) -> bool:
+        if pa.types.is_dictionary(data_type):
+            data_type = data_type.value_type
+        return any(
+            check(data_type)
+            for check in (pa.types.is_string, pa.types.is_large_string, pa.types.is_binary, pa.types.is_large_binary)
+        )
+
+    parquet_file = pq.ParquetFile(path)
+    try:
+        schema = parquet_file.schema_arrow
+    finally:
+        parquet_file.close()
+    nested = [field.name for field in schema if pa.types.is_nested(field.type)]
+    if nested:
+        raise UserInputError(
+            "Parquet columns with nested values (lists, structs or maps) are not supported: "
+            + ", ".join(str(name) for name in nested[:5])
+            + ". Flatten them or export the table as CSV."
+        )
+    text_columns = [field.name for field in schema if _is_text(field.type)]
+    if not text_columns:
+        return 0
+    reader = pq.ParquetFile(path, read_dictionary=text_columns)
+    total = 0
+    try:
+        for row_group in range(reader.metadata.num_row_groups):
+            table = reader.read_row_group(row_group, columns=text_columns)
+            for column in table.columns:
+                for chunk in column.chunks:
+                    if pa.types.is_dictionary(chunk.type):
+                        lengths = pc.binary_length(chunk.dictionary)
+                        size = pc.sum(pc.take(lengths, chunk.indices)).as_py()
+                    else:
+                        size = pc.sum(pc.binary_length(chunk)).as_py()
+                    total += int(size or 0)
+                    if total > limit:
+                        return total
+    finally:
+        reader.close()
+    return total
+
+
+def _dataframe_text_chars(dataframe: pd.DataFrame, limit: int) -> int:
+    """Characters of text held by a parsed table, counted until the count passes ``limit``.
+
+    A cell that shares its string with other cells (an Excel shared string, a categorical
+    level) counts once per cell, since later steps may copy it per cell.
+    """
+
+    total = 0
+    for position, dtype in enumerate(dataframe.dtypes):
+        if isinstance(dtype, pd.CategoricalDtype):
+            series = dataframe.iloc[:, position]
+            categories = series.cat.categories
+            lengths = np.fromiter(
+                (len(value) if isinstance(value, (str, bytes)) else 0 for value in categories),
+                dtype=np.int64,
+                count=len(categories),
+            )
+            codes = series.cat.codes.to_numpy()
+            total += int(lengths[codes[codes >= 0]].sum())
+        elif isinstance(dtype, pd.StringDtype):
+            total += int(dataframe.iloc[:, position].str.len().sum())
+        elif dtype == object:
+            values = dataframe.iloc[:, position].array
+            total += sum(len(value) for value in values if isinstance(value, (str, bytes)))
+        else:
+            continue  # numbers, booleans and dates are bounded by the cell limit
+        if total > limit:
+            break
+    return total
+
+
+_XML_PROLOG_BYTES = 4096
+
+
+def _iter_xml_elements(handle: Any, wanted: frozenset[str]) -> Any:
+    """Yield each completed element whose local name is in ``wanted``, keeping memory flat.
+
+    Elements outside a wanted one are dropped as soon as they end, so a part with millions
+    of cells is streamed rather than built into a tree.
+    """
+
+    import xml.etree.ElementTree as ElementTree
+
+    stack: list[Any] = []
+    open_wanted = 0
+    for event, element in ElementTree.iterparse(handle, events=("start", "end")):
+        is_wanted = element.tag.rpartition("}")[2] in wanted
+        if event == "start":
+            stack.append(element)
+            open_wanted += is_wanted
+            continue
+        stack.pop()
+        if is_wanted:
+            open_wanted -= 1
+            yield element
+        if stack and not open_wanted:
+            stack[-1].remove(element)
+
+
+def _xlsx_text_chars(path: Path, limit: int) -> int:
+    """Characters that the shared-string cells of a workbook decode to, counted until the count passes ``limit``.
+
+    A shared string is stored once but every cell that uses it becomes its own text value
+    when the sheet is read, so the declared part sizes do not bound the parsed text.
+    """
+
+    from array import array
+
+    shared_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+    with zipfile.ZipFile(path) as archive:
+        names = [info.filename for info in archive.infolist() if info.filename.lower().endswith(".xml")]
+        for name in names:
+            with archive.open(name) as handle:
+                prolog = handle.read(_XML_PROLOG_BYTES).upper()
+            if b"<!DOCTYPE" in prolog or b"<!ENTITY" in prolog:
+                raise UserInputError("Failed to read Excel file: the workbook contains XML declarations that are not allowed.")
+        shared_parts: list[str] = []
+        if "[Content_Types].xml" in names:
+            # openpyxl locates the shared strings through the content types.
+            with archive.open("[Content_Types].xml") as handle:
+                for element in _iter_xml_elements(handle, frozenset({"Override"})):
+                    if element.get("ContentType") == shared_type:
+                        shared_parts.append(str(element.get("PartName") or "").lstrip("/"))
+        shared_parts += [name for name in names if name.lower().endswith("sharedstrings.xml")]
+        shared_name = next((name for name in shared_parts if name in names), None)
+        if shared_name is None:
+            return 0
+        lengths = array("q")
+        with archive.open(shared_name) as handle:
+            for element in _iter_xml_elements(handle, frozenset({"si"})):
+                lengths.append(sum(len(node.text or "") for node in element.iter() if node.tag.rpartition("}")[2] == "t"))
+        if not lengths:
+            return 0
+        total = 0
+        # Every part is scanned, not only the first sheet, so a relocated sheet cannot skip the count.
+        for name in names:
+            if name in (shared_name, "[Content_Types].xml"):
+                continue
+            with archive.open(name) as handle:
+                for cell in _iter_xml_elements(handle, frozenset({"c"})):
+                    if cell.get("t") != "s":
+                        continue
+                    value = next((child.text for child in cell if child.tag.rpartition("}")[2] == "v"), None)
+                    try:
+                        index = int(str(value).strip())
+                    except ValueError:
+                        continue
+                    if 0 <= index < len(lengths):
+                        total += lengths[index]
+                        if total > limit:
+                            return total
+    return total
+
+
+def _xls_text_chars(path: Path, limit: int) -> int:
+    """Characters of text in the first sheet of a legacy .xls workbook (the sheet the loader reads)."""
+
+    try:
+        import xlrd
+    except ImportError:  # pragma: no cover - the loader reports the missing engine itself
+        return 0
+    book = xlrd.open_workbook(str(path), on_demand=True)
+    try:
+        if book.nsheets < 1:
+            return 0
+        sheet = book.sheet_by_index(0)
+        total = 0
+        for row in range(min(sheet.nrows, _MAX_UPLOAD_ROWS + 1)):
+            total += sum(len(value) for value in sheet.row_values(row) if isinstance(value, str))
+            if total > limit:
+                break
+        return total
+    finally:
+        book.release_resources()
+
+
+def _clean_column_labels(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Replace line breaks and other control characters in column names with a space.
+
+    Excel headers often carry a line break (Alt+Enter). Request fields refuse control
+    characters in column names, so such a column would load but could not be analysed.
+    """
+
+    names = [str(column) for column in dataframe.columns]
+    if not any(_CONTROL_CHAR_PATTERN.search(name) for name in names):
+        return dataframe
+    dataframe.columns = make_unique_columns(_HEADER_CONTROL_RUN_PATTERN.sub(" ", name).strip() for name in names)
+    return dataframe
+
+
+# Leading bytes of the legacy Excel formats (the signatures pandas uses to pick a reader).
+_XLS_SIGNATURES = (
+    b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",  # compound file (BIFF5/BIFF8)
+    b"\x09\x00\x04\x00\x07\x00\x10\x00",  # BIFF2
+    b"\x09\x02\x06\x00\x00\x00\x10\x00",  # BIFF3
+    b"\x09\x04\x06\x00\x00\x00\x10\x00",  # BIFF4
+)
+
+
+def _excel_container(path: Path) -> str | None:
+    """"zip" or "xls" from the file's leading bytes; the reader picks its engine by content, not by extension."""
+
+    with path.open("rb") as handle:
+        head = handle.read(8)
+    if head.startswith(b"PK\x03\x04"):
+        return "zip"
+    if head in _XLS_SIGNATURES:
+        return "xls"
+    return None
+
+
 def _guard_compressed_upload(path: Path, filename: str) -> None:
-    """Refuse workbooks/Parquet files whose decompressed size or shape exceeds the upload limits."""
+    """Refuse workbooks/Parquet files whose decompressed size, decoded text or shape exceeds the upload limits."""
 
     suffix = Path(filename).suffix.lower()
-    if suffix == ".xlsx":
+    container = _excel_container(path) if suffix in {".xlsx", ".xls"} else None
+    if suffix == ".xls" and container == "xls":
+        try:
+            text_chars = _xls_text_chars(path, _MAX_UPLOAD_TEXT_CHARS)
+        except MemoryError:
+            raise
+        except Exception as exc:
+            logger.info("Rejected an unreadable Excel upload: %s", exc)
+            raise UserInputError("Failed to read Excel file: the .xls file is not a valid workbook.") from exc
+        if text_chars > _MAX_UPLOAD_TEXT_CHARS:
+            raise _text_too_large(text_chars)
+        return
+    # A workbook named .xls that is really a zip is read as .xlsx, so it gets the same checks.
+    if suffix == ".xlsx" or container == "zip":
         try:
             with zipfile.ZipFile(path) as archive:
                 uncompressed_bytes = sum(max(0, int(info.file_size)) for info in archive.infolist())
@@ -1630,6 +2164,15 @@ def _guard_compressed_upload(path: Path, filename: str) -> None:
                     "export the sheet as CSV instead."
                 ),
             )
+        try:
+            text_chars = _xlsx_text_chars(path, _MAX_UPLOAD_TEXT_CHARS)
+        except (UserInputError, MemoryError):
+            raise
+        except Exception as exc:
+            logger.info("Rejected an unreadable Excel upload: %s", exc)
+            raise UserInputError("Failed to read Excel file: the .xlsx container is not a valid workbook.") from exc
+        if text_chars > _MAX_UPLOAD_TEXT_CHARS:
+            raise _text_too_large(text_chars)
         return
     if suffix == ".parquet":
         try:
@@ -1643,7 +2186,9 @@ def _guard_compressed_upload(path: Path, filename: str) -> None:
             finally:
                 parquet_file.close()
         except Exception as exc:
-            raise UserInputError(f"Failed to read Parquet file: {exc}") from exc
+            # The parser's own message can name server-side paths; log it and answer generically.
+            logger.info("Rejected an unreadable Parquet upload: %s", exc)
+            raise UserInputError("Failed to read Parquet file: the file is not a valid Parquet file.") from exc
         _enforce_upload_shape_limits(SimpleNamespace(shape=(int(metadata.num_rows), int(metadata.num_columns))))
         uncompressed_bytes = sum(
             max(0, int(metadata.row_group(index).total_byte_size)) for index in range(metadata.num_row_groups)
@@ -1656,6 +2201,15 @@ def _guard_compressed_upload(path: Path, filename: str) -> None:
                     f"SurvStudio accepts Parquet data up to {_format_megabytes(_MAX_PARQUET_UNCOMPRESSED_BYTES)} uncompressed."
                 ),
             )
+        try:
+            text_bytes = _parquet_text_bytes(path, _MAX_UPLOAD_TEXT_CHARS)
+        except (UserInputError, MemoryError):
+            raise
+        except Exception as exc:
+            logger.info("Rejected an unreadable Parquet upload: %s", exc)
+            raise UserInputError("Failed to read Parquet file: the file is not a valid Parquet file.") from exc
+        if text_bytes > _MAX_UPLOAD_TEXT_CHARS:
+            raise _text_too_large(text_bytes)
 
 
 def _store_loaded_dataframe(
@@ -1669,6 +2223,10 @@ def _store_loaded_dataframe(
     """Validate, hash, store and profile a freshly loaded table (blocking; run in a worker thread)."""
 
     _enforce_upload_shape_limits(dataframe)
+    # Checked before hashing and profiling, which touch every text cell.
+    text_chars = _dataframe_text_chars(dataframe, _MAX_UPLOAD_TEXT_CHARS)
+    if text_chars > _MAX_UPLOAD_TEXT_CHARS:
+        raise _text_too_large(text_chars)
     ensure_model_feature_candidate_limit(dataframe)
     stored = store.create(
         dataframe,
@@ -1690,6 +2248,7 @@ def _ingest_uploaded_file(path: Path, filename: str) -> dict[str, Any]:
         max_columns=_MAX_UPLOAD_COLUMNS,
         max_cells=_MAX_UPLOAD_CELLS,
     )
+    _clean_column_labels(dataframe)
     # The parsed frame is private to this request, so the store can keep it without a deep copy.
     return _store_loaded_dataframe(dataframe, filename=filename, source="upload", copy_dataframe=False)
 
@@ -1898,6 +2457,17 @@ def fail_bad_request(exc: Exception) -> NoReturn:
         raise HTTPException(
             status_code=500,
             detail="The analysis ran out of memory. Reduce the cohort size, feature count, or model complexity and try again.",
+        ) from exc
+    if isinstance(exc, csv.Error):
+        # Raised by the csv module for an over-long field or broken quoting in an uploaded file.
+        raise HTTPException(
+            status_code=400,
+            detail="The file could not be read as delimited text: a field is too long or its quoting is malformed.",
+        ) from exc
+    if isinstance(exc, UnicodeDecodeError):
+        raise HTTPException(
+            status_code=400,
+            detail="The file is not valid UTF-8 text. Save it as UTF-8 (for example \"CSV UTF-8\" in Excel) and try again.",
         ) from exc
     runtime_classification = _classify_runtime_request_error(exc)
     if runtime_classification is not None:
@@ -2494,11 +3064,44 @@ def _json_safe_error_payload(value: Any) -> Any:
     return value
 
 
+_ERROR_INPUT_ECHO_LIMIT = 200
+
+
+def _is_small_error_input(value: Any) -> bool:
+    """True when the echoed input has at most a few hundred values and no long text."""
+
+    pending = [value]
+    seen = 0
+    while pending:
+        item = pending.pop()
+        seen += 1
+        if seen > _ERROR_INPUT_ECHO_LIMIT:
+            return False
+        if isinstance(item, (dict, list, tuple)):
+            if len(item) > _ERROR_INPUT_ECHO_LIMIT:
+                return False
+            pending.extend(item.values() if isinstance(item, dict) else item)
+        elif isinstance(item, str) and len(item) > 1000:
+            return False
+    return True
+
+
+def _trimmed_validation_errors(errors: Sequence[Any]) -> list[Any]:
+    """Validation errors without large echoed inputs (a whole prediction block or table), which the page never shows."""
+
+    trimmed: list[Any] = []
+    for error in errors:
+        if isinstance(error, dict) and "input" in error and not _is_small_error_input(error["input"]):
+            error = {**error, "input": "(omitted: too large to echo)"}
+        trimmed.append(error)
+    return trimmed
+
+
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse(
         status_code=422,
-        content={"detail": _json_safe_error_payload(jsonable_encoder(exc.errors()))},
+        content={"detail": _json_safe_error_payload(jsonable_encoder(_trimmed_validation_errors(exc.errors())))},
     )
 
 
@@ -2640,6 +3243,36 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
             temp_path.unlink(missing_ok=True)
 
 
+def _reject_overlong_matrix_text(path: Path, *, compressed: bool) -> None:
+    """Refuse a text matrix with more lines than any accepted layout can have, before it is parsed.
+
+    Either layout puts a header and then one line per marker or per patient, so no accepted
+    matrix has more lines than the larger of the two limits (plus the header). Counting runs
+    over the unpacked stream in fixed-size chunks and stops at the limit.
+    """
+
+    import gzip
+    import zlib
+
+    limit = max(MAX_MATRIX_MARKERS, MAX_MATRIX_SAMPLES) + 1
+    lines = 0
+    unpacked = 0
+    try:
+        with (gzip.open(path, "rb") if compressed else path.open("rb")) as handle:
+            while chunk := handle.read(1 << 20):
+                lines += chunk.count(b"\n")
+                unpacked += len(chunk)
+                if lines > limit:
+                    raise UserInputError(
+                        f"The matrix has more than {limit:,} lines; SurvStudio reads at most {MAX_MATRIX_MARKERS:,} markers "
+                        f"and {MAX_MATRIX_SAMPLES:,} patients. Keep fewer markers, for example the most variable ones."
+                    )
+                if unpacked > MAX_DECOMPRESSED_BYTES:
+                    return  # the reader reports the size limit itself
+    except (OSError, EOFError, zlib.error):
+        return  # a damaged file is reported by the reader with its own message
+
+
 @app.post("/api/marker-matrix")
 async def upload_marker_matrix(
     file: UploadFile = File(...),
@@ -2675,6 +3308,8 @@ async def upload_marker_matrix(
             stored = _get_stored_dataset(dataset_id)
             if id_column not in stored.dataframe.columns:
                 raise UserInputError(f"The ID column '{id_column}' is not in the dataset.")
+            if suffix != ".parquet":
+                _reject_overlong_matrix_text(temp_path, compressed=compressed)
             patient_ids = stored.dataframe[id_column].tolist()
             matrix = read_marker_matrix(temp_path, filename, patient_ids=patient_ids, orientation=orientation)
             summary = match_summary(matrix, patient_ids)
@@ -2695,7 +3330,7 @@ async def upload_marker_matrix(
                 **summary,
             }
 
-        return await run_in_threadpool(_ingest)
+        return await _run_job(_ingest)
     except HTTPException:
         raise
     except Exception as exc:
@@ -2945,6 +3580,12 @@ async def cox(request_model: CoxRequest, request: Request) -> dict[str, Any]:
                 selected_cox_inputs,
                 context="Cox covariates",
             )
+            _reject_oversized_design(
+                stored,
+                request_model.covariates,
+                request_model.categorical_covariates,
+                context="Cox covariates",
+            )
             from survival_toolkit.plots import (
                 build_cox_diagnostics_figure,
                 build_cox_forest_figure,
@@ -3005,6 +3646,12 @@ async def cox_preview(request_model: CoxRequest, request: Request) -> dict[str, 
                 selected_cox_inputs,
                 context="Cox covariates",
             )
+            _reject_oversized_design(
+                stored,
+                request_model.covariates,
+                request_model.categorical_covariates,
+                context="Cox covariates",
+            )
             preview = preview_cox_analysis_inputs(
                 stored.dataframe,
                 time_column=request_model.time_column,
@@ -3035,6 +3682,30 @@ async def cohort_table(request_model: CohortTableRequest, request: Request) -> d
                     [request_model.group_column],
                     context="grouped cohort tables",
                 )
+                group_column = str(request_model.group_column)
+                if group_column in stored.dataframe.columns:
+                    # Each group adds a column and a pass over the cohort; the same cap as Kaplan-Meier groups.
+                    n_groups = int(stored.dataframe[group_column].nunique(dropna=True))
+                    if n_groups > _MAX_COHORT_TABLE_GROUPS:
+                        raise UserInputError(
+                            f'"{group_column}" has {n_groups:,} distinct values; a grouped cohort table compares at most '
+                            f"{_MAX_COHORT_TABLE_GROUPS} groups. Group the column into fewer categories first."
+                        )
+            # A text column is listed level by level (each level scans the cohort again), so an ID or
+            # free-text column would produce one row per patient.
+            for variable in dict.fromkeys(str(name) for name in request_model.variables):
+                if variable not in stored.dataframe.columns:
+                    continue  # reported by the analysis itself
+                series = stored.dataframe[variable]
+                if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
+                    continue
+                n_levels = int(series.nunique(dropna=True))
+                if n_levels > _MAX_COHORT_TABLE_LEVELS:
+                    raise UserInputError(
+                        f'"{variable}" has {n_levels:,} distinct values; a cohort table lists at most '
+                        f"{_MAX_COHORT_TABLE_LEVELS} levels per categorical variable. Leave out ID or free-text columns "
+                        "or group the values into fewer categories."
+                    )
             dataframe = stored.dataframe
             cohort_note: str | None = None
             analysis_cohort: dict[str, Any] | None = None
@@ -3090,6 +3761,12 @@ async def cohort_table(request_model: CohortTableRequest, request: Request) -> d
 @app.post("/api/discover-signature")
 async def discover_signature(request_model: SignatureSearchRequest, request: Request) -> dict[str, Any]:
     try:
+        minimum_combinations = request_model.minimum_combinations()
+        if minimum_combinations > _MAX_SIGNATURE_COMBINATIONS:
+            raise UserInputError(
+                f"This search would test at least {minimum_combinations:,} feature combinations; SurvStudio searches at most "
+                f"{_MAX_SIGNATURE_COMBINATIONS:,}. Choose fewer candidate columns or a smaller maximum combination size."
+            )
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
 
@@ -3219,6 +3896,12 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                 [*request_model.features, *request_model.categorical_features],
                 context="machine-learning model inputs",
             )
+            _reject_oversized_design(
+                stored,
+                request_model.features,
+                request_model.categorical_features,
+                context="machine-learning model inputs",
+            )
             if request_model.model_type == "compare":
                 if request_model.evaluation_strategy == "repeated_cv":
                     comparison = cross_validate_survival_models(
@@ -3323,6 +4006,9 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                 except (MemoryError, KeyboardInterrupt):
                     raise
                 except Exception as exc:
+                    # A cancelled request or a coding error is not a SHAP failure to report next to the model.
+                    if must_propagate(exc):
+                        raise
                     shap_error = f"{type(exc).__name__}: {exc}"
                     if request_model.shap_safe_mode and "high-dimensional inputs" in str(exc).lower():
                         subset = _select_shap_safe_mode_subset(result, request_model.features)
@@ -3373,6 +4059,8 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                             except (MemoryError, KeyboardInterrupt):
                                 raise
                             except Exception as safe_mode_exc:
+                                if must_propagate(safe_mode_exc):
+                                    raise
                                 shap_error = (
                                     f"{type(exc).__name__}: {exc} "
                                     f"SHAP safe mode also failed: {type(safe_mode_exc).__name__}: {safe_mode_exc}"
@@ -3424,6 +4112,12 @@ async def deep_model(request_model: DeepModelRequest, request: Request) -> dict[
             _reject_outcome_informed_columns(
                 stored,
                 [*request_model.features, *request_model.categorical_features],
+                context="deep-learning model inputs",
+            )
+            _reject_oversized_design(
+                stored,
+                request_model.features,
+                request_model.categorical_features,
                 context="deep-learning model inputs",
             )
             base = dict(
@@ -3564,7 +4258,7 @@ class CounterfactualRequest(_FeatureSelectionRequestModel):
     counterfactual_value: Any
     model_type: Literal["rsf", "gbs"] = "rsf"
     n_estimators: int = Field(default=100, ge=10, le=1000)
-    max_depth: int | None = None
+    max_depth: int | None = Field(default=None, ge=1, le=64)
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = Field(default=42, ge=0, le=2**32 - 1)
 
@@ -3575,6 +4269,22 @@ class CounterfactualRequest(_FeatureSelectionRequestModel):
         if text is None:
             raise ValueError("target_feature must not be empty or null.")
         return text
+
+    @field_validator("original_value", "counterfactual_value", mode="before")
+    @classmethod
+    def validate_feature_value(cls, value: Any, info: Any) -> Any:
+        # One value of the target feature: a number, a category label, a boolean, or null.
+        if value is None or isinstance(value, (bool, int)):
+            return value
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError(f"{info.field_name} must be a finite number.")
+            return value
+        if isinstance(value, str):
+            if len(value) > 1000:
+                raise ValueError(f"{info.field_name} must be 1000 characters or fewer.")
+            return value
+        raise ValueError(f"{info.field_name} must be a single number, text label, boolean, or null.")
 
     @model_validator(mode="after")
     def validate_target_feature_membership(self) -> "CounterfactualRequest":
@@ -3597,7 +4307,7 @@ class PDPRequest(_FeatureSelectionRequestModel):
     target_feature: str
     model_type: Literal["rsf", "gbs"] = "rsf"
     n_estimators: int = Field(default=100, ge=10, le=1000)
-    max_depth: int | None = None
+    max_depth: int | None = Field(default=None, ge=1, le=64)
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = Field(default=42, ge=0, le=2**32 - 1)
 
@@ -3641,6 +4351,12 @@ async def time_dependent_importance(request_model: TimeDependentImportanceReques
             _reject_outcome_informed_columns(
                 stored,
                 [*request_model.features, *request_model.categorical_features],
+                context="time-dependent importance inputs",
+            )
+            _reject_oversized_design(
+                stored,
+                request_model.features,
+                request_model.categorical_features,
                 context="time-dependent importance inputs",
             )
             result = compute_time_dependent_importance(
@@ -3687,6 +4403,12 @@ async def counterfactual(request_model: CounterfactualRequest, request: Request)
                 stored,
                 [*request_model.features, *request_model.categorical_features, request_model.target_feature],
                 context="counterfactual analysis",
+            )
+            _reject_oversized_design(
+                stored,
+                request_model.features,
+                request_model.categorical_features,
+                context="counterfactual model inputs",
             )
             artifact = _get_ml_artifact(request_model.dataset_id, request_config)
             analysis = counterfactual_survival(
@@ -3750,6 +4472,12 @@ async def pdp(request_model: PDPRequest, request: Request) -> dict[str, Any]:
                 stored,
                 [*request_model.features, *request_model.categorical_features, request_model.target_feature],
                 context="partial dependence analysis",
+            )
+            _reject_oversized_design(
+                stored,
+                request_model.features,
+                request_model.categorical_features,
+                context="partial dependence model inputs",
             )
             trained = _get_ml_artifact(request_model.dataset_id, request_config)
             artifact_reused = trained is not None
@@ -3854,17 +4582,57 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _reject_repeated_marker_roles(request_model: MarkerEvaluationRequest) -> None:
+    """Each column may have one role: time, event, marker, clinical covariate, stratum or patient ID."""
+
+    roles: list[tuple[str, Sequence[str]]] = [
+        ("outcome time", [request_model.time_column]),
+        ("outcome event", [request_model.event_column]),
+        ("marker", request_model.marker_columns),
+        ("clinical covariate", request_model.clinical_columns),
+        ("stratum", request_model.strata_columns),
+    ]
+    if request_model.marker_matrix_id and request_model.marker_matrix_id_column:
+        roles.append(("patient ID", [request_model.marker_matrix_id_column]))
+    first_role: dict[str, str] = {}
+    clashes: list[str] = []
+    for role, columns in roles:
+        for column in columns:
+            name = str(column)
+            earlier = first_role.setdefault(name, role)
+            if earlier != role:
+                clashes.append(f"'{name}' ({earlier} and {role})")
+    if clashes:
+        raise UserInputError(
+            "Each column can have only one role in a marker evaluation; these were given more than one: "
+            + ", ".join(clashes[:5])
+            + (" ..." if len(clashes) > 5 else "")
+            + "."
+        )
+
+
+def _reject_missing_marker_columns(stored: Any, columns: Sequence[str]) -> None:
+    present = set(stored.dataframe.columns)
+    missing = [column for column in dict.fromkeys(str(column) for column in columns) if column not in present]
+    if missing:
+        raise UserInputError(
+            "Columns not found in the dataset: " + ", ".join(missing[:10]) + (" ..." if len(missing) > 10 else "") + "."
+        )
+
+
 @app.post("/api/marker-evaluation")
 async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Request) -> dict[str, Any]:
     try:
         from survival_toolkit.plots import build_marker_rank_figure, build_marker_stability_figure, build_marker_summary_figure
 
+        _reject_repeated_marker_roles(request_model)
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
         inputs = [*request_model.marker_columns, *request_model.clinical_columns, *request_model.strata_columns]
         matrix = marker_matrices.get(request_model.marker_matrix_id) if request_model.marker_matrix_id else None
 
         def _run() -> dict[str, Any]:
+            _reject_missing_marker_columns(stored, [request_model.time_column, request_model.event_column, *inputs])
             # Input checks scan every column, so they run in the worker thread too.
             _reject_survival_outcome_feature_columns(
                 stored,
@@ -3875,6 +4643,13 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
                 context="marker evaluation",
             )
             _reject_outcome_informed_columns(stored, inputs, context="marker evaluation")
+            # Every marker model carries all clinical covariates.
+            _reject_oversized_design(
+                stored,
+                request_model.clinical_columns,
+                request_model.categorical_clinical,
+                context="clinical covariates",
+            )
             frame = stored.dataframe
             markers = list(request_model.marker_columns)
             matrix_info = None
@@ -3889,6 +4664,20 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
                     columns=[id_column, request_model.time_column, request_model.event_column, *request_model.clinical_columns, *request_model.strata_columns],
                 )
                 markers = list(matrix.marker_names)
+                # The same outcome-leakage rules as for dataset columns, applied to the matrix markers.
+                leaked = _matrix_outcome_markers(
+                    frame,
+                    markers,
+                    event_column=request_model.event_column,
+                    event_positive_value=request_model.event_positive_value,
+                )
+                if leaked:
+                    raise UserInputError(
+                        "The marker matrix holds survival outcome columns, which cannot be used as markers: "
+                        + ", ".join(leaked[:10])
+                        + (" ..." if len(leaked) > 10 else "")
+                        + ". Remove them from the matrix file and attach it again."
+                    )
                 matrix_info = {
                     "filename": matrix.filename,
                     "n_markers": len(markers),
@@ -3951,6 +4740,10 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
                 )
             except KeyError as exc:
                 raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
+            except (AttributeError, IndexError, TypeError) as exc:
+                # The recipe is client JSON guarded only by a content hash, which a client can recompute.
+                logger.warning("Rejected a malformed marker recipe", exc_info=exc)
+                raise UserInputError("The recipe is malformed; export it again from a marker evaluation.") from exc
             return _attach_dataset_hash(
                 {
                     "validation": validation,
@@ -4001,7 +4794,7 @@ async def tripod_ai_report(request_model: TripodChecklistRequest) -> dict[str, A
             {**item.analysis, "family": item.family, "request_config": item.request_config}
             for item in request_model.comparisons
         ]
-        return await run_in_threadpool(tripod_ai_checklist, comparisons, dataset=dataset)
+        return await _run_job(lambda: tripod_ai_checklist(comparisons, dataset=dataset))
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -4038,15 +4831,35 @@ async def checklist_export(request_model: ChecklistExportRequest) -> Response:
         fail_bad_request(exc)
 
 
+def _interval_draws(n_patients: int, n_events: int, n_models: int, requested: int) -> tuple[int, str | None]:
+    """Bootstrap draws that fit the work budget, and a note when that is fewer than requested."""
+
+    work_per_draw = max(n_events, 1) * max(n_patients, 1) * max(n_models, 1)
+    affordable = _INTERVAL_WORK_BUDGET // work_per_draw
+    if affordable < _INTERVAL_MIN_DRAWS:
+        raise UserInputError(
+            f"The shared test set ({n_patients:,} patients, {n_events:,} events, {n_models} models) is too large for "
+            f"bootstrap intervals: only {affordable} draws fit the work budget and at least {_INTERVAL_MIN_DRAWS} are needed. "
+            "Compare fewer models at once or report the point estimates."
+        )
+    draws = min(int(requested), int(affordable))
+    if draws >= requested:
+        return draws, None
+    return draws, (
+        f"Bootstrap draws were limited to {draws} of the {requested} requested, so the intervals for "
+        f"{n_patients:,} test patients ({n_events:,} events, {n_models} models) stay within the work budget."
+    )
+
+
 @app.post("/api/model-comparison-intervals")
-async def model_comparison_intervals(request_model: ModelComparisonIntervalsRequest) -> dict[str, Any]:
+async def model_comparison_intervals(request_model: ModelComparisonIntervalsRequest, request: Request) -> dict[str, Any]:
     try:
 
         def _run() -> dict[str, Any]:
-            time, event, risks, rows = merge_prediction_blocks(request_model.predictions)
-            work = max(int(event.sum()), 1) * time.shape[0] * max(len(risks), 1)
-            draws = max(200, min(int(request_model.n_bootstrap), _INTERVAL_WORK_BUDGET // work))
-            result = c_index_intervals(
+            # Deliberate messages ("the comparisons share no test patients") reach the user as 400s.
+            time, event, risks, rows = user_input_boundary(merge_prediction_blocks)(request_model.predictions)
+            draws, note = _interval_draws(int(time.shape[0]), int(event.sum()), len(risks), int(request_model.n_bootstrap))
+            result = user_input_boundary(c_index_intervals)(
                 time,
                 event,
                 risks,
@@ -4054,9 +4867,12 @@ async def model_comparison_intervals(request_model: ModelComparisonIntervalsRequ
                 n_bootstrap=draws,
                 random_seed=request_model.random_seed,
             )
-            return {**result, "n_shared": len(rows)}
+            payload = {**result, "n_shared": len(rows), "n_bootstrap_requested": int(request_model.n_bootstrap)}
+            if note:
+                payload["bootstrap_note"] = note
+            return payload
 
-        return await run_in_threadpool(_run)
+        return await _run_job(_run, request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -4066,7 +4882,7 @@ async def design_audit(request_model: DesignAuditRequest) -> dict[str, Any]:
     try:
         request_config = request_model.model_dump()
         design = design_from_dict(request_config)
-        result = await run_in_threadpool(audit_design, design)
+        result = await _run_job(lambda: audit_design(design))
         return {**result, "request_config": request_config}
     except Exception as exc:
         fail_bad_request(exc)
