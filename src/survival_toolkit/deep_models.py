@@ -168,23 +168,35 @@ def _derived_seed(base_seed: int, offset: int = 0) -> int:
 _MUST_PROPAGATE_MARK = "_survstudio_must_propagate"
 
 
+def _raised_in_survstudio(exc: BaseException) -> bool:
+    """Whether the innermost frame of the exception's traceback is SurvStudio code."""
+    traceback = exc.__traceback__
+    module_name = ""
+    while traceback is not None:
+        module_name = str(traceback.tb_frame.f_globals.get("__name__", ""))
+        traceback = traceback.tb_next
+    return module_name == "survival_toolkit" or module_name.startswith("survival_toolkit.")
+
+
 def _must_propagate_deep(exc: BaseException) -> bool:
     """``must_propagate`` for the deep-model fallbacks, seeing through ``user_input_boundary``.
 
     The public trainers turn a ``TypeError`` raised by SurvStudio code (a coding bug) into an
     ``InternalAnalysisError``; per-model and per-fold fallbacks must re-raise it instead of
-    recording an ordinary model failure. Running out of memory also ends the run: the next
-    model or fold would only exhaust the memory again. Worker processes mark such errors
-    before they are pickled back to the parent, because pickling drops ``__cause__``.
+    recording an ordinary model failure, as they must an ``IndexError`` or
+    ``ZeroDivisionError`` raised by SurvStudio code. Running out of memory also ends the run:
+    the next model or fold would only exhaust the memory again. Worker processes mark such
+    errors before they are pickled back to the parent, because pickling drops ``__cause__``.
     """
-    if isinstance(exc, MemoryError) or getattr(exc, _MUST_PROPAGATE_MARK, False) or must_propagate(exc):
+    if (
+        isinstance(exc, MemoryError)
+        or getattr(exc, _MUST_PROPAGATE_MARK, False)
+        or must_propagate(exc)
+        or (isinstance(exc, (IndexError, ZeroDivisionError)) and _raised_in_survstudio(exc))
+    ):
         return True
     cause = exc.__cause__
-    return (
-        isinstance(exc, InternalAnalysisError)
-        and cause is not None
-        and (isinstance(cause, MemoryError) or must_propagate(cause))
-    )
+    return isinstance(exc, InternalAnalysisError) and cause is not None and _must_propagate_deep(cause)
 
 
 def _failure_message(exc: BaseException) -> str:

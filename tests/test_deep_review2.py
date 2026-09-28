@@ -868,3 +868,90 @@ def test_the_unused_preprocessing_helpers_are_gone() -> None:
     assert not hasattr(dm, "_prepare_deep_data")
     assert not hasattr(dm, "_survival_after_event_bins")
 
+
+# The shared feature-typing rule in the encoder, and the stricter must-propagate rule ----------
+
+
+def _shared_rule_coerce(original):
+    """``encoding.coerce_feature_subset`` under the shared rule: undeclared text of finite numbers is numeric."""
+    from pandas.api.types import is_numeric_dtype
+
+    def _coerce(df, features, categorical_features=None):
+        declared = list(categorical_features or [])
+        converted = df.copy()
+        for column in features:
+            series = df[column]
+            if column in declared or is_numeric_dtype(series) or isinstance(series.dtype, pd.CategoricalDtype):
+                continue
+            numbers = pd.to_numeric(series.dropna(), errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+            if np.isfinite(numbers).all():
+                converted[column] = pd.to_numeric(series, errors="coerce")
+        return original(converted, features, categorical_features)
+
+    return _coerce
+
+
+def test_split_encoders_keep_the_cohort_types_under_the_shared_numeric_text_rule(monkeypatch) -> None:
+    import survival_toolkit.encoding as encoding
+    from sklearn.model_selection import StratifiedKFold
+
+    from survival_toolkit.evaluation import stratified_holdout_indices
+
+    monkeypatch.setattr(encoding, "coerce_feature_subset", _shared_rule_coerce(encoding.coerce_feature_subset))
+    rng = np.random.default_rng(0)
+    n = 120
+    df = pd.DataFrame({
+        "time": rng.exponential(20, n).round(1) + 0.1,
+        "event": rng.integers(0, 2, n),
+        "age": rng.normal(60, 10, n),
+        "grade": rng.choice(["1", "2", "3"], n).astype(object),
+    })
+    df.loc[0, "grade"] = "unknown"  # the only text level: training rows without it hold numbers only
+    events = df["event"].to_numpy()
+    seed = next(
+        seed for seed in range(200)
+        if (split := stratified_holdout_indices(events, random_state=seed))[2] == "holdout" and 0 in set(split[1].tolist())
+    )
+    data, split = dm._prepare_deep_training_inputs(
+        df, time_column="time", event_column="event", features=["age", "grade"], random_seed=seed
+    )
+    assert split["evaluation_mode"] == "holdout"
+    assert data["feature_names"] == ["grade_2", "grade_3", "age"]
+    clean = dm._coerce_deep_frame(df, "time", "event", ["age", "grade"])
+    clean_events = clean["event"].astype(int).to_numpy()
+    for train_rows, eval_rows in StratifiedKFold(n_splits=5, shuffle=True, random_state=42).split(clean, clean_events):
+        fold_data, _ = dm._prepare_deep_split_data(
+            clean.iloc[train_rows].reset_index(drop=True),
+            clean.iloc[eval_rows].reset_index(drop=True),
+            time_column="time",
+            event_column="event",
+            features=["age", "grade"],
+        )
+        assert {"grade_2", "grade_3"} <= set(fold_data["feature_names"]) and "grade" not in fold_data["feature_names"]
+
+
+def test_index_errors_raised_by_survstudio_code_end_the_run(monkeypatch) -> None:
+    df = make_example_dataset(seed=4, n_patients=80)
+    # An empty artifact selection makes train_deepsurv index an empty array (a SurvStudio bug).
+    monkeypatch.setattr(dm, "_select_artifact_indices", lambda **kwargs: torch.arange(0, dtype=torch.long))
+    with pytest.raises(IndexError):
+        dm.compare_deep_survival_models(
+            df, "os_months", "os_event", FEATURES, epochs=1, hidden_layers=[4], num_time_bins=5,
+            included_models=["DeepSurv", "Neural MTLR"],
+        )
+    monkeypatch.undo()
+
+    def _library_index_error(*args, **kwargs):
+        raise IndexError("index 3 is out of bounds for dimension 0 with size 3")
+
+    # Raised outside SurvStudio code (here: this test module), it stays an ordinary model failure.
+    _install_stubs(monkeypatch, train_deepsurv=_library_index_error)
+    result = dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, included_models=["DeepSurv", "DeepHit"])
+    assert [error["model"] for error in result["errors"]] == ["DeepSurv"]
+    wrapped = dm.InternalAnalysisError()
+    try:
+        [][0]  # an IndexError raised here is not SurvStudio code either
+    except IndexError as exc:
+        wrapped.__cause__ = exc
+    assert not dm._must_propagate_deep(wrapped)
+
