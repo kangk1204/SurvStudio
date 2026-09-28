@@ -721,6 +721,109 @@ def test_marker_summary_does_not_claim_what_was_not_tested(tmp_path: Path, untes
     assert "Permutations above 0" in no_permutations["next"]
 
 
+_MATRIX = "{ matrix_id: 'm1', filename: 'expr.tsv', n_markers: 20, n_matched: 300, n_patients: 360, id_column: 'patient_id' }"
+
+
+def test_a_marker_matrix_is_freed_when_another_dataset_replaces_its_own(tmp_path: Path, example_dataset: dict) -> None:
+    """R15-11: a derived snapshot keeps the attached matrix; another dataset deletes it on the server."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.run("state.markerMatrix = """ + _MATRIX + r"""; renderMarkerMatrixState();");
+      const columns = [...fixtures.dataset.columns, { name: "age__median_split", kind: "categorical", n_unique: 2, unique_preview: ["Low", "High"], missing: 0, non_missing: 360 }];
+      page.fetchHandler = (request) => {
+        if (request.method === "DELETE") return { status: 200, body: { status: "deleted" } };
+        if (request.url.endsWith("/api/derive-group")) return { status: 200, body: { ...fixtures.dataset, dataset_id: "derived-snapshot", columns,
+          derived_column: "age__median_split", derive_summary: { method: "median_split", counts: [] } } };
+        return { status: 200, body: { preview: { analyzable_rows: 360, outcome_rows: 360, events: 250, estimated_parameters: 4, events_per_parameter: 62 } } };
+      };
+      page.run("activateTab('cox'); refs.derivePanel.classList.remove('hidden'); refs.deriveButton.click()");
+      await page.settle();
+      const afterDerive = { matrix: page.run("state.markerMatrix?.matrix_id || null"), deletes: page.requests.filter((request) => request.method === "DELETE").length };
+      await loadDataset(page, { ...fixtures.dataset, dataset_id: "another-cohort" });
+      return { afterDerive, matrix: page.run("state.markerMatrix"), deletes: page.requests.filter((request) => request.method === "DELETE").map((request) => request.url) };
+    """, dataset=example_dataset)
+
+    assert result["afterDerive"] == {"matrix": "m1", "deletes": 0}
+    assert result["matrix"] is None
+    assert result["deletes"] == ["/api/marker-matrix/m1"]
+
+
+def test_a_marker_file_attached_to_a_replaced_dataset_is_deleted(tmp_path: Path, example_dataset: dict) -> None:
+    """R15-11: the attach answer for the old dataset is not used, and its matrix is freed on the server."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const hold = deferred();
+      page.fetchHandler = (request) => {
+        if (request.method === "DELETE") return { status: 200, body: { status: "deleted" } };
+        if (request.url.endsWith("/api/marker-matrix")) return hold.promise;
+        return { status: 500, body: { detail: "unexpected" } };
+      };
+      page.run("activateTab('markers'); refs.markerMatrixFile.files = [{ name: 'expr.tsv' }]; refs.attachMarkerMatrixButton.click()");
+      await page.settle(3);
+      await loadDataset(page, { ...fixtures.dataset, dataset_id: "another-cohort" });
+      hold.resolve({ status: 200, body: { matrix_id: "m2", filename: "expr.tsv", n_markers: 20, n_matched: 300, n_patients: 360, id_column: "patient_id" } });
+      await page.settle();
+      return {
+        matrix: page.run("state.markerMatrix"),
+        deletes: page.requests.filter((request) => request.method === "DELETE").map((request) => request.url),
+        toasts: page.toasts(),
+      };
+    """, dataset=example_dataset)
+
+    assert result["matrix"] is None
+    assert result["deletes"] == ["/api/marker-matrix/m2"]
+    assert any("was not attached" in toast for toast in result["toasts"]), result["toasts"]
+
+
+def test_a_validation_upload_cancelled_in_flight_is_still_deleted(tmp_path: Path, example_dataset: dict, marker_payloads: dict) -> None:
+    """R15-11: the upload is let finish, so the external cohort it stored can be deleted again."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.fetchHandler = (request) => (request.url.endsWith("/api/marker-evaluation")
+        ? { status: 200, body: { ...fixtures.markers.added, request_config: request.json() } }
+        : { status: 500, body: { detail: "unexpected" } });
+      page.run("activateTab('markers'); refs.runMarkersButton.click()");
+      await page.settle();
+      const upload = deferred();
+      page.fetchHandler = (request) => {
+        if (request.method === "DELETE") return { status: 200, body: { status: "deleted" } };
+        if (request.url.endsWith("/api/upload")) return upload.promise;
+        if (request.url.endsWith("/api/marker-validation")) return deferred().promise;
+        if (request.url.endsWith("/api/marker-evaluation")) return { status: 200, body: { ...fixtures.markers.added, request_config: request.json() } };
+        return { status: 500, body: { detail: "unexpected" } };
+      };
+      page.run("refs.markerValidationFile.files = [{ name: 'external.csv' }]; refs.runMarkerValidationButton.click()");
+      await page.settle(3);
+      // A new evaluation makes this validation obsolete while the file is still uploading.
+      page.run("runMarkerEvaluation()");
+      await page.settle();
+      upload.resolve({ status: 200, body: { dataset_id: "external-3", filename: "external.csv" } });
+      await page.settle();
+      return {
+        deletes: page.requests.filter((request) => request.method === "DELETE").map((request) => request.url),
+        validations: page.requests.filter((request) => request.url.endsWith("/api/marker-validation")).length,
+        busy: page.run("isScopeBusy('markers')"),
+      };
+    """, dataset=example_dataset, markers=marker_payloads)
+
+    assert result == {"deletes": ["/api/dataset/external-3"], "validations": 0, "busy": False}
+
+
+def test_a_validation_without_a_figure_clears_the_previous_replication_plot(tmp_path: Path) -> None:
+    """R15-13: the plot of an earlier validation does not stay under a later one."""
+    result = _run_page(tmp_path, r"""
+      const validation = { cohort: { n: 200, events: 90 }, metrics: { c_index: 0.7 }, markers: [], notes: [] };
+      page.context.__validation = validation;
+      await page.run(`renderMarkerValidation({ external_filename: "first.csv", validation: __validation,
+        figure: { data: [{ x: [1, 2], y: [1, 2] }], layout: {} } })`);
+      const first = page.run("({ data: Boolean(refs.markerValidationPlot.data), hidden: refs.markerValidationPlot.classList.contains('hidden') })");
+      await page.run(`renderMarkerValidation({ external_filename: "second.csv", validation: __validation, figure: null })`);
+      return { first, second: page.run("({ data: Boolean(refs.markerValidationPlot.data), hidden: refs.markerValidationPlot.classList.contains('hidden') })") };
+    """)
+
+    assert result == {"first": {"data": True, "hidden": False}, "second": {"data": False, "hidden": True}}
+
+
 # ── Derived groupings ───────────────────────────────────────────
 
 

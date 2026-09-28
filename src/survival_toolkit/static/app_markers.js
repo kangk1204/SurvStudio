@@ -69,7 +69,12 @@ async function attachMarkerMatrix() {
   form.append("id_column", idColumn);
   form.append("orientation", refs.markerMatrixOrientation?.value || "auto");
   const payload = await fetchJSON("/api/marker-matrix", { method: "POST", body: form });
-  if (state.dataset?.dataset_id !== datasetId) return;
+  if (state.dataset?.dataset_id !== datasetId) {
+    // The matrix was matched to the patients of a dataset the workspace no longer shows: free it again.
+    deleteMarkerMatrixOnServer(payload?.matrix_id);
+    showToast("The dataset changed while the marker file was being attached, so it was not attached. Attach it again.", "warning", 5200);
+    return;
+  }
   state.markerMatrix = payload;
   if (refs.markerMatrixFile) refs.markerMatrixFile.value = "";
   renderMarkerMatrixState();
@@ -78,10 +83,15 @@ async function attachMarkerMatrix() {
   showToast(`Attached ${formatCount(payload.n_markers)} markers; ${formatCount(payload.n_matched)} of ${formatCount(payload.n_patients)} patients matched.`, "success", 4000);
 }
 
+// Frees a marker matrix the workspace no longer uses, so it does not linger in the server's store.
+function deleteMarkerMatrixOnServer(matrixId) {
+  if (matrixId) fetch(apiUrl(`/api/marker-matrix/${encodeURIComponent(matrixId)}`), { method: "DELETE" }).catch(() => {});
+}
+
 function removeMarkerMatrix() {
   const matrixId = state.markerMatrix?.matrix_id;
   state.markerMatrix = null;
-  if (matrixId) fetch(apiUrl(`/api/marker-matrix/${encodeURIComponent(matrixId)}`), { method: "DELETE" }).catch(() => {});
+  deleteMarkerMatrixOnServer(matrixId);
   renderMarkerMatrixState();
   renderMarkerSelectionLine();
   scheduleResultCurrencySync();
@@ -465,7 +475,9 @@ async function runMarkerValidation() {
   try {
     const form = new FormData();
     form.append("file", file);
-    const external = await fetchJSON("/api/upload", { signal: requestSignal("markerValidation"), method: "POST", body: form });
+    // The upload is not cancelled with the validation: the server stores the cohort either way, and only its
+    // answer carries the id the cleanup below needs.
+    const external = await fetchJSON("/api/upload", { method: "POST", body: form });
     externalDatasetId = external?.dataset_id || null;
     if (!requestTokenMatches("markerValidation", requestToken)) return;
     const payload = await fetchJSON("/api/marker-validation", {
@@ -541,6 +553,10 @@ async function renderMarkerValidation(payload) {
     resetPlotElement(refs.markerValidationPlot);
     await Plotly.newPlot(refs.markerValidationPlot, payload.figure.data, plotLayoutConfig(payload.figure.layout || {}, "marker_replication"), plotConfig("marker_replication"));
     stabilizePlotShellHeight(refs.markerValidationPlot);
+  } else if (refs.markerValidationPlot) {
+    // A validation without a replication figure must not show the plot of an earlier one.
+    clearPlotShell(refs.markerValidationPlot, "", { state: "placeholder" });
+    refs.markerValidationPlot.classList.add("hidden");
   }
   renderTable(refs.markerValidationShell, markerValidationRows(validation), null, { pValueColumns: ["Replication P (Holm)"] });
 }

@@ -484,7 +484,9 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   // A different dataset makes any pending derive/signature response obsolete.
   invalidateRequestTokens(["derive", "signature"]);
   state.dataset = payload;
-  // A marker matrix belongs to the patients of the dataset it was attached to; derived-column snapshots keep it.
+  // A marker matrix belongs to the patients of the dataset it was attached to; derived-column snapshots keep it,
+  // and another dataset frees it on the server.
+  deleteMarkerMatrixOnServer(state.markerMatrix?.matrix_id);
   state.markerMatrix = null;
   // Results, banners, plots, and export buttons of the previous dataset.
   clearAnalysisOutputs();
@@ -744,9 +746,6 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
     setSelectValueIfPresent(refs.groupColumn, preservedGroup);
   }
   syncDeriveControlsState();
-  const shouldClearTableOutput = shouldAutoApplyDerivedGroup
-    && currentCohortTableOutputState().hasOutput
-    && activeTabName() === "tables";
   runtime.lastDerivedGroup = {
     derivedColumn: payload.derived_column,
     summary: payload.derive_summary,
@@ -760,11 +759,8 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
     : "";
   updateDatasetBadge();
   renderDerivedGroupSummary(payload.derived_column, payload.derive_summary);
-  if (shouldClearTableOutput) {
-    clearCohortTableOutput({ rerenderChrome: false, syncHistory: false });
-  } else {
-    renderSharedFeatureSummary();
-  }
+  // The new snapshot already cleared every result, the cohort table included (updateAfterDerivedDataset).
+  renderSharedFeatureSummary();
   renderWorkspaceChrome();
   queueHistorySync();
   if (toastMode !== "silent") {
@@ -772,7 +768,7 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
       shouldRefreshKm
         ? `Created ${payload.derived_column} and updated Group by. ${featureUseMessage} Kaplan-Meier is refreshing now.`
         : shouldAutoApplyDerivedGroup
-          ? `Created ${payload.derived_column} and updated Group by. ${featureUseMessage}${shouldClearTableOutput ? " Previous cohort table output was cleared; build the table again to match the new grouping." : ""}`
+          ? `Created ${payload.derived_column} and updated Group by. ${featureUseMessage}`
           : `Created ${payload.derived_column}. Current Group by remains ${preservedGroup}. ${featureUseMessage} Use Group by or Run again when you want to analyze the new grouping.`,
       "success",
       5200,

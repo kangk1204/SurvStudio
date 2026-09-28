@@ -476,17 +476,6 @@ function lockedTestBannerSuffix(analysis, bestRow) {
   return `, locked-test C-index of rank-1 model=${formatValue(bestRow.locked_test_c_index)}${heldOut}`;
 }
 
-function clearCohortTableOutput({ rerenderChrome = true, syncHistory = true } = {}) {
-  state.cohort = null;
-  if (refs.cohortTableShell) refs.cohortTableShell.innerHTML = COHORT_TABLE_EMPTY_STATE_HTML;
-  if (refs.downloadCohortTableButton) refs.downloadCohortTableButton.disabled = true;
-  if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.disabled = true;
-  renderSharedFeatureSummary();
-  syncDownloadButtonAvailability();
-  if (rerenderChrome) renderWorkspaceChrome();
-  if (syncHistory) queueHistorySync();
-}
-
 function downloadCsv(filename, rows, columns = null, { caption = "", notes = [] } = {}) {
   return downloadHelpers.downloadCsv({ filename, rows, columns, showToast, caption, notes });
 }
