@@ -588,6 +588,29 @@ def _pooled_c_index(time: np.ndarray, event: np.ndarray, risk: np.ndarray, strat
     return float(concordant / comparable) if comparable > 0 else float("nan")
 
 
+def _comparable_pairs(time: np.ndarray, event: np.ndarray) -> float:
+    """Comparable pairs under the conventions of ``harrell_c_many``: an event with a later time or a tied censoring."""
+    died = np.asarray(event).astype(bool)
+    event_time = time[died]
+    later = time.shape[0] - np.searchsorted(np.sort(time), event_time, side="right")
+    censored = np.sort(time[~died])
+    tied = np.searchsorted(censored, event_time, side="right") - np.searchsorted(censored, event_time, side="left")
+    return float(np.sum(later) + np.sum(tied))
+
+
+def _stratified_c_many(time: np.ndarray, event: np.ndarray, risks: np.ndarray, strata: np.ndarray) -> np.ndarray:
+    """Harrell's C of each risk column, comparing patients only within the same stratum (as ``_pooled_c_index``)."""
+    numerator = np.zeros(risks.shape[1])
+    comparable = 0.0
+    for code in np.unique(strata):
+        rows = strata == code
+        pairs = _comparable_pairs(time[rows], event[rows])
+        if pairs > 0:
+            numerator += harrell_c_many(time[rows], event[rows], risks[rows]) * pairs
+            comparable += pairs
+    return numerator / comparable if comparable > 0 else np.full(risks.shape[1], np.nan)
+
+
 class _SignatureFit(NamedTuple):
     columns: np.ndarray
     params: np.ndarray
@@ -1865,13 +1888,14 @@ def validate_locked_recipe(
     c_draws: list[float] = []
     clinical_draws: list[float] = []
     delta_draws: list[float] = []
-    for _ in range(int(n_bootstrap) if strata is None else 0):
+    for _ in range(int(n_bootstrap)):
         raise_if_cancelled()
         rows = rng.integers(0, time.shape[0], size=time.shape[0])
         if not event[rows].any():
             continue
         risks = linear_predictor[rows][:, None] if clinical_predictor is None else np.column_stack([linear_predictor[rows], clinical_predictor[rows]])
-        draws = harrell_c_many(time[rows], event[rows], risks)
+        # A stratified model compares patients within strata only, as its point estimate does.
+        draws = harrell_c_many(time[rows], event[rows], risks) if strata is None else _stratified_c_many(time[rows], event[rows], risks, strata[rows])
         c_draws.append(float(draws[0]))
         if clinical_predictor is not None:
             clinical_draws.append(float(draws[1]))

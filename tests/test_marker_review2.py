@@ -440,7 +440,34 @@ def test_a_marker_named_like_a_clinical_level_indicator_is_refused() -> None:
                          clinical_columns=["age", "grade"], categorical_clinical=["grade"], settings=_QUICK)
 
 
-# 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
+# 9: a stratified locked model gets its bootstrap intervals too.
+
+
+def test_stratified_c_many_equals_the_pooled_within_stratum_c_index() -> None:
+    rng = np.random.default_rng(9)
+    for _ in range(20):
+        n = int(rng.integers(20, 120))
+        time = rng.integers(1, 12, size=n).astype(float)
+        event = rng.integers(0, 2, size=n)
+        risks = np.round(rng.normal(size=(n, 2)), 1)
+        strata = rng.integers(0, 3, size=n)
+        pooled = marker_evaluation._stratified_c_many(time, event, risks, strata)
+        for column in range(2):
+            assert pooled[column] == pytest.approx(marker_evaluation._pooled_c_index(time, event, risks[:, column], strata), abs=1e-12)
+
+
+def test_a_stratified_locked_model_gets_bootstrap_intervals() -> None:
+    frame = _copy_cohort(1).drop(columns=["age_copy"])
+    frame["site"] = np.where(np.arange(len(frame)) % 3 == 0, "A", "B")
+    recipe = evaluate_markers(frame, time_column="time", event_column="event", marker_columns=[f"g{index}" for index in range(4)],
+                              clinical_columns=["age"], strata_columns=["site"], settings=_QUICK)["locked_recipe"]
+    external = _copy_cohort(2).drop(columns=["age_copy"])
+    external["site"] = np.where(np.arange(len(external)) % 2 == 0, "A", "B")
+    metrics = validate_locked_recipe(external, recipe, n_bootstrap=100)["metrics"]
+    # Before, the bootstrap was skipped without a word for stratified models.
+    for key in ("c_index", "clinical_only_c_index", "delta_c_index"):
+        low, high = metrics[f"{key}_ci"]
+        assert low is not None and low <= metrics[key] <= high and low < high
 
 
 def _duplicates_reference(values: np.ndarray, labels: list[str]) -> dict:
