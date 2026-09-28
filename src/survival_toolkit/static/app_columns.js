@@ -47,7 +47,8 @@ function buttonsForScope(scope) {
       ...(runtime.workbenchRevealed && predictiveFamilyGoal() === "dl" ? [refs.runPredictiveWorkbenchButton] : []),
     ];
   }
-  if (scope === "km") return [refs.runKmButton, refs.runSignatureSearchButton];
+  if (scope === "km") return [refs.runKmButton];
+  if (scope === "signature") return [refs.runSignatureSearchButton];
   if (scope === "cox") {
     return [
       refs.runCoxButton,
@@ -74,7 +75,8 @@ function runScopeForButton(button) {
   }
   if ([refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton].includes(button)) return "ml";
   if ([refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton].includes(button)) return "dl";
-  if (button === refs.runKmButton || button === refs.runSignatureSearchButton) return "km";
+  if (button === refs.runKmButton) return "km";
+  if (button === refs.runSignatureSearchButton) return "signature";
   if (button === refs.runCoxButton) return "cox";
   if (button === refs.runCohortTableButton) return "tables";
   if (button === refs.runMarkersButton || button === refs.runMarkerValidationButton) return "markers";

@@ -903,7 +903,8 @@ def test_marker_summary_does_not_claim_what_was_not_tested(tmp_path: Path, untes
     """, markers=untested_marker_payloads)
 
     no_subsamples = result["noSubsamples"]
-    assert untested_marker_payloads["noSubsamples"]["analysis"]["tier_counts"]["suggestive"] == 1
+    # The fixture must hold suggestive markers, the evidence a missing stability check leaves unconfirmed.
+    assert untested_marker_payloads["noSubsamples"]["analysis"]["tier_counts"]["suggestive"] >= 1
     assert "does not hold up across subsamples" not in no_subsamples["headline"]
     assert "stability was not assessed" in no_subsamples["headline"]
     assert "repeated on 0 subsamples" not in no_subsamples["strengths"]
@@ -992,20 +993,17 @@ def test_dropped_markers_are_grouped_by_their_reason_and_cohort_notes_are_shown(
 
 
 def test_blank_marker_settings_use_the_shared_defaults(tmp_path: Path, example_dataset: dict) -> None:
-    """Blank Permutations, Subsamples and Seed send the workspace's MARKER_NUMERIC_DEFAULTS when it is defined."""
+    """Blank Permutations, Subsamples and Seed send the workspace's MARKER_NUMERIC_DEFAULTS, the values result
+    currency compares against."""
     result = _run_page(tmp_path, r"""
       await loadDataset(page, fixtures.dataset);
       page.run("refs.markerPermutations.value = ''; refs.markerResamples.value = ''; refs.markerRandomSeed.value = '';");
-      const pick = () => page.run("(({ n_permutations, n_resamples, random_seed }) => ({ n_permutations, n_resamples, random_seed }))(markerRequestFields())");
-      const builtIn = pick();
-      page.run("var MARKER_NUMERIC_DEFAULTS = Object.freeze({ n_permutations: 999, n_resamples: 99, random_seed: 9 });");
-      return { builtIn, shared: pick() };
+      const sent = page.run("(({ n_permutations, n_resamples, random_seed }) => ({ n_permutations, n_resamples, random_seed }))(markerRequestFields())");
+      const shared = page.run("({ ...MARKER_NUMERIC_DEFAULTS })");
+      return { sent, shared };
     """, dataset=example_dataset)
 
-    assert result == {
-        "builtIn": {"n_permutations": 1000, "n_resamples": 200, "random_seed": 20260926},
-        "shared": {"n_permutations": 999, "n_resamples": 99, "random_seed": 9},
-    }
+    assert result["sent"] == result["shared"] == {"n_permutations": 1000, "n_resamples": 200, "random_seed": 20260926}
 
 
 _MATRIX = "{ matrix_id: 'm1', filename: 'expr.tsv', n_markers: 20, n_matched: 300, n_patients: 360, id_column: 'patient_id' }"
