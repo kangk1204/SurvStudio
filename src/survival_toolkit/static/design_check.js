@@ -20,13 +20,31 @@
     field(containerId).appendChild(row);
   }
 
-  function cohorts(containerId) {
+  // The filled-in rows of a cohort list, each with its row number. A number field holding text the browser
+  // cannot read reports an empty value; it counts as filled (NaN), so its row is flagged instead of dropped.
+  function cohortRows(containerId) {
     return [...field(containerId).querySelectorAll(".cohort-row")]
-      .map((row) => {
-        const value = (key) => row.querySelector(`[data-cohort-field="${key}"]`).value.trim();
-        return { name: value("name"), n: value("n") === "" ? null : Number(value("n")), events: value("events") === "" ? null : Number(value("events")) };
+      .map((row, index) => {
+        const input = (key) => row.querySelector(`[data-cohort-field="${key}"]`);
+        const text = (key) => input(key).value.trim();
+        const number = (key) => {
+          if (input(key).validity?.badInput) return Number.NaN;
+          return text(key) === "" ? null : Number(text(key));
+        };
+        return { row: index + 1, cohort: { name: text("name"), n: number("n"), events: number("events") } };
       })
-      .filter((cohort) => cohort.n !== null || cohort.name);
+      .filter(({ cohort }) => cohort.name || cohort.n !== null || cohort.events !== null);
+  }
+
+  // What is wrong with the first incomplete row of a list, or "": the server would refuse it without naming the row.
+  function cohortRowProblem(rows, label) {
+    const invalid = rows.find(({ cohort }) => !Number.isFinite(cohort.n)
+      || (cohort.events !== null && !Number.isFinite(cohort.events)));
+    if (!invalid) return "";
+    const which = invalid.cohort.name ? `"${invalid.cohort.name}"` : `in row ${invalid.row}`;
+    return invalid.cohort.n === null
+      ? `Enter the number of patients for the ${label} cohort ${which}, or remove that row.`
+      : `The patients or events of the ${label} cohort ${which} could not be read as numbers. Enter whole numbers, or remove that row.`;
   }
 
   function formatNumber(value) {
@@ -95,11 +113,15 @@
   async function checkDesign(event) {
     event.preventDefault();
     showError("");
+    // A shown result describes the design it was checked for; it comes back only with the new answer.
+    field("designResult").classList.add("hidden");
+    const selectionRows = cohortRows("selectionCohorts");
+    const sealedRows = cohortRows("sealedCohorts");
     const body = {
       candidate_models: Number(field("candidateModels").value),
       gene_only: field("geneOnly").value === "true",
-      selection_cohorts: cohorts("selectionCohorts"),
-      sealed_cohorts: cohorts("sealedCohorts"),
+      selection_cohorts: selectionRows.map(({ cohort }) => cohort),
+      sealed_cohorts: sealedRows.map(({ cohort }) => cohort),
       headline: field("headline").value,
       training_in_selection: field("trainingInSelection").checked,
       prefilter_used_validation_outcomes: field("prefilterLeak").checked,
@@ -111,22 +133,37 @@
       showError("Add at least one cohort that was used to choose the model.");
       return;
     }
+    const rowProblem = cohortRowProblem(selectionRows, "selection") || cohortRowProblem(sealedRows, "sealed");
+    if (rowProblem) {
+      showError(rowProblem);
+      return;
+    }
     const button = field("checkDesignButton");
     button.disabled = true;
     try {
-      const response = await fetch("/api/design-audit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      let response;
+      try {
+        response = await fetch("/api/design-audit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      } catch {
+        showError("The local SurvStudio server did not answer.");
+        return;
+      }
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         showError(errorText(payload.detail));
         return;
       }
-      renderResult(payload);
-    } catch {
-      showError("The local SurvStudio server did not answer.");
+      try {
+        renderResult(payload);
+      } catch (error) {
+        // Not a network failure: the answer arrived but could not be displayed.
+        field("designResult").classList.add("hidden");
+        showError(`The design was checked, but the result could not be shown: ${error?.message || error}`);
+      }
     } finally {
       button.disabled = false;
     }

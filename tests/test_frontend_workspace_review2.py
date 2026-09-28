@@ -587,3 +587,57 @@ _DESIGN_HELPERS = r"""
     placement: { selection_cohorts: 1, median_cohort_size: 200, size_unit: "patients", candidate_models: 101, features: "genes only" },
     map: { version: "test" } };
 """
+
+
+def test_a_failed_design_recheck_hides_the_previous_result(tmp_path: Path) -> None:
+    """#16: the result of the previous design stayed on screen under the error of the new one."""
+    result = _run_design_page(tmp_path, _DESIGN_HELPERS + r"""
+      page.fetchHandler = () => ({ status: 200, body: audit });
+      const first = await submit();
+      page.fetchHandler = () => ({ status: 422, body: { detail: "candidate_models must be at least 2." } });
+      return { first, second: await submit() };
+    """)
+
+    assert result["first"] == {"error": "", "resultHidden": False, "requests": 1}
+    assert result["second"] == {"error": "candidate_models must be at least 2.", "resultHidden": True, "requests": 2}
+
+
+def test_design_check_names_the_failure_that_happened(tmp_path: Path) -> None:
+    """#27: a display error was reported as "the server did not answer"."""
+    result = _run_design_page(tmp_path, _DESIGN_HELPERS + r"""
+      page.fetchHandler = () => Promise.reject(new TypeError("Failed to fetch"));
+      const offline = await submit();
+      page.fetchHandler = () => ({ status: 200, body: { ...audit, flags: [null] } });
+      return { offline, broken: await submit() };
+    """)
+
+    assert result["offline"]["error"] == "The local SurvStudio server did not answer."
+    assert result["broken"]["error"].startswith("The design was checked, but the result could not be shown: ")
+    assert result["broken"]["resultHidden"] is True
+
+
+def test_design_check_flags_incomplete_cohort_rows_instead_of_dropping_them(tmp_path: Path) -> None:
+    """#27: an unnamed row whose patient count could not be read silently left the design."""
+    result = _run_design_page(tmp_path, _DESIGN_HELPERS + r"""
+      page.fetchHandler = () => ({ status: 200, body: audit });
+      const addRow = () => {
+        page.document.querySelector('[data-add-cohort="selectionCohorts"]').click();
+        const rows = page.document.querySelectorAll("#selectionCohorts .cohort-row");
+        return rows[rows.length - 1];
+      };
+      const unreadable = addRow().querySelector('[data-cohort-field="n"]');
+      unreadable.validity = { badInput: true };
+      const badNumber = await submit();
+      unreadable.closest(".cohort-row").remove();
+      addRow().querySelector('[data-cohort-field="name"]').value = "GSE72094";
+      const missingCount = await submit();
+      return { badNumber, missingCount };
+    """)
+
+    assert result["badNumber"] == {
+        "error": "The patients or events of the selection cohort in row 2 could not be read as numbers. Enter whole numbers, or remove that row.",
+        "resultHidden": True,
+        "requests": 0,
+    }
+    assert result["missingCount"]["error"] == 'Enter the number of patients for the selection cohort "GSE72094", or remove that row.'
+    assert result["missingCount"]["requests"] == 0
