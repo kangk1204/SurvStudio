@@ -765,6 +765,74 @@ def test_cohort_table_outcome_restriction_keeps_the_validation_message(time_colu
     assert "could not be processed" not in _detail(table)
 
 
+# ── Request body limits on JSON routes ──────────────────────────
+
+
+def test_json_routes_refuse_an_oversized_content_length_before_reading() -> None:
+    declared = app_module._MAX_JSON_BODY_BYTES + 1
+    for path in ("/api/export-table", "/api/model-comparison-intervals", "/api/marker-validation"):
+        response = client.post(path, content=b"{}", headers={"Content-Type": "application/json", "Content-Length": str(declared)})
+        assert response.status_code == 413, (path, response.text)
+        assert "limit" in _detail(response)
+
+
+def test_json_routes_stop_reading_a_streamed_body_past_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    monkeypatch.setattr(app_module, "_MAX_JSON_BODY_BYTES", 64 * 1024)
+    chunk = b" " * (16 * 1024)
+    parts = [b'{"rows": [', *([chunk] * 200), b"]}"]
+    state = {"index": 0, "consumed": 0, "status": None}
+
+    async def receive() -> dict:
+        index = state["index"]
+        if index >= len(parts):
+            await asyncio.sleep(3600)
+        state["index"] = index + 1
+        state["consumed"] += len(parts[index])
+        return {"type": "http.request", "body": parts[index], "more_body": index + 1 < len(parts)}
+
+    async def send(message: dict) -> None:
+        if message["type"] == "http.response.start":
+            state["status"] = message["status"]
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/export-table",
+        "raw_path": b"/api/export-table",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"127.0.0.1:8000"), (b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 5555),
+        "server": ("127.0.0.1", 8000),
+    }
+
+    async def _run() -> None:
+        try:
+            await asyncio.wait_for(app(scope, receive, send), timeout=60)
+        except Exception:  # the server may still raise after the response was sent
+            pass
+
+    asyncio.run(_run())
+    assert state["status"] == 413
+    # The body is 3.2 MB; reading stops within a chunk of the 64 KB limit.
+    assert state["consumed"] <= 64 * 1024 + 2 * len(chunk) + 64
+
+
+def test_uploads_keep_their_own_larger_limit() -> None:
+    assert app_module._max_upload_request_bytes() > app_module._MAX_JSON_BODY_BYTES
+    response = client.post(
+        "/api/upload",
+        content=b"--x--\r\n",
+        headers={"Content-Type": "multipart/form-data; boundary=x", "Content-Length": str(app_module._MAX_JSON_BODY_BYTES + 1)},
+    )
+    assert response.status_code != 413, response.text
+
+
 # ── Bootstrap budgets and long jobs ─────────────────────────────
 
 

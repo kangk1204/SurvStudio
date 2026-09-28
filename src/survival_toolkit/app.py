@@ -333,27 +333,43 @@ _UPLOAD_PATHS = frozenset({"/api/upload", "/api/marker-matrix"})
 _UPLOAD_TOO_LARGE_DETAIL = "Upload exceeds the 200 MB limit."
 # Allowance for multipart boundaries and part headers on top of the file-size limit.
 _UPLOAD_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+# Largest body of any other request (all JSON). The largest legitimate one, the test-set predictions
+# of four comparisons of 10 models on 100,000 patients sent to the interval endpoint, is about 100 MB.
+_MAX_JSON_BODY_BYTES = 128 * 1024 * 1024
+_JSON_BODY_TOO_LARGE_DETAIL = "Request body exceeds the 128 MB limit."
 
 
 def _max_upload_request_bytes() -> int:
     return int(_MAX_UPLOAD_BYTES) + _UPLOAD_MULTIPART_OVERHEAD_BYTES
 
 
-class UploadSizeLimitMiddleware:
-    """Reject oversized uploads from Content-Length before the multipart body is read.
+def _request_body_limit(scope: Scope) -> tuple[int, str] | None:
+    """Byte limit and message for a request's body; None for methods whose bodies no route reads."""
 
-    Chunked requests without Content-Length are cut off as soon as the streamed body passes the
-    limit, instead of being spooled to disk in full by the multipart parser first.
+    if str(scope.get("method", "GET")).upper() not in _STATE_CHANGING_METHODS:
+        return None
+    if scope.get("path") in _UPLOAD_PATHS:
+        return _max_upload_request_bytes(), _UPLOAD_TOO_LARGE_DETAIL
+    return int(_MAX_JSON_BODY_BYTES), _JSON_BODY_TOO_LARGE_DETAIL
+
+
+class UploadSizeLimitMiddleware:
+    """Reject oversized request bodies from Content-Length before they are read.
+
+    Uploads get the upload limit and every other state-changing request (JSON) the smaller body
+    limit. Chunked requests without Content-Length are cut off as soon as the streamed body
+    passes the limit, instead of being spooled to disk (multipart) or memory (JSON) in full first.
     """
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope.get("path") not in _UPLOAD_PATHS or scope.get("method") != "POST":
+        body_limit = _request_body_limit(scope) if scope["type"] == "http" else None
+        if body_limit is None:
             await self.app(scope, receive, send)
             return
-        limit = _max_upload_request_bytes()
+        limit, too_large_detail = body_limit
         content_length = Headers(scope=scope).get("content-length")
         if content_length is not None:
             try:
@@ -365,7 +381,7 @@ class UploadSizeLimitMiddleware:
                 await response(scope, receive, send)
                 return
             if declared_bytes > limit:
-                response = JSONResponse({"detail": _UPLOAD_TOO_LARGE_DETAIL}, status_code=413)
+                response = JSONResponse({"detail": too_large_detail}, status_code=413)
                 await response(scope, receive, send)
                 return
 
@@ -378,7 +394,7 @@ class UploadSizeLimitMiddleware:
                 received_bytes += len(message.get("body", b""))
                 if received_bytes > limit:
                     # FastAPI re-raises HTTPExceptions raised while reading the body.
-                    raise HTTPException(status_code=413, detail=_UPLOAD_TOO_LARGE_DETAIL)
+                    raise HTTPException(status_code=413, detail=too_large_detail)
             return message
 
         await self.app(scope, limited_receive, send)
