@@ -454,6 +454,46 @@ def _sniff_delimiter(text: str, default: str) -> str:
     return best_delimiter
 
 
+def _data_row_layout(text: str, delimiter: str) -> tuple[str, int]:
+    """How the data rows of a text table line up with its header row.
+
+    Returns ``("header", 0)`` when no sampled data row has more fields than the header,
+    ``("trailing", k)`` when the extra fields (at most ``k``) are all empty because the writer
+    ends every row with a separator, and ``("row_names", 1)`` when every data row has exactly one
+    field more, as R's ``write.table`` writes row names without a header field. pandas would use
+    the first column as the index in both cases, which in the trailing case shifts every column
+    label one place. Rows with extra fields that fit neither case are refused.
+    """
+    header: list[str] | None = None
+    widths: list[int] = []
+    extras_empty = True
+    try:
+        for row in csv.reader(io.StringIO(text, newline=""), delimiter=delimiter):
+            if not row:
+                continue  # blank line, skipped by pandas as well
+            if header is None:
+                header = row
+                continue
+            widths.append(len(row))
+            if len(row) > len(header) and any(field.strip() for field in row[len(header) :]):
+                extras_empty = False
+            if len(widths) >= _DELIMITER_SNIFF_MAX_RECORDS:
+                break
+    except csv.Error:
+        return "header", 0
+    if header is None or not widths or max(widths) <= len(header):
+        return "header", 0
+    if extras_empty:
+        return "trailing", max(widths) - len(header)
+    if set(widths) == {len(header) + 1}:
+        return "row_names", 1
+    raise ValueError(
+        f"The data rows have more fields than the header row ({len(header)} column names, up to {max(widths)} "
+        "fields per row), so the values cannot be matched to their columns. Add the missing column names to the "
+        "header row, or remove the extra separators, and upload the file again."
+    )
+
+
 def _is_text_series(series: pd.Series) -> bool:
     # pandas >= 3 reads text as the dedicated "str" dtype instead of object.
     return is_object_dtype(series) or is_string_dtype(series)
@@ -541,6 +581,7 @@ def _read_csv_with_fallback(
         if not sample_text.strip():
             raise ValueError("The uploaded file is empty. Add a header row and at least one data row.")
         delimiter = _sniff_delimiter(sample_text, default_delimiter)
+        layout, extra_fields = _data_row_layout(sample_text, delimiter)
         try:
             frame = _parse_delimited_text(
                 _open,
@@ -549,6 +590,8 @@ def _read_csv_with_fallback(
                 max_rows=max_rows,
                 max_columns=max_columns,
                 max_cells=max_cells,
+                layout=layout,
+                extra_fields=extra_fields,
             )
         except UnicodeDecodeError as exc:
             # A later part of the file does not fit this encoding; try the next one.
@@ -569,23 +612,48 @@ def _parse_delimited_text(
     max_rows: int | None,
     max_columns: int | None,
     max_cells: int | None,
+    layout: str = "header",
+    extra_fields: int = 0,
 ) -> pd.DataFrame:
+    """Parse a delimited text table with one column per field and a 0..n-1 row index.
+
+    ``layout`` comes from ``_data_row_layout``. Data rows with a field more than the header are
+    read with explicit column names, so pandas never takes the first column as the index: R row
+    names become a "row_names" column, and the empty fields after a trailing separator an
+    unnamed column that is dropped when it holds nothing.
+    """
     def _read(**kwargs: Any) -> pd.DataFrame:
         with open_source() as handle:
             return pd.read_csv(handle, sep=delimiter, encoding=encoding, encoding_errors="strict", **kwargs)
 
     try:
         header = _read(nrows=0)
-        n_columns = int(header.shape[1])
+        header_names = [str(name) for name in header.columns]
+        names: list[str] | None = None
+        if layout == "row_names":
+            names = [_next_available_column_name(header_names, "row_names"), *header_names]
+        elif layout == "trailing" and extra_fields > 0:
+            # pandas names a header field without a name "Unnamed: <position>".
+            names = [*header_names, *(f"Unnamed: {len(header_names) + offset}" for offset in range(extra_fields))]
+        read_options: dict[str, Any] = {"header": 0, "names": names} if names is not None else {}
+        n_columns = len(names) if names is not None else int(header.shape[1])
         _reject_upload_shape(n_columns=n_columns, max_columns=max_columns)
         nrows = _row_read_limit(n_columns, max_rows=max_rows, max_cells=max_cells)
-        frame = _read(nrows=nrows)
+        frame = _read(nrows=nrows, **read_options)
     except pd.errors.EmptyDataError as exc:
         raise ValueError("The uploaded file is empty. Add a header row and at least one data row.") from exc
     except (csv.Error, pd.errors.ParserError) as exc:
         raise ValueError(
             "The uploaded text file is empty or malformed. Add a header row and at least one data row."
         ) from exc
+    if not isinstance(frame.index, pd.RangeIndex):
+        # pandas moved the first field of each row into the index because a row beyond the
+        # sampled lines has more fields than the header; the column labels would be shifted.
+        raise ValueError(
+            "Some data rows have more fields than the header row, so the values cannot be matched to their "
+            "columns. Add the missing column names to the header row, or remove the extra separators, and "
+            "upload the file again."
+        )
     _reject_upload_shape(
         n_rows=int(frame.shape[0]),
         n_columns=int(frame.shape[1]),
@@ -595,9 +663,13 @@ def _parse_delimited_text(
     )
 
     def _read_raw_text(positions: list[int]) -> pd.DataFrame:
-        return _read(nrows=nrows, dtype=str, usecols=positions)
+        return _read(nrows=nrows, dtype=str, usecols=positions, **read_options)
 
-    return _convert_formatted_number_columns(frame, delimiter=delimiter, read_raw_text=_read_raw_text)
+    frame = _convert_formatted_number_columns(frame, delimiter=delimiter, read_raw_text=_read_raw_text)
+    if layout == "trailing" and names is not None:
+        empty_extras = [name for name in names[len(header_names) :] if bool(frame[name].isna().all())]
+        frame = frame.drop(columns=empty_extras)
+    return frame
 
 
 def _non_empty_text(series: pd.Series) -> pd.Series:
@@ -725,6 +797,21 @@ def _convert_formatted_number_columns(
     return frame
 
 
+def _read_excel_frame(source: io.BytesIO | str | Path, **kwargs: Any) -> pd.DataFrame:
+    """``pd.read_excel`` with a damaged or mislabelled workbook reported as a ValueError.
+
+    Only the reader call is guarded: openpyxl, xlrd and zipfile raise many unrelated exception
+    types for unreadable files, while an error in SurvStudio's own code must not be reported as
+    an unreadable file.
+    """
+    try:
+        return pd.read_excel(source, **kwargs)
+    except MemoryError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Failed to read Excel file: {exc}") from exc
+
+
 def _read_excel_limited(
     source: io.BytesIO | str | Path,
     *,
@@ -732,19 +819,14 @@ def _read_excel_limited(
     max_columns: int | None,
     max_cells: int | None,
 ) -> pd.DataFrame:
-    try:
-        if max_rows is None and max_columns is None and max_cells is None:
-            return pd.read_excel(source)
-        header = pd.read_excel(source, nrows=0)
-        n_columns = int(header.shape[1])
-        _reject_upload_shape(n_columns=n_columns, max_columns=max_columns)
-        if hasattr(source, "seek"):
-            source.seek(0)
-        frame = pd.read_excel(source, nrows=_row_read_limit(n_columns, max_rows=max_rows, max_cells=max_cells))
-    except (MemoryError, UploadShapeError):
-        raise
-    except Exception as exc:
-        raise ValueError(f"Failed to read Excel file: {exc}") from exc
+    if max_rows is None and max_columns is None and max_cells is None:
+        return _read_excel_frame(source)
+    header = _read_excel_frame(source, nrows=0)
+    n_columns = int(header.shape[1])
+    _reject_upload_shape(n_columns=n_columns, max_columns=max_columns)
+    if hasattr(source, "seek"):
+        source.seek(0)
+    frame = _read_excel_frame(source, nrows=_row_read_limit(n_columns, max_rows=max_rows, max_cells=max_cells))
     _reject_upload_shape(
         n_rows=int(frame.shape[0]),
         n_columns=int(frame.shape[1]),
@@ -753,6 +835,39 @@ def _read_excel_limited(
         max_cells=max_cells,
     )
     return frame
+
+
+def _read_parquet_frame(source: io.BytesIO | str | Path) -> pd.DataFrame:
+    """``pd.read_parquet`` with a damaged file reported as a ValueError (only the reader call is guarded)."""
+    try:
+        return pd.read_parquet(source)
+    except MemoryError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Failed to read Parquet file: {exc}") from exc
+
+
+def _with_default_row_index(frame: pd.DataFrame) -> pd.DataFrame:
+    """The table with a unique 0..n-1 row index; a meaningful stored index becomes ordinary columns.
+
+    Parquet files keep a pandas index: patient IDs set as the index, or the row numbers of a
+    filtered or concatenated frame (which can repeat). Analysis rows are matched by index later,
+    so an unnamed integer index is taken as row numbers and dropped, and any other index (a
+    named one, text labels, several levels) is kept as named columns in front.
+    """
+    index = frame.index
+    if isinstance(index, pd.RangeIndex) and index.start == 0 and index.step == 1:
+        return frame
+    if index.nlevels == 1 and index.name is None and pd.api.types.is_integer_dtype(index.dtype):
+        return frame.reset_index(drop=True)
+    used = [str(column) for column in frame.columns]
+    names: list[str] = []
+    for level, name in enumerate(index.names):
+        base = str(name) if name is not None else ("index" if index.nlevels == 1 else f"level_{level}")
+        names.append(_next_available_column_name([*used, *names], base))
+    index_columns = index.to_frame(index=False)
+    index_columns.columns = names
+    return pd.concat([index_columns, frame.reset_index(drop=True)], axis=1)
 
 
 def _load_dataframe_source(
@@ -770,12 +885,7 @@ def _load_dataframe_source(
     elif suffix in {".xlsx", ".xls"}:
         df = _read_excel_limited(source, **limits)
     elif suffix == ".parquet":
-        try:
-            df = pd.read_parquet(source)
-        except MemoryError:
-            raise
-        except Exception as exc:
-            raise ValueError(f"Failed to read Parquet file: {exc}") from exc
+        df = _read_parquet_frame(source)
     else:
         raise ValueError(
             f"Unsupported input file extension '{suffix or '<none>'}' for '{filename}'. "
@@ -785,6 +895,9 @@ def _load_dataframe_source(
     if df.empty:
         raise ValueError("The uploaded file contains no data rows.")
     source_encoding = df.attrs.get("source_encoding")
+    # Every load path returns a unique 0..n-1 row index: cohort rows are matched to the stored
+    # table by index (source_row_index), which a stored or repeated index would break.
+    df = _with_default_row_index(df)
     df.columns = make_unique_columns(df.columns)
     if source_encoding:
         df.attrs["source_encoding"] = source_encoding
