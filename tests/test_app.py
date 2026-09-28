@@ -2236,18 +2236,19 @@ def test_app_store_purges_ml_artifacts_on_eviction() -> None:
 
 
 def test_dataset_lease_blocks_ttl_expiry_and_lru_eviction_until_released() -> None:
-    from datetime import datetime, timedelta, timezone
-
     from survival_toolkit.store import DatasetStore
 
     local_store = DatasetStore(max_datasets=2, ttl_seconds=60)
+    # Idle time runs on the store's monotonic clock; a fake clock ages the dataset by two hours.
+    now = [1_000.0]
+    local_store._clock = lambda: now[0]
     evicted: list[str] = []
     local_store.add_eviction_listener(evicted.append)
     frame = make_example_dataset(seed=4, n_patients=20)
     running = local_store.create(frame, filename="running.csv")
 
     with local_store.lease(running.dataset_id):
-        local_store._datasets[running.dataset_id].last_accessed = datetime.now(timezone.utc) - timedelta(hours=2)
+        now[0] += 2 * 3600
         other = local_store.create(frame, filename="other.csv")
         local_store.create(frame, filename="third.csv")  # must evict `other`, not the leased dataset
         assert local_store.contains(running.dataset_id)
