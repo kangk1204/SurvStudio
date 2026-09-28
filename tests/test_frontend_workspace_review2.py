@@ -102,6 +102,141 @@ def test_event_value_never_carries_over_to_another_dataset(tmp_path: Path) -> No
     assert result["back"] == {"dataset": "veteran", "value": "1"}
 
 
+def test_event_columns_that_name_the_event_pass_the_baseline_check(tmp_path: Path) -> None:
+    """#3: the server accepts "progression_on_therapy" and "treatment_failure" coded 0/1; "treatment_arm" stays out."""
+    dataset = _profile("pot", {
+        "pfs_months": [5, 8, 12, 20, 25, 30, 33, 40, 41, 50, 52, 60],
+        "progression_on_therapy": [0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+        "treatment_failure": [1, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0],
+        "treatment_arm": ["A", "B"] * 6,
+        "age": [50, 61, 72, 45, 66, 58, 70, 49, 63, 55, 68, 59],
+    })
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const load = page.run(`({ event: refs.eventColumn.value, value: refs.eventPositiveValue.value,
+        options: refs.eventColumn.options.map((option) => option.value), warning: refs.eventColumnWarning.textContent,
+        covariates: allCheckboxValues(refs.covariateChecklist) })`);
+      load.ready = page.run(fixtures.status);
+      page.change("#eventColumn", "treatment_failure");
+      const failure = page.run(`({ value: refs.eventPositiveValue.value, warning: refs.eventColumnWarning.textContent })`);
+      failure.ready = page.run(fixtures.status);
+      page.change("#showAllEventColumns", true);
+      page.change("#eventColumn", "treatment_arm");
+      const arm = page.run(`({ warning: refs.eventColumnWarning.textContent })`);
+      arm.ready = page.run(fixtures.status);
+      return { load, failure, arm };
+    """, dataset=dataset, status=_ENDPOINT_STATUS)
+
+    assert result["load"]["event"] == "progression_on_therapy"
+    assert result["load"]["value"] == "1"
+    assert result["load"]["options"] == ["progression_on_therapy", "treatment_failure"]
+    assert result["load"]["warning"] == ""
+    assert result["load"]["ready"] == "ready"
+    # Event columns are outcomes, not covariates (the server refuses them as model inputs too).
+    assert result["load"]["covariates"] == ["treatment_arm", "age"]
+    assert result["failure"] == {"value": "1", "warning": "", "ready": "ready"}
+    assert "looks more like a baseline characteristic" in result["arm"]["warning"]
+    assert "looks more like a baseline characteristic" in result["arm"]["ready"]
+
+
+def test_server_suggested_event_columns_are_offered_and_kept_out_of_covariates(tmp_path: Path) -> None:
+    """#4: the TCGA-CDR 0/1 endpoints OS, PFI and DSS are event columns even next to vital_status."""
+    dataset = _profile("cdr", {
+        "gender": ["MALE", "FEMALE"] * 6,
+        "vital_status": ["Alive", "Dead", "Alive", "Dead", "Alive", "Alive", "Dead", "Alive", "Alive", "Dead", "Alive", "Alive"],
+        "OS": [0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
+        "OS.time": [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200],
+        "PFI": [1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1],
+        "PFI.time": [50, 80, 300, 90, 500, 100, 120, 800, 900, 60, 1100, 70],
+        "marital_status": ["Married", "Single"] * 6,
+        "age": [50, 61, 72, 45, 66, 58, 70, 49, 63, 55, 68, 59],
+    })
+    assert {"OS", "PFI", "marital_status"} <= set(dataset["suggestions"]["event_columns"])
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const load = page.run(`({ event: refs.eventColumn.value, value: refs.eventPositiveValue.value,
+        options: refs.eventColumn.options.map((option) => option.value), help: refs.eventColumnHelp.textContent,
+        covariates: allCheckboxValues(refs.covariateChecklist), features: allCheckboxValues(refs.modelFeatureChecklist),
+        tableVariables: allCheckboxValues(refs.cohortVariableChecklist), deriveSources: refs.deriveSource.options.map((option) => option.value) })`);
+      page.change("#timeColumn", "PFI.time");
+      page.change("#eventColumn", "PFI");
+      const pfi = page.run(`({ value: refs.eventPositiveValue.value, warning: refs.eventColumnWarning.textContent })`);
+      pfi.ready = page.run(fixtures.status);
+      return { load, pfi };
+    """, dataset=dataset, status=_ENDPOINT_STATUS)
+
+    load = result["load"]
+    assert load["event"] == "vital_status"
+    assert load["value"] == "Dead"
+    # A suggestion whose values are no event coding (Married/Single) stays a covariate.
+    assert load["options"] == ["vital_status", "OS", "PFI"]
+    assert load["help"] == "Showing likely event columns only."
+    for listed in (load["covariates"], load["features"], load["tableVariables"]):
+        assert not {"OS", "PFI", "vital_status", "OS.time", "PFI.time"} & set(listed)
+        assert {"gender", "marital_status", "age"} <= set(listed)
+    assert load["deriveSources"] == ["age"]
+    assert result["pfi"] == {"value": "1", "warning": "", "ready": "ready"}
+
+
+def test_a_censoring_flag_is_neither_suggested_nor_accepted(tmp_path: Path) -> None:
+    """#9: "censored" coded 0/1 usually means 1 = censored; the server refuses it as the event column."""
+    dataset = _profile("cens", {
+        "time": [5, 8, 12, 20, 25, 30, 33, 40, 41, 50, 52, 60],
+        "censored": [0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1],
+        "age": [50, 61, 72, 45, 66, 58, 70, 49, 63, 55, 68, 59],
+        "treatment": ["A", "B"] * 6,
+    })
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const load = page.run(`({ event: refs.eventColumn.value, options: refs.eventColumn.options.map((option) => option.value),
+        help: refs.eventColumnHelp.textContent, covariates: allCheckboxValues(refs.covariateChecklist) })`);
+      page.change("#eventColumn", "censored");
+      const chosen = page.run(`({ warning: refs.eventColumnWarning.textContent, tone: refs.eventColumnWarning.className })`);
+      chosen.ready = page.run(fixtures.status);
+      page.fetchHandler = () => ({ status: 500, body: { detail: "no request expected" } });
+      page.run("refs.runKmButton.click()");
+      await page.settle();
+      chosen.kmRequests = page.requests.filter((request) => request.url.endsWith("/api/kaplan-meier")).length;
+      return { load, chosen };
+    """, dataset=dataset, status=_ENDPOINT_STATUS)
+
+    assert result["load"]["event"] == ""
+    assert result["load"]["options"] == ["", "censored", "treatment"]
+    assert result["load"]["help"] == "No clear event column name was found; showing binary columns."
+    assert "censored" not in result["load"]["covariates"]
+    assert "looks like a censoring indicator" in result["chosen"]["warning"]
+    assert "event = 1 - censored" in result["chosen"]["warning"]
+    assert "event-warning-error" in result["chosen"]["tone"]
+    assert result["chosen"]["ready"] == result["chosen"]["warning"]
+    assert result["chosen"]["kmRequests"] == 0
+
+
+def test_without_a_likely_event_column_nothing_is_preselected(tmp_path: Path) -> None:
+    """#20: the dataset's second column ("sex") is no event guess, and the help text says why the list is broad."""
+    dataset = _profile("ovarian", {
+        "id": [f"p{index}" for index in range(12)],
+        "sex": ["M", "F"] * 6,
+        "age": [50, 61, 72, 45, 66, 58, 70, 49, 63, 55, 68, 59],
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475, 477, 563, 638, 744],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0],
+    })
+    assert dataset["suggestions"]["event_columns"] == []
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const load = page.run(`({ event: refs.eventColumn.value, options: refs.eventColumn.options.map((option) => option.value),
+        help: refs.eventColumnHelp.textContent, warning: refs.eventColumnWarning.textContent })`);
+      page.change("#eventColumn", "fustat");
+      load.chosen = page.run("refs.eventColumn.value");
+      return load;
+    """, dataset=dataset)
+
+    assert result["event"] == ""
+    assert result["options"] == ["", "sex", "fustat"]
+    assert result["help"] == "No clear event column name was found; showing binary columns."
+    assert result["warning"] == ""
+    assert result["chosen"] == "fustat"
+
+
 # ── Snapshots and history ──────────────────────────────────────
 
 

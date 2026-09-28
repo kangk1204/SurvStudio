@@ -812,6 +812,7 @@ function applyControlSnapshot(snapshot) {
   renderEventColumnOptions({
     preferred: snapshot.eventColumn && columnNames.has(snapshot.eventColumn) ? snapshot.eventColumn : null,
     silent: true,
+    restoring: true,
   });
   setSelectValueIfPresent(refs.eventPositiveValue, snapshot.eventPositiveValue);
   refreshVariableSelections();
