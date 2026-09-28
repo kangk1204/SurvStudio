@@ -7179,6 +7179,10 @@ def test_marker_frontend_runs_the_evaluation_and_validates_the_locked_model() ->
     assert 'invalidateRequestTokens(["markers", "markerValidation"]);' in text
     assert "const candidateColumns = [...markers, ...clinical];" in text
     assert "MARKER_TABLE_DISPLAY_LIMIT" in text
+    # Repeated patients lead the cautions and keep the verdict at review.
+    assert "const repeated = markerDuplicateCaution(analysis.duplicates);" in text
+    assert 'status: robust && !repeated ? "robust" : "review",' in text
+    assert "Possible repeated patients (" in text
 
 
 def test_design_check_page_is_served_without_a_dataset() -> None:

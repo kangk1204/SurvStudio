@@ -1722,6 +1722,50 @@ def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str, 
         raise
 
 
+def test_browser_markers_tab_warns_about_a_patient_profiled_twice(browser_server: str, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    import numpy as np
+    import pandas as pd
+
+    from survival_toolkit.sample_data import make_example_dataset
+
+    frame = make_example_dataset()
+    rng = np.random.default_rng(8)
+    genes = rng.normal(size=(4, 300))[rng.integers(0, 4, len(frame))] * 1.5 + rng.normal(size=(len(frame), 300))
+    genes[200] = genes[15] + rng.normal(scale=0.3, size=300)
+    matrix_path = tmp_path / "expression.tsv"
+    pd.DataFrame(genes.T, index=[f"GENE{index:03d}" for index in range(300)], columns=frame["patient_id"]).to_csv(matrix_path, sep="\t", index_label="gene")
+    ids = frame["patient_id"].tolist()
+
+    try:
+        with playwright.sync_playwright() as api:
+            browser = _launch_browser(api)
+            page = browser.new_page(viewport={"width": 1440, "height": 1200})
+            page.goto(browser_server, wait_until="networkidle")
+            page.locator("#loadExampleButton").click()
+            _wait_for_workspace(page)
+            page.locator('[data-tab="markers"]').click()
+            page.locator("#markerMatrixDetails > summary").click()
+            page.locator("#markerMatrixFile").set_input_files(str(matrix_path))
+            page.locator("#attachMarkerMatrixButton").click()
+            page.locator("#markerMatrixStatus").wait_for(state="visible")
+            page.locator("#panel-markers .options-details > summary").click()
+            page.locator("#markerPermutations").fill("49")
+            page.locator("#markerResamples").fill("6")
+            page.locator("#runMarkersButton").click()
+            page.wait_for_function("!document.getElementById('downloadMarkersCsvButton').disabled", timeout=120000)
+
+            board = page.locator("#markersInsightBoard").inner_text()
+            assert "Possible repeated patients (1)" in board
+            assert f"{ids[15]} and {ids[200]}" in board
+            assert "ROBUST" not in board.upper().split("\n")[0]
+            browser.close()
+    except Exception as exc:  # pragma: no cover - environment-dependent skip path
+        if _is_playwright_environment_error(exc):
+            pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
+        raise
+
+
 def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server: str, tmp_path: Path) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     import numpy as np

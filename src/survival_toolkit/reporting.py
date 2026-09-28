@@ -121,6 +121,13 @@ def marker_methods_paragraph(result: dict[str, Any], request: dict[str, Any] | N
         "or invalid outcome, clinical covariate or stratum were excluded.",
         "Markers were analysed as continuous variables without cut-points.",
     ]
+    duplicates = result.get("duplicates") or {}
+    if duplicates.get("checked"):
+        sentences.append(
+            f"Patients were screened for repeated samples: over the {duplicates.get('markers_used')} most variable markers, a pair whose "
+            "profiles were each other's best match, correlated at least 0.7 and stood 0.2 above either patient's next-best match was "
+            "flagged, as were patients with identical values."
+        )
     if signature.get("apparent_c") is not None:
         sentences.append(
             ("A Cox model with the clinical covariates and " if added_value else "A Cox model with ")
@@ -147,6 +154,12 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
             f"and an optimism-corrected C-index of {_number(signature.get('optimism_corrected_c'))}."
         )
     text += _left_out_comparison(signature, added_value)
+    duplicates = result.get("duplicates") or {}
+    repeated = int(duplicates.get("n_pairs") or 0) + int(duplicates.get("n_identical") or 0)
+    if repeated:
+        text += f" The screen for repeated samples flagged {repeated} pair(s) or group(s) of patients with identical or near-identical profiles."
+    elif duplicates.get("checked"):
+        text += " The screen for repeated samples flagged no patients."
     return text
 
 

@@ -3809,6 +3809,17 @@ async def pdp(request_model: PDPRequest, request: Request) -> dict[str, Any]:
 # ── Marker evaluation and design audit endpoints ────────────────
 
 
+_ID_COLUMN_NAME = re.compile(r"(^|[^a-z])(id|patient|sample|subject|case|barcode)([^a-z]|$)", re.IGNORECASE)
+
+
+def _likely_id_column(table: pd.DataFrame) -> str | None:
+    """A column that names patients (unique values under a name such as patient_id), for messages about them."""
+    for column in table.columns:
+        if _ID_COLUMN_NAME.search(str(column)) and table[column].notna().all() and table[column].is_unique:
+            return str(column)
+    return None
+
+
 def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     """The marker table as flat rows on the primary lens, for display and export."""
     primary = result["primary_lens"]
@@ -3867,12 +3878,15 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
             frame = stored.dataframe
             markers = list(request_model.marker_columns)
             matrix_info = None
+            # Names patients in the duplicate screen only; it is never a marker or covariate.
+            id_column = _likely_id_column(stored.dataframe)
             if matrix is not None:
+                id_column = str(request_model.marker_matrix_id_column)
                 frame = matrix_frame(
                     stored.dataframe,
                     matrix,
-                    id_column=str(request_model.marker_matrix_id_column),
-                    columns=[request_model.time_column, request_model.event_column, *request_model.clinical_columns, *request_model.strata_columns],
+                    id_column=id_column,
+                    columns=[id_column, request_model.time_column, request_model.event_column, *request_model.clinical_columns, *request_model.strata_columns],
                 )
                 markers = list(matrix.marker_names)
                 matrix_info = {
@@ -3892,6 +3906,7 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
                 strata_columns=request_model.strata_columns,
                 event_positive_value=request_model.event_positive_value,
                 settings=request_model.marker_settings(),
+                id_column=id_column,
             )
             report_dataset = {**_report_dataset(stored), "marker_matrix": matrix_info} if matrix_info else _report_dataset(stored)
             payload = {

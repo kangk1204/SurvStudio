@@ -13,6 +13,9 @@ a reader should check a published marker claim:
    rank interval, and whether its direction holds.
 4. Tiers from pre-declared rules, and an optimism report for a signature built from
    the selected markers ("winner's curse" of picking the strongest marker).
+5. A screen for patients whose marker profiles are identical or near-identical
+   (``survival_toolkit.duplicates``): a patient in the data twice can sit on both sides
+   of a subsample split and flatter the internal estimates.
 
 Nothing here dichotomizes markers; every statistic uses the continuous values.
 """
@@ -33,6 +36,7 @@ from survival_toolkit.analysis import (
     _harrell_c_index_counts,
 )
 from survival_toolkit.concurrency import raise_if_cancelled
+from survival_toolkit.duplicates import possible_duplicates
 from survival_toolkit.encoding import fit_feature_encoder, transform_feature_encoder
 from survival_toolkit.errors import user_input_boundary
 from survival_toolkit.marker_screen import (
@@ -929,6 +933,14 @@ def freeze_recipe(
     return recipe
 
 
+def _patient_labels(df: pd.DataFrame, source_rows: Sequence[Any], id_column: str | None) -> list[str]:
+    """How the duplicate screen names patients: by ``id_column`` when given, else by dataset row number."""
+    if id_column and id_column in df.columns and df.index.is_unique:
+        return [str(value) for value in df.loc[list(source_rows), id_column]]
+    positions = pd.Index(df.index).get_indexer(list(source_rows)) if df.index.is_unique else np.full(len(source_rows), -1)
+    return [f"row {position + 1}" if position >= 0 else str(label) for position, label in zip(positions, source_rows)]
+
+
 @user_input_boundary
 def evaluate_markers(
     df: pd.DataFrame,
@@ -941,8 +953,12 @@ def evaluate_markers(
     strata_columns: Sequence[str] = (),
     event_positive_value: Any = None,
     settings: MarkerSettings | None = None,
+    id_column: str | None = None,
 ) -> dict[str, Any]:
-    """Screen candidate markers and check the whole screening procedure (see module docstring)."""
+    """Screen candidate markers and check the whole screening procedure (see module docstring).
+
+    ``id_column`` only names patients in the duplicate screen; without it they are named by row number.
+    """
     settings = _validated_settings(settings or MarkerSettings())
     cohort = prepare_marker_cohort(
         df,
@@ -956,6 +972,7 @@ def evaluate_markers(
         max_missing_fraction=settings.max_missing_fraction,
         max_mode_fraction=settings.max_mode_fraction,
     )
+    duplicates = possible_duplicates(cohort.markers, _patient_labels(df, cohort.source_rows, id_column))
     rng = np.random.default_rng(int(settings.random_seed))
     all_rows = np.arange(cohort.time.shape[0])
     full = run_procedure(cohort, all_rows, settings)
@@ -1054,6 +1071,7 @@ def evaluate_markers(
             "strata_columns": cohort.strata_columns,
             "row_mask_hash": cohort.row_mask_hash,
         },
+        "duplicates": duplicates,
         "null": {
             "n_permutations": int(adjusted[primary]["n_permutations"]),
             "lens2_null": settings.lens2_null if primary == "added_value" else None,

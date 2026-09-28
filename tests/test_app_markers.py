@@ -267,6 +267,31 @@ def test_marker_matrix_markers_are_evaluated_against_the_dataset(tmp_path: Path)
     assert "attach the file again" in expired.json()["detail"]
 
 
+def test_marker_evaluation_flags_a_patient_profiled_twice_by_patient_id(tmp_path: Path):
+    frame = make_example_dataset()
+    rng = np.random.default_rng(8)
+    subtype = rng.integers(0, 4, len(frame))
+    genes = rng.normal(size=(4, 400))[subtype] * 1.5 + rng.normal(size=(len(frame), 400))
+    # The same tumour twice under two patient IDs.
+    genes[200] = genes[15] + rng.normal(scale=0.3, size=400)
+    table = pd.DataFrame(genes.T, index=[f"GENE{index:03d}" for index in range(400)], columns=frame["patient_id"])
+    path = tmp_path / "expression.tsv"
+    table.to_csv(path, sep="\t", index_label="gene")
+    dataset = client.post("/api/load-example").json()
+    info = _attach(path, dataset["dataset_id"]).json()
+
+    request = _marker_request(dataset["dataset_id"], marker_columns=[], marker_matrix_id=info["matrix_id"], marker_matrix_id_column="patient_id")
+    payload = client.post("/api/marker-evaluation", json=request).json()
+
+    duplicates = payload["analysis"]["duplicates"]
+    ids = frame["patient_id"].tolist()
+    assert duplicates["checked"] and [(pair["a"], pair["b"]) for pair in duplicates["pairs"]] == [(ids[15], ids[200])]
+    assert "flagged 1 pair(s)" in payload["report"]["results"]
+    # Two markers in the table: too few to compare profiles, so nothing is claimed.
+    small = client.post("/api/marker-evaluation", json=_marker_request(dataset["dataset_id"])).json()["analysis"]["duplicates"]
+    assert not small["checked"] and small["pairs"] == []
+
+
 def test_marker_matrix_upload_explains_problems(tmp_path: Path):
     dataset = client.post("/api/load-example").json()
     path = _expression_file(tmp_path)

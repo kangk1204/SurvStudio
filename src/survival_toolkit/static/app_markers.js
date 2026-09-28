@@ -210,6 +210,8 @@ function markerSummary(payload) {
       ? `No marker is robust; ${formatCount(suggestive)} show evidence that does not hold up across subsamples.`
       : `No marker shows ${addedValue ? "added value beyond the clinical covariates" : "an association"} after family-wise error control.`;
   const cautions = [];
+  const repeated = markerDuplicateCaution(analysis.duplicates);
+  if (repeated) cautions.push(repeated);
   if (!addedValue) cautions.push("No clinical covariates were given, so markers are judged on marginal association only. Add clinical covariates to test added value.");
   if (signature.signature_optimism != null && Number(signature.signature_optimism) > 0.02) {
     cautions.push(`The selected-marker model's apparent C-index is optimistic by about ${Number(signature.signature_optimism).toFixed(3)}; report the corrected value.`);
@@ -228,8 +230,9 @@ function markerSummary(payload) {
   if (Number(counts["marginal only"] || 0) > 0) {
     cautions.push(`${formatCount(counts["marginal only"])} marker(s) are associated with survival but add nothing beyond the clinical covariates.`);
   }
+  const duplicateScreen = analysis.duplicates || {};
   return {
-    status: robust ? "robust" : "review",
+    status: robust && !repeated ? "robust" : "review",
     headline,
     metrics: [
       { label: "Patients", value: cohort.n },
@@ -245,6 +248,9 @@ function markerSummary(payload) {
       `Family-wise p-values (Westfall-Young) from ${formatValue(analysis.null?.n_permutations)} permutations${analysis.null?.lens2_null === "freedman_lane" ? ", keeping each marker's link to the clinical covariates" : ""}.`,
       `The whole screen was repeated on ${formatValue(analysis.resampling?.n_valid)} subsamples of ${Math.round(100 * Number(analysis.resampling?.fraction || 0.632))}% of the patients.`,
       `Robust: family-wise p ≤ ${formatValue(settings.alpha)}, selected in ≥ ${Math.round(100 * Number(settings.robust_frequency || 0.5))}% of subsamples and the same direction in ≥ ${Math.round(100 * Number(settings.robust_direction || 0.9))}%.`,
+      ...(duplicateScreen.checked && !repeated
+        ? [`No repeated patients: no two patients have near-identical profiles over the ${formatCount(duplicateScreen.markers_used)} most variable markers.`]
+        : []),
     ],
     cautions,
     next_steps: [
@@ -252,6 +258,21 @@ function markerSummary(payload) {
       "Report the optimism-corrected C-index rather than the apparent one.",
     ],
   };
+}
+
+// Patients who look like the same tumour twice: identical values, or each other's clear best match.
+function markerDuplicateCaution(duplicates) {
+  const pairs = duplicates?.pairs || [];
+  const identical = duplicates?.identical || [];
+  const total = Number(duplicates?.n_pairs || pairs.length) + Number(duplicates?.n_identical || identical.length);
+  if (!total) return "";
+  const examples = [
+    ...identical.map((group) => group.join(" = ")),
+    ...pairs.map((pair) => `${pair.a} and ${pair.b} (r = ${Number(pair.r).toFixed(2)})`),
+  ].slice(0, 3);
+  return `Possible repeated patients (${formatCount(total)}): ${examples.join("; ")}${total > examples.length ? "; ..." : ""}. `
+    + "Their marker profiles are identical or near-identical, as for one tumour entered twice. A patient in the data twice can sit on both sides "
+    + "of a subsample split and flatter the corrected C-index; keep one sample per patient and run again.";
 }
 
 // The selected-marker model against the clinical covariates alone, both in the patients left out of each subsample.

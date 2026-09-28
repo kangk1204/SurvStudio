@@ -29,6 +29,7 @@
 - Validating a locked marker model now opens with its C-index in the external cohort beside the clinical covariates alone, with the gain and its interval in the panel title, above the per-marker hazard ratios.
 - The Markers Run button is enabled by an attached marker matrix with no column ticked, and follows every change to the selection (it stayed enabled after Clear).
 - `marker_screen.fit_cox` ends as not converged when a diverging fit leaves the information matrix non-finite, instead of raising from numpy's least squares and failing a whole screen. This happened on a heavy-tailed gene in one genome-wide simulation replicate.
+- The marker evaluation screens patients for repeated samples (`survival_toolkit.duplicates`). On panels of at least 200 markers, it flags patients whose profiles are each other's clear best match (r ≥ 0.7, 0.2 above the next-best match), and on continuous panels it flags patients with identical values. The result is in `result["duplicates"]`. In the Markers tab, flagged pairs lead the cautions, named by the patient ID column, and keep the verdict at review; the REMARK report states the screen and its result. A duplicate audit of public breast cancer cohorts found 109 repeated pairs within and across cohorts, which prompted this check.
 
 ### New
 
