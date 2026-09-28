@@ -24,13 +24,12 @@ from pandas.api.types import (
 )
 from scipy.special import ndtri
 from scipy import stats
-from statsmodels.base.model import LikelihoodModel
 from statsmodels.duration.hazard_regression import PHReg, PHRegResults
 from statsmodels.duration.survfunc import SurvfuncRight, survdiff
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
 from survival_toolkit.concurrency import raise_if_cancelled, suppressed_warnings
-from survival_toolkit.encoding import reject_numeric_text_features
+from survival_toolkit.encoding import numeric_text_values, reject_numeric_text_features
 from survival_toolkit.errors import ColumnNotFoundError, must_propagate, user_input_boundary
 
 TRUE_TOKENS = {
@@ -7147,15 +7146,6 @@ def compute_km_analysis(
     }
 
 
-def _is_number_text(series: pd.Series) -> bool:
-    """True when every non-missing value of a text column reads as a finite number once trimmed."""
-    text = series.dropna().astype(str).str.strip()
-    numbers = pd.to_numeric(text, errors="coerce")
-    if bool(numbers.isna().any()):
-        return False
-    return bool(np.isfinite(numbers.to_numpy(dtype=float)).all())
-
-
 def _categorical_candidates(df: pd.DataFrame, columns: Sequence[str]) -> list[str]:
     """Covariates encoded as categorical without being declared.
 
@@ -7169,7 +7159,7 @@ def _categorical_candidates(df: pd.DataFrame, columns: Sequence[str]) -> list[st
         series = df[column]
         if isinstance(series.dtype, pd.CategoricalDtype):
             candidates.append(column)
-        elif not is_numeric_dtype(series) and not is_bool_dtype(series) and not _is_number_text(series):
+        elif not is_numeric_dtype(series) and not is_bool_dtype(series) and numeric_text_values(series) is None:
             candidates.append(column)
     return candidates
 
