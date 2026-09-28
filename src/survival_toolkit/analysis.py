@@ -3360,7 +3360,7 @@ def _cox_fit_failure_message(exc: Exception, stability_snapshot: dict[str, Any])
     if "converg" in lowered:
         return (
             "Cox PH fit did not converge cleanly. This usually means sparse strata, sparse categories, "
-            "quasi-separation (a level or covariate whose rows all have, or all lack, the event early), or an "
+            "quasi-separation (for example a level in which every row, or no row, has the event), or an "
             "over-specified model for the available events. "
             "Collapse sparse levels, reduce strata complexity, or simplify the covariate set."
             f"{_cox_problem_signals(stability_snapshot)}"
@@ -3543,7 +3543,9 @@ def fit_phreg(model: PHReg) -> tuple[PHRegResults, bool]:
     if not isinstance(model, PHReg):
         return model.fit(disp=False), True
     model.groups = None
-    fit = _phreg_newton_raphson(model)
+    # Trial steps that overflow or reach log(0) are expected and handled as non-finite values.
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        fit = _phreg_newton_raphson(model)
     results = PHRegResults(model, fit.beta, fit.covariance)
     results.mle_retvals = {
         "converged": fit.converged,
@@ -5318,7 +5320,10 @@ def _build_candidate_indicators(
                     level: position
                     for position, level in enumerate(_ordered_reference_categories(counts.index.tolist(), str(column)))
                 }
-                levels = sorted((str(level) for level in counts.index), key=lambda level: (-int(counts[level]), reference_order[level]))
+                levels = sorted(
+                    (str(level) for level in counts.index),
+                    key=lambda level: (-int(counts[level]), reference_order[level]),
+                )
                 reference = levels[0]
                 # With two levels "most common level vs rest" is the same split as the other level;
                 # with more it is a distinct rule (for example wild type vs any mutation).
