@@ -789,3 +789,99 @@ def test_small_thresholds_keep_their_digits_in_rule_labels() -> None:
     low, high = summary["cutoffs"]
     assert f"({low:.6g})" in summary["assignment_rule"] and f"({high:.6g})" in summary["assignment_rule"]
     assert "(0.000)" not in summary["assignment_rule"]
+
+
+# ---------------------------------------------------------------------------------------
+# Signature search internals and library argument checks (R5#10, R5#15, R5#16, R5#17)
+
+
+def _screened(seed: int = 5, n: int = 300, n_features: int = 5):
+    rng = np.random.default_rng(seed)
+    frame = pd.DataFrame(
+        {
+            "os_months": np.round(rng.exponential(20.0, n), 2) + 0.1,
+            "os_event": (rng.random(n) < 0.3).astype(int),
+            **{f"g{index}": rng.normal(size=n) for index in range(n_features)},
+            "arm": rng.choice(["a", "b", "c"], n),
+        }
+    )
+    columns = [f"g{index}" for index in range(n_features)] + ["arm"]
+    cohort = analysis._cohort_frame(frame, "os_months", "os_event", extra_columns=columns)
+    indicators = analysis._build_candidate_indicators(cohort, columns, min_group_size=30)
+    screen = analysis._screen_signature_combinations(
+        cohort, indicators, time_column="os_months", event_column="os_event", max_size=3, operator="mixed",
+        min_group_size=30, min_events_per_group=9,
+    )
+    return cohort, screen
+
+
+def test_lazy_permutation_family_gives_the_dense_family_and_the_same_p_values(monkeypatch) -> None:
+    cohort, screen = _screened()
+    dense = np.column_stack(
+        [analysis._combine_indicator_masks(screen.indicator_masks, indices, operator) for indices, operator in screen.family]
+    )
+    small = screen.family_masks()
+    assert small.dense is not None and np.array_equal(small.dense, dense)
+    # Above the size limit only the indicator columns are kept, not one column per combination.
+    monkeypatch.setattr(analysis._SignatureFamily, "DENSE_MAX_CELLS", 0)
+    family = screen.family_masks()
+    assert family.dense is None
+    assert family.shape == dense.shape and dense.shape[1] > 100
+    assert family.indicators.shape == (dense.shape[0], len(screen.indicator_masks))
+    assert np.array_equal(np.asarray(family), dense)
+    rows = np.random.default_rng(1).permutation(dense.shape[0])
+    assert np.array_equal(family.columns(rows, 7, 90), dense[rows, 7:90])
+
+    times = cohort["os_months"].to_numpy(dtype=float)
+    events = cohort["os_event"].to_numpy(dtype=float)
+    observed = np.asarray([row["Chi-square"] for row in screen.rows], dtype=float)
+    settings = {"min_events_per_group": 9, "n_iterations": 25, "random_seed": 11}
+    lazy_p, lazy_valid = analysis._search_adjusted_permutation_p_values(times, events, family, observed, **settings)
+    dense_p, dense_valid = analysis._search_adjusted_permutation_p_values(times, events, dense, observed, **settings)
+    assert lazy_valid == dense_valid == 25
+    assert np.array_equal(lazy_p, dense_p)
+
+
+def test_permutations_refuse_to_run_without_the_size_feasible_family() -> None:
+    cohort, screen = _screened()
+    for row, adjusted in zip(screen.rows, analysis._bh_adjust([row["P value"] for row in screen.rows]), strict=True):
+        row["BH adjusted p"] = adjusted
+    with pytest.raises(ValueError, match="every size-feasible combination"):
+        analysis._add_signature_robustness_metrics(
+            cohort, screen.rows, screen.combinations, [0], time_column="os_months", event_column="os_event",
+            min_group_size=30, min_events_per_group=9, bootstrap_iterations=0, bootstrap_sample_fraction=0.8,
+            permutation_iterations=5, validation_iterations=0, validation_fraction=0.35, significance_level=0.05,
+            random_seed=1, family_masks=None,
+        )
+
+
+def test_rules_without_a_hazard_ratio_are_counted_and_named_in_the_summary(monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "os_months": np.round(np.random.default_rng(2).exponential(20.0, 200), 2) + 0.1,
+            "os_event": (np.random.default_rng(3).random(200) < 0.5).astype(int),
+            "g": np.random.default_rng(4).normal(size=200),
+        }
+    )
+    unavailable = {"Hazard ratio (signature+ vs -)": None, "HR CI lower": None, "HR CI upper": None}
+    monkeypatch.setattr(analysis, "_signature_cox_metrics", lambda times, events, mask, alpha=0.05: dict(unavailable))
+    _, _, payload = discover_feature_signature(frame, "os_months", "os_event", ["g"], max_combination_size=1, bootstrap_iterations=0)
+    search = payload["search_space"]
+    assert search["hazard_ratio_unavailable_signatures"] == search["robustness_evaluated_signatures"] > 0
+    assert any("could not be estimated for" in caution for caution in payload["scientific_summary"]["cautions"])
+
+
+def test_library_calls_check_the_settings_the_api_checks() -> None:
+    from survival_toolkit.sample_data import make_example_dataset
+
+    df = make_example_dataset(seed=3, n_patients=80)
+    with pytest.raises(ValueError, match="top_k must be at least 1"):
+        discover_feature_signature(df, "os_months", "os_event", ["age"], top_k=0, bootstrap_iterations=0)
+    for fraction in (0.0, 0.5, float("nan")):
+        with pytest.raises(ValueError, match="min_group_fraction must be greater than 0 and less than 0.5"):
+            discover_feature_signature(df, "os_months", "os_event", ["age"], min_group_fraction=fraction, bootstrap_iterations=0)
+    for power in (-1.0, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="fh_p must be a finite number of at least 0"):
+            analysis.compute_km_analysis(df, "os_months", "os_event", logrank_weight="fleming_harrington", fh_p=power)
+    with pytest.raises(ValueError, match="risk_table_points must be between 1 and 100"):
+        analysis.compute_km_analysis(df, "os_months", "os_event", risk_table_points=1000)

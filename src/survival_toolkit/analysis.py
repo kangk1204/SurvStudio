@@ -4599,6 +4599,13 @@ def _signature_scientific_summary(
             f"{unevaluated} further rule(s) passed the BH threshold but were not screened for robustness, because enough "
             "significant signatures were already found in rank order or the robustness cap was reached; they are listed as not significant."
         )
+    without_hazard_ratio = int(search_space.get("hazard_ratio_unavailable_signatures") or 0)
+    if without_hazard_ratio:
+        cautions.append(
+            f"The Cox hazard ratio could not be estimated for {without_hazard_ratio} scored rule(s) (the fit failed or did not "
+            "converge, for example when one side has every event before the other side's), so they cannot pass the "
+            "confidence-interval rule."
+        )
 
     support = _safe_float(best_split.get("Bootstrap support (p<alpha)"))
     direction_consistency = _safe_float(best_split.get("Bootstrap HR direction consistency"))
@@ -5817,10 +5824,67 @@ class ThresholdLogrankScan:
         return {"statistic": statistic, "n_high": n_high, "events_high": events_high}
 
 
+class _SignatureFamily:
+    """Every size-feasible combination of a signature search, as rows x combinations masks.
+
+    A family up to ``DENSE_MAX_CELLS`` cells is kept as one boolean matrix. A larger one (100,000
+    rows and 5,000 combinations take 500 MB) is never materialised: ``columns`` combines the
+    indicator columns of one block of combinations, rows in a given order, giving exactly the
+    columns of the dense matrix. ``np.asarray`` returns the whole matrix either way.
+    """
+
+    DENSE_MAX_CELLS = 64_000_000
+
+    def __init__(self, indicator_masks: Sequence[np.ndarray], members: Sequence[tuple[tuple[int, ...], str]]) -> None:
+        n_rows = int(indicator_masks[0].shape[0]) if len(indicator_masks) else 0
+        self.indicators = (
+            np.column_stack([np.asarray(mask, dtype=bool) for mask in indicator_masks])
+            if len(indicator_masks)
+            else np.zeros((0, 0), dtype=bool)
+        )
+        width = max((len(indices) for indices, _ in members), default=1)
+        # Indicator indices of each combination, padded with its first index (x AND x = x OR x = x).
+        self.index_matrix = np.array(
+            [[*indices, *([indices[0]] * (width - len(indices)))] for indices, _ in members], dtype=np.intp
+        ).reshape(len(members), width)
+        self.use_and = np.array([operator == "AND" for _, operator in members], dtype=bool)
+        self.shape = (n_rows, len(members))
+        self.dense = (
+            self._combine(slice(None), 0, len(members)) if n_rows * len(members) <= self.DENSE_MAX_CELLS else None
+        )
+
+    def _combine(self, rows: np.ndarray | slice, start: int, stop: int) -> np.ndarray:
+        gathered = self.indicators[rows][:, self.index_matrix[start:stop]]
+        use_and = self.use_and[start:stop]
+        return np.where(use_and[np.newaxis, :], gathered.all(axis=2), gathered.any(axis=2))
+
+    def columns(self, rows: np.ndarray | slice, start: int, stop: int) -> np.ndarray:
+        """Columns ``start`` to ``stop - 1`` with the rows taken in the order ``rows``."""
+        if self.dense is not None:
+            return self.dense[rows, start:stop]
+        return self._combine(rows, start, stop)
+
+    def __array__(self, dtype: Any = None, copy: Any = None) -> np.ndarray:
+        matrix = self.dense if self.dense is not None else self._combine(slice(None), 0, self.shape[1])
+        return matrix if dtype is None else matrix.astype(dtype, copy=False)
+
+
+class _DenseFamily:
+    """A dense rows x combinations mask matrix with the ``columns`` interface of ``_SignatureFamily``."""
+
+    def __init__(self, masks: np.ndarray) -> None:
+        matrix = np.asarray(masks, dtype=bool)
+        self.matrix = matrix[:, np.newaxis] if matrix.ndim == 1 else matrix
+        self.shape = self.matrix.shape
+
+    def columns(self, rows: np.ndarray | slice, start: int, stop: int) -> np.ndarray:
+        return self.matrix[rows, start:stop]
+
+
 def _search_adjusted_permutation_p_values(
     times: np.ndarray,
     events: np.ndarray,
-    masks: np.ndarray,
+    masks: np.ndarray | _SignatureFamily,
     observed_stats: np.ndarray,
     *,
     min_events_per_group: int,
@@ -5841,21 +5905,21 @@ def _search_adjusted_permutation_p_values(
     as the null family makes the p-values anti-conservative.
 
     The outcome is sorted once and each shuffle reorders the mask rows instead; mask
-    columns are scored in blocks so memory stays bounded for large searches.
+    columns are scored in blocks so memory stays bounded for large searches, and a
+    ``_SignatureFamily`` builds each block from the indicator masks instead of holding the
+    whole matrix.
     """
     if n_iterations <= 0:
         return None, 0
-    mask_arr = np.asarray(masks, dtype=bool)
-    if mask_arr.ndim == 1:
-        mask_arr = mask_arr[:, np.newaxis]
+    family = masks if isinstance(masks, _SignatureFamily) else _DenseFamily(masks)
     events_arr = np.asarray(events, dtype=float)
     times_arr = np.asarray(times, dtype=float)
     observed = np.asarray(observed_stats, dtype=float)
-    if mask_arr.shape[1] == 0:
+    if family.shape[1] == 0:
         return None, 0
     total_events = float(events_arr.sum())
     outcome = _logrank_outcome(times_arr, events_arr)
-    n_rows, n_columns = mask_arr.shape
+    n_rows, n_columns = family.shape
     block = max(1, _LOGRANK_BLOCK_CELLS // max(int(n_rows), 1))
     positions = np.arange(n_rows)
     inverse = np.empty(n_rows, dtype=np.intp)
@@ -5870,7 +5934,7 @@ def _search_adjusted_permutation_p_values(
         mask_rows = inverse[outcome.order]
         best = -np.inf
         for start in range(0, n_columns, block):
-            sorted_block = mask_arr[mask_rows, start : start + block]
+            sorted_block = family.columns(mask_rows, start, start + block)
             group_events = outcome.sorted_events @ sorted_block
             eligible = (group_events >= min_events_per_group) & ((total_events - group_events) >= min_events_per_group)
             if not np.any(eligible):
@@ -6022,12 +6086,19 @@ def _validate_signature_search_settings(
     significance_level: float,
     combination_operator: str,
     random_seed: int,
+    top_k: int = 15,
+    min_group_fraction: float = 0.1,
 ) -> str:
     """Check the signature-search settings and return the normalized combination operator."""
     if not candidates:
         raise ValueError("Select at least one candidate feature for signature discovery.")
     if max_combination_size < 1:
         raise ValueError("max_combination_size must be at least 1.")
+    if top_k < 1:
+        raise ValueError("top_k must be at least 1.")
+    if not (math.isfinite(float(min_group_fraction)) and 0.0 < float(min_group_fraction) < 0.5):
+        # Both sides of a rule must hold this share of the cohort, so it must stay below one half.
+        raise ValueError("min_group_fraction must be greater than 0 and less than 0.5.")
     if bootstrap_iterations < 0:
         raise ValueError("bootstrap_iterations must be at least 0.")
     if bootstrap_sample_fraction < 0.4 or bootstrap_sample_fraction > 1.0:
@@ -6117,15 +6188,9 @@ class _SignatureScreen(NamedTuple):
     family: list[tuple[tuple[int, ...], str]]
     evaluated_combinations: int
 
-    def family_matrix(self) -> np.ndarray:
-        """Masks of the tested family as an (n, k) boolean matrix."""
-        n_rows = int(self.indicator_masks[0].shape[0]) if self.indicator_masks else 0
-        if not self.family:
-            return np.zeros((n_rows, 0), dtype=bool)
-        matrix = np.empty((n_rows, len(self.family)), dtype=bool)
-        for position, (indices, operator) in enumerate(self.family):
-            matrix[:, position] = _combine_indicator_masks(self.indicator_masks, indices, operator)
-        return matrix
+    def family_masks(self) -> _SignatureFamily:
+        """Masks of the tested family, built from the indicator masks block by block when scored."""
+        return _SignatureFamily(self.indicator_masks, self.family)
 
 
 def _screen_signature_combinations(
@@ -6243,19 +6308,19 @@ def _add_signature_robustness_metrics(
     validation_fraction: float,
     significance_level: float,
     random_seed: int,
-    family_masks: np.ndarray | None = None,
+    family_masks: np.ndarray | _SignatureFamily | None = None,
     top_k: int | None = None,
     indicator_masks: Sequence[np.ndarray] | None = None,
 ) -> dict[str, int]:
     """Fill in the Cox, bootstrap, permutation, and validation metrics of the screened rows.
 
     Permutation p-values are computed for every row against ``family_masks`` (all
-    size-feasible combinations). The other metrics are computed for the ``always`` rows and
-    then, lazily and in rank order, for the ``conditional`` rows until ``top_k`` significant
-    signatures are known or ``_SIGNATURE_MAX_EXTRA_ROBUSTNESS_ROWS`` extra rows were scored.
-    ``indicator_masks`` (from the screen) rebuild each row's mask without re-evaluating
-    its rules on the frame. Returns how many rows were scored and how many BH-passing rows
-    were left unscored.
+    size-feasible combinations), which permutations require. The other metrics are computed
+    for the ``always`` rows and then, lazily and in rank order, for the ``conditional`` rows
+    until ``top_k`` significant signatures are known or ``_SIGNATURE_MAX_EXTRA_ROBUSTNESS_ROWS``
+    extra rows were scored. ``indicator_masks`` (from the screen) rebuild each row's mask
+    without re-evaluating its rules on the frame. Returns how many rows were scored, how many
+    BH-passing rows were left unscored, and how many scored rows got no hazard ratio.
     """
     times = frame[time_column].to_numpy(dtype=float)
     events = frame[event_column].to_numpy(dtype=int)
@@ -6266,9 +6331,9 @@ def _add_signature_robustness_metrics(
 
     if permutation_iterations > 0:
         if family_masks is None:
-            family_masks = np.column_stack(
-                [_signature_mask(frame, combo["combo"], operator=combo["operator"]) for combo in valid_combinations]
-            )
+            # The screened rows met the event rule on the observed outcome, so they are not a valid
+            # null family (p-values against them are anti-conservative).
+            raise ValueError("Search-adjusted permutation p-values need every size-feasible combination as the null family.")
         adjusted_perm_p, valid_perm = _search_adjusted_permutation_p_values(
             times,
             events,
@@ -6294,7 +6359,10 @@ def _add_signature_robustness_metrics(
             min_bootstrap_consistency=0.6,
         )
 
+    hazard_ratio_unavailable = 0
+
     def _score(idx: int) -> None:
+        nonlocal hazard_ratio_unavailable
         combo = valid_combinations[idx]
         if indicator_masks is not None and combo.get("indicator_indices") is not None:
             mask = _combine_indicator_masks(indicator_masks, combo["indicator_indices"], combo["operator"])
@@ -6312,6 +6380,10 @@ def _add_signature_robustness_metrics(
                 RuntimeWarning,
             )
         observed_hazard_ratio = _safe_float(rows[idx].get("Hazard ratio (signature+ vs -)"))
+        if observed_hazard_ratio is None or _safe_float(rows[idx].get("HR CI lower")) is None:
+            # A failed or non-converged Cox fit: the row cannot pass the interval rule, and the
+            # summary says how many rows ended this way.
+            hazard_ratio_unavailable += 1
         if bootstrap_iterations > 0:
             rows[idx].update(
                 _bootstrap_signature_metrics(
@@ -6364,6 +6436,7 @@ def _add_signature_robustness_metrics(
     return {
         "robustness_evaluated_signatures": len(always) + extra_scored,
         "robustness_unevaluated_signatures": len(conditional) - extra_scored,
+        "hazard_ratio_unavailable_signatures": hazard_ratio_unavailable,
     }
 
 
@@ -6422,6 +6495,8 @@ def discover_feature_signature(
         significance_level=significance_level,
         combination_operator=combination_operator,
         random_seed=random_seed,
+        top_k=top_k,
+        min_group_fraction=min_group_fraction,
     )
 
     frame = _cohort_frame(
@@ -6481,9 +6556,9 @@ def discover_feature_signature(
         validation_fraction=validation_fraction,
         significance_level=significance_level,
         random_seed=random_seed,
-        # The permutation null family is every size-feasible combination, materialized only
-        # when permutations were requested.
-        family_masks=screen.family_matrix() if permutation_iterations > 0 else None,
+        # The permutation null family is every size-feasible combination, used only when
+        # permutations were requested.
+        family_masks=screen.family_masks() if permutation_iterations > 0 else None,
         top_k=top_k,
         indicator_masks=screen.indicator_masks,
     )
@@ -6521,6 +6596,7 @@ def discover_feature_signature(
         "permutation_family_size": int(len(screen.family)) if permutation_iterations > 0 else None,
         "robustness_evaluated_signatures": int(robustness_counts["robustness_evaluated_signatures"]),
         "robustness_unevaluated_signatures": int(robustness_counts["robustness_unevaluated_signatures"]),
+        "hazard_ratio_unavailable_signatures": int(robustness_counts["hazard_ratio_unavailable_signatures"]),
         "time_column_note": frame.attrs.get("time_column_note"),
         "truncated": truncated,
         "min_group_size": int(min_group_size),
@@ -6870,6 +6946,10 @@ def _km_rmst_contrast(
     return rmst_contrast
 
 
+# Risk-table columns; the API allows 12, so this only stops a library call from building a huge table.
+_KM_MAX_RISK_TABLE_POINTS = 100
+
+
 @user_input_boundary
 def compute_km_analysis(
     df: pd.DataFrame,
@@ -6889,8 +6969,11 @@ def compute_km_analysis(
         raise ValueError("confidence_level must be between 0 and 1.")
     if max_time is not None and not (math.isfinite(float(max_time)) and float(max_time) > 0.0):
         raise ValueError("max_time must be positive and finite when provided.")
-    if int(risk_table_points) < 1:
-        raise ValueError("risk_table_points must be at least 1.")
+    if not 1 <= int(risk_table_points) <= _KM_MAX_RISK_TABLE_POINTS:
+        raise ValueError(f"risk_table_points must be between 1 and {_KM_MAX_RISK_TABLE_POINTS}.")
+    if not (math.isfinite(float(fh_p)) and float(fh_p) >= 0.0):
+        # Fleming-Harrington weights are S(t-)^p; a negative or undefined power is not a weighted log-rank test.
+        raise ValueError("fh_p must be a finite number of at least 0.")
     if logrank_weight not in KM_WEIGHT_MAP:
         # A typo would otherwise run a plain log-rank test labelled with the typo.
         raise ValueError(
