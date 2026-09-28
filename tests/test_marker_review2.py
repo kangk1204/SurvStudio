@@ -263,14 +263,14 @@ def test_development_markers_with_infinite_values_are_left_out_with_the_fix() ->
     common = dict(time_column="time", event_column="event", settings=_QUICK)
     result = evaluate_markers(frame, marker_columns=["signal", "noise", "log_expression"], **common)
     assert {row["marker"] for row in result["marker_table"]} == {"signal", "noise"}
-    assert result["cohort"]["dropped_markers"] == [{"marker": "log_expression", "reason": "15 infinite values"}]
-    assert any("log_expression" in note and "log(x + 1)" in note for note in result["cohort"]["notes"])
-    with pytest.raises(ValueError, match=r"log_expression \(15 infinite values\).*log\(x \+ 1\)"):
+    assert result["cohort"]["dropped_markers"] == [{"marker": "log_expression", "reason": "infinite values", "n_infinite": 15}]
+    assert any("1 marker(s) hold infinite values" in note and "log_expression" in note and "log(x + 1)" in note for note in result["cohort"]["notes"])
+    with pytest.raises(ValueError, match=r"log_expression \(infinite values\).*log\(x \+ 1\)"):
         evaluate_markers(frame, marker_columns=["log_expression"], **common)
     # A marker with positive infinity written as text is left out the same way.
     frame["as_text"] = frame["signal"].astype(object)
     frame.loc[3, "as_text"] = "inf"
-    assert {"marker": "as_text", "reason": "1 infinite value"} in evaluate_markers(
+    assert {"marker": "as_text", "reason": "infinite values", "n_infinite": 1} in evaluate_markers(
         frame, marker_columns=["signal", "as_text"], **common
     )["cohort"]["dropped_markers"]
 

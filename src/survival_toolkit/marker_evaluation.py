@@ -278,7 +278,8 @@ def prepare_marker_cohort(
     notes: list[str] = []
     for index, column in enumerate(markers):
         if infinite[index]:
-            dropped.append({"marker": column, "reason": f"{int(infinite[index])} infinite value{'' if infinite[index] == 1 else 's'}"})
+            # One reason text for all, so reports can count markers by reason; the number of values apart.
+            dropped.append({"marker": column, "reason": "infinite values", "n_infinite": int(infinite[index])})
             continue
         observed = values[:, index][~np.isnan(values[:, index])]
         if missing_share[index] > max_missing_fraction:
