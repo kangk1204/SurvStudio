@@ -599,14 +599,18 @@ def test_a_label_with_a_help_button_names_its_control() -> None:
 
 
 def test_the_collapsed_derive_panel_is_out_of_the_tab_order() -> None:
-    """#24: the collapsed panel stays laid out (display: flex) for its transition, so it needs visibility: hidden."""
+    """#24: the collapsed panel stays laid out (display: flex) for its transition, so it needs visibility: hidden.
+
+    Collapsing hides it only when the collapse ends (a delayed visibility step on .hidden); expanding shows it at
+    once (no delay on the open panel), so its status text is readable as soon as the panel opens."""
     styles = (_STATIC_DIR / "styles.css").read_text(encoding="utf-8")
     block = styles[styles.index(".derive-panel.hidden {"):]
     block = block[:block.index("}")]
 
     assert "visibility: hidden;" in block
+    assert "visibility 0s linear var(--duration-slow)" in block
     base = styles[styles.index(".derive-panel {"):]
-    assert "visibility var(--duration-slow)" in base[:base.index("}")]
+    assert "visibility 0s linear 0s" in base[:base.index("}")]
 
 
 # ── Design check page ──────────────────────────────────────────

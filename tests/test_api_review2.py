@@ -983,10 +983,10 @@ def test_reused_profiles_of_derived_snapshots_match_a_fresh_profile(monkeypatch:
         raise AssertionError("a derived snapshot must reuse the cached profile")
 
     monkeypatch.setattr(app_module, "profile_dataframe", _unexpected_profile)
-    # Two groups on four rows: an identifier-like name with repeated values, flagged like any column.
+    # Two groups on four rows: a name ending in an identifier word, with repeated values, flagged like any column.
     derived = client.post(
         "/api/derive-group",
-        json={"dataset_id": upload.json()["dataset_id"], "source_column": "score", "method": "median_split", "new_column_name": "patient_id_group"},
+        json={"dataset_id": upload.json()["dataset_id"], "source_column": "score", "method": "median_split", "new_column_name": "subgroup_id"},
     )
     assert derived.status_code == 200, derived.text
     payload = derived.json()
@@ -994,7 +994,7 @@ def test_reused_profiles_of_derived_snapshots_match_a_fresh_profile(monkeypatch:
     fresh = app_module._json_ready(profile_dataframe(stored.dataframe, dataset_id=stored.dataset_id, filename=stored.filename))
     for key, value in fresh.items():
         assert payload[key] == value, key
-    assert [entry["column"] for entry in payload["duplicate_identifier_columns"]] == ["patient_id", "patient_id_group"]
+    assert [entry["column"] for entry in payload["duplicate_identifier_columns"]] == ["patient_id", "subgroup_id"]
 
 
 def test_deep_model_loss_figure_uses_the_early_stopping_run_of_a_real_fit() -> None:
