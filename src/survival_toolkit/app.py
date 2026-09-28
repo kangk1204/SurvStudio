@@ -403,9 +403,23 @@ class UploadSizeLimitMiddleware:
         await self.app(scope, limited_receive, send)
 
 
+class _SurrogateSafeJSONResponse(JSONResponse):
+    """A JSON response that writes an unpaired UTF-16 surrogate as a ``\\u`` escape instead of failing.
+
+    JSON text may carry such a surrogate (a valid "\\ud800" escape), and results echo request
+    text that no field check sees (model names of prediction blocks, recipe entries), so UTF-8
+    encoding would otherwise turn a finished analysis into a bare server error.
+    """
+
+    def render(self, content: Any) -> bytes:
+        text = json.dumps(content, ensure_ascii=False, allow_nan=False, indent=None, separators=(",", ":"))
+        return text.encode("utf-8", "backslashreplace")
+
+
 app = FastAPI(
     title="SurvStudio",
     description="Local survival analysis dashboard for exploratory and validation-oriented cohort work.",
+    default_response_class=_SurrogateSafeJSONResponse,
 )
 app.add_middleware(UploadSizeLimitMiddleware)
 app.add_middleware(
@@ -984,13 +998,10 @@ class DeriveGroupRequest(_EventPositiveValueRequestModel):
 
     @field_validator("lower_label", "upper_label", mode="before")
     @classmethod
-    def validate_group_label(cls, value: Any) -> str:
+    def validate_group_label(cls, value: Any) -> str | None:
         if not isinstance(value, str):
             raise ValueError("Group labels must be text.")
-        text = _normalize_optional_text_field(value, field_name="Group labels")
-        if text is None:  # pragma: no cover - text values are never None
-            raise ValueError("Group labels must not be empty.")
-        return text
+        return _normalize_optional_text_field(value, field_name="Group labels")
 
 
 class KaplanMeierRequest(_EventPositiveValueRequestModel):

@@ -813,6 +813,25 @@ def test_unpaired_surrogates_are_refused_with_a_readable_422() -> None:
         assert payload["detail"]
 
 
+def test_results_echoing_request_text_with_unpaired_surrogates_are_still_json() -> None:
+    import json
+
+    intervals = _post_raw(
+        "/api/model-comparison-intervals",
+        r'{"predictions":[{"row_ids":["a","b","c","d"],"time":[1,2,3,4],"event":[1,0,1,1],'
+        r'"risk":{"M\ud800":[0.1,0.2,0.3,0.4]}}],"n_bootstrap":100}',
+    )
+    assert intervals.status_code == 200, intervals.text[:200]
+    assert json.loads(intervals.content)["rows"][0]["model"] == "M\ud800"
+    tripod = _post_raw(
+        "/api/tripod-ai-checklist",
+        r'{"comparisons":[{"family":"ml","analysis":{"comparison_table":[{"model":"LASSO\ud800","c_index":0.7}],'
+        r'"n_patients":360,"n_events":259,"evaluation_mode":"holdout"}}]}',
+    )
+    assert tripod.status_code == 200, tripod.text[:200]
+    json.loads(tripod.content)
+
+
 def test_error_details_escape_unpaired_surrogates() -> None:
     from fastapi import HTTPException
 
