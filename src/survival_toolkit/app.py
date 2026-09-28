@@ -2769,6 +2769,10 @@ def fail_bad_request(exc: Exception) -> NoReturn:
             status_code=400,
             detail="The file is not valid UTF-8 text. Save it as UTF-8 (for example \"CSV UTF-8\" in Excel) and try again.",
         ) from exc
+    # Coding errors come first, so an error that errors.py counts as one is never reported as a data problem.
+    if isinstance(exc, TypeError) or is_programming_error(exc):
+        logger.error("SurvStudio coding error while handling a request", exc_info=exc_info)
+        raise HTTPException(status_code=500, detail=InternalAnalysisError.default_message) from exc
     runtime_classification = _classify_runtime_request_error(exc)
     if runtime_classification is not None:
         logger.warning("Request failed on its data or settings (%s)", type(exc).__name__, exc_info=exc_info)
@@ -2780,9 +2784,6 @@ def fail_bad_request(exc: Exception) -> NoReturn:
     if isinstance(exc, InternalAnalysisError):
         logger.error("Unexpected internal analysis error", exc_info=exc_info)
         raise HTTPException(status_code=500, detail=str(exc) or InternalAnalysisError.default_message) from exc
-    if isinstance(exc, TypeError) or is_programming_error(exc):
-        logger.error("SurvStudio coding error while handling a request", exc_info=exc_info)
-        raise HTTPException(status_code=500, detail=InternalAnalysisError.default_message) from exc
     if isinstance(exc, ValueError):
         logger.warning("Request failed with an untyped ValueError", exc_info=exc_info)
         raise HTTPException(status_code=400, detail=_UNPROCESSABLE_REQUEST_DETAIL) from exc
@@ -3639,19 +3640,28 @@ def _reject_overlong_matrix_text(path: Path, *, compressed: bool) -> None:
 
     Either layout puts a header and then one line per marker or per patient, so no accepted
     matrix has more lines than the larger of the two limits (plus the header). Counting runs
-    over the unpacked stream in fixed-size chunks and stops at the limit.
+    over the unpacked stream in fixed-size chunks and stops at the limit. UTF-16 text (as the
+    readers detect it) is decoded first, because its code units can hold a newline byte inside
+    another character.
     """
 
+    import codecs
     import gzip
     import zlib
+
+    from survival_toolkit.analysis import _text_encoding_candidates
 
     limit = max(MAX_MATRIX_MARKERS, MAX_MATRIX_SAMPLES) + 1
     lines = 0
     unpacked = 0
+    chunk_bytes = 1 << 20
     try:
         with (gzip.open(path, "rb") if compressed else path.open("rb")) as handle:
-            while chunk := handle.read(1 << 20):
-                lines += chunk.count(b"\n")
+            chunk = handle.read(chunk_bytes)
+            encoding = _text_encoding_candidates(chunk, complete=len(chunk) < chunk_bytes)[0] if chunk else "utf-8"
+            decoder = codecs.getincrementaldecoder(encoding)(errors="replace") if encoding.startswith("utf-16") else None
+            while chunk:
+                lines += decoder.decode(chunk).count("\n") if decoder is not None else chunk.count(b"\n")
                 unpacked += len(chunk)
                 if lines > limit:
                     raise UserInputError(
@@ -3660,6 +3670,7 @@ def _reject_overlong_matrix_text(path: Path, *, compressed: bool) -> None:
                     )
                 if unpacked > MAX_DECOMPRESSED_BYTES:
                     return  # the reader reports the size limit itself
+                chunk = handle.read(chunk_bytes)
     except (OSError, EOFError, zlib.error):
         return  # a damaged file is reported by the reader with its own message
 

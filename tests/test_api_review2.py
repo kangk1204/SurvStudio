@@ -833,6 +833,35 @@ def test_uploads_keep_their_own_larger_limit() -> None:
     assert response.status_code != 413, response.text
 
 
+def test_utf16_matrix_lines_are_counted_on_decoded_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    import gzip
+
+    from survival_toolkit.errors import UserInputError
+
+    def _reached_the_reader(*args, **kwargs):
+        raise UserInputError("reached the matrix reader")
+
+    monkeypatch.setattr(app_module, "MAX_MATRIX_MARKERS", 50)
+    monkeypatch.setattr(app_module, "MAX_MATRIX_SAMPLES", 100)
+    monkeypatch.setattr(app_module, "read_marker_matrix", _reached_the_reader)
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    # "Ċ" is stored as the bytes 0A 01 in UTF-16-LE: a newline byte inside another character.
+    short = ("gene,P1\n" + "".join(f"G{index}ĊĊĊĊ,1\n" for index in range(40))).encode("utf-16")
+    long = ("gene,P1\n" + "".join(f"G{index},1\n" for index in range(500))).encode("utf-16")
+    for name, payload, expected in (
+        ("short.csv", short, "reached the matrix reader"),
+        ("short.csv.gz", gzip.compress(short), "reached the matrix reader"),
+        ("long.csv", long, "more than 101 lines"),
+    ):
+        response = client.post(
+            "/api/marker-matrix",
+            data={"dataset_id": dataset_id, "id_column": "patient_id"},
+            files={"file": (name, payload, "application/octet-stream")},
+        )
+        assert response.status_code == 400, (name, response.text)
+        assert expected in _detail(response), (name, _detail(response))
+
+
 # ── Bootstrap budgets and long jobs ─────────────────────────────
 
 
