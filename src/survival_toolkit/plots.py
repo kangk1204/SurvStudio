@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import textwrap
 from typing import Any
 
 import numpy as np
@@ -1668,15 +1669,51 @@ def _finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and bool(np.isfinite(float(value)))
 
 
+def _drawable_interval(estimate: Any, keys: tuple[str, str, str]) -> bool:
+    """Whether an estimate and its interval can be drawn on a log axis: finite and positive (an infinite bound cannot)."""
+    return all(_finite_number(estimate.get(key)) and float(estimate[key]) > 0 for key in keys)
+
+
+def _not_drawn_note(entries: list[str], *, limit: int = 8, width: int = 110, max_lines: int = 3) -> tuple[str, int]:
+    """"Not drawn: a (reason), b (reason)" for a figure note, wrapped, escaped and cut after ``limit`` entries."""
+    shown = ", ".join(entries[:limit]) + (f" and {len(entries) - limit} more" if len(entries) > limit else "")
+    lines = textwrap.wrap(f"Not drawn: {shown}", width=width) or [""]
+    if len(lines) > max_lines:
+        lines = lines[: max_lines - 1] + [_truncate_label_fragment(" ".join(lines[max_lines - 1 :]), width)]
+    return "<br>".join(escape_plotly_text(line) for line in lines), len(lines)
+
+
+_REPLICATION_FIT_LABELS = {"added_value": "with the clinical covariates", "marginal": "marker alone"}
+
+
+def _replication_fit(row: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+    """The external fit a locked marker's replication test used, with its lens: with the clinical covariates for
+    "added_value", without them for "marginal", and none when ``tested`` is None (that fit was not estimable).
+    Results without ``tested`` used the adjusted fit when there was one."""
+    lens = row["tested"] if "tested" in row else ("added_value" if row.get("adjusted") else "marginal")
+    fit = row.get("adjusted") if lens == "added_value" else row.get("marginal") if lens == "marginal" else None
+    return (lens, fit) if isinstance(fit, dict) else (None, None)
+
+
 def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any]:
     """The locked model in the external cohort: its C-index beside the clinical covariates alone (top), and each
-    locked marker's external hazard ratio, coloured by whether it replicated (bottom)."""
+    locked marker's external hazard ratio from the fit its replication test used, coloured by whether it replicated
+    (bottom). Markers without a drawable estimate are named in a note under the forest instead."""
     rows = []
+    not_drawn: list[str] = []
     for row in validation.get("markers", []):
-        tested = row.get("adjusted") or row.get("marginal")
-        # Finite and positive, as the Cox forest requires: an infinite bound cannot be drawn on a log axis.
-        if tested and all(_finite_number(tested.get(key)) and tested[key] > 0 for key in ("hazard_ratio", "ci_lower", "ci_upper")):
-            rows.append((row, tested))
+        lens, tested = _replication_fit(row)
+        name = str(row.get("marker"))
+        if row.get("absent"):
+            not_drawn.append(f"{name} (not measured)")
+        elif tested is None:
+            not_drawn.append(f"{name} (not estimable)")
+        elif _drawable_interval(tested, ("hazard_ratio", "ci_lower", "ci_upper")):
+            rows.append((row, {**tested, "lens": lens}))
+        elif _drawable_interval(tested, ("hazard_ratio", "hazard_ratio", "hazard_ratio")):
+            not_drawn.append(f"{name} (interval not finite)")
+        else:
+            not_drawn.append(f"{name} (estimate not finite)")
     rows.reverse()
     labels = [str(row["marker"]) for row, _ in rows]
     display_labels, axis_layout = _feature_plot_axis_layout(labels, width=30, max_lines=2)
@@ -1763,10 +1800,14 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
                     "width": 0,
                 },
                 customdata=[
-                    [escape_plotly_text(row["marker"]), escape_plotly_text(_format_p_value(row.get("replication_p_holm")))]
-                    for row, _ in members
+                    [
+                        escape_plotly_text(row["marker"]),
+                        escape_plotly_text(_format_p_value(row.get("replication_p_holm"))),
+                        _REPLICATION_FIT_LABELS.get(str(tested["lens"]), ""),
+                    ]
+                    for row, tested in members
                 ],
-                hovertemplate="%{customdata[0]}<br>HR %{x:.3f}<br>Replication p (Holm) = %{customdata[1]}<extra></extra>",
+                hovertemplate="%{customdata[0]}<br>HR %{x:.3f} (%{customdata[2]})<br>Replication p (Holm) = %{customdata[1]}<extra></extra>",
             ),
             row=2,
             col=1,
@@ -1784,8 +1825,25 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
             showarrow=False,
             font={"size": 14, "color": INK},
         )
-    _marker_layout(fig, "Locked Model in the External Cohort", height=area + 80 + 110, left=axis_layout["l"])
-    fig.update_layout(margin={"b": 110}, legend={"orientation": "h", "yanchor": "top", "y": -88 / area, "xanchor": "left", "x": 0.0})
+    # Markers without a drawable estimate are named under the legend, never drawn with another fit's hazard ratio.
+    note, note_lines = _not_drawn_note(not_drawn, width=95) if not_drawn else ("", 0)
+    bottom = 110 + (18 * note_lines + 14 if note_lines else 0)
+    if note:
+        fig.add_annotation(
+            text=note,
+            xref="paper",
+            yref="paper",
+            x=0.0,
+            y=0.0,
+            xanchor="left",
+            yanchor="top",
+            yshift=-112,
+            showarrow=False,
+            align="left",
+            font={"size": 12, "color": INK},
+        )
+    _marker_layout(fig, "Locked Model in the External Cohort", height=area + 80 + bottom, left=axis_layout["l"])
+    fig.update_layout(margin={"b": bottom}, legend={"orientation": "h", "yanchor": "top", "y": -88 / area, "xanchor": "left", "x": 0.0})
     bounds = [tested[key] for _, tested in rows for key in ("ci_lower", "ci_upper")]
     fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_log_axis_ticks([1.0, *bounds]), row=2, col=1, **_COMMON_AXES)
     # Markers keep the recipe's order (first at the top) instead of being grouped by replication status.
