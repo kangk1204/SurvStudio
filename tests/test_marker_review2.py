@@ -470,6 +470,29 @@ def test_a_stratified_locked_model_gets_bootstrap_intervals() -> None:
         assert low is not None and low <= metrics[key] <= high and low < high
 
 
+# 10: the permutations, the subsamples and the non-linear lens draw from independent random streams.
+
+
+def test_the_number_of_permutations_does_not_change_the_subsamples() -> None:
+    frame = _copy_cohort(1).drop(columns=["age_copy"])
+    common = dict(time_column="time", event_column="event", marker_columns=[f"g{index}" for index in range(4)])
+    settings = MarkerSettings(n_permutations=19, n_resamples=6, random_seed=1)
+    first = evaluate_markers(frame, settings=settings, **common)
+    more_permutations = evaluate_markers(frame, settings=settings._replace(n_permutations=20), **common)
+    more_subsamples = evaluate_markers(frame, settings=settings._replace(n_resamples=7), **common)
+
+    def lens(result, key):
+        return {row["marker"]: row["marginal"][key] for row in result["marker_table"]}
+
+    for key in ("selection_frequency", "direction_consistency", "median_rank", "rank_interval"):
+        assert lens(first, key) == lens(more_permutations, key), key
+    assert first["signature"]["signature_optimism"] == more_permutations["signature"]["signature_optimism"]
+    assert lens(first, "p_fwer") == lens(more_subsamples, "p_fwer") and lens(first, "q_perm") == lens(more_subsamples, "q_perm")
+
+
+# 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
+
+
 def _duplicates_reference(values: np.ndarray, labels: list[str]) -> dict:
     """The whole-panel implementation the blocked screen replaced, kept as the definition (cohorts up to MAX_PATIENTS)."""
     from collections import defaultdict

@@ -1321,14 +1321,16 @@ def evaluate_markers(
         max_mode_fraction=settings.max_mode_fraction,
     )
     duplicates = possible_duplicates(cohort.markers, _patient_labels(df, cohort.source_rows, id_column))
-    rng = np.random.default_rng(int(settings.random_seed))
+    # One independent random stream per stage, so changing the number of permutations does not change which
+    # subsamples are drawn (nor the number of subsamples the permutations).
+    permutation_seed, resample_seed, nonlinear_seed = np.random.SeedSequence(int(settings.random_seed)).spawn(3)
     all_rows = np.arange(cohort.time.shape[0])
     full = run_procedure(cohort, all_rows, settings)
     primary = "added_value" if "added_value" in full.lenses and cohort.clinical is not None else "marginal"
-    adjusted = permutation_null(cohort, full, settings, rng)
-    resampling = resample_procedure(cohort, full, settings, rng, primary)
+    adjusted = permutation_null(cohort, full, settings, np.random.default_rng(permutation_seed))
+    resampling = resample_procedure(cohort, full, settings, np.random.default_rng(resample_seed), primary)
     tiers, patterns = assign_tiers(primary, adjusted, resampling, full.lenses, settings)
-    nonlinear = nonlinear_lens(cohort, settings, rng)
+    nonlinear = nonlinear_lens(cohort, settings, np.random.default_rng(nonlinear_seed))
     nonlinear_ready = bool(nonlinear and nonlinear.get("available"))
     if nonlinear_ready:
         for index in range(len(patterns)):
