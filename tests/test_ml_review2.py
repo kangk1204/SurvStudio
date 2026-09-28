@@ -306,6 +306,43 @@ def test_repeated_cv_summary_describes_fold_means_and_models_that_could_not_run(
     assert "training folds of about 120 patients" in summary["strengths"][0]
 
 
+# ── Random Survival Forest memory and settings ──────────────────────────────
+
+
+@requires_sksurv
+def test_very_deep_tree_limits_are_estimated_and_absurd_ones_refused() -> None:
+    from survival_toolkit import ml_models as ml
+
+    unlimited = ml.rsf_memory_estimate_bytes(1000, 500, n_estimators=10, min_samples_leaf=6)
+    assert ml.rsf_memory_estimate_bytes(1000, 500, n_estimators=10, min_samples_leaf=6, max_depth=1100) == unlimited
+    assert ml.rsf_memory_estimate_bytes(1000, 500, n_estimators=10, min_samples_leaf=6, max_depth=2**31 - 1) == unlimited
+    df = make_example_dataset(seed=10, n_patients=120)
+    fitted = ml.train_random_survival_forest(df, "os_months", "os_event", ["age", "biomarker_score"], n_estimators=5,
+                                             max_depth=1100, compute_importance=False, compute_brier=False)
+    assert fitted["model_stats"]["max_depth"] == 1100
+    with pytest.raises(UserInputError, match="max_depth must be at most 2147483647"):
+        ml.train_random_survival_forest(df, "os_months", "os_event", ["age"], n_estimators=5, max_depth=10**30)
+
+
+def test_rsf_memory_budget_treats_inf_as_no_limit_and_ignores_unusable_values(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    times = np.arange(1.0, 2001.0)
+    monkeypatch.setenv("SURVSTUDIO_RSF_MEMORY_BUDGET_GB", "inf")
+    assert ml._rsf_memory_budget_bytes() == float("inf")
+    ml.check_rsf_memory(times, n_estimators=10**6, min_samples_leaf=1)
+    for unusable in ("nan", "-3", "0", "lots"):
+        monkeypatch.setenv("SURVSTUDIO_RSF_MEMORY_BUDGET_GB", unusable)
+        assert ml._rsf_memory_budget_bytes() == 2e9
+    monkeypatch.setenv("SURVSTUDIO_RSF_MEMORY_BUDGET_GB", "1.5")
+    assert ml._rsf_memory_budget_bytes() == 1.5e9
+    with pytest.raises(ValueError) as refused:
+        ml.check_rsf_memory(times, n_estimators=10**6, min_samples_leaf=1)
+    # The web app has no min_samples_leaf setting, so that advice is marked as the package's.
+    assert "raise min_samples_leaf" not in str(refused.value)
+    assert "in the Python package a larger min_samples_leaf" in str(refused.value)
+
+
 # ── Optimal cutpoint scan ───────────────────────────────────────────────────
 
 

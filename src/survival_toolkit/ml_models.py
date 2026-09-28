@@ -143,6 +143,10 @@ def _require_sklearn() -> None:
         raise ImportError(_SKLEARN_INSTALL_MSG)
 
 
+# scikit-learn stores a tree depth as a C integer and uses this value for "no limit".
+_MAX_TREE_DEPTH = 2**31 - 1
+
+
 def _validate_max_depth(max_depth: Any) -> int | None:
     """``max_depth`` of a tree model: None (automatic) or a whole number of at least 1."""
     if max_depth is None:
@@ -150,6 +154,10 @@ def _validate_max_depth(max_depth: Any) -> int | None:
     if isinstance(max_depth, bool) or not isinstance(max_depth, (int, np.integer)) or int(max_depth) < 1:
         raise ValueError(
             f"max_depth must be a whole number of at least 1 (or empty for the automatic depth); got {max_depth!r}."
+        )
+    if int(max_depth) > _MAX_TREE_DEPTH:
+        raise ValueError(
+            f"max_depth must be at most {_MAX_TREE_DEPTH} (or empty for the automatic depth); got {max_depth!r}."
         )
     return int(max_depth)
 
@@ -161,17 +169,22 @@ _RSF_MEMORY_BUDGET_ENV_VAR = "SURVSTUDIO_RSF_MEMORY_BUDGET_GB"
 _RSF_DEFAULT_MEMORY_BUDGET_BYTES = 2_000_000_000
 _RSF_BYTES_PER_NODE_AND_TIME = 16
 # While predicting, each tree running on a worker thread materialises a
-# (rows x distinct training times x 2) array; forest predictions run in row chunks of
-# at most this many bytes of such arrays.
+# (rows x distinct training times x 2) array (and, for risk scores, a copy of its event-time
+# columns); forest predictions run in row chunks of at most this many bytes of such arrays.
 _RSF_PREDICTION_CHUNK_BYTES = 256 * 1024**2
 
 
-def _rsf_memory_budget_bytes() -> int:
+def _rsf_memory_budget_bytes() -> float:
+    """The forest memory budget in bytes: the environment variable in GB ("inf" for no limit), else 2 GB."""
     try:
         configured = float(os.environ.get(_RSF_MEMORY_BUDGET_ENV_VAR, "") or 0.0)
     except ValueError:
         configured = 0.0
-    return int(configured * 1e9) if configured > 0.0 else _RSF_DEFAULT_MEMORY_BUDGET_BYTES
+    if configured == math.inf:
+        return math.inf
+    if not math.isfinite(configured) or configured <= 0.0:
+        return float(_RSF_DEFAULT_MEMORY_BUDGET_BYTES)
+    return configured * 1e9
 
 
 def rsf_memory_estimate_bytes(
@@ -191,7 +204,8 @@ def rsf_memory_estimate_bytes(
     """
     nodes = float(n_rows) / max(float(min_samples_leaf), 2.5)
     if max_depth is not None:
-        nodes = min(nodes, float(2 ** (int(max_depth) + 1) - 1))
+        # Computed in floating point: 2**(max_depth + 1) of a very deep limit exceeds a float.
+        nodes = min(nodes, math.ldexp(1.0, min(int(max_depth) + 1, 1023)) - 1.0)
     return float(n_estimators) * max(nodes, 1.0) * float(n_unique_times) * _RSF_BYTES_PER_NODE_AND_TIME
 
 
@@ -219,8 +233,9 @@ def check_rsf_memory(
         raise ValueError(
             f"{model_label} would need about {estimate / 1e9:.3g} GB of memory: {int(n_estimators)} trees on "
             f"{n_rows} training rows with {n_unique} distinct follow-up times (limit {budget / 1e9:.3g} GB). "
-            "Use fewer trees, set a maximum tree depth, raise min_samples_leaf, or round the follow-up times "
-            f"(for example to whole days or months); {_RSF_MEMORY_BUDGET_ENV_VAR} changes the limit."
+            "Use fewer trees, set a maximum tree depth, or round the follow-up times (for example to whole days "
+            "or months); in the Python package a larger min_samples_leaf also shrinks the forest. "
+            f"{_RSF_MEMORY_BUDGET_ENV_VAR} changes the limit."
         )
 
 
@@ -236,6 +251,8 @@ def _prediction_row_chunk(model: Any) -> int | None:
     if unique_times is None:
         return None
     n_unique = max(int(np.asarray(unique_times).size), 1)
+    is_event_time = getattr(model, "is_event_time_", None)
+    n_event_times = int(np.count_nonzero(is_event_time)) if is_event_time is not None else n_unique
     n_trees = max(len(getattr(model, "estimators_", []) or []), 1)
     try:
         from joblib import effective_n_jobs
@@ -244,9 +261,11 @@ def _prediction_row_chunk(model: Any) -> int | None:
     except (ImportError, ValueError):
         threads = os.cpu_count() or 1
     threads = max(1, min(threads, n_trees))
-    # Per row: one (distinct times x 2) float64 array per concurrent tree, plus the output row.
-    per_row = (threads * 2 + 1) * n_unique * 8
-    return max(64, int(_RSF_PREDICTION_CHUNK_BYTES // per_row))
+    # Per row: for each concurrent tree one (distinct times x 2) float64 array and, when
+    # predicting risk scores, a copy of its event-time columns; plus the output row (a
+    # survival curve when predicting survival functions). No floor: the byte bound holds.
+    per_row = (threads * (2 * n_unique + n_event_times) + n_unique) * 8
+    return max(1, int(_RSF_PREDICTION_CHUNK_BYTES // per_row))
 
 
 def _predict_risk_scores(model: Any, X: pd.DataFrame | np.ndarray) -> np.ndarray:

@@ -164,8 +164,15 @@ def test_forest_predictions_in_row_chunks_match_one_call(monkeypatch) -> None:
     grid = np.quantile(y["time"], [0.2, 0.5, 0.8])
     whole_survival = ml._step_function_matrix(forest.predict_survival_function(X), grid)
 
+    # Per row: for each of the two concurrent trees a (distinct times x 2) array and a copy of its
+    # event-time columns, plus the output row.
+    n_times = forest.unique_times_.size
+    per_row = (2 * (2 * n_times + int(np.count_nonzero(forest.is_event_time_))) + n_times) * 8
     monkeypatch.setattr(ml, "_RSF_PREDICTION_CHUNK_BYTES", 1)
-    assert ml._prediction_row_chunk(forest) == 64
+    # No floor overrides the byte bound.
+    assert ml._prediction_row_chunk(forest) == 1
+    monkeypatch.setattr(ml, "_RSF_PREDICTION_CHUNK_BYTES", 50 * per_row + 7)
+    assert ml._prediction_row_chunk(forest) == 50
     np.testing.assert_allclose(ml._predict_risk_scores(forest, X), whole, rtol=1e-12, atol=0.0)
     np.testing.assert_allclose(ml._sksurv_survival_predictor(forest, X)(grid), whole_survival, rtol=1e-12, atol=0.0)
 
