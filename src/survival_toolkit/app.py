@@ -2180,11 +2180,14 @@ def _guard_compressed_upload(path: Path, filename: str) -> None:
         except ImportError:  # pragma: no cover - pandas reports the missing engine itself
             return
         try:
-            parquet_file = pq.ParquetFile(path)
-            try:
-                metadata = parquet_file.metadata
-            finally:
-                parquet_file.close()
+            # Open the file here so its handle is closed even when pyarrow fails: a handle held by the
+            # exception's traceback would stop the temporary upload from being deleted on Windows.
+            with open(path, "rb") as handle:
+                parquet_file = pq.ParquetFile(handle)
+                try:
+                    metadata = parquet_file.metadata
+                finally:
+                    parquet_file.close()
         except Exception as exc:
             # The parser's own message can name server-side paths; log it and answer generically.
             logger.info("Rejected an unreadable Parquet upload: %s", exc)
@@ -3240,7 +3243,25 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
     finally:
         await file.close()
         if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
+            _remove_temporary_upload(temp_path)
+
+
+def _remove_temporary_upload(path: Path) -> None:
+    """Delete an uploaded file's temporary copy without hiding the request's own outcome.
+
+    On Windows a file still open elsewhere cannot be deleted; a parser that failed may hold it until its
+    traceback is collected, so collect once and retry, and otherwise leave the file to the system.
+    """
+    try:
+        path.unlink(missing_ok=True)
+    except PermissionError:
+        import gc
+
+        gc.collect()
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not delete the temporary upload %s; it is left for the system to clear.", path)
 
 
 def _reject_overlong_matrix_text(path: Path, *, compressed: bool) -> None:
@@ -3338,7 +3359,7 @@ async def upload_marker_matrix(
     finally:
         await file.close()
         if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
+            _remove_temporary_upload(temp_path)
 
 
 @app.delete("/api/marker-matrix/{matrix_id}")

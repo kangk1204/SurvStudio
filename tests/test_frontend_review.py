@@ -634,7 +634,9 @@ def _run_page(tmp_path: Path, script: str, **fixtures) -> object:
         json.dumps({"staticDir": str(_STATIC_DIR), "template": str(_TEMPLATE), "script": script, **fixtures}),
         encoding="utf-8",
     )
-    completed = subprocess.run(["node", str(harness), str(data)], capture_output=True, text=True, timeout=120)
+    completed = subprocess.run(
+        ["node", str(harness), str(data)], capture_output=True, text=True, encoding="utf-8", timeout=120
+    )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     return json.loads(completed.stdout.rsplit("@@RESULT@@", 1)[1])
 

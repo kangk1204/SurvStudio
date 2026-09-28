@@ -4603,6 +4603,7 @@ def test_frontend_format_value_keeps_tiny_p_values_nonzero() -> None:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     formatted = json.loads(completed.stdout.strip())
 
@@ -4622,7 +4623,7 @@ def test_frontend_format_value_keeps_ordinary_magnitudes_out_of_scientific_notat
             "console.log(JSON.stringify([formatValue(1528), formatValue(1500), formatValue(2000.0), formatValue(1528.5), formatValue(3567.6254), formatValue(12345678.9), formatValue(0)]));",
         ]
     )
-    completed = subprocess.run(["node", "-e", node_script], check=True, capture_output=True, text=True)
+    completed = subprocess.run(["node", "-e", node_script], check=True, capture_output=True, text=True, encoding="utf-8")
     formatted = json.loads(completed.stdout.strip())
 
     assert formatted == ["1528", "1500", "2000", "1528.5", "3567.625", "1.23e+7", "0"]
@@ -4645,7 +4646,7 @@ def test_frontend_csv_sanitizer_keeps_signed_display_numbers() -> None:
             "console.log(JSON.stringify(['-0.50 \u00b1 1.20', '-12%', '-1,234', '-1.2 (\u22123.4 to 0.5)', '-0.5\u20131.2', '-cmd|x', '-SUM(A1)', '@SUM(1)'].map(f)));",
         ]
     )
-    completed = subprocess.run(["node", "-e", node_script], check=True, capture_output=True, text=True)
+    completed = subprocess.run(["node", "-e", node_script], check=True, capture_output=True, text=True, encoding="utf-8")
 
     assert json.loads(completed.stdout.strip()) == [True, True, True, True, True, False, False, False]
 
@@ -4668,6 +4669,7 @@ def test_frontend_format_p_value_uses_journal_thresholds() -> None:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     formatted = json.loads(completed.stdout.strip())
 
