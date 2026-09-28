@@ -4,7 +4,9 @@ exception policy and the dataset store."""
 from __future__ import annotations
 
 import gzip
+import threading
 import tracemalloc
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +23,7 @@ from survival_toolkit.encoding import (
     unseen_category_counts,
 )
 from survival_toolkit.errors import (
+    DatasetNotFoundError,
     InternalAnalysisError,
     JobCancelledError,
     UserInputError,
@@ -29,6 +32,7 @@ from survival_toolkit.errors import (
 )
 from survival_toolkit.evaluation import c_index_intervals, prediction_block
 from survival_toolkit.marker_matrix import match_summary, read_marker_matrix
+from survival_toolkit.store import DatasetStore
 
 
 def _patients(n: int = 30) -> list[str]:
@@ -490,3 +494,94 @@ def test_interval_messages_tell_a_length_mismatch_from_missing_scores() -> None:
         c_index_intervals(time, event, {"Cox PH": rng.normal(size=40), "RSF": rng.normal(size=10)})
     with pytest.raises(UserInputError, match="finite risk score"):
         c_index_intervals(time, event, {"Cox PH": np.full(40, np.nan)})
+
+
+# ── Dataset store ────────────────────────────────────────────────
+
+
+def test_dataset_store_expires_on_a_monotonic_clock() -> None:
+    now = [1000.0]
+    store = DatasetStore(ttl_seconds=60)
+    store._clock = lambda: now[0]
+    frame = pd.DataFrame({"a": [1, 2, 3]})
+    stored = store.create(frame, "a.csv")
+
+    # A wall-clock jump (a changed system time) does not age the dataset ...
+    store._datasets[stored.dataset_id].last_accessed = datetime.now(timezone.utc) - timedelta(days=1)
+    now[0] += 59
+    assert store.get(stored.dataset_id).dataset_id == stored.dataset_id
+    # ... idle time on the store's own clock does, counted from the last use.
+    now[0] += 61
+    with pytest.raises(DatasetNotFoundError):
+        store.get(stored.dataset_id)
+
+    leased = store.create(frame, "b.csv")
+    with store.lease(leased.dataset_id):
+        now[0] += 3600
+        assert store.get(leased.dataset_id).dataset_id == leased.dataset_id
+    # Releasing the lease counts as a use; idle time after it expires the dataset at the next sweep.
+    now[0] += 61
+    store.create(frame, "c.csv")
+    assert not store.contains(leased.dataset_id)
+
+
+def test_dataset_store_copies_and_hashes_outside_its_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = DatasetStore()
+    held: list[bool] = []
+
+    def spy(name):
+        original = getattr(DatasetStore, name)
+
+        def call(*args, **kwargs):
+            held.append(store._lock._is_owned())
+            return original(*args, **kwargs)
+
+        return call
+
+    monkeypatch.setattr(store, "_copy_dataframe", spy("_copy_dataframe"))
+    monkeypatch.setattr(store, "_dataframe_hash", spy("_dataframe_hash"))
+    original_metadata_copy = store._copy_metadata
+
+    def metadata_copy(metadata):
+        held.append(store._lock._is_owned())
+        return original_metadata_copy(metadata)
+
+    monkeypatch.setattr(store, "_copy_metadata", metadata_copy)
+    frame = pd.DataFrame({"a": np.arange(10.0)})
+
+    stored = store.create(frame, "a.csv", metadata={"note": {"x": 1}})
+    fetched = store.get(stored.dataset_id)
+    updated = store.update_dataframe(stored.dataset_id, frame.assign(a=frame["a"] * 2))
+    store.update_metadata(stored.dataset_id, {"note": {"x": 2}})
+
+    assert held and not any(held)
+    assert fetched.dataframe["a"].tolist() == list(np.arange(10.0))
+    assert updated.dataframe["a"].tolist() == list(np.arange(10.0) * 2)
+    assert updated.metadata["dataset_hash"] != stored.metadata["dataset_hash"]
+    assert store.get(stored.dataset_id).metadata["note"] == {"x": 2}
+
+
+def test_dataset_store_readers_see_one_consistent_version_while_it_is_replaced() -> None:
+    store = DatasetStore()
+    frames = [pd.DataFrame({"a": np.full(2000, float(version))}) for version in range(2)]
+    stored = store.create(frames[0], "a.csv")
+    hashes = {DatasetStore._dataframe_hash(frame): float(frame["a"].iloc[0]) for frame in frames}
+    problems: list[str] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            current = store.get(stored.dataset_id)
+            value = float(current.dataframe["a"].iloc[0])
+            if hashes.get(current.metadata["dataset_hash"]) != value:
+                problems.append("hash and table disagree")
+
+    threads = [threading.Thread(target=reader) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for version in range(40):
+        store.update_dataframe(stored.dataset_id, frames[version % 2])
+    stop.set()
+    for thread in threads:
+        thread.join()
+    assert problems == []

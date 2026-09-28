@@ -4,10 +4,11 @@ import copy
 import hashlib
 import logging
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -46,6 +47,12 @@ class DatasetStore:
     Metadata is deep-copied on the way in and out, except values stored under
     ``shared_metadata_keys``: those hold large read-only caches (for example a column
     profile) that callers never mutate in place, so they are shared by reference.
+
+    Idle time is measured on a monotonic clock, so a change of the system time neither
+    expires datasets early nor keeps them forever (``last_accessed`` is for display).
+    Copying and hashing tables happen outside the store-wide lock: a stored dataset's
+    table and metadata are replaced, never changed in place, so a reference taken under
+    the lock stays one consistent version while it is copied.
     """
 
     def __init__(
@@ -62,6 +69,8 @@ class DatasetStore:
         self._leases: dict[str, int] = {}
         self._eviction_listeners: list[Callable[[str], None]] = []
         self._shared_metadata_keys = frozenset(str(key) for key in shared_metadata_keys)
+        self._clock: Callable[[], float] = time.monotonic
+        self._last_used: dict[str, float] = {}
 
     def _copy_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
         if not self._shared_metadata_keys:
@@ -97,7 +106,12 @@ class DatasetStore:
         stored = self._datasets.get(dataset_id)
         if stored is not None:
             stored.last_accessed = datetime.now(timezone.utc)
+            self._last_used[dataset_id] = self._clock()
             self._datasets.move_to_end(dataset_id)
+
+    def _forget(self, dataset_id: str) -> None:
+        del self._datasets[dataset_id]
+        self._last_used.pop(dataset_id, None)
 
     @contextmanager
     def lease(self, dataset_id: str) -> Iterator[None]:
@@ -154,15 +168,14 @@ class DatasetStore:
         return digest.hexdigest()[:16]
 
     def _evict_expired(self) -> list[str]:
-        now = datetime.now(timezone.utc)
+        now = self._clock()
         expired = [
             key
-            for key, stored in self._datasets.items()
-            if not self._leases.get(key)
-            and (now - stored.last_accessed).total_seconds() > self._ttl_seconds
+            for key in self._datasets
+            if not self._leases.get(key) and now - self._last_used.get(key, now) > self._ttl_seconds
         ]
         for key in expired:
-            del self._datasets[key]
+            self._forget(key)
         return expired
 
     def _evict_lru(self) -> list[str]:
@@ -172,7 +185,7 @@ class DatasetStore:
             if victim is None:
                 # Every stored dataset is in use by a running job; allow a temporary overflow.
                 break
-            del self._datasets[victim]
+            self._forget(victim)
             evicted.append(victim)
         return evicted
 
@@ -185,7 +198,7 @@ class DatasetStore:
         metadata: dict[str, Any] | None = None,
         copy_dataframe: bool = True,
     ) -> StoredDataset:
-        # Hashing and copying are CPU-bound; do them before taking the store-wide lock.
+        # Hashing and copying are CPU-bound; do them outside the store-wide lock.
         dataset_hash = self._dataframe_hash(dataframe)
         stored_dataframe = self._copy_dataframe(dataframe, copy_dataframe=copy_dataframe)
         stored_metadata = self._copy_metadata(metadata or {})
@@ -205,9 +218,10 @@ class DatasetStore:
                 metadata=stored_metadata,
             )
             self._datasets[dataset_id] = stored
-            result = self._clone_stored(stored, copy_dataframe=copy_dataframe)
+            self._last_used[dataset_id] = self._clock()
+            snapshot = replace(stored)
         self._notify_evicted(evicted)
-        return result
+        return self._clone_stored(snapshot, copy_dataframe=copy_dataframe)
 
     def _clone_stored(self, stored: StoredDataset, *, copy_dataframe: bool = True) -> StoredDataset:
         return StoredDataset(
@@ -230,59 +244,59 @@ class DatasetStore:
         with self._lock:
             evicted = self._evict_expired()
             stored = self._datasets.get(dataset_id)
+            snapshot = None
             if stored is not None:
-                stored.last_accessed = datetime.now(timezone.utc)
-                self._datasets.move_to_end(dataset_id)
-                result = self._clone_stored(stored, copy_dataframe=copy_dataframe)
+                self._touch(dataset_id)
+                snapshot = replace(stored)
         self._notify_evicted(evicted)
-        if stored is None:
+        if snapshot is None:
             raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}")
-        return result
+        return self._clone_stored(snapshot, copy_dataframe=copy_dataframe)
 
     def delete(self, dataset_id: str) -> None:
         with self._lock:
             try:
-                del self._datasets[dataset_id]
+                self._forget(dataset_id)
             except KeyError as exc:
                 raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}") from exc
         self._notify_evicted([dataset_id])
 
     def update_dataframe(self, dataset_id: str, dataframe: pd.DataFrame, *, copy_dataframe: bool = True) -> StoredDataset:
+        new_dataframe = self._copy_dataframe(dataframe, copy_dataframe=copy_dataframe)
+        dataset_hash = self._dataframe_hash(new_dataframe)
         with self._lock:
             evicted = self._evict_expired()
             stored = self._datasets.get(dataset_id)
+            snapshot = None
             if stored is not None:
-                self._datasets.move_to_end(dataset_id)
-                stored.dataframe = self._copy_dataframe(dataframe, copy_dataframe=copy_dataframe)
-                stored.last_accessed = datetime.now(timezone.utc)
-                stored.metadata = {
-                    **stored.metadata,
-                    "dataset_hash": self._dataframe_hash(stored.dataframe),
-                }
-                result = self._clone_stored(stored, copy_dataframe=copy_dataframe)
+                stored.dataframe = new_dataframe
+                stored.metadata = {**stored.metadata, "dataset_hash": dataset_hash}
+                self._touch(dataset_id)
+                snapshot = replace(stored)
         self._notify_evicted(evicted)
-        if stored is None:
+        if snapshot is None:
             raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}")
         # The table changed, so anything cached for the old contents is stale.
         self._notify_evicted([dataset_id])
-        return result
+        return self._clone_stored(snapshot, copy_dataframe=copy_dataframe)
 
     def update_metadata(self, dataset_id: str, metadata: dict[str, Any]) -> StoredDataset:
+        new_metadata = self._copy_metadata(metadata)
         with self._lock:
             evicted = self._evict_expired()
             stored = self._datasets.get(dataset_id)
+            snapshot = None
             if stored is not None:
-                self._datasets.move_to_end(dataset_id)
-                stored.last_accessed = datetime.now(timezone.utc)
                 stored.metadata = {
-                    **self._copy_metadata(metadata),
+                    **new_metadata,
                     "dataset_hash": stored.metadata.get("dataset_hash") or self._dataframe_hash(stored.dataframe),
                 }
-                result = self._clone_stored(stored, copy_dataframe=False)
+                self._touch(dataset_id)
+                snapshot = replace(stored)
         self._notify_evicted(evicted)
-        if stored is None:
+        if snapshot is None:
             raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}")
-        return result
+        return self._clone_stored(snapshot, copy_dataframe=False)
 
     @property
     def count(self) -> int:
