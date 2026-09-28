@@ -508,10 +508,6 @@ function formatGroupChip(groupLabel) {
   return `Grouping only: ${groupLabel}`;
 }
 
-function formatMaxTimeChip(maxTimeValue) {
-  return maxTimeValue ? `Max time: ${maxTimeValue}` : "Max time: Auto";
-}
-
 function renderContextCards({
   hasDataset,
   timeLabel,
@@ -614,11 +610,17 @@ function syncAnalysisRunButtonAvailability() {
   const hasCoxCovariates = coxCovariateCount > 0;
   const hasSharedFeatures = sharedFeatureCount > 0;
   const hasTableVariables = tableVariableCount > 0;
-  const signatureFeatureMessage = "Select at least one marker to search for cut-point combinations.";
-  const markerCount = selectedCheckboxValues(refs.markerChecklist).length;
+  // An attached marker matrix supplies the markers for the evaluation, not for the cut-point search, which
+  // reads the marker checklist (disabled, but still ticked, while a matrix is attached).
+  const matrixAttached = typeof markerMatrixAttached === "function" && markerMatrixAttached();
+  const signatureFeatureMessage = matrixAttached
+    ? "The cut-point search uses markers from the checklist, not an attached marker file. Remove the file to search the checklist markers."
+    : "Select at least one marker to search for cut-point combinations.";
+  const markerCount = typeof currentMarkerSelections === "function"
+    ? currentMarkerSelections().markers.length
+    : selectedCheckboxValues(refs.markerChecklist).length;
   const hasMarkers = markerCount > 0;
-  // An attached marker matrix supplies the markers for the evaluation (not for the cut-point search).
-  const hasEvaluationMarkers = hasMarkers || (typeof markerMatrixAttached === "function" && markerMatrixAttached());
+  const hasEvaluationMarkers = hasMarkers || matrixAttached;
   const coxFeatureMessage = "Select at least one covariate for the Cox model.";
   const sharedFeatureMessage = "Select at least one shared ML/DL model feature.";
   const tableVariableMessage = "Select at least one variable for the cohort table.";
@@ -771,34 +773,18 @@ function renderSharedFeatureSummary() {
   renderWorkspaceChrome();
 }
 
+// Single-model plots of a result that no longer matches the settings are marked stale, not deleted:
+// undoing the edit (or switching the model back) shows them again unchanged.
 function syncStaleSingleResultArtifacts() {
   const mlPayload = goalPayload("ml");
-  if (mlPayload && panelModeForPayload(mlPayload) === "single" && !currentGoalResult("ml")) {
-    clearPlotShell(
-      refs.mlImportancePlot,
-      '<div class="empty-state plot-empty"><span>Current model settings changed. Run Analysis to refresh feature importance.</span></div>',
-      { state: "message" },
-    );
-    clearPlotShell(
-      refs.mlShapPlot,
-      '<div class="empty-state plot-empty"><span>Current model settings changed. Run Analysis to refresh SHAP.</span></div>',
-      { state: "message" },
-    );
-  }
+  const mlStale = Boolean(mlPayload && panelModeForPayload(mlPayload) === "single" && !currentGoalResult("ml"));
+  setPlotStale(refs.mlImportancePlot, mlStale, "Model settings changed since this run. Run Analysis to refresh feature importance.");
+  setPlotStale(refs.mlShapPlot, mlStale, "Model settings changed since this run. Run Analysis to refresh SHAP.");
 
   const dlPayload = goalPayload("dl");
-  if (dlPayload && panelModeForPayload(dlPayload) === "single" && !currentGoalResult("dl")) {
-    clearPlotShell(
-      refs.dlImportancePlot,
-      '<div class="empty-state plot-empty"><span>Current model settings changed. Train this deep model again to refresh feature salience.</span></div>',
-      { state: "message" },
-    );
-    clearPlotShell(
-      refs.dlLossPlot,
-      '<div class="empty-state plot-empty"><span>Current model settings changed. Train this deep model again to refresh learning curves.</span></div>',
-      { state: "message" },
-    );
-  }
+  const dlStale = Boolean(dlPayload && panelModeForPayload(dlPayload) === "single" && !currentGoalResult("dl"));
+  setPlotStale(refs.dlImportancePlot, dlStale, "Model settings changed since this run. Train this deep model again to refresh feature salience.");
+  setPlotStale(refs.dlLossPlot, dlStale, "Model settings changed since this run. Train this deep model again to refresh learning curves.");
 
   updateResultVisibility();
   syncPredictiveWorkbenchSingleResultVisibility();

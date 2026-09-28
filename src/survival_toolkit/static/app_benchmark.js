@@ -14,8 +14,6 @@
       benchmarkMetricNumber,
       benchmarkEvaluationLabel,
       benchmarkReviewAction,
-      mlModelLabel,
-      dlModelLabel,
       formatValue,
       escapeHtml,
       isScopeBusy,
@@ -173,10 +171,6 @@
 
     const EXPERIMENTAL_MODELS = new Set(["Survival Transformer", "Survival VAE"]);
 
-    function showBenchmarkStarterAction() {
-      return true;
-    }
-
     function benchmarkRowsFromPayload(goal, payload, { statusOverride = null, paramsSource = "current" } = {}) {
       if (!payload) return [];
       const meta = benchmarkGoalMeta(goal);
@@ -270,34 +264,6 @@
     function benchmarkExcludedRows(goal, { currentOnly = false } = {}) {
       const payload = benchmarkComparePayload(goal, { currentOnly });
       return benchmarkExcludedRowsForPayload(goal, payload, { paramsSource: currentOnly ? "current" : "latest" });
-    }
-
-    function benchmarkSingleRunSummary(goal, payload) {
-      const requestConfig = payload?.request_config || payload?.analysis?.request_config || {};
-      if (goal === "ml") {
-        const stats = payload?.analysis?.model_stats || {};
-        const label = mlModelLabel(requestConfig.model_type || "ML model");
-        return {
-          title: "Latest single run",
-          text: `${label} ${stats.metric_name || "C-index"}=${formatValue(stats.c_index)} on ${benchmarkEvaluationLabel(stats.evaluation_mode)} evaluation. Use Compare All if you want this family to appear in the unified leaderboard.`,
-          chips: [
-            `Eval: ${benchmarkEvaluationLabel(stats.evaluation_mode)}`,
-            `Features: ${formatValue(stats.n_features)}`,
-            `N: ${formatValue(stats.n_patients)}`,
-          ],
-        };
-      }
-      const stats = payload?.analysis || {};
-      const label = dlModelLabel(requestConfig.model_type || "deep model");
-      return {
-        title: "Latest single run",
-        text: `${label} C-index=${formatValue(stats.c_index)} on ${benchmarkEvaluationLabel(stats.evaluation_mode)} evaluation. Use Compare All if you want this family to appear in the unified leaderboard.`,
-        chips: [
-          `Eval: ${benchmarkEvaluationLabel(stats.evaluation_mode)}`,
-          `Epochs: ${formatValue(stats.epochs_trained || stats.epochs)}`,
-          `Features: ${formatValue(stats.n_features)}`,
-        ],
-      };
     }
 
     function unifiedBenchmarkRows({ currentOnly = true } = {}) {
@@ -420,7 +386,7 @@
       const nonComparableCount = rawVisibleRows.filter((row) => !row.comparableForRanking).length;
       const predictiveBusy = isScopeBusy("predictive") || isScopeBusy("ml") || isScopeBusy("dl");
       const pendingFamilies = ["ml", "dl"].filter((goal) => !currentFamilies.includes(goal));
-      return {
+      const board = {
         currentRows,
         visibleRows,
         visibleExcludedRows,
@@ -453,6 +419,12 @@
           dl: comparisonRowsFromPayload(snapshotPayloads.dl).length,
         },
       };
+      // Intervals already computed for exactly this board, so every re-render (not only a full
+      // renderBenchmarkBoard) keeps the 95% CI and ΔC columns. Fetching them is renderBenchmarkBoard's job.
+      board.intervals = boardPredictionBlocks(board) && runtime.benchmarkIntervals?.key === boardIntervalKey(board)
+        ? runtime.benchmarkIntervals
+        : null;
+      return board;
     }
 
     async function renderUnifiedBenchmarkPlot(board) {
@@ -496,23 +468,6 @@
         return;
       }
 
-      const noteParts = [
-        board.showingStaleBoard
-          ? "Showing the last Compare All board as a stale reference."
-          : `Showing ${board.plottableRows.length} current screening rows on one C-index axis${board.evaluationModes[0] ? ` using ${benchmarkEvaluationLabel(board.evaluationModes[0])} evaluation.` : "."}`,
-      ];
-      if (board.showingStaleBoard) {
-        noteParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the board.");
-      }
-      if (board.hiddenStaleFamilies.length) {
-        noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
-      }
-      if (board.missingMetricCount) {
-        noteParts.push(`Omitted ${board.missingMetricCount} row(s) without a numeric C-index.`);
-      }
-      // The ranking, interval and methodology notes sit once, under the leaderboard.
-      refs.benchmarkPlotNote.textContent = noteParts.join(" ");
-
       const intervals = board.intervals?.status === "ready" ? board.intervals.result : null;
       const intervalByModel = new Map((intervals?.rows || []).map((row) => [String(row.model), row]));
       const valueOf = (row) => {
@@ -520,9 +475,40 @@
         if (interval?.c_index != null) return Number(interval.c_index);
         return board.hasLockedTest ? benchmarkMetricNumber(row.locked_test_c_index) : row.numericCIndex;
       };
-      // Best model on top; each dot carries its bootstrap interval when the board has one.
-      const ordered = board.plottableRows.filter((row) => Number.isFinite(valueOf(row))).sort((left, right) => valueOf(left) - valueOf(right));
-      const label = (row) => `${row.model} (${benchmarkRowFamilyMeta(row).familyShortLabel})`;
+      const metricLabel = chartMetricLabel(board);
+      const stalePrefix = board.showingStaleBoard ? "Showing the last Compare All board as a stale reference. " : "";
+      // Screen-rank order, as in the leaderboard (development results), never the plotted locked-test values:
+      // those must not pick the model. Rank 1 on top and marked; each dot carries its interval when there is one.
+      const screenRank = new Map(board.rankingRows.map((row, index) => [row, index + 1]));
+      const ordered = board.plottableRows.filter((row) => Number.isFinite(valueOf(row)));
+      if (!ordered.length) {
+        refs.benchmarkPlotNote.textContent = `${stalePrefix}No model has a ${board.hasLockedTest ? "locked-test C-index" : "C-index"} to chart. Review the table below.`;
+        refs.benchmarkComparisonPlot.classList.add("hidden");
+        clearPlotShell(refs.benchmarkComparisonPlot, '<div class="empty-state plot-empty"><span>No C-index values are available to chart for the current board.</span></div>');
+        return;
+      }
+
+      const noteParts = [
+        board.showingStaleBoard
+          ? "Showing the last Compare All board as a stale reference."
+          : `Showing ${ordered.length} current screening rows on one C-index axis${board.evaluationModes[0] ? ` using ${benchmarkEvaluationLabel(board.evaluationModes[0])} evaluation.` : "."}`,
+        "Models are in leaderboard (screen-rank) order; rank 1 is marked.",
+      ];
+      if (board.showingStaleBoard) {
+        noteParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the board.");
+      }
+      if (board.hiddenStaleFamilies.length) {
+        noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
+      }
+      const omitted = board.missingMetricCount + (board.plottableRows.length - ordered.length);
+      if (omitted) {
+        noteParts.push(`Omitted ${omitted} row(s) without a ${board.hasLockedTest ? "locked-test" : "numeric"} C-index.`);
+      }
+      // The ranking, interval and methodology notes sit once, under the leaderboard.
+      refs.benchmarkPlotNote.textContent = noteParts.join(" ");
+
+      const isRankOne = (row) => screenRank.get(row) === 1;
+      const label = (row) => `${row.model} (${benchmarkRowFamilyMeta(row).familyShortLabel})${isRankOne(row) ? " · rank 1" : ""}`;
       const traces = ["ml", "dl"].map((family) => {
         const members = ordered.filter((row) => benchmarkRowFamilyMeta(row).familyTab === family);
         const intervalsOf = members.map((row) => intervalByModel.get(String(row.model)) || null);
@@ -533,9 +519,10 @@
           x: members.map(valueOf),
           y: members.map(label),
           marker: {
-            size: 11,
+            size: members.map((row) => (isRankOne(row) ? 15 : 11)),
+            symbol: members.map((row) => (isRankOne(row) ? "diamond" : "circle")),
             color: family === "ml" ? "rgba(47, 101, 217, 0.95)" : "rgba(219, 126, 21, 0.95)",
-            line: { color: "#1a2332", width: 1 },
+            line: { color: "#1a2332", width: members.map((row) => (isRankOne(row) ? 2 : 1)) },
           },
           error_x: intervals
             ? {
@@ -552,12 +539,14 @@
             intervalRangeText(intervalsOf[index]?.c_index_ci),
             deltaText(intervalsOf[index]),
             benchmarkEvaluationLabel(row.evaluation_mode),
+            screenRank.has(row) ? String(screenRank.get(row)) : "not ranked",
           ]),
           hovertemplate: [
             "<b>%{y}</b>",
             `${board.hasLockedTest ? "Locked-test C-index" : "C-index"}: %{x:.3f} %{customdata[0]}`,
             "%{customdata[1]}",
             "Evaluation: %{customdata[2]}",
+            "Screen rank: %{customdata[3]}",
             "<extra></extra>",
           ].join("<br>"),
         };
@@ -581,7 +570,8 @@
       }
       const layout = {
         title: {
-          text: board.hasLockedTest ? "Locked-test C-index with 95% intervals" : "C-index on the same test patients, with 95% intervals",
+          // Names only what is drawn: intervals appear in the title once they are on the chart.
+          text: intervals ? `${metricLabel}, with 95% bootstrap intervals` : metricLabel,
           x: 0.02,
           xanchor: "left",
           font: { family: "Source Serif 4, serif", size: 20, color: "#1a2332" },
@@ -597,8 +587,9 @@
           gridcolor: "rgba(27, 39, 51, 0.08)",
           zeroline: false,
         },
-        // Categories in C-index order across both families (best on top), not grouped by family.
-        yaxis: { automargin: true, tickfont: { size: 12 }, categoryorder: "array", categoryarray: ordered.map(label) },
+        // Categories in screen-rank order across both families (rank 1 on top; Plotly lists the first
+        // category at the bottom), not grouped by family.
+        yaxis: { automargin: true, tickfont: { size: 12 }, categoryorder: "array", categoryarray: [...ordered].reverse().map(label) },
         shapes,
         annotations,
         showlegend: true,
@@ -615,6 +606,16 @@
         plotConfig("benchmark_comparison"),
       );
       stabilizePlotShellHeight(refs.benchmarkComparisonPlot);
+    }
+
+    // What the chart's dots are: the locked-test C-index, the mean over repeated-CV folds, or the C-index on
+    // the one holdout test set both families share.
+    function chartMetricLabel(board) {
+      if (board.hasLockedTest) return "Locked-test C-index";
+      const mode = String(board.evaluationModes?.[0] || "");
+      if (mode.startsWith("repeated_cv")) return "Mean cross-validated C-index";
+      if (mode === "holdout") return "C-index on the same test patients";
+      return "C-index";
     }
 
     function intervalRangeText(interval) {
@@ -653,13 +654,20 @@
       ].join("|");
     }
 
+    // A failed interval request is tried again on a later render, after a pause that doubles with each
+    // failure (5 s, 10 s, ... up to a minute), so a passing server hiccup does not hide the intervals for good.
+    const INTERVAL_RETRY_BASE_MS = 5000;
+    const INTERVAL_RETRY_MAX_MS = 60000;
+
     // Bootstrap intervals for the visible board, fetched once per board and kept in runtime.
     function boardIntervals(board) {
       const blocks = boardPredictionBlocks(board);
       if (!blocks) return null;
       const key = boardIntervalKey(board);
-      if (runtime.benchmarkIntervals?.key === key) return runtime.benchmarkIntervals;
-      runtime.benchmarkIntervals = { key, status: "loading" };
+      const cached = runtime.benchmarkIntervals?.key === key ? runtime.benchmarkIntervals : null;
+      if (cached && !(cached.status === "error" && Date.now() >= cached.retryAt)) return cached;
+      const failures = cached?.status === "error" ? cached.failures : 0;
+      runtime.benchmarkIntervals = { key, status: "loading", failures };
       fetchJSON("/api/model-comparison-intervals", { method: "POST", body: JSON.stringify({ predictions: blocks }) })
         .then((result) => {
           if (runtime.benchmarkIntervals?.key !== key) return;
@@ -668,7 +676,14 @@
         })
         .catch((error) => {
           if (runtime.benchmarkIntervals?.key !== key) return;
-          runtime.benchmarkIntervals = { key, status: "error", error: error?.message || String(error) };
+          const retryDelay = Math.min(INTERVAL_RETRY_MAX_MS, INTERVAL_RETRY_BASE_MS * 2 ** failures);
+          runtime.benchmarkIntervals = {
+            key,
+            status: "error",
+            error: error?.message || String(error),
+            failures: failures + 1,
+            retryAt: Date.now() + retryDelay,
+          };
           requestBoardRender();
         });
       return runtime.benchmarkIntervals;
@@ -863,7 +878,7 @@
           <strong class="benchmark-family-title">${escapeHtml(summary.title)}</strong>
           <p class="benchmark-family-copy">${escapeHtml(summary.text)}</p>
           <div class="dataset-preset-chips">${summary.chips.map((label) => `<span class="dataset-preset-chip">${escapeHtml(label)}</span>`).join("")}</div>
-          ${!hasAnyResult && showBenchmarkStarterAction() ? benchmarkStarterActionMarkup() : ""}
+          ${hasAnyResult ? "" : benchmarkStarterActionMarkup()}
         </article>
       `;
     }
@@ -879,14 +894,12 @@
         refs.benchmarkTableNote.textContent = board.staleFamilies.length
           ? "Stored compare rows are stale and hidden. Rerun Compare All Models to rebuild the shared board with the current settings."
           : "Run Compare All Models to build a shared leaderboard across classical ML and deep learning.";
-        refs.benchmarkComparisonShell.innerHTML = showBenchmarkStarterAction()
-          ? `
+        refs.benchmarkComparisonShell.innerHTML = `
             <div class="empty-state">
               <span>Run Compare All Models to build a shared leaderboard across classical ML and deep learning.</span>
               ${benchmarkStarterActionMarkup()}
             </div>
-          `
-          : '<div class="empty-state">Run Compare All Models to build a shared leaderboard across classical ML and deep learning.</div>';
+          `;
         return;
       }
 
@@ -1022,7 +1035,6 @@
       renderUnifiedBenchmarkSummary,
       renderUnifiedBenchmarkTable,
       renderBenchmarkBoard,
-      benchmarkSingleRunSummary,
     };
   }
 

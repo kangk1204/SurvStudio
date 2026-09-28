@@ -1740,6 +1740,31 @@ h3 {
   box-sizing: content-box;
 }
 
+/* A result that no longer matches the settings stays drawn, faded, under a notice (setPlotStale). */
+.plot-shell.plot-stale {
+  position: relative;
+}
+
+.plot-shell.plot-stale > * {
+  opacity: 0.2;
+  pointer-events: none;
+}
+
+.plot-shell.plot-stale::after {
+  content: attr(data-stale-message);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--ink);
+  font-size: 0.85rem;
+  font-weight: 600;
+  pointer-events: none;
+}
+
 .plot-shell.is-refreshing {
   position: relative;
 }

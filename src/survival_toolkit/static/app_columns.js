@@ -59,7 +59,25 @@ function buttonsForScope(scope) {
   }
   if (scope === "tables") return [refs.runCohortTableButton];
   if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];
+  if (scope === "derive") return [refs.deriveButton];
   return [];
+}
+
+// The busy scope a Run button belongs to, for clicks and for Ctrl+Enter alike.
+function runScopeForButton(button) {
+  if (!button) return null;
+  if (button === refs.runPredictiveCompareAllButton) return "predictive";
+  if (button === refs.runPredictiveWorkbenchButton || button === refs.runPredictiveSelectedButton) {
+    return predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey()).family;
+  }
+  if ([refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton].includes(button)) return "ml";
+  if ([refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton].includes(button)) return "dl";
+  if (button === refs.runKmButton || button === refs.runSignatureSearchButton) return "km";
+  if (button === refs.runCoxButton) return "cox";
+  if (button === refs.runCohortTableButton) return "tables";
+  if (button === refs.runMarkersButton || button === refs.runMarkerValidationButton) return "markers";
+  if (button === refs.deriveButton) return "derive";
+  return null;
 }
 
 function setChecklistDisabled(container, isDisabled) {
@@ -108,6 +126,14 @@ function setScopeBusy(scope, isBusy, activeButton = null) {
   if (scope === "ml") updateMlEvaluationControls();
   if (scope === "dl") updateDlEvaluationControls();
   syncAnalysisRunButtonAvailability();
+  // The loop above re-enabled every button of the scope; the ones with their own conditions (Validate
+  // needs a locked model, the marker list is locked while a file is attached, Create is locked while
+  // Group by is set) take their state from those conditions again.
+  if (scope === "markers") {
+    renderMarkerMatrixState();
+    syncMarkerDownloadButtons();
+  }
+  if (scope === "derive") syncDeriveControlsState();
   renderWorkspaceChrome();
   if (scope === "predictive" || scope === "ml" || scope === "dl") {
     renderBenchmarkBoard();
@@ -271,11 +297,17 @@ function recommendedTimeColumns() {
   return (state.dataset?.suggestions?.time_columns || []).filter((column) => names.has(column));
 }
 
+function numericTimeCandidateColumns() {
+  const numeric = new Set(state.dataset?.numeric_columns || []);
+  return datasetColumnNames().filter((column) => numeric.has(column));
+}
+
+// The Time menu lists the likely follow-up columns; "All numeric" (or a dataset without a likely one)
+// lists every numeric column, so a follow-up column with an unusual name can still be chosen.
 function allowedTimeColumns() {
   const recommended = recommendedTimeColumns();
-  if (recommended.length) return recommended;
-  const names = new Set(datasetColumnNames());
-  return (state.dataset?.numeric_columns || []).filter((column) => names.has(column));
+  if (recommended.length && !refs.showAllTimeColumns?.checked) return recommended;
+  return numericTimeCandidateColumns();
 }
 
 function identicalOutcomeColumnMessage() {
@@ -306,9 +338,16 @@ function currentTimeColumnWarning() {
 
   const recommended = recommendedTimeColumns();
   if (!recommended.length || recommended.includes(timeColumn)) return null;
+  if (refs.showAllTimeColumns?.checked) {
+    // Chosen on purpose through "All numeric": a reminder, not a block.
+    return {
+      tone: "warning",
+      message: `"${timeColumn}" is not one of the likely follow-up time columns (${recommended.slice(0, 3).join(", ")}). Use it only if it holds each patient's follow-up time.`,
+    };
+  }
   return {
     tone: "error",
-    message: `"${timeColumn}" does not look like a survival follow-up time column. Choose one of the likely time columns instead: ${recommended.slice(0, 3).join(", ")}.`,
+    message: `"${timeColumn}" does not look like a survival follow-up time column. Choose one of the likely time columns instead: ${recommended.slice(0, 3).join(", ")}, or tick All numeric if it is the follow-up time.`,
   };
 }
 
@@ -318,7 +357,9 @@ function updateTimeColumnGuidance() {
   const recommended = recommendedTimeColumns();
   const numericColumns = allowedTimeColumns();
   if (refs.timeColumnHelp) {
-    if (recommended.length) {
+    if (recommended.length && refs.showAllTimeColumns?.checked) {
+      refs.timeColumnHelp.textContent = "Showing all numeric columns. Use only a true follow-up time.";
+    } else if (recommended.length) {
       refs.timeColumnHelp.textContent = "Showing likely time columns only.";
     } else if (numericColumns.length) {
       refs.timeColumnHelp.textContent = "No clear time column name was found; showing numeric columns. Check the follow-up field.";
@@ -343,11 +384,10 @@ function renderTimeColumnOptions({ preferred = null, silent = true } = {}) {
   const options = allowedTimeColumns();
   const recommended = recommendedTimeColumns();
   const currentValue = preferred ?? refs.timeColumn?.value ?? "";
+  // Without a likely follow-up column nothing is preselected: the first numeric column is usually an ID.
   const nextValue = options.includes(currentValue)
     ? currentValue
-    : recommended.length
-      ? inferDefault(options, recommended, 0)
-      : "";
+    : recommended.find((column) => options.includes(column)) || "";
   renderSelect(refs.timeColumn, options, {
     includeBlank: !recommended.length || !nextValue,
     blankLabel: "Select time column",
@@ -392,9 +432,20 @@ function eventTokenCandidates(value) {
   return variants;
 }
 
+// A label that negates an event ("No recurrence", "Not progressed", "Non-relapse", "Never", "Without
+// death", "Recurrence-free") names the censored side even though it contains an event word.
+const EVENT_NEGATION_TOKENS = new Set(["no", "not", "non", "never", "without"]);
+
+function isNegatedEventLabel(value) {
+  if (typeof value !== "string") return false;
+  const tokens = value.trim().toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return tokens.some((token) => EVENT_NEGATION_TOKENS.has(token) || token.endsWith("free") || /^non[a-z]{3,}$/.test(token));
+}
+
 function eventValueFamily(value) {
   const candidates = eventTokenCandidates(value);
   if (!candidates.length) return null;
+  if (isNegatedEventLabel(value)) return "censor";
   if (candidates.some((candidate) => EVENT_FALSE_TOKENS.has(candidate))) return "censor";
   if (candidates.some((candidate) => EVENT_TRUE_TOKENS.has(candidate))) return "event";
   return null;
@@ -420,6 +471,7 @@ function hasRecognizableEventCoding(values) {
 
 function inferEventPositiveSelection(eventColumn, values, previousValue = "") {
   const normalized = values.map((value) => ({
+    value,
     raw: String(value),
     token: normalizeEventToken(value),
     candidates: eventTokenCandidates(value),
@@ -429,8 +481,12 @@ function inferEventPositiveSelection(eventColumn, values, previousValue = "") {
     return { value: String(previousValue), warning: null };
   }
 
-  const truthy = normalized.filter((entry) => entry.candidates.some((candidate) => EVENT_TRUE_TOKENS.has(candidate)));
-  const falsy = normalized.filter((entry) => entry.candidates.some((candidate) => EVENT_FALSE_TOKENS.has(candidate)));
+  // A negated label ("No recurrence") is never the event value, however many event words it holds.
+  const negated = normalized.filter((entry) => isNegatedEventLabel(entry.value));
+  const truthy = normalized.filter((entry) => !negated.includes(entry)
+    && entry.candidates.some((candidate) => EVENT_TRUE_TOKENS.has(candidate)));
+  const falsy = normalized.filter((entry) => negated.includes(entry)
+    || entry.candidates.some((candidate) => EVENT_FALSE_TOKENS.has(candidate)));
   const pickTruthy = truthy.find((entry) => entry.token === "1")
     || truthy.find((entry) => entry.token === "event")
     || truthy.find((entry) => entry.token === "dead")
@@ -441,6 +497,12 @@ function inferEventPositiveSelection(eventColumn, values, previousValue = "") {
   }
   if (pickTruthy && normalized.length === 1) {
     return { value: pickTruthy.raw, warning: null };
+  }
+  if (negated.length && !pickTruthy) {
+    return {
+      value: "",
+      warning: `"${eventColumn}" has values that negate an event (${negated.map((entry) => entry.raw).join(", ")}), so SurvStudio did not guess which value means event. Choose it explicitly.`,
+    };
   }
 
   const uniqueTokens = [...new Set(normalized.map((entry) => entry.token))];
@@ -665,7 +727,9 @@ function updateEventPositiveOptions() {
   updateEventColumnGuidance();
 }
 
-function renderChecklist(container, values, selected = [], notes = {}) {
+// `notes` maps a value to a short note (a Map or a plain object; only its own entries count, so a column
+// named "constructor" gets no note from Object.prototype).
+function renderChecklist(container, values, selected = [], notes = new Map()) {
   if (!container) return;
   container.innerHTML = "";
   values.forEach((value) => {
@@ -679,10 +743,11 @@ function renderChecklist(container, values, selected = [], notes = {}) {
     const span = document.createElement("span");
     span.textContent = value;
     label.append(input, span);
-    if (notes[value]) {
+    const noteText = ownEntry(notes, value);
+    if (noteText) {
       const note = document.createElement("small");
       note.className = "check-item-note";
-      note.textContent = notes[value];
+      note.textContent = noteText;
       label.appendChild(note);
     }
     container.appendChild(label);
@@ -735,13 +800,6 @@ function allCheckboxValues(container, { visibleOnly = false } = {}) {
   return [...container.querySelectorAll('input[type="checkbox"]')]
     .filter((input) => !visibleOnly || !input.closest(".check-item")?.classList.contains("hidden-by-filter"))
     .map((input) => input.value);
-}
-
-function resetChecklistSearch(container) {
-  const searchControl = searchControlForChecklist(container);
-  if (!searchControl) return;
-  searchControl.value = "";
-  applyChecklistSearch(container);
 }
 
 function normalizeDerivedColumnProvenance(provenance = {}) {

@@ -144,6 +144,10 @@
             <span>Time <button class="help-dot" type="button" data-tooltip="Follow-up time of each patient, for example months until death or last contact.">?</button></span>
             <select id="timeColumn"></select>
           </label>
+          <label class="toggle compact-toggle" title="List every numeric column in the Time menu, not only likely follow-up time columns.">
+            <input id="showAllTimeColumns" type="checkbox" />
+            <span>All numeric</span>
+          </label>
           <label class="config-field">
             <span>Event <button class="help-dot" type="button" data-tooltip="Whether the event happened, for example death = 1 and alive = 0.">?</button></span>
             <select id="eventColumn"></select>
@@ -1096,6 +1100,7 @@
             </div>
           </details>
           <div class="table-grid">
+            <div class="table-card full-width"><h3>Best cut-point combination</h3><div class="signature-summary" id="signatureSummary"></div></div>
             <div class="table-card full-width"><h3>Signature Interpretation</h3><div class="insight-board compact" id="signatureInsightBoard"><div class="empty-state">Run auto-discovery to assess robustness.</div></div></div>
             <div class="table-card full-width"><h3>Signature Ranking</h3><div class="table-shell" id="signatureShell"><div class="empty-state">Run auto-discovery to find feature combinations.</div></div></div>
           </div>

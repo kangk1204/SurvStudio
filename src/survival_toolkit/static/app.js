@@ -20,8 +20,6 @@ const benchmarkBoardApi = window.SurvStudioBenchmark.createBenchmarkBoardApi({
   benchmarkMetricNumber,
   benchmarkEvaluationLabel,
   benchmarkReviewAction,
-  mlModelLabel,
-  dlModelLabel,
   formatValue,
   escapeHtml,
   isScopeBusy,
@@ -349,15 +347,8 @@ function wireDownloads() {
 // ── Utilities ──────────────────────────────────────────────────
 
 async function withLoading(button, action, scopeOverride = null, { swallowErrors = true } = {}) {
-  const scope = scopeOverride || (
-    button === refs.runMlButton || button === refs.runCompareButton || button === refs.runCompareInlineButton ? "ml"
-      : button === refs.runDlButton || button === refs.runDlCompareButton || button === refs.runDlCompareInlineButton ? "dl"
-        : button === refs.runKmButton ? "km"
-          : button === refs.runCoxButton ? "cox"
-            : button === refs.runCohortTableButton ? "tables"
-              : button === refs.runMarkersButton ? "markers"
-                : null
-  );
+  // One resolver for clicks and Ctrl+Enter, so every run holds its busy scope however it was started.
+  const scope = scopeOverride || runScopeForButton(button);
   if (scope && isScopeBusy(scope)) return;
   if (scope) {
     setScopeBusy(scope, true, button);
@@ -382,49 +373,26 @@ async function withLoading(button, action, scopeOverride = null, { swallowErrors
   }
 }
 
-async function initializeRuntime() {
+function initializeRuntime() {
   updateGroupingDetailsVisibility(activeTabName(), { force: true });
   renderWorkspaceChrome();
   syncHistoryState("replace");
-  if (!runtime.isFilePreview) { setRuntimeBanner(""); return; }
-  try {
-    await fetchJSON("/api/health");
-    setRuntimeBanner("Direct file preview connected to local API at http://127.0.0.1:8000.", "success");
-  } catch {
-    setRuntimeBanner("Start `python -m survival_toolkit` and refresh, or open http://127.0.0.1:8000.", "warning");
-  }
+  setRuntimeBanner("");
 }
 
-function getActiveRunButton() {
-  const tab = document.querySelector(".tab-button.active")?.dataset.tab;
-  if (tab === "km") return refs.runKmButton;
-  if (tab === "cox") return refs.runCoxButton;
-  if (tab === "tables") return refs.runCohortTableButton;
-  if (tab === "markers") return refs.runMarkersButton;
-  if (tab === "ml") return refs.runMlButton;
-  if (tab === "dl") return refs.runDlButton;
+// The Run button of the active tab and the action it starts, for Ctrl+Enter. The ML and DL tabs open the
+// Prediction models tab, so "benchmark" covers both families.
+function activeRunTarget() {
+  const tab = activeTabName();
+  if (tab === "km") return { button: refs.runKmButton, action: runKaplanMeier };
+  if (tab === "cox") return { button: refs.runCoxButton, action: runCox };
+  if (tab === "tables") return { button: refs.runCohortTableButton, action: runCohortTable };
+  if (tab === "markers") return { button: refs.runMarkersButton, action: runMarkerEvaluation };
   if (tab === "benchmark") {
-    if (runtime.workbenchRevealed && refs.runPredictiveWorkbenchButton && !refs.runPredictiveWorkbenchButton.classList.contains("hidden")) {
-      return refs.runPredictiveWorkbenchButton;
+    if (!runtime.workbenchRevealed) return { button: refs.runPredictiveCompareAllButton, action: runUnifiedPredictiveComparison };
+    if (!refs.runPredictiveWorkbenchButton.classList.contains("hidden")) {
+      return { button: refs.runPredictiveWorkbenchButton, action: runPredictiveSelectedModel };
     }
-    return runtime.workbenchRevealed ? null : refs.runPredictiveCompareAllButton;
-  }
-  return null;
-}
-
-function getActiveRunAction() {
-  const tab = document.querySelector(".tab-button.active")?.dataset.tab;
-  if (tab === "km") return runKaplanMeier;
-  if (tab === "cox") return runCox;
-  if (tab === "tables") return runCohortTable;
-  if (tab === "markers") return runMarkerEvaluation;
-  if (tab === "ml") return runMlModel;
-  if (tab === "dl") return runDlModel;
-  if (tab === "benchmark") {
-    if (runtime.workbenchRevealed && refs.runPredictiveWorkbenchButton && !refs.runPredictiveWorkbenchButton.classList.contains("hidden")) {
-      return runPredictiveSelectedModel;
-    }
-    return runtime.workbenchRevealed ? null : runUnifiedPredictiveComparison;
   }
   return null;
 }
@@ -508,11 +476,13 @@ function updateResultVisibility() {
   const kmPairwise = hasRenderedTable(refs.kmPairwiseShell);
   const signatureInsight = hasRenderedInsight(refs.signatureInsightBoard);
   const signatureTable = hasRenderedTable(refs.signatureShell);
+  const signatureSummary = Boolean(refs.signatureSummary?.innerHTML.trim());
   reveal(refs.kmMetaBanner, hasRenderedPlot(refs.kmPlot) || kmInsight || kmSummary);
   reveal(refs.kmInsightBoard, kmInsight);
   reveal(refs.kmSummaryShell?.closest(".table-card"), kmSummary);
   reveal(refs.kmRiskShell?.closest(".table-card"), kmRisk);
   reveal(refs.kmPairwiseShell?.closest(".table-card"), kmPairwise);
+  reveal(refs.signatureSummary?.closest(".table-card"), signatureSummary);
   reveal(refs.signatureInsightBoard?.closest(".table-card"), signatureInsight);
   reveal(refs.signatureShell?.closest(".table-card"), signatureTable);
 
@@ -579,7 +549,9 @@ function resultAnchorFor(tabName, { mode = "single" } = {}) {
     cox: [refs.coxPlot, refs.coxDiagnosticsPlot, refs.coxMartingalePlot, refs.coxResultsShell],
     predictive: [refs.benchmarkSummaryGrid, refs.benchmarkComparisonPlot, refs.benchmarkComparisonShell, refs.benchmarkWorkbench],
     tables: [refs.cohortTableShell],
-    markers: [refs.markersSummaryPlot, refs.markersStabilityPlot, refs.markersInsightBoard],
+    markers: mode === "signature"
+      ? [refs.signatureSummary?.closest(".table-card"), refs.signatureShell]
+      : [refs.markersSummaryPlot, refs.markersStabilityPlot, refs.markersInsightBoard],
     ml: mode === "compare"
       ? [refs.mlComparisonPlot, refs.mlComparisonShell, refs.mlMetaBanner]
       : [refs.mlImportancePlot, refs.mlMetaBanner, refs.mlInsightBoard],
@@ -700,16 +672,19 @@ function initKeyboardShortcuts() {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       if (!state.dataset) return;
-      const btn = getActiveRunButton();
-      const action = getActiveRunAction();
-      if (btn && action && !btn.disabled) withLoading(btn, action);
+      const target = activeRunTarget();
+      // withLoading takes the button's busy scope, exactly as a click does.
+      if (target?.button && !target.button.disabled) withLoading(target.button, target.action);
     }
   });
 }
 
 function goHome({ syncHistory = true, historyMode = "replace" } = {}) {
-  // Leaving the workspace makes pending dataset loads/derives obsolete.
-  invalidateRequestTokens(["dataset", "derive"]);
+  // Leaving the workspace makes every pending request obsolete: dataset loads, derives, and runs of any
+  // kind (a running ML or DL job would otherwise finish into an empty workspace).
+  invalidateRequestTokens(Object.keys(runtime.requestTokens));
+  runtime.benchmarkIntervals = null;
+  setAnalysisConsistencyBanner("");
   const result = shellHelpers.goHome({
     state,
     runtime,
@@ -744,17 +719,12 @@ function initListeners() {
   refs.runPredictiveCompareAllButton?.addEventListener("click", () => {
     withLoading(refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, "predictive");
   });
+  // runPredictiveSelectedModel opens the workbench itself; withLoading takes the selected family's scope.
   refs.runPredictiveSelectedButton?.addEventListener("click", () => {
-    runtime.workbenchRevealed = true;
-    runtime.predictiveWorkbenchIntent = "train";
-    const selectedFamily = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey()).family;
-    withLoading(refs.runPredictiveSelectedButton, runPredictiveSelectedModel, selectedFamily);
+    withLoading(refs.runPredictiveSelectedButton, runPredictiveSelectedModel);
   });
   refs.runPredictiveWorkbenchButton?.addEventListener("click", () => {
-    runtime.workbenchRevealed = true;
-    runtime.predictiveWorkbenchIntent = "train";
-    const selectedFamily = predictiveModelMeta(refs.predictiveModelSelector?.value || currentPredictiveModelKey()).family;
-    withLoading(refs.runPredictiveWorkbenchButton, runPredictiveSelectedModel, selectedFamily);
+    withLoading(refs.runPredictiveWorkbenchButton, runPredictiveSelectedModel);
   });
   refs.openPredictiveWorkbenchButton?.addEventListener("click", () => {
     reviewBenchmarkModel(currentPredictiveModelKey(), "single");
@@ -810,7 +780,7 @@ function initListeners() {
   refs.loadTcgaUploadReadyButton.addEventListener("click", () => withLoading(refs.loadTcgaUploadReadyButton, loadTcgaUploadReadyDataset));
   refs.loadGbsg2Button.addEventListener("click", () => withLoading(refs.loadGbsg2Button, loadGbsg2Dataset));
   refs.loadExampleButton.addEventListener("click", () => withLoading(refs.loadExampleButton, loadExampleDataset));
-  refs.timeColumn.addEventListener("change", () => {
+  const onTimeColumnChange = () => {
     clearAnalysisOutputs();
     applyAutomaticTimeUnitLabel();
     updateTimeColumnGuidance();
@@ -820,6 +790,19 @@ function initListeners() {
     updateEventColumnGuidance();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
+  };
+  refs.timeColumn.addEventListener("change", onTimeColumnChange);
+  // "All numeric" lists every numeric column in the Time menu; the choice is kept when it is still listed.
+  refs.showAllTimeColumns?.addEventListener("change", () => {
+    const previous = refs.timeColumn.value;
+    renderTimeColumnOptions({ silent: false });
+    if (refs.timeColumn.value !== previous) {
+      onTimeColumnChange();
+    } else {
+      updateTimeColumnGuidance();
+      renderSharedFeatureSummary();
+      queueHistorySync();
+    }
   });
   refs.eventColumn.addEventListener("change", () => {
     clearAnalysisOutputs();

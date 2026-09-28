@@ -42,10 +42,18 @@ function renderMarkerMatrixState() {
   if (attached && refs.markerMatrixDetails) refs.markerMatrixDetails.open = true;
   refs.markerChecklist?.classList.toggle("matrix-attached", attached);
   refs.markerChecklist?.querySelectorAll("input").forEach((input) => { input.disabled = attached; });
-  [refs.markerSearchInput, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.markerMatrixIdColumn, refs.markerMatrixOrientation, refs.markerMatrixFile]
+  [refs.markerSearchInput, refs.markerMatrixIdColumn, refs.markerMatrixOrientation, refs.markerMatrixFile]
     .filter(Boolean)
     .forEach((control) => { control.disabled = attached; });
-  if (refs.attachMarkerMatrixButton) refs.attachMarkerMatrixButton.disabled = attached;
+  // Select all and Clear belong to the "markers" busy scope too: they stay off while a run is in flight.
+  const busy = isScopeBusy("markers");
+  [refs.selectAllMarkersButton, refs.clearMarkersButton]
+    .filter(Boolean)
+    .forEach((button) => { button.disabled = attached || busy; });
+  // Attach also stays off while its own upload is in flight (withLoading marks it "is-loading").
+  if (refs.attachMarkerMatrixButton) {
+    refs.attachMarkerMatrixButton.disabled = attached || refs.attachMarkerMatrixButton.classList.contains("is-loading");
+  }
 }
 
 async function attachMarkerMatrix() {
@@ -104,9 +112,10 @@ function refreshMarkerSelections() {
   const clinical = previousMarkers.length || previousClinical.length
     ? previousClinical
     : currentCoxSelections().covariates.filter((value) => clinicalCandidates.includes(value));
-  const notes = Object.fromEntries(markerCandidates.map((value) => [value, markerExclusionNote(value)]).filter(([, note]) => note));
+  // A Map, so a column named "constructor" or "toString" has no note unless it earned one.
+  const notes = new Map(markerCandidates.map((value) => [value, markerExclusionNote(value)]).filter(([, note]) => note));
   // Columns the evaluation would drop start unchecked, so the default run does not fail on them.
-  const markers = previousMarkers.length ? previousMarkers : markerCandidates.filter((value) => !clinical.includes(value) && !notes[value]);
+  const markers = previousMarkers.length ? previousMarkers : markerCandidates.filter((value) => !clinical.includes(value) && !notes.has(value));
   renderChecklist(refs.markerChecklist, markerCandidates, markers, notes);
   renderChecklist(refs.markerClinicalChecklist, clinicalCandidates, clinical);
   refreshMarkerMatrixControls();
@@ -118,6 +127,13 @@ function currentMarkerSelections() {
   const clinical = selectedCheckboxValues(refs.markerClinicalChecklist).filter((value) => !markers.includes(value));
   const categoricalCandidates = new Set(sharedModelCategoricalCandidates());
   return { markers, clinical, categorical: clinical.filter((value) => categoricalCandidates.has(value)) };
+}
+
+// The columns the cut-point search tries: the ticked markers and the clinical covariates of this tab.
+// Discover sends them, and its result stays current (and exportable) only while they are unchanged.
+function signatureCandidateColumns() {
+  const { markers, clinical } = currentMarkerSelections();
+  return [...markers, ...clinical];
 }
 
 function renderMarkerSelectionLine() {
@@ -162,9 +178,11 @@ async function runMarkerEvaluation() {
   if (!fields.marker_columns.length && !fields.marker_matrix_id) throw new Error("Choose at least one marker.");
   const markerCount = fields.marker_matrix_id ? Number(state.markerMatrix?.n_markers || 0) : fields.marker_columns.length;
   const requestToken = beginRequestToken("markers");
+  // A validation of the previous locked model must not land under this evaluation.
+  invalidateRequestTokens(["markerValidation"]);
   const datasetId = base.dataset_id;
   const loading = beginShellLoading([refs.markersStabilityPlot]);
-  setRuntimeBanner(
+  const runBanner = setRuntimeBanner(
     `Evaluating ${formatValue(markerCount)} marker(s) with ${formatValue(fields.n_permutations)} permutations and ${formatValue(fields.n_resamples)} subsamples. ${markerCount > 5000 ? "A genome-wide panel takes 10 minutes or more." : "Large panels take a few minutes."}`,
     "info",
   );
@@ -179,7 +197,7 @@ async function runMarkerEvaluation() {
     if (requestTokenMatches("markers", requestToken)) loading.restore();
     throw error;
   } finally {
-    if (requestTokenMatches("markers", requestToken)) setRuntimeBanner("");
+    releaseRuntimeBanner(runBanner);
   }
   if (!requestTokenMatches("markers", requestToken) || state.dataset?.dataset_id !== datasetId) return;
   loading.finish();
@@ -324,16 +342,34 @@ async function renderMarkerResults(payload) {
   else clearPlotShell(refs.markersSummaryPlot, "", { state: "placeholder" });
   await renderMarkerPlot(refs.markersStabilityPlot, payload.stability_figure, "marker_stability", payload);
   await renderMarkerPlot(refs.markersRankPlot, payload.rank_figure, "marker_ranks", payload);
-  const rows = payload.display_table || [];
+  const rows = markerDisplayRows(payload);
   renderTable(refs.markersTableShell, rows.slice(0, MARKER_TABLE_DISPLAY_LIMIT));
   if (refs.markersTableNote) {
-    const evidence = "Evidence: M marginal association and A added value over the clinical covariates, each + or − when family-wise significant (higher or lower hazard) and · when not; N+ when the non-linear check agrees.";
-    refs.markersTableNote.textContent = (rows.length > MARKER_TABLE_DISPLAY_LIMIT
+    const addedValue = payload?.analysis?.primary_lens === "added_value";
+    const order = rows.length > MARKER_TABLE_DISPLAY_LIMIT
       ? `Showing the first ${formatValue(MARKER_TABLE_DISPLAY_LIMIT)} of ${formatValue(rows.length)} markers, strongest first. Export the table for all of them.`
-      : "Strongest markers first. HR per unit of the marker, from a Cox model with the clinical covariates.") + ` ${evidence}`;
+      : "Strongest markers first.";
+    // The HR column comes from the model of the primary lens: with the clinical covariates, or the marker alone.
+    const hazardRatio = addedValue
+      ? "HR per unit of the marker, from a Cox model with the clinical covariates."
+      : "HR per unit of the marker, from a Cox model with the marker alone (no clinical covariates were given).";
+    const evidence = addedValue
+      ? "Evidence: M marginal association and A added value over the clinical covariates, each + or − when family-wise significant (higher or lower hazard) and · when not; N+ when the non-linear check agrees."
+      : "Evidence: M marginal association, + or − when family-wise significant (higher or lower hazard) and · when not; N+ when the non-linear check agrees.";
+    refs.markersTableNote.textContent = `${order} ${hazardRatio} ${evidence}`;
   }
   if (refs.markerValidationSection) refs.markerValidationSection.classList.remove("hidden");
   updateResultVisibility();
+}
+
+// The marker table as shown and exported. A rank interval reads "1 to 3", because a spreadsheet opens
+// "1-3" as a date.
+function markerDisplayRows(payload) {
+  return (payload?.display_table || []).map((row) => {
+    const interval = row?.["Rank 95% interval"];
+    const match = typeof interval === "string" ? /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(interval) : null;
+    return match ? { ...row, "Rank 95% interval": `${match[1]} to ${match[2]}` } : row;
+  });
 }
 
 function clearMarkerOutputs() {
@@ -365,11 +401,14 @@ async function runMarkerValidation() {
   if (!file) throw new Error("Choose the external cohort file first.");
   const requestToken = beginRequestToken("markerValidation");
   const sourceDatasetId = state.dataset?.dataset_id;
-  setRuntimeBanner(`Uploading ${file.name} and applying the locked model unchanged.`, "info");
+  const recipeHash = recipe.recipe_hash;
+  const runBanner = setRuntimeBanner(`Uploading ${file.name} and applying the locked model unchanged.`, "info");
+  let externalDatasetId = null;
   try {
     const form = new FormData();
     form.append("file", file);
     const external = await fetchJSON("/api/upload", { signal: requestSignal("markerValidation"), method: "POST", body: form });
+    externalDatasetId = external?.dataset_id || null;
     if (!requestTokenMatches("markerValidation", requestToken)) return;
     const payload = await fetchJSON("/api/marker-validation", {
       signal: requestSignal("markerValidation"),
@@ -377,16 +416,31 @@ async function runMarkerValidation() {
       body: JSON.stringify({ dataset_id: external.dataset_id, recipe, marker_scaling: refs.markerValidationScaling?.value || "as_measured" }),
     });
     if (!requestTokenMatches("markerValidation", requestToken) || state.dataset?.dataset_id !== sourceDatasetId) return;
+    // Shown only under the evaluation whose locked model it validated.
+    if (state.markers?.analysis?.locked_recipe?.recipe_hash !== recipeHash) return;
     state.markerValidation = { ...payload, external_filename: file.name };
     await renderMarkerValidation(state.markerValidation);
     syncDownloadButtonAvailability();
     showToast(`Locked model applied to ${file.name}.`, "success", 3200);
   } finally {
-    if (requestTokenMatches("markerValidation", requestToken)) setRuntimeBanner("");
+    releaseRuntimeBanner(runBanner);
+    // The external cohort was stored only for this validation; free it so it cannot crowd out the
+    // development dataset in the server's store.
+    if (externalDatasetId) {
+      fetch(apiUrl(`/api/dataset/${encodeURIComponent(externalDatasetId)}`), { method: "DELETE" }).catch(() => {});
+    }
   }
 }
 
-function markerValidationMetrics(validation) {
+// The unit of the horizon: the time unit set for the endpoint, or the development time column's name when
+// that unit is still the generic "Time".
+function markerHorizonUnit(timeColumn = "") {
+  const unit = String(refs.timeUnitLabel?.value || "").trim();
+  if (unit && unit !== DEFAULT_TIME_UNIT_LABEL) return unit.toLowerCase();
+  return timeColumn ? `(${timeColumn})` : "";
+}
+
+function markerValidationMetrics(validation, { timeColumn = "" } = {}) {
   const metrics = validation?.metrics || {};
   const interval = (values) => (Array.isArray(values) && values[0] != null ? ` (${formatValue(values[0])} to ${formatValue(values[1])})` : "");
   const rows = [
@@ -394,7 +448,10 @@ function markerValidationMetrics(validation) {
     { label: "Calibration slope", value: `${formatValue(metrics.calibration_slope)}${interval(metrics.calibration_slope_ci)}` },
   ];
   if (metrics.delta_c_index != null) rows.push({ label: "C gain over clinical", value: `${formatValue(metrics.delta_c_index)}${interval(metrics.delta_c_index_ci)}` });
-  if (metrics.observed_expected_ratio != null) rows.push({ label: `Observed/expected at ${formatValue(metrics.horizon)}`, value: formatValue(metrics.observed_expected_ratio) });
+  if (metrics.observed_expected_ratio != null) {
+    const unit = markerHorizonUnit(timeColumn);
+    rows.push({ label: `Observed/expected at ${formatValue(metrics.horizon)}${unit ? ` ${unit}` : ""}`, value: formatValue(metrics.observed_expected_ratio) });
+  }
   if (metrics.brier_skill != null) rows.push({ label: "Brier skill", value: formatValue(metrics.brier_skill) });
   if (metrics.marker_weight_available != null && Number(metrics.marker_weight_available) < 1) {
     rows.push({ label: "Marker weight measured", value: `${Math.round(100 * Number(metrics.marker_weight_available))}%` });
@@ -408,7 +465,9 @@ async function renderMarkerValidation(payload) {
   const cohort = validation.cohort || {};
   const replicated = (validation.markers || []).filter((row) => row.replicated).length;
   const total = (validation.markers || []).filter((row) => !row.absent).length;
-  const metrics = markerValidationMetrics(validation);
+  const metrics = markerValidationMetrics(validation, {
+    timeColumn: state.markers?.analysis?.locked_recipe?.outcome?.time_column || "",
+  });
   if (refs.markerValidationSummary) {
     refs.markerValidationSummary.innerHTML = `
       <p class="marker-validation-headline">${escapeHtml(`${payload.external_filename || "External cohort"}: ${formatValue(cohort.n)} patients, ${formatValue(cohort.events)} events. ${formatValue(replicated)} of ${formatValue(total)} markers replicated.`)}</p>
@@ -422,7 +481,7 @@ async function renderMarkerValidation(payload) {
     await Plotly.newPlot(refs.markerValidationPlot, payload.figure.data, plotLayoutConfig(payload.figure.layout || {}, "marker_replication"), plotConfig("marker_replication"));
     stabilizePlotShellHeight(refs.markerValidationPlot);
   }
-  renderTable(refs.markerValidationShell, markerValidationRows(validation));
+  renderTable(refs.markerValidationShell, markerValidationRows(validation), null, { pValueColumns: ["Replication P (Holm)"] });
 }
 
 function markerValidationRows(validation) {
@@ -454,7 +513,7 @@ function downloadMarkerRecipe() {
 function downloadMarkerTable() {
   const payload = currentGoalResult("markers");
   if (!requireCurrentResultForExport("markers", { payload })) return;
-  downloadCsv(buildDownloadFilename("marker_evaluation", "csv"), payload.display_table || [], null, {
+  downloadCsv(buildDownloadFilename("marker_evaluation", "csv"), markerDisplayRows(payload), null, {
     caption: "Marker evaluation",
     notes: [markerMetaBanner(payload)],
   });
