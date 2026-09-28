@@ -2118,7 +2118,24 @@ def _require_dataframe_columns(df: pd.DataFrame, columns: Sequence[str | None]) 
     raise ColumnNotFoundError(f"Columns not found in dataset: {quoted}.")
 
 
-_IDENTIFIER_NAME_TOKENS = {"id", "ids", "patient", "subject", "sample", "barcode", "case", "mrn", "participant", "uuid"}
+# Identifier names end in an identifier word ("patient_id", "tcga_barcode", "SubjectID"), name the
+# entity itself ("patient", "sample"), or number it ("case_number", "sample_name"). The entity word
+# alone at the front does not make an identifier: "sample_purity" or "patient_age" are measurements.
+_IDENTIFIER_HEAD_TOKENS = {"id", "ids", "barcode", "uuid", "mrn", "identifier"}
+_IDENTIFIER_ENTITY_TOKENS = {"patient", "subject", "sample", "case", "participant"}
+_IDENTIFIER_NUMBER_TOKENS = {"no", "nr", "number", "num", "code", "name", "key"}
+
+
+def _is_identifier_like_name(name: str) -> bool:
+    tokens = _column_name_tokens(name)
+    while tokens and tokens[-1].isdigit():  # "patient_id_2" after de-duplicated column names
+        tokens.pop()
+    if not tokens:
+        return False
+    head = tokens[-1]
+    if head in _IDENTIFIER_HEAD_TOKENS or head in _IDENTIFIER_ENTITY_TOKENS:
+        return True
+    return head in _IDENTIFIER_NUMBER_TOKENS and any(token in _IDENTIFIER_ENTITY_TOKENS for token in tokens[:-1])
 
 
 def detect_duplicate_identifier_columns(df: pd.DataFrame) -> list[dict[str, Any]]:
@@ -2127,16 +2144,20 @@ def detect_duplicate_identifier_columns(df: pd.DataFrame) -> list[dict[str, Any]
     Repeated subject identifiers usually mean one subject contributes several
     rows (for example multiple tumour samples). Survival estimators then
     double-count that subject, and row-level train/test splits can place
-    copies of the same subject on both sides of the split.
+    copies of the same subject on both sides of the split. Decimal measurements
+    are never identifiers, whatever their name.
     """
     findings: list[dict[str, Any]] = []
     for column in df.columns:
-        tokens = set(_column_name_tokens(str(column)))
-        if not tokens & _IDENTIFIER_NAME_TOKENS:
+        if not _is_identifier_like_name(str(column)):
             continue
         values = df[column].dropna()
         if values.empty:
             continue
+        if pd.api.types.is_float_dtype(values.dtype):
+            fractional = np.mod(values.to_numpy(dtype=float), 1.0)
+            if not bool(np.all(fractional == 0.0)):
+                continue
         n_unique = int(values.nunique())
         # Identifier columns are mostly unique; low-cardinality columns such as
         # "sample_type" are attributes, not identifiers.
@@ -2185,8 +2206,6 @@ def profile_dataframe(df: pd.DataFrame, dataset_id: str, filename: str) -> dict[
             categorical_columns.append(column)
         if is_binary:
             binary_candidate_columns.append(column)
-        if profile["kind"] == "binary" and column not in categorical_columns and column not in numeric_columns:
-            categorical_columns.append(column)
         column_profiles.append(profile)
 
     suggestions = suggest_columns(df)

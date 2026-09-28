@@ -467,6 +467,33 @@ def test_unusual_time_column_brings_a_caution_even_without_alternatives() -> Non
     assert "time_column_note" not in _cohort_frame(renamed, "os_months", "os_event").attrs
 
 
+def test_measurements_named_after_the_patient_or_sample_are_not_duplicate_identifiers() -> None:
+    rng = np.random.default_rng(5)
+    n = 120
+    frame = pd.DataFrame(
+        {
+            "patient_id": [f"P{i:03d}" for i in range(n)],
+            "os_months": rng.exponential(30, n).round(1) + 0.1,
+            "os_event": rng.integers(0, 2, n),
+            "sample_purity": rng.uniform(0.2, 0.95, n).round(2),
+            "patient_age": rng.integers(35, 90, n),
+        }
+    )
+    assert analysis.detect_duplicate_identifier_columns(frame) == []
+    km = compute_km_analysis(frame, "os_months", "os_event")
+    assert not any("Identifier column" in caution for caution in km["scientific_summary"]["cautions"])
+
+    repeated = pd.DataFrame(
+        {
+            "PatientID": ["P1", "P1", "P2", "P3", "P4", "P5"],
+            "sample_barcode": ["S1", "S2", "S2", "S3", "S4", "S5"],
+            "case_number": [1.0, 2.0, 2.0, 3.0, np.nan, 4.0],  # whole numbers read as floats because of a blank
+        }
+    )
+    flagged = [finding["column"] for finding in analysis.detect_duplicate_identifier_columns(repeated)]
+    assert flagged == ["PatientID", "sample_barcode", "case_number"]
+
+
 def test_generic_time_to_event_names_pair_with_any_endpoint() -> None:
     analysis._validate_endpoint_family_pair("tte", "os_event")
     analysis._validate_endpoint_family_pair("tts", "pfs_event")
