@@ -12,6 +12,14 @@ import pandas as pd
 import pytest
 
 from survival_toolkit import marker_matrix
+from survival_toolkit.encoding import (
+    coerce_feature_subset,
+    fit_feature_encoder,
+    reject_numeric_text_features,
+    text_level_overflow,
+    transform_feature_encoder,
+    unseen_category_counts,
+)
 from survival_toolkit.errors import UserInputError
 from survival_toolkit.marker_matrix import match_summary, read_marker_matrix
 
@@ -262,3 +270,116 @@ def test_a_parquet_file_with_unreadable_data_is_a_user_error(tmp_path: Path) -> 
     path.write_bytes(bytes(raw))
     with pytest.raises(UserInputError, match="Parquet file could not be read"):
         read_marker_matrix(path, "damaged.parquet", patient_ids=patients)
+
+
+# ── Shared encoder: feature types at fit and transform ───────────
+
+
+def test_numbers_stored_as_text_are_numeric_features() -> None:
+    rng = np.random.default_rng(3)
+    psa = [f"{value:.2f}" for value in rng.lognormal(1.0, 1.0, 120)]
+    ages = rng.integers(40, 85, size=120)
+    frame = pd.DataFrame(
+        {
+            # A Parquet or Arrow string column of numbers, and an Excel column with some numbers typed as text.
+            "psa": pd.array(psa, dtype="string"),
+            "age": pd.Series([f" {age}" if index % 5 == 0 else (f"+{age}" if index % 7 == 0 else int(age)) for index, age in enumerate(ages)], dtype=object),
+            "x": rng.normal(size=120),
+        }
+    )
+
+    reject_numeric_text_features(frame, ["psa", "age", "x"], [])
+    assert text_level_overflow(frame["psa"]) is None
+    selected, categorical, numeric = coerce_feature_subset(frame, ["psa", "age", "x"])
+    assert categorical == [] and numeric == ["psa", "age", "x"]
+    assert selected["age"].dtype == np.float64 and selected["age"].tolist() == [float(age) for age in ages]
+
+    encoder = fit_feature_encoder(frame, ["psa", "age", "x"])
+    assert encoder["numeric_features"] == ["psa", "age", "x"] and encoder["feature_names"] == ["psa", "age", "x"]
+    encoded = transform_feature_encoder(frame, encoder)
+    assert encoded["psa"].tolist() == pytest.approx([float(value) for value in psa])
+
+    # Declared categorical, or a pandas Categorical, a column stays categorical.
+    assert fit_feature_encoder(frame, ["age", "x"], ["age"])["categorical_features"] == ["age"]
+    codes = pd.DataFrame({"code": pd.Categorical([1, 2, 3, 1, 2, 3]), "x": np.arange(6.0)})
+    assert fit_feature_encoder(codes, ["code", "x"])["categorical_features"] == ["code"]
+    # A text column with a value that is not a number stays categorical.
+    grades = pd.DataFrame({"grade": ["1", "2", "3", "Unknown", "2", "1"], "x": np.arange(6.0)})
+    assert fit_feature_encoder(grades, ["grade", "x"])["categorical_features"] == ["grade"]
+
+
+def test_text_feature_messages_name_the_values_that_are_not_numbers() -> None:
+    rng = np.random.default_rng(4)
+    values = [f"{value:.2f}" for value in rng.lognormal(1.0, 1.0, 120)]
+
+    # A stray "inf" is a value that is not a finite number, not a number.
+    with_inf = pd.DataFrame({"psa": [*values, "inf"]})
+    with pytest.raises(ValueError, match=r'"psa" looks numeric but contains 1 non-numeric value\(s\) such as "inf"'):
+        reject_numeric_text_features(with_inf, ["psa"], [])
+
+    # Numbers stored as a pandas Categorical: the message does not claim that some are not numbers.
+    as_categories = pd.DataFrame({"psa": pd.Categorical([float(value) for value in values])})
+    with pytest.raises(ValueError) as refused:
+        reject_numeric_text_features(as_categories, ["psa"], [])
+    message = str(refused.value)
+    assert "stored as categories" in message and "are not" not in message and "such as )" not in message
+    assert "mark it as categorical" in message
+
+    # Cells holding only spaces are described instead of shown as "".
+    ages = [str(age) for age in rng.integers(40, 85, size=60)]
+    ages[::20] = ["  "] * 3
+    with pytest.raises(ValueError, match="such as a cell with only spaces or empty text"):
+        reject_numeric_text_features(pd.DataFrame({"age": ages}), ["age"], [])
+
+
+def test_numeric_features_holding_text_at_transform_are_refused_not_imputed() -> None:
+    development = pd.DataFrame({"age": [50.0, 60.0, 70.0, 80.0, 65.0], "grade": [1, 2, 3, 1, 2]})
+    encoder = fit_feature_encoder(development, ["age", "grade"], ["grade"])
+
+    external = pd.DataFrame({"age": ["55", ".", "unknown", "75", "90"], "grade": [1, 2, 3, 2, 1]})
+    with pytest.raises(ValueError, match=r'"age" was numeric when the model was fitted, but 2 of its values are not numbers, such as "\.", "unknown"'):
+        transform_feature_encoder(external, encoder)
+    # Only the categorical levels are compared here, so the text in "age" does not matter.
+    assert unseen_category_counts(external, encoder) == {"grade": 0}
+
+    # Blank cells stay missing and take the fitted median; numbers written as text are numbers.
+    blanks = pd.DataFrame({"age": pd.Series(["55", "", "  ", None, 90], dtype=object), "grade": [1, 2, 3, 2, 1]})
+    assert transform_feature_encoder(blanks, encoder)["age"].tolist() == [55.0, 65.0, 65.0, 65.0, 90.0]
+    as_text = pd.DataFrame({"age": pd.array(["55", "65.5", None, "1e2", "70"], dtype="string"), "grade": ["1", "2", "3", "2", "1"]})
+    encoded = transform_feature_encoder(as_text, encoder)
+    assert encoded["age"].tolist() == [55.0, 65.5, 65.0, 100.0, 70.0]
+    assert encoded["grade_2"].tolist() == [0.0, 1.0, 0.0, 1.0, 0.0]
+
+
+def test_a_locked_marker_model_refuses_an_external_numeric_covariate_coded_as_text() -> None:
+    from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
+
+    rng = np.random.default_rng(7)
+    n = 200
+    age = rng.normal(62, 9, n).round(0)
+    values = rng.normal(size=(n, 3))
+    linear = 0.04 * (age - 62) + 0.8 * values[:, 0]
+    event_time = rng.exponential(np.exp(-linear))
+    censor_time = rng.exponential(1.5, n)
+    development = pd.DataFrame(
+        {
+            "os_time": np.minimum(event_time, censor_time),
+            "os_event": (event_time <= censor_time).astype(int),
+            "age": age,
+            **{f"m{index}": values[:, index] for index in range(3)},
+        }
+    )
+    result = evaluate_markers(
+        development,
+        time_column="os_time",
+        event_column="os_event",
+        marker_columns=["m0", "m1", "m2"],
+        clinical_columns=["age"],
+        settings=MarkerSettings(n_permutations=19, n_resamples=4, random_seed=2),
+    )
+    external = development.copy()
+    external["age"] = external["age"].astype(object)
+    external.loc[:39, "age"] = "."  # a SAS-style missing code for 40 patients
+
+    with pytest.raises(UserInputError, match=r'"age" was numeric when the model was fitted, but 40 of its values'):
+        validate_locked_recipe(external, result["locked_recipe"], n_bootstrap=0)
