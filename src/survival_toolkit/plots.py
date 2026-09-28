@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 
-from survival_toolkit.reporting import signature_fit_failed, signature_is_clinical_only
+from survival_toolkit.reporting import _count, signature_fit_failed, signature_is_clinical_only
 
 PAPER = "#ffffff"
 INK = "#1a2332"
@@ -1214,7 +1214,7 @@ def build_loss_curve_figure(
     elif max_epochs_requested and epochs_trained and epochs_trained >= max_epochs_requested:
         status_text = f"Trained to max epoch ({max_epochs_requested})"
     elif epochs_trained:
-        status_text = f"Trained for {epochs_trained} epoch(s)"
+        status_text = f"Trained for {_count(epochs_trained, 'epoch')}"
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": 80, "b": 60},

@@ -537,3 +537,8 @@ def test_loss_curve_best_epoch_skips_missing_monitor_values() -> None:
     assert "Best monitor epoch" not in _annotation_text(nothing) and not nothing["layout"].get("shapes")
     assert "Best monitor epoch: 3" in _annotation_text(gap_min)
     assert "Best monitor epoch: 2" in _annotation_text(gap_max)
+
+
+def test_loss_curve_status_counts_epochs_in_the_right_number() -> None:
+    assert "Trained for 1 epoch" == _annotation_text(build_loss_curve_figure([1.0], epochs_trained=1))
+    assert "Trained for 3 epochs" == _annotation_text(build_loss_curve_figure([1.0, 0.9, 0.8], epochs_trained=3))
