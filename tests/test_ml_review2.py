@@ -306,6 +306,75 @@ def test_repeated_cv_summary_describes_fold_means_and_models_that_could_not_run(
     assert "training folds of about 120 patients" in summary["strengths"][0]
 
 
+# ── Optimal cutpoint scan ───────────────────────────────────────────────────
+
+
+def test_cutpoint_scan_refuses_a_numeric_marker_stored_as_text_with_stray_values() -> None:
+    from survival_toolkit.ml_models import find_optimal_cutpoint
+
+    df = make_example_dataset(seed=10, n_patients=200).copy()
+    marker = df["biomarker_score"].round(2).astype(object)
+    marker.loc[df["biomarker_score"].nsmallest(30).index] = "<0.1"
+    df["marker_txt"] = marker
+    with pytest.raises(UserInputError, match='Marker "marker_txt" looks numeric but contains 30 non-numeric value.*"<0.1"'):
+        find_optimal_cutpoint(df, "os_months", "os_event", "marker_txt", event_positive_value=1, permutation_iterations=0)
+
+
+def test_cutpoint_scan_counts_and_reports_the_marker_values_it_leaves_out() -> None:
+    from survival_toolkit.ml_models import find_optimal_cutpoint
+
+    df = make_example_dataset(seed=10, n_patients=200).copy()
+    clean = find_optimal_cutpoint(df, "os_months", "os_event", "biomarker_score", permutation_iterations=0)
+    assert clean["n_marker_values_non_numeric"] == 0 and clean["n_marker_values_non_finite"] == 0
+    assert clean["input_notes"] == []
+
+    # Infinite values of a numeric marker (for example log of 0) are left out and counted.
+    with_inf = df.assign(marker=df["biomarker_score"])
+    with_inf.loc[with_inf.index[:3], "marker"] = np.inf
+    result = find_optimal_cutpoint(with_inf, "os_months", "os_event", "marker", permutation_iterations=0)
+    assert result["n_marker_values_non_finite"] == 3
+    assert result["n_above_cutpoint"] + result["n_below_cutpoint"] == len(df) - 3
+    assert result["input_notes"] == ["3 infinite value(s) in marker were treated as missing and left out of the scan."]
+
+    # A text marker that is mostly, but not clearly, numbers: its text and "inf" entries are left out and counted.
+    text = df["biomarker_score"].round(3).astype(str).astype(object)
+    text.iloc[:60] = "not measured"
+    text.iloc[60:62] = "inf"
+    result = find_optimal_cutpoint(df.assign(marker=text), "os_months", "os_event", "marker", permutation_iterations=0)
+    assert result["n_marker_values_non_numeric"] == 60 and result["n_marker_values_non_finite"] == 2
+    assert result["n_above_cutpoint"] + result["n_below_cutpoint"] == len(df) - 62
+    assert np.isfinite(result["optimal_cutpoint"])
+    assert any(note.startswith("60 non-numeric value(s) in marker") for note in result["input_notes"])
+
+
+@pytest.mark.parametrize("iterations", [-1, -5, 2.5, True])
+def test_cutpoint_scan_refuses_an_invalid_permutation_count(iterations) -> None:
+    from survival_toolkit.ml_models import find_optimal_cutpoint
+
+    df = make_example_dataset(seed=10, n_patients=120)
+    with pytest.raises(UserInputError, match="permutation_iterations must be a whole number of at least 0"):
+        find_optimal_cutpoint(df, "os_months", "os_event", "biomarker_score", permutation_iterations=iterations)
+
+
+def test_cutpoint_scan_records_count_marker_groups_and_the_result_counts_risk_groups() -> None:
+    from survival_toolkit.ml_models import find_optimal_cutpoint
+
+    rng = np.random.default_rng(1)
+    n = 200
+    protective = rng.normal(size=n)
+    event_time = rng.exponential(8.0 / np.exp(-0.8 * protective))
+    censor_time = rng.uniform(0.0, 3.0, size=n)
+    df = pd.DataFrame({"t": np.minimum(event_time, censor_time), "e": (event_time <= censor_time).astype(int), "m": protective})
+    result = find_optimal_cutpoint(df, "t", "e", "m", event_positive_value=1, permutation_iterations=0)
+    # A protective marker: the patients above the cutpoint are the lower-risk group.
+    assert result["label_above_cutpoint"] == "Low"
+    best = next(record for record in result["scan_data"] if record["cutpoint"] == result["optimal_cutpoint"])
+    assert set(best) == {"cutpoint", "statistic", "p_value", "n_above_cutpoint", "n_below_cutpoint"}
+    above = int((df["m"] > result["optimal_cutpoint"]).sum())
+    assert best["n_above_cutpoint"] == result["n_above_cutpoint"] == above
+    assert result["n_low"] == above and result["n_high"] == n - above
+
+
 # ── Rankings without a C-index ──────────────────────────────────────────────
 
 

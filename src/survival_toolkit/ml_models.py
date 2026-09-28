@@ -41,6 +41,7 @@ from survival_toolkit.encoding import (
     canonical_category_values,
     coerce_feature_subset,
     fit_feature_encoder as _fit_shared_feature_encoder,
+    numeric_text_contamination,
     ordered_category_values as _ordered_category_values,
     reject_numeric_text_features,
     transform_feature_encoder as _transform_shared_feature_encoder,
@@ -1642,15 +1643,29 @@ def find_optimal_cutpoint(
     -------
     dict
         Keys: ``optimal_cutpoint``, ``p_value`` (selection-adjusted when
-        permutations are enabled), ``raw_p_value`` (unadjusted), ``n_high``,
-        ``n_low``, ``scan_data`` (list of per-cutpoint records), and
-        ``split_column`` (name of the derived grouping column).
+        permutations are enabled), ``raw_p_value`` (unadjusted), ``n_high`` and
+        ``n_low`` (sizes of the higher- and lower-risk groups),
+        ``n_above_cutpoint`` and ``n_below_cutpoint`` (sizes of the groups above and
+        below the cutpoint), ``scan_data`` (list of per-cutpoint records, each with
+        ``n_above_cutpoint`` and ``n_below_cutpoint``), ``split_column`` (name of the
+        derived grouping column), and ``n_marker_values_non_numeric`` /
+        ``n_marker_values_non_finite`` with ``input_notes`` for marker values that
+        were left out of the scan.
     """
     if str(variable) in {str(time_column), str(event_column)}:
         raise ValueError(
             f"'{variable}' is the survival {'time' if str(variable) == str(time_column) else 'event'} column; "
             "choose a marker other than the outcome columns for the cutpoint scan."
         )
+    if (
+        isinstance(permutation_iterations, bool)
+        or not isinstance(permutation_iterations, (int, np.integer))
+        or int(permutation_iterations) < 0
+    ):
+        raise ValueError(
+            f"permutation_iterations must be a whole number of at least 0; got {permutation_iterations!r}."
+        )
+    permutation_iterations = int(permutation_iterations)
     frame = _cohort_frame(
         df,
         time_column=time_column,
@@ -1658,15 +1673,30 @@ def find_optimal_cutpoint(
         event_positive_value=event_positive_value,
         extra_columns=[variable],
     )
+    # Numbers stored as text with a few stray entries (such as "<0.1" below a detection
+    # limit) are refused by the rule the model features use, instead of silently scanning
+    # only the patients whose entry parses.
+    contamination = numeric_text_contamination(frame[variable])
+    if contamination is not None:
+        examples = ", ".join(f'"{value}"' for value in contamination["examples"])
+        raise ValueError(
+            f'Marker "{variable}" looks numeric but contains {contamination["n_non_numeric"]} non-numeric value(s) '
+            f"such as {examples}, and the cutpoint scan would leave those patients out. Recode those values as "
+            "numbers or as missing (blank cells)."
+        )
 
     numeric_values = pd.to_numeric(frame[variable], errors="coerce")
+    numeric_array = numeric_values.to_numpy(dtype=float, na_value=np.nan)
     source_rows = _frame_source_rows(frame)
     if include_split_series and source_rows is None:
         # Falling back to positional labels would shift the split onto other patients.
         raise ValueError("The analysed rows could not be mapped back to the source dataset rows.")
-    keep_mask = numeric_values.notna().to_numpy(dtype=bool)
+    # Missing markers were already dropped with the cohort, so a value that does not parse is
+    # text; infinite values in a numeric column were dropped there as missing and are counted too.
+    n_non_numeric = int(np.isnan(numeric_array).sum())
+    n_non_finite = int(np.isinf(numeric_array).sum()) + int(frame.attrs.get("rows_with_infinite_extra_values", 0) or 0)
+    keep_mask = np.isfinite(numeric_array)
     frame = frame.loc[keep_mask].reset_index(drop=True)
-    numeric_values = pd.to_numeric(frame[variable], errors="coerce")
     # Original row labels of the analysed rows, so the derived split can be
     # mapped back onto the uploaded dataset row-for-row.
     kept_source_rows = (
@@ -1676,11 +1706,19 @@ def find_optimal_cutpoint(
     )
 
     if frame.empty:
-        raise ValueError(f"No valid numeric values in '{variable}' after cleaning.")
+        raise ValueError(
+            f"No valid numeric values in '{variable}' after cleaning"
+            + (f" ({n_non_numeric} value(s) are not numbers)." if n_non_numeric else ".")
+        )
+    input_notes: list[str] = []
+    if n_non_numeric:
+        input_notes.append(f"{n_non_numeric} non-numeric value(s) in {variable} were treated as missing and left out of the scan.")
+    if n_non_finite:
+        input_notes.append(f"{n_non_finite} infinite value(s) in {variable} were treated as missing and left out of the scan.")
 
     time_values = frame[time_column].to_numpy(dtype=float)
     event_values = frame[event_column].to_numpy(dtype=float)
-    var_values = numeric_values.to_numpy(dtype=float)
+    var_values = numeric_array[keep_mask]
     n_total = len(frame)
     min_size = max(int(math.ceil(n_total * min_group_fraction)), 1)
 
@@ -1724,15 +1762,17 @@ def find_optimal_cutpoint(
             f"No valid cutpoint found for '{variable}'. "
             "Ensure min_group_fraction allows at least one feasible split."
         )
+    # Group sizes by marker value (above / below the cutpoint); the result's n_high and
+    # n_low are the higher- and lower-risk groups, which may be the other way round.
     scan_data: list[dict[str, Any]] = [
         {
             "cutpoint": _safe_float(cutpoint),
             "statistic": _safe_float(statistic),
             "p_value": _safe_float(float(stats.chi2.sf(statistic, df=1))),
-            "n_high": int(n_high),
-            "n_low": int(n_total - n_high),
+            "n_above_cutpoint": int(n_above),
+            "n_below_cutpoint": int(n_total - n_above),
         }
-        for cutpoint, statistic, n_high, keep in zip(candidates, statistics, n_high_values, eligible, strict=True)
+        for cutpoint, statistic, n_above, keep in zip(candidates, statistics, n_high_values, eligible, strict=True)
         if keep
     ]
     # First maximum in cutpoint order, as a sequential scan with a strict ">" would pick.
@@ -1808,10 +1848,10 @@ def find_optimal_cutpoint(
                 "When available, p_value is the selection-adjusted value."
             ),
         },
-        "n_above_cutpoint": best_record["n_high"],
-        "n_below_cutpoint": best_record["n_low"],
-        "n_high": best_record["n_low"] if swap else best_record["n_high"],
-        "n_low": best_record["n_high"] if swap else best_record["n_low"],
+        "n_above_cutpoint": best_record["n_above_cutpoint"],
+        "n_below_cutpoint": best_record["n_below_cutpoint"],
+        "n_high": best_record["n_below_cutpoint"] if swap else best_record["n_above_cutpoint"],
+        "n_low": best_record["n_above_cutpoint"] if swap else best_record["n_below_cutpoint"],
         "risk_direction_rule": "log-rank observed vs expected events in the above-cutpoint group",
         "above_cutpoint_observed_events": _safe_float(above_observed),
         "above_cutpoint_expected_events": _safe_float(above_expected),
@@ -1820,6 +1860,9 @@ def find_optimal_cutpoint(
         "scan_data": scan_data,
         "split_column": split_col_name,
         "candidate_grid": candidate_grid,
+        "n_marker_values_non_numeric": n_non_numeric,
+        "n_marker_values_non_finite": n_non_finite,
+        "input_notes": input_notes,
     }
     if split_series is not None:
         result["split_series"] = split_series
