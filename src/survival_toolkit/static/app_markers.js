@@ -684,7 +684,7 @@ function wireMarkerControls() {
   refs.markerSearchInput?.addEventListener("input", () => applyChecklistSearch(refs.markerChecklist));
   refs.markerClinicalSearchInput?.addEventListener("input", () => applyChecklistSearch(refs.markerClinicalChecklist));
   refs.selectAllMarkersButton?.addEventListener("click", () => {
-    setCheckedValues(refs.markerChecklist, allCheckboxValues(refs.markerChecklist, { visibleOnly: true }));
+    addVisibleCheckboxesToSelection(refs.markerChecklist);
     renderMarkerSelectionLine();
     scheduleResultCurrencySync();
     queueHistorySync();

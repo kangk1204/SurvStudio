@@ -198,6 +198,13 @@ function setCheckedValues(container, values) {
   });
 }
 
+// "Select all" of a searchable list: the items the search shows join the selection; choices it hides stay ticked.
+function addVisibleCheckboxesToSelection(container) {
+  const selection = [...new Set([...selectedCheckboxValues(container), ...allCheckboxValues(container, { visibleOnly: true })])];
+  setCheckedValues(container, selection);
+  return selection;
+}
+
 function summarizeFeatureNames(values, limit = 4) {
   if (!values.length) return "none selected";
   if (values.length <= limit) return values.join(", ");

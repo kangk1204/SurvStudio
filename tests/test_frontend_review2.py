@@ -1325,6 +1325,32 @@ def test_selections_start_from_defaults_for_a_new_dataset_and_stay_as_chosen_oth
     assert result["afterRefresh"]["mlCategoricals"] == [] and result["afterRefresh"]["dlCategoricals"] == []
 
 
+def test_select_all_with_a_search_filter_adds_the_shown_items(tmp_path: Path, example_dataset: dict) -> None:
+    """R14-5: "Select all" adds what the search shows to the selection; it never drops the hidden choices."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const pick = (search, checklist, input, button, start, query) => {
+        page.run(`setCheckedValues(refs.${checklist}, ${JSON.stringify(start)})`);
+        page.change(`#${input}`, query);
+        page.run(`refs.${button}.click()`);
+        const selected = page.run(`selectedCheckboxValues(refs.${checklist})`);
+        page.change(`#${input}`, "");
+        return selected;
+      };
+      return {
+        cox: pick("cox", "covariateChecklist", "covariateSearchInput", "selectAllCoxCovariatesButton", ["age"], "stage"),
+        strata: pick("strata", "strataChecklist", "strataSearchInput", "selectAllCoxStrataButton", ["treatment"], "sex"),
+        table: pick("table", "cohortVariableChecklist", "cohortVariableSearchInput", "selectAllCohortVariablesButton", ["age"], "sex"),
+        markers: pick("markers", "markerChecklist", "markerSearchInput", "selectAllMarkersButton", ["biomarker_score"], "immune"),
+      };
+    """, dataset=example_dataset)
+
+    assert result["cox"] == ["age", "stage"]
+    assert result["strata"] == ["sex", "treatment"]
+    assert result["table"] == ["age", "sex"]
+    assert result["markers"] == ["biomarker_score", "immune_index"]
+
+
 # ── Derived groupings ───────────────────────────────────────────
 
 

@@ -904,7 +904,7 @@ function initListeners() {
   });
   refs.selectAllCoxCovariatesButton?.addEventListener("click", () => {
     const covariates = allCheckboxValues(refs.covariateChecklist, { visibleOnly: true });
-    setCheckedValues(refs.covariateChecklist, covariates);
+    addVisibleCheckboxesToSelection(refs.covariateChecklist);
     syncCoxCovariateSelection({ preferredScope: "covariate", autoCategoricalValues: covariates });
     renderSharedFeatureSummary();
     queueHistorySync();
@@ -939,8 +939,7 @@ function initListeners() {
     showToast("Cleared Cox categorical flags.", "success", 2200);
   });
   refs.selectAllCoxStrataButton?.addEventListener("click", () => {
-    const strata = allCheckboxValues(refs.strataChecklist, { visibleOnly: true });
-    setCheckedValues(refs.strataChecklist, strata);
+    addVisibleCheckboxesToSelection(refs.strataChecklist);
     syncCoxCovariateSelection({ preferredScope: "strata" });
     renderSharedFeatureSummary();
     queueHistorySync();
@@ -964,8 +963,7 @@ function initListeners() {
     applyChecklistSearch(refs.cohortVariableChecklist);
   });
   refs.selectAllCohortVariablesButton?.addEventListener("click", () => {
-    const variables = allCheckboxValues(refs.cohortVariableChecklist, { visibleOnly: true });
-    setCheckedValues(refs.cohortVariableChecklist, variables);
+    addVisibleCheckboxesToSelection(refs.cohortVariableChecklist);
     renderSharedFeatureSummary();
     queueHistorySync();
     showToast("Selected all visible cohort table variables.", "success", 2200);

@@ -827,7 +827,8 @@ def test_cohort_table_variable_picker_supports_search_and_bulk_actions() -> None
     assert 'refs.cohortVariableSearchInput?.addEventListener("input", () => {' in text
     assert 'applyChecklistSearch(refs.cohortVariableChecklist);' in text
     assert 'refs.selectAllCohortVariablesButton?.addEventListener("click", () => {' in text
-    assert 'allCheckboxValues(refs.cohortVariableChecklist, { visibleOnly: true })' in text
+    # Select all adds the shown items to the selection (tests/test_frontend_review2.py drives it).
+    assert 'addVisibleCheckboxesToSelection(refs.cohortVariableChecklist);' in text
     assert 'refs.clearCohortVariablesButton?.addEventListener("click", () => {' in text
     assert 'showToast("Selected all visible cohort table variables.", "success", 2200);' in text
     assert 'showToast("Cleared the cohort table variable list.", "success", 2200);' in text
