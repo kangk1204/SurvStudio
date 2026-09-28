@@ -937,7 +937,8 @@ body {
     max-height var(--duration-slow) var(--ease-standard),
     opacity var(--duration-base) var(--ease-standard),
     margin-top var(--duration-slow) var(--ease-standard),
-    padding-top var(--duration-slow) var(--ease-standard);
+    padding-top var(--duration-slow) var(--ease-standard),
+    visibility var(--duration-slow) var(--ease-standard);
 }
 
 .derive-panel .config-field,
@@ -2520,12 +2521,15 @@ tr:nth-child(even) td {
 
 /* ─── Derive Panel Transition ─── */
 
+/* Collapsed but still laid out for the transition; visibility keeps its controls out of the Tab order and
+   away from screen readers (it switches only at the end of the collapse, see .derive-panel). */
 .derive-panel.hidden {
   max-height: 0 !important;
   opacity: 0;
   margin-top: 0;
   padding-top: 0;
   border-top-color: transparent;
+  visibility: hidden;
   display: flex !important;
 }
 

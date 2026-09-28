@@ -530,6 +530,27 @@ class _LabelScanner(HTMLParser):
                 self.labels.append(label)
 
 
+def test_a_label_with_a_help_button_names_its_control() -> None:
+    """#14: without for=, a label names its first labelable descendant, the "?" button, not the field."""
+    scanner = _LabelScanner()
+    scanner.feed(_TEMPLATE.read_text(encoding="utf-8"))
+
+    assert len(scanner.labels) == 11
+    for label in scanner.labels:
+        assert label["for"] and label["for"] in label["controls"], label
+
+
+def test_the_collapsed_derive_panel_is_out_of_the_tab_order() -> None:
+    """#24: the collapsed panel stays laid out (display: flex) for its transition, so it needs visibility: hidden."""
+    styles = (_STATIC_DIR / "styles.css").read_text(encoding="utf-8")
+    block = styles[styles.index(".derive-panel.hidden {"):]
+    block = block[:block.index("}")]
+
+    assert "visibility: hidden;" in block
+    base = styles[styles.index(".derive-panel {"):]
+    assert "visibility var(--duration-slow)" in base[:base.index("}")]
+
+
 # ── Design check page ──────────────────────────────────────────
 
 
