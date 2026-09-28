@@ -17,7 +17,7 @@ import math
 from typing import Any, Callable, Sequence
 
 from survival_toolkit import __version__
-from survival_toolkit.duplicates import MIN_GAP, MIN_IDENTICAL_MARKERS, MIN_MARKERS, MIN_R
+from survival_toolkit.duplicates import MAX_PATIENTS, MIN_GAP, MIN_IDENTICAL_MARKERS, MIN_MARKERS, MIN_R
 
 STATUS_LABELS = {"reported": "Filled in by SurvStudio", "partly": "Partly filled in", "author": "Authors to complete"}
 CHECKLIST_COLUMNS = ("Item", "Section", "Topic", "Status", "Text")
@@ -213,6 +213,8 @@ def _tier_sentence(result: dict[str, Any], added_value: bool) -> str:
             f"{_percent(settings.get('robust_direction', 0.9))} of them; markers with {evidence} that did not meet the "
             "stability rule were called suggestive" + marginal
         )
+    # The current engine never calls a marker robust without subsamples, but 0.2.0 builds before 28 September 2026
+    # did (on its family-wise p-value alone), and this text still has to describe their results.
     if int((result.get("tier_counts") or {}).get("robust", 0) or 0) > 0:
         return (
             "Without subsamples the stability rule could not be applied, so a marker was called robust on its family-wise "
@@ -234,6 +236,16 @@ def _identical_check_ran(duplicates: dict[str, Any], n_markers: int) -> bool | N
     if n_markers < MIN_IDENTICAL_MARKERS:
         return False
     return None
+
+
+def _near_identical_limit(duplicates: dict[str, Any], n_markers: int) -> str:
+    """Why near-identical profiles were not compared: the panel had too few markers, or the cohort too many patients
+    (the screen's note says which; a result without it, by the panel size)."""
+    note = str(duplicates.get("note") or "")
+    capped = f"{MAX_PATIENTS:,} patients" in note if note else n_markers >= MIN_MARKERS
+    if capped:
+        return f"near-identical profiles are compared only in cohorts of up to {MAX_PATIENTS:,} patients"
+    return f"near-identical profiles are checked only on panels of at least {MIN_MARKERS} markers"
 
 
 def _duplicate_screen_sentence(result: dict[str, Any]) -> str:
@@ -258,13 +270,13 @@ def _duplicate_screen_sentence(result: dict[str, Any]) -> str:
         return text + "."
     if identical is True:
         return (
-            "Patients with identical values on every marker were flagged as possible repeated samples; near-identical profiles "
-            f"are checked only on panels of at least {MIN_MARKERS} markers."
+            "Patients with identical values on every marker were flagged as possible repeated samples; "
+            f"{_near_identical_limit(duplicates, n_markers)}."
         )
     if identical is None:
         return (
             f"Patients with identical values on every marker were flagged as possible repeated samples {conditional}; "
-            f"near-identical profiles are checked only on panels of at least {MIN_MARKERS} markers."
+            f"{_near_identical_limit(duplicates, n_markers)}."
         )
     return ""
 
@@ -284,8 +296,11 @@ def _signature_methods_sentence(result: dict[str, Any], added_value: bool) -> st
         "its apparent C-index was corrected for optimism by subtracting the mean difference between the C-index of the whole "
         "procedure{scope} in each subsample and in the patients left out of it"
     )
-    if _stability_assessed(result):
+    n_valid, n_failed = _resample_counts(result)
+    if n_valid > 0:
         missing_reason = "because no subsample gave a model that could be scored in the patients left out"
+    elif n_failed > 0:
+        missing_reason = "because every subsample failed"
     else:
         missing_reason = "because no subsample was available"
     corrected = signature.get("optimism_corrected_c") is not None
@@ -381,6 +396,7 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
     if _n_permutations(result) <= 0:
         text += " No permutations were run, so no family-wise p-values or permutation q-values were available."
     elif not _stability_assessed(result):
+        # Robust markers without subsamples come only from 0.2.0 builds before 28 September 2026 (see _tier_sentence).
         text += (
             " Stability over subsamples was not assessed, so the robust markers rest on their family-wise p-value alone."
             if robust
@@ -406,9 +422,9 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
     if n_pairs or n_identical:
         flagged = []
         if n_pairs:
-            flagged.append(f"{n_pairs} pair(s) of patients with near-identical profiles")
+            flagged.append(f"{_count(n_pairs, 'pair')} of patients with near-identical profiles")
         if n_identical:
-            flagged.append(f"{n_identical} group(s) of patients with identical values")
+            flagged.append(f"{_count(n_identical, 'group')} of patients with identical values")
         text += f" The screen for repeated samples flagged {' and '.join(flagged)}."
     elif _duplicate_screen_ran(result):
         text += " The screen for repeated samples flagged no patients."
@@ -444,9 +460,10 @@ def _internal_validation_text(result: dict[str, Any], added_value: bool) -> str:
         text += "; the final model could not be fitted in the full cohort"
     shrinkage = _finite(signature.get("top_marker_shrinkage"))
     if shrinkage is not None:
+        # The engine follows each subsample's top marker by score statistic, whether or not its q-value selected it.
         text += (
-            f"; in the patients left out, the strongest marker's log hazard ratio was {_percent(shrinkage)} of its value in the "
-            "subsamples that selected it"
+            "; in the patients left out, the log hazard ratio of each subsample's strongest marker (the one with the largest "
+            f"score statistic, whether or not it was selected) was on average {_percent(shrinkage)} of its value in the subsample"
         )
     selected_model = apparent is not None and not clinical_only
     text += "." + _left_out_comparison(
@@ -493,11 +510,19 @@ def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None =
     added_value = result.get("primary_lens") == "added_value"
     n_adjusted = _exact_fit_count(result, "adjusted")
     n_unadjusted = _exact_fit_count(result, "marginal")
+    # Exact Cox fits are run for the shortlist (the strongest markers and every supported one); a fit whose
+    # coefficient runs to infinity gives no estimate.
+    n_shortlisted = sum(1 for row in result.get("marker_table", []) if row.get("exact"))
 
     def exact_markers(count: int) -> str:
         if count == markers_evaluated:
             return "the marker" if count == 1 else f"all {count} markers"
-        return f"{_count(count, 'marker')} (the {settings.get('shortlist_size')} strongest and every supported one)"
+        missing = max(n_shortlisted - count, 0)
+        without = f"{_count(missing, 'marker')} had no estimate" if missing else ""
+        if n_shortlisted >= markers_evaluated:
+            return f"{count} of the {markers_evaluated} markers" + (f" ({without})" if without else "")
+        scope = f"the {settings.get('shortlist_size')} strongest and every supported one"
+        return f"{_count(count, 'marker')} ({scope}" + (f"; {without})" if without else ")")
 
     matrix = (dataset or {}).get("marker_matrix")
     marker_text = (
@@ -541,7 +566,11 @@ def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None =
         _item("7", "Study design", "Clinical endpoints", "reported", _endpoint_text(request)),
         _item("8", "Study design", "Candidate variables", "reported",
               f"{_count(markers_evaluated, 'candidate marker')}; clinical covariates: {_names(cohort.get('clinical_columns') or [])}; strata: {_names(cohort.get('strata_columns') or [])}."
-              + (f" {len(dropped)} marker(s) were excluded before the analysis ({_dropped_text(dropped)})." if dropped else "")),
+              + (
+                  f" {_count(len(dropped), 'marker')} {'was' if len(dropped) == 1 else 'were'} excluded before the analysis ({_dropped_text(dropped)})."
+                  if dropped
+                  else ""
+              )),
         _item("9", "Study design", "Sample size rationale", "partly",
               f"{cohort.get('n')} patients and {events} events for {_count(markers_evaluated, 'candidate marker')} "
               + (f"({events / max(markers_evaluated, 1):.1f} events per marker)" if events >= markers_evaluated else "(fewer events than markers, so the evaluation is a screen)")
@@ -555,11 +584,16 @@ def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None =
         _item("14", "Results", "Relation of the markers to standard prognostic variables", "partly" if added_value else "author",
               marginal_text + "Show how the reported markers relate to the standard prognostic variables."
               if added_value else "Show how the markers relate to the standard prognostic variables."),
+        # With clinical covariates the table's interval columns belong to the adjusted hazard ratio, and the
+        # unadjusted one (Unadjusted HR) is a point estimate; without them the table's HR and interval are unadjusted.
         _item("15", "Results", "Univariable analyses", "reported",
               "The marker table gives every marker's unadjusted score-test p-value"
-              + (" (Unadjusted P) and, for " if added_value else " and, for ")
-              + f"{exact_markers(n_unadjusted)}, the hazard ratio with a 95% confidence interval from an unadjusted Cox model"
-              + (" (Unadjusted HR)." if added_value else ".")
+              + (
+                  f" (Unadjusted P) and, for {exact_markers(n_unadjusted)}, the hazard ratio from an unadjusted Cox model as a point "
+                  "estimate (Unadjusted HR); the table's confidence intervals belong to the adjusted hazard ratios."
+                  if added_value
+                  else f" and, for {exact_markers(n_unadjusted)}, the hazard ratio with a 95% confidence interval from an unadjusted Cox model."
+              )
               + " Kaplan-Meier curves by marker level can be drawn in the Survival curves tab with a cut-point fixed in advance."),
         _item("16", "Results", "Multivariable analyses with confidence intervals", "partly",
               f"The marker table gives, for {exact_markers(n_adjusted)}, hazard ratios with 95% Wald confidence intervals from Cox models "

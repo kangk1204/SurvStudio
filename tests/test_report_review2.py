@@ -29,6 +29,10 @@ def _annotation_text(figure: dict) -> str:
     return " ".join(str(annotation.get("text", "")) for annotation in figure["layout"].get("annotations", []))
 
 
+def _items(report: dict) -> dict:
+    return {entry["item"]: entry for entry in report["items"]}
+
+
 # ── Replication figure ───────────────────────────────────────────
 
 
@@ -222,3 +226,117 @@ def test_a_screen_without_clinical_covariates_says_whether_it_selected_a_marker_
     assert "No marker was selected, so there is no model." in _annotation_text(none_figure)
     assert "C-index (no marker selected)" in _annotation_text(none_figure)
     assert "The model could not be fitted in the full cohort." in _annotation_text(failed_figure)
+
+
+# ── REMARK text ──────────────────────────────────────────────────
+
+
+def _exact(hazard_ratio: float | None = 1.2) -> dict | None:
+    return None if hazard_ratio is None else {"hazard_ratio": hazard_ratio, "ci_lower": 1.0, "ci_upper": 1.5, "wald_p": 0.04}
+
+
+def _remark_result(n_markers: int, shortlisted: int, *, unfitted: int = 0, **changes) -> dict:
+    """An added-value evaluation whose ``shortlisted`` strongest markers got exact Cox fits, the last ``unfitted``
+    of them without an estimate on either lens."""
+    table = []
+    for index in range(n_markers):
+        exact = None
+        if index < shortlisted:
+            estimable = index < shortlisted - unfitted
+            exact = {"marginal": _exact() if estimable else None, "adjusted": _exact() if estimable else None}
+        table.append({"marker": f"m{index}", "tier": "not supported", "exact": exact,
+                      "added_value": {"q_bh": 0.5}, "marginal": {"p_value": 0.2}})
+    result = _added_value_result(
+        marker_table=table,
+        tier_counts={"robust": 0, "suggestive": 0, "marginal only": 0, "not supported": n_markers},
+        cohort={"n": 300, "events": 120, "n_markers_evaluated": n_markers, "clinical_columns": ["age"], "strata_columns": [],
+                "dropped_markers": []},
+        signature={"markers": ["m0"], "clinical_only": False, "apparent_c": 0.74, "optimism_corrected_c": 0.71},
+    )
+    result.update(changes)
+    return result
+
+
+def test_remark_items_count_the_markers_with_an_exact_fit_against_the_shortlist() -> None:
+    whole_panel = _items(remark_checklist(_remark_result(8, 8, unfitted=1), request=_REQUEST))
+    shortlist = _items(remark_checklist(_remark_result(60, 52, unfitted=1), request=_REQUEST))
+    complete = _items(remark_checklist(_remark_result(60, 52), request=_REQUEST))
+
+    assert "Adjusted hazard ratios with confidence intervals are given for 7 of the 8 markers (1 marker had no estimate)," in whole_panel["17"]["text"]
+    assert "the 50 strongest" not in whole_panel["16"]["text"]
+    assert "for 51 markers (the 50 strongest and every supported one; 1 marker had no estimate)" in shortlist["17"]["text"]
+    assert "for 52 markers (the 50 strongest and every supported one)," in complete["16"]["text"]
+
+
+def test_remark_univariable_item_promises_no_interval_the_table_does_not_give() -> None:
+    added_value = _items(remark_checklist(_remark_result(8, 8), request=_REQUEST))["15"]["text"]
+    marginal = _items(
+        remark_checklist(_remark_result(8, 8, primary_lens="marginal", cohort={"n": 300, "events": 120, "n_markers_evaluated": 8}),
+                         request=_REQUEST)
+    )["15"]["text"]
+
+    # With clinical covariates the exported table has the unadjusted HR as a point estimate only.
+    assert "confidence interval from an unadjusted" not in added_value
+    assert "all 8 markers, the hazard ratio from an unadjusted Cox model as a point estimate (Unadjusted HR)" in added_value
+    assert "the table's confidence intervals belong to the adjusted hazard ratios" in added_value
+    # Without them the table's HR and interval are the unadjusted ones.
+    assert "the hazard ratio with a 95% confidence interval from an unadjusted Cox model" in marginal
+
+
+def test_remark_counts_use_singular_nouns() -> None:
+    result = _remark_result(
+        8, 8,
+        cohort={"n": 300, "events": 120, "n_markers_evaluated": 8, "clinical_columns": ["age"], "strata_columns": [],
+                "dropped_markers": [{"marker": "flat", "reason": "constant"}]},
+        duplicates={"checked": True, "identical_checked": True, "markers_used": 5000, "n_pairs": 1, "n_identical": 1},
+    )
+
+    report = remark_checklist(result, request=_REQUEST)
+
+    assert "1 marker was excluded before the analysis (flat)." in _items(report)["8"]["text"]
+    assert "flagged 1 pair of patients with near-identical profiles and 1 group of patients with identical values." in report["results"]
+    assert "(s)" not in " ".join([report["methods"], report["results"], *(entry["text"] for entry in report["items"])])
+
+
+def test_remark_duplicate_screen_gives_the_patient_cap_as_the_reason_near_identical_profiles_were_not_compared() -> None:
+    capped = {"checked": False, "identical_checked": True, "n_pairs": 0, "n_identical": 0,
+              "note": "Near-identical profiles are checked for up to 6,000 patients."}
+    cohort = {"n": 7000, "events": 3000, "n_markers_evaluated": 5000, "clinical_columns": ["age"], "strata_columns": [], "dropped_markers": []}
+
+    methods = remark_checklist(_remark_result(8, 8, duplicates=capped, cohort=cohort), request=_REQUEST)["methods"]
+    # A result without the note: a panel of 5,000 markers was large enough, so the cohort was too large.
+    legacy = remark_checklist(
+        _remark_result(8, 8, duplicates={key: value for key, value in capped.items() if key != "note"}, cohort=cohort), request=_REQUEST
+    )["methods"]
+    small = remark_checklist(
+        _remark_result(8, 8, duplicates={**capped, "note": "Near-identical profiles are checked on panels of at least 200 markers."}),
+        request=_REQUEST,
+    )["methods"]
+
+    expected = "near-identical profiles are compared only in cohorts of up to 6,000 patients."
+    assert expected in methods and expected in legacy
+    assert "panels of at least 200 markers" not in methods and "panels of at least 200 markers" not in legacy
+    assert "near-identical profiles are checked only on panels of at least 200 markers." in small
+
+
+def test_remark_gives_the_reason_the_optimism_could_not_be_corrected_when_every_subsample_failed() -> None:
+    failed = _remark_result(8, 8, resampling={"n_valid": 0, "n_failed": 12, "fraction": 0.632, "stability_assessed": False})
+    failed["signature"] = {"markers": ["m0"], "clinical_only": False, "apparent_c": 0.7, "optimism_corrected_c": None}
+
+    methods = remark_checklist(failed, request=_REQUEST)["methods"]
+
+    assert "could not be corrected for optimism because every subsample failed." in methods
+    assert "no subsample was available" not in methods
+
+
+def test_remark_describes_the_shrinkage_of_each_subsamples_strongest_marker() -> None:
+    result = _remark_result(8, 8)
+    result["signature"] = {**result["signature"], "top_marker_shrinkage": 0.62}
+
+    text = _items(remark_checklist(result, request=_REQUEST))["18"]["text"]
+
+    assert "subsamples that selected it" not in text
+    assert (
+        "in the patients left out, the log hazard ratio of each subsample's strongest marker (the one with the largest "
+        "score statistic, whether or not it was selected) was on average 62% of its value in the subsample"
+    ) in text

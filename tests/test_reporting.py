@@ -9,7 +9,6 @@ import pytest
 from survival_toolkit import __version__
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers
 from survival_toolkit.reporting import (
-    _PAIRED_DIFFERENCE_KEYS,
     STATUS_LABELS,
     checklist_markdown,
     checklist_rows,
@@ -75,19 +74,26 @@ def test_remark_checklist_fills_in_what_the_run_knows() -> None:
     assert "constant" in items["8"]["text"]
     assert "cohort.csv" in items["2"]["text"] and "fingerprint abc" in items["2"]["text"]
     assert "5 of 240 rows were excluded" in items["12"]["text"]
-    adjusted = sum(1 for row in result["marker_table"] if (row.get("exact") or {}).get("adjusted"))
-    assert adjusted >= 5
+    # Exact fits cover the shortlist, the 5 strongest markers on the added-value lens and every supported one, which
+    # is smaller than the panel here; every one of them had an estimate.
+    table = result["marker_table"]
+    strongest = sorted(table, key=lambda row: -(row["added_value"]["chi2"] or 0.0))[:5]
+    shortlist = {row["marker"] for row in strongest} | {row["marker"] for row in table if row["tier"] != "not supported"}
+    assert {row["marker"] for row in table if row.get("exact")} == shortlist and len(shortlist) < len(_MARKERS)
+    assert {row["marker"] for row in table if (row.get("exact") or {}).get("adjusted")} == shortlist
     assert items["17"]["status"] == "reported"
-    scope = f"all {adjusted} markers" if adjusted == len(_MARKERS) else f"{adjusted} markers (the 5 strongest and every supported one)"
-    assert f"given for {scope}" in items["17"]["text"]
+    assert f"given for {len(shortlist)} markers (the 5 strongest and every supported one), whether or not" in items["17"]["text"]
     assert "Unadjusted HR" in items["15"]["text"]
     robust = result["tier_counts"]["robust"]
     assert report["results"].startswith(f"Of {len(_MARKERS)} markers, {robust} {'was' if robust == 1 else 'were'} robust")
-    # The selected-marker model is set against the clinical covariates alone, in the patients left out.
+    # The selected-marker model is set against the clinical covariates alone in the patients left out, by the mean
+    # paired difference evaluate_markers reports.
     signature = result["signature"]
-    paired = [signature[key] for key in _PAIRED_DIFFERENCE_KEYS if signature.get(key) is not None]
-    gain = f"{paired[0] if paired else signature['signature_c_left_out'] - signature['clinical_c_left_out']:+.3f}"
-    assert f"for the clinical covariates alone (mean difference {gain})" in report["results"]
+    assert signature["signature_gain_left_out"] is not None
+    assert (
+        f"against {signature['clinical_c_left_out']:.3f} for the clinical covariates alone "
+        f"(mean difference {signature['signature_gain_left_out']:+.3f})"
+    ) in report["results"]
     assert re.search(r"In the patients left out of each of \d+ subsamples, it reached a mean C-index", report["results"])
     assert "the selected-marker model reached a mean C-index" in items["18"]["text"]
     assert "more than 90% of patients at one value were excluded" in report["methods"]
