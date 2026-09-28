@@ -311,7 +311,8 @@ def test_only_data_failures_of_a_subsample_are_counted(monkeypatch: pytest.Monke
         return run
 
     def data_failure():
-        marker_evaluation._validated_settings(MarkerSettings(alpha=2.0))  # a ValueError raised by SurvStudio
+        # The one data failure of a subsample: its clinical-only model does not converge.
+        raise marker_evaluation.ClinicalModelNotConvergedError("The clinical-only Cox model did not converge.")
 
     monkeypatch.setattr(marker_evaluation, "run_procedure", failing_with(data_failure))
     result = evaluate_markers(frame, time_column="os_time", event_column="os_event", marker_columns=_markers(frame), settings=settings)

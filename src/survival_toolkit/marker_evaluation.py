@@ -41,7 +41,7 @@ from survival_toolkit.analysis import (
 from survival_toolkit.concurrency import raise_if_cancelled
 from survival_toolkit.duplicates import possible_duplicates
 from survival_toolkit.encoding import fit_feature_encoder, transform_feature_encoder
-from survival_toolkit.errors import _raised_by_survstudio, must_propagate, user_input_boundary
+from survival_toolkit.errors import user_input_boundary
 from survival_toolkit.marker_screen import (
     TIES_METHODS,
     CoxNull,
@@ -69,6 +69,14 @@ _LENS2_NULL_ALIASES = {"freedman_lane": "smith"}
 _LP_CLIP = 50.0
 # Above this share of external rows at a categorical level the locked model has not seen, validation stops.
 MAX_UNSEEN_LEVEL_SHARE = 0.5
+
+
+class ClinicalModelNotConvergedError(ValueError):
+    """The clinical-only Cox model of a set of rows did not converge: a failure of the data, not of the code.
+
+    A subsample whose clinical model fails this way is counted as failed; on the full cohort the message
+    reaches the user. It is a ValueError, so callers that catch ValueError still do.
+    """
 
 
 class MarkerSettings(NamedTuple):
@@ -421,7 +429,7 @@ def _clinical_null_model(
         return design, None
     null = fit_cox_null(time, event, design, strata, ties)
     if not null.converged:
-        raise ValueError("The clinical-only Cox model did not converge.")
+        raise ClinicalModelNotConvergedError("The clinical-only Cox model did not converge.")
     estimable = ~np.isnan(null.beta)
     if not estimable.all():
         design = design[:, estimable]
@@ -686,12 +694,10 @@ def resample_procedure(
         left_out = np.setdiff1d(np.arange(n), rows)
         try:
             fit = run_procedure(cohort, rows, settings)
-        except (ValueError, np.linalg.LinAlgError) as exc:
-            # A subsample the procedure cannot fit (a clinical model that does not converge) is counted
-            # as failed. Programming errors, and ValueErrors raised inside libraries (shape mismatches),
-            # stop the analysis instead of being counted.
-            if must_propagate(exc) or not (isinstance(exc, np.linalg.LinAlgError) or _raised_by_survstudio(exc)):
-                raise
+        except (ClinicalModelNotConvergedError, np.linalg.LinAlgError):
+            # A subsample the procedure cannot fit (its clinical model does not converge, or a matrix
+            # routine fails on its data) is counted as failed. Any other error, including a ValueError
+            # from a check that a bug would trip, stops the analysis instead of being counted.
             n_failed += 1
             continue
         for lens in lenses:

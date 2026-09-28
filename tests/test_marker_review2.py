@@ -194,3 +194,47 @@ def test_a_level_whose_patients_leave_before_the_first_event_is_left_out_of_ever
     recipe = result["locked_recipe"]
     assert recipe is not None and "grade_3" not in recipe["model"]["terms"]
     assert all(np.isfinite(recipe["model"]["coefficients"]))
+
+
+# 2: only a clinical model that does not converge (or a failing matrix routine) counts as a failed subsample.
+
+
+def test_errors_raised_by_checks_in_a_subsample_stop_the_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    from survival_toolkit import marker_screen
+    from survival_toolkit.errors import UserInputError
+
+    rng = np.random.default_rng(1)
+    n = 120
+    frame = pd.DataFrame(rng.normal(size=(n, 4)), columns=list("abcd"))
+    frame["time"] = rng.exponential(size=n) + 0.05
+    frame["event"] = rng.integers(0, 2, n)
+    original = marker_evaluation.run_procedure
+    common = dict(time_column="time", event_column="event", marker_columns=list("abcd"),
+                  settings=MarkerSettings(n_permutations=9, n_resamples=5, random_seed=1))
+
+    def failing_with(error):
+        def run(cohort, rows, settings):
+            if rows.size < n:
+                error(rows)
+            return original(cohort, rows, settings)
+
+        return run
+
+    def singular_matrix(rows):
+        np.linalg.inv(np.zeros((2, 2)))
+
+    monkeypatch.setattr(marker_evaluation, "run_procedure", failing_with(singular_matrix))
+    assert evaluate_markers(frame, **common)["resampling"]["n_failed"] == 5
+
+    def shape_bug(rows):
+        # numpy raises inside a SurvStudio function, so the error looked like SurvStudio's own check.
+        marker_screen.residualize(np.zeros((rows.size, 2)), np.zeros((rows.size - 1, 1)))
+
+    def contract_check(rows):
+        marker_evaluation._validated_settings(MarkerSettings(alpha=2.0))
+
+    for error in (shape_bug, contract_check):
+        monkeypatch.setattr(marker_evaluation, "run_procedure", failing_with(error))
+        # Before, every subsample was counted as failed and the analysis finished without its stability.
+        with pytest.raises(UserInputError):
+            evaluate_markers(frame, **common)
