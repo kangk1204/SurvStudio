@@ -105,6 +105,24 @@ def signature_is_clinical_only(signature: dict[str, Any] | None) -> bool:
     return signature.get("apparent_c") is not None and not signature.get("markers")
 
 
+def signature_fit_failed(result: dict[str, Any]) -> bool:
+    """Whether a marker evaluation's final model could not be fitted in the full cohort: it has no apparent C-index
+    although there was a model to fit, the clinical covariates (added value) or markers the screen selected (a
+    Benjamini-Hochberg q-value at most alpha on the primary lens)."""
+    signature = result.get("signature") or {}
+    if signature.get("apparent_c") is not None or signature_is_clinical_only(signature) or signature.get("markers"):
+        return False
+    if result.get("primary_lens") == "added_value":
+        return True
+    primary = str(result.get("primary_lens") or "marginal")
+    alpha = _finite((result.get("settings") or {}).get("alpha"))
+    return alpha is not None and any(
+        (q_value := _finite(row[primary].get("q_bh"))) is not None and q_value <= alpha
+        for row in result.get("marker_table") or []
+        if isinstance(row.get(primary), dict)
+    )
+
+
 def _n_permutations(result: dict[str, Any]) -> int:
     return int((result.get("null") or {}).get("n_permutations") or 0)
 
@@ -377,7 +395,12 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
         else:
             text += f" The selected-marker model ({_names(signature.get('markers') or [])}) had an apparent C-index of {_number(apparent)}"
             text += f" and an optimism-corrected C-index of {_number(corrected)}." if corrected is not None else " (not corrected for optimism)."
-    text += _left_out_comparison(signature, added_value, subject="the whole procedure" if clinical_only else "it")
+    elif signature_fit_failed(result):
+        text += " The final model could not be fitted in the full cohort, so it has no apparent or optimism-corrected C-index."
+    # "It" only follows a sentence about the selected-marker model; otherwise the left-out C-index is the procedure's.
+    text += _left_out_comparison(
+        signature, added_value, subject="it" if apparent is not None and not clinical_only else "the whole procedure"
+    )
     duplicates = result.get("duplicates") or {}
     n_pairs, n_identical = int(duplicates.get("n_pairs") or 0), int(duplicates.get("n_identical") or 0)
     if n_pairs or n_identical:
@@ -417,14 +440,17 @@ def _internal_validation_text(result: dict[str, Any], added_value: bool) -> str:
         text += f", and {model} C-index was corrected from {_number(apparent)} to {_number(corrected)}"
     elif apparent is not None:
         text += f"; {model} apparent C-index ({_number(apparent)}) could not be corrected for optimism"
+    elif signature_fit_failed(result):
+        text += "; the final model could not be fitted in the full cohort"
     shrinkage = _finite(signature.get("top_marker_shrinkage"))
     if shrinkage is not None:
         text += (
             f"; in the patients left out, the strongest marker's log hazard ratio was {_percent(shrinkage)} of its value in the "
             "subsamples that selected it"
         )
+    selected_model = apparent is not None and not clinical_only
     text += "." + _left_out_comparison(
-        signature, added_value, subject="the whole procedure" if clinical_only else "the selected-marker model"
+        signature, added_value, subject="the selected-marker model" if selected_model else "the whole procedure"
     )
     return text + closing
 

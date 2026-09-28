@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 
-from survival_toolkit.reporting import signature_is_clinical_only
+from survival_toolkit.reporting import signature_fit_failed, signature_is_clinical_only
 
 PAPER = "#ffffff"
 INK = "#1a2332"
@@ -1589,16 +1589,23 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
     model's C-index falls from its apparent value to the value in patients it did not see."""
     added_value = result.get("primary_lens") == "added_value"
     signature = result.get("signature") or {}
+    # The model the right panel is about: with no marker selected it holds the clinical covariates only; it can also
+    # have failed to fit in the full cohort, or not exist (no marker selected and no clinical covariates).
+    if signature_is_clinical_only(signature):
+        model_title, empty_note = "C-index of the clinical-only model", "No C-index is available for the model."
+    elif signature_fit_failed(result):
+        model_title, empty_note = "C-index (full-cohort model not fitted)", "The model could not be fitted in the full cohort."
+    elif signature.get("markers") or signature.get("apparent_c") is not None:
+        model_title, empty_note = "C-index of the selected-marker model", "No C-index is available for the model."
+    else:
+        model_title, empty_note = "C-index (no marker selected)", "No marker was selected, so there is no model."
+    selected_model = model_title == "C-index of the selected-marker model"
     fig = make_subplots(
         rows=1,
         cols=2,
         column_widths=[0.55, 0.45],
         horizontal_spacing=0.2,
-        subplot_titles=(
-            "Markers clearing each bar",
-            # With no marker selected the model holds the clinical covariates only.
-            "C-index of the clinical-only model" if signature_is_clinical_only(signature) else "C-index of the selected-marker model",
-        ),
+        subplot_titles=("Markers clearing each bar", model_title),
     )
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 14, "color": INK, "family": "Sora, sans-serif"}
@@ -1663,10 +1670,12 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
         fig.update_xaxes(title="Markers", range=[0, longest * 1.22], dtick=max(1, int(np.ceil(longest / 5))), row=1, col=1, **_COMMON_AXES)
     fig.update_yaxes(autorange="reversed", row=1, col=1, **_COMMON_AXES)
 
+    # The left-out C-index comes from the model each subsample selected and fitted: the selected-marker model's
+    # in the usual case, else plainly the whole procedure's (it could select markers in a subsample).
     ladder = [
         ("Apparent", signature.get("apparent_c"), ACCENT),
         ("Optimism-corrected", signature.get("optimism_corrected_c"), SLATE),
-        ("Left-out patients", signature.get("signature_c_left_out"), SAGE),
+        ("Left-out patients" if selected_model else "Whole procedure<br>(left-out)", signature.get("signature_c_left_out"), SAGE),
     ]
     if added_value:
         ladder.append(("Clinical only<br>(left-out)", signature.get("clinical_c_left_out"), "rgba(100,116,139,0.9)"))
@@ -1700,7 +1709,7 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
         fig.update_yaxes(autorange="reversed", row=1, col=2, **_COMMON_AXES)
     else:
         fig.add_annotation(
-            text="No marker entered the model.",
+            text=empty_note,
             xref="x2 domain",
             yref="y2 domain",
             x=0.5,

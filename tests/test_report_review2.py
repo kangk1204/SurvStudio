@@ -11,6 +11,9 @@ from survival_toolkit.plots import (
     build_marker_summary_figure,
     marker_evidence_funnel,
 )
+from survival_toolkit.reporting import marker_results_paragraph, remark_checklist
+
+_REQUEST = {"time_column": "os_time", "event_column": "os_event", "event_positive_value": 1}
 
 
 def _fit(hazard_ratio: float, low: float, high: float) -> dict:
@@ -142,3 +145,80 @@ def test_evidence_funnel_marks_the_robust_bar_not_assessed_without_subsamples() 
     assert stages["Robust"]["count"] is None and stages["Robust"]["note"] == "not assessed (no subsamples)"
     printed = _funnel_text(build_marker_summary_figure(result))
     assert printed["Family-wise p ≤ 0.05"] == "<b>2</b>" and printed["Robust"] == "not assessed (no subsamples)"
+
+
+# ── The model of the whole procedure ─────────────────────────────
+
+
+def _added_value_result(**changes) -> dict:
+    """evaluate_markers output whose full-cohort model did not converge while the subsamples were scored."""
+    result = {
+        "primary_lens": "added_value",
+        "marker_table": [],
+        "tier_counts": {"robust": 0, "suggestive": 2, "marginal only": 0, "not supported": 6},
+        "cohort": {"n": 300, "events": 120, "n_markers_evaluated": 8, "clinical_columns": ["age"], "strata_columns": [], "dropped_markers": []},
+        "settings": {"alpha": 0.05, "fdr_level": 0.1, "shortlist_size": 50, "max_signature_markers": 10},
+        "null": {"n_permutations": 1000, "lens2_null": "smith"},
+        "resampling": {"n_valid": 200, "n_failed": 0, "fraction": 0.632, "stability_assessed": True},
+        "signature": {
+            "markers": [], "clinical_only": False, "apparent_c": None, "optimism_corrected_c": None,
+            "signature_c_left_out": 0.65, "clinical_c_left_out": 0.62, "signature_gain_left_out": 0.03,
+            "n_signature_replicates": 150, "n_clinical_replicates": 150,
+        },
+        "duplicates": {},
+    }
+    result.update(changes)
+    return result
+
+
+def _ladder(figure: dict) -> list:
+    return next(trace for trace in figure["data"] if trace.get("mode") == "markers+text")["y"]
+
+
+def test_a_full_cohort_model_that_could_not_be_fitted_is_named_in_the_text_and_the_summary_figure() -> None:
+    result = _added_value_result()
+
+    text = marker_results_paragraph(result)
+    figure = build_marker_summary_figure(result)
+    items = {entry["item"]: entry for entry in remark_checklist(result, request=_REQUEST)["items"]}
+
+    assert "it reached" not in text
+    assert "The final model could not be fitted in the full cohort, so it has no apparent or optimism-corrected C-index." in text
+    assert "In the patients left out of each of 150 subsamples, the whole procedure reached a mean C-index of 0.650 against 0.620" in text
+    assert "the whole procedure reached a mean C-index" in items["18"]["text"]
+    titles = [annotation["text"] for annotation in figure["layout"]["annotations"]]
+    assert "C-index (full-cohort model not fitted)" in titles and "C-index of the selected-marker model" not in titles
+    assert _ladder(figure) == ["Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
+
+    # Without a scored subsample the panel gives that reason, not "No marker entered the model."
+    bare = build_marker_summary_figure(_added_value_result(signature={"markers": [], "clinical_only": False, "apparent_c": None}))
+    notes = _annotation_text(bare)
+    assert "The model could not be fitted in the full cohort." in notes and "No marker entered the model." not in notes
+
+
+def test_the_left_out_rung_of_a_clinical_only_model_is_the_whole_procedure() -> None:
+    signature = {"markers": [], "clinical_only": True, "apparent_c": 0.70, "optimism_corrected_c": 0.69,
+                 "signature_c_left_out": 0.66, "clinical_c_left_out": 0.655}
+
+    clinical_only = build_marker_summary_figure(_added_value_result(signature=signature))
+    selected = build_marker_summary_figure(_added_value_result(signature={**signature, "markers": ["m1"], "clinical_only": False}))
+
+    assert _ladder(clinical_only) == ["Apparent", "Optimism-corrected", "Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
+    assert _ladder(selected) == ["Apparent", "Optimism-corrected", "Left-out patients", "Clinical only<br>(left-out)"]
+
+
+def test_a_screen_without_clinical_covariates_says_whether_it_selected_a_marker_or_failed_to_fit_one() -> None:
+    no_model = {"markers": [], "clinical_only": False, "apparent_c": None, "optimism_corrected_c": None}
+    # Every marker of the screen has q = 0.004, so the procedure selected markers and failed to fit them.
+    selected = _screen_result(signature=no_model)
+    nothing_selected = _screen_result(signature=no_model)
+    nothing_selected["marker_table"] = [
+        {**row, "marginal": {**row["marginal"], "q_bh": 0.4}} for row in nothing_selected["marker_table"]
+    ]
+
+    none_figure = build_marker_summary_figure(nothing_selected)
+    failed_figure = build_marker_summary_figure(selected)
+
+    assert "No marker was selected, so there is no model." in _annotation_text(none_figure)
+    assert "C-index (no marker selected)" in _annotation_text(none_figure)
+    assert "The model could not be fitted in the full cohort." in _annotation_text(failed_figure)
