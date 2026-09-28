@@ -1113,6 +1113,20 @@ def test_uploads_keep_their_own_larger_limit() -> None:
     assert response.status_code != 413, response.text
 
 
+def test_matrix_line_scan_stops_when_its_request_is_cancelled(tmp_path) -> None:
+    import threading
+
+    from survival_toolkit.concurrency import cancellation_scope
+    from survival_toolkit.errors import JobCancelledError
+
+    path = tmp_path / "matrix.csv"
+    path.write_bytes(b"gene,P1\n" + b"G,1\n" * 10)
+    cancelled = threading.Event()
+    cancelled.set()
+    with cancellation_scope(cancelled), pytest.raises(JobCancelledError):
+        app_module._reject_overlong_matrix_text(path, compressed=False)
+
+
 def test_utf16_matrix_lines_are_counted_on_decoded_text(monkeypatch: pytest.MonkeyPatch) -> None:
     import gzip
 

@@ -3764,6 +3764,7 @@ def _reject_overlong_matrix_text(path: Path, *, compressed: bool) -> None:
             encoding = _text_encoding_candidates(chunk, complete=len(chunk) < chunk_bytes)[0] if chunk else "utf-8"
             decoder = codecs.getincrementaldecoder(encoding)(errors="replace") if encoding.startswith("utf-16") else None
             while chunk:
+                raise_if_cancelled()
                 lines += decoder.decode(chunk).count("\n") if decoder is not None else chunk.count(b"\n")
                 unpacked += len(chunk)
                 if lines > limit:
