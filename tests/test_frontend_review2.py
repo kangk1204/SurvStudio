@@ -176,3 +176,74 @@ def test_a_failed_run_of_one_mode_keeps_the_result_of_the_other_mode(
     assert result["trained"] == {"mode": "single", "current": True, "stale": False, "hidden": False}
     assert result["afterFailedCompare"] == result["trained"]
     assert result["afterFailedSingle"] == {"mode": "compare", "current": True, "comparison": True}
+
+
+# ── Runtime banner ──────────────────────────────────────────────
+
+
+def test_the_compare_all_banner_stays_up_through_both_phases(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:
+    """R13-5/R15-10: the phases (each started through withLoading) do not clear or replace the Compare All banner."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const mlHold = deferred();
+      const dlHold = deferred();
+      page.fetchHandler = (request) => {
+        const body = request.json();
+        if (request.url.endsWith("/api/ml-model")) return mlHold.promise.then(() => ({ status: 200, body: { analysis: fixtures.compare.ml, request_config: body } }));
+        if (request.url.endsWith("/api/deep-model")) return dlHold.promise.then(() => ({ status: 200, body: { analysis: fixtures.compare.dl, request_config: body } }));
+        if (request.url.endsWith("/api/model-comparison-intervals")) return { status: 200, body: fixtures.compare.intervals };
+        return { status: 500, body: { detail: "unexpected" } };
+      };
+      const banner = () => page.run("refs.runtimeBanner.textContent");
+      page.run("activateTab('benchmark'); refs.runPredictiveCompareAllButton.click()");
+      await page.settle(3);
+      const duringMl = banner();
+      mlHold.resolve();
+      await page.settle(10);
+      const duringDl = banner();
+      dlHold.resolve();
+      await page.settle(40);
+      return { duringMl, duringDl, after: page.run("refs.runtimeBanner.className") };
+    """, dataset=example_dataset, compare=compare_payloads)
+
+    assert result["duringMl"].startswith("Comparing the full predictive stack")
+    assert result["duringDl"] == result["duringMl"]
+    assert result["after"] == "runtime-banner hidden"
+
+
+def test_starting_a_run_keeps_the_banner_of_a_run_in_flight_and_clears_a_notice(
+    tmp_path: Path, example_dataset: dict, marker_payloads: dict
+) -> None:
+    """R13-5/R15-10: withLoading clears a finished load's notice, never the progress banner of another run."""
+    result = _run_page(tmp_path, r"""
+      const km = (request) => ({ status: 200, body: {
+        analysis: { summary_table: [], risk_table: { rows: [], columns: [] }, pairwise_table: [], cohort: { n: 360 } },
+        figure: { data: [{ x: [0], y: [1] }], layout: {} }, request_config: request.json() } });
+      page.run("refs.datasetFile.files = [{ name: 'cohort.csv' }]");
+      page.fetchHandler = (request) => (request.url.endsWith("/api/upload") ? { status: 200, body: fixtures.dataset } : km(request));
+      page.change("#datasetFile");
+      await page.settle();
+      const notice = page.run("refs.runtimeBanner.textContent");
+      page.run("refs.runKmButton.click()");
+      await page.settle();
+      const afterKm = page.run("refs.runtimeBanner.className");
+      const hold = deferred();
+      page.fetchHandler = (request) => (request.url.endsWith("/api/marker-evaluation")
+        ? hold.promise.then(() => ({ status: 200, body: { ...fixtures.markers.added, request_config: request.json() } }))
+        : km(request));
+      page.run("activateTab('markers'); refs.runMarkersButton.click()");
+      await page.settle(3);
+      const during = page.run("refs.runtimeBanner.textContent");
+      page.run("activateTab('km'); refs.runKmButton.click()");
+      await page.settle();
+      const duringAfterKm = page.run("refs.runtimeBanner.textContent");
+      hold.resolve();
+      await page.settle();
+      return { notice, afterKm, during, duringAfterKm, after: page.run("refs.runtimeBanner.className") };
+    """, dataset=example_dataset, markers=marker_payloads)
+
+    assert " loaded (360 rows" in result["notice"]
+    assert result["afterKm"] == "runtime-banner hidden"
+    assert result["during"].startswith("Evaluating 2 marker(s)")
+    assert result["duringAfterKm"] == result["during"]
+    assert result["after"] == "runtime-banner hidden"

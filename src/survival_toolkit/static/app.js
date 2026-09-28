@@ -355,7 +355,8 @@ async function withLoading(button, action, scopeOverride = null, { swallowErrors
   } else {
     setButtonLoading(button, true);
   }
-  setRuntimeBanner("");
+  // Only a notice left by an earlier action: the banner of a run still in flight belongs to that run.
+  clearRuntimeNotice();
   try {
     const value = await action();
     return { ok: true, value };

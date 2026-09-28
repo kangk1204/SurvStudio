@@ -185,6 +185,7 @@ async function runMarkerEvaluation() {
   const runBanner = setRuntimeBanner(
     `Evaluating ${formatValue(markerCount)} marker(s) with ${formatValue(fields.n_permutations)} permutations and ${formatValue(fields.n_resamples)} subsamples. ${markerCount > 5000 ? "A genome-wide panel takes 10 minutes or more." : "Large panels take a few minutes."}`,
     "info",
+    { held: true },
   );
   let payload;
   try {
@@ -431,7 +432,7 @@ async function runMarkerValidation() {
   const requestToken = beginRequestToken("markerValidation");
   const sourceDatasetId = state.dataset?.dataset_id;
   const recipeHash = recipe.recipe_hash;
-  const runBanner = setRuntimeBanner(`Uploading ${file.name} and applying the locked model unchanged.`, "info");
+  const runBanner = setRuntimeBanner(`Uploading ${file.name} and applying the locked model unchanged.`, "info", { held: true });
   let externalDatasetId = null;
   try {
     const form = new FormData();

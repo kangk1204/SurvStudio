@@ -319,7 +319,7 @@ def test_frontend_surfaces_upload_success_feedback_and_allows_reselecting_same_f
 
     assert "function hasCompletedResults()" in text
     assert "function uploadFeedbackMessages(payload" in text
-    assert 'setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info");' in text
+    assert 'setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info", { held: true });' in text
     assert 'showToast(feedback.toast, "success", 3400);' in text
     assert 'refs.datasetFile.addEventListener("click", () => {' in text
     assert 'refs.datasetFile.value = "";' in text
@@ -6721,8 +6721,9 @@ def test_compare_all_actions_surface_pending_feedback() -> None:
 
     assert "function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
     assert "function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
-    assert 'setRuntimeBanner("Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info");' in app_js
-    assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");' in app_js
+    # Run banners are held by their run (tests/test_frontend_review2.py drives them through withLoading).
+    assert 'setRuntimeBanner("Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info", { held: true });' in app_js
+    assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info", { held: true });' in app_js
     assert "refs.mlMetaBanner.textContent = mlComparePendingBannerText({" in app_js
     assert "refs.dlMetaBanner.textContent = dlComparePendingBannerText({" in app_js
 

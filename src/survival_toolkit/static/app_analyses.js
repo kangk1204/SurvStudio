@@ -583,7 +583,7 @@ function applyLoadedDataset(payload) {
 async function uploadDataset() {
   if (!refs.datasetFile.files?.length) throw new Error("Choose a dataset file first.");
   const selectedFile = refs.datasetFile.files[0];
-  const uploadBanner = setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info");
+  const uploadBanner = setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info", { held: true });
   const formData = new FormData();
   formData.append("file", selectedFile);
   let payload;
@@ -594,7 +594,11 @@ async function uploadDataset() {
     releaseRuntimeBanner(uploadBanner);
     throw error;
   }
-  if (!payload) return;
+  if (!payload) {
+    // A newer load replaced this one.
+    releaseRuntimeBanner(uploadBanner);
+    return;
+  }
   const previousDatasetName = state.dataset?.filename || "";
   const clearedResults = Boolean(state.dataset) && hasCompletedResults();
   applyLoadedDataset(payload);

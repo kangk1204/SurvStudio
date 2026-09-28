@@ -44,6 +44,7 @@ const appState = {
     derive: 0,
   },
   runtimeBannerSerial: 0,
+  runtimeBannerHeld: false,
   requestControllers: {},
   coxMartingaleTerm: "",
   resultPreference: {
@@ -580,9 +581,11 @@ function errorMessageText(error, fallbackText = "Request failed.") {
 }
 
 // Returns a serial that identifies this banner, so a run can later clear the banner it set without
-// wiping a newer one (releaseRuntimeBanner).
-function setRuntimeBanner(text = "", tone = "info") {
+// wiping a newer one (releaseRuntimeBanner). A run in flight sets its progress banner `held`; starting
+// another action clears only a banner nobody holds, such as the notice of a finished load (clearRuntimeNotice).
+function setRuntimeBanner(text = "", tone = "info", { held = false } = {}) {
   runtime.runtimeBannerSerial = Number(runtime.runtimeBannerSerial || 0) + 1;
+  runtime.runtimeBannerHeld = Boolean(text) && Boolean(held);
   if (!refs.runtimeBanner) return runtime.runtimeBannerSerial;
   if (!text) {
     refs.runtimeBanner.textContent = "";
@@ -597,6 +600,11 @@ function setRuntimeBanner(text = "", tone = "info") {
 // Clears the banner only while it is still the one that `serial` set.
 function releaseRuntimeBanner(serial) {
   if (serial && serial === runtime.runtimeBannerSerial) setRuntimeBanner("");
+}
+
+// A newly started action clears a leftover notice, but not the progress banner of a run still in flight.
+function clearRuntimeNotice() {
+  if (!runtime.runtimeBannerHeld) setRuntimeBanner("");
 }
 
 function renderServerStoppedState(message) {

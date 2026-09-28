@@ -150,7 +150,10 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
     cvFolds,
     cvRepeats,
   });
-  const runBanner = setRuntimeBanner("Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info");
+  // Inside Compare All the Compare All banner stays up for both phases.
+  const runBanner = compareSource === "predictive_compare_all"
+    ? 0
+    : setRuntimeBanner("Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info", { held: true });
   const loading = beginShellLoading([refs.mlComparisonShell]);
 
   try {
@@ -263,7 +266,7 @@ async function runUnifiedPredictiveComparison() {
   // A cancelled phase (a new dataset, derived snapshot or endpoint cleared the results) ends the whole
   // comparison: nothing from the old cohort is restored and no further run starts on the new one.
   const superseded = (attempt) => Boolean(attempt?.superseded) || state.dataset?.dataset_id !== startDatasetId;
-  const runBanner = setRuntimeBanner("Comparing the full predictive stack across classical ML and deep learning. This can take several minutes on larger cohorts.", "info");
+  const runBanner = setRuntimeBanner("Comparing the full predictive stack across classical ML and deep learning. This can take several minutes on larger cohorts.", "info", { held: true });
   try {
     const mlAttempt = await withLoading(
       refs.runCompareButton,
@@ -344,7 +347,7 @@ async function runDlModel() {
     cvFolds: dlSetting("cv_folds", refs.dlCvFolds),
     cvRepeats: dlSetting("cv_repeats", refs.dlCvRepeats),
   });
-  const runBanner = setRuntimeBanner("Training the selected deep-learning model. This can take noticeably longer than a classical fit.", "info");
+  const runBanner = setRuntimeBanner("Training the selected deep-learning model. This can take noticeably longer than a classical fit.", "info", { held: true });
 
   try {
     let payload;
@@ -483,7 +486,10 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
     cvFolds: dlSetting("cv_folds", refs.dlCvFolds),
     cvRepeats: dlSetting("cv_repeats", refs.dlCvRepeats),
   });
-  const runBanner = setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");
+  // Inside Compare All the Compare All banner stays up for both phases.
+  const runBanner = compareSource === "predictive_compare_all"
+    ? 0
+    : setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info", { held: true });
   const loading = beginShellLoading([refs.dlComparisonShell]);
 
   try {
