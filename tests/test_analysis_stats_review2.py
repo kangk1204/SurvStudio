@@ -385,3 +385,186 @@ def test_pairwise_log_rank_loop_stops_when_the_request_is_cancelled(monkeypatch)
     monkeypatch.setattr(analysis, "raise_if_cancelled", _cancelled)
     with pytest.raises(JobCancelledError):
         analysis.compute_km_analysis(frame, "time", "event", group_column="g")
+
+
+# ---------------------------------------------------------------------------------------
+# Level ordering (R5#1, R5#5, R5#6), candidate rules (R4#4), and covariate typing
+
+
+def _ordering_frame(seed: int = 3, n: int = 200) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    er = rng.choice(["ER+", "ER-"], n)
+    return pd.DataFrame(
+        {
+            "time": rng.exponential(np.where(er == "ER+", 2.0, 1.0)) + 0.01,
+            "event": (rng.random(n) < 0.7).astype(int),
+            "er": er,
+            "age_group": rng.choice(["<65", ">=65"], n),
+            "sex": rng.choice(["여성", "남성"], n),
+            "smoking": rng.choice(["Never", "Former", "Current"], n),
+        }
+    )
+
+
+def _ordering_outputs(frame: pd.DataFrame) -> tuple[list[str], list[float], list[str], list[str], dict[str, list[str]]]:
+    from survival_toolkit.encoding import ordered_level_labels
+
+    covariates = ["er", "age_group", "sex", "smoking"]
+    cox = compute_cox_analysis(frame, "time", "event", covariates)
+    km = analysis.compute_km_analysis(frame, "time", "event", group_column="er")
+    table = analysis.compute_cohort_table(frame, ["age_group", "sex"], group_column="smoking")
+    return (
+        [row["Label"] for row in cox["results_table"]],
+        [row["Hazard ratio"] for row in cox["results_table"]],
+        [row["Group"] for row in km["summary_table"]],
+        table["columns"],
+        {column: ordered_level_labels(frame[column], column) for column in covariates},
+    )
+
+
+def test_reference_levels_and_group_order_do_not_depend_on_row_order() -> None:
+    frame = _ordering_frame()
+    labels, hazard_ratios, km_groups, table_columns, levels = _ordering_outputs(frame)
+    assert labels == [
+        "er: ER+ vs ER-",
+        "age_group: >=65 vs <65",
+        "sex: 여성 vs 남성",
+        "smoking: Former vs Never",
+        "smoking: Current vs Never",
+    ]
+    assert km_groups == ["ER-", "ER+"]
+    assert table_columns == ["Variable", "Statistic", "Overall (grouped subset)", "Never", "Former", "Current"]
+    assert levels["er"] == ["ER-", "ER+"] and levels["age_group"] == ["<65", ">=65"]
+    for column, ascending in itertools.product(["er", "age_group", "sex", "smoking"], [True, False]):
+        reordered = frame.sort_values(column, ascending=ascending, kind="mergesort").reset_index(drop=True)
+        other_labels, other_ratios, other_groups, other_columns, other_levels = _ordering_outputs(reordered)
+        assert (other_labels, other_groups, other_columns, other_levels) == (labels, km_groups, table_columns, levels)
+        assert other_ratios == pytest.approx(hazard_ratios, rel=1e-9)
+
+
+def test_signs_negations_and_non_latin_labels_order_as_written() -> None:
+    order = analysis._ordered_reference_categories
+    assert order(["ER+", "ER-"], "er") == ["ER-", "ER+"]
+    assert order(["HER2-", "HER2+"][::-1], "her2") == ["HER2-", "HER2+"]
+    assert order(["PD-L1(+)", "PD-L1(-)"], "pdl1") == ["PD-L1(-)", "PD-L1(+)"]
+    assert order(["Signature+", "Signature-"], "auto_signature_group") == ["Signature-", "Signature+"]
+    assert order(["EGFR mutated", "EGFR non-mutated"], "egfr") == ["EGFR non-mutated", "EGFR mutated"]
+    assert order(["Non-wildtype", "Wildtype"], "idh") == ["Wildtype", "Non-wildtype"]
+    assert order(["MGMT methylated", "MGMT unmethylated"], "mgmt") == ["MGMT unmethylated", "MGMT methylated"]
+    # Hangul labels no longer normalise to "" (which tied every level and kept the row order).
+    assert analysis._normalize_category_text("여성") == ("여성", "여성")
+    assert order(["여성", "남성"], "sex") == order(["남성", "여성"], "sex") == ["남성", "여성"]
+    assert order([">=65", "<65"], "age") == order(["<65", ">=65"], "age") == ["<65", ">=65"]
+
+
+def test_numeric_codes_stay_in_numeric_order_before_text_with_unknown_last() -> None:
+    order = analysis._ordered_reference_categories
+    assert order(["100", "Unknown", "60", "80"], "kps") == ["60", "80", "100", "Unknown"]
+    assert order(["Grade 10", "Grade 2", "Grade 1"], "grade") == ["Grade 1", "Grade 2", "Grade 10"]
+    rng = np.random.default_rng(9)
+    n = 300
+    frame = pd.DataFrame(
+        {
+            "time": rng.exponential(1, n) + 0.01,
+            "event": (rng.random(n) < 0.7).astype(int),
+            "kps": rng.choice(["60", "70", "80", "90", "100", "Unknown"], n),
+            "gleason": rng.choice(["6", "7", "8", "9", "10", "Unknown"], n),
+        }
+    )
+    cox = compute_cox_analysis(frame, "time", "event", ["kps"])
+    assert [row["Label"] for row in cox["results_table"]] == [
+        "kps: 70 vs 60",
+        "kps: 80 vs 60",
+        "kps: 90 vs 60",
+        "kps: 100 vs 60",
+        "kps: Unknown vs 60",
+    ]
+    km = analysis.compute_km_analysis(frame, "time", "event", group_column="gleason")
+    assert [row["Group"] for row in km["summary_table"]] == ["6", "7", "8", "9", "10", "Unknown"]
+
+
+def test_clinical_codings_and_derived_groups_follow_their_natural_order() -> None:
+    from survival_toolkit.sample_data import make_example_dataset
+
+    order = analysis._ordered_reference_categories
+    assert order(["Stage IB", "Stage IA2", "Stage IIA", "Stage IA1", "Stage IA3", "Stage IIIB"], "stage") == [
+        "Stage IA1",
+        "Stage IA2",
+        "Stage IA3",
+        "Stage IB",
+        "Stage IIA",
+        "Stage IIIB",
+    ]
+    assert order(["Stage 2", "Stage 1B", "Stage 1A"], "stage") == ["Stage 1A", "Stage 1B", "Stage 2"]
+    assert order(["Current", "Former", "Never"], "smoking_status") == ["Never", "Former", "Current"]
+    assert order(["Ex-smoker", "Current smoker", "Non-smoker"], "smoking") == ["Non-smoker", "Ex-smoker", "Current smoker"]
+    assert order(["Current smoker", "Current reformed smoker for > 15 years", "Lifelong Non-smoker"], "tobacco_history") == [
+        "Lifelong Non-smoker",
+        "Current reformed smoker for > 15 years",
+        "Current smoker",
+    ]
+    assert order(["High", "Intermediate", "Low"], "risk") == ["Low", "Intermediate", "High"]
+    assert order(["High risk", "Low risk"], "risk_group") == ["Low risk", "High risk"]
+    assert order(["High", "Low", "Normal"], "potassium") == ["Normal", "Low", "High"]
+
+    df = make_example_dataset(seed=11, n_patients=240)
+    median, median_column, _ = analysis.derive_group_column(df, "biomarker_score", "median_split")
+    assert [row["Label"] for row in compute_cox_analysis(median, "os_months", "os_event", [median_column])["results_table"]] == [
+        f"{median_column}: High vs Low"
+    ]
+    groups = {
+        method_cutoff: analysis.compute_km_analysis(
+            analysis.derive_group_column(df, "biomarker_score", method_cutoff[0], cutoff=method_cutoff[1])[0],
+            "os_months",
+            "os_event",
+            group_column=f"biomarker_score__{method_cutoff[0]}",
+        )["summary_table"]
+        for method_cutoff in [("percentile_split", "25,25"), ("percentile_split", "25"), ("quartile_split", None)]
+    }
+    assert [row["Group"] for row in groups[("percentile_split", "25,25")]] == [
+        "At/below 25th percentile threshold",
+        "Between percentile thresholds",
+        "At/above 75th percentile threshold",
+    ]
+    assert [row["Group"] for row in groups[("percentile_split", "25")]] == ["Rest", "At/above 75th percentile threshold"]
+    assert [row["Group"] for row in groups[("quartile_split", None)]] == ["Q1", "Q2", "Q3", "Q4"]
+
+
+def test_most_common_level_is_a_candidate_rule_only_beyond_two_levels() -> None:
+    rng = np.random.default_rng(0)
+    n = 300
+    mutation = rng.choice(["wildtype", "missense", "truncating"], size=n, p=[0.6, 0.25, 0.15])
+    frame = pd.DataFrame({"mut": mutation, "flag": np.where(np.arange(n) % 2 == 0, "b", "a")})
+    indicators = analysis._build_candidate_indicators(frame, ["mut", "flag"], min_group_size=30)
+    labels = [indicator["label"] for indicator in indicators]
+    # "Wild type vs any mutation" is a rule of its own when there are three levels.
+    assert labels == ['mut == "wildtype"', 'mut == "missense"', 'mut == "truncating"', 'flag == "b"']
+    assert [indicator["reference"] for indicator in indicators] == ["missense", "wildtype", "wildtype", "a"]
+    # Equal counts: the reference follows the level order, not the order of the rows.
+    reversed_rows = analysis._build_candidate_indicators(frame.iloc[::-1], ["flag"], min_group_size=30)
+    assert [indicator["label"] for indicator in reversed_rows] == ['flag == "b"']
+
+
+def test_numbers_stored_as_text_are_numeric_cox_covariates() -> None:
+    from survival_toolkit.sample_data import make_example_dataset
+
+    df = make_example_dataset(seed=23, n_patients=160)
+    df["age"] = (df["age"] // 10) * 10.0
+    as_text = df.assign(age=[f" {value:.0f} " for value in df["age"]])
+    assert not pd.api.types.is_numeric_dtype(as_text["age"])
+    numeric_fit = compute_cox_analysis(df, "os_months", "os_event", ["age", "stage"])
+    text_fit = compute_cox_analysis(as_text, "os_months", "os_event", ["age", "stage"])
+    assert text_fit["categorical_covariates"] == ["stage"]
+    assert [row["Label"] for row in text_fit["results_table"]] == [row["Label"] for row in numeric_fit["results_table"]]
+    assert [row["Beta"] for row in text_fit["results_table"]] == pytest.approx(
+        [row["Beta"] for row in numeric_fit["results_table"]], rel=1e-10
+    )
+    # Declared categorical, a pandas categorical dtype, or text that is not all numbers stays categorical.
+    preview = analysis.preview_cox_analysis_inputs
+    assert preview(as_text, "os_months", "os_event", ["age", "stage"])["categorical_covariates"] == ["stage"]
+    declared = preview(as_text, "os_months", "os_event", ["age", "stage"], categorical_covariates=["age"])
+    assert declared["categorical_covariates"] == ["age", "stage"]
+    coded = df.assign(age=pd.Categorical(df["age"]))
+    assert preview(coded, "os_months", "os_event", ["age", "stage"])["categorical_covariates"] == ["age", "stage"]
+    mixed = as_text.assign(age=as_text["age"].where(df.index % 7 != 0, "unknown"))
+    assert preview(mixed, "os_months", "os_event", ["age", "stage"])["categorical_covariates"] == ["age", "stage"]

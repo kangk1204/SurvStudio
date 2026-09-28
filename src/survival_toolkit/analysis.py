@@ -5286,11 +5286,18 @@ def _build_candidate_indicators(
             elif int(counts.shape[0]) < 2:
                 reason = "only one observed level"
             else:
-                reference = str(counts.idxmax())
-                for level in counts.index.tolist():
-                    level_text = str(level)
-                    if level_text == reference:
-                        continue
+                # Most common level first; ties follow the reference order, so neither the
+                # reference nor the rule order depends on the order of the rows.
+                reference_order = {
+                    level: position
+                    for position, level in enumerate(_ordered_reference_categories(counts.index.tolist(), str(column)))
+                }
+                levels = sorted((str(level) for level in counts.index), key=lambda level: (-int(counts[level]), reference_order[level]))
+                reference = levels[0]
+                # With two levels "most common level vs rest" is the same split as the other level;
+                # with more it is a distinct rule (for example wild type vs any mutation).
+                tested_levels = levels[1:] if len(levels) == 2 else levels
+                for level_text in tested_levels:
                     mask = values == level_text
                     n_positive = int(mask.sum())
                     if min_group_size <= n_positive <= (len(mask) - min_group_size):
@@ -5299,13 +5306,13 @@ def _build_candidate_indicators(
                                 "column": column,
                                 "kind": "categorical_level",
                                 "level": level_text,
-                                "reference": reference,
+                                "reference": reference if level_text != reference else levels[1],
                                 "label": f'{column} == "{level_text}"',
                             }
                         )
                 reason = (
-                    f"no level other than the most common one has between {int(min_group_size)} and "
-                    f"{len(values) - int(min_group_size)} rows"
+                    f"no level{' other than the most common one' if len(levels) == 2 else ''} has between "
+                    f"{int(min_group_size)} and {len(values) - int(min_group_size)} rows"
                 )
         if skipped is not None and len(indicators) == n_before:
             skipped.append({"column": str(column), "reason": reason})
@@ -7011,11 +7018,29 @@ def compute_km_analysis(
     }
 
 
+def _is_number_text(series: pd.Series) -> bool:
+    """True when every non-missing value of a text column reads as a finite number once trimmed."""
+    text = series.dropna().astype(str).str.strip()
+    numbers = pd.to_numeric(text, errors="coerce")
+    if bool(numbers.isna().any()):
+        return False
+    return bool(np.isfinite(numbers.to_numpy(dtype=float)).all())
+
+
 def _categorical_candidates(df: pd.DataFrame, columns: Sequence[str]) -> list[str]:
+    """Covariates encoded as categorical without being declared.
+
+    The typing rule shared with the ML and deep-learning encoders: a column with a pandas
+    categorical dtype, or a non-numeric column whose non-missing values do not all read as
+    finite numbers, is categorical. A text column whose values are all finite numbers (numbers
+    stored as text, as a CSV load would have read them) is numeric, and so are booleans.
+    """
     candidates: list[str] = []
     for column in columns:
         series = df[column]
-        if not is_numeric_dtype(series):
+        if isinstance(series.dtype, pd.CategoricalDtype):
+            candidates.append(column)
+        elif not is_numeric_dtype(series) and not is_bool_dtype(series) and not _is_number_text(series):
             candidates.append(column)
     return candidates
 
@@ -7025,12 +7050,13 @@ def _resolve_cox_categorical_covariates(
     covariates: Sequence[str],
     categorical_covariates: Sequence[str] | None,
 ) -> list[str]:
-    """Explicitly marked categorical covariates plus every covariate that is not numeric.
+    """Explicitly marked categorical covariates plus every undeclared covariate typed as categorical.
 
-    Text covariates are always categorical: coercing them to numbers would silently turn
-    every label into a missing value and drop those rows from the complete-case fit.
-    Continuous numbers with a few stray text values are refused instead of becoming a
-    categorical term with one level per distinct number.
+    Text covariates are categorical (see ``_categorical_candidates``): coercing labels to numbers
+    would silently turn them into missing values and drop those rows from the complete-case
+    fit. A text column that holds only numbers is used as a number. Continuous numbers with a
+    few stray text values are refused instead of becoming a categorical term with one level per
+    distinct number.
     """
     # Missing columns are reported together with the outcome columns by _cohort_frame.
     present = [column for column in covariates if column in df.columns]
@@ -7061,7 +7087,12 @@ def _cox_categorical(values: pd.Series, column: str) -> pd.Categorical:
 
 
 def _as_float_covariate(values: pd.Series) -> pd.Series:
-    """A numeric covariate as float64; nullable Int64/Float64/boolean NA becomes NaN."""
+    """A numeric covariate as float64; nullable Int64/Float64/boolean NA becomes NaN.
+
+    Numbers stored as text are read after trimming surrounding spaces, as the typing rule reads them.
+    """
+    if not is_numeric_dtype(values) and not is_bool_dtype(values):
+        values = values.astype("string").str.strip()
     numeric = pd.to_numeric(values, errors="coerce")
     return pd.Series(numeric.to_numpy(dtype=float, na_value=np.nan), index=values.index)
 
@@ -7210,99 +7241,210 @@ def _cox_design_condition_number(exog: Any) -> float | None:
     return condition_number
 
 
-_STAGE_ORDER = [
-    "0",
-    "i",
-    "ia",
-    "ib",
-    "ic",
-    "ii",
-    "iia",
-    "iib",
-    "iic",
-    "iii",
-    "iiia",
-    "iiib",
-    "iiic",
-    "iv",
-    "iva",
-    "ivb",
-    "ivc",
-]
-_STAGE_ORDER_INDEX = {stage: idx for idx, stage in enumerate(_STAGE_ORDER)}
-
-
 def _normalize_category_text(value: Any) -> tuple[str, str]:
+    """Lower-case words of a label with punctuation turned into single spaces, and the same without spaces.
+
+    Letters and digits of every script count as word characters, so non-Latin labels keep their text.
+    """
     text = str(value).strip().lower()
-    normalized = re.sub(r"[^a-z0-9]+", " ", text).strip()
+    normalized = re.sub(r"[\W_]+", " ", text).strip()
     compact = normalized.replace(" ", "")
     return normalized, compact
 
 
-def _stage_level_key(value: Any) -> tuple[int, int, str] | None:
-    normalized, compact = _normalize_category_text(value)
-    stage_token = compact
-    if stage_token.startswith("stage"):
-        stage_token = stage_token[5:]
-    if not stage_token:
-        return None
-    if "unknown" in normalized:
-        return (1, len(_STAGE_ORDER_INDEX) + 1, normalized)
-    stage_index = _STAGE_ORDER_INDEX.get(stage_token)
-    if stage_index is None:
-        return None
-    return (0, stage_index, normalized)
-
-
-_NEGATED_MUTATION_LEVEL_PATTERN = re.compile(r"^(?:non|not|no|un)\s?(?:mutated|mutant|mutation)")
-_NEGATED_FINDING_LEVEL_PATTERN = re.compile(
-    r"^(?:non|not|no|un)\s?(?:detected|detectable|expressed|expression|methylated|amplified|amplification|altered)"
+# Labels that stand for a missing or unusable value; they sort after every other level.
+_UNKNOWN_LEVEL_TEXTS = frozenset(
+    {
+        "unknown",
+        "unk",
+        "missing",
+        "not available",
+        "na",
+        "n a",
+        "nan",
+        "not applicable",
+        "not reported",
+        "not evaluated",
+        "not assessed",
+        "not specified",
+        "unspecified",
+        "undetermined",
+        "indeterminate",
+        "discrepancy",
+    }
 )
+_PLAIN_NUMBER_PATTERN = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+# AJCC/FIGO stage tokens after "stage" (or bare Roman numerals): numeral, sub-stage letter, digit.
+_ROMAN_STAGE_PATTERN = re.compile(r"(0|iv|i{1,3})([abc]?)(\d?)")
+_ARABIC_STAGE_PATTERN = re.compile(r"([0-4])([abc]?)(\d?)")
+_ROMAN_STAGE_VALUES = {"0": 0, "i": 1, "ii": 2, "iii": 3, "iv": 4}
+# Negations may follow a prefix ("EGFR non-mutated", "MGMT unmethylated").
+_NEGATED_MUTATION_LEVEL_PATTERN = re.compile(r"(?:^|\s)(?:non|not|no|un)\s?(?:mutated|mutant|mutation)\b")
+_NEGATED_WILDTYPE_LEVEL_PATTERN = re.compile(r"(?:^|\s)(?:non|not|no)\s?(?:wild\s?type|wt)\b")
+_NEGATED_FINDING_LEVEL_PATTERN = re.compile(
+    r"(?:^|\s)(?:non|not|no|un)\s?(?:detected|detectable|expressed|expression|methylated|amplified|amplification|altered)\b"
+)
+_NEGATIVE_LEVEL_TEXTS = frozenset({"negative", "neg", "no", "absent", "control", "reference", "baseline", "normal", "none"})
+_POSITIVE_LEVEL_TEXTS = frozenset({"positive", "pos", "yes", "present", "case", "abnormal"})
+# A label ending in a sign reads as positive or negative ("ER+", "HER2-", "PD-L1(+)", "Signature-").
+_TRAILING_SIGN_PATTERN = re.compile(r"(.*[^\W_])\s*\(?([+＋\-−–])\)?", re.DOTALL)
+_BARE_EXPOSURE_LEVELS = frozenset({"never", "former", "current", "ex"})
+_ORDINAL_LEVEL_RANKS = {
+    "low": 0,
+    "lower": 0,
+    "mild": 0,
+    "intermediate": 1,
+    "medium": 1,
+    "mid": 1,
+    "middle": 1,
+    "moderate": 1,
+    "high": 2,
+    "higher": 2,
+    "severe": 2,
+}
+# Group labels written by derive_group_column's percentile splits.
+_PERCENTILE_GROUP_PATTERN = re.compile(r"(?:at )?(below|above) .*percentile threshold")
+_DIGIT_RUN_PATTERN = re.compile(r"(\d+)")
+
+
+def _plain_number(text: str) -> float | None:
+    stripped = text.strip()
+    if not _PLAIN_NUMBER_PATTERN.fullmatch(stripped):
+        return None
+    number = float(stripped)
+    return number if math.isfinite(number) else None
+
+
+def _exposure_rank(tokens: Sequence[str], compact: str) -> int | None:
+    """Never (0) < former (1) < current (2) exposure, e.g. smoking status."""
+    token_set = set(tokens)
+    if "never" in token_set or "nonsmoker" in compact:
+        return 0
+    if token_set & {"former", "formerly", "ex", "reformed", "quit", "past", "previous"} or compact.startswith("exsmok"):
+        return 1
+    if token_set & {"current", "currently", "active", "smoker"}:
+        return 2
+    return None
+
+
+def _stage_rank(compact: str) -> tuple[int, int, int] | None:
+    """(numeral, sub-stage letter, digit) of a stage label such as "Stage IA2", "IIIB", or "Stage 2A"."""
+    token = compact
+    prefixed = token.startswith("stage")
+    if prefixed:
+        token = token[5:]
+    if not token:
+        return None
+    match = _ROMAN_STAGE_PATTERN.fullmatch(token)
+    if match is not None:
+        numeral = _ROMAN_STAGE_VALUES[match.group(1)]
+    else:
+        # Arabic numerals read as stages only after the word "stage".
+        match = _ARABIC_STAGE_PATTERN.fullmatch(token) if prefixed else None
+        if match is None:
+            return None
+        numeral = int(match.group(1))
+    letter = "abc".index(match.group(2)) + 1 if match.group(2) else 0
+    digit = int(match.group(3)) if match.group(3) else 0
+    return numeral, letter, digit
+
+
+def _trailing_sign_polarity(text: str) -> int | None:
+    """0 for a label ending in a minus sign, 1 for a plus sign, None otherwise (and for combinations like "ER+/PR-")."""
+    stripped = text.strip()
+    if "/" in stripped:
+        return None
+    match = _TRAILING_SIGN_PATTERN.fullmatch(stripped)
+    if match is None:
+        return None
+    return 1 if match.group(2) in {"+", "＋"} else 0
+
+
+def _ordinal_level_rank(normalized: str, tokens: Sequence[str]) -> int | None:
+    """Low (0) < intermediate (1) < high (2), including the percentile-split group labels."""
+    if normalized == "rest":
+        return 0
+    if normalized == "between percentile thresholds":
+        return 1
+    percentile = _PERCENTILE_GROUP_PATTERN.fullmatch(normalized)
+    if percentile is not None:
+        return 0 if percentile.group(1) == "below" else 2
+    return _ORDINAL_LEVEL_RANKS.get(tokens[0]) if tokens else None
+
+
+def _natural_text_key(text: str) -> tuple[tuple[int, int, str], ...]:
+    """Sort key that compares digit runs as numbers ("T2" before "T10")."""
+    parts: list[tuple[int, int, str]] = []
+    for index, chunk in enumerate(_DIGIT_RUN_PATTERN.split(text)):
+        if index % 2:
+            parts.append((0, int(chunk), ""))
+        elif chunk:
+            parts.append((1, 0, chunk))
+    return tuple(parts)
+
+
+def _category_reference_rank(raw: str, column: str) -> tuple[int, tuple[Any, ...]]:
+    """Reference-order group and rank of one category label (lower comes first)."""
+    normalized, compact = _normalize_category_text(raw)
+    column_text, column_compact = _normalize_category_text(column)
+    if not normalized or normalized in _UNKNOWN_LEVEL_TEXTS or "unknown" in normalized or "missing" in normalized:
+        return 9, ()
+    number = _plain_number(raw)
+    if number is not None:
+        # Numeric codes (60, 70, ..., 100) keep numeric order ahead of text levels.
+        return 0, (number,)
+    tokens = normalized.split()
+    exposure_context = any(word in column_compact for word in ("smok", "tobacco", "cigar")) or "smok" in compact
+    if exposure_context or normalized in _BARE_EXPOSURE_LEVELS:
+        exposure = _exposure_rank(tokens, compact)
+        if exposure is not None:
+            return 1, (exposure,)
+    stage = _stage_rank(compact)
+    if stage is not None:
+        return 2, stage
+    # Negated labels are checked first: "Non-mutated" contains "mutated" but is the wild-type
+    # reference, "Non-wildtype" is the mutant level, and "Not detected" is the negative level.
+    if _NEGATED_MUTATION_LEVEL_PATTERN.search(normalized):
+        return 3, (0,)
+    if _NEGATED_WILDTYPE_LEVEL_PATTERN.search(normalized):
+        return 3, (1,)
+    if _NEGATED_FINDING_LEVEL_PATTERN.search(normalized):
+        return 4, (0,)
+    if "wildtype" in compact or compact == "wt":
+        return 3, (0,)
+    if "mutated" in normalized or "mutant" in normalized or "mutation" in normalized or compact == "mut":
+        return 3, (1,)
+    if normalized in _NEGATIVE_LEVEL_TEXTS:
+        return 4, (0,)
+    if normalized in _POSITIVE_LEVEL_TEXTS:
+        return 4, (1,)
+    polarity = _trailing_sign_polarity(raw)
+    if polarity is not None:
+        return 4, (polarity,)
+    if "sex" in column_text or "gender" in column_text:
+        if normalized == "female":
+            return 5, (0,)
+        if normalized == "male":
+            return 5, (1,)
+    ordinal = _ordinal_level_rank(normalized, tokens)
+    if ordinal is not None:
+        return 6, (ordinal,)
+    return 8, ()
 
 
 def _category_reference_sort_key(column: str, value: Any) -> tuple[Any, ...]:
-    normalized, compact = _normalize_category_text(value)
-    column_text, column_compact = _normalize_category_text(column)
-    unknown_like = {"unknown", "missing", "not available", "na", "n a"}
-    if normalized in unknown_like or "unknown" in normalized or "missing" in normalized:
-        return (9, normalized)
+    """Sort key that puts the natural reference level of a categorical variable first.
 
-    smoking_context = "smok" in column_compact or "smoker" in normalized or "nonsmoker" in compact
-    if smoking_context:
-        if "lifelong non smoker" in normalized or "never smoker" in normalized or "non smoker" in normalized or "nonsmoker" in compact:
-            return (0, 0, normalized)
-        if "former smoker" in normalized or normalized.startswith("former "):
-            return (0, 1, normalized)
-        if "current smoker" in normalized or normalized.startswith("current "):
-            return (0, 2, normalized)
-
-    stage_key = _stage_level_key(value)
-    if stage_key is not None:
-        return (1, *stage_key)
-
-    # Negated labels are checked first: "Non-mutated" contains "mutated" but is the wild-type
-    # reference, and "Not detected" is the negative level.
-    if _NEGATED_MUTATION_LEVEL_PATTERN.match(normalized):
-        return (2, 0, normalized)
-    if _NEGATED_FINDING_LEVEL_PATTERN.match(normalized):
-        return (3, 0, normalized)
-    if "wildtype" in compact or "wt" == compact:
-        return (2, 0, normalized)
-    if "mutated" in normalized or "mutant" in normalized:
-        return (2, 1, normalized)
-
-    if normalized in {"negative", "neg", "no", "absent", "control", "reference", "baseline", "normal", "none"}:
-        return (3, 0, normalized)
-    if normalized in {"positive", "pos", "yes", "present", "case", "abnormal"}:
-        return (3, 1, normalized)
-
-    if "sex" in column_text or "gender" in column_text:
-        if normalized == "female":
-            return (4, 0, normalized)
-        if normalized == "male":
-            return (4, 1, normalized)
-
-    return (8, normalized)
+    Clinical conventions come first (numeric codes in numeric order, never < former < current
+    exposure, AJCC stages, wild type before mutant, negative before positive, female before
+    male, low < intermediate < high), then the remaining labels in natural text order, and
+    unknown-like labels last. Labels that normalise alike ("<65" and ">=65") are ordered by
+    their exact text, so the order never depends on the order of the rows.
+    """
+    raw = str(value)
+    group, rank = _category_reference_rank(raw, column)
+    normalized, _ = _normalize_category_text(raw)
+    return (group, rank, _natural_text_key(normalized), raw)
 
 
 def _ordered_reference_categories(values: Sequence[Any], column: str) -> list[str]:
