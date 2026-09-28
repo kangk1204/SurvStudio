@@ -875,6 +875,46 @@ def test_repeated_cv_without_any_complete_model_names_no_cv_selected_model(monke
     assert result["ranking_complete"] is False
 
 
+def test_repeated_cv_manuscript_ranks_come_from_the_rows() -> None:
+    from survival_toolkit.ml_models import build_manuscript_result_tables
+
+    common = {"cv_folds": 5, "cv_repeats": 3, "n_repeats": 3, "evaluation_mode": "repeated_cv"}
+    tables = build_manuscript_result_tables({
+        "evaluation_mode": "repeated_cv_incomplete",
+        "comparison_table": [
+            {"model": "DeepSurv", "c_index": 0.71, "rank": 2, **common},
+            {"model": "Neural MTLR", "c_index": 0.73, "rank": 1, **common},
+            # Left unranked by the comparison, or without a cross-validated C-index.
+            {"model": "DeepHit", "c_index": 0.75, "rank": None, **common},
+            {"model": "Survival VAE", "c_index": None, "rank": 3, **{**common, "evaluation_mode": "repeated_cv_incomplete"}},
+        ],
+    })
+    assert [row["Rank"] for row in tables["model_performance_table"]] == [2, 1, "Not ranked", "Not ranked"]
+
+
+@pytest.mark.parametrize("fraction", [0, 0.0, -0.2, float("nan"), float("inf"), 0.6, True, "0.3"])
+def test_repeated_cv_refuses_a_locked_test_fraction_outside_the_form_bounds(monkeypatch, fraction) -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=27, n_patients=150)
+    _patch_fits(monkeypatch, ml)
+    with pytest.raises(UserInputError, match=r"locked_test_fraction must be None \(no locked test set\) or a fraction between 0.05 and 0.5"):
+        ml.cross_validate_survival_models(df, "os_months", "os_event", ["age", "biomarker_score"], cv_folds=2,
+                                          cv_repeats=1, locked_test_fraction=fraction)
+
+
+def test_repeated_cv_accepts_the_locked_test_fraction_bounds_and_none(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=27, n_patients=150)
+    _patch_fits(monkeypatch, ml)
+    for accepted in (0.05, 0.5, None):
+        result = ml.cross_validate_survival_models(df, "os_months", "os_event", ["age", "biomarker_score"], cv_folds=2,
+                                                   cv_repeats=1, locked_test_fraction=accepted)
+        assert result["locked_test_fraction"] == accepted
+        assert (result["n_locked_test_patients"] is None) == (accepted is None)
+
+
 def test_comparisons_flag_missing_brier_metrics_of_the_top_model(monkeypatch) -> None:
     from survival_toolkit import ml_models as ml
 

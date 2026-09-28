@@ -162,6 +162,27 @@ def _validate_max_depth(max_depth: Any) -> int | None:
     return int(max_depth)
 
 
+# The web form's bounds for the share of the cohort reserved as a locked test set.
+_LOCKED_TEST_FRACTION_BOUNDS = (0.05, 0.5)
+
+
+def _validated_locked_test_fraction(value: Any) -> float | None:
+    """``None`` (no locked test set) or a fraction within the web form's bounds, as for the deep models.
+
+    0, a negative value, or NaN used to leave the run without a locked test set silently.
+    """
+    if value is None:
+        return None
+    low, high = _LOCKED_TEST_FRACTION_BOUNDS
+    valid_type = not isinstance(value, bool) and isinstance(value, (int, np.integer, float, np.floating))
+    if not valid_type or not (low <= float(value) <= high):
+        raise ValueError(
+            f"locked_test_fraction must be None (no locked test set) or a fraction between {low} and {high} "
+            f"(got {value!r})."
+        )
+    return float(value)
+
+
 # A fitted Random Survival Forest keeps, in every node of every tree, the survival and
 # cumulative hazard functions at each distinct training time (2 x 8 bytes), so its size
 # grows with trees x nodes x distinct times, roughly quadratically in the training rows.
@@ -3404,9 +3425,9 @@ def cross_validate_survival_models(
 ) -> dict[str, Any]:
     """Evaluate Cox PH, LASSO-Cox, RSF, and GBS with repeated stratified cross-validation.
 
-    With ``locked_test_fraction`` set, a stratified test set is reserved first;
-    repeated CV runs on the remaining development set only, and every model is
-    refit on the development set and scored once on the untouched test set.
+    With ``locked_test_fraction`` set (a fraction from 0.05 to 0.5), a stratified test
+    set is reserved first; repeated CV runs on the remaining development set only, and
+    every model is refit on the development set and scored once on the untouched test set.
     """
     _require_sklearn()
     categorical_features = list(categorical_features or [])
@@ -3419,6 +3440,7 @@ def cross_validate_survival_models(
     _validate_model_feature_columns(features, time_column=time_column, event_column=event_column)
     # An invalid depth would otherwise only drop the tree models from the table.
     max_depth = _validate_max_depth(max_depth)
+    locked_test_fraction = _validated_locked_test_fraction(locked_test_fraction)
 
     frame = _cohort_frame(
         df,
@@ -3437,7 +3459,7 @@ def cross_validate_survival_models(
     source_rows = _frame_source_rows(frame)
     all_events = frame[event_column].astype(int).to_numpy()
 
-    use_locked_test = locked_test_fraction is not None and float(locked_test_fraction) > 0.0
+    use_locked_test = locked_test_fraction is not None
     if use_locked_test:
         dev_positions, test_positions = locked_test_split(
             all_events,
