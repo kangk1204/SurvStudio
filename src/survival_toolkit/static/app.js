@@ -574,7 +574,9 @@ function scrollToAnalysisResult(tabName, { mode = "single" } = {}) {
 
 function shouldRevealCompletedResult(goal) {
   if (goal === "predictive") return activeTabName() === "benchmark";
-  if (activeTabName() === "benchmark" && ["ml", "dl"].includes(goal)) return true;
+  // An ML or DL result is revealed in place only while the Prediction tab shows that family: a user who moved
+  // on to the other family's controls stays there (a toast says the run finished).
+  if (goal === "ml" || goal === "dl") return activeTabName() === "benchmark" && predictiveFamilyGoal() === goal;
   return activeTabName() === goal;
 }
 

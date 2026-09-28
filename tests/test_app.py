@@ -1146,7 +1146,8 @@ def test_ml_dl_result_reveal_is_conditional_on_current_view() -> None:
 
     assert "function shouldRevealCompletedResult(goal) {" in text
     assert "function revealCompletedResultIfCurrent(goal" in text
-    assert 'if (activeTabName() === "benchmark" && ["ml", "dl"].includes(goal)) return true;' in text
+    # Only while the Prediction tab shows that family (tests/test_frontend_review2.py drives it).
+    assert 'if (goal === "ml" || goal === "dl") return activeTabName() === "benchmark" && predictiveFamilyGoal() === goal;' in text
     assert "return activeTabName() === goal;" in text
     assert 'revealCompletedResultIfCurrent("ml", {' in text
     assert 'revealCompletedResultIfCurrent("dl", {' in text

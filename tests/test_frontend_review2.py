@@ -227,6 +227,35 @@ def test_a_failed_run_of_one_mode_keeps_the_result_of_the_other_mode(
     assert result["afterFailedSingle"] == {"mode": "compare", "current": True, "comparison": True}
 
 
+def test_a_finished_ml_run_does_not_pull_the_workbench_away_from_deep_learning(tmp_path: Path, example_dataset: dict) -> None:
+    """R13-6: the user moved on to DeepSurv's controls while RSF trained; the view stays there and a toast tells."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+    """ + _DL_SINGLE_HANDLER + r"""
+      const hold = deferred();
+      page.fetchHandler = (request) => (request.url.endsWith("/api/ml-model") ? hold.promise.then(() => mlSingle(request)) : { status: 500, body: { detail: "unexpected" } });
+      page.run("activateTab('benchmark'); reviewBenchmarkModel('rsf', 'single'); refs.runPredictiveWorkbenchButton.click()");
+      await page.settle(3);
+      page.run("reviewBenchmarkModel('deepsurv', 'single')");
+      await page.settle(3);
+      hold.resolve();
+      await page.settle();
+      return {
+        family: page.run("runtime.predictiveFamily"),
+        selector: page.run("refs.predictiveModelSelector.value"),
+        tab: page.run("activeTabName()"),
+        trained: page.run("panelModeForPayload(state.ml)"),
+        toasts: page.toasts(),
+      };
+    """, dataset=example_dataset)
+
+    assert result["family"] == "dl"
+    assert result["selector"] == "deepsurv"
+    assert result["tab"] == "benchmark"
+    assert result["trained"] == "single"
+    assert any("Random Survival Forest model finished in the background" in toast for toast in result["toasts"]), result["toasts"]
+
+
 # ── Runtime banner ──────────────────────────────────────────────
 
 
