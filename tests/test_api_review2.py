@@ -678,6 +678,93 @@ def test_a_group_cut_from_an_outcome_informed_column_is_outcome_informed() -> No
     assert km.json()["analysis"]["outcome_informed_group"] is True
 
 
+def _example_with_event_copy() -> str:
+    from survival_toolkit.sample_data import make_example_dataset
+
+    frame = make_example_dataset()
+    frame["vital"] = frame["os_event"]
+    frame["bm"] = frame["biomarker_score"]
+    upload = client.post("/api/upload", files={"file": ("with_copy.csv", frame.to_csv(index=False).encode(), "text/csv")})
+    assert upload.status_code == 200, upload.text
+    return upload.json()["dataset_id"]
+
+
+@pytest.mark.parametrize("group", ["vital", "pfs_event"])
+def test_kaplan_meier_refuses_outcome_columns_as_groups(group: str) -> None:
+    dataset_id = _example_with_event_copy()
+    response = client.post(
+        "/api/kaplan-meier",
+        json={"dataset_id": dataset_id, "time_column": "os_months", "event_column": "os_event", "group_column": group},
+    )
+    assert response.status_code == 400, response.text
+    assert "Survival outcome columns cannot be used" in _detail(response) and group in _detail(response)
+    grouped = client.post(
+        "/api/kaplan-meier",
+        json={"dataset_id": dataset_id, "time_column": "os_months", "event_column": "os_event", "group_column": "stage"},
+    )
+    assert grouped.status_code == 200, grouped.text
+
+
+def test_optimal_cutpoint_refuses_outcome_and_outcome_informed_variables() -> None:
+    dataset_id = _example_with_event_copy()
+    base = {"dataset_id": dataset_id, "time_column": "os_months", "event_column": "os_event", "permutation_iterations": 0}
+    copy_of_event = client.post("/api/optimal-cutpoint", json={**base, "variable": "vital"})
+    assert copy_of_event.status_code == 400, copy_of_event.text
+    assert "Survival outcome columns cannot be used" in _detail(copy_of_event)
+
+    derived = client.post("/api/derive-group", json={**base, "source_column": "age", "method": "optimal_cutpoint", "lower_label": "0", "upper_label": "1"})
+    assert derived.status_code == 200, derived.text
+    informed = client.post(
+        "/api/optimal-cutpoint",
+        json={**base, "dataset_id": derived.json()["dataset_id"], "variable": derived.json()["derived_column"]},
+    )
+    assert informed.status_code == 400, informed.text
+    assert "Outcome-informed" in _detail(informed)
+
+    response = client.post("/api/optimal-cutpoint", json={**base, "variable": "biomarker_score"})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["request_config"]["variable"] == "biomarker_score"
+    assert payload["dataset_hash"] == client.get(f"/api/dataset/{dataset_id}").json()["dataset_hash"]
+
+
+def test_marker_validation_checks_the_mapped_columns_for_roles_and_outcomes() -> None:
+    _, recipe = _locked_recipe()
+    marker = recipe["markers"][0]
+    external = _example_with_event_copy()
+
+    def validate(mapping: dict):
+        return client.post(
+            "/api/marker-validation", json={"dataset_id": external, "recipe": recipe, "column_mapping": mapping, "n_bootstrap": 0}
+        )
+
+    for mapping in ({marker: "os_event"}, {marker: "os_months"}, {"age": "os_months"}):
+        response = validate(mapping)
+        assert response.status_code == 400, (mapping, response.text)
+        assert "only one role" in _detail(response), _detail(response)
+    for mapping in ({marker: "vital"}, {marker: "pfs_event"}):
+        response = validate(mapping)
+        assert response.status_code == 400, (mapping, response.text)
+        assert "Survival outcome columns cannot be used" in _detail(response)
+
+    renamed = validate({"biomarker_score": "bm"})
+    assert renamed.status_code == 200, renamed.text
+
+
+@pytest.mark.parametrize(
+    ("time_column", "event_column", "event_value"),
+    [("os_months", "os_months", 1), ("os_months", "stage", "IX"), ("os_months", "os_event", 7)],
+)
+def test_cohort_table_outcome_restriction_keeps_the_validation_message(time_column: str, event_column: str, event_value) -> None:
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    outcome = {"time_column": time_column, "event_column": event_column, "event_positive_value": event_value}
+    km = client.post("/api/kaplan-meier", json={"dataset_id": dataset_id, **outcome})
+    table = client.post("/api/cohort-table", json={"dataset_id": dataset_id, "variables": ["age"], **outcome})
+    assert km.status_code == table.status_code == 400, (km.text, table.text)
+    assert _detail(table) == _detail(km)
+    assert "could not be processed" not in _detail(table)
+
+
 # ── Bootstrap budgets and long jobs ─────────────────────────────
 
 

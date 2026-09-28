@@ -3910,6 +3910,19 @@ async def kaplan_meier(request_model: KaplanMeierRequest, request: Request) -> d
         def _run() -> dict[str, Any]:
             from survival_toolkit.plots import build_km_figure
 
+            group_column = request_model.group_column
+            if group_column and group_column not in (request_model.time_column, request_model.event_column):
+                # Curves split by the outcome itself (a copy of the event, another endpoint's event) show
+                # nothing but the split. The time and event columns get their own message from the analysis.
+                # Input checks scan every column, so they run in the worker thread too.
+                _reject_survival_outcome_feature_columns(
+                    stored,
+                    [group_column],
+                    time_column=request_model.time_column,
+                    event_column=request_model.event_column,
+                    event_positive_value=request_model.event_positive_value,
+                    context="Kaplan-Meier grouping",
+                )
             analysis = compute_km_analysis(
                 stored.dataframe,
                 time_column=request_model.time_column,
@@ -4095,8 +4108,9 @@ async def cohort_table(request_model: CohortTableRequest, request: Request) -> d
             cohort_note: str | None = None
             analysis_cohort: dict[str, Any] | None = None
             if request_model.time_column and request_model.event_column:
-                # Same row rule as KM/Cox: valid time and event values and non-negative follow-up time.
-                survival_frame = _cohort_frame(
+                # Same row rule as KM/Cox: valid time and event values and non-negative follow-up time. The
+                # boundary keeps the rule's own messages ("No events were found ...") for the user.
+                survival_frame = user_input_boundary(_cohort_frame)(
                     dataframe,
                     time_column=request_model.time_column,
                     event_column=request_model.event_column,
@@ -4226,8 +4240,19 @@ async def optimal_cutpoint(request_model: OptimalCutpointRequest, request: Reque
         from survival_toolkit.plots import build_cutpoint_scan_figure
 
         stored = _get_stored_dataset(request_model.dataset_id)
+        request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                [request_model.variable],
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="optimal cutpoint searches",
+            )
+            _reject_outcome_informed_columns(stored, [request_model.variable], context="optimal cutpoint searches")
             result = find_optimal_cutpoint(
                 stored.dataframe,
                 time_column=request_model.time_column,
@@ -4238,7 +4263,7 @@ async def optimal_cutpoint(request_model: OptimalCutpointRequest, request: Reque
                 permutation_iterations=request_model.permutation_iterations,
             )
             figure = build_cutpoint_scan_figure(result, variable_name=request_model.variable)
-            return {"result": result, "figure": figure}
+            return _attach_dataset_hash({"result": result, "figure": figure, "request_config": request_config}, stored)
 
         return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
@@ -4972,6 +4997,26 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _reject_repeated_column_roles(roles: Sequence[tuple[str, Sequence[str]]], *, analysis: str) -> None:
+    """Each column may have one role in ``analysis``: time, event, marker, clinical covariate, stratum or patient ID."""
+
+    first_role: dict[str, str] = {}
+    clashes: list[str] = []
+    for role, columns in roles:
+        for column in columns:
+            name = str(column)
+            earlier = first_role.setdefault(name, role)
+            if earlier != role:
+                clashes.append(f"'{name}' ({earlier} and {role})")
+    if clashes:
+        raise UserInputError(
+            f"Each column can have only one role in {analysis}; these were given more than one: "
+            + ", ".join(clashes[:5])
+            + (" ..." if len(clashes) > 5 else "")
+            + "."
+        )
+
+
 def _reject_repeated_marker_roles(request_model: MarkerEvaluationRequest) -> None:
     """Each column may have one role: time, event, marker, clinical covariate, stratum or patient ID."""
 
@@ -4984,21 +5029,59 @@ def _reject_repeated_marker_roles(request_model: MarkerEvaluationRequest) -> Non
     ]
     if request_model.marker_matrix_id and request_model.marker_matrix_id_column:
         roles.append(("patient ID", [request_model.marker_matrix_id_column]))
-    first_role: dict[str, str] = {}
-    clashes: list[str] = []
-    for role, columns in roles:
-        for column in columns:
-            name = str(column)
-            earlier = first_role.setdefault(name, role)
-            if earlier != role:
-                clashes.append(f"'{name}' ({earlier} and {role})")
-    if clashes:
-        raise UserInputError(
-            "Each column can have only one role in a marker evaluation; these were given more than one: "
-            + ", ".join(clashes[:5])
-            + (" ..." if len(clashes) > 5 else "")
-            + "."
-        )
+    _reject_repeated_column_roles(roles, analysis="a marker evaluation")
+
+
+def _reject_leaky_validation_columns(
+    stored: Any,
+    recipe: dict[str, Any],
+    column_mapping: dict[str, str],
+    event_positive_value: Any,
+) -> None:
+    """Apply the marker-evaluation role and outcome rules to the external columns a locked recipe will read.
+
+    ``column_mapping`` can point a locked marker or covariate at any external column, including
+    the outcome, a copy of it, or an outcome-informed derived column; those would validate the
+    model on the outcome itself. A recipe without the fields read here is left to the validation,
+    which reports what is missing.
+    """
+
+    outcome = recipe.get("outcome")
+    clinical = recipe.get("clinical")
+    markers = recipe.get("markers")
+    strata = recipe.get("strata_columns") or []
+    if not (isinstance(outcome, dict) and isinstance(clinical, dict) and isinstance(markers, list) and isinstance(strata, list)):
+        return
+    clinical_columns = clinical.get("columns") or []
+    names = [outcome.get("time_column"), outcome.get("event_column"), *markers, *clinical_columns, *strata]
+    if not isinstance(clinical_columns, list) or not all(isinstance(name, str) for name in names):
+        return
+
+    def external(name: str) -> str:
+        return str(column_mapping.get(name, name))
+
+    time_column = external(outcome["time_column"])
+    event_column = external(outcome["event_column"])
+    # One role per recipe column, so two locked columns mapped onto one external column clash too.
+    inputs: list[tuple[str, list[str]]] = [
+        *[(f"marker {name}", [external(name)]) for name in markers],
+        *[(f"clinical covariate {name}", [external(name)]) for name in clinical_columns],
+        *[(f"stratum {name}", [external(name)]) for name in strata],
+    ]
+    _reject_repeated_column_roles(
+        [("outcome time", [time_column]), ("outcome event", [event_column]), *inputs],
+        analysis="a marker validation",
+    )
+    external_inputs = [column for _role, columns in inputs for column in columns]
+    _reject_survival_outcome_feature_columns(
+        stored,
+        external_inputs,
+        time_column=time_column,
+        event_column=event_column,
+        event_positive_value=outcome.get("event_positive_value") if event_positive_value is None else event_positive_value,
+        context="marker validation",
+    )
+    _reject_outcome_informed_columns(stored, external_inputs, context="marker validation")
 
 
 def _reject_missing_marker_columns(stored: Any, columns: Sequence[str]) -> None:
@@ -5117,6 +5200,8 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
 
         def _run() -> dict[str, Any]:
             recipe = request_model.recipe
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_leaky_validation_columns(stored, recipe, request_model.column_mapping, request_model.event_positive_value)
             # A stratified recipe is scored without bootstrap draws; the others share the interval work budget.
             if recipe.get("strata_columns"):
                 n_bootstrap, bootstrap_note = int(request_model.n_bootstrap), None
