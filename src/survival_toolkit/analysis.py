@@ -4925,13 +4925,13 @@ def _percentile_split(
             rest_label = _percentile_threshold_label(threshold_percent, "below")
             labels = np.where(numeric_series <= split_point, rest_label, top_label)
             assignment_rule = (
-                f"{source_column} > percentile threshold ({split_point:.3f}) -> {top_label}, else -> {rest_label}"
+                f"{source_column} > percentile threshold ({split_point:.6g}) -> {top_label}, else -> {rest_label}"
             )
         else:
             top_label = _percentile_threshold_label(threshold_percent, "above")
             labels = np.where(numeric_series >= split_point, top_label, rest_label)
             assignment_rule = (
-                f"{source_column} >= percentile threshold ({split_point:.3f}) -> {top_label}, else -> {rest_label}"
+                f"{source_column} >= percentile threshold ({split_point:.6g}) -> {top_label}, else -> {rest_label}"
             )
         return labels, {
             "method": method,
@@ -4962,8 +4962,8 @@ def _percentile_split(
         "cutoffs": [low_threshold, high_threshold],
         "n_groups": 3,
         "assignment_rule": (
-            f"{source_column} <= lower percentile threshold ({low_threshold:.3f}) -> {bottom_label}; "
-            f"{source_column} >= upper percentile threshold ({high_threshold:.3f}) -> {top_label}; "
+            f"{source_column} <= lower percentile threshold ({low_threshold:.6g}) -> {bottom_label}; "
+            f"{source_column} >= upper percentile threshold ({high_threshold:.6g}) -> {top_label}; "
             f"else -> {middle_label}"
         ),
     }
@@ -4999,8 +4999,8 @@ def _extreme_split(
         "n_groups": 2,
         "excluded_count": excluded_middle_count,
         "assignment_rule": (
-            f"{source_column} <= lower percentile threshold ({low_threshold:.3f}) -> {bottom_label}; "
-            f"{source_column} >= upper percentile threshold ({high_threshold:.3f}) -> {top_label}; "
+            f"{source_column} <= lower percentile threshold ({low_threshold:.6g}) -> {bottom_label}; "
+            f"{source_column} >= upper percentile threshold ({high_threshold:.6g}) -> {top_label}; "
             "else -> excluded middle range"
         ),
     }
@@ -5263,6 +5263,7 @@ def _build_candidate_indicators(
             numeric = pd.Series(
                 pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, na_value=np.nan), index=series.index
             )
+            numeric = numeric.where(np.isfinite(numeric))
             quantile_candidates = (0.25, 0.5, 0.75)
             seen_thresholds: set[float] = set()
             for quantile in quantile_candidates:
@@ -5282,7 +5283,8 @@ def _build_candidate_indicators(
                             "kind": "numeric_gt",
                             "threshold": cutoff,
                             "quantile": float(quantile),
-                            "label": f"{column} > Q{int(quantile * 100)}({cutoff:.3f})",
+                            # Six significant digits: three decimals printed small thresholds as "(0.000)".
+                            "label": f"{column} > Q{int(quantile * 100)}({cutoff:.6g})",
                         }
                     )
             reason = (
@@ -5355,11 +5357,11 @@ def _indicator_definition(indicator: dict[str, Any]) -> dict[str, Any]:
 def _evaluate_indicator(df: pd.DataFrame, indicator: dict[str, Any]) -> pd.Series:
     column = indicator["column"]
     if indicator["kind"] == "numeric_gt":
-        numeric = pd.to_numeric(df[column], errors="coerce")
-        out = pd.Series(pd.NA, index=df.index, dtype="boolean")
-        valid = numeric.notna()
-        out.loc[valid] = (numeric.loc[valid] > float(indicator["threshold"])).astype(bool)
-        return out
+        values = pd.to_numeric(df[column], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+        # +/-Inf is missing here, as the search cohort and the derived groups treat it.
+        valid = np.isfinite(values)
+        above = np.where(valid, values > float(indicator["threshold"]), False)
+        return pd.Series(pd.array(above, dtype="boolean"), index=df.index).mask(~valid)
     if indicator["kind"] == "categorical_level":
         values = df[column].astype("string")
         out = pd.Series(pd.NA, index=df.index, dtype="boolean")

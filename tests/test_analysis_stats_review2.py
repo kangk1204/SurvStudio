@@ -743,3 +743,49 @@ def test_cohort_table_caps_groups_and_levels_like_the_api() -> None:
     wide = pd.DataFrame({"note": [f"n{i}" for i in range(250)]})
     with pytest.raises(ValueError, match="at most 200 levels"):
         analysis.compute_cohort_table(wide, ["note"])
+
+
+# ---------------------------------------------------------------------------------------
+# Signature rule definitions (R4#7, R4#8)
+
+
+def _plain(values: pd.Series) -> list[bool | None]:
+    return [None if pd.isna(value) else bool(value) for value in values]
+
+
+def test_infinite_marker_values_are_missing_in_signature_rules() -> None:
+    rule = {"column": "g", "kind": "numeric_gt", "threshold": 0.0}
+    evaluated = analysis._evaluate_indicator(pd.DataFrame({"g": [np.inf, -np.inf, 1.0, -1.0, np.nan]}), rule)
+    assert _plain(evaluated) == [None, None, True, False, None]
+    repeated_index = pd.DataFrame({"g": [5.0, np.nan, 1.0, 7.0, 2.0]}, index=[3, 1, 3, 1, 2])
+    assert _plain(analysis._evaluate_indicator(repeated_index, {**rule, "threshold": 3.0})) == [True, None, False, True, False]
+
+    rng = np.random.default_rng(3)
+    n = 200
+    g = rng.normal(size=n)
+    event_time = rng.exponential(10 / np.exp(0.8 * (g > 0)))
+    censor_time = rng.exponential(15, n)
+    frame = pd.DataFrame(
+        {"os_months": np.minimum(event_time, censor_time) + 0.01, "os_event": (event_time <= censor_time).astype(int), "g": g}
+    )
+    frame.loc[:4, "g"] = np.inf
+    output, column, payload = discover_feature_signature(
+        frame, "os_months", "os_event", ["g"], max_combination_size=1, bootstrap_iterations=0
+    )
+    # The search leaves the +Inf rows out, so the saved signature column must not label them.
+    assert payload["search_space"]["n_rows_analyzed"] == 195
+    assert output.loc[:4, column].isna().all()
+    assert output.loc[5:, column].notna().all()
+
+
+def test_small_thresholds_keep_their_digits_in_rule_labels() -> None:
+    frame = pd.DataFrame({"x": np.linspace(0.0001, 0.0009, 40)})
+    indicators = analysis._build_candidate_indicators(frame, ["x"], min_group_size=5)
+    assert [indicator["label"] for indicator in indicators] == [
+        f"x > Q{int(indicator['quantile'] * 100)}({indicator['threshold']:.6g})" for indicator in indicators
+    ]
+    assert not any("(0.000)" in indicator["label"] for indicator in indicators)
+    _, _, summary = analysis.derive_group_column(frame, "x", "percentile_split", cutoff="25,25")
+    low, high = summary["cutoffs"]
+    assert f"({low:.6g})" in summary["assignment_rule"] and f"({high:.6g})" in summary["assignment_rule"]
+    assert "(0.000)" not in summary["assignment_rule"]
