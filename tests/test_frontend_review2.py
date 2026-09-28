@@ -15,6 +15,7 @@ from test_frontend_review import (  # noqa: F401 (pytest fixtures used by name)
     _compare_all_script,
     _locked_test_compare,
     _run_page,
+    client,
     compare_payloads,
     example_dataset,
     marker_payloads,
@@ -535,6 +536,60 @@ def test_unticking_all_event_columns_is_an_endpoint_change(tmp_path: Path) -> No
     assert "26 events" in result["unticked"]["line"]
     assert "not a standard event column name" in result["blocked"]
     assert "30 events" in result["afterTick"]
+
+
+# ── Markers ─────────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def untested_marker_payloads(example_dataset) -> dict:
+    """Real marker evaluations run with Subsamples = 0 and with Permutations = 0."""
+    request = {
+        "dataset_id": example_dataset["dataset_id"],
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "event_positive_value": 1,
+        "marker_columns": ["biomarker_score", "immune_index"],
+        "clinical_columns": ["age", "stage"],
+        "categorical_clinical": ["stage"],
+        "n_permutations": 49,
+        "n_resamples": 8,
+        "random_seed": 7,
+    }
+    payloads = {}
+    for key, changes in (("noSubsamples", {"n_resamples": 0}), ("noPermutations", {"n_permutations": 0})):
+        response = client.post("/api/marker-evaluation", json={**request, **changes})
+        assert response.status_code == 200, response.text
+        payloads[key] = response.json()
+    return payloads
+
+
+def test_marker_summary_does_not_claim_what_was_not_tested(tmp_path: Path, untested_marker_payloads: dict) -> None:
+    """R15-6: with no subsamples, stability is untested; with no permutations, there are no family-wise p-values."""
+    result = _run_page(tmp_path, r"""
+      page.context.__markers = fixtures.markers;
+      const summarize = (key) => {
+        const summary = page.run(`markerSummary(__markers.${key})`);
+        return { headline: summary.headline, strengths: summary.strengths.join(" | "), cautions: summary.cautions.join(" | "), next: summary.next_steps.join(" | ") };
+      };
+      return { noSubsamples: summarize("noSubsamples"), noPermutations: summarize("noPermutations") };
+    """, markers=untested_marker_payloads)
+
+    no_subsamples = result["noSubsamples"]
+    assert untested_marker_payloads["noSubsamples"]["analysis"]["tier_counts"]["suggestive"] == 1
+    assert "does not hold up across subsamples" not in no_subsamples["headline"]
+    assert "stability was not assessed" in no_subsamples["headline"]
+    assert "repeated on 0 subsamples" not in no_subsamples["strengths"]
+    assert "No subsample was evaluated, so the stability of the selection was not assessed and no marker can be robust." in no_subsamples["cautions"]
+    assert "Subsamples above 0" in no_subsamples["next"]
+    assert "optimism-corrected" not in no_subsamples["next"]
+
+    no_permutations = result["noPermutations"]
+    assert "after family-wise error control" not in no_permutations["headline"]
+    assert no_permutations["headline"].startswith("No marker was tested")
+    assert "0 permutations" not in no_permutations["strengths"]
+    assert "Westfall-Young" not in no_permutations["strengths"]
+    assert "Permutations above 0" in no_permutations["next"]
 
 
 # ── Derived groupings ───────────────────────────────────────────

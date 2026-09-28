@@ -223,14 +223,34 @@ function markerSummary(payload) {
   const suggestive = Number(counts.suggestive || 0);
   const evaluated = Number(cohort.n_markers_evaluated || 0);
   const addedValue = analysis.primary_lens === "added_value";
-  const headline = robust
-    ? `${formatCount(robust)} of ${formatCount(evaluated)} markers are robust${addedValue ? " beyond the clinical covariates" : ""}.`
-    : suggestive
+  // With Permutations at 0 there are no family-wise p-values, so no marker was tested; with Subsamples at 0
+  // (or every subsample failed) the stability of the selection was not assessed, so no marker can be robust.
+  const nPermutations = analysis.null?.n_permutations;
+  const permutationsRun = nPermutations == null || Number(nPermutations) > 0;
+  const resampling = analysis.resampling || {};
+  const stabilityAssessed = resampling.stability_assessed ?? (resampling.n_valid == null || Number(resampling.n_valid) > 0);
+  const lensText = addedValue ? "added value beyond the clinical covariates" : "an association";
+  let headline;
+  if (!permutationsRun) {
+    headline = `No marker was tested for ${lensText}: with Permutations at 0 there are no family-wise p-values.`;
+  } else if (robust) {
+    headline = `${formatCount(robust)} of ${formatCount(evaluated)} markers are robust${addedValue ? " beyond the clinical covariates" : ""}.`;
+  } else if (suggestive) {
+    headline = stabilityAssessed
       ? `No marker is robust; ${formatCount(suggestive)} show evidence that does not hold up across subsamples.`
-      : `No marker shows ${addedValue ? "added value beyond the clinical covariates" : "an association"} after family-wise error control.`;
+      : `${formatCount(suggestive)} marker(s) show evidence, but their stability was not assessed (Subsamples at 0), so none can be robust.`;
+  } else {
+    headline = `No marker shows ${lensText} after family-wise error control.`;
+  }
   const cautions = [];
   const repeated = markerDuplicateCaution(analysis.duplicates);
   if (repeated) cautions.push(repeated);
+  if (!permutationsRun) {
+    cautions.push("No permutations were run, so there are no family-wise p-values (Westfall-Young) and every marker is left untested.");
+  }
+  if (!stabilityAssessed) {
+    cautions.push(String(resampling.note || "No subsample was evaluated, so the stability of the selection was not assessed and no marker can be robust."));
+  }
   if (!addedValue) cautions.push("No clinical covariates were given, so markers are judged on marginal association only. Add clinical covariates to test added value.");
   const clinicalOnly = markerModelIsClinicalOnly(signature);
   if (clinicalOnly) cautions.push("No marker was selected, so the final model is the clinical-only model (the clinical covariates alone).");
@@ -268,8 +288,12 @@ function markerSummary(payload) {
     ],
     strengths: [
       ...(leftOut && leftOut.gain >= 0.02 ? [leftOut.text] : []),
-      `Family-wise p-values (Westfall-Young) from ${formatValue(analysis.null?.n_permutations)} permutations${addedValue && markerResidualNull(analysis) ? ", permuting each marker's residuals after regression on the clinical covariates (Smith method), which keeps each marker's link to the covariates" : ""}.`,
-      `The whole screen was repeated on ${formatValue(analysis.resampling?.n_valid)} subsamples of ${Math.round(100 * Number(analysis.resampling?.fraction || 0.632))}% of the patients.`,
+      ...(permutationsRun
+        ? [`Family-wise p-values (Westfall-Young) from ${formatValue(nPermutations)} permutations${addedValue && markerResidualNull(analysis) ? ", permuting each marker's residuals after regression on the clinical covariates (Smith method), which keeps each marker's link to the covariates" : ""}.`]
+        : []),
+      ...(stabilityAssessed
+        ? [`The whole screen was repeated on ${formatValue(resampling.n_valid)} subsamples of ${Math.round(100 * Number(resampling.fraction || 0.632))}% of the patients.`]
+        : []),
       `Robust: family-wise p ≤ ${formatValue(settings.alpha)}, selected in ≥ ${Math.round(100 * Number(settings.robust_frequency || 0.5))}% of subsamples and the same direction in ≥ ${Math.round(100 * Number(settings.robust_direction || 0.9))}%.`,
       ...(duplicateScreen.checked && !repeated
         ? [`No repeated patients: no two patients have near-identical profiles over the ${formatCount(duplicateScreen.markers_used)} most variable markers.`]
@@ -277,8 +301,12 @@ function markerSummary(payload) {
     ],
     cautions,
     next_steps: [
-      robust ? "Validate the locked model in an independent cohort below before claiming the markers." : "Treat suggestive markers as hypotheses for an independent cohort.",
-      "Report the optimism-corrected C-index rather than the apparent one.",
+      ...(permutationsRun ? [] : ["Run again with Permutations above 0 to test the markers."]),
+      ...(stabilityAssessed ? [] : ["Run again with Subsamples above 0 to see which markers hold up across subsamples."]),
+      ...(permutationsRun
+        ? [robust ? "Validate the locked model in an independent cohort below before claiming the markers." : "Treat suggestive markers as hypotheses for an independent cohort."]
+        : []),
+      ...(signature.optimism_corrected_c != null ? ["Report the optimism-corrected C-index rather than the apparent one."] : []),
     ],
   };
 }
