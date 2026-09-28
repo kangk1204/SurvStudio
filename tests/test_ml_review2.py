@@ -227,6 +227,26 @@ def test_repeated_cv_refuses_when_no_fold_has_a_comparable_pair(monkeypatch) -> 
                                           cv_repeats=2)
 
 
+def test_locked_test_set_without_a_comparable_pair_is_explained(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+    from survival_toolkit.evaluation import locked_test_split
+
+    df = _late_event_cohort(n=40, n_events=5)
+    events = df["event"].to_numpy()
+    # A seed whose locked test set holds a single event, which none of its patients outlives.
+    seed = next(
+        seed for seed in range(100)
+        if int(events[locked_test_split(events, random_state=seed, test_fraction=0.25)[1]].sum()) == 1
+    )
+    _patch_fits(monkeypatch, ml, **{name: _c_index_fit() for name in _FIT_FUNCTIONS})
+    result = ml.cross_validate_survival_models(df, "time", "event", ["x", "z"], cv_folds=2, cv_repeats=1,
+                                               random_state=seed, locked_test_fraction=0.25)
+    assert all(row["locked_test_c_index"] is None for row in result["comparison_table"])
+    summary = result["scientific_summary"]
+    assert any(text.startswith("The locked test set has no comparable pair of patients") for text in summary["cautions"])
+    assert not any("reached a locked-test C-index" in text for text in summary["strengths"])
+
+
 def test_repeated_cv_excludes_a_model_that_lacks_a_fold_the_others_have(monkeypatch) -> None:
     from survival_toolkit import ml_models as ml
 

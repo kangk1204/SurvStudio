@@ -3662,6 +3662,13 @@ def cross_validate_survival_models(
             "(no event followed by a longer follow-up), so the C-index is undefined there for every model; those folds "
             f"were skipped for all models alike, and the cross-validated means use the other {n_scored_folds} folds."
         )
+    if locked_test_frame is not None and not _has_comparable_pair(
+        locked_test_frame[time_column], locked_test_frame[event_column]
+    ):
+        extra_cautions.append(
+            "The locked test set has no comparable pair of patients (no event followed by a longer follow-up), so no "
+            "model has a locked-test C-index; use a larger locked test fraction or a cohort with more events."
+        )
     if locked_errors:
         failed_names = ", ".join(error["model"] for error in locked_errors)
         extra_cautions.append(
