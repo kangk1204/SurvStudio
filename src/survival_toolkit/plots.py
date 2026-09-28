@@ -1095,9 +1095,17 @@ def build_model_comparison_figure(comparison: dict[str, Any]) -> dict[str, Any]:
 
     finite_vals = [v for v in safe_c if v is not None]
     y_max = max(finite_vals) if finite_vals else 1.0
-    note = "<br><sup>* apparent-fallback rows shown for transparency and excluded from rank ordering</sup>" if any(
-        not row.get("comparable_for_ranking", True) for row in table
-    ) else ""
+    unranked_modes = [str(row.get("evaluation_mode") or "") for row in table if not row.get("comparable_for_ranking", True)]
+    unranked_kinds = []
+    if any("apparent" in mode for mode in unranked_modes):
+        unranked_kinds.append("apparent-fallback rows")
+    if any("apparent" not in mode for mode in unranked_modes):
+        unranked_kinds.append("rows without a complete C-index estimate")
+    note = (
+        f"<br><sup>* {' and '.join(unranked_kinds)} shown for transparency and excluded from rank ordering</sup>"
+        if unranked_kinds
+        else ""
+    )
 
     fig = go.Figure()
     fig.add_trace(

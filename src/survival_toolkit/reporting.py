@@ -722,13 +722,17 @@ def _fold_failure_text(result: dict[str, Any], row: dict[str, Any]) -> str:
 
 
 def _unranked_reason(result: dict[str, Any], row: dict[str, Any]) -> str | None:
-    """None when the row can be ranked by its C-index, else why it cannot."""
-    if row.get("comparable_for_ranking") is False:
-        return "apparent evaluation on the patients used for fitting, not comparable with the others"
+    """None when the row can be ranked by its C-index, else why it cannot.
+
+    Rows left unranked because they lost cross-validation folds or have no C-index are also marked
+    not comparable, so those reasons are checked before the apparent-evaluation one.
+    """
     if str(result.get("evaluation_mode", "")).startswith("repeated_cv") and _incomplete_row(row):
         return _fold_failure_text(result, row)
     if _finite(row.get("c_index")) is None:
         return "no C-index"
+    if row.get("comparable_for_ranking") is False:
+        return "apparent evaluation on the patients used for fitting, not comparable with the others"
     return None
 
 
