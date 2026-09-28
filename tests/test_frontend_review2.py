@@ -660,6 +660,23 @@ def test_an_optimal_cutpoint_for_another_endpoint_is_discarded(tmp_path: Path, e
     assert any("The endpoint changed while the optimal cutpoint was being scanned" in toast for toast in result["toasts"])
 
 
+def test_without_a_suggested_event_column_event_stays_blank(tmp_path: Path) -> None:
+    """R14-20: the dataset's second column is not preselected as the event when nothing suggests one."""
+    dataset = _synthetic_dataset()
+    flag = {"name": "flag", "kind": "binary", "n_unique": 2, "unique_preview": [0, 1], "missing": 0, "non_missing": 40}
+    dataset["columns"] = [dataset["columns"][0], flag, *[column for column in dataset["columns"][1:] if column["name"] != "os_event"]]
+    dataset["numeric_columns"] = ["flag", "os_months", "age", "biomarker", "status_code"]
+    dataset["binary_candidate_columns"] = ["flag", "sex", "status_code"]
+    dataset["suggestions"] = {"time_columns": ["os_months"], "event_columns": []}
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      return { event: page.run("refs.eventColumn.value"), options: page.run("refs.eventColumn.options.map((option) => option.value)") };
+    """, dataset=dataset)
+
+    assert result["event"] == ""
+    assert "flag" in result["options"]
+
+
 def test_unticking_all_event_columns_is_an_endpoint_change(tmp_path: Path) -> None:
     """R13-2: when unticking "All columns" resets Event, results are cleared and the Cox preview is refreshed."""
     result = _run_page(tmp_path, r"""

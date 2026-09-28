@@ -351,6 +351,11 @@ function activateTab(tabName, { historyMode = "replace", focusTabButton = false,
   });
 }
 
+// The server's first suggested event column that the dataset has; "" when it suggests none.
+function suggestedEventColumn(columnNames, suggestions) {
+  return (suggestions?.event_columns || []).find((column) => columnNames.includes(column)) || "";
+}
+
 function updateControlsFromDataset({ scrollToTop = false } = {}) {
   const columnNames = state.dataset.columns.map((c) => c.name);
   const suggestions = state.dataset.suggestions;
@@ -359,12 +364,10 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   if (refs.covariateSearchInput) refs.covariateSearchInput.value = "";
   if (refs.categoricalSearchInput) refs.categoricalSearchInput.value = "";
   if (refs.cohortVariableSearchInput) refs.cohortVariableSearchInput.value = "";
-  // Only a likely follow-up column is preselected; otherwise Time stays blank for the user to choose.
+  // Only a likely follow-up column is preselected; otherwise Time stays blank for the user to choose. Event
+  // likewise starts from a suggested event column only, never from a guessed column position.
   renderTimeColumnOptions({ preferred: "", silent: true });
-  renderEventColumnOptions({
-    preferred: inferDefault(columnNames, suggestions.event_columns, 1),
-    silent: true,
-  });
+  renderEventColumnOptions({ preferred: suggestedEventColumn(columnNames, suggestions), silent: true });
   renderSelect(refs.groupColumn, columnNames, { includeBlank: true, blankLabel: "Overall only", selected: null });
   // Display settings from a previous dataset (max time in its units, its time unit) must not carry over, and
   // neither do its variable selections: a new dataset starts from its own defaults.
@@ -518,7 +521,7 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
     : "";
   const preferredEvent = snapshot?.eventColumn && columnNames.includes(snapshot.eventColumn)
     ? snapshot.eventColumn
-    : inferDefault(columnNames, suggestions.event_columns || [], 1);
+    : suggestedEventColumn(columnNames, suggestions);
   const preferredGroup = snapshot?.groupColumn && columnNames.includes(snapshot.groupColumn)
     ? snapshot.groupColumn
     : null;
