@@ -10,7 +10,16 @@ import pandas as pd
 import pytest
 
 import survival_toolkit.analysis as analysis
-from survival_toolkit.analysis import _cohort_frame, compute_km_analysis, load_dataframe
+from survival_toolkit.analysis import (
+    _cohort_frame,
+    _survival_outcome_like_columns,
+    coerce_event,
+    compute_km_analysis,
+    find_event_equivalent_columns,
+    load_dataframe,
+    model_feature_candidate_columns,
+    suggest_columns,
+)
 
 
 # ---------------------------------------------------------------------------------------
@@ -250,3 +259,176 @@ def test_numbers_with_separators_are_never_taken_for_calendar_dates() -> None:
     dated = pd.DataFrame({"os_date": ["2020-01-03", "2021-05-06", "-", "2022-01-01"], "os_event": [1, 0, 1, 0]})
     with pytest.raises(ValueError, match="calendar dates"):
         compute_km_analysis(dated, "os_date", "os_event")
+
+
+# ---------------------------------------------------------------------------------------
+# Missing-value markers and negated labels in the event column (R3 #6)
+
+
+def test_missing_value_markers_in_the_event_column_are_missing_not_censored() -> None:
+    status = pd.Series(
+        ["Dead", "Alive", "Not Reported", "Dead", "Not available", "No data", "Alive", "Not applicable", "Never assessed"],
+        name="vital_status",
+    )
+    expected = [1.0, 0.0, None, 1.0, None, None, 0.0, None, None]
+    for coded in (coerce_event(status), coerce_event(status, "Dead")):
+        assert [None if np.isnan(value) else value for value in coded.tolist()] == expected
+    for label in ("Not reported", "Not available", "Not applicable", "No data", "Never assessed"):
+        assert analysis._outcome_status_family_match(label) == (None, False), label
+    for label in ("No recurrence", "0:Not Recurred", "Never relapsed", "without progression", "No evidence of disease"):
+        assert analysis._outcome_status_family_match(label)[0] == "censor", label
+
+
+def test_tcga_markers_in_the_event_column_leave_the_other_patients_usable() -> None:
+    frame = pd.DataFrame(
+        {
+            "os_days": [10, 20, 30, 40, 50, 60, 70],
+            "vital_status": ["Dead", "Alive", "Alive", "[Not Available]", "Dead", "Alive", "Dead"],
+        }
+    )
+    for positive in (None, "Dead"):
+        km = compute_km_analysis(frame, "os_days", "vital_status", event_positive_value=positive)
+        assert km["cohort"]["n"] == 6 and km["cohort"]["events"] == 3
+    blanks = pd.DataFrame({"time": ["10", " ", "30", "40", "50", "60"], "status": ["1", "0", " ", "1", "0", "1"]})
+    assert len(_cohort_frame(blanks, "time", "status")) == 4
+
+
+def test_none_in_an_event_column_is_not_dropped_as_missing() -> None:
+    # "None" can mean no event ("Recurrence: None"); dropping it would keep only the events.
+    with pytest.raises(ValueError, match="Could not infer event coding"):
+        coerce_event(pd.Series(["None", "Relapse", "None", "Relapse"], name="recurrence"))
+
+
+# ---------------------------------------------------------------------------------------
+# Columns that record the absence of the event (R3 #2)
+
+
+def _absence_frame(name: str, time_name: str = "pfs_months") -> tuple[pd.DataFrame, int]:
+    rng = np.random.default_rng(8)
+    event = (rng.random(60) < 0.6).astype(int)
+    frame = pd.DataFrame({time_name: rng.exponential(20, 60).round(1) + 0.1, "event": event, name: 1 - event})
+    return frame, int(event.sum())
+
+
+@pytest.mark.parametrize(
+    ("name", "time_name", "state"),
+    [
+        ("progression_free", "pfs_months", "being free of the event"),
+        ("event_free", "efs_months", "being free of the event"),
+        ("disease_free", "dfs_months", "being free of the event"),
+        ("relapse_free_status", "rfs_months", "being free of the event"),
+        ("ProgressionFree", "pfs_months", "being free of the event"),
+        ("alive", "os_months", "being alive"),
+        ("is_alive", "os_months", "being alive"),
+        ("living", "os_months", "being alive"),
+        ("survived", "os_months", "being alive"),
+    ],
+)
+def test_columns_recording_the_absence_of_the_event_are_refused_with_generic_codes(name: str, time_name: str, state: str) -> None:
+    frame, _ = _absence_frame(name, time_name)
+    for codes in ((0, 1), ("No", "Yes"), (False, True)):
+        coded = frame.assign(**{name: np.where(frame[name] == 1, codes[1], codes[0])})
+        with pytest.raises(ValueError, match=f"records {state}"):
+            compute_km_analysis(coded, time_name, name)
+        with pytest.raises(ValueError, match=f"records {state}"):
+            compute_km_analysis(coded, time_name, name, event_positive_value=codes[1])
+        assert name not in suggest_columns(coded)["event_columns"]
+    assert suggest_columns(frame)["event_columns"] == ["event"]
+
+
+def test_absence_named_columns_with_outcome_labels_and_endpoint_names_stay_usable() -> None:
+    frame, n_events = _absence_frame("alive", "os_months")
+    frame["alive"] = np.where(frame["event"] == 1, "Dead", "Alive")
+    km = compute_km_analysis(frame, "os_months", "alive", event_positive_value="Dead")
+    assert km["cohort"]["events"] == n_events
+    # "Progression-free survival" names the endpoint: its status column holds the events.
+    frame, n_events = _absence_frame("progression_free_survival_status")
+    frame["progression_free_survival_status"] = frame["event"]
+    km = compute_km_analysis(frame, "pfs_months", "progression_free_survival_status")
+    assert km["cohort"]["events"] == n_events
+    assert "progression_free_survival_status" in suggest_columns(frame)["event_columns"]
+
+
+# ---------------------------------------------------------------------------------------
+# Outcome-like names, complements, and follow-up time names (R3 #4, #7, #11)
+
+
+def test_death_alive_and_censoring_flags_are_outcome_columns() -> None:
+    rng = np.random.default_rng(1)
+    n = 40
+    dead = rng.integers(0, 2, n)
+    dfs_event = np.maximum(dead, rng.integers(0, 2, n))
+    frame = pd.DataFrame(
+        {
+            "os_months": rng.uniform(1, 60, n).round(1),
+            "dfs_months": rng.uniform(1, 60, n).round(1),
+            "dfs_event": dfs_event,
+            "dead": dead,
+            "deceased": np.where(dead == 1, "Yes", "No"),
+            "died": dead,
+            "alive": 1 - dead,
+            "vital": np.where(dead == 1, "Dead", "Alive"),
+            "censored": 1 - dfs_event,
+            "studied": rng.integers(0, 2, n),  # holds "died" only as a substring
+            "age": rng.integers(40, 80, n),
+        }
+    )
+    flagged = {"dead", "deceased", "died", "alive", "vital", "censored"}
+    assert flagged <= _survival_outcome_like_columns(frame)
+    assert "studied" not in _survival_outcome_like_columns(frame)
+    assert not flagged & set(model_feature_candidate_columns(frame))
+    assert {"studied", "age"} <= set(model_feature_candidate_columns(frame))
+    # The censoring flag is the complement of the event it censors.
+    assert "censored" in find_event_equivalent_columns(frame, "dfs_event")
+    assert {"alive", "vital", "deceased", "died"} <= find_event_equivalent_columns(frame, "dead")
+
+
+def test_complements_of_the_event_are_found_on_the_overlapping_rows() -> None:
+    n = 12
+    frame = pd.DataFrame({"time": np.arange(1, n + 1, dtype=float), "event": [1, 0] * (n // 2)})
+    frame["cens_flag"] = 1 - frame["event"]
+    frame["free_label"] = np.where(frame["event"] == 1, "No", "Yes")
+    frame.loc[[0, 5], "cens_flag"] = np.nan
+    frame["age"] = np.arange(50, 50 + n)
+    frame["unrelated"] = [1, 1, 0, 0] * (n // 4)
+    assert find_event_equivalent_columns(frame, "event") == {"cens_flag", "free_label"}
+
+
+def test_follow_up_names_are_time_columns_and_baseline_intervals_are_not() -> None:
+    for name in ("days_to_last_known_alive", "last_contact_days", "time_to_next_treatment_days", "days_to_last_contact"):
+        assert analysis._looks_like_survival_time_column_name(name), name
+    for name in ("time_to_surgery_days", "time_since_diagnosis_years", "os_dead", "time_to_treatment_start_months"):
+        assert not analysis._looks_like_survival_time_column_name(name), name
+    for name in ("time_to_death_days", "time_to_progression_months", "time_in_months", "time_to_last_follow_up_days"):
+        assert analysis._looks_like_survival_time_column_name(name), name
+
+
+def test_baseline_status_columns_are_not_outcomes_unless_their_values_name_one() -> None:
+    rng = np.random.default_rng(2)
+    n = 50
+    frame = pd.DataFrame(
+        {
+            "os_months": rng.exponential(30, n).round(1) + 0.1,
+            "os_event": rng.integers(0, 2, n),
+            "diabetes_status": rng.choice(["Yes", "No"], n),
+            "marital_status": rng.choice(["Married", "Never married", "Divorced"], n),
+            "hiv_status": rng.choice(["Positive", "Negative", "Not tested"], n),
+            "insurance_status": rng.choice(["Insured", "Uninsured"], n),
+            "patient_status": rng.choice(["Alive", "Dead"], n),
+            "status": rng.integers(0, 2, n),
+        }
+    )
+    assert _survival_outcome_like_columns(frame) == {"os_months", "os_event", "patient_status", "status"}
+    assert suggest_columns(frame)["event_columns"] == ["os_event", "patient_status", "status"]
+    assert "diabetes_status" in model_feature_candidate_columns(frame)
+    # An explicit choice is still possible: the user said what the column means.
+    km = compute_km_analysis(frame, "os_months", "diabetes_status", event_positive_value="Yes")
+    assert km["cohort"]["events"] == int((frame["diabetes_status"] == "Yes").sum())
+
+
+def test_generic_time_to_event_names_pair_with_any_endpoint() -> None:
+    analysis._validate_endpoint_family_pair("tte", "os_event")
+    analysis._validate_endpoint_family_pair("tts", "pfs_event")
+    analysis._validate_endpoint_family_pair("time_to_event", "dfs_status")
+    with pytest.raises(ValueError, match="different survival endpoints"):
+        analysis._validate_endpoint_family_pair("os_months", "pfs_event")

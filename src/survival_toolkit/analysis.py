@@ -88,16 +88,21 @@ _MODEL_FEATURE_ID_PATTERN = re.compile(r"^(patient_id|sample_id|subject_id|id|ba
 _EVENT_NAME_PATTERNS = (
     re.compile(r"event"),
     re.compile(r"death"),
+    re.compile(r"deceas"),
     re.compile(r"mort"),
     re.compile(r"status$"),
-    re.compile(r"vital_status"),
+    re.compile(r"vital"),
     re.compile(r"survival_status"),
     re.compile(r"outcome_status"),
     re.compile(r"relapse"),
     re.compile(r"recur"),
     re.compile(r"progress"),
     re.compile(r"failure"),
+    re.compile(r"censor"),
 )
+# Outcome words matched as whole name tokens: as substrings they would also match "studied" or
+# "deadline". "cens" is a common short name of a censoring flag.
+_OUTCOME_NAME_TOKENS = {"dead", "died", "alive", "survived", "cens"}
 _SURVIVAL_ENDPOINT_ABBREVIATIONS = {
     "os",
     "pfs",
@@ -123,6 +128,26 @@ _SURVIVAL_ENDPOINT_ABBREVIATIONS = {
 }
 # "<word> free" names a survival endpoint: disease-free, progression-free, ... survival.
 _ENDPOINT_FREE_PHRASE_WORDS = ("disease", "progression", "recurrence", "relapse", "event", "metastasis", "failure")
+# Followed by one of these, "<word> free" names the endpoint ("progression-free survival", "disease
+# free months"); otherwise it says the patient is still free of the event ("progression_free" = 1).
+_FREE_PHRASE_ENDPOINT_TOKENS = {
+    "survival",
+    "surv",
+    "interval",
+    "time",
+    "period",
+    "day",
+    "days",
+    "week",
+    "weeks",
+    "month",
+    "months",
+    "year",
+    "years",
+}
+# Names that say the patient has not died ("alive", "is_alive", "living", "survived").
+_ALIVE_NAME_TOKENS = {"alive", "living", "survived", "survivor"}
+_DEATH_NAME_TOKENS = {"dead", "death", "died", "deceased"}
 _OBSERVATION_TOKENS = {"obs", "observation", "observed"}
 _TIME_UNIT_TOKENS = {"day", "days", "week", "weeks", "month", "months", "year", "years"}
 _TIME_CONTEXT_TOKENS = {
@@ -137,15 +162,28 @@ _TIME_CONTEXT_TOKENS = {
 _OUTCOME_CONTEXT_TOKENS = {
     "event",
     "death",
+    "dead",
+    "died",
+    "deceased",
+    "alive",
+    "vital",
     "mort",
     "status",
     "progress",
     "progression",
+    "progressed",
     "relapse",
+    "relapsed",
     "recur",
     "recurrence",
+    "recurred",
+    "metastasis",
+    "metastases",
     "failure",
     "censor",
+    "censored",
+    "censoring",
+    "cens",
 }
 _TIME_NAME_TOKENS = (
     "time",
@@ -1238,7 +1276,8 @@ def _endpoint_family_from_column_name(name: str) -> str | None:
     for family, phrase in phrase_families:
         if _tokens_contain_phrase(tokens, phrase):
             return family
-    for family in ("os", "pfs", "dfs", "rfs", "efs", "tts", "tte", "dss", "css", "pfi", "dfi"):
+    # "tte" and "tts" (time to event, time to ...) are generic, so they pair with any endpoint.
+    for family in ("os", "pfs", "dfs", "rfs", "efs", "dss", "css", "pfi", "dfi"):
         if family in token_set:
             return family
     return None
@@ -1307,6 +1346,8 @@ def _looks_like_survival_time_column_name(name: str) -> bool:
         or _tokens_contain_phrase(tokens, ("follow", "up"))
         or "fu" in token_set
         or "fup" in token_set
+        # "days_to_last_contact", "days_to_last_known_alive": the last follow-up by another name.
+        or any(_tokens_contain_phrase(tokens, ("last", word)) for word in ("contact", "known", "seen"))
     )
     # "Disease Free (Months)", "Recurrence Free Months": "<word> free" names an endpoint.
     has_free_phrase = any(_tokens_contain_phrase(tokens, (word, "free")) for word in _ENDPOINT_FREE_PHRASE_WORDS)
@@ -1320,10 +1361,15 @@ def _looks_like_survival_time_column_name(name: str) -> bool:
         or has_followup
         or has_free_phrase
         or has_qualified_time
+        # Time to next treatment (TTNT) spelled out.
+        or _tokens_contain_phrase(tokens, ("next", "treatment"))
     )
     has_event_context = bool(token_set & _OUTCOME_CONTEXT_TOKENS)
     has_duration_keyword = "duration" in token_set
     has_generic_time_context = has_time_keyword or has_duration_keyword
+    # "time_to_surgery_days", "time_since_diagnosis_years": a time to or since a clinical milestone
+    # that is neither an outcome nor follow-up is a baseline interval.
+    names_other_interval = bool(token_set & {"to", "since"}) and not (has_survival_context or has_event_context)
 
     if normalized in {"time", "survival_time", "event_time", "time_to_event", "followup_time"}:
         return True
@@ -1342,9 +1388,30 @@ def _looks_like_survival_time_column_name(name: str) -> bool:
         return True
     if has_generic_time_context and (len(tokens) == 1 or has_survival_context or has_event_context):
         return True
-    if has_time_units and (has_survival_context or has_event_context or has_time_keyword):
+    if has_time_units and (has_survival_context or has_event_context or (has_time_keyword and not names_other_interval)):
         return True
     return False
+
+
+def _absence_of_event_name(name: str) -> str | None:
+    """"free" or "alive" when a column name says the event has not happened, else None.
+
+    "progression_free", "event_free", "disease_free", "relapse_free_status": the patient is
+    still free of the event. "alive", "is_alive", "living", "survived": the patient has not
+    died. "Progression-free survival" (or "... months") names an endpoint instead, and a name
+    that also names death ("alive_or_dead") is left alone.
+    """
+    tokens = _column_name_tokens(name)
+    if set(tokens) & _DEATH_NAME_TOKENS:
+        return None
+    for position, token in enumerate(tokens):
+        joined = token.endswith("free") and token[: -len("free")] in _ENDPOINT_FREE_PHRASE_WORDS  # "EventFree"
+        phrase = token == "free" and position > 0 and tokens[position - 1] in _ENDPOINT_FREE_PHRASE_WORDS
+        if (joined or phrase) and not set(tokens[position + 1 :]) & _FREE_PHRASE_ENDPOINT_TOKENS:
+            return "free"
+    if set(tokens) & _ALIVE_NAME_TOKENS:
+        return "alive"
+    return None
 
 
 def _is_event_like_column_name(name: str) -> bool:
@@ -1353,7 +1420,64 @@ def _is_event_like_column_name(name: str) -> bool:
         return False
     if normalized in {"event", "status"}:
         return True
-    return any(pattern.search(normalized) for pattern in _EVENT_NAME_PATTERNS)
+    if any(pattern.search(normalized) for pattern in _EVENT_NAME_PATTERNS):
+        return True
+    # Death, "alive" and censoring flags, and "free of the event" flags, restate the outcome too.
+    return bool(set(_column_name_tokens(name)) & _OUTCOME_NAME_TOKENS) or _absence_of_event_name(name) == "free"
+
+
+# Words that make a "status" column name an outcome name ("vital_status", "os_status", "survival_status").
+_OUTCOME_STATUS_NAME_TOKENS = {
+    "survival",
+    "surv",
+    "outcome",
+    "vital",
+    "censor",
+    "censored",
+    "censoring",
+    "cens",
+    "alive",
+    "living",
+    "follow",
+    "followup",
+    "fu",
+    "fup",
+    *_SURVIVAL_ENDPOINT_ABBREVIATIONS,
+}
+
+
+def _is_generic_status_name(name: str) -> bool:
+    """A "<something>_status" name whose only outcome word is "status" ("diabetes_status", "marital_status").
+
+    Such columns are usually baseline characteristics. A bare "status" ("status", "status2") and
+    names that also name the outcome or an endpoint ("vital_status", "os_status",
+    "death_status", "Disease Free Status") are outcome names.
+    """
+    normalized = _normalize_column_label(name)
+    if "status" not in normalized:
+        return False
+    tokens = _column_name_tokens(name)
+    if not [token for token in tokens if token != "status" and not token.isdigit()]:
+        return False
+    if set(tokens) & _OUTCOME_STATUS_NAME_TOKENS or _name_has_strong_event_word(name):
+        return False
+    return _absence_of_event_name(name) is None
+
+
+def _values_name_the_outcome(series: pd.Series) -> bool:
+    """True when a value names an outcome state itself (Dead, Alive, Relapsed, NED, "No recurrence").
+
+    Yes/No, True/False and 0/1 codes do not: under a name such as "diabetes_status" they describe
+    a baseline characteristic.
+    """
+    for value in _unique_non_missing_values(series):
+        normalized = _normalize_token(value)
+        if normalized is None or normalized in _GENERIC_BINARY_CODE_TOKENS:
+            continue
+        family, _exact_match = _outcome_status_family_match(value)
+        if family in {"event_death", "event_progression", "censor"}:
+            return True
+    return False
 
 
 def _looks_like_baseline_status_column(name: str) -> bool:
@@ -1426,6 +1550,13 @@ def _outcome_status_value_family(value: Any) -> str | None:
 
 
 _NEGATED_STATUS_PATTERN = re.compile(r"^(no|not|non|never|without)\b")
+# A negation word followed by more words ("No recurrence", "Not reported").
+_NEGATED_PHRASE_PATTERN = re.compile(r"^(no|not|non|never|without)\b\W*[a-z]")
+# The event words a negation must apply to: "No recurrence" is censoring, while "Not reported",
+# "No data" or "Never assessed" are missing values.
+_NEGATABLE_EVENT_WORD_PATTERN = re.compile(
+    r"event|death|dead|died|deceas|mort|relaps|recur|progress|fail|metasta|diseas|tumou?r|evidence"
+)
 _LEADING_STATUS_CODE_PATTERN = re.compile(r"^\s*\d+\s*[:=.)\-]\s*")
 
 
@@ -1437,9 +1568,14 @@ def _outcome_status_family_match(value: Any) -> tuple[str | None, bool]:
     # "relapse-free") describe the absence of the event, i.e. censoring.
     label_text = _LEADING_STATUS_CODE_PATTERN.sub("", normalized).strip()
     if label_text and (
-        _NEGATED_STATUS_PATTERN.match(label_text) or re.search(r"(^|[^a-z])free($|[^a-z])", label_text)
+        (_NEGATED_STATUS_PATTERN.match(label_text) and _NEGATABLE_EVENT_WORD_PATTERN.search(label_text))
+        or re.search(r"(^|[^a-z])free($|[^a-z])", label_text)
     ):
         return "censor", True
+    if label_text and _NEGATED_PHRASE_PATTERN.match(label_text):
+        # A negated phrase without an event word ("Not reported", "No data", "Never married") is no
+        # outcome label; its "no" part must not read as censoring below.
+        return None, False
     for candidate in _token_variants(normalized):
         family = _OUTCOME_STATUS_VALUE_FAMILIES.get(candidate)
         if family is not None:
@@ -1484,10 +1620,14 @@ def _looks_like_event_outcome_column(name: str, series: pd.Series) -> bool:
     Baseline-looking names (biomarker, receptor, or clinical "status" columns such as
     her2_status or nodal_status) are not outcomes unless the name also names the event
     ("treatment_failure"), and two-valued labels that are not event coding
-    (Positive/Negative, MSI-H/MSS) never make a column an outcome.
+    (Positive/Negative, MSI-H/MSS) never make a column an outcome. Other "<something>_status"
+    names (diabetes_status, marital_status, hiv_status) are outcomes only when their values
+    name an outcome state (Dead/Alive, Relapsed, NED), not with Yes/No or 0/1 codes.
     """
     if not _is_event_like_column_name(name) or _is_baseline_named_column(name):
         return False
+    if _is_generic_status_name(name):
+        return _values_name_the_outcome(series)
     return _values_decode_as_event_coding(series)
 
 
@@ -1526,7 +1666,14 @@ def _model_feature_candidate_columns_from_metadata(
         # Time suggestions leave out 0/1 columns, so time-like names are checked directly too.
         if column in suggested_time_set or _looks_like_survival_time_column_name(column):
             continue
-        if column in binary_set and _is_event_like_column_name(column) and not _is_baseline_named_column(column):
+        # Only the names are known here, so a two-valued "<something>_status" column counts as the
+        # baseline characteristic it usually is.
+        if (
+            column in binary_set
+            and _is_event_like_column_name(column)
+            and not _is_baseline_named_column(column)
+            and not _is_generic_status_name(column)
+        ):
             continue
         candidates.append(column)
     return candidates
@@ -1699,7 +1846,29 @@ def _event_tokens_for_label(target: Any, target_token: str, observed_tokens: lis
     return {target_token}
 
 
+# Markers that mean "not recorded" in an event column, as in time columns. "None" and "-" are left
+# out: in an event column they can mean "no event" ("Recurrence: None") or a negative result.
+_EVENT_MISSING_VALUE_TOKENS = frozenset(_MISSING_VALUE_TOKENS - {"none", "-", "--"})
+
+
+def _without_missing_event_markers(series: pd.Series) -> pd.Series:
+    """The event column with missing-value markers ("[Not Available]", "Not reported", blank text) as missing."""
+    if is_bool_dtype(series) or is_numeric_dtype(series):
+        return series
+    markers = [
+        value
+        for value in _unique_non_missing_values(series)
+        if isinstance(value, str) and value.strip().lower() in _EVENT_MISSING_VALUE_TOKENS
+    ]
+    if not markers:
+        return series
+    return series.mask(series.isin(markers))
+
+
 def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Series:
+    # Missing-value markers are missing before any coding, as they are in the time column; the
+    # negation rule would otherwise read "Not reported" as censored.
+    series = _without_missing_event_markers(series)
     out = pd.Series(np.nan, index=series.index, dtype=float)
     valid = series.notna()
     if not valid.any():
@@ -1854,11 +2023,14 @@ def find_event_equivalent_columns(
             candidate = coerce_event(series)
         except ValueError:
             continue
-        overlap = reference_valid & candidate.notna()
+        overlap = (reference_valid & candidate.notna()).to_numpy(dtype=bool)
         if int(overlap.sum()) < 3:
             continue
-        candidate_values = candidate.to_numpy(dtype=float, na_value=np.nan)
-        if np.array_equal(candidate_values[overlap.to_numpy(dtype=bool)], reference_values[overlap.to_numpy(dtype=bool)]):
+        candidate_overlap = candidate.to_numpy(dtype=float, na_value=np.nan)[overlap]
+        reference_overlap = reference_values[overlap]
+        # A copy of the event, or its complement (a censoring or "alive" flag, 1 - event),
+        # restates the outcome.
+        if np.array_equal(candidate_overlap, reference_overlap) or np.array_equal(candidate_overlap, 1.0 - reference_overlap):
             equivalents.add(str(column))
     return equivalents
 
@@ -1877,7 +2049,6 @@ def _is_endpoint_abbreviation_name(name: str) -> bool:
 
 def suggest_columns(df: pd.DataFrame) -> dict[str, list[str]]:
     columns = list(df.columns)
-    # "censor"-named columns are not suggested: they usually code 1 = censored.
     event_tokens = ("event", "status", "death", "progress", "relapse")
     # A 0/1 column is an event indicator even when its name reads like an endpoint ("OS").
     time_columns = [
@@ -1886,13 +2057,21 @@ def suggest_columns(df: pd.DataFrame) -> dict[str, list[str]]:
         if _looks_like_survival_time_column_name(column) and not _is_zero_one_indicator(df[column])
     ]
     keyword_event_columns = set(_column_keywords(columns, event_tokens))
-    event_columns = [
-        column
-        for column in columns
-        if (column in keyword_event_columns and not _is_baseline_named_column(str(column)))
-        # TCGA Pan-Cancer CDR style: "OS", "PFI", "DFI", "DSS" hold the 0/1 events.
-        or (_is_endpoint_abbreviation_name(str(column)) and _is_zero_one_indicator(df[column]))
-    ]
+    event_columns = []
+    for column in columns:
+        name = str(column)
+        if _is_endpoint_abbreviation_name(name) and _is_zero_one_indicator(df[column]):
+            # TCGA Pan-Cancer CDR style: "OS", "PFI", "DFI", "DSS" hold the 0/1 events.
+            event_columns.append(column)
+        elif (
+            column in keyword_event_columns
+            and not _is_baseline_named_column(name)
+            # "diabetes_status" coded Yes/No is a baseline characteristic.
+            and not (_is_generic_status_name(name) and not _values_name_the_outcome(df[column]))
+            # Censoring or "free of the event" flags coded 0/1 or Yes/No mean 1 = no event.
+            and _no_event_indicator_message(df, column) is None
+        ):
+            event_columns.append(column)
     suggestions = {
         "time_columns": time_columns,
         "event_columns": event_columns,
@@ -2151,6 +2330,7 @@ _GENERIC_BINARY_CODE_TOKENS = {"0", "1", "yes", "no", "y", "n", "true", "false",
 
 
 def _has_only_generic_binary_codes(series: pd.Series) -> bool:
+    series = _without_missing_event_markers(series)
     if is_bool_dtype(series):
         return not series.dropna().empty
     numeric_values = _numeric_unique_values(series)
@@ -2160,24 +2340,42 @@ def _has_only_generic_binary_codes(series: pd.Series) -> bool:
     return bool(tokens) and tokens <= _GENERIC_BINARY_CODE_TOKENS
 
 
-def reject_censoring_indicator_event_column(df: pd.DataFrame, event_column: str) -> None:
-    """Refuse a generically coded column whose name says it flags censoring.
+def _no_event_indicator_message(df: pd.DataFrame, event_column: str) -> str | None:
+    """Why a generically coded column cannot be the event column, or None when it can.
 
-    SurvStudio treats 1 as the event. A column named like "censored" coded 0/1, Yes/No,
-    Y/N, or True/False usually means 1/Yes/True = censored, so reading it directly would
+    SurvStudio treats 1 as the event. A column named like "censored", or like the absence of
+    the event ("progression_free", "event_free", "is_alive", "survived"), coded 0/1, Yes/No,
+    Y/N, or True/False usually means 1/Yes/True = no event, so reading it directly would
     invert the whole analysis. Columns whose values name the outcome themselves
     ("Dead"/"Alive") are left to the regular event checks.
     """
-    tokens = set(_column_name_tokens(str(event_column)))
-    if not tokens & _CENSORING_NAME_TOKENS or tokens & _EVENT_NAME_OVERRIDE_TOKENS:
-        return
+    name = str(event_column)
+    tokens = set(_column_name_tokens(name))
+    censoring = bool(tokens & _CENSORING_NAME_TOKENS) and not tokens & _EVENT_NAME_OVERRIDE_TOKENS
+    absence = None if censoring else _absence_of_event_name(name)
+    if not censoring and absence is None:
+        return None
     if not _has_only_generic_binary_codes(df[event_column]):
-        return
-    raise ValueError(
-        f'"{event_column}" looks like a censoring indicator (usually 1, Yes, or True = censored), but SurvStudio '
-        "needs an event indicator (1 = event). Add a recoded column such as event = 1 - "
-        f"{event_column} (Yes -> 0, No -> 1) and select that instead."
+        return None
+    if censoring:
+        return (
+            f'"{event_column}" looks like a censoring indicator (usually 1, Yes, or True = censored), but SurvStudio '
+            "needs an event indicator (1 = event). Add a recoded column such as event = 1 - "
+            f"{event_column} (Yes -> 0, No -> 1) and select that instead."
+        )
+    state = "being free of the event" if absence == "free" else "being alive"
+    return (
+        f'"{event_column}" looks like it records {state} (usually 1, Yes, or True = no event), but SurvStudio '
+        "needs an event indicator (1 = event). Choose the event indicator column instead, or add a recoded column "
+        f"such as event = 1 - {event_column} (Yes -> 0, No -> 1) and select that."
     )
+
+
+def reject_censoring_indicator_event_column(df: pd.DataFrame, event_column: str) -> None:
+    """Refuse a generically coded column whose name says it flags censoring or the absence of the event."""
+    message = _no_event_indicator_message(df, event_column)
+    if message is not None:
+        raise ValueError(message)
 
 
 def _validate_event_column_choice(df: pd.DataFrame, event_column: str) -> None:
