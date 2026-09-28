@@ -345,8 +345,9 @@ const COHORT_TABLE_EMPTY_STATE_HTML = '<div class="empty-state">Check variables 
 // `pValueColumns` lists the columns shown as p-values; without it, the labels of analysis outputs decide
 // (isPValueLikeLabel). Tables whose column names come from the data (Table 1 group levels, the data
 // preview) pass `pValueColumns: []` and `rawHeaders: true`, so a group named "Test positive" or a column
-// named "ki67_p" is shown as it is.
-function renderTable(shell, rows, columns = null, { labels = {}, pValueColumns = null, rawHeaders = false } = {}) {
+// named "ki67_p" is shown as it is. `rawValues` shows every value as it is too (the data preview: a 13-digit
+// ID or a value with six decimals is data, not a result to round).
+function renderTable(shell, rows, columns = null, { labels = {}, pValueColumns = null, rawHeaders = false, rawValues = false } = {}) {
   if (!rows || rows.length === 0) {
     shell.innerHTML = '<div class="empty-state">No rows returned.</div>';
     return;
@@ -371,7 +372,11 @@ function renderTable(shell, rows, columns = null, { labels = {}, pValueColumns =
     visibleColumns.forEach((column) => {
       const td = document.createElement("td");
       const value = ownEntry(row, column);
-      td.textContent = typeof value === "number" && isPValueColumn(column) ? formatPValue(value) : formatValue(value);
+      if (rawValues) {
+        td.textContent = value === null || value === undefined || value === "" ? "NA" : String(value);
+      } else {
+        td.textContent = typeof value === "number" && isPValueColumn(column) ? formatPValue(value) : formatValue(value);
+      }
       tr.appendChild(td);
     });
     tbody.appendChild(tr);

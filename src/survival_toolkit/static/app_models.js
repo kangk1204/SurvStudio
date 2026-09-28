@@ -199,7 +199,8 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
       refs.mlComparisonShell.innerHTML = '<div class="empty-state">No model returned a comparison row.</div>';
     }
     if (payload.analysis?.manuscript_tables?.model_performance_table) {
-      renderTable(refs.mlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
+      // Manuscript headers are publication-ready ("Training Time, ms"): shown exactly as they are exported.
+      renderTable(refs.mlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
     }
     if (payload.figure?.data?.length) {
       refs.mlComparisonPlot.classList.remove("hidden");
@@ -425,7 +426,7 @@ async function runDlModel() {
       refs.dlComparisonShell.innerHTML = '<div class="empty-state">Run "Compare All" to benchmark all deep models on the same feature set.</div>';
     }
     if (repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table) {
-      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
+      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
     } else {
       refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Run "Compare All" to populate manuscript-ready deep comparison rows.</div>';
     }
@@ -551,7 +552,7 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
       refs.dlComparisonShell.innerHTML = '<div class="empty-state">No deep model returned a comparison row.</div>';
     }
     if (payload.analysis?.manuscript_tables?.model_performance_table) {
-      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
+      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
     }
     if (payload.figures?.comparison?.data?.length) {
       refs.dlComparisonPlot.classList.remove("hidden");

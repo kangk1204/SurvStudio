@@ -226,12 +226,13 @@ function validateDlControls({ compare = false } = {}) {
 }
 
 function renderDatasetPreview() {
-  // The file's own column order and names: object keys would put numeric names such as "7157" first,
-  // and header or p-value formatting would rewrite the data (a column named "ki67_p" is not a p-value).
+  // The file's own column order, names and values: object keys would put numeric names such as "7157" first,
+  // and header, number or p-value formatting would rewrite the data (a column named "ki67_p" is not a
+  // p-value, and a 13-digit patient ID is not "1.70e+12").
   const rows = state.dataset.preview || [];
   const present = new Set(rows.flatMap((row) => Object.keys(row || {})));
   const columns = datasetColumnNames().filter((column) => present.has(column));
-  renderTable(refs.datasetPreviewShell, rows, columns.length ? columns : null, { pValueColumns: [], rawHeaders: true });
+  renderTable(refs.datasetPreviewShell, rows, columns.length ? columns : null, { pValueColumns: [], rawHeaders: true, rawValues: true });
 }
 
 function duplicateIdentifierColumns(dataset = state.dataset) {

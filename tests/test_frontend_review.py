@@ -986,7 +986,8 @@ def test_table_one_and_the_data_preview_show_data_labels_as_they_are(tmp_path: P
 
     assert result["previewHeaders"][-2:] == ["ki67_p", "7157"]
     assert result["previewHeaders"][:2] == ["patient_id", "os_months"]
-    assert result["previewKi67"] == ["12.5", "2.00e-4", "-1.3"]
+    # The preview shows the file's values as they are (tests/test_frontend_review2.py: no rounding either).
+    assert result["previewKi67"] == ["12.5", "0.0002", "-1.3"]
     assert result["tableHeaders"] == ["Variable", "Statistic", "Overall (grouped subset)", "Test positive", "pT1a"]
     assert result["tableCells"] == [
         ["Cohort size", "N", "150", "45", "105"],

@@ -741,6 +741,43 @@ def test_a_refused_checklist_export_names_the_field_the_server_rejected(tmp_path
     assert result == {"refused": "format: Input should be 'docx' or 'markdown'", "unreadable": "Checklist export failed."}
 
 
+def test_manuscript_tables_show_the_headers_they_export(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:
+    """R13-21: "Training Time, ms" is shown as exported, not rewritten to "Training Time, Ms"."""
+    compare = dict(compare_payloads)
+    ml = dict(compare_payloads["ml"])
+    ml["manuscript_tables"] = {"model_performance_table": [
+        {"Rank": 1, "Model": "Random Survival Forest", "C-index": 0.714, "Features, n": 4, "Training Time, ms": 812.5},
+    ]}
+    compare["ml"] = ml
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.fetchHandler = (request) => (request.url.endsWith("/api/ml-model")
+        ? { status: 200, body: { analysis: fixtures.compare.ml, request_config: request.json() } }
+        : { status: 500, body: { detail: "unexpected" } });
+      await page.run("withLoading(refs.runCompareButton, runCompareModels)");
+      await page.settle();
+      return page.run("refs.mlManuscriptShell.querySelectorAll('th').map((th) => th.textContent)");
+    """, dataset=example_dataset, compare=compare)
+
+    assert result == ["Rank", "Model", "C-index", "Features, n", "Training Time, ms"]
+
+
+def test_the_data_preview_shows_values_as_they_are_in_the_file(tmp_path: Path, example_dataset: dict) -> None:
+    """R13-22: a 13-digit ID and a 6-decimal value are not rewritten to "1.70e+12" and "52.123"."""
+    dataset = {**example_dataset, "preview": [dict(row) for row in example_dataset["preview"]]}
+    dataset["columns"] = [*example_dataset["columns"], {"name": "record", "kind": "numeric", "n_unique": 360, "unique_preview": [], "missing": 0, "non_missing": 360}]
+    dataset["preview"][0].update({"record": 1700000000000, "age": 52.123456})
+    dataset["preview"][1].update({"record": None})
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const headers = page.run("refs.datasetPreviewShell.querySelectorAll('th').map((th) => th.textContent)");
+      const cell = (row, name) => page.run(`refs.datasetPreviewShell.querySelectorAll('tbody tr')[${row}].children[${headers.indexOf(name)}].textContent`);
+      return { record: cell(0, "record"), age: cell(0, "age"), missing: cell(1, "record") };
+    """, dataset=dataset)
+
+    assert result == {"record": "1700000000000", "age": "52.123456", "missing": "NA"}
+
+
 # ── Markers ─────────────────────────────────────────────────────
 
 
