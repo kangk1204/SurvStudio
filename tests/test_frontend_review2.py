@@ -264,6 +264,38 @@ def test_the_locked_test_ranking_note_is_the_same_in_summary_and_table(
         assert "Within each family, ranking uses development-set cross-validation" in text
 
 
+def test_an_unranked_locked_test_comparison_names_no_rank_one_model(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:
+    """Without a complete CV aggregate no model is ranked, so neither the note nor the banner names rows[0] as rank 1."""
+    compare = dict(compare_payloads)
+    ml = dict(compare_payloads["ml"])
+    ml.pop("test_predictions")
+    ml.update({"evaluation_mode": "repeated_cv_incomplete", "n_development_patients": 250, "n_locked_test_patients": 110, "n_locked_test_events": 50})
+    ml["comparison_table"] = [
+        {"model": model, "c_index": None, "rank": None, "comparable_for_ranking": False, "locked_test_c_index": test,
+         "evaluation_mode": "repeated_cv_incomplete"}
+        for model, test in (("Random Survival Forest", 0.66), ("Cox PH", 0.64))
+    ]
+    compare["ml"] = ml
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.fetchHandler = (request) => (request.url.endsWith("/api/ml-model")
+        ? { status: 200, body: { analysis: fixtures.compare.ml, request_config: request.json() } }
+        : { status: 500, body: { detail: "unexpected" } });
+      await page.run("withLoading(refs.runCompareButton, runCompareModels)");
+      await page.settle();
+      return {
+        note: page.run("refs.mlComparisonShell.querySelector('.comparison-table-note').textContent"),
+        banner: page.run("refs.mlMetaBanner.textContent"),
+      };
+    """, dataset=example_dataset, compare=compare)
+
+    assert "rank-1 model (Random Survival Forest" not in result["note"]
+    assert "No model had a complete cross-validation aggregate, so none was selected" in result["note"]
+    assert "Random Survival Forest" not in result["banner"]
+    assert result["banner"].startswith("No model was CV-selected (no complete cross-validation aggregate)")
+    assert "rank-1" not in result["banner"]
+
+
 # ── Result mode after a failed run ──────────────────────────────
 
 

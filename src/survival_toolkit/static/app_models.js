@@ -214,12 +214,17 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
     }
     renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "Model comparison.");
     const comparisonRows = payload.analysis?.comparison_table || [];
-    const bestRow = comparisonRows[0] || {};
+    // The rank-1 row, not the first one: without a complete CV aggregate no model is ranked.
+    const rankOne = comparisonRankOneRow(comparisonRows);
+    const bestRow = rankOne || {};
     const evaluationMode = payload.analysis?.evaluation_mode || "unknown";
     const repeatedCvLike = evaluationMode === "repeated_cv" || evaluationMode === "repeated_cv_incomplete";
     const evalLabel = compareEvaluationLabel(payload.analysis, evaluationMode);
     const mlMetricLabel = repeatedCvLike ? "Mean C-index" : "C-index";
-    refs.mlMetaBanner.textContent = `Screening top model=${formatValue(bestRow.model)}, ${mlMetricLabel}=${formatValue(bestRow.c_index)}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}${lockedTestBannerSuffix(payload.analysis, bestRow)}`;
+    const mlLead = comparisonRows.length && !rankOne
+      ? "No model was CV-selected (no complete cross-validation aggregate)"
+      : `Screening top model=${formatValue(bestRow.model)}, ${mlMetricLabel}=${formatValue(bestRow.c_index)}`;
+    refs.mlMetaBanner.textContent = `${mlLead}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}${lockedTestBannerSuffix(payload.analysis, rankOne)}`;
     refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
     if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !plotShowsResult(refs.mlComparisonPlot, payload);
     if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !plotShowsResult(refs.mlComparisonPlot, payload);
@@ -568,7 +573,10 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
     clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Single-model training and monitor metric curves appear when you train one deep model.</span></div>');
     const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
     renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning comparison results.");
-    const bestRow = payload.analysis?.comparison_table?.[0] || {};
+    const dlRows = payload.analysis?.comparison_table || [];
+    // The rank-1 row, not the first one: without a complete CV aggregate no model is ranked.
+    const rankOne = comparisonRankOneRow(dlRows);
+    const bestRow = rankOne || {};
     const dlEvalMode = payload.analysis?.evaluation_mode || "unknown";
     const dlEvalLabel = compareEvaluationLabel(payload.analysis, dlEvalMode);
     const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Screening top holdout-comparable" : "Screening top model";
@@ -583,7 +591,10 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
     const repeatedCvRerunNote = dlEvalMode === "repeated_cv"
       ? ", rerun a single architecture with Run Analysis while keeping repeated CV selected"
       : "";
-    refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, ${dlMetricLabel}=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}${lockedTestBannerSuffix(payload.analysis, bestRow)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
+    const dlLead = dlRows.length && !rankOne
+      ? "No model was CV-selected (no complete cross-validation aggregate)"
+      : `${dlBestLabel}=${formatValue(bestRow.model)}, ${dlMetricLabel}=${formatValue(bestRow.c_index)}`;
+    refs.dlMetaBanner.textContent = `${dlLead}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(dlRows.length)}${lockedTestBannerSuffix(payload.analysis, rankOne)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
     refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
     if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !plotShowsResult(refs.dlComparisonPlot, payload);
     if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !plotShowsResult(refs.dlComparisonPlot, payload);

@@ -398,13 +398,24 @@ function comparisonRankIsMissing(rank) {
   return rank === null || rank === undefined || rank === "" || !Number.isFinite(Number(rank));
 }
 
+// The CV-selected (rank 1) row of a comparison, or null when the comparison ranked no model (no model had a
+// complete cross-validation aggregate). Rows of results without a rank field are in rank order.
+function comparisonRankOneRow(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!comparisonRowsHaveKey(list, "rank")) return list[0] || null;
+  return list.find((row) => Number(row?.rank) === 1) || null;
+}
+
 function lockedTestSummaryNote(analysis) {
   const rows = Array.isArray(analysis?.comparison_table) ? analysis.comparison_table : [];
   if (!comparisonRowsHaveKey(rows, "locked_test_c_index")) return "";
-  const rankOne = rows.find((row) => Number(row?.rank) === 1) || rows[0] || {};
+  const rankOne = comparisonRankOneRow(rows);
+  const lockedTest = `The locked test set${analysis?.n_locked_test_patients != null ? ` (${formatValue(analysis.n_locked_test_patients)} patients, ${formatValue(analysis.n_locked_test_events)} events)` : ""} was not used for ranking`;
   const parts = [
     `Models are ranked by development-set repeated CV${analysis?.n_development_patients != null ? ` (${formatValue(analysis.n_development_patients)} patients)` : ""}.`,
-    `The locked test set${analysis?.n_locked_test_patients != null ? ` (${formatValue(analysis.n_locked_test_patients)} patients, ${formatValue(analysis.n_locked_test_events)} events)` : ""} was not used for ranking; report the locked-test C-index of the rank-1 model (${formatValue(rankOne.model)}: ${formatValue(rankOne.locked_test_c_index)}) as the independent estimate, not the best locked-test value across models.`,
+    rankOne
+      ? `${lockedTest}; report the locked-test C-index of the rank-1 model (${formatValue(rankOne.model)}: ${formatValue(rankOne.locked_test_c_index)}) as the independent estimate, not the best locked-test value across models.`
+      : `${lockedTest}. No model had a complete cross-validation aggregate, so none was selected and there is no rank-1 locked-test C-index to report; do not pick a model by its locked-test value.`,
   ];
   if (analysis?.locked_test_note) parts.push(String(analysis.locked_test_note));
   return parts.join(" ");
