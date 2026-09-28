@@ -231,11 +231,15 @@ function markerSummary(payload) {
   const repeated = markerDuplicateCaution(analysis.duplicates);
   if (repeated) cautions.push(repeated);
   if (!addedValue) cautions.push("No clinical covariates were given, so markers are judged on marginal association only. Add clinical covariates to test added value.");
+  const clinicalOnly = markerModelIsClinicalOnly(signature);
+  if (clinicalOnly) cautions.push("No marker was selected, so the final model is the clinical-only model (the clinical covariates alone).");
   if (signature.signature_optimism != null && Number(signature.signature_optimism) > 0.02) {
-    cautions.push(`The selected-marker model's apparent C-index is optimistic by about ${Number(signature.signature_optimism).toFixed(3)}; report the corrected value.`);
+    cautions.push(`The ${clinicalOnly ? "clinical-only" : "selected-marker"} model's apparent C-index is optimistic by about ${Number(signature.signature_optimism).toFixed(3)}; report the corrected value.`);
   }
   const leftOut = markerLeftOutComparison(signature, addedValue);
-  if (leftOut && leftOut.gain < 0.02) cautions.push(leftOut.text + " The selected markers add little discrimination beyond the clinical covariates.");
+  if (leftOut && leftOut.gain < 0.02) {
+    cautions.push(leftOut.text + (clinicalOnly ? "" : " The selected markers add little discrimination beyond the clinical covariates."));
+  }
   if ((cohort.dropped_markers || []).length) {
     const dropped = cohort.dropped_markers;
     const nearConstant = dropped.filter((item) => String(item.reason || "").startsWith("near-constant")).length;
@@ -258,12 +262,12 @@ function markerSummary(payload) {
       { label: "Markers", value: formatCount(evaluated) },
       { label: "Robust", value: robust },
       { label: "Suggestive", value: suggestive },
-      { label: "Model C (corrected)", value: signature.optimism_corrected_c },
+      { label: clinicalOnly ? "Clinical-only model C (corrected)" : "Model C (corrected)", value: signature.optimism_corrected_c },
       ...(leftOut ? [{ label: "Clinical-only C (left out)", value: signature.clinical_c_left_out }] : []),
     ],
     strengths: [
       ...(leftOut && leftOut.gain >= 0.02 ? [leftOut.text] : []),
-      `Family-wise p-values (Westfall-Young) from ${formatValue(analysis.null?.n_permutations)} permutations${analysis.null?.lens2_null === "freedman_lane" ? ", keeping each marker's link to the clinical covariates" : ""}.`,
+      `Family-wise p-values (Westfall-Young) from ${formatValue(analysis.null?.n_permutations)} permutations${addedValue && markerResidualNull(analysis) ? ", permuting each marker's residuals after regression on the clinical covariates (Smith method), which keeps each marker's link to the covariates" : ""}.`,
       `The whole screen was repeated on ${formatValue(analysis.resampling?.n_valid)} subsamples of ${Math.round(100 * Number(analysis.resampling?.fraction || 0.632))}% of the patients.`,
       `Robust: family-wise p ≤ ${formatValue(settings.alpha)}, selected in ≥ ${Math.round(100 * Number(settings.robust_frequency || 0.5))}% of subsamples and the same direction in ≥ ${Math.round(100 * Number(settings.robust_direction || 0.9))}%.`,
       ...(duplicateScreen.checked && !repeated
@@ -293,15 +297,37 @@ function markerDuplicateCaution(duplicates) {
     + "of a subsample split and flatter the corrected C-index; keep one sample per patient and run again.";
 }
 
-// The selected-marker model against the clinical covariates alone, both in the patients left out of each subsample.
+// The added-value lens permutes each marker's residuals after regression on the clinical covariates ("smith";
+// "freedman_lane" is its former name). Older results name the scheme only in their settings.
+function markerResidualNull(analysis) {
+  const scheme = String(analysis?.null?.lens2_null ?? analysis?.settings?.lens2_null ?? "");
+  return scheme === "smith" || scheme === "freedman_lane";
+}
+
+// True when the procedure selected no marker, so its final model holds the clinical covariates only.
+function markerModelIsClinicalOnly(signature) {
+  if (signature?.clinical_only != null) return Boolean(signature.clinical_only);
+  return signature?.apparent_c != null && Array.isArray(signature?.markers) && !signature.markers.length;
+}
+
+// The model of the whole procedure against the clinical covariates alone, both in the patients left out of each
+// subsample; with paired subsamples the mean paired gain and their number.
 function markerLeftOutComparison(signature, addedValue) {
   const model = signature?.signature_c_left_out;
   const clinical = signature?.clinical_c_left_out;
   if (!addedValue || model == null || clinical == null) return null;
-  const gain = Number(model) - Number(clinical);
+  const pairedGain = signature?.signature_gain_left_out;
+  const gain = pairedGain != null && Number.isFinite(Number(pairedGain)) ? Number(pairedGain) : Number(model) - Number(clinical);
+  const replicates = Number(signature?.n_clinical_replicates);
+  const where = Number.isInteger(replicates) && replicates > 0
+    ? (replicates === 1 ? "the one subsample that could be scored" : `each of ${formatCount(replicates)} subsamples`)
+    : "each subsample";
+  const subject = markerModelIsClinicalOnly(signature)
+    ? "the whole selection procedure (it selected no marker in the full cohort, so the final model is the clinical-only model)"
+    : "the selected-marker model";
   return {
     gain,
-    text: `In the patients left out of each subsample, the selected-marker model reached C ${formatValue(model)} against ${formatValue(clinical)} for the clinical covariates alone (${gain >= 0 ? "+" : ""}${gain.toFixed(3)}).`,
+    text: `In the patients left out of ${where}, ${subject} reached C ${formatValue(model)} against ${formatValue(clinical)} for the clinical covariates alone (${gain >= 0 ? "+" : ""}${gain.toFixed(3)}).`,
   };
 }
 
@@ -317,7 +343,10 @@ function markerMetaBanner(payload) {
     `markers=${formatCount(cohort.n_markers_evaluated)}`,
     `tested for ${lens}`,
   ];
-  if (signature.apparent_c != null) parts.push(`model C apparent=${formatValue(signature.apparent_c)}, corrected=${formatValue(signature.optimism_corrected_c)}`);
+  if (signature.apparent_c != null) {
+    const model = markerModelIsClinicalOnly(signature) ? "clinical-only model (no marker selected)" : "model";
+    parts.push(`${model} C apparent=${formatValue(signature.apparent_c)}, corrected=${formatValue(signature.optimism_corrected_c)}`);
+  }
   if (analysis.primary_lens === "added_value" && signature.clinical_c_left_out != null) parts.push(`clinical-only C (left out)=${formatValue(signature.clinical_c_left_out)}`);
   return parts.join(", ");
 }
@@ -447,6 +476,9 @@ function markerValidationMetrics(validation, { timeColumn = "" } = {}) {
     { label: "C-index", value: `${formatValue(metrics.c_index)}${interval(metrics.c_index_ci)}` },
     { label: "Calibration slope", value: `${formatValue(metrics.calibration_slope)}${interval(metrics.calibration_slope_ci)}` },
   ];
+  if (metrics.clinical_only_c_index != null) {
+    rows.push({ label: "Clinical-only C-index", value: `${formatValue(metrics.clinical_only_c_index)}${interval(metrics.clinical_only_c_index_ci)}` });
+  }
   if (metrics.delta_c_index != null) rows.push({ label: "C gain over clinical", value: `${formatValue(metrics.delta_c_index)}${interval(metrics.delta_c_index_ci)}` });
   if (metrics.observed_expected_ratio != null) {
     const unit = markerHorizonUnit(timeColumn);
@@ -484,17 +516,26 @@ async function renderMarkerValidation(payload) {
   renderTable(refs.markerValidationShell, markerValidationRows(validation), null, { pValueColumns: ["Replication P (Holm)"] });
 }
 
+// One row per locked marker. `tested` names the fit its replication used ("added_value" with the clinical
+// covariates, "marginal" without; null when that fit was not estimable); results without it used the
+// adjusted fit when there was one.
 function markerValidationRows(validation) {
-  return (validation?.markers || []).map((row) => {
-    const tested = row.adjusted || row.marginal || {};
+  const markers = (validation?.markers || []).filter((row) => row && typeof row === "object");
+  const showTested = markers.some((row) => "tested" in row);
+  return markers.map((row) => {
+    const lens = "tested" in row ? row.tested : (row.adjusted ? "added_value" : (row.marginal ? "marginal" : null));
+    const fit = lens === "added_value" ? row.adjusted : (lens === "marginal" ? row.marginal : null);
+    const estimable = !row.absent && row.replication_p_holm != null;
+    const status = (text) => (row.absent ? "not measured" : (estimable ? text : "not estimable"));
     return {
       Marker: row.marker,
-      "HR per unit": tested.hazard_ratio,
-      "CI lower": tested.ci_lower,
-      "CI upper": tested.ci_upper,
-      "Same direction": row.absent ? "not measured" : row.same_direction ? "yes" : "no",
-      "Replication P (Holm)": row.replication_p_holm,
-      Replicated: row.absent ? "not measured" : row.replicated ? "yes" : "no",
+      ...(showTested ? { "Tested as": row.absent ? "not measured" : ({ added_value: "added value", marginal: "marginal" }[lens] || "not estimable") } : {}),
+      "HR per unit": fit?.hazard_ratio ?? null,
+      "CI lower": fit?.ci_lower ?? null,
+      "CI upper": fit?.ci_upper ?? null,
+      "Same direction": status(row.same_direction ? "yes" : "no"),
+      "Replication P (Holm)": estimable ? row.replication_p_holm : status(""),
+      Replicated: status(row.replicated ? "yes" : "no"),
     };
   });
 }

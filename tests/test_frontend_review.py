@@ -1537,6 +1537,104 @@ def test_validation_table_formats_replication_p_and_names_the_horizon_unit(tmp_p
     assert "Observed/expected at 24.5 months" in result["labels"]
 
 
+def test_marker_summary_names_the_smith_null_and_a_clinical_only_model(tmp_path: Path) -> None:
+    """The added-value null is the Smith scheme ("freedman_lane" is its old name); no selected marker means a clinical-only model."""
+    result = _run_page(tmp_path, r"""
+      const base = {
+        primary_lens: "added_value",
+        tier_counts: { robust: 0, suggestive: 0 },
+        cohort: { n: 300, events: 120, n_markers_evaluated: 12 },
+        settings: { alpha: 0.05, robust_frequency: 0.5, robust_direction: 0.9 },
+        resampling: { n_valid: 20, fraction: 0.632 },
+      };
+      const selected = { markers: ["GENE_A"], clinical_only: false, apparent_c: 0.71, optimism_corrected_c: 0.69, signature_optimism: 0.03,
+        signature_c_left_out: 0.70, clinical_c_left_out: 0.66, signature_gain_left_out: 0.035, n_clinical_replicates: 18 };
+      const clinicalOnly = { markers: [], clinical_only: true, apparent_c: 0.66, optimism_corrected_c: 0.63, signature_optimism: 0.03,
+        signature_c_left_out: 0.645, clinical_c_left_out: 0.64, signature_gain_left_out: 0.004, n_clinical_replicates: 1 };
+      const summarize = (nullScheme, signature) => {
+        page.context.__payload = { analysis: { ...base, null: { n_permutations: 199, lens2_null: nullScheme }, signature } };
+        return page.run("markerSummary(__payload)");
+      };
+      const smith = summarize("smith", selected);
+      const oldName = summarize("freedman_lane", selected);
+      const raw = summarize("raw", selected);
+      const clinical = summarize("smith", clinicalOnly);
+      const text = (summary) => [...summary.cautions, ...summary.strengths].join(" | ");
+      page.context.__banner = { analysis: { ...base, signature: clinicalOnly } };
+      return {
+        smithText: text(smith),
+        oldNameText: text(oldName),
+        rawText: text(raw),
+        clinicalText: text(clinical),
+        clinicalMetric: clinical.metrics.map((metric) => metric.label),
+        banner: page.run("markerMetaBanner(__banner)"),
+      };
+    """)
+
+    assert "Smith method" in result["smithText"]
+    assert "Smith method" in result["oldNameText"]
+    assert "Smith method" not in result["rawText"]
+    assert "In the patients left out of each of 18 subsamples, the selected-marker model reached C 0.7 against 0.66" in result["smithText"]
+    assert "(+0.035)" in result["smithText"]
+    assert "selected-marker" not in result["clinicalText"]
+    assert "the final model is the clinical-only model" in result["clinicalText"]
+    assert "The clinical-only model's apparent C-index is optimistic by about 0.030" in result["clinicalText"]
+    assert "In the patients left out of the one subsample that could be scored, the whole selection procedure" in result["clinicalText"]
+    assert "The selected markers add little" not in result["clinicalText"]
+    assert "Clinical-only model C (corrected)" in result["clinicalMetric"]
+    assert "clinical-only model (no marker selected) C apparent=0.66" in result["banner"]
+
+
+def test_validation_rows_follow_the_tested_fit_and_flag_what_is_not_estimable(tmp_path: Path) -> None:
+    """Rows name the fit their replication used; a null replication p reads "not estimable"."""
+    result = _run_page(tmp_path, r"""
+      const validation = {
+        metrics: { c_index: 0.7, c_index_ci: [0.65, 0.75], clinical_only_c_index: 0.66, clinical_only_c_index_ci: [0.6, 0.71] },
+        markers: [
+          { marker: "A", tested: "added_value", adjusted: { hazard_ratio: 1.5, ci_lower: 1.1, ci_upper: 2.0 }, marginal: { hazard_ratio: 1.9 },
+            same_direction: true, replication_p_holm: 0.004, replicated: true },
+          { marker: "B", tested: "marginal", adjusted: { hazard_ratio: 1.2 }, marginal: { hazard_ratio: 0.8, ci_lower: 0.6, ci_upper: 1.0 },
+            same_direction: true, replication_p_holm: 0.2, replicated: false },
+          { marker: "C", tested: null, adjusted: null, marginal: { hazard_ratio: 1.4 }, same_direction: false, replication_p_holm: null, replicated: false },
+          { marker: "D", tested: null, adjusted: null, marginal: null, same_direction: false, absent: true, replication_p_holm: null, replicated: false },
+        ],
+      };
+      page.context.__validation = validation;
+      return {
+        rows: page.run("markerValidationRows(__validation)"),
+        metrics: page.run("markerValidationMetrics(__validation)").map((metric) => `${metric.label}: ${metric.value}`),
+        oldRows: page.run(`markerValidationRows({ markers: [{ marker: "A", adjusted: { hazard_ratio: 1.5 }, marginal: { hazard_ratio: 1.9 },
+          same_direction: true, replication_p_holm: 0.01, replicated: true }] })`),
+      };
+    """)
+
+    rows = {row["Marker"]: row for row in result["rows"]}
+    assert rows["A"]["Tested as"] == "added value" and rows["A"]["HR per unit"] == 1.5
+    assert rows["B"]["Tested as"] == "marginal" and rows["B"]["HR per unit"] == 0.8
+    assert rows["C"] == {
+        "Marker": "C",
+        "Tested as": "not estimable",
+        "HR per unit": None,
+        "CI lower": None,
+        "CI upper": None,
+        "Same direction": "not estimable",
+        "Replication P (Holm)": "not estimable",
+        "Replicated": "not estimable",
+    }
+    assert rows["D"]["Replication P (Holm)"] == "not measured" and rows["D"]["Tested as"] == "not measured"
+    assert "Clinical-only C-index: 0.66 (0.6 to 0.71)" in result["metrics"]
+    # A result from before the "tested" field shows the adjusted fit and no extra column.
+    assert result["oldRows"] == [{
+        "Marker": "A",
+        "HR per unit": 1.5,
+        "CI lower": None,
+        "CI upper": None,
+        "Same direction": "yes",
+        "Replication P (Holm)": 0.01,
+        "Replicated": "yes",
+    }]
+
+
 def test_discover_is_disabled_while_a_marker_file_is_attached(tmp_path: Path, example_dataset: dict) -> None:
     """I16: the disabled-but-ticked checklist boxes do not count as markers for the cut-point search."""
     result = _run_page(tmp_path, r"""
