@@ -559,7 +559,9 @@ def test_frontend_benchmark_dependency_chips_hide_stale_compare_counts() -> None
     assert '`Completed families: ${completedFamiliesLabel}`' in text
     assert '`Pending families: ${pendingFamiliesLabel}`' in text
     assert "function benchmarkExcludedModels(" in text
-    assert "const erroredModels = errors.map((entry) => String(entry?.model || \"\").trim()).filter(Boolean);" in text
+    # A failed locked-test refit leaves the model ranked, so only other errors exclude it.
+    assert 'return errors.filter((entry) => entry && entry.stage !== "locked_test");' in text
+    assert "const erroredModels = exclusionErrors(payload).map((entry) => String(entry?.model || \"\").trim()).filter(Boolean);" in text
     assert "return [...new Set([...explicit, ...erroredModels])];" in text
     assert "function benchmarkExcludedRows(" in text
     assert "Excluded from ${sourceLabel}" in text
