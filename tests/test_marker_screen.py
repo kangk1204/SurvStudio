@@ -134,6 +134,33 @@ def test_fit_cox_reports_a_separated_covariate_as_not_converged() -> None:
     separated = (time <= 10).astype(float)  # every early event has x = 1: the MLE is infinite
     fit = fit_cox(time, event, separated)
     assert not fit.converged or abs(fit.beta[0]) > 5
+    # The likelihood converges (as in R), but the coefficient is flagged as running to infinity.
+    assert fit.separated.tolist() == [True]
+
+
+def test_fit_cox_flags_only_the_coefficient_that_runs_to_infinity() -> None:
+    rng = np.random.default_rng(8)
+    n = 120
+    time = rng.exponential(size=n)
+    event = rng.integers(0, 2, size=n)
+    carriers = rng.random(n) < 0.15
+    event[carriers] = 0  # no carrier has the event, so the carrier coefficient runs to -infinity
+    design = np.column_stack([rng.normal(size=n), carriers.astype(float)])
+    for ties in ("efron", "breslow"):
+        fit = fit_cox(time, event, design, None, ties)
+        assert fit.separated.tolist() == [False, True]
+        assert fit.beta[1] < -8
+
+    # Regular fits are never flagged: the reference cohort, a strong effect, and a marker without
+    # effect on a large scale (its coefficient is near zero, so only the SD-scaled rule can judge it).
+    time_r, event_r, clinical, markers, strata = _arrays(_reference_cohort(), True)
+    assert not fit_cox(time_r, event_r, np.column_stack([clinical, markers]), strata).separated.any()
+    strong = rng.normal(size=n)
+    time_s = rng.exponential(np.exp(-1.5 * strong))
+    large = 1e5 * rng.normal(size=n) + 3e6
+    fit = fit_cox(time_s, np.ones(n, dtype=int), np.column_stack([strong, large]))
+    assert fit.converged and not fit.separated.any()
+    assert abs(fit.beta[1]) < 1e-5
 
 
 def test_fit_cox_ends_as_not_converged_when_the_information_turns_non_finite(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -258,6 +285,38 @@ def test_permutation_fdr_q_values_follow_the_threshold_rule() -> None:
     assert q == pytest.approx([0.0, 0.25, 0.375, 0.375])
 
 
+def test_permutation_fdr_leaves_markers_without_an_observed_statistic_out() -> None:
+    # A collinear marker has no observed statistic but finite permuted ones (its residuals vary);
+    # counting them would inflate every q-value, as MaxT already avoids.
+    observed = np.array([10.0, 8.0, np.nan, 1.0])
+    permuted = np.array([[0.1, 0.2, 50.0, 1.5], [0.3, 2.0, 40.0, 0.2]])
+    accumulator = PermutationFdrAccumulator(observed)
+    accumulator.update(permuted)
+    reference = PermutationFdrAccumulator(observed[[0, 1, 3]])
+    reference.update(permuted[:, [0, 1, 3]])
+    q = accumulator.q_values()
+    assert np.isnan(q[2])
+    assert q[[0, 1, 3]] == pytest.approx(reference.q_values())
+    with pytest.raises(ValueError, match="one column per marker"):
+        accumulator.update(permuted[:, :3])
+
+
+def test_score_screen_checks_its_null_model_and_permutations() -> None:
+    time, event, clinical, markers, strata = _arrays(_reference_cohort(), False)
+    clinical_null = fit_cox_null(time, event, clinical)
+    # The efficient information needs the design the null model was fitted on.
+    with pytest.raises(ValueError, match="null model has 2 coefficient"):
+        CoxScoreScreen(time, event, null=clinical_null)
+    with pytest.raises(ValueError, match="null model has 2 coefficient"):
+        CoxScoreScreen(time, event, null=clinical_null, Z=clinical[:, :1])
+    screen = CoxScoreScreen(time, event, null=clinical_null, Z=clinical)
+    repeated = np.arange(len(time))
+    repeated[1] = 0
+    for bad in (repeated, np.arange(len(time) - 1), np.arange(len(time)) + 1):
+        with pytest.raises(ValueError, match="every row once"):
+            screen.permuted_chi2(markers, [bad])
+
+
 def test_bh_vector_matches_the_existing_adjustment() -> None:
     from survival_toolkit.analysis import _bh_adjust
 
@@ -274,3 +333,56 @@ def test_harrell_c_many_matches_harrell_c_index_with_ties() -> None:
     for column in range(risk.shape[1]):
         assert many[column] == pytest.approx(_harrell_c_index(time, event, risk[:, column]), abs=1e-12)
     assert np.isnan(harrell_c_many(time, np.zeros(90, dtype=int), risk)).all()
+
+
+def _pairwise_c_reference(time: np.ndarray, event: np.ndarray, risk: np.ndarray) -> np.ndarray:
+    """The events x patients implementation harrell_c_many replaced, kept as the definition."""
+    time = np.asarray(time, dtype=float).reshape(-1)
+    event = np.asarray(event).reshape(-1).astype(bool)
+    scores = np.asarray(risk, dtype=float)
+    if scores.ndim == 1:
+        scores = scores.reshape(-1, 1)
+    events = np.flatnonzero(event)
+    result = np.full(scores.shape[1], np.nan, dtype=float)
+    if events.size == 0:
+        return result
+    later = time[None, :] > time[events][:, None]
+    tied_censored = (time[None, :] == time[events][:, None]) & ~event[None, :]
+    comparable = later | tied_censored
+    n_comparable = float(comparable.sum())
+    if n_comparable <= 0.0:
+        return result
+    for column in range(scores.shape[1]):
+        values = scores[:, column]
+        event_values = values[events][:, None]
+        concordant = np.sum(comparable & (event_values > values[None, :]))
+        ties = np.sum(comparable & (event_values == values[None, :]))
+        result[column] = (float(concordant) + 0.5 * float(ties)) / n_comparable
+    return result
+
+
+@pytest.mark.parametrize("pairwise_limit", [0, 10**12])
+def test_harrell_c_many_equals_the_pairwise_definition_exactly(monkeypatch: pytest.MonkeyPatch, pairwise_limit: int) -> None:
+    from survival_toolkit import marker_screen
+
+    # 0 forces the sorted-prefix counts, 10**12 the direct pair comparison.
+    monkeypatch.setattr(marker_screen, "_PAIRWISE_LIMIT", pairwise_limit)
+    rng = np.random.default_rng(17)
+    for trial in range(400):
+        n = int(rng.integers(0, 50)) if trial % 4 else int(rng.integers(50, 700))
+        n_columns = int(rng.integers(0, 4))
+        # Heavy ties in time (a few distinct values, censored and event ties) and in risk.
+        time = rng.integers(0, int(rng.integers(1, 6)), size=n).astype(float) if trial % 3 else rng.exponential(size=n)
+        event = rng.integers(0, 2, size=n) if trial % 5 else (rng.random(n) < 0.1).astype(int) * 3
+        risk = rng.integers(0, int(rng.integers(1, 5)), size=(n, n_columns)).astype(float)
+        if trial % 2:
+            risk = np.round(rng.normal(size=(n, n_columns)), 1)
+        if trial % 6 == 0 and n:
+            risk[rng.random((n, n_columns)) < 0.15] = np.nan
+            risk[rng.random((n, n_columns)) < 0.05] = np.inf
+            risk[rng.random((n, n_columns)) < 0.05] = -0.0
+        if trial % 7 == 0 and n:
+            time[rng.random(n) < 0.1] = np.nan
+        risk_argument = risk[:, 0] if n_columns == 1 and trial % 2 else risk
+        expected = _pairwise_c_reference(time, event, risk_argument)
+        assert np.array_equal(harrell_c_many(time, event, risk_argument), expected, equal_nan=True), trial
