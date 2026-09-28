@@ -129,6 +129,20 @@ def test_separated_covariate_is_not_converged_and_worded_as_such() -> None:
         compute_cox_analysis(frame, "time", "event", ["x"])
     assert "non-finite estimates" not in str(exc_info.value)
 
+    # Every event has the highest value in its risk set: the log-likelihood runs to 0 and the
+    # information matrix breaks down on the way, which is divergence, not a singular design.
+    ordered = pd.DataFrame(
+        {
+            "time": [2.0, 4.0, 5.0, 7.0, 9.0, 11.0, 12.0, 15.0],
+            "event": [1, 0, 1, 1, 0, 1, 0, 0],
+            "x": [3.0, 1.0, 2.5, 2.0, 0.5, 1.5, 0.2, 0.1],
+        }
+    )
+    results, converged = analysis.fit_phreg(_phreg(ordered, ["x"]))
+    assert not converged and results.mle_retvals["reason"] != "singular_information"
+    with pytest.raises(ValueError, match="did not converge cleanly"):
+        compute_cox_analysis(ordered, "time", "event", ["x"])
+
 
 def test_singular_cox_design_is_reported_as_singular() -> None:
     rng = np.random.default_rng(5)

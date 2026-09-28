@@ -3434,7 +3434,9 @@ class _PHRegNewton(NamedTuple):
     covariance: np.ndarray
     converged: bool
     iterations: int
-    # "converged", "singular_information", "non_finite", "iteration_limit", or "separated".
+    # "converged"; "singular_information" (a singular design, found at the start); "diverged"
+    # (non-finite values or an information matrix that breaks down while the coefficients run
+    # off); "iteration_limit"; or "separated" (a coefficient that runs to infinity).
     reason: str
     separated: np.ndarray
 
@@ -3464,9 +3466,11 @@ def _phreg_newton_raphson(model: PHReg) -> _PHRegNewton:
     loglik = float(model.loglike(beta))
     derivatives = _phreg_score_information(model, beta)
     if not math.isfinite(loglik) or derivatives is None:
-        return _failed("non_finite", 0, beta)
+        return _failed("diverged", 0, beta)
     factor = _phreg_information_factor(derivatives[1])
     if factor is None:
+        # At the start every coefficient is 0, so a singular information matrix means the
+        # design itself is singular (redundant columns).
         return _failed("singular_information", 0, beta)
     candidate = beta + _phreg_solve(factor, derivatives[0])
     halving = False
@@ -3474,7 +3478,7 @@ def _phreg_newton_raphson(model: PHReg) -> _PHRegNewton:
     iterations = 0
     for iterations in range(1, _COX_NEWTON_MAX_ITERATIONS + 1):
         if not np.all(np.isfinite(candidate)):
-            return _failed("non_finite", iterations, beta)
+            return _failed("diverged", iterations, beta)
         candidate_loglik = float(model.loglike(candidate))
         if (
             math.isfinite(candidate_loglik)
@@ -3493,12 +3497,13 @@ def _phreg_newton_raphson(model: PHReg) -> _PHRegNewton:
             continue
         halving = False
         beta, loglik = candidate, candidate_loglik
+        # Past the start, an information matrix that stops being finite or positive definite
+        # comes from coefficients running off (for example a covariate that orders every event
+        # first), not from the design.
         derivatives = _phreg_score_information(model, beta)
-        if derivatives is None:
-            return _failed("non_finite", iterations, beta)
-        factor = _phreg_information_factor(derivatives[1])
-        if factor is None:
-            return _failed("singular_information", iterations, beta)
+        factor = None if derivatives is None else _phreg_information_factor(derivatives[1])
+        if derivatives is None or factor is None:
+            return _failed("diverged", iterations, beta)
         candidate = beta + _phreg_solve(factor, derivatives[0])
     if not converged:
         return _failed("iteration_limit", iterations, beta)
@@ -3506,7 +3511,7 @@ def _phreg_newton_raphson(model: PHReg) -> _PHRegNewton:
     derivatives = _phreg_score_information(model, beta)
     factor = None if derivatives is None else _phreg_information_factor(derivatives[1])
     if derivatives is None or factor is None:
-        return _failed("singular_information", iterations, beta)
+        return _failed("diverged", iterations, beta)
     covariance = _phreg_solve(factor, np.eye(n_params))
     covariance = (covariance + covariance.T) / 2.0
     pending = _phreg_solve(factor, derivatives[0])
