@@ -27,6 +27,7 @@ from survival_toolkit.errors import (
     must_propagate,
     user_input_boundary,
 )
+from survival_toolkit.evaluation import c_index_intervals, prediction_block
 from survival_toolkit.marker_matrix import match_summary, read_marker_matrix
 
 
@@ -466,3 +467,26 @@ def test_user_input_boundary_behaviour_is_unchanged() -> None:
         run(_survstudio_function("def probe():\n    return [][1]\n"))
     with pytest.raises(InternalAnalysisError):
         run(lambda: np.zeros(3) + np.zeros(4))
+
+
+# ── Evaluation helpers ───────────────────────────────────────────
+
+
+def test_prediction_block_refuses_risk_scores_that_do_not_line_up() -> None:
+    kwargs = {"row_ids": ["a", "b", "c"], "time": [1.0, 2.0, 3.0], "event": [1, 0, 1]}
+    with pytest.raises(InternalAnalysisError, match="RSF"):
+        prediction_block(**kwargs, risks={"Cox PH": (None, [0.1, 0.2, 0.3]), "RSF": ([0, 1], [1.0, 2.0, 3.0])})
+    with pytest.raises(InternalAnalysisError, match="DeepSurv"):
+        prediction_block(**kwargs, risks={"DeepSurv": (None, [0.1, 0.2])})
+    block = prediction_block(**kwargs, risks={"Cox PH": (None, [0.1, 0.2, 0.3]), "RSF": ([0, 2], [1.0, 3.0])})
+    assert block["row_ids"] == ["a", "c"] and block["risk"] == {"Cox PH": [0.1, 0.3], "RSF": [1.0, 3.0]}
+
+
+def test_interval_messages_tell_a_length_mismatch_from_missing_scores() -> None:
+    rng = np.random.default_rng(4)
+    time = rng.exponential(size=40)
+    event = rng.integers(0, 2, size=40)
+    with pytest.raises(UserInputError, match="one risk score per test patient: RSF has 10 for 40 patients"):
+        c_index_intervals(time, event, {"Cox PH": rng.normal(size=40), "RSF": rng.normal(size=10)})
+    with pytest.raises(UserInputError, match="finite risk score"):
+        c_index_intervals(time, event, {"Cox PH": np.full(40, np.nan)})

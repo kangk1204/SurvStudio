@@ -459,7 +459,7 @@ def test_interval_bootstrap_stops_when_its_request_is_cancelled() -> None:
     cancelled.set()
     with cancellation_scope(cancelled), pytest.raises(JobCancelledError):
         c_index_intervals(time, event, {"Cox PH": signal}, n_bootstrap=200)
-    with pytest.raises(UserInputError, match="finite risk score"):
+    with pytest.raises(UserInputError, match="one risk score per test patient: Cox PH has 10"):
         c_index_intervals(time, event, {"Cox PH": signal[:10]})
     with pytest.raises(UserInputError, match="event indicator of 0 or 1"):
         c_index_intervals(time, event * 2, {"Cox PH": signal})
