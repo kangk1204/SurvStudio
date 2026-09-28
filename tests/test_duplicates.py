@@ -40,11 +40,14 @@ def test_identical_rows_are_reported_for_continuous_panels_only() -> None:
     continuous[20] = continuous[3]
     report = possible_duplicates(continuous, [f"row {index + 1}" for index in range(40)])
     assert report["identical"] == [["row 4", "row 21"]] and report["n_identical"] == 1
+    assert report["identical_checked"]
     assert not report["checked"] and str(MIN_MARKERS) in report["note"]
 
-    # Mutation calls: patients share profiles by chance, so they are not reported.
+    # Mutation calls: patients share profiles by chance, so they are not reported, and the report says the
+    # identical-profile check did not run.
     binary = rng.integers(0, 2, size=(200, 25)).astype(float)
-    assert possible_duplicates(binary, [str(index) for index in range(200)])["identical"] == []
+    binary_report = possible_duplicates(binary, [str(index) for index in range(200)])
+    assert binary_report["identical"] == [] and binary_report["identical_checked"] is False
 
 
 def test_patients_missing_most_markers_are_listed_and_not_compared() -> None:

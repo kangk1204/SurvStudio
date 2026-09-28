@@ -42,9 +42,10 @@ MAX_MISSING_SHARE = 0.5
 def possible_duplicates(values: np.ndarray, labels: Sequence[Any]) -> dict[str, Any]:
     """Screen a patients x markers array (NaN allowed) for identical and near-identical patients.
 
-    Returns ``{"checked", "markers_used", "note", "pairs", "identical", "n_pairs", "n_identical",
-    "mostly_missing", "n_mostly_missing"}``: ``pairs`` holds each flagged pair (``a``, ``b``, correlation ``r``,
-    ``gap``), strongest first; ``identical`` holds groups of patients whose values are all equal;
+    Returns ``{"checked", "identical_checked", "markers_used", "note", "pairs", "identical", "n_pairs",
+    "n_identical", "mostly_missing", "n_mostly_missing"}``: ``pairs`` holds each flagged pair (``a``, ``b``,
+    correlation ``r``, ``gap``), strongest first; ``identical`` holds groups of patients whose values are all equal
+    (checked on continuous panels only, ``identical_checked``);
     ``mostly_missing`` names the patients left out of both checks for missing more than ``MAX_MISSING_SHARE`` of
     the markers. The lists stop at ``MAX_LISTED`` and the counts give the totals.
     """
@@ -52,6 +53,7 @@ def possible_duplicates(values: np.ndarray, labels: Sequence[Any]) -> dict[str, 
     labels = [str(label) for label in labels]
     report: dict[str, Any] = {
         "checked": False,
+        "identical_checked": False,
         "markers_used": 0,
         "note": None,
         "pairs": [],
@@ -82,7 +84,7 @@ def possible_duplicates(values: np.ndarray, labels: Sequence[Any]) -> dict[str, 
         for label, row in zip(labels, rounded):
             groups[row.tobytes()].append(label)
         identical = [members for members in groups.values() if len(members) > 1]
-        report.update(identical=identical[:MAX_LISTED], n_identical=len(identical))
+        report.update(identical_checked=True, identical=identical[:MAX_LISTED], n_identical=len(identical))
 
     if n_markers < MIN_MARKERS:
         report["note"] = f"Near-identical profiles are checked on panels of at least {MIN_MARKERS} markers."

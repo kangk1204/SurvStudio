@@ -320,8 +320,8 @@ def marker_methods_paragraph(result: dict[str, Any], request: dict[str, Any] | N
 # When the left-out C-indices of the model and of the clinical covariates alone are paired subsample by
 # subsample, a result may carry the number of pairs and the mean paired difference; other results carry only
 # the two means and the number of model replicates.
-_PAIRED_COUNT_KEYS = ("n_paired_replicates", "n_left_out_pairs", "n_clinical_pairs")
-_PAIRED_DIFFERENCE_KEYS = ("delta_c_left_out", "c_left_out_difference", "left_out_c_difference")
+_PAIRED_COUNT_KEYS = ("n_clinical_replicates", "n_paired_replicates", "n_left_out_pairs", "n_clinical_pairs")
+_PAIRED_DIFFERENCE_KEYS = ("signature_gain_left_out", "delta_c_left_out", "c_left_out_difference", "left_out_c_difference")
 
 
 def _left_out_comparison(signature: dict[str, Any], added_value: bool, *, subject: str = "it") -> str:

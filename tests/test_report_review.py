@@ -167,6 +167,15 @@ def test_remark_left_out_comparison_gives_the_number_of_subsamples() -> None:
     assert "(mean difference +0.040)" in unpaired["results"]
     assert "each of 18 subsamples" in paired["results"] and "(mean difference +0.050)" in paired["results"]
 
+    # The field names marker_evaluation writes for the paired comparison.
+    engine = remark_checklist(
+        _hand_built_result(
+            signature={**signature, "n_signature_replicates": 40, "n_clinical_replicates": 40, "signature_gain_left_out": 0.042}
+        ),
+        request=_REQUEST,
+    )
+    assert "each of 40 subsamples" in engine["results"] and "(mean difference +0.042)" in engine["results"]
+
 
 def test_remark_text_uses_singular_nouns_for_one() -> None:
     result = _hand_built_result(tier_counts={"robust": 1, "suggestive": 0, "marginal only": 1}, cohort={"n_markers_evaluated": 1})
