@@ -1821,8 +1821,9 @@ def test_integrated_brier_score_reports_pointwise_mode_when_support_window_colla
 
     times = np.array([0.0, 1.0, 2.0], dtype=float)
     events = np.array([1, 0, 1], dtype=int)
-    support_times = np.array([0.0, 0.0, 0.0], dtype=float)
-    support_events = np.array([1, 0, 0], dtype=int)
+    # Every support event happens at t=0; the censoring survival stays positive until t=5.
+    support_times = np.array([0.0, 0.0, 5.0], dtype=float)
+    support_events = np.array([1, 1, 0], dtype=int)
 
     def _predicted(eval_times: np.ndarray) -> np.ndarray:
         return np.full((len(times), len(eval_times)), 0.75, dtype=float)
@@ -1837,6 +1838,8 @@ def test_integrated_brier_score_reports_pointwise_mode_when_support_window_colla
 
     assert result["eval_times"] == [0.0]
     assert len(result["brier_scores"]) == 1
+    # (0.75 - 0)^2 for the event at t=0 and (0.75 - 1)^2 for the two patients still at risk.
+    assert result["ibs"] == pytest.approx((0.5625 + 2 * 0.0625) / 3)
     assert result["ibs"] == pytest.approx(result["brier_scores"][0]["score"])
     assert result["null_ibs"] == pytest.approx(result["null_brier_scores"][0]["score"])
     assert "Pointwise Brier score" in result["scientific_summary"]["headline"]

@@ -158,4 +158,6 @@ def test_interval_endpoint_merges_blocks_and_reports_paired_differences() -> Non
     deepsurv = next(row for row in payload["rows"] if row["model"] == "DeepSurv")
     assert deepsurv["delta_vs_reference"] < 0 and deepsurv["delta_ci"][1] < 0
     mismatch = {**deep, "event": [1] * 80}
-    assert client.post("/api/model-comparison-intervals", json={"predictions": [classical, mismatch]}).status_code == 400
+    rejected = client.post("/api/model-comparison-intervals", json={"predictions": [classical, mismatch]})
+    assert rejected.status_code == 400
+    assert "disagree on the outcome of shared test patients" in rejected.json()["detail"]
