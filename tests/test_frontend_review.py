@@ -1122,6 +1122,19 @@ def test_only_a_404_for_the_open_dataset_closes_the_workspace(tmp_path: Path, ex
     assert result["openAfterOwn"] is False
 
 
+def test_a_history_entry_whose_cohort_is_gone_goes_home_with_a_reason(tmp_path: Path, example_dataset: dict) -> None:
+    """H13: Back to a page of an expired cohort cannot show it; the landing page says why."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.fetchHandler = () => ({ status: 404, body: { detail: "Unknown dataset id: 0123abcdef" } });
+      await page.run("restoreHistoryState({ view: 'workspace', datasetId: '0123abcdef', tab: 'km' })");
+      return { dataset: page.run("state.dataset"), banner: page.run("refs.runtimeBanner.textContent") };
+    """, dataset=example_dataset)
+
+    assert result["dataset"] is None
+    assert result["banner"] == "That page could not be restored: Unknown dataset id: 0123abcdef. Load the cohort again to continue."
+
+
 def test_validate_and_marker_buttons_keep_their_own_conditions_after_a_busy_cycle(tmp_path: Path, example_dataset: dict) -> None:
     """H14/I19: a finished run does not re-enable Validate without a model, or the list buttons with a file."""
     result = _run_page(tmp_path, r"""
@@ -1404,6 +1417,35 @@ def test_locked_test_chart_follows_screen_rank_and_names_only_what_it_draws(tmp_
     assert result["order"][-1] == "Random Survival Forest (ML) · rank 1"
     assert result["order"][-2] == "DeepHit (DL)"
     assert result["order"][0] == "Cox PH (ML)"
+
+
+def test_a_failed_locked_test_refit_is_a_caution_not_an_exclusion(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:
+    """An error at stage "locked_test" leaves the model ranked by CV; only other errors exclude a model."""
+    compare = _locked_test_compare(compare_payloads, failed=False)
+    compare["ml"]["comparison_table"][0]["locked_test_c_index"] = None
+    compare["ml"]["errors"] = [
+        {"model": "Random Survival Forest", "stage": "locked_test", "error": "the refit did not converge"},
+        {"model": "Gradient Boosted Survival", "error": "fit failed"},
+    ]
+    result = _run_page(tmp_path, _compare_all_script(r"""
+      const rows = page.run("refs.benchmarkComparisonShell.querySelectorAll('tbody tr').map((tr) => tr.children.map((td) => td.textContent.trim()))");
+      return {
+        rows,
+        note: page.run("refs.benchmarkTableNote.textContent"),
+        summary: page.run("refs.benchmarkSummaryGrid.textContent"),
+        cellTitle: page.run("refs.benchmarkComparisonShell.querySelector('tbody tr td .benchmark-row-note')?.getAttribute('title') || ''"),
+      };
+    """), dataset=example_dataset, compare=compare)
+
+    rsf = next(row for row in result["rows"] if "Random Survival Forest" in row)
+    gbs = next(row for row in result["rows"] if "Gradient Boosted Survival" in row)
+    assert rsf[0] == "1"
+    assert any("Locked-test refit failed; ranked by CV" in cell for cell in rsf)
+    assert gbs[0] == "—" and any("(Excluded)" in cell for cell in gbs)
+    assert "The locked-test refit of the rank-1 model (Random Survival Forest) failed" in result["note"]
+    assert "Excluded from the current Classical ML compare run: Gradient Boosted Survival." in result["summary"]
+    assert "compare run: Random Survival Forest" not in result["summary"]
+    assert result["cellTitle"] == "the refit did not converge"
 
 
 def test_chart_shows_an_empty_state_when_no_locked_test_value_exists(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:

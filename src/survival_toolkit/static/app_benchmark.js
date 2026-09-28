@@ -135,12 +135,25 @@
       return comparisonRowsFromPayload(payload);
     }
 
+    // A failed locked-test refit ("stage": "locked_test") leaves the model ranked by cross-validation: it is
+    // not an excluded model, only a model without a locked-test estimate (see lockedTestErrorFor).
+    function exclusionErrors(payload) {
+      const errors = Array.isArray(payload?.analysis?.errors) ? payload.analysis.errors : [];
+      return errors.filter((entry) => entry && entry.stage !== "locked_test");
+    }
+
+    function lockedTestErrorFor(payload, row) {
+      if (row?.locked_test_error) return String(row.locked_test_error);
+      const errors = Array.isArray(payload?.analysis?.errors) ? payload.analysis.errors : [];
+      const entry = errors.find((item) => item?.stage === "locked_test" && String(item?.model || "").trim() === String(row?.model || "").trim());
+      return entry ? String(entry.error || "the refit failed") : "";
+    }
+
     function excludedModelsFromPayload(payload) {
       const explicit = Array.isArray(payload?.analysis?.excluded_models)
         ? payload.analysis.excluded_models.map((value) => String(value || "").trim()).filter(Boolean)
         : [];
-      const errors = Array.isArray(payload?.analysis?.errors) ? payload.analysis.errors : [];
-      const erroredModels = errors.map((entry) => String(entry?.model || "").trim()).filter(Boolean);
+      const erroredModels = exclusionErrors(payload).map((entry) => String(entry?.model || "").trim()).filter(Boolean);
       return [...new Set([...explicit, ...erroredModels])];
     }
 
@@ -188,6 +201,7 @@
           numericCIndex: benchmarkMetricNumber(row.c_index),
           hasLockedTest: Object.prototype.hasOwnProperty.call(row || {}, "locked_test_c_index"),
           locked_test_c_index: row.locked_test_c_index,
+          lockedTestError: lockedTestErrorFor(payload, row),
           evaluation_mode: row.evaluation_mode || payload?.analysis?.evaluation_mode || "",
           sourceRank: rankProvided ? (ranked ? Number(row.rank) : null) : index + 1,
           comparableForRanking: ranked && row.comparable_for_ranking !== false && benchmarkMetricNumber(row.c_index) !== null,
@@ -206,7 +220,7 @@
       const runGroupId = comparePayloadGroupId(payload);
       const comparisonRows = comparisonRowsFromPayload(payload);
       const seenModels = new Set(comparisonRows.map((row) => String(row?.model || "").trim().toLowerCase()).filter(Boolean));
-      const errorRows = Array.isArray(payload?.analysis?.errors) ? payload.analysis.errors : [];
+      const errorRows = exclusionErrors(payload);
       const rows = [];
 
       errorRows.forEach((entry, index) => {
@@ -921,6 +935,16 @@
         leadParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the leaderboard.");
       }
       if (board.hasLockedTest) leadParts.push(LOCKED_TEST_RANKING_NOTE);
+      // A failed locked-test refit leaves the model ranked by cross-validation but without an independent estimate.
+      const lockedTestFailures = board.visibleRows.filter((row) => row.lockedTestError);
+      if (board.hasLockedTest && lockedTestFailures.length) {
+        const rankOne = board.rankingRows[0];
+        leadParts.push(
+          rankOne?.lockedTestError
+            ? `The locked-test refit of the rank-1 model (${rankOne.model}) failed, so it has no locked-test C-index to report.`
+            : `The locked-test refit failed for ${lockedTestFailures.map((row) => row.model).join(", ")}; ${lockedTestFailures.length === 1 ? "it stays" : "they stay"} ranked by cross-validation.`,
+        );
+      }
       leadParts.push(intervalNote(board));
       const detailParts = [intervalDetail(board)];
       if (board.visibleExcludedRows.length) {
@@ -981,7 +1005,7 @@
                 <td><span class="benchmark-family-pill family-${escapeHtml(familyMeta.familyTab)}">${escapeHtml(familyMeta.familyLabel)}</span></td>
                 <td>${escapeHtml(formatValue(row.model))}</td>
                 <td>${escapeHtml(formatValue(row.c_index))}</td>
-                ${board.hasLockedTest ? `<td>${row.hasLockedTest ? escapeHtml(formatValue(row.locked_test_c_index)) : "—"}</td>` : ""}
+                ${board.hasLockedTest ? `<td>${row.hasLockedTest ? escapeHtml(formatValue(row.locked_test_c_index)) : "—"}${row.lockedTestError ? `<div class="benchmark-row-note" title="${escapeHtml(row.lockedTestError)}">Locked-test refit failed; ranked by CV</div>` : ""}</td>` : ""}
                 ${intervals ? intervalCells(intervalByModel.get(String(row.model))) : ""}
                 <td>${escapeHtml(benchmarkEvaluationLabel(row.evaluation_mode))}</td>
                 <td>${escapeHtml(row.status)}</td>

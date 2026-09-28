@@ -965,8 +965,13 @@ async function restoreHistoryState(historyState) {
     activateTab(historyState.tab || "km");
     renderWorkspaceChrome();
   } catch (error) {
-    // A newer navigation or dataset load cancelled this restore; leave the workspace alone.
-    if (!isSupersededRequestError(error)) goHome({ syncHistory: false });
+    // A newer navigation or dataset load cancelled this restore; leave the workspace alone. Otherwise the
+    // page cannot be shown (for example its cohort left the server's store), so say why before going home.
+    if (!isSupersededRequestError(error)) {
+      goHome({ syncHistory: false });
+      const reason = errorMessageText(error).replace(/([^.!?])$/, "$1.");
+      setRuntimeBanner(`That page could not be restored: ${reason} Load the cohort again to continue.`, "warning");
+    }
   } finally {
     runtime.historySyncPaused = false;
   }
