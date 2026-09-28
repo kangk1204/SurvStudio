@@ -1203,25 +1203,35 @@ def test_partial_dependence_supports_categorical_raw_feature() -> None:
 def test_partial_dependence_orders_categories_like_the_reference_levels() -> None:
     import pandas as pd
 
+    import survival_toolkit.ml_models as ml_models
     from survival_toolkit.ml_models import compute_partial_dependence
 
-    class _OrdinalModel:
+    class _StageModel:
         def predict(self, X):
-            return X[:, 0].astype(float)
+            # One point of risk for stage II and two for stage III.
+            return np.asarray(X, dtype=float) @ np.array([1.0, 2.0])
 
     analysis_frame = pd.DataFrame({"stage": pd.Series(["Stage I", "Stage III", "Stage II"], dtype="string")})
-    encoded = pd.DataFrame({"stage": [0.0, 1.0, 2.0]})
+    encoder = ml_models._fit_feature_encoder(analysis_frame, ["stage"], ["stage"])
+    encoded = ml_models._transform_feature_encoder(analysis_frame, encoder)
 
     pdp = compute_partial_dependence(
-        _OrdinalModel(),
+        _StageModel(),
         encoded,
         feature_name="stage",
         categorical_features=["stage"],
+        feature_encoder=encoder,
         analysis_frame=analysis_frame,
     )
 
-    # Same clinical ordering as the encoder baseline and the Cox reference level.
+    # Same clinical ordering as the encoder baseline and the Cox reference level, and each
+    # category's curve value is the risk the model gives that category.
     assert pdp["values"] == ["Stage I", "Stage II", "Stage III"]
+    assert pdp["mean_risk"] == [0.0, 1.0, 2.0]
+    # Without the encoder a category cannot be placed on the encoded columns, so no silent all-None curve.
+    with pytest.raises(ValueError, match="needs the fitted feature encoder"):
+        compute_partial_dependence(_StageModel(), encoded, feature_name="stage", categorical_features=["stage"],
+                                   analysis_frame=analysis_frame)
 
 
 def test_partial_dependence_raises_on_internal_prediction_failure() -> None:
@@ -1755,24 +1765,10 @@ def test_partial_dependence_uses_encoder_levels_for_categorical_features() -> No
         def predict(self, x):
             return np.asarray(x[:, 0], dtype=float)
 
-    analysis_frame = pd.DataFrame({"marker": pd.Series(["a", "z", "a"], dtype="string")})
-    encoder = {
-        "features": ["marker"],
-        "categorical_features": ["marker"],
-        "categorical_mappings": {
-            "marker": {
-                "all_levels": ["a", "__unknown"],
-                "retained_levels": ["a"],
-                "missing_label": "__missing",
-                "unknown_column": "marker____unknown",
-                "missing_column": "marker__missing",
-            }
-        },
-        "encoded_columns": ["marker__a", "marker____unknown", "marker__missing"],
-        "feature_names": ["marker__a", "marker____unknown", "marker__missing"],
-        "numeric_features": [],
-        "numeric_impute_values": {},
-    }
+    # The encoder was fitted on training rows that hold "a" and "z"; the analysed rows also hold
+    # "q", a level the model never saw, which is therefore not a point of the curve.
+    encoder = ml_models._fit_feature_encoder(pd.DataFrame({"marker": ["a", "z", "a"]}), ["marker"], ["marker"])
+    analysis_frame = pd.DataFrame({"marker": pd.Series(["a", "z", "a", "q"], dtype="string")})
     encoded = ml_models._transform_feature_encoder(analysis_frame, encoder)
 
     result = ml_models.compute_partial_dependence(
@@ -1785,7 +1781,9 @@ def test_partial_dependence_uses_encoder_levels_for_categorical_features() -> No
     )
 
     assert result["feature_type"] == "categorical"
-    assert result["values"] == ["a", "__unknown"]
+    assert result["values"] == ["a", "z"]
+    assert result["mean_risk"] == [0.0, 1.0]
+    assert result["category_counts"] == {"a": 2, "z": 1}
 
 
 def test_integrated_brier_score_restricts_eval_times_to_support_event_window() -> None:

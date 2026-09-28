@@ -306,6 +306,56 @@ def test_repeated_cv_summary_describes_fold_means_and_models_that_could_not_run(
     assert "training folds of about 120 patients" in summary["strengths"][0]
 
 
+# ── Partial dependence ──────────────────────────────────────────────────────
+
+
+@requires_sksurv
+def test_partial_dependence_counts_categories_as_the_encoder_reads_them() -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=20, n_patients=200).copy()
+    df["dose"] = np.random.default_rng(3).integers(1, 4, size=len(df)).astype(float)
+    features = ["age", "biomarker_score", "dose"]
+    # One held-out row holds 2.5, so the whole column reads as decimals ("2.0") while the
+    # encoder, fitted on whole-number training rows, stores the levels "1", "2", "3".
+    df.loc[_holdout_rows(df, features, 1), "dose"] = 2.5
+    fitted = ml.train_random_survival_forest(df, "os_months", "os_event", features, categorical_features=["dose"],
+                                             n_estimators=5, random_state=42, compute_importance=False, compute_brier=False)
+    assert fitted["_feature_encoder"]["categorical_mappings"]["dose"]["all_levels"] == ["1", "2", "3"]
+    pdp = ml.compute_partial_dependence(fitted["_model"], fitted["_X_encoded"], "dose", categorical_features=["dose"],
+                                        feature_encoder=fitted["_feature_encoder"], analysis_frame=fitted["_analysis_frame"])
+    observed = fitted["_analysis_frame"]["dose"].value_counts()
+    assert pdp["category_counts"] == {"1": int(observed[1.0]), "2": int(observed[2.0]), "3": int(observed[3.0])}
+
+
+@requires_sksurv
+def test_partial_dependence_refuses_a_column_the_model_never_used() -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=21, n_patients=160)
+    fitted = ml.train_random_survival_forest(df, "os_months", "os_event", ["age", "biomarker_score"], n_estimators=5,
+                                             random_state=1, compute_importance=False, compute_brier=False)
+    with pytest.raises(UserInputError, match="'os_months' is not an input of the fitted model. Use one of: 'age', 'biomarker_score'"):
+        ml.compute_partial_dependence(fitted["_model"], fitted["_X_encoded"], "os_months", n_points=5,
+                                      feature_encoder=fitted["_feature_encoder"], analysis_frame=fitted["_analysis_frame"])
+
+
+def test_partial_dependence_refuses_non_finite_predictions_instead_of_leaving_gaps() -> None:
+    from survival_toolkit import ml_models as ml
+
+    class _NanModel:
+        def predict(self, X):
+            X = np.asarray(X, dtype=float)
+            return np.where(X[:, 0] > 25.0, np.nan, X[:, 0])
+
+    frame = pd.DataFrame({"age": [10.0, 20.0, 30.0]})
+    encoder = ml._fit_feature_encoder(frame, ["age"])
+    with pytest.raises(UserInputError, match="non-finite risk scores"):
+        ml.compute_partial_dependence(_NanModel(), frame, "age", n_points=3, feature_encoder=encoder, analysis_frame=frame)
+    with pytest.raises(UserInputError, match="non-finite risk scores"):
+        ml.compute_partial_dependence(_NanModel(), frame, "age", n_points=3)
+
+
 # ── Numerical helpers ───────────────────────────────────────────────────────
 
 

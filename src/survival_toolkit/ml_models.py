@@ -38,6 +38,7 @@ from survival_toolkit.analysis import (
     _safe_float,
 )
 from survival_toolkit.encoding import (
+    _stored_level_values,
     canonical_category_values,
     coerce_feature_subset,
     fit_feature_encoder as _fit_shared_feature_encoder,
@@ -4050,6 +4051,16 @@ def compute_partial_dependence(
     # The fitted encoder decides how the model saw a feature: text columns are one-hot
     # encoded even when the request did not list them as categorical.
     categorical_features = _encoder_categorical_features(feature_encoder, categorical_features)
+    if isinstance(feature_encoder, dict) and feature_encoder.get("features") is not None:
+        model_inputs = [str(feature) for feature in feature_encoder.get("features") or []]
+        if str(feature_name) not in model_inputs:
+            # Varying a column the model never used would draw a flat, meaningless curve.
+            raise ValueError(
+                f"Feature '{feature_name}' is not an input of the fitted model. Use one of: "
+                + ", ".join(f"'{feature}'" for feature in model_inputs[:20])
+                + (", ..." if len(model_inputs) > 20 else "")
+                + "."
+            )
     computation_errors: list[str] = []
 
     def _predict_mean_for_variant(frame_variant: pd.DataFrame) -> float | None:
@@ -4072,20 +4083,28 @@ def compute_partial_dependence(
                 replacement = (replacement - mean) / scale
             X_variant[:, col_idx] = replacement
         preds = _predict_risk_scores(model, X_variant)
-        return _safe_float(float(np.mean(preds)))
+        mean_risk = _safe_float(float(np.mean(preds)))
+        if mean_risk is None:
+            # A silent gap in the curve would read as a missing category or grid value.
+            raise ValueError("the model returned non-finite risk scores")
+        return mean_risk
 
     if analysis_frame is not None and feature_name in analysis_frame.columns:
         if feature_name in categorical_features:
-            encoder_levels: list[str] = []
-            if feature_encoder is not None:
-                encoder_levels = [
-                    str(level)
-                    for level in (
-                        feature_encoder.get("categorical_mappings", {})
-                        .get(feature_name, {})
-                        .get("all_levels", [])
-                    )
-                ]
+            if feature_encoder is None:
+                # Without the encoder a category cannot be placed on the model's encoded columns.
+                raise ValueError(
+                    f"Partial dependence of the categorical feature '{feature_name}' needs the fitted feature "
+                    "encoder, which maps each category onto the model's encoded columns."
+                )
+            encoder_levels = [
+                str(level)
+                for level in (
+                    feature_encoder.get("categorical_mappings", {})
+                    .get(feature_name, {})
+                    .get("all_levels", [])
+                )
+            ]
             category_values = encoder_levels or _ordered_category_values(analysis_frame[feature_name])
             if len(category_values) < 2:
                 raise ValueError(
@@ -4094,8 +4113,11 @@ def compute_partial_dependence(
                 )
 
             mean_risks: list[float | None] = []
-            # Count by the encoder's canonical labels ("1", not "1.0"), the labels category_values uses.
-            category_counts = canonical_category_values(analysis_frame[feature_name]).value_counts(dropna=True)
+            # Count the rows of each level as the encoder reads them: canonical labels matched to
+            # the stored levels, so "2.0" counts for level "2" even when the whole column holds 2.5.
+            category_counts = _stored_level_values(
+                canonical_category_values(analysis_frame[feature_name]), category_values
+            ).value_counts(dropna=True)
             for category in category_values:
                 raise_if_cancelled()
                 frame_variant = analysis_frame.copy()
@@ -4197,7 +4219,10 @@ def compute_partial_dependence(
         X_modified[:, col_idx] = grid_val
         try:
             preds = _predict_risk_scores(model, X_modified)
-            mean_risks.append(_safe_float(float(np.mean(preds))))
+            mean_risk = _safe_float(float(np.mean(preds)))
+            if mean_risk is None:
+                raise ValueError("the model returned non-finite risk scores")
+            mean_risks.append(mean_risk)
         except Exception as exc:
             if must_propagate(exc) or isinstance(exc, MemoryError):
                 raise
