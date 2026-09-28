@@ -45,6 +45,7 @@ const appState = {
   },
   runtimeBannerSerial: 0,
   runtimeBannerHeld: false,
+  pendingUploads: 0,
   requestControllers: {},
   coxMartingaleTerm: "",
   resultPreference: {
@@ -388,9 +389,11 @@ const AUTO_CATEGORICAL_UNIQUE_THRESHOLD = 6;
 const COX_STAGE_VARIABLE_PREFERENCE = ["stage_group", "pathologic_stage", "stage"];
 const DEFAULT_TIME_UNIT_LABEL = "Time";
 const DEFAULT_LOCKED_TEST_PERCENT = 30;
-// Defaults of the numeric settings (the server's defaults). Request builders, input checks and result
-// currency all read a blank field as its default, so a run never sends Number("") = 0 while the result
-// currency assumes the default (and ML and DL never split the patients with different seeds).
+// Defaults of the numeric settings: the value each field starts with on the page (index.html). The server's
+// own defaults can differ (its cut-point search runs no permutations or validation splits unless asked), so
+// the page always sends these. Request builders, input checks and result currency all read a blank field as
+// its default, so a run never sends Number("") = 0 while the result currency assumes the default (and ML and
+// DL never split the patients with different seeds).
 const KM_NUMERIC_DEFAULTS = Object.freeze({ confidence_level: 0.95, risk_table_points: 6, fh_p: 1 });
 const ML_NUMERIC_DEFAULTS = Object.freeze({ n_estimators: 100, learning_rate: 0.1, random_state: 42, cv_folds: 5, cv_repeats: 3 });
 const DL_NUMERIC_DEFAULTS = Object.freeze({

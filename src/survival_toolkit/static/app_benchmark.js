@@ -182,7 +182,6 @@
             class="button ghost compact-btn"
             type="button"
             data-benchmark-model="rsf"
-            data-benchmark-mode="single"
           >
             Open model controls
           </button>

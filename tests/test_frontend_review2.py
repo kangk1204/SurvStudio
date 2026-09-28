@@ -1047,6 +1047,116 @@ def test_the_cox_preview_is_shown_as_soon_as_a_dataset_loads(tmp_path: Path, exa
     assert result["line"].startswith("350 of 360 patients usable (10 dropped for missing values)")
 
 
+# ── Navigation, uploads and errors ──────────────────────────────
+
+
+def test_arrow_keys_move_between_shown_tabs_without_new_history_entries(tmp_path: Path, example_dataset: dict) -> None:
+    """R13-17/R14-15: the ML and DL buttons (both the Prediction tab) are skipped, and keys replace history like clicks."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      let pushes = 0;
+      const history = page.context.history;
+      const push = history.pushState.bind(history);
+      history.pushState = (...args) => { pushes += 1; return push(...args); };
+      page.run("activateTab('benchmark', { focusTabButton: true })");
+      const strip = page.document.querySelector(".tab-strip");
+      const press = (key) => {
+        strip.dispatchEvent({ type: "keydown", key, target: page.document.activeElement, bubbles: true, defaultPrevented: false,
+          preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} });
+        return page.run("activeTabName()");
+      };
+      const keys = ["ArrowLeft", "ArrowRight", "ArrowRight", "Home", "End", "ArrowRight"];
+      return { tabs: keys.map(press), pushes, focused: page.document.activeElement?.dataset?.tab };
+    """, dataset=example_dataset)
+
+    assert result == {"tabs": ["markers", "benchmark", "tables", "km", "data", "km"], "pushes": 0, "focused": "km"}
+
+
+def test_plot_failures_in_event_handlers_are_caught(tmp_path: Path, example_dataset: dict) -> None:
+    """R13-18: a failed martingale redraw is reported; a failed or throwing reset-axes relayout is contained."""
+    result = _run_page(tmp_path, r"""
+      let unhandled = 0;
+      process.on("unhandledRejection", () => { unhandled += 1; });
+      await loadDataset(page, fixtures.dataset);
+      page.run(`state.cox = { analysis: { martingale_plot_data: [
+        { term: "age", value: [1, 2, 3], residual: [0.1, -0.2, 0.3] }, { term: "bmi", value: [1, 2, 3], residual: [0.2, 0.1, -0.3] }] } };
+        syncCoxMartingaleSelector(coxMartingalePanels(), "age");`);
+      const newPlot = page.plotly.newPlot;
+      page.plotly.newPlot = () => Promise.reject(new Error("the chart could not be drawn"));
+      page.change("#coxMartingaleVariableSelect", "bmi");
+      await page.settle();
+      page.plotly.newPlot = newPlot;
+      page.run(`refs.coxPlot._fullLayout = { xaxis: { range: [0, 2] }, yaxis: { range: [0, 3] }, height: 400 };
+        refs.coxPlot.__handlers = {};
+        refs.coxPlot.on = (name, handler) => { refs.coxPlot.__handlers[name] = handler; };
+        stabilizeCoxPlotResetAxes(refs.coxPlot);`);
+      page.plotly.relayout = () => Promise.reject(new Error("relayout failed"));
+      page.run("refs.coxPlot.__handlers.plotly_relayout({ 'xaxis.autorange': true })");
+      await page.settle();
+      const afterRejected = page.run("refs.coxPlot.__stableResetAxesState.applying");
+      page.plotly.relayout = () => { throw new Error("relayout threw"); };
+      let threw = false;
+      try {
+        page.run("refs.coxPlot.__handlers.plotly_relayout({ 'yaxis.autorange': true })");
+      } catch {
+        threw = true;
+      }
+      await page.settle();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { unhandled, toasts: page.toasts(), afterRejected, threw, afterThrown: page.run("refs.coxPlot.__stableResetAxesState.applying") };
+    """, dataset=example_dataset)
+
+    assert result["unhandled"] == 0
+    assert any("the chart could not be drawn" in toast for toast in result["toasts"]), result["toasts"]
+    assert result["afterRejected"] is False
+    assert result["threw"] is False
+    assert result["afterThrown"] is False
+
+
+def test_the_upload_button_stays_busy_until_the_last_of_overlapping_uploads_ends(tmp_path: Path, example_dataset: dict) -> None:
+    """R13-20: a second file (dropped while one uploads) replaces the first; the button waits for the second."""
+    result = _run_page(tmp_path, r"""
+      const uploads = [deferred(), deferred()];
+      let calls = 0;
+      page.fetchHandler = (request) => (request.url.endsWith("/api/upload") ? uploads[calls++].promise : { status: 500, body: { detail: "unexpected" } });
+      const button = () => page.run("({ disabled: refs.uploadButton.disabled, loading: refs.uploadButton.classList.contains('is-loading') })");
+      page.run("refs.datasetFile.files = [{ name: 'first.csv' }]");
+      page.change("#datasetFile");
+      await page.settle(3);
+      page.run("refs.datasetFile.files = [{ name: 'second.csv' }]");
+      page.change("#datasetFile");
+      await page.settle(3);
+      const firstAborted = page.requests[0].signal.aborted;
+      const whileSecond = button();
+      uploads[1].resolve({ status: 200, body: fixtures.dataset });
+      await page.settle();
+      return { calls, firstAborted, whileSecond, after: button(), dataset: page.run("state.dataset?.dataset_id") };
+    """, dataset=example_dataset)
+
+    assert result["calls"] == 2
+    assert result["firstAborted"] is True
+    assert result["whileSecond"] == {"disabled": True, "loading": True}
+    assert result["after"] == {"disabled": False, "loading": False}
+    assert result["dataset"] == example_dataset["dataset_id"]
+
+
+def test_dead_code_of_the_second_review_is_gone() -> None:
+    """R13-16: withLoading has no swallowErrors option, required refs need no guards, the workbench has no fallback."""
+    static = Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static"
+    app_js = (static / "app.js").read_text(encoding="utf-8")
+    sources = "\n".join(path.read_text(encoding="utf-8") for path in sorted(static.glob("app*.js")))
+    assert "swallowErrors" not in sources
+    assert "clearCohortTableOutput" not in sources
+    assert "shouldClearTableOutput" not in sources
+    for name in ("downloadCoxPngButton", "downloadCoxSvgButton", "downloadCohortTableXlsxButton", "downloadMlComparisonPngButton",
+                 "downloadMlComparisonSvgButton", "downloadDlComparisonPngButton", "downloadDlComparisonSvgButton",
+                 "downloadKmPngButton", "downloadKmSvgButton"):
+        assert f"if (refs.{name}) refs.{name}.addEventListener" not in app_js, name
+    start = app_js.index("function reviewBenchmarkSourceTab(")
+    body = app_js[start:app_js.index("\n}\n", start)]
+    assert "scrollToAnalysisResult" not in body and "WorkspaceCard" not in body
+
+
 # ── Derived groupings ───────────────────────────────────────────
 
 

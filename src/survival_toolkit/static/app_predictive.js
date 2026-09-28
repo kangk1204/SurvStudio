@@ -347,10 +347,7 @@ function benchmarkReviewAction(row) {
   const modelKey = predictiveModelKeyFromComparisonLabel(row.model);
   if (modelKey) {
     return {
-      dataset: {
-        benchmarkModel: modelKey,
-        benchmarkMode: row.sourceMode || "",
-      },
+      dataset: { benchmarkModel: modelKey },
       label: "Train a model",
       disabled: false,
     };
@@ -364,10 +361,7 @@ function benchmarkReviewAction(row) {
     };
   }
   return {
-    dataset: {
-      benchmarkTab: row.familyTab,
-      benchmarkMode: row.sourceMode || "",
-    },
+    dataset: { benchmarkTab: row.familyTab },
     label: `Open ${row.familyTab.toUpperCase()} controls`,
     disabled: false,
   };
@@ -913,10 +907,6 @@ function benchmarkResultLabel(goal) {
   if (tone === "current") return "Current";
   if (tone === "stale") return "Stale";
   return "Not run";
-}
-
-function benchmarkPanelMode(goal) {
-  return benchmarkGoalMeta(goal).panel?.dataset?.resultMode || "idle";
 }
 
 function benchmarkEvaluationLabel(mode) {

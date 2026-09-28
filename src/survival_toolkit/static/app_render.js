@@ -883,15 +883,16 @@ function stabilizeCoxPlotResetAxes(plotEl) {
     if (!resetRequested || !stableState || stableState.applying) return;
 
     stableState.applying = true;
-    Promise.resolve(
-      Plotly.relayout(plotEl, {
+    // The executor turns a relayout that throws into a rejection too; a failed reset only leaves Plotly's own axes.
+    new Promise((resolve) => {
+      resolve(Plotly.relayout(plotEl, {
         height: stableState.height,
         "xaxis.autorange": false,
         "xaxis.range": stableState.xRange.slice(),
         "yaxis.autorange": false,
         "yaxis.range": stableState.yRange.slice(),
-      })
-    ).finally(() => {
+      }));
+    }).catch(() => {}).finally(() => {
       if (plotEl.__stableResetAxesState) plotEl.__stableResetAxesState.applying = false;
     });
   });

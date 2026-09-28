@@ -505,7 +505,7 @@ def test_frontend_exposes_unified_benchmark_tab() -> None:
     assert "function benchmarkBoardState()" in benchmark_text
     assert "const benchmarkBoardApi = window.SurvStudioBenchmark.createBenchmarkBoardApi({" in text
     assert "function syncPredictiveWorkbenchCompareVisibility()" in text
-    assert "function reviewBenchmarkSourceTab(tabName, mode = null)" in text
+    assert "function reviewBenchmarkSourceTab(tabName)" in text
     assert '  if (resolvedTabName === "ml" || resolvedTabName === "dl") {' in text
     assert '#tab-ml,' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text(encoding="utf-8")
 
@@ -1124,7 +1124,8 @@ def test_tab_activation_moves_focus_only_when_asked() -> None:
 
     assert 'function activateTab(tabName, { historyMode = "replace", focusTabButton = false, syncHistory = true } = {}) {' in text
     assert "if (isActive && focusTabButton) {" in text
-    assert 'activateTab(tabs[next].dataset.tab, { historyMode: "push", focusTabButton: true });' in text
+    # Arrow keys replace the history entry like a click (tests/test_frontend_review2.py drives them).
+    assert 'activateTab(tabs[next].dataset.tab, { historyMode: "replace", focusTabButton: true });' in text
 
 
 def test_reparenting_preserves_focus_scroll_and_schedules_extra_plot_resize() -> None:
@@ -6705,7 +6706,7 @@ def test_benchmark_frontend_normalizes_missing_family_labels_before_rendering() 
 def test_runs_use_scope_override_for_loading_locks() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert "async function withLoading(button, action, scopeOverride = null, { swallowErrors = true } = {}) {" in app_js
+    assert "async function withLoading(button, action, scopeOverride = null) {" in app_js
     assert "const scope = scopeOverride || runScopeForButton(button);" in app_js
     assert 'withLoading(refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, "predictive");' in app_js
     assert "const scopeButtons = buttonsForScope(scope);" in app_js
