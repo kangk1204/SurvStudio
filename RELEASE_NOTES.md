@@ -33,7 +33,7 @@
 
 ### New
 
-- `survival_toolkit.marker_screen`: vectorized Cox score tests for many candidate markers, marginal and as added value over clinical covariates (Efron or Breslow ties, with strata); Freedman–Lane residual permutations; Westfall–Young step-down p-values; permutation FDR; Harrell's C for many risk scores at once. Score statistics match R `coxph` score tests to a relative 1e-8 (univariate) and 1e-6 (clinically adjusted).
+- `survival_toolkit.marker_screen`: vectorized Cox score tests for many candidate markers, marginal and as added value over clinical covariates (Efron or Breslow ties, with strata); permutations of each marker's residuals after regression on the clinical covariates (the Smith method); Westfall–Young step-down p-values; permutation FDR; Harrell's C for many risk scores at once. Score statistics match R `coxph` score tests to a relative 1e-8 (univariate) and 1e-6 (clinically adjusted).
 - `survival_toolkit.marker_evaluation.evaluate_markers`: the whole screening procedure checked in one step. It reports family-wise error and FDR by permutation, stability over event-stratified subsamples, and pre-declared tiers. A robust marker needs a Westfall–Young p ≤ 0.05, selection in at least 50% of subsamples and the same direction in at least 90%. It also reports an optimism-corrected C-index for the selected signature, the shrinkage of the strongest marker's effect, and an optional descriptive tree-model lens.
 - `survival_toolkit.marker_evaluation.validate_locked_recipe`: applies a SHA-256-locked signature unchanged to an external cohort. It reports the C-index with a bootstrap CI, the gain over the clinical-only model, the calibration slope, observed/expected risk, the Brier score and skill, and a Holm-adjusted replication test per marker.
 - README: a Prognostic Marker Evaluation section with a runnable example.
@@ -57,6 +57,63 @@
 - The distribution is now named `survstudio` (the import name stays `survival_toolkit`), with a `survstudio` command next to the old `survival-toolkit`; the package metadata carries the licence, authors, keywords and project links.
 - A Dockerfile builds a container that serves the app on port 8000 (`docker run --rm -p 127.0.0.1:8000:8000 survstudio`); inside a container the start-up message explains how to publish the port on loopback only.
 - `CITATION.cff` and `.zenodo.json` describe the software for GitHub's citation box and Zenodo archiving; a release workflow builds and checks the wheel, publishes it to PyPI by trusted publishing and pushes a multi-architecture image to GHCR when a GitHub release is published. `docs/releasing.md` lists the one-time account steps.
+
+### Fixes from a second full code review
+
+Statistics
+
+- Locked marker models store the baseline hazard at the development mean of the linear predictor (recipe version 2), so expected risk, observed/expected and the Brier scores in an external cohort no longer collapse when markers are on log scales. Version-1 recipes still validate and leave out the absolute risks their stored baseline lost.
+- Locked recipes are hashed in a canonical form, so a model downloaded, or sent back by the browser, validates. Every validation from the browser used to fail with "edited after it was locked".
+- Categorical covariates coded as numbers keep the same levels whether a file reads them as 1 or 1.0, in locked models, ML encoders and deep models. Validation stops when most external rows have levels the model never saw, instead of scoring them as the reference level.
+- Cox fits whose coefficients run to infinity (separation) are flagged and left out of exact hazard ratios, the winner's-curse shrinkage and the selected-marker model.
+- The selected-marker model and the clinical covariates are compared in the patients left out of the same subsamples, and the number of subsamples is reported. A model without selected markers is labelled as the clinical model.
+- No marker is robust when no subsample could be evaluated, and the methods text says that stability was not assessed.
+- The added-value permutation is named for what it does: each marker's residuals after regression on the clinical covariates are permuted (the Smith method; Winkler et al. 2014), not the Freedman–Lane scheme. The setting is `lens2_null="smith"`; "freedman_lane" stays as an alias.
+- Permutation FDR leaves out markers without an observed statistic, the near-constant filter counts missing values at their imputed median, and `ties="breslow"` reaches every fit.
+- Harrell's C for many risk scores counts pairs in n log n time with identical results, and bootstrap loops can be cancelled.
+- The signature search's search-adjusted permutation p-value now repeats the whole search in every shuffle: the family is every combination that passes the size rule, and the event rule is applied inside each shuffle. Before, the family was chosen on the observed outcome, and under the global null about 16% of searches gave p ≤ 0.05. Bootstrap minimums scale with the resample size, robustness checks run in rank order only as far as needed, memory is bounded by working in column blocks, and thresholds follow the chosen significance level.
+- Kaplan-Meier drops groups never at risk, as R does; outcome-selected groups report neither tests nor an RMST interval; a single-level group no longer claims a test.
+- Cox refuses identifier-like categoricals and designs with as many coefficients as events before fitting, orders numeric-coded levels numerically, takes negated labels ("Non-mutated") as the reference, counts infinite covariate values, and fits columns whose names would break a formula.
+- Table 1 counts each group correctly when a numeric code has a non-integer level.
+
+Data input and outcomes
+
+- Files with decimal commas convert only those columns; dot-decimal columns and dotted dates are no longer rewritten. UTF-16 files over 1 MB load, and the delimiter guess reads at most 64 KB.
+- Follow-up times written with thousands separators are read, and other time text that is not a number is refused with examples instead of being counted as missing.
+- A censoring indicator coded Yes/No or true/false is refused, because it would swap events and censored patients; so is a time column that is missing for nearly all censored patients (such as days_to_death).
+- Biomarker status columns (ER, HER2, MSI, IDH and similar) are no longer taken for outcomes; PFI, DFI, TTP and similar time names are recognised, and an unrecognised time name brings a caution instead of an error.
+
+Marker matrices and the repeated-patient screen
+
+- Parquet matrices saved with an index, patient IDs with leading zeros, R `write.table` headers and text in other encodings are read; text matrices are bounded before they are parsed; TCGA sample types are classified by range and barcodes matched regardless of case.
+- Patients missing most markers are left out of the repeated-patient screen and listed, and the report says whether identical profiles were checked.
+
+Machine learning and deep learning
+
+- Counterfactuals resolve category values against the model's levels (3, "3" and "3.0" name the same level) and refuse values the model never saw.
+- Random survival forests refuse fits beyond a memory budget (`SURVSTUDIO_RSF_MEMORY_BUDGET_GB`, default 2) and predict in row chunks; the integrated Brier score no longer builds full survival curves and stops before the censoring survival reaches zero; Kernel SHAP is seeded and reproducible; the Cox rank check runs on the standardised design.
+- Deep models refuse networks above 20 million parameters; feature types are decided once on the whole cohort, not per split; the ML outcome checks apply; a crashed worker no longer ends a parallel cross-validation, and cancelling stops running folds. Every deep fit runs on one torch thread, so a seed gives the same numbers in parallel and sequential runs. `epochs_trained` is now the refit's epoch count, and `early_stopping_epochs` gives the run that chose it.
+- A failed locked-test refit is reported as an error and a caution, and the model stays ranked by cross-validation.
+
+Server
+
+- Heavy jobs wait on their own executor instead of holding shared worker threads; model-comparison intervals run as cancellable heavy jobs under a hard work budget, and the leaderboard says when fewer draws were used.
+- Markers from an attached matrix get the same outcome-leakage checks as table columns.
+- Requests are bounded for hidden-layer widths (1,024), tree depth (1–64), seeds, signature combinations and model design size; decoded upload sizes, workbook shared strings and Parquet dictionaries are measured before parsing; column headers with line breaks are cleaned.
+- Client mistakes return 400 or 422 with a specific message instead of 500, and non-finite numbers are returned as null.
+
+Front end
+
+- Results stay current when event labels or time units carry spaces; the Signature CSV export works after Discover, whose results now show on the Markers tab.
+- The time picker no longer preselects an ID column and lists every numeric column on request; a negated label ("No recurrence") is never chosen as the event value.
+- Table 1 and the data preview show values and headers as they are; stale ML and DL plots are greyed out instead of deleted; the leaderboard keeps its intervals when tabs change.
+- Compare All stops when its dataset changes, a validation result is shown only with the model it validated, and each validation upload is deleted from the server afterwards.
+- CSV exports quote their preamble lines and follow the server's rules against spreadsheet formulas.
+
+Reports and figures
+
+- REMARK and TRIPOD+AI text follow what each run did: runs with no permutations or subsamples, clinical-only models, mixed or incomplete evaluations, and ML and DL comparisons with different settings.
+- The rank-uncertainty figure and the replication forest keep rank order, the cutpoint scan shows its chosen cutpoint, three-group KM plots use three colours, and p-values just below 0.05 are printed with enough digits to stay below it.
 
 ## 0.2.0 — 2026-09-26 — Full code review
 
