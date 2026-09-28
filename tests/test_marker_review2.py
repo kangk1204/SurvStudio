@@ -427,6 +427,19 @@ def test_within_cohort_scaling_of_a_clinical_only_model_and_of_a_recipe_without_
             validate_locked_recipe(_copy_cohort(2), edited, n_bootstrap=0, marker_scaling=scaling)
 
 
+# 7: a marker cannot be named like an encoded clinical indicator.
+
+
+def test_a_marker_named_like_a_clinical_level_indicator_is_refused() -> None:
+    from survival_toolkit.errors import UserInputError
+
+    frame = _graded_cohort(2, 200, ["1", "2", "3"], [0.3, 0.4, 0.3]).rename(columns={"m0": "grade_2"})
+    with pytest.raises(UserInputError, match="encoded clinical covariate: grade_2"):
+        # Before, the locked model held two terms named grade_2 and could never be validated.
+        evaluate_markers(frame, time_column="time", event_column="event", marker_columns=["grade_2", "m1"],
+                         clinical_columns=["age", "grade"], categorical_clinical=["grade"], settings=_QUICK)
+
+
 # 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
 
 

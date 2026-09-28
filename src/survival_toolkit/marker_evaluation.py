@@ -322,6 +322,15 @@ def prepare_marker_cohort(
     strata_codes = _build_cox_strata_payload(frame, strata)["codes"] if strata else None
     if clinical:
         encoder = fit_feature_encoder(frame, clinical, list(categorical_clinical))
+        # A model term names each column; a marker called like a level indicator ("grade_2") would give the
+        # locked model two terms of one name, which no validation could tell apart.
+        encoded_names = set(encoder["feature_names"])
+        clash = [column for column in markers if column in encoded_names]
+        if clash:
+            raise ValueError(
+                "Markers cannot have the name of an encoded clinical covariate: " + ", ".join(clash[:5])
+                + ". A categorical covariate is encoded as one column per level, named like grade_2; rename the marker column."
+            )
         clinical_design = np.asarray(transform_feature_encoder(frame, encoder, output="numpy"), dtype=float)
         clinical_names = list(encoder["feature_names"])
         redundant = _redundant_clinical_columns(clinical_design, None if strata_codes is None else np.asarray(strata_codes))
