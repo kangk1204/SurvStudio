@@ -227,6 +227,9 @@ def test_bootstrap_signature_metrics_reports_skipped_resamples(monkeypatch) -> N
 
     assert metrics["Bootstrap valid resamples"] == 0
     assert metrics["Bootstrap skipped resamples"] == 4
+    # Every row is signature+, so no resample has a comparison group and nothing is estimated.
+    assert metrics["Bootstrap support (p<alpha)"] is None
+    assert metrics["Bootstrap HR direction consistency"] is None and metrics["Bootstrap median p"] is None
 
 
 def test_cox_preview_warns_when_events_per_parameter_is_extremely_low() -> None:
@@ -2369,13 +2372,19 @@ def test_discover_feature_signature_ranks_and_persists_best_group() -> None:
     assert payload["search_space"]["significance_level"] == 0.05
     assert payload["search_space"]["combination_operator"] == "and"
     assert payload["search_space"]["random_seed"] == 1234
-    assert payload["search_space"]["significant_signatures"] >= 0
-    support = payload["best_split"]["Bootstrap support (p<alpha)"]
-    assert support is None or 0.0 <= support <= 1.0
-    permutation_p = payload["best_split"]["Permutation p"]
-    assert permutation_p is None or 0.0 <= permutation_p <= 1.0
-    direction_consistency = payload["best_split"]["Bootstrap HR direction consistency"]
-    assert direction_consistency is None or 0.0 <= direction_consistency <= 1.0
+    # Significant rows rank first, so the table holds as many of them as fit in top_k.
+    shown_significant = sum(bool(row["Statistically significant"]) for row in payload["results_table"])
+    assert shown_significant == min(payload["search_space"]["significant_signatures"], len(payload["results_table"]))
+    # Shares of the 10 requested resamples and (k + 1) / (valid + 1) permutation p-values.
+    best = payload["best_split"]
+    support = best["Bootstrap support (p<alpha)"]
+    direction_consistency = best["Bootstrap HR direction consistency"]
+    assert support is not None and 0.0 <= support <= 1.0 and support * 10 == pytest.approx(round(support * 10))
+    assert direction_consistency is not None and direction_consistency * 10 == pytest.approx(round(direction_consistency * 10))
+    permutation_p = best["Permutation p"]
+    permutation_draws = best["Permutation valid resamples"] + 1
+    assert permutation_p is not None and 1 <= round(permutation_p * permutation_draws) <= permutation_draws
+    assert permutation_p * permutation_draws == pytest.approx(round(permutation_p * permutation_draws))
     assert isinstance(payload["best_split"]["Statistically significant"], bool)
     assert payload["best_split"]["Combination operator"] == "AND"
     assert payload["scientific_summary"]["headline"]

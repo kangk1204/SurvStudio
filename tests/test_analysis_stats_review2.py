@@ -963,3 +963,47 @@ def test_risk_table_labels_never_use_exponent_notation() -> None:
     assert not any("e" in label for label in labels)
     assert [float(label) for label in labels] == pytest.approx(risk_table["times"])
     assert labels[-1] == "3000000"
+
+
+# ---------------------------------------------------------------------------------------
+# R references for tests that relied on internal comparisons (R5#20)
+
+
+def test_group_never_at_risk_is_left_out_with_r_values() -> None:
+    frame = pd.DataFrame(
+        {
+            "time": [0.5, 0.6, 2.0, 3.0, 4.0, 5.0, 2.5, 3.5, 4.5, 6.0],
+            "event": [0, 0, 1, 0, 1, 1, 1, 0, 1, 0],
+            "g": ["early", "early", "a", "a", "a", "a", "b", "b", "b", "b"],
+        }
+    )
+    # R: survdiff(Surv(time, event) ~ g, rho = 0 and 1); "early" has 0 expected events, so df = 1.
+    for weight, chisq, p_value in (("logrank", 0.447601304145, 0.503476263295), ("fleming_harrington", 0.365714285714, 0.545349668011)):
+        test = analysis.compute_km_analysis(frame, "time", "event", group_column="g", logrank_weight=weight, fh_p=1.0)["test"]
+        assert test["chisq"] == pytest.approx(chisq, rel=1e-10)
+        assert test["p_value"] == pytest.approx(p_value, rel=1e-10)
+
+
+def test_proportional_hazards_statistics_match_r_on_gbsg2() -> None:
+    from pathlib import Path
+
+    data = Path(analysis.__file__).resolve().parent / "data" / "gbsg2_upload_ready.csv"
+    frame = pd.read_csv(data)
+    covariates = ["age", "horTh", "menostat", "pnodes", "tgrade", "tsize"]
+    result = compute_cox_analysis(frame, "rfs_days", "rfs_event", covariates, ["horTh", "menostat", "tgrade"])
+    # R: coxph(ties = "efron") and the classic cox.zph statistics on resid(fit, "schoenfeld") with log time.
+    expected = {
+        "age": (-0.01237517173594, 3.03416427087967),
+        "horTh: yes vs no": (-0.35822682409399, 0.07957378559364),
+        "menostat: Pre vs Post": (-0.33211817247040, 0.00374418948924),
+        "pnodes": (0.05028192116514, 0.35279256023432),
+        "tgrade: II vs I": (0.76199152101979, 2.58351057513644),
+        "tgrade: III vs I": (1.00054160059206, 7.90189028247960),
+        "tsize": (0.00732515014619, 0.44772240135311),
+    }
+    betas = {row["Label"]: row["Beta"] for row in result["results_table"]}
+    statistics = {row["Term"]: row["Chi-square"] for row in result["diagnostics_table"]}
+    for label, (beta, chi_square) in expected.items():
+        assert betas[label] == pytest.approx(beta, abs=1e-8)
+        assert statistics[label] == pytest.approx(chi_square, rel=1e-6)
+    assert result["model_stats"]["global_ph_statistic"] == pytest.approx(19.585110033048, rel=1e-6)
