@@ -240,6 +240,59 @@ def test_errors_raised_by_checks_in_a_subsample_stop_the_analysis(monkeypatch: p
             evaluate_markers(frame, **common)
 
 
+# 4: infinite marker values are never imputed as if they were missing.
+
+
+def _log_expression_cohort(seed: int, n: int = 200) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    signal = rng.normal(size=n)
+    event_time = rng.exponential(np.exp(-0.9 * signal))
+    censor_time = rng.exponential(1.5, size=n)
+    frame = pd.DataFrame({"time": np.minimum(event_time, censor_time), "event": (event_time <= censor_time).astype(int)})
+    frame["signal"] = signal
+    frame["noise"] = rng.normal(size=n)
+    expression = np.exp(rng.normal(size=n))
+    expression[:15] = 0.0
+    with np.errstate(divide="ignore"):
+        frame["log_expression"] = np.log(expression)  # log(0) = -inf for 15 patients
+    return frame
+
+
+def test_development_markers_with_infinite_values_are_left_out_with_the_fix() -> None:
+    frame = _log_expression_cohort(1)
+    common = dict(time_column="time", event_column="event", settings=_QUICK)
+    result = evaluate_markers(frame, marker_columns=["signal", "noise", "log_expression"], **common)
+    assert {row["marker"] for row in result["marker_table"]} == {"signal", "noise"}
+    assert result["cohort"]["dropped_markers"] == [{"marker": "log_expression", "reason": "15 infinite values"}]
+    assert any("log_expression" in note and "log(x + 1)" in note for note in result["cohort"]["notes"])
+    with pytest.raises(ValueError, match=r"log_expression \(15 infinite values\).*log\(x \+ 1\)"):
+        evaluate_markers(frame, marker_columns=["log_expression"], **common)
+    # A marker with positive infinity written as text is left out the same way.
+    frame["as_text"] = frame["signal"].astype(object)
+    frame.loc[3, "as_text"] = "inf"
+    assert {"marker": "as_text", "reason": "1 infinite value"} in evaluate_markers(
+        frame, marker_columns=["signal", "as_text"], **common
+    )["cohort"]["dropped_markers"]
+
+
+def test_validation_refuses_locked_markers_with_infinite_values() -> None:
+    from survival_toolkit.errors import UserInputError
+
+    frame = _log_expression_cohort(2)
+    recipe = evaluate_markers(frame, time_column="time", event_column="event", marker_columns=["signal", "noise"], settings=_QUICK)["locked_recipe"]
+    assert "signal" in recipe["markers"]
+    external = _log_expression_cohort(3)
+    external.loc[:4, "signal"] = -np.inf
+    with pytest.raises(UserInputError, match=r"infinite values in the external dataset: signal.*log\(x \+ 1\)"):
+        validate_locked_recipe(external, recipe, n_bootstrap=0)
+    # Missing values are still imputed at the development median, also from a nullable (Parquet-style) column.
+    external = _log_expression_cohort(3)
+    external["signal"] = external["signal"].astype("Float64")
+    external.loc[:4, "signal"] = pd.NA
+    report = validate_locked_recipe(external, recipe, n_bootstrap=0)
+    assert any("5 missing signal value(s) imputed" in note for note in report["notes"])
+
+
 # 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
 
 

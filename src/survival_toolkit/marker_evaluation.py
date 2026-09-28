@@ -125,6 +125,8 @@ class MarkerCohort(NamedTuple):
     clinical_encoder: dict[str, Any] | None
     # Encoded clinical columns left out because a Cox model cannot estimate them (see prepare_marker_cohort).
     dropped_clinical: tuple[dict[str, str], ...] = ()
+    # Notes on what preparing the cohort left out, for the result's cohort notes.
+    notes: tuple[str, ...] = ()
 
 
 class LensStats(NamedTuple):
@@ -200,7 +202,8 @@ def prepare_marker_cohort(
     values than ``max_missing_fraction`` are left out, and the rest are imputed inside
     each fit of the procedure. Markers with more than ``max_mode_fraction`` of their
     values equal to one value, counting missing values at the median they are imputed
-    with, are left out as near-constant. Encoded clinical columns that a Cox model cannot
+    with, are left out as near-constant. Markers holding infinite values are left out
+    with a note (``notes``). Encoded clinical columns that a Cox model cannot
     estimate (constant within every stratum, or a linear combination of the columns before
     them) are left out and listed in ``dropped_clinical``.
     """
@@ -257,7 +260,6 @@ def prepare_marker_cohort(
             non_numeric.append(markers[index])
             continue
         values[:, index] = coerced.to_numpy(dtype=float, na_value=np.nan)
-    values[~np.isfinite(values)] = np.nan
     if non_numeric:
         raise ValueError(
             "Markers must be numeric; these columns contain text: "
@@ -265,10 +267,18 @@ def prepare_marker_cohort(
             + (" ..." if len(non_numeric) > 5 else "")
             + ". Recode text values as blank cells or leave the column out."
         )
+    # An infinite value (the log of zero, say) is not a missing value: imputing it at the median would
+    # hide the patients with the most extreme values, so such markers are left out instead.
+    infinite = np.isinf(values).sum(axis=0)
+    values[~np.isfinite(values)] = np.nan
     missing_share = np.mean(np.isnan(values), axis=0)
     kept: list[int] = []
     dropped: list[dict[str, Any]] = []
+    notes: list[str] = []
     for index, column in enumerate(markers):
+        if infinite[index]:
+            dropped.append({"marker": column, "reason": f"{int(infinite[index])} infinite value{'' if infinite[index] == 1 else 's'}"})
+            continue
         observed = values[:, index][~np.isnan(values[:, index])]
         if missing_share[index] > max_missing_fraction:
             dropped.append({"marker": column, "reason": f"{missing_share[index]:.0%} missing"})
@@ -290,11 +300,19 @@ def prepare_marker_cohort(
             dropped.append({"marker": column, "reason": f"near-constant ({counts.max() / values.shape[0]:.0%} at one value)"})
         else:
             kept.append(index)
+    finite_hint = "Transform them so every value is finite, for example log(x + 1) instead of log(x)."
     if not kept:
         reasons = "; ".join(f"{item['marker']} ({item['reason']})" for item in dropped[:5])
         raise ValueError(
             f"No usable markers remain: {reasons}{' ...' if len(dropped) > 5 else ''}. "
-            f"Markers may have at most {max_missing_fraction:.0%} missing values and need more than one common value."
+            f"Markers may have at most {max_missing_fraction:.0%} missing values and need more than one common value"
+            + (f", and no infinite values. {finite_hint}" if infinite.any() else ".")
+        )
+    if infinite.any():
+        names = [markers[index] for index in np.flatnonzero(infinite)]
+        notes.append(
+            f"{len(names)} marker(s) hold infinite values (such as the log of zero) and were left out: "
+            f"{', '.join(names[:5])}{' ...' if len(names) > 5 else ''}. {finite_hint}"
         )
 
     clinical_design = None
@@ -327,6 +345,7 @@ def prepare_marker_cohort(
         dropped_markers=dropped,
         clinical_encoder=encoder,
         dropped_clinical=tuple(dropped_clinical),
+        notes=tuple(notes),
     )
 
 
@@ -1305,6 +1324,7 @@ def evaluate_markers(
             "infinity (for example a mutation whose carriers never had the event). No model was locked."
         )
     cohort_notes = [f"{item['column']} was left out of the clinical model: {item['reason']}." for item in cohort.dropped_clinical]
+    cohort_notes += list(cohort.notes)
     stability_assessed = resampling.n_valid > 0
 
     rows: list[dict[str, Any]] = []
@@ -1707,6 +1727,7 @@ def validate_locked_recipe(
                 )
             if unseen_count:
                 notes.append(f"{unseen_count} external row(s) have a {column} level not seen in development; scored as the reference level.")
+    infinite: list[str] = []
     for name in markers:
         median = float(recipe["marker_medians"][name])
         if name in absent:
@@ -1716,8 +1737,10 @@ def validate_locked_recipe(
         numeric = pd.to_numeric(raw, errors="coerce")
         if bool((raw.notna() & numeric.isna()).any()):
             raise ValueError(f'Marker "{external(name)}" contains text in the external dataset.')
-        values = numeric.to_numpy(dtype=float, copy=True)
-        values[~np.isfinite(values)] = np.nan
+        values = numeric.to_numpy(dtype=float, copy=True, na_value=np.nan)
+        if np.isinf(values).any():
+            infinite.append(external(name))
+            continue
         imputed = int(np.isnan(values).sum())
         if marker_scaling == "within_cohort":
             observed = values[~np.isnan(values)]
@@ -1730,6 +1753,13 @@ def validate_locked_recipe(
         if imputed:
             notes.append(f"{imputed} missing {name} value(s) imputed with the development median.")
         columns[name] = np.where(np.isnan(values), median, values)
+    if infinite:
+        # Imputing them at the median would score the patients with the most extreme values as typical.
+        raise ValueError(
+            f"Locked markers hold infinite values in the external dataset: {', '.join(infinite[:6])}"
+            f"{' ...' if len(infinite) > 6 else ''}. Transform them as in development so every value is finite, for example "
+            "log(x + 1) instead of log(x)."
+        )
     if absent:
         notes.append(
             f"{len(absent)} locked marker(s) are not in the external dataset ({', '.join(absent)}); they were held at their "
