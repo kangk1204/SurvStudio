@@ -291,6 +291,75 @@ def _categorical_dataset() -> dict:
     })
 
 
+def test_restoring_a_snapshot_keeps_the_categorical_flags_the_user_unticked(tmp_path: Path) -> None:
+    """#2: Back/Forward and a new derived group re-ticked "Treat as categorical" flags."""
+    derived = _categorical_dataset()
+    derived["dataset_id"] = "cats-derived"
+    derived["columns"].append({"name": "age_group", "kind": "categorical", "missing": 0, "non_missing": 12, "n_unique": 2, "unique_preview": ["Low", "High"]})
+    derived["derived_column"] = "age_group"
+    derived["derive_summary"] = {"method": "median_split", "counts": []}
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const flags = () => page.run("({ ml: selectedCheckboxValues(refs.modelCategoricalChecklist), dl: selectedCheckboxValues(refs.dlModelCategoricalChecklist) })");
+      const initial = flags();
+      for (const list of ["#modelCategoricalChecklist", "#dlModelCategoricalChecklist"]) {
+        page.run(`document.querySelector("${list} input[value='stage']").checked = false`);
+        page.change(`${list} input[value='stage']`);
+      }
+      const unticked = flags();
+      page.context.__snapshot = page.run("captureControlSnapshot()");
+      page.run("applyControlSnapshot(__snapshot)");
+      const restored = flags();
+      page.fetchHandler = (request) => (request.url.endsWith("/api/derive-group") ? { status: 200, body: fixtures.derived } : { status: 500, body: { detail: "x" } });
+      page.run("activateTab('cox'); refs.derivePanel.classList.remove('hidden'); refs.deriveSource.value = 'age'; refs.deriveButton.click()");
+      await page.settle();
+      return { initial, unticked, restored, derived: flags(), dataset: page.run("state.dataset.dataset_id") };
+    """, dataset=_categorical_dataset(), derived=derived)
+
+    assert result["initial"] == {"ml": ["stage", "sex"], "dl": ["stage", "sex"]}
+    assert result["unticked"] == {"ml": ["sex"], "dl": ["sex"]}
+    assert result["restored"] == {"ml": ["sex"], "dl": ["sex"]}
+    assert result["dataset"] == "cats-derived"
+    assert result["derived"] == {"ml": ["sex"], "dl": ["sex"]}
+
+
+def test_restoring_a_snapshot_updates_the_ml_model_controls(tmp_path: Path) -> None:
+    """#13: Back to a Gradient Boosted Survival page left the learning rate disabled as for RSF."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.change("#mlModelType", "gbs");
+      page.context.__state = page.run("currentHistoryState()");
+      page.change("#mlModelType", "rsf");
+      const rsf = page.run("refs.mlLearningRate.disabled");
+      await page.run("restoreHistoryState(__state)");
+      await page.settle();
+      return { rsf, model: page.run("refs.mlModelType.value"), disabled: page.run("refs.mlLearningRate.disabled") };
+    """, dataset=_categorical_dataset())
+
+    assert result == {"rsf": True, "model": "gbs", "disabled": False}
+
+
+def test_a_restored_endpoint_gets_its_own_warnings(tmp_path: Path) -> None:
+    """#22: the "confirm the 1/2 coding" note stayed although the restored page had 2 chosen."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.change("#eventPositiveValue", "2");
+      page.context.__state = page.run("currentHistoryState()");
+      page.change("#eventColumn", "relapse");
+      const other = page.run("({ event: refs.eventColumn.value, value: refs.eventPositiveValue.value })");
+      await page.run("restoreHistoryState(__state)");
+      await page.settle();
+      return { other, event: page.run("refs.eventColumn.value"), value: page.run("refs.eventPositiveValue.value"),
+        warning: page.run("refs.eventValueWarning.textContent"), ready: page.run("endpointIsReady()") };
+    """, dataset=_lung())
+
+    assert result["other"] == {"event": "relapse", "value": "1"}
+    assert result["event"] == "status"
+    assert result["value"] == "2"
+    assert result["warning"] == ""
+    assert result["ready"] is True
+
+
 # ── Column lists ───────────────────────────────────────────────
 
 

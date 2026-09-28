@@ -815,6 +815,10 @@ function applyControlSnapshot(snapshot) {
     restoring: true,
   });
   setSelectValueIfPresent(refs.eventPositiveValue, snapshot.eventPositiveValue);
+  // The warnings follow the restored endpoint: reading the event value again keeps it and drops a "choose the
+  // event value" note it answers, and the time check sees the restored event column.
+  updateEventPositiveOptions();
+  updateTimeColumnGuidance();
   refreshVariableSelections();
   setSelectValueIfPresent(refs.groupColumn, snapshot.groupColumn ?? "");
   setInputValue(refs.timeUnitLabel, snapshot.timeUnitLabel);
@@ -888,15 +892,18 @@ function applyControlSnapshot(snapshot) {
   updateWeightVisibility();
   updateMlEvaluationControls();
   updateDlEvaluationControls();
+  updateMlModelControlVisibility();
   updateDlModelControlVisibility();
   setCheckedValues(refs.covariateChecklist, snapshot.covariates || []);
   setCheckedValues(refs.categoricalChecklist, snapshot.categoricals || []);
   setCheckedValues(refs.strataChecklist, snapshot.coxStrata || []);
   setCheckedValues(refs.modelFeatureChecklist, snapshot.modelFeatures || []);
-  setCheckedValues(refs.modelCategoricalChecklist, snapshot.modelCategoricals || []);
-  setCheckedValues(refs.dlModelFeatureChecklist, snapshot.modelFeatures || []);
-  setCheckedValues(refs.dlModelCategoricalChecklist, snapshot.dlModelCategoricals || snapshot.modelCategoricals || []);
   syncModelFeatureMirrors(refs.modelFeatureChecklist);
+  // The categorical flags come after mirroring the features, which ticks every likely categorical feature: a
+  // flag the user unticked stays unticked. (A snapshot without the lists keeps those automatic flags.)
+  if (Array.isArray(snapshot.modelCategoricals)) setCheckedValues(refs.modelCategoricalChecklist, snapshot.modelCategoricals);
+  const dlCategoricals = Array.isArray(snapshot.dlModelCategoricals) ? snapshot.dlModelCategoricals : snapshot.modelCategoricals;
+  if (Array.isArray(dlCategoricals)) setCheckedValues(refs.dlModelCategoricalChecklist, dlCategoricals);
   syncModelCategoricalMirrors(refs.modelCategoricalChecklist);
   syncModelCategoricalMirrors(refs.dlModelCategoricalChecklist);
   setCheckedValues(refs.cohortVariableChecklist, snapshot.cohortVariables || []);
