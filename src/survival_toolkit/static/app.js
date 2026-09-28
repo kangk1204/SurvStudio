@@ -806,7 +806,7 @@ function initListeners() {
       queueHistorySync();
     }
   });
-  refs.eventColumn.addEventListener("change", () => {
+  const onEventColumnChange = () => {
     clearAnalysisOutputs();
     updateTimeColumnGuidance();
     updateEventPositiveOptions();
@@ -815,7 +815,8 @@ function initListeners() {
     renderSharedFeatureSummary();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
-  });
+  };
+  refs.eventColumn.addEventListener("change", onEventColumnChange);
   refs.eventPositiveValue.addEventListener("change", () => {
     clearAnalysisOutputs();
     updateEventPositiveOptions();
@@ -824,12 +825,20 @@ function initListeners() {
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
   });
+  // "All columns" lists every column in the Event menu. Unticking it can reset the event column: that is an
+  // endpoint change like any other. Ticking it can unblock the chosen column, so the Cox preview is checked again.
   refs.showAllEventColumns?.addEventListener("change", () => {
+    const previous = refs.eventColumn.value;
     renderEventColumnOptions({ silent: false });
+    if (refs.eventColumn.value !== previous) {
+      onEventColumnChange();
+      return;
+    }
     refreshVariableSelections();
     updateDatasetBadge();
     renderSharedFeatureSummary();
     queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
   });
   refs.groupColumn.addEventListener("change", () => {
     rerenderDerivedGroupSummaryIfVisible();

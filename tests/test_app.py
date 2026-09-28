@@ -792,10 +792,11 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
     text = app_js.read_text(encoding="utf-8")
 
     assert 'const matchingOutcomeWarning = identicalOutcomeColumnMessage();' in text
-    assert 'refs.eventColumn.addEventListener("change", () => {' in text
     assert 'const onTimeColumnChange = () => {\n    clearAnalysisOutputs();' in text
     assert 'refs.timeColumn.addEventListener("change", onTimeColumnChange);' in text
-    assert 'refs.eventColumn.addEventListener("change", () => {\n    clearAnalysisOutputs();' in text
+    # An Event reset by the "All columns" toggle takes the same path (tests/test_frontend_review2.py).
+    assert 'const onEventColumnChange = () => {\n    clearAnalysisOutputs();' in text
+    assert 'refs.eventColumn.addEventListener("change", onEventColumnChange);' in text
     assert 'refs.eventPositiveValue.addEventListener("change", () => {\n    clearAnalysisOutputs();' in text
     assert 'updateTimeColumnGuidance();' in text
     assert 'const coxCovariateCount = goalFeatureCount("cox");' in text

@@ -23,6 +23,55 @@ from test_frontend_review import (  # noqa: F401 (pytest fixtures used by name)
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed for the front-end tests")
 
 
+def _synthetic_dataset() -> dict:
+    """A small dataset payload with a second 0/1 column ("status_code") that is not a standard event name."""
+    n = 40
+    rows = [
+        {
+            "patient_id": f"P{index + 1}",
+            "os_months": index % 17 + 1.5,
+            "os_event": 0 if index % 3 == 0 else 1,
+            "age": 40 + index % 30,
+            "biomarker": (index % 11) / 10,
+            "sex": "M" if index % 2 else "F",
+            "status_code": 0 if index % 4 == 0 else 1,
+        }
+        for index in range(n)
+    ]
+
+    def column(name: str, kind: str, unique: int, preview: list) -> dict:
+        return {"name": name, "kind": kind, "n_unique": unique, "unique_preview": preview, "missing": 0, "non_missing": n}
+
+    return {
+        "dataset_id": "synthetic-1",
+        "filename": "synthetic.csv",
+        "n_rows": n,
+        "n_columns": 7,
+        "dataset_hash": "hash-1",
+        "columns": [
+            column("patient_id", "categorical", n, ["P1", "P2", "P3"]),
+            column("os_months", "numeric", 17, [1.5, 2.5, 3.5]),
+            column("os_event", "binary", 2, [0, 1]),
+            column("age", "numeric", 30, [40, 41, 42]),
+            column("biomarker", "numeric", 11, [0, 0.1, 0.2]),
+            column("sex", "categorical", 2, ["F", "M"]),
+            column("status_code", "binary", 2, [0, 1]),
+        ],
+        "numeric_columns": ["os_months", "os_event", "age", "biomarker", "status_code"],
+        "binary_candidate_columns": ["os_event", "sex", "status_code"],
+        "suggestions": {"time_columns": ["os_months"], "event_columns": ["os_event"]},
+        "preview": rows[:5],
+        "derived_column_provenance": {},
+    }
+
+
+_KM_HANDLER = r"""
+  const km = (request) => ({ status: 200, body: {
+    analysis: { summary_table: [], risk_table: { rows: [], columns: [] }, pairwise_table: [], cohort: { n: 360 } },
+    figure: { data: [{ x: [0], y: [1] }], layout: {} }, request_config: request.json() } });
+"""
+
+
 # ── Prediction leaderboard ──────────────────────────────────────
 
 
@@ -343,3 +392,117 @@ def test_compare_all_checks_every_setting_before_the_first_phase(tmp_path: Path,
     assert len(result["invalidDl"]["toasts"]) == 1
     assert result["invalidDl"]["toasts"][0].startswith("Hidden layers must be a comma-separated list of positive integers.")
     assert result["noFeatures"] == ["Select at least one ML/DL model feature."]
+
+
+# ── Endpoint changes ────────────────────────────────────────────
+
+
+def _optimal_derive_script(change_endpoint: str) -> str:
+    """Start an optimal-cutpoint Create, change the endpoint while it scans, then let the scan answer."""
+    return r"""
+      await loadDataset(page, fixtures.dataset);
+    """ + _KM_HANDLER + r"""
+      const hold = deferred();
+      page.fetchHandler = (request) => (request.url.endsWith("/api/derive-group") ? hold.promise : km(request));
+      page.run("activateTab('km'); refs.derivePanel.classList.remove('hidden'); syncDeriveToggleButton(); refs.deriveSource.value = 'biomarker_score'");
+      page.change("#deriveMethod", "optimal_cutpoint");
+      page.run("refs.deriveButton.click()");
+      await page.settle(3);
+      const derive = page.requests.find((request) => request.url.endsWith("/api/derive-group"));
+      const sent = derive.json();
+      const scanning = page.run("refs.deriveStatus.textContent");
+    """ + change_endpoint + r"""
+      await page.settle(3);
+      const columns = [...fixtures.dataset.columns, { name: "biomarker_score__optimal_cutpoint", kind: "categorical", n_unique: 2, unique_preview: ["Low", "High"], missing: 0, non_missing: 360 }];
+      hold.resolve({ status: 200, body: { ...fixtures.dataset, dataset_id: "derived-snapshot", columns, derived_column: "biomarker_score__optimal_cutpoint",
+        derive_summary: { method: "optimal_cutpoint", outcome_informed: true, p_value: 0.001, p_value_label: "selection_adjusted_p_value", cutoff: 2.5,
+          counts: [{ group: "Low", n: 200 }, { group: "High", n: 160 }], recipe: { method: "optimal_cutpoint", source_column: "biomarker_score" } },
+        cutpoint_figure: { data: [{ x: [1, 2], y: [1, 2] }], layout: {} } } });
+      await page.settle(40);
+      return {
+        sentEvent: sent.event_column,
+        scanning,
+        aborted: derive.signal.aborted,
+        dataset: page.run("state.dataset.dataset_id"),
+        group: page.run("refs.groupColumn.value"),
+        summaryShown: page.run("!refs.deriveSummary.classList.contains('hidden')"),
+        scanPlot: page.run("Boolean(refs.cutpointPlot.data)"),
+        kmGroups: page.requests.filter((request) => request.url.endsWith("/api/kaplan-meier")).map((request) => request.json().group_column),
+        status: page.run("refs.deriveStatus.textContent"),
+        busy: page.run("isScopeBusy('derive')"),
+        toasts: page.toasts(),
+      };
+    """
+
+
+def test_changing_the_endpoint_cancels_an_optimal_cutpoint_scan(tmp_path: Path, example_dataset: dict) -> None:
+    """R15-2: a grouping optimised for the old endpoint is never applied under the new one."""
+    result = _run_page(tmp_path, _optimal_derive_script(r"""
+      page.change("#eventColumn", "pfs_event");
+    """), dataset=example_dataset)
+
+    assert result["sentEvent"] == "os_event"
+    assert result["scanning"] == "Scanning a new grouping column..."
+    assert result["aborted"] is True
+    assert result["dataset"] == example_dataset["dataset_id"]
+    assert result["group"] == ""
+    assert result["summaryShown"] is False
+    assert result["scanPlot"] is False
+    assert result["kmGroups"] == []
+    assert result["status"] == ""
+    assert result["busy"] is False
+
+
+def test_an_optimal_cutpoint_for_another_endpoint_is_discarded(tmp_path: Path, example_dataset: dict) -> None:
+    """R15-2: when the endpoint changed without the change handlers (a restored page), the answer is still checked."""
+    result = _run_page(tmp_path, _optimal_derive_script(r"""
+      page.run("refs.eventColumn.value = 'pfs_event'");
+    """), dataset=example_dataset)
+
+    assert result["aborted"] is False
+    assert result["dataset"] == example_dataset["dataset_id"]
+    assert result["group"] == ""
+    assert result["summaryShown"] is False
+    assert result["kmGroups"] == []
+    assert result["status"] == ""
+    assert any("The endpoint changed while the optimal cutpoint was being scanned" in toast for toast in result["toasts"])
+
+
+def test_unticking_all_event_columns_is_an_endpoint_change(tmp_path: Path) -> None:
+    """R13-2: when unticking "All columns" resets Event, results are cleared and the Cox preview is refreshed."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+    """ + _KM_HANDLER + r"""
+      page.fetchHandler = (request) => {
+        if (!request.url.endsWith("/api/cox-preview")) return km(request);
+        const events = request.json().event_column === "status_code" ? 30 : 26;
+        return { status: 200, body: { preview: { analyzable_rows: 40, outcome_rows: 40, events, estimated_parameters: 2, events_per_parameter: events / 2 } } };
+      };
+      const snapshot = () => page.run(`({ event: refs.eventColumn.value, line: refs.coxPreviewLine.textContent, km: Boolean(state.km) })`);
+      page.run("activateTab('cox')");
+      page.change("#showAllEventColumns", true);
+      page.change("#eventColumn", "status_code");
+      await page.settle();
+      page.run("refs.runKmButton.click()");
+      await page.settle();
+      const ticked = snapshot();
+      page.change("#showAllEventColumns", false);
+      await page.settle();
+      const unticked = snapshot();
+      // A non-standard event column chosen without "All columns" is blocked; ticking the box unblocks it.
+      page.run(`{ const option = document.createElement("option"); option.value = "status_code"; option.textContent = "status_code";
+        refs.eventColumn.appendChild(option); refs.eventColumn.value = "status_code"; refreshCoxPreview({ force: true }); }`);
+      await page.settle();
+      const blocked = page.run("refs.coxPreviewLine.textContent");
+      page.change("#showAllEventColumns", true);
+      await page.settle();
+      return { ticked, unticked, blocked, afterTick: page.run("refs.coxPreviewLine.textContent") };
+    """, dataset=_synthetic_dataset())
+
+    assert result["ticked"]["event"] == "status_code" and result["ticked"]["km"] is True
+    assert "30 events" in result["ticked"]["line"]
+    assert result["unticked"]["event"] == "os_event"
+    assert result["unticked"]["km"] is False
+    assert "26 events" in result["unticked"]["line"]
+    assert "not a standard event column name" in result["blocked"]
+    assert "30 events" in result["afterTick"]

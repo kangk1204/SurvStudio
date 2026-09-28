@@ -34,6 +34,19 @@ function currentBaseConfig() {
   };
 }
 
+// True while the controls still describe the endpoint (time, event, event value) of `config`.
+function sameEndpoint(config) {
+  let base;
+  try {
+    base = currentBaseConfig();
+  } catch {
+    return false;
+  }
+  return String(base.time_column) === String(config?.time_column ?? "")
+    && String(base.event_column) === String(config?.event_column ?? "")
+    && String(base.event_positive_value).trim() === String(config?.event_positive_value ?? "").trim();
+}
+
 function validateGroupingSelection() {
   const warning = currentGroupColumnWarning();
   if (warning?.tone === "error") throw new Error(warning.message);
@@ -390,6 +403,8 @@ function clearOutcomeInformedGroupingOutputs() {
 function clearAnalysisOutputs() {
   invalidateRequestTokens(["km", "cox", "tables", "signature", "ml", "dl"]);
   invalidateRequestTokens(["markers", "markerValidation"]);
+  // A grouping being created is cancelled too: an optimal cutpoint is optimised for the endpoint of its request.
+  invalidateRequestTokens(["derive"]);
   clearMarkerOutputs();
   clearOutcomeInformedGroupingOutputs();
   state.km = null;
@@ -661,9 +676,14 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
     }
   }
   const deriveToken = beginRequestToken("derive");
-  refs.deriveStatus.textContent = isOptimal
+  const progressStatus = isOptimal
     ? "Scanning a new grouping column..."
     : "Creating a new grouping column...";
+  refs.deriveStatus.textContent = progressStatus;
+  // A failed, cancelled or discarded request takes its own progress line with it, never a newer message.
+  const clearProgressStatus = () => {
+    if (refs.deriveStatus.textContent === progressStatus) refs.deriveStatus.textContent = "";
+  };
 
   const body = {
     dataset_id: sourceDatasetId,
@@ -692,11 +712,23 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
       body: JSON.stringify(body),
     });
   } catch (error) {
-    if (requestTokenMatches("derive", deriveToken)) refs.deriveStatus.textContent = "";
+    clearProgressStatus();
     throw error;
   }
   if (!requestTokenMatches("derive", deriveToken) || state.dataset?.dataset_id !== sourceDatasetId) {
     // The workspace moved on (another dataset or a newer derived snapshot); never swap it back.
+    clearProgressStatus();
+    return;
+  }
+  if (isOptimal && !sameEndpoint(optimalOutcome)) {
+    // The endpoint changed without the change handlers (a restored history entry, for example): a cut point
+    // optimised for the old endpoint must not group patients under the new one.
+    clearProgressStatus();
+    showToast(
+      "The endpoint changed while the optimal cutpoint was being scanned, so the grouping was not created. Create it again for the current endpoint.",
+      "warning",
+      5200,
+    );
     return;
   }
   updateAfterDerivedDataset(payload, { deferChrome: shouldRefreshKm });
