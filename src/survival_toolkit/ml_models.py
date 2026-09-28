@@ -58,12 +58,11 @@ from survival_toolkit.evaluation import (
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
 
 try:
-    from sklearn.model_selection import StratifiedKFold, train_test_split
+    from sklearn.model_selection import StratifiedKFold
 
     _SKLEARN_AVAILABLE = True
 except ImportError:
     StratifiedKFold = None
-    train_test_split = None
     _SKLEARN_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
@@ -354,8 +353,21 @@ def _has_comparable_pair(times: Any, events: Any) -> bool:
 _PERMUTATION_IMPORTANCE_MAX_ROWS = 300
 PERMUTATION_IMPORTANCE_METHOD = (
     "Permutation importance: mean drop in Harrell's C-index on the evaluation rows when a raw feature is "
-    "shuffled (all one-hot columns of a categorical feature are shuffled together)."
+    "shuffled (all one-hot columns of a categorical feature are shuffled together), averaged over 5 shuffles "
+    "(3 with more than 20 features, 2 with more than 60); an evaluation set of more than "
+    f"{_PERMUTATION_IMPORTANCE_MAX_ROWS} rows is scored on a random subsample of {_PERMUTATION_IMPORTANCE_MAX_ROWS} rows."
 )
+
+
+def _permutation_importance_method(evaluation_mode: str) -> str:
+    """How the permutation importance was computed; in-sample without a holdout."""
+    if evaluation_mode == "holdout":
+        return PERMUTATION_IMPORTANCE_METHOD
+    return (
+        PERMUTATION_IMPORTANCE_METHOD
+        + " The cohort was too small for a holdout, so the evaluation rows are the rows the model was fitted on and "
+        "this importance is in-sample."
+    )
 
 
 def encoded_feature_groups(encoded_columns: Sequence[str], feature_encoder: dict[str, Any] | None) -> dict[str, list[int]]:
@@ -397,7 +409,8 @@ def _grouped_permutation_importance(
     *,
     random_state: int,
 ) -> list[dict[str, Any]]:
-    """Out-of-sample permutation importance per raw feature for a fitted survival model.
+    """Permutation importance per raw feature of a fitted survival model on the evaluation rows
+    (out of sample when they are a holdout).
 
     Shuffling one-hot columns one at a time would create impossible rows (two levels at
     once) and split a feature's importance across its levels, so each raw feature's
@@ -549,13 +562,13 @@ def _scientific_summary_ml(
         if c_index < 0.55:
             cautions.append("C-index is close to chance-level ranking (0.50).")
 
-    # Headline
+    # Headline ("an apparent C-index", "a holdout C-index", "a repeated-CV mean C-index")
+    metric_phrase = metric_name[:1].lower() + metric_name[1:]
     if c_index is not None:
-        headline = (
-            f"{model_name} estimated a {metric_name.lower()} of {c_index:.3f} on the current evaluation path."
-        )
+        article = "an" if metric_phrase[:1] in "aeiou" else "a"
+        headline = f"{model_name} estimated {article} {metric_phrase} of {c_index:.3f} on the current evaluation path."
     else:
-        headline = f"{model_name} training completed but the {metric_name.lower()} could not be computed."
+        headline = f"{model_name} training completed but the {metric_phrase} could not be computed."
 
     next_steps.append(
         "Validate on an independent cohort or via cross-validation before drawing clinical conclusions."
@@ -1562,7 +1575,9 @@ def _select_lasso_alpha(
         "selection_threshold_c_index": float(best["c_index"]),
         "inner_selection_c_index": float(best["c_index"]),
         "inner_selection_c_index_se": _safe_float(best.get("c_index_se")),
-        "inner_cv_folds": int(max_folds) if selection_mode == "inner_cv" else 0,
+        # k of the k-fold inner split, and how many of its folds could be scored.
+        "inner_cv_folds": int(n_splits) if selection_mode == "inner_cv" else 0,
+        "inner_cv_scored_folds": int(max_folds) if selection_mode == "inner_cv" else 0,
         "n_nonzero_features": int(best["n_nonzero_features"]),
         "n_alpha_candidates": int(len(candidate_rows)),
     }
@@ -1579,43 +1594,31 @@ def _prepare_model_evaluation_split(
 ) -> dict[str, Any]:
     """Prepare aligned train/evaluation/full encoded matrices.
 
-    Falls back to apparent evaluation if a holdout split becomes unusable after
-    encoding or missing-value filtering.
+    The shared stratified holdout is used whenever the cohort allows one; a cohort too small
+    for a holdout is scored on the rows it is fitted on (apparent evaluation). The encoder
+    keeps every row (missing values are imputed from the training rows), so encoding never
+    removes the evaluation rows.
     """
     categorical_features = list(categorical_features or [])
-
-    def _encode_split(
-        train_frame: pd.DataFrame,
-        eval_frame: pd.DataFrame,
-    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
-        train_encoded, eval_encoded, encoder = _encode_train_test_features(
-            train_frame,
-            eval_frame,
-            features,
-            categorical_features,
-        )
-        if train_encoded.isna().any().any() or eval_encoded.isna().any().any():
-            raise ValueError("Feature encoding produced non-finite values after imputation.")
-        train_encoded = train_encoded.reset_index(drop=True)
-        eval_encoded = eval_encoded.reset_index(drop=True)
-        train_clean = train_frame.reset_index(drop=True)
-        eval_clean = eval_frame.reset_index(drop=True)
-        return train_clean, eval_clean, train_encoded, eval_encoded, encoder
-
     train_frame, eval_frame, evaluation_mode = _split_train_test(
         frame,
         event_column,
         random_state=random_state,
     )
-    train_frame, eval_frame, train_encoded, eval_encoded, encoder = _encode_split(train_frame, eval_frame)
-
-    if train_encoded.empty or eval_encoded.empty:
-        evaluation_mode = "apparent"
-        base_frame = frame.copy().reset_index(drop=True)
-        train_frame, eval_frame, train_encoded, eval_encoded, encoder = _encode_split(base_frame, base_frame)
-
+    train_encoded, eval_encoded, encoder = _encode_train_test_features(
+        train_frame,
+        eval_frame,
+        features,
+        categorical_features,
+    )
+    if train_encoded.isna().any().any() or eval_encoded.isna().any().any():
+        raise ValueError("Feature encoding produced non-finite values after imputation.")
     if train_encoded.empty or eval_encoded.empty:
         raise ValueError("No valid rows remain after encoding features for model evaluation.")
+    train_encoded = train_encoded.reset_index(drop=True)
+    eval_encoded = eval_encoded.reset_index(drop=True)
+    train_frame = train_frame.reset_index(drop=True)
+    eval_frame = eval_frame.reset_index(drop=True)
 
     full_encoded = _transform_feature_encoder(frame, encoder).reset_index(drop=True)
     full_frame = frame.reset_index(drop=True)
@@ -2250,9 +2253,9 @@ def train_random_survival_forest(
         event_column=event_column,
         evaluation_risk_scores=_predict_risk_scores(model, matrices["eval_encoded"]),
         risk_scores=_predict_risk_scores(model, matrices["full_encoded"]),
-        # Out-of-sample permutation importance per raw feature, computed the same way
-        # for RSF and GBS so their rankings are comparable (impurity importance is
-        # in-sample, and sksurv >= 0.24 no longer provides it for RSF).
+        # Permutation importance per raw feature on the evaluation rows (out of sample with a
+        # holdout), computed the same way for RSF and GBS so their rankings are comparable
+        # (impurity importance is in-sample, and sksurv >= 0.24 no longer provides it for RSF).
         importance_records=(
             _grouped_permutation_importance(
                 model,
@@ -2264,7 +2267,11 @@ def train_random_survival_forest(
             if compute_importance
             else []
         ),
-        importance_method=PERMUTATION_IMPORTANCE_METHOD if compute_importance else "Not computed for this run.",
+        importance_method=(
+            _permutation_importance_method(matrices["evaluation_mode"])
+            if compute_importance
+            else "Not computed for this run."
+        ),
         brier_result=(
             _holdout_brier_metrics(model, matrices, time_column=time_column, event_column=event_column)
             if compute_brier
@@ -2365,7 +2372,11 @@ def train_gradient_boosted_survival(
             if compute_importance
             else []
         ),
-        importance_method=PERMUTATION_IMPORTANCE_METHOD if compute_importance else "Not computed for this run.",
+        importance_method=(
+            _permutation_importance_method(matrices["evaluation_mode"])
+            if compute_importance
+            else "Not computed for this run."
+        ),
         brier_result=(
             _holdout_brier_metrics(model, matrices, time_column=time_column, event_column=event_column)
             if compute_brier
@@ -2381,7 +2392,8 @@ def train_gradient_boosted_survival(
         training_time_ms=training_time_ms,
         extra_strengths=[
             f"Boosted ensemble with {n_estimators} stages, learning_rate={learning_rate}, max_depth={resolved_max_depth}, min_samples_leaf={effective_min_samples_leaf}.",
-            "Non-parametric model; no proportional-hazards assumption required.",
+            "Boosted Cox model (Cox partial-likelihood loss): the trees allow non-linear effects and interactions, "
+            "but the hazards are assumed to be proportional over time.",
         ],
     )
 
@@ -2457,6 +2469,35 @@ def train_lasso_cox(
         key=lambda row: row["importance"] if row["importance"] is not None else 0.0,
         reverse=True,
     )
+    # Without a holdout the rows that chose the penalty are also the evaluation rows.
+    holdout = matrices["evaluation_mode"] == "holdout"
+    fitting_rows = "the training split" if holdout else "the fitting rows (every analysed patient)"
+    inner_folds = int(alpha_meta.get("inner_cv_folds", 0) or 0)
+    scored_folds = int(alpha_meta.get("inner_cv_scored_folds", inner_folds) or 0)
+    if alpha_meta.get("selection_rule") == "inner_cv_max_mean_c_index":
+        selection_strength = (
+            f"Penalty selection used {inner_folds}-fold stratified inner cross-validation on {fitting_rows}"
+            + (f" ({scored_folds} of the {inner_folds} folds could be scored)" if scored_folds < inner_folds else "")
+            + " and kept the alpha with the highest mean inner C-index (ties go to the sparser model)."
+        )
+    else:
+        selection_strength = (
+            f"Penalty selection used apparent concordance on {fitting_rows} because they were too few for inner "
+            "cross-validation."
+        )
+    if alpha_meta["selection_mode"] != "inner_cv":
+        selection_caution = (
+            "Penalty selection fell back to apparent training performance because inner cross-validation was not feasible."
+        )
+    elif holdout:
+        selection_caution = (
+            "Penalty selection used only the training split (inner cross-validation); evaluation rows were never used."
+        )
+    else:
+        selection_caution = (
+            "Penalty selection used inner cross-validation on the fitting rows, which are also the evaluation rows "
+            "here (apparent evaluation), so the reported C-index is optimistic."
+        )
     return _fitted_model_result(
         model_type="LassoCox",
         model_name="LASSO-Cox",
@@ -2482,6 +2523,8 @@ def train_lasso_cox(
             "alpha_selection_c_index_se": _safe_float(alpha_meta.get("inner_selection_c_index_se")),
             "alpha_selection_threshold_c_index": _safe_float(alpha_meta.get("selection_threshold_c_index")),
             "n_alpha_candidates": int(alpha_meta["n_alpha_candidates"]),
+            "alpha_selection_inner_cv_folds": inner_folds,
+            "alpha_selection_inner_cv_scored_folds": scored_folds,
             "n_active_features": n_active_features,
         },
         training_time_ms=training_time_ms,
@@ -2490,23 +2533,14 @@ def train_lasso_cox(
                 f"L1-penalized Coxnet selected alpha={alpha_meta['alpha']:.4g} "
                 f"with {n_active_features} non-zero coefficient(s)."
             ),
-            (
-                f"Penalty selection used {alpha_meta.get('inner_cv_folds', 0)}-fold stratified inner cross-validation "
-                "on the training split and kept the alpha with the highest mean inner C-index (ties go to the sparser model)."
-                if alpha_meta.get("selection_rule") == "inner_cv_max_mean_c_index"
-                else "Penalty selection used apparent training concordance because the training split was too small for inner cross-validation."
-            ),
+            selection_strength,
         ],
         extra_cautions=[
             (
                 "This penalized Cox path is intended for predictive screening in wide feature sets. "
                 "Do not interpret its shrunk coefficients like inferential Cox PH hazard ratios."
             ),
-            (
-                "Penalty selection used only the training split (inner cross-validation); evaluation rows were never used."
-                if alpha_meta["selection_mode"] == "inner_cv"
-                else "Penalty selection fell back to apparent training performance because inner cross-validation was not feasible."
-            ),
+            selection_caution,
         ],
         extra_payload={"_feature_scaler": scaler},
     )
@@ -4613,6 +4647,13 @@ def compute_calibration_data(
     if bin_assign is None or not bin_categories:
         # Fallback: single-bin summary
         bin_categories = [None]
+    # Tied predictions merge quantile bins, so fewer bins than requested may be formed.
+    n_bins_formed = len(bin_categories)
+    bins_text = f"{n_bins_formed} bin(s)" + (
+        f" ({n_bins} requested; tied predicted values left fewer distinct quantile bins)"
+        if n_bins_formed != n_bins
+        else ""
+    )
 
     non_estimable_bins = 0
     for cat in bin_categories:
@@ -4668,7 +4709,7 @@ def compute_calibration_data(
         mean_abs_diff = None
 
     strengths: list[str] = [
-        f"Calibration assessed at t={time_label} across {n_bins} bins for {n_samples} patients ({n_events} events); this is a descriptive binning-based check, not a formal calibration test.",
+        f"Calibration assessed at t={time_label} across {bins_text} for {n_samples} patients ({n_events} events); this is a descriptive binning-based check, not a formal calibration test.",
     ]
     cautions: list[str] = []
     next_steps: list[str] = []
@@ -4687,7 +4728,7 @@ def compute_calibration_data(
     empty_bins = sum(1 for b in bins_result if b["count"] == 0)
     if empty_bins > 0:
         cautions.append(
-            f"{empty_bins} of {n_bins} bins had no patients; "
+            f"{empty_bins} of {n_bins_formed} bins had no patients; "
             "consider reducing n_bins or using a larger dataset."
         )
     if non_estimable_bins > 0:
@@ -4721,7 +4762,7 @@ def compute_calibration_data(
         "metrics": [
             {"label": "Patients", "value": n_samples},
             {"label": "Events", "value": n_events},
-            {"label": "Bins", "value": n_bins},
+            {"label": "Bins", "value": n_bins_formed},
             {"label": "Mean |pred - obs|", "value": _safe_float(mean_abs_diff)},
         ],
     }
@@ -4731,6 +4772,8 @@ def compute_calibration_data(
 
     return {
         "time_point": time_label,
+        "n_bins": n_bins_formed,
+        "n_bins_requested": n_bins,
         "bins": bins_result,
         "predicted": predicted_points,
         "observed": observed_points,
@@ -5226,21 +5269,27 @@ def counterfactual_survival(
         direction = "decreases"
         direction_label = "lower risk"
     else:
-        direction = "has minimal effect on"
+        direction = "changes"
         direction_label = "similar risk"
 
     if risk_change_pct is None:
-        risk_change_text = "is not well-defined because the baseline predicted risk is zero"
+        effect_sentence = (
+            "The relative change in predicted risk is undefined because the baseline predicted risk is zero."
+        )
         headline_effect = (
             f"Under a model-based scenario that sets '{target_feature}' from {original_label} to {counterfactual_label}, "
             "predicted risk changed, but the relative change is undefined because the baseline predicted risk is zero."
         )
     else:
-        risk_change_text = f"{direction} by {abs(risk_change_pct):.1f}% ({direction_label})"
         relative_quantity = (
             "hazard"
             if risk_scale == "log_hazard"
             else "risk score (cumulative hazard summed over the training event times)"
+        )
+        # The reported change is the median of the per-patient ratios, not a change of the median risk.
+        effect_sentence = (
+            f"The median per-patient relative {relative_quantity} {direction} by {abs(risk_change_pct):.1f}% "
+            f"({direction_label})."
         )
         headline_effect = (
             f"Under a model-based scenario that sets '{target_feature}' from {original_label} to {counterfactual_label}, "
@@ -5250,7 +5299,7 @@ def counterfactual_survival(
     strengths: list[str] = [
         f"Counterfactual scenario analysis set '{target_feature}' from "
         f"{original_label} to {counterfactual_label} across {n_patients} patients.",
-        f"Median predicted risk {risk_change_text}.",
+        effect_sentence,
     ]
     cautions: list[str] = [
         "Counterfactual analysis assumes independent feature manipulation; "

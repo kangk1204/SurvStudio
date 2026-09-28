@@ -306,6 +306,137 @@ def test_repeated_cv_summary_describes_fold_means_and_models_that_could_not_run(
     assert "training folds of about 120 patients" in summary["strengths"][0]
 
 
+# ── Summaries and descriptions ──────────────────────────────────────────────
+
+
+@requires_sksurv
+def test_gradient_boosting_summary_says_it_is_a_boosted_cox_model() -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=30, n_patients=120)
+    result = ml.train_gradient_boosted_survival(df, "os_months", "os_event", ["age", "biomarker_score"], n_estimators=5,
+                                                compute_importance=False, compute_brier=False)
+    strengths = result["scientific_summary"]["strengths"]
+    assert not any("no proportional-hazards assumption" in text for text in strengths)
+    assert any(text.startswith("Boosted Cox model") and "assumed to be proportional" in text for text in strengths)
+
+
+@requires_sksurv
+def test_lasso_summary_does_not_claim_unused_evaluation_rows_in_apparent_mode() -> None:
+    from survival_toolkit import ml_models as ml
+
+    rng = np.random.default_rng(1)
+    n = 200
+    x1, x2 = rng.normal(size=n), rng.normal(size=n)
+    event = np.ones(n, dtype=int)
+    event[:3] = 0  # three censored patients: too few for a holdout
+    df = pd.DataFrame({"t": rng.exponential(np.exp(-0.7 * x1)) * 10 + 0.1, "e": event, "x1": x1, "x2": x2})
+    result = ml.train_lasso_cox(df, "t", "e", ["x1", "x2"], random_state=3)
+    assert result["model_stats"]["evaluation_mode"] == "apparent"
+    assert result["model_stats"]["alpha_selection_mode"] == "inner_cv"
+    summary = result["scientific_summary"]
+    assert not any("evaluation rows were never used" in text for text in summary["cautions"])
+    assert any("also the evaluation rows" in text and "optimistic" in text for text in summary["cautions"])
+    assert any("inner cross-validation on the fitting rows" in text for text in summary["strengths"])
+
+
+@requires_sksurv
+def test_lasso_penalty_selection_reports_the_folds_split_and_the_folds_scored(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=24, n_patients=200)
+    features = ["age", "biomarker_score", "immune_index"]
+    encoded, _, _ = ml._encode_train_test_features(df, df, features)
+    original = ml._drop_constant_train_columns
+    calls = {"n": 0}
+
+    def _second_inner_fold_fails(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 3:  # the first call is the full path, the next ones the inner folds
+            raise ValueError("degenerate inner fold")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ml, "_drop_constant_train_columns", _second_inner_fold_fails)
+    meta = ml._select_lasso_alpha(df.reset_index(drop=True), encoded.reset_index(drop=True), time_column="os_months",
+                                  event_column="os_event", random_state=11)
+    assert meta["selection_mode"] == "inner_cv"
+    assert meta["inner_cv_folds"] == 5 and meta["inner_cv_scored_folds"] == 4
+
+    monkeypatch.setattr(ml, "_drop_constant_train_columns", original)
+    monkeypatch.setattr(ml, "_select_lasso_alpha", lambda *args, **kwargs: meta)
+    fitted = ml.train_lasso_cox(df, "os_months", "os_event", features)
+    assert any(
+        "5-fold stratified inner cross-validation on the training split (4 of the 5 folds could be scored)" in text
+        for text in fitted["scientific_summary"]["strengths"]
+    )
+
+
+def test_headlines_use_the_right_article_and_keep_the_metric_capitalisation() -> None:
+    from survival_toolkit import ml_models as ml
+
+    def headline(mode):
+        return ml._scientific_summary_ml(model_name="RSF", c_index=0.7, n_patients=100, n_events=40, n_features=3,
+                                         evaluation_mode=mode)["headline"]
+
+    assert headline("apparent") == "RSF estimated an apparent C-index of 0.700 on the current evaluation path."
+    assert headline("holdout") == "RSF estimated a holdout C-index of 0.700 on the current evaluation path."
+    assert headline("repeated_cv") == "RSF estimated a repeated-CV mean C-index of 0.700 on the current evaluation path."
+
+
+@requires_sksurv
+def test_permutation_importance_method_states_its_repeats_subsample_and_sample() -> None:
+    from survival_toolkit import ml_models as ml
+
+    holdout = ml.train_random_survival_forest(make_example_dataset(seed=20, n_patients=200), "os_months", "os_event",
+                                              ["age", "biomarker_score"], n_estimators=5, compute_brier=False)
+    assert "averaged over 5 shuffles" in holdout["importance_method"]
+    assert "random subsample of 300 rows" in holdout["importance_method"]
+    assert "in-sample" not in holdout["importance_method"]
+    apparent = ml.train_random_survival_forest(make_example_dataset(seed=35, n_patients=16), "os_months", "os_event",
+                                               ["age", "biomarker_score"], n_estimators=5, compute_brier=False)
+    assert apparent["model_stats"]["evaluation_mode"] == "apparent"
+    assert "this importance is in-sample" in apparent["importance_method"]
+    assert not hasattr(ml, "train_test_split")
+
+
+def test_counterfactual_strength_describes_the_median_per_patient_ratio(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    class _LinearAgeModel:
+        def predict(self, X):
+            return np.asarray(X)[:, 0].astype(float)
+
+    analysis_frame = pd.DataFrame({"age": [10.0, 20.0, 30.0]})
+    trained = {"_model": _LinearAgeModel(), "_X_encoded": analysis_frame.copy(), "_analysis_frame": analysis_frame}
+    df = make_example_dataset(seed=63, n_patients=40)
+
+    def run(original, value):
+        return ml.counterfactual_survival(df, "os_months", "os_event", ["age"], target_feature="age",
+                                          original_value=original, counterfactual_value=value, trained_result=trained)
+
+    tripled = run(5.0, 15.0)["scientific_summary"]
+    assert tripled["strengths"][1] == (
+        "The median per-patient relative risk score (cumulative hazard summed over the training event times) "
+        "increases by 200.0% (higher risk)."
+    )
+    nearly_equal = run(10.0, 10.2)["scientific_summary"]
+    assert nearly_equal["strengths"][1].endswith("changes by 2.0% (similar risk).")
+    assert "changes by 2.0%." in nearly_equal["headline"]
+
+
+def test_calibration_reports_the_bins_it_formed() -> None:
+    from survival_toolkit.ml_models import compute_calibration_data
+
+    predicted = np.repeat([0.2, 0.5, 0.8], [14, 13, 13])
+    result = compute_calibration_data(np.arange(1, 41, dtype=float), np.tile([1, 0], 20), predicted, t=10.0, n_bins=10)
+    # Tied predictions collapse the ten requested quantile bins.
+    formed = len(result["bins"])
+    assert formed < 10 and result["n_bins"] == formed and result["n_bins_requested"] == 10
+    summary = result["scientific_summary"]
+    assert f"across {formed} bin(s) (10 requested;" in summary["strengths"][0]
+    assert {"label": "Bins", "value": formed} in summary["metrics"]
+
+
 # ── Random Survival Forest memory and settings ──────────────────────────────
 
 
