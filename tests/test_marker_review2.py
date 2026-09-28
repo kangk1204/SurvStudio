@@ -532,6 +532,41 @@ def test_a_replication_that_cannot_be_estimated_keeps_its_place_in_the_holm_fami
     assert rows["m0"]["replication_p_holm"] == pytest.approx(min(1.0, 2.0 * one_sided), rel=1e-12, abs=0.0)
 
 
+# 13: notes and lenses say what was done.
+
+
+def test_an_evaluation_whose_clinical_columns_are_all_left_out_is_the_unadjusted_one() -> None:
+    frame = _copy_cohort(6).drop(columns=["age_copy"])
+    frame["centre"] = np.where(np.arange(len(frame)) < 100, "A", "B")
+    frame["centre_b"] = (frame["centre"] == "B").astype(float)  # constant within each stratum
+    common = dict(time_column="time", event_column="event", marker_columns=[f"g{index}" for index in range(4)], strata_columns=["centre"],
+                  settings=_QUICK)
+    result = evaluate_markers(frame, clinical_columns=["centre_b"], **common)
+    unadjusted = evaluate_markers(frame, **common)
+    # Before, the primary lens stayed "added value" and the null was reported as the Smith scheme, although
+    # the markers themselves were permuted and nothing was adjusted for.
+    assert result["primary_lens"] == "marginal" and result["null"]["lens2_null"] is None
+    assert result["marker_table"] == unadjusted["marker_table"]
+    assert any("without clinical adjustment" in note for note in result["cohort"]["notes"])
+    assert result["locked_recipe"]["model"]["terms"] == unadjusted["locked_recipe"]["model"]["terms"]
+
+
+def test_a_clinical_model_that_cannot_be_fitted_is_not_blamed_on_a_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    rng = np.random.default_rng(21)
+    n = 150
+    frame = pd.DataFrame({"time": rng.exponential(size=n) + 0.1, "event": rng.integers(0, 2, n), "age": rng.normal(size=n)})
+    for index in range(3):
+        frame[f"noise_{index}"] = rng.normal(size=n)
+    monkeypatch.setattr(marker_evaluation, "_fit_signature", lambda *args, **kwargs: None)
+    result = evaluate_markers(frame, time_column="time", event_column="event", marker_columns=[f"noise_{index}" for index in range(3)],
+                              clinical_columns=["age"], settings=_QUICK._replace(n_resamples=0))
+    assert result["signature"]["markers"] == [] and result["locked_recipe"] is None
+    assert result["signature"]["notes"] == [
+        "No marker was selected, and the model of the clinical covariates alone could not be fitted: it did not converge. "
+        "No model was locked."
+    ]
+
+
 # 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
 
 

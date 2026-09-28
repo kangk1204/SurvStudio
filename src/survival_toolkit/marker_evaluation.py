@@ -340,6 +340,10 @@ def prepare_marker_cohort(
             keep = [index for index in range(len(clinical_names)) if index not in redundant]
             clinical_design = clinical_design[:, keep]
             clinical_names = [clinical_names[index] for index in keep]
+        if not clinical_names:
+            # Nothing to adjust for: the evaluation is the one without clinical covariates (marginal lens only).
+            clinical_design = None
+            notes.append("No clinical covariate could be estimated, so the markers were evaluated without clinical adjustment.")
     return MarkerCohort(
         time=frame[time_column].to_numpy(dtype=float),
         event=frame[event_column].to_numpy(dtype=int),
@@ -669,6 +673,8 @@ def _fit_signature(
     # first event) has no coefficient; the model is the fit without it.
     design_columns = design_columns[estimable[: design_columns.size]]
     params, runaway = params[estimable], runaway[estimable]
+    if not params.size:
+        return None
     return _SignatureFit(
         columns=columns,
         params=params,
@@ -1385,10 +1391,15 @@ def evaluate_markers(
                 f"The coefficient of {names} runs to infinity (a group without events, for example), so the model "
                 "treats that group as having no risk."
             )
-    elif _signature_columns(full, primary, settings.max_signature_markers).size or cohort.clinical is not None:
+    elif _signature_columns(full, primary, settings.max_signature_markers).size:
         signature_notes.append(
             "The selected-marker model could not be fitted: it did not converge, or a marker's coefficient runs to "
             "infinity (for example a mutation whose carriers never had the event). No model was locked."
+        )
+    elif cohort.clinical is not None:
+        signature_notes.append(
+            "No marker was selected, and the model of the clinical covariates alone could not be fitted: it did not converge. "
+            "No model was locked."
         )
     cohort_notes = [f"{item['column']} was left out of the clinical model: {item['reason']}." for item in cohort.dropped_clinical]
     cohort_notes += list(cohort.notes)
