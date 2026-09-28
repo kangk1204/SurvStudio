@@ -1565,12 +1565,12 @@ def _family_wise_computed(result: dict[str, Any]) -> bool:
     )
 
 
-def _stability_assessed(result: dict[str, Any]) -> bool:
-    """Whether any subsample was evaluated (results that do not say so are taken to have had subsamples)."""
+def _no_subsample_evaluated(result: dict[str, Any]) -> bool:
+    """Whether the result says that no subsample was evaluated, so the robust tier could not be assessed."""
     resampling = result.get("resampling") or {}
     if resampling.get("stability_assessed") is not None:
-        return bool(resampling["stability_assessed"])
-    return int(resampling.get("n_valid") or 0) > 0 if "n_valid" in resampling else True
+        return not resampling["stability_assessed"]
+    return "n_valid" in resampling and not int(resampling.get("n_valid") or 0)
 
 
 def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1597,7 +1597,7 @@ def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
     permuted = _family_wise_computed(result)
     if not permuted:
         robust_note = _NOT_PERMUTED
-    elif not _stability_assessed(result):
+    elif _no_subsample_evaluated(result):
         robust_note = "not assessed (no subsamples)"
     else:
         robust_note = None
@@ -1629,15 +1629,16 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
     signature = result.get("signature") or {}
     # The model the right panel is about: with no marker selected it holds the clinical covariates only; it can also
     # have failed to fit in the full cohort, or not exist (no marker selected and no clinical covariates).
+    selected_model = False
     if signature_is_clinical_only(signature):
         model_title, empty_note = "C-index of the clinical-only model", "No C-index is available for the model."
     elif signature_fit_failed(result):
         model_title, empty_note = "C-index (full-cohort model not fitted)", "The model could not be fitted in the full cohort."
     elif signature.get("markers") or signature.get("apparent_c") is not None:
         model_title, empty_note = "C-index of the selected-marker model", "No C-index is available for the model."
+        selected_model = True
     else:
         model_title, empty_note = "C-index (no marker selected)", "No marker was selected, so there is no model."
-    selected_model = model_title == "C-index of the selected-marker model"
     fig = make_subplots(
         rows=1,
         cols=2,
@@ -1766,7 +1767,7 @@ def _finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and bool(np.isfinite(float(value)))
 
 
-def _drawable_interval(estimate: Any, keys: tuple[str, str, str]) -> bool:
+def _drawable_interval(estimate: Any, keys: tuple[str, ...]) -> bool:
     """Whether an estimate and its interval can be drawn on a log axis: finite and positive (an infinite bound cannot)."""
     return all(_finite_number(estimate.get(key)) and float(estimate[key]) > 0 for key in keys)
 
@@ -1809,7 +1810,7 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
             not_drawn.append(f"{name} (not estimable)")
         elif _drawable_interval(tested, ("hazard_ratio", "ci_lower", "ci_upper")):
             rows.append((row, {**tested, "lens": lens}))
-        elif _drawable_interval(tested, ("hazard_ratio", "hazard_ratio", "hazard_ratio")):
+        elif _drawable_interval(tested, ("hazard_ratio",)):
             not_drawn.append(f"{name} (interval not finite)")
         else:
             not_drawn.append(f"{name} (estimate not finite)")

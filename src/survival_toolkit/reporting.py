@@ -673,7 +673,8 @@ def _hyperparameter_text(result: dict[str, Any]) -> str:
             f"{_layers_text(request.get('hidden_layers'))}, dropout {request.get('dropout')} and batch size {request.get('batch_size')}"
         )
         if request.get("early_stopping_patience"):
-            # The deep-model trainers refit on the rows the monitoring subset held out (refit_on_training_partition).
+            # The deep-model trainers then refit each network on the whole training partition, monitoring rows included
+            # (refit_on_training_partition).
             text += (
                 f", stopping early after {request.get('early_stopping_patience')} epochs without improvement on a monitoring subset "
                 "drawn from each training partition; each network was then refit on the whole training partition for the number of "
