@@ -942,6 +942,13 @@ function syncHistoryState(mode = "replace") {
 }
 
 async function restoreHistoryState(historyState) {
+  // Every entry SurvStudio makes has a state (the first one is replaced at startup). One without comes from a
+  // fragment link such as "#workspace" and must not close the open workspace: it takes the current state, so
+  // going back and forward to it stays here.
+  if (!historyState && state.dataset) {
+    syncHistoryState("replace");
+    return;
+  }
   const restoreToken = ++runtime.historyRestoreToken;
   const restoredPredictiveFamily = normalizedPredictiveFamily(historyState?.predictiveFamily);
   if (!historyState || historyState.view !== "workspace" || !historyState.datasetId) {
@@ -984,6 +991,33 @@ async function restoreHistoryState(historyState) {
     runtime.historySyncPaused = false;
   }
 }
+
+// Leaving the page in this tab (a reload, a typed address, a link) discards every result held in memory, so
+// while there are results the browser asks first. Links such as "Check its design" open a new tab instead.
+function confirmLeavingWithResults(event) {
+  if (!state.dataset || !refs.workspace?.isConnected || !hasCompletedResults()) return;
+  event.preventDefault();
+  // Older browsers ask only when returnValue is set.
+  event.returnValue = "";
+}
+
+// "Skip to workspace" moves the focus itself: following its #workspace link would add a history entry
+// without a state. Before a dataset is open, the landing page is the main region.
+function skipToMainRegion(event) {
+  const link = event.target instanceof Element ? event.target.closest(".skip-link") : null;
+  if (!link) return;
+  event.preventDefault();
+  const region = [refs.workspace, refs.landing].find((element) => element && !element.classList.contains("hidden"));
+  if (!region) return;
+  // Focusable just for this move, so clicks inside the region later do not focus it.
+  region.setAttribute("tabindex", "-1");
+  region.addEventListener("blur", () => region.removeAttribute("tabindex"), { once: true });
+  region.focus();
+}
+
+// Page-level listeners, registered as this part loads; their handlers only run once the page is up.
+window.addEventListener("beforeunload", confirmLeavingWithResults);
+document.addEventListener("click", skipToMainRegion);
 
 function syncDeriveToggleButton() {
   if (!refs.deriveToggle || !refs.derivePanel) return;

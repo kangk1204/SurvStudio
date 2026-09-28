@@ -14,11 +14,16 @@
 
   function syncHistoryState({ runtime, nextState, mode = "replace" }) {
     if (runtime.historySyncPaused || !window.history?.replaceState) return;
-    if (mode === "push") {
-      window.history.pushState(nextState, "", window.location.href);
-      return;
+    try {
+      if (mode === "push") {
+        window.history.pushState(nextState, "", window.location.href);
+        return;
+      }
+      window.history.replaceState(nextState, "", window.location.href);
+    } catch {
+      // Safari and Firefox refuse (SecurityError) when a page updates its history too often. The entry then
+      // keeps its previous state until the next update; the change that asked for it must still go through.
     }
-    window.history.replaceState(nextState, "", window.location.href);
   }
 
   async function shutdownServer({

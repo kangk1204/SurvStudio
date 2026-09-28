@@ -220,6 +220,12 @@ body {
   transform: translateY(0);
 }
 
+/* The skip link moves the focus to the whole main region; no outline around all of it. */
+.workspace:focus,
+.landing:focus {
+  outline: none;
+}
+
 ::selection {
   background: rgba(37, 115, 135, 0.18);
   color: var(--ink);

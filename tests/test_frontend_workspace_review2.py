@@ -360,6 +360,82 @@ def test_a_restored_endpoint_gets_its_own_warnings(tmp_path: Path) -> None:
     assert result["ready"] is True
 
 
+def test_a_history_entry_without_a_state_keeps_the_workspace_and_the_skip_link_moves_focus(tmp_path: Path) -> None:
+    """#8: following "Skip to workspace" (#workspace) made an entry whose popstate took the page home."""
+    result = _run_page(tmp_path, r"""
+      const click = (selector) => page.run(`(() => {
+        const event = { type: "click", bubbles: true, target: null, defaultPrevented: false,
+          preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} };
+        document.querySelector("${selector}").dispatchEvent(event);
+        return event.defaultPrevented;
+      })()`);
+      const landingSkip = { prevented: click(".skip-link"), focused: page.run("document.activeElement?.id || null") };
+      await loadDataset(page, fixtures.dataset);
+      const skip = { prevented: click(".skip-link"), focused: page.run("document.activeElement?.id || null"),
+        tabindex: page.run("refs.workspace.getAttribute('tabindex')") };
+      page.run("refs.workspace.dispatchEvent({ type: 'blur', bubbles: false, preventDefault() {}, stopPropagation() {} })");
+      skip.tabindexAfterBlur = page.run("refs.workspace.getAttribute('tabindex')");
+      page.run("history.state = null");
+      await page.run("restoreHistoryState(null)");
+      await page.settle();
+      return { landingSkip, skip, dataset: page.run("state.dataset?.dataset_id || null"),
+        workspaceHidden: page.run("refs.workspace.classList.contains('hidden')"), entry: page.run("history.state?.view || null") };
+    """, dataset=_categorical_dataset())
+
+    assert result["landingSkip"] == {"prevented": True, "focused": "landing"}
+    assert result["skip"] == {"prevented": True, "focused": "workspace", "tabindex": "-1", "tabindexAfterBlur": None}
+    assert result["dataset"] == "cats"
+    assert result["workspaceHidden"] is False
+    assert result["entry"] == "workspace"
+
+
+def test_history_updates_the_browser_refuses_do_not_break_the_page(tmp_path: Path) -> None:
+    """#17: Safari and Firefox throw a SecurityError when a page updates its history too often."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.run(`history.replaceState = () => { throw new Error("SecurityError: too many calls"); };
+        history.pushState = history.replaceState;`);
+      const tab = page.run("(() => { try { activateTab('cox', { historyMode: 'push' }); return activeTabName(); } catch (error) { return error.message; } })()");
+      page.change("#groupColumn", "sex");
+      await page.settle();
+      return { tab, group: page.run("refs.groupColumn.value") };
+    """, dataset=_categorical_dataset())
+
+    assert result == {"tab": "cox", "group": "sex"}
+
+
+def test_leaving_the_page_with_results_asks_first_and_the_design_link_opens_a_new_tab(tmp_path: Path) -> None:
+    """#6: the Markers tab's design-check link replaced the workspace, and Back could not bring it back."""
+    html = _TEMPLATE.read_text(encoding="utf-8")
+    markers_panel = html[html.index('id="panel-markers"'):html.index("<!-- Cohort Table Panel -->")]
+    link = re.search(r'<a href="/design-check"[^>]*>', markers_panel)
+    assert link and 'target="_blank"' in link.group(0) and 'rel="noopener"' in link.group(0)
+
+    result = _run_page(tmp_path, r"""
+      const leave = () => page.run(`(() => {
+        const event = { type: "beforeunload", defaultPrevented: false, returnValue: undefined, preventDefault() { this.defaultPrevented = true; } };
+        confirmLeavingWithResults(event);
+        return { asked: event.defaultPrevented, returnValue: event.returnValue ?? null };
+      })()`);
+      const home = leave();
+      await loadDataset(page, fixtures.dataset);
+      const noResults = leave();
+      page.fetchHandler = (request) => ({ status: 200, body: {
+        analysis: { summary_table: [{ Group: "Overall", N: 12 }], risk_table: { rows: [], columns: [] }, pairwise_table: [], cohort: { n: 12 } },
+        figure: { data: [{ x: [0, 1], y: [1, 0.5] }], layout: {} },
+        request_config: request.json(),
+      } });
+      page.run("refs.runKmButton.click()");
+      await page.settle();
+      return { home, noResults, withResults: leave(), km: page.run("Boolean(state.km)") };
+    """, dataset=_categorical_dataset())
+
+    assert result["home"] == {"asked": False, "returnValue": None}
+    assert result["noResults"] == {"asked": False, "returnValue": None}
+    assert result["km"] is True
+    assert result["withResults"] == {"asked": True, "returnValue": ""}
+
+
 # ── Column lists ───────────────────────────────────────────────
 
 
