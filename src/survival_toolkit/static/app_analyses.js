@@ -313,6 +313,7 @@ function activateTab(tabName, { historyMode = "replace", focusTabButton = false,
     }
     if (resolvedTabName === "benchmark") resizePlotIfDisplayed(refs.benchmarkComparisonPlot);
     if (resolvedTabName === "markers" && state.markers) {
+      resizePlotIfDisplayed(refs.markersSummaryPlot);
       resizePlotIfDisplayed(refs.markersStabilityPlot);
       resizePlotIfDisplayed(refs.markersRankPlot);
       resizePlotIfDisplayed(refs.markerValidationPlot);

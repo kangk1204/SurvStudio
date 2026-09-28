@@ -3078,3 +3078,17 @@ def test_standing_assumption_notes_do_not_lower_the_status() -> None:
         from survival_toolkit.analysis import _COX_STANDING_NOTES
 
         assert any(caution not in _COX_STANDING_NOTES for caution in summary["cautions"])
+        # The data-driven cautions come first, ahead of the notes every Cox fit carries.
+        assert summary["cautions"][0] not in _COX_STANDING_NOTES
+
+
+def test_data_driven_km_cautions_lead_the_standing_notes() -> None:
+    rng = np.random.default_rng(4)
+    # One group of 10 patients raises the data-driven "fewer than 15 patients" caution.
+    df = pd.DataFrame({"time": rng.exponential(10.0, 50), "event": rng.integers(0, 2, 50), "arm": ["a"] * 40 + ["b"] * 10})
+    df.loc[[0, 40], "event"] = 1
+    km = compute_km_analysis(df, "time", "event", group_column="arm")
+    cautions = km["scientific_summary"]["cautions"]
+    assert km["scientific_summary"]["status"] != "robust"
+    assert "non-informative" not in cautions[0]
+    assert "non-informative" in " ".join(cautions)

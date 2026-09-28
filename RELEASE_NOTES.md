@@ -21,6 +21,11 @@
 - Summary badges read Robust when only the method's standing assumptions apply, and the Cox headline names the estimates that look unstable rather than the significant terms.
 - The prediction-model leaderboard gives every model's C-index a 95% bootstrap interval and its difference from Cox PH a paired 95% interval on the same test patients, drawn as a dot plot with intervals instead of bars from zero.
 - Validating a locked marker model in another cohort can rescale the markers within the cohort (another platform), and runs when some locked markers are not measured there, reporting the share of the model's weight that was.
+- The Markers tab opens its results with one summary figure: how many markers clear each bar (tested, p < 0.05, FDR q ≤ 0.05, family-wise p ≤ 0.05, robust; log scale for genome-wide panels) and the selected-marker model's C-index from apparent to optimism-corrected to the patients left out, beside the clinical covariates alone. The key numbers and the verdict follow, then the stability and rank plots.
+- Interpretation panels list the cautions raised by the data before the notes that hold for every KM or Cox run, so the first two in view are the ones that matter.
+- The leaderboard note is one line (what is shown, the ranking rule and the interval basis); tie methods, metric asymmetries and exclusions fold under "Method notes".
+- Marker columns with more than 20% missing values or a single value start unchecked and are labelled ("31% missing"), and when no selected marker is usable the error names each one and why. On the TCGA-LUAD sample the default run no longer fails on its two sparsely recorded numeric columns.
+- A marker matrix that cannot be unpacked because the temporary folder is full or over quota says so and suggests TMPDIR, instead of calling the file damaged.
 
 ### New
 

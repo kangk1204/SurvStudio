@@ -6,6 +6,12 @@ const MARKER_TABLE_DISPLAY_LIMIT = 300;
 
 // An attached marker matrix (omics, POST /api/marker-matrix) replaces the marker checklist; the server
 // matches its patients to the dataset through the chosen ID column at every run.
+// Marker counts run to tens of thousands; thousands separators keep them readable.
+function formatCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toLocaleString("en-US") : "NA";
+}
+
 function markerMatrixAttached() {
   return Boolean(state.markerMatrix?.matrix_id);
 }
@@ -31,7 +37,7 @@ function renderMarkerMatrixState() {
   const attached = markerMatrixAttached();
   refs.markerMatrixStatus?.classList.toggle("hidden", !attached);
   if (attached && refs.markerMatrixSummary) {
-    refs.markerMatrixSummary.textContent = `${matrix.filename}: ${formatValue(matrix.n_markers)} markers, ${formatValue(matrix.n_matched)} of ${formatValue(matrix.n_patients)} patients matched by ${matrix.id_column}.${matrix.id_note ? ` ${matrix.id_note}` : ""}`;
+    refs.markerMatrixSummary.textContent = `${matrix.filename}: ${formatCount(matrix.n_markers)} markers, ${formatCount(matrix.n_matched)} of ${formatCount(matrix.n_patients)} patients matched by ${matrix.id_column}.${matrix.id_note ? ` ${matrix.id_note}` : ""}`;
   }
   if (attached && refs.markerMatrixDetails) refs.markerMatrixDetails.open = true;
   refs.markerChecklist?.classList.toggle("matrix-attached", attached);
@@ -61,7 +67,7 @@ async function attachMarkerMatrix() {
   renderMarkerMatrixState();
   renderMarkerSelectionLine();
   scheduleResultCurrencySync();
-  showToast(`Attached ${formatValue(payload.n_markers)} markers; ${formatValue(payload.n_matched)} of ${formatValue(payload.n_patients)} patients matched.`, "success", 4000);
+  showToast(`Attached ${formatCount(payload.n_markers)} markers; ${formatCount(payload.n_matched)} of ${formatCount(payload.n_patients)} patients matched.`, "success", 4000);
 }
 
 function removeMarkerMatrix() {
@@ -77,6 +83,17 @@ function markerCandidateColumns() {
   return modelFeatureCandidateColumns().filter((name) => getColumnMeta(name)?.kind === "numeric");
 }
 
+// Why the evaluation would leave a column out (more than 20% missing, or a single value); "" when usable.
+function markerExclusionNote(name) {
+  const meta = getColumnMeta(name);
+  if (!meta) return "";
+  const missing = Number(meta.missing || 0);
+  const total = missing + Number(meta.non_missing || 0);
+  if (total && missing / total > 0.2) return `${Math.round((100 * missing) / total)}% missing`;
+  if (Number(meta.n_unique ?? 2) < 2) return "one value";
+  return "";
+}
+
 // Markers are numeric columns; clinical covariates start from the Cox selection and are left out of the markers.
 function refreshMarkerSelections() {
   if (!state.dataset || !refs.markerChecklist || !refs.markerClinicalChecklist) return;
@@ -87,8 +104,10 @@ function refreshMarkerSelections() {
   const clinical = previousMarkers.length || previousClinical.length
     ? previousClinical
     : currentCoxSelections().covariates.filter((value) => clinicalCandidates.includes(value));
-  const markers = previousMarkers.length ? previousMarkers : markerCandidates.filter((value) => !clinical.includes(value));
-  renderChecklist(refs.markerChecklist, markerCandidates, markers);
+  const notes = Object.fromEntries(markerCandidates.map((value) => [value, markerExclusionNote(value)]).filter(([, note]) => note));
+  // Columns the evaluation would drop start unchecked, so the default run does not fail on them.
+  const markers = previousMarkers.length ? previousMarkers : markerCandidates.filter((value) => !clinical.includes(value) && !notes[value]);
+  renderChecklist(refs.markerChecklist, markerCandidates, markers, notes);
   renderChecklist(refs.markerClinicalChecklist, clinicalCandidates, clinical);
   refreshMarkerMatrixControls();
   renderMarkerSelectionLine();
@@ -102,6 +121,9 @@ function currentMarkerSelections() {
 }
 
 function renderMarkerSelectionLine() {
+  // Every change to the markers (ticks, select all, clear, attaching or removing a file) passes here,
+  // so Run is enabled exactly when there is something to evaluate.
+  if (typeof syncAnalysisRunButtonAvailability === "function") syncAnalysisRunButtonAvailability();
   if (!refs.markerSelectionLine) return;
   const { markers, clinical } = currentMarkerSelections();
   if (!state.dataset) {
@@ -114,8 +136,8 @@ function renderMarkerSelectionLine() {
     ? `judged on added value over ${formatValue(clinical.length)} clinical covariate${clinical.length === 1 ? "" : "s"}`
     : "judged on marginal association (no clinical covariates)";
   refs.markerSelectionLine.textContent = count
-    ? `${formatValue(count)} marker${count === 1 ? "" : "s"}${matrix ? ` from ${matrix.filename}` : ""}, ${lens}.`
-    : "Choose at least one numeric marker.";
+    ? `${formatCount(count)} marker${count === 1 ? "" : "s"}${matrix ? ` from ${matrix.filename}` : ""}, ${lens}.`
+    : "Choose at least one numeric marker, or attach a marker file such as gene expression.";
 }
 
 function markerRequestFields() {
@@ -183,14 +205,14 @@ function markerSummary(payload) {
   const evaluated = Number(cohort.n_markers_evaluated || 0);
   const addedValue = analysis.primary_lens === "added_value";
   const headline = robust
-    ? `${formatValue(robust)} of ${formatValue(evaluated)} markers are robust${addedValue ? " beyond the clinical covariates" : ""}.`
+    ? `${formatCount(robust)} of ${formatCount(evaluated)} markers are robust${addedValue ? " beyond the clinical covariates" : ""}.`
     : suggestive
-      ? `No marker is robust; ${formatValue(suggestive)} show evidence that does not hold up across subsamples.`
+      ? `No marker is robust; ${formatCount(suggestive)} show evidence that does not hold up across subsamples.`
       : `No marker shows ${addedValue ? "added value beyond the clinical covariates" : "an association"} after family-wise error control.`;
   const cautions = [];
   if (!addedValue) cautions.push("No clinical covariates were given, so markers are judged on marginal association only. Add clinical covariates to test added value.");
   if (signature.signature_optimism != null && Number(signature.signature_optimism) > 0.02) {
-    cautions.push(`The selected-marker model's apparent C-index is optimistic by about ${formatValue(signature.signature_optimism)}; report the corrected value.`);
+    cautions.push(`The selected-marker model's apparent C-index is optimistic by about ${Number(signature.signature_optimism).toFixed(3)}; report the corrected value.`);
   }
   const leftOut = markerLeftOutComparison(signature, addedValue);
   if (leftOut && leftOut.gain < 0.02) cautions.push(leftOut.text + " The selected markers add little discrimination beyond the clinical covariates.");
@@ -198,13 +220,13 @@ function markerSummary(payload) {
     const dropped = cohort.dropped_markers;
     const nearConstant = dropped.filter((item) => String(item.reason || "").startsWith("near-constant")).length;
     cautions.push(
-      `${formatValue(dropped.length)} marker(s) were left out before testing: `
-      + `${formatValue(nearConstant)} near-constant (most patients at one value, as for genes expressed in few patients) `
-      + `and ${formatValue(dropped.length - nearConstant)} constant or mostly missing.`,
+      `${formatCount(dropped.length)} marker(s) were left out before testing: `
+      + `${formatCount(nearConstant)} near-constant (most patients at one value, as for genes expressed in few patients) `
+      + `and ${formatCount(dropped.length - nearConstant)} constant or mostly missing.`,
     );
   }
   if (Number(counts["marginal only"] || 0) > 0) {
-    cautions.push(`${formatValue(counts["marginal only"])} marker(s) are associated with survival but add nothing beyond the clinical covariates.`);
+    cautions.push(`${formatCount(counts["marginal only"])} marker(s) are associated with survival but add nothing beyond the clinical covariates.`);
   }
   return {
     status: robust ? "robust" : "review",
@@ -212,7 +234,7 @@ function markerSummary(payload) {
     metrics: [
       { label: "Patients", value: cohort.n },
       { label: "Events", value: cohort.events },
-      { label: "Markers", value: evaluated },
+      { label: "Markers", value: formatCount(evaluated) },
       { label: "Robust", value: robust },
       { label: "Suggestive", value: suggestive },
       { label: "Model C (corrected)", value: signature.optimism_corrected_c },
@@ -253,7 +275,7 @@ function markerMetaBanner(payload) {
     ...(payload?.marker_matrix ? [`markers from ${payload.marker_matrix.filename}`] : []),
     `N=${formatValue(cohort.n)}`,
     `events=${formatValue(cohort.events)}`,
-    `markers=${formatValue(cohort.n_markers_evaluated)}`,
+    `markers=${formatCount(cohort.n_markers_evaluated)}`,
     `tested for ${lens}`,
   ];
   if (signature.apparent_c != null) parts.push(`model C apparent=${formatValue(signature.apparent_c)}, corrected=${formatValue(signature.optimism_corrected_c)}`);
@@ -276,6 +298,9 @@ async function renderMarkerPlot(plot, figure, name, payload) {
 async function renderMarkerResults(payload) {
   renderInsightBoard(refs.markersInsightBoard, markerSummary(payload), "Run the evaluation to see which markers hold up.");
   refs.markersMetaBanner.textContent = markerMetaBanner(payload);
+  // Results saved before the summary figure existed simply leave its shell hidden.
+  if (payload.summary_figure?.data?.length) await renderMarkerPlot(refs.markersSummaryPlot, payload.summary_figure, "marker_summary", payload);
+  else clearPlotShell(refs.markersSummaryPlot, "", { state: "placeholder" });
   await renderMarkerPlot(refs.markersStabilityPlot, payload.stability_figure, "marker_stability", payload);
   await renderMarkerPlot(refs.markersRankPlot, payload.rank_figure, "marker_ranks", payload);
   const rows = payload.display_table || [];
@@ -296,6 +321,7 @@ function clearMarkerOutputs() {
   if (refs.markersInsightBoard) refs.markersInsightBoard.innerHTML = '<div class="empty-state">Run the evaluation to see which markers hold up.</div>';
   if (refs.markersMetaBanner) refs.markersMetaBanner.textContent = "";
   clearPlotShell(refs.markersStabilityPlot, '<div class="empty-state plot-empty"><span>Choose markers and click <strong>Run Analysis</strong>.</span></div>', { state: "placeholder" });
+  clearPlotShell(refs.markersSummaryPlot, "", { state: "placeholder" });
   clearPlotShell(refs.markersRankPlot, "", { state: "placeholder" });
   if (refs.markersTableShell) refs.markersTableShell.innerHTML = '<div class="empty-state">Run the evaluation to fill the marker table.</div>';
   refs.markerValidationSection?.classList.add("hidden");
@@ -430,6 +456,7 @@ function syncMarkerDownloadButtons() {
   if (refs.downloadMarkerRemarkDocxButton) refs.downloadMarkerRemarkDocxButton.disabled = !current?.report;
   if (refs.downloadMarkerRemarkMarkdownButton) refs.downloadMarkerRemarkMarkdownButton.disabled = !current?.report;
   const stabilityCurrent = plotShowsResult(refs.markersStabilityPlot, current);
+  if (refs.downloadMarkersSummaryPngButton) refs.downloadMarkersSummaryPngButton.disabled = !plotShowsResult(refs.markersSummaryPlot, current);
   if (refs.downloadMarkersStabilityPngButton) refs.downloadMarkersStabilityPngButton.disabled = !stabilityCurrent;
   if (refs.downloadMarkersRankPngButton) refs.downloadMarkersRankPngButton.disabled = !plotShowsResult(refs.markersRankPlot, current);
   if (refs.runMarkerValidationButton) {
@@ -469,6 +496,11 @@ function wireMarkerControls() {
   refs.downloadMarkerRecipeButton?.addEventListener("click", downloadMarkerRecipe);
   refs.downloadMarkerRemarkDocxButton?.addEventListener("click", () => downloadMarkerChecklist("docx"));
   refs.downloadMarkerRemarkMarkdownButton?.addEventListener("click", () => downloadMarkerChecklist("markdown"));
+  refs.downloadMarkersSummaryPngButton?.addEventListener("click", () => {
+    const payload = currentGoalResult("markers");
+    if (!requireCurrentPlotForExport(refs.markersSummaryPlot, payload)) return;
+    void downloadPlotImage(refs.markersSummaryPlot, buildDownloadFilename("marker_summary", "png").replace(/\.png$/, ""), "png");
+  });
   refs.downloadMarkersStabilityPngButton?.addEventListener("click", () => {
     const payload = currentGoalResult("markers");
     if (!requireCurrentPlotForExport(refs.markersStabilityPlot, payload)) return;

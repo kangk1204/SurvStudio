@@ -3846,7 +3846,7 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
 @app.post("/api/marker-evaluation")
 async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Request) -> dict[str, Any]:
     try:
-        from survival_toolkit.plots import build_marker_rank_figure, build_marker_stability_figure
+        from survival_toolkit.plots import build_marker_rank_figure, build_marker_stability_figure, build_marker_summary_figure
 
         stored = _get_stored_dataset(request_model.dataset_id)
         request_config = request_model.model_dump()
@@ -3897,6 +3897,8 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
             payload = {
                 "analysis": _trim_marker_table(result),
                 "display_table": _marker_display_rows(result),
+                # Figures read the full marker table; the payload carries a trimmed one.
+                "summary_figure": build_marker_summary_figure(result),
                 "stability_figure": build_marker_stability_figure(result),
                 "rank_figure": build_marker_rank_figure(result),
                 "report": remark_checklist(result, request={**request_config, "marker_columns": markers}, dataset=report_dataset),

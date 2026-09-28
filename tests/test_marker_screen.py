@@ -136,6 +136,26 @@ def test_fit_cox_reports_a_separated_covariate_as_not_converged() -> None:
     assert not fit.converged or abs(fit.beta[0]) > 5
 
 
+def test_fit_cox_ends_as_not_converged_when_the_information_turns_non_finite(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A diverging fit on a heavy-tailed RNA-seq marker left NaN in the information matrix, and
+    # numpy's least squares then raised, failing a whole genome-wide screen.
+    from survival_toolkit import marker_screen
+
+    time, event = np.arange(1.0, 21.0), np.ones(20, dtype=int)
+    real = marker_screen._score_and_information_at
+    calls = {"count": 0}
+
+    def breaks_on_second_step(*args, **kwargs):
+        calls["count"] += 1
+        score, information = real(*args, **kwargs)
+        return (score, np.full_like(information, np.nan)) if calls["count"] >= 2 else (score, information)
+
+    monkeypatch.setattr(marker_screen, "_score_and_information_at", breaks_on_second_step)
+    fit = fit_cox(time, event, np.linspace(-1.0, 1.0, 20))
+    assert not fit.converged
+    assert np.all(np.isnan(fit.covariance)) and np.all(np.isfinite(fit.beta))
+
+
 def test_score_equals_the_schoenfeld_residual_sum_of_the_marker() -> None:
     time, event, clinical, markers, strata = _arrays(_reference_cohort(), True)
     null = fit_cox_null(time, event, clinical, strata, "efron")

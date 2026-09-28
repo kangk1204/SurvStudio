@@ -950,6 +950,8 @@ report = validate_locked_recipe(external, result["locked_recipe"], horizon=60)
 print(report["metrics"]["c_index"])
 ```
 
+The Markers tab opens its results with one summary figure: the number of markers that clear each bar (tested, p < 0.05, FDR q ≤ 0.05, family-wise p ≤ 0.05, robust) and the signature's C-index from apparent to optimism-corrected to the left-out rows, beside the clinical covariates alone. `survival_toolkit.plots.build_marker_summary_figure(result)` draws it from Python.
+
 In the Markers tab, `Export` also gives a REMARK checklist (Word or Markdown): the methods and results paragraphs of the run and the 20 REMARK items, each marked as filled in by SurvStudio, partly filled in, or for the authors to complete (study design, specimens, assay, interpretation). From Python, `survival_toolkit.reporting.remark_checklist(result)` returns the same checklist.
 
 External validation reports Harrell's C with a bootstrap CI, the C-index gain over the locked clinical-only model, the calibration slope, observed/expected risk, the Brier score and Brier skill at the horizon, and each marker's external hazard ratio with a Holm-adjusted one-sided replication test. A recipe that was edited after it was locked is rejected.
@@ -1062,7 +1064,7 @@ Available exports (each tab's `Export` menu):
   - marker table as `CSV`
   - locked model as `JSON` (for `validate_locked_recipe` or the in-app validation)
   - REMARK checklist as `DOCX` or `Markdown`
-  - stability and rank plots as `PNG`
+  - summary figure, stability and rank plots as `PNG`
 - Prediction models leaderboard:
   - TRIPOD+AI checklist as `DOCX` or `Markdown`, covering the latest ML and DL comparisons: data preparation, missing data, the evaluation design and shared splits, performance, and the winner's-curse caution when the best of several models is chosen on the same data
 - ML and DL comparison:

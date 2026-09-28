@@ -507,12 +507,10 @@
       if (board.hiddenStaleFamilies.length) {
         noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden until rerun.`);
       }
-      if (board.hasLockedTest) noteParts.push(LOCKED_TEST_RANKING_NOTE);
-      noteParts.push(intervalNote(board));
-      noteParts.push(...benchmarkMethodologyNotes(board));
       if (board.missingMetricCount) {
         noteParts.push(`Omitted ${board.missingMetricCount} row(s) without a numeric C-index.`);
       }
+      // The ranking, interval and methodology notes sit once, under the leaderboard.
       refs.benchmarkPlotNote.textContent = noteParts.join(" ");
 
       const intervals = board.intervals?.status === "ready" ? board.intervals.result : null;
@@ -680,11 +678,24 @@
       const intervals = board.intervals;
       if (intervals?.status === "ready") {
         const result = intervals.result || {};
-        return `Intervals are 95% bootstrap intervals over the ${formatValue(result.n)} ${board.hasLockedTest ? "locked-test" : "test"} patients all models share (${formatValue(result.events)} events). ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients, so a model whose ΔC interval contains 0 is not distinguishable from Cox PH on this split.`;
+        return `Intervals are 95% bootstrap intervals over the ${formatValue(result.n)} ${board.hasLockedTest ? "locked-test" : "test"} patients all models share (${formatValue(result.events)} events).`;
       }
       if (intervals?.status === "loading") return "Computing bootstrap intervals for the C-index of each model.";
       if (intervals?.status === "error") return `Bootstrap intervals are unavailable: ${intervals.error}`;
       return "Leaderboard order is a point-estimate screening view; repeated cross-validation reports the spread across folds instead of intervals.";
+    }
+
+    function intervalDetail(board) {
+      if (board.intervals?.status !== "ready") return "";
+      return "ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients, so a model whose ΔC interval contains 0 is not distinguishable from Cox PH on this split.";
+    }
+
+    // One line stays in view; everything a reader needs only when writing up folds into "Method notes".
+    function tableNoteMarkup(lead, details) {
+      const leadText = lead.filter(Boolean).join(" ");
+      const items = details.filter(Boolean);
+      if (!items.length) return escapeHtml(leadText);
+      return `${escapeHtml(leadText)}<details class="benchmark-note-details"><summary>Method notes (${items.length})</summary><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></details>`;
     }
 
     function buildBenchmarkSummaryContent(board, hasAnyResult, currentMlRows, currentDlRows) {
@@ -880,7 +891,7 @@
       }
 
       const presentFamilies = [...new Set(board.visibleRows.map((row) => benchmarkRowFamilyMeta(row).familyLabel))];
-      const noteParts = [
+      const leadParts = [
         board.hasMixedEvaluation
           ? "Visible compare rows are grouped by family because evaluation modes differ. No cross-family ranking is published."
           : board.visibleHasMixedRunGroups
@@ -893,31 +904,32 @@
               : `Showing ${board.visibleRows.length} current screening rows from the latest ML and DL comparison outputs.`)
             : `Showing ${board.visibleRows.length} ${board.showingStaleBoard ? "stale" : "current"} screening row(s) from ${presentFamilies[0] ?? "one family"} only.`),
       ];
-      if (board.visibleExcludedRows.length) {
-        noteParts.push(`${board.visibleExcludedRows.length} excluded model row(s) are listed below without rank or C-index.`);
-      }
       if (board.showingStaleBoard) {
-        noteParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the leaderboard.");
+        leadParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the leaderboard.");
+      }
+      if (board.hasLockedTest) leadParts.push(LOCKED_TEST_RANKING_NOTE);
+      leadParts.push(intervalNote(board));
+      const detailParts = [intervalDetail(board)];
+      if (board.visibleExcludedRows.length) {
+        detailParts.push(`${board.visibleExcludedRows.length} excluded model row(s) are listed below without rank or C-index.`);
       }
       if (board.hiddenStaleFamilies.length) {
-        noteParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden.`);
+        detailParts.push(`Stale compare rows from ${board.hiddenStaleFamilies.map((goal) => benchmarkGoalMeta(goal).label).join(" and ")} are hidden.`);
       }
       if (board.hasMixedEvaluation) {
-        noteParts.push(`Current evaluation modes: ${board.evaluationModes.map((mode) => benchmarkEvaluationLabel(mode)).join(", ")}.`);
+        detailParts.push(`Current evaluation modes: ${board.evaluationModes.map((mode) => benchmarkEvaluationLabel(mode)).join(", ")}.`);
       }
       if (board.visibleHasMixedRunGroups) {
-        noteParts.push("Visible ML and DL rows come from different compare runs, so no cross-family rank or shared chart is published.");
+        detailParts.push("Visible ML and DL rows come from different compare runs, so no cross-family rank or shared chart is published.");
       }
-      if (board.hasLockedTest) noteParts.push(LOCKED_TEST_RANKING_NOTE);
-      noteParts.push(intervalNote(board));
-      noteParts.push(...benchmarkMethodologyNotes(board));
+      detailParts.push(...benchmarkMethodologyNotes(board));
       ["ml", "dl"].forEach((goal) => {
         const copy = excludedModelsCopy(goal, board.excludedByFamily?.[goal], {
           sourceLabel: board.showingStaleBoard ? "the last complete snapshot" : "the current",
         });
-        if (copy) noteParts.push(copy);
+        if (copy) detailParts.push(copy);
       });
-      refs.benchmarkTableNote.textContent = noteParts.join(" ");
+      refs.benchmarkTableNote.innerHTML = tableNoteMarkup(leadParts, detailParts);
 
       const intervals = board.intervals?.status === "ready" ? board.intervals.result : null;
       const intervalByModel = new Map((intervals?.rows || []).map((row) => [String(row.model), row]));

@@ -617,6 +617,8 @@ function syncAnalysisRunButtonAvailability() {
   const signatureFeatureMessage = "Select at least one marker to search for cut-point combinations.";
   const markerCount = selectedCheckboxValues(refs.markerChecklist).length;
   const hasMarkers = markerCount > 0;
+  // An attached marker matrix supplies the markers for the evaluation (not for the cut-point search).
+  const hasEvaluationMarkers = hasMarkers || (typeof markerMatrixAttached === "function" && markerMatrixAttached());
   const coxFeatureMessage = "Select at least one covariate for the Cox model.";
   const sharedFeatureMessage = "Select at least one shared ML/DL model feature.";
   const tableVariableMessage = "Select at least one variable for the cohort table.";
@@ -637,8 +639,8 @@ function syncAnalysisRunButtonAvailability() {
   );
   setActionDisabledState(
     refs.runMarkersButton,
-    !endpointReady || !hasMarkers || isScopeBusy("markers"),
-    !endpointReady ? readyMessage : (!hasMarkers ? "Choose at least one marker." : ""),
+    !endpointReady || !hasEvaluationMarkers || isScopeBusy("markers"),
+    !endpointReady ? readyMessage : (!hasEvaluationMarkers ? "Choose at least one marker or attach a marker file." : ""),
   );
   setActionDisabledState(
     refs.runCoxButton,

@@ -918,7 +918,7 @@
           <div class="table-card full-width">
             <div class="table-card-head">
               <h3>Leaderboard</h3>
-              <span class="benchmark-table-note" id="benchmarkTableNote">Run Compare All on ML or DL to build a shared leaderboard.</span>
+              <div class="benchmark-table-note" id="benchmarkTableNote">Run Compare All on ML or DL to build a shared leaderboard.</div>
               <details class="export-menu">
                 <summary class="button ghost">Export</summary>
                 <div class="export-menu-items">
@@ -969,6 +969,7 @@
                   <button class="button ghost" id="downloadMarkerRecipeButton" type="button" disabled>Locked model (JSON)</button>
                   <button class="button ghost" id="downloadMarkerRemarkDocxButton" type="button" disabled>REMARK checklist (Word)</button>
                   <button class="button ghost" id="downloadMarkerRemarkMarkdownButton" type="button" disabled>REMARK checklist (Markdown)</button>
+                  <button class="button ghost" id="downloadMarkersSummaryPngButton" type="button" disabled>Summary figure (PNG)</button>
                   <button class="button ghost" id="downloadMarkersStabilityPngButton" type="button" disabled>Stability plot (PNG)</button>
                   <button class="button ghost" id="downloadMarkersRankPngButton" type="button" disabled>Rank plot (PNG)</button>
                 </div>
@@ -1032,11 +1033,13 @@
             </div>
           </details>
 
+          <!-- At a glance first (figure, key numbers, verdict), then the per-marker detail. -->
+          <div class="plot-shell" id="markersSummaryPlot"></div>
+          <div class="analysis-banner" id="markersMetaBanner"></div>
+          <div class="insight-board" id="markersInsightBoard"><div class="empty-state">Run the evaluation to see which markers hold up.</div></div>
           <div class="plot-shell" id="markersStabilityPlot">
             <div class="empty-state plot-empty"><span>Choose markers and click <strong>Run Analysis</strong>.</span></div>
           </div>
-          <div class="analysis-banner" id="markersMetaBanner"></div>
-          <div class="insight-board" id="markersInsightBoard"><div class="empty-state">Run the evaluation to see which markers hold up.</div></div>
           <div class="plot-shell" id="markersRankPlot"></div>
           <div class="table-card full-width">
             <div class="table-card-head">

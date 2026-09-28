@@ -2690,7 +2690,8 @@ def _km_scientific_summary(
         "status": status,
         "headline": headline,
         "strengths": strengths,
-        "cautions": cautions,
+        # Data-driven cautions lead; the notes that hold for every KM run follow.
+        "cautions": cautions[standing_cautions:] + cautions[:standing_cautions],
         "next_steps": next_steps,
         "metrics": [
             {"label": "Patients", "value": int(cohort_summary["n"])},
@@ -3169,11 +3170,14 @@ def _cox_scientific_summary(
     ):
         status = "caution"
 
+    # Data-driven cautions lead; the notes that hold for every Cox fit follow.
+    cautions = [caution for caution in notes.cautions if caution not in _COX_STANDING_NOTES]
+    cautions += [caution for caution in notes.cautions if caution in _COX_STANDING_NOTES]
     return {
         "status": status,
         "headline": headline,
         "strengths": notes.strengths,
-        "cautions": notes.cautions,
+        "cautions": cautions,
         "next_steps": notes.next_steps,
         "metrics": _cox_summary_metrics(
             model_stats,

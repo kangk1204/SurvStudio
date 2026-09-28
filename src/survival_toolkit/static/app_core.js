@@ -185,6 +185,7 @@ const refs = {
   downloadMarkerRecipeButton: document.getElementById("downloadMarkerRecipeButton"),
   downloadMarkerRemarkDocxButton: document.getElementById("downloadMarkerRemarkDocxButton"),
   downloadMarkerRemarkMarkdownButton: document.getElementById("downloadMarkerRemarkMarkdownButton"),
+  downloadMarkersSummaryPngButton: document.getElementById("downloadMarkersSummaryPngButton"),
   downloadMarkersStabilityPngButton: document.getElementById("downloadMarkersStabilityPngButton"),
   downloadMarkersRankPngButton: document.getElementById("downloadMarkersRankPngButton"),
   selectAllMarkersButton: document.getElementById("selectAllMarkersButton"),
@@ -206,6 +207,7 @@ const refs = {
   markerResamples: document.getElementById("markerResamples"),
   markerRandomSeed: document.getElementById("markerRandomSeed"),
   markerNonlinearLens: document.getElementById("markerNonlinearLens"),
+  markersSummaryPlot: document.getElementById("markersSummaryPlot"),
   markersStabilityPlot: document.getElementById("markersStabilityPlot"),
   markersMetaBanner: document.getElementById("markersMetaBanner"),
   markersInsightBoard: document.getElementById("markersInsightBoard"),
@@ -1013,9 +1015,8 @@ function renderAnalysisConsistencyBanner() {
     .map((item) => (Number.isFinite(item.n) ? `${item.label} N=${formatValue(item.n)}` : item.label))
     .join("; ");
   setAnalysisConsistencyBanner(
-    `Loaded analyses currently use different analyzable cohorts on the same dataset (${cohortSummary}). `
-      + "This usually reflects different missing-value filtering or candidate-feature eligibility. "
-      + "Do not report KM, Cox, Signature, or grouped table outputs side by side as if they used the same patients.",
+    `Loaded analyses currently use different analyzable cohorts on the same dataset (${cohortSummary}), `
+      + "usually because of missing values. Do not present them side by side as one cohort.",
     "warning",
   );
 }

@@ -162,6 +162,34 @@ def test_gzip_compressed_matrices_are_read(tmp_path: Path) -> None:
         read_marker_matrix(broken, "broken.tsv.gz", patient_ids=patients)
 
 
+def test_a_full_temporary_disk_is_not_reported_as_a_damaged_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import errno
+    import gzip
+
+    from survival_toolkit import marker_matrix
+
+    archive = tmp_path / "expr.tsv.gz"
+    with gzip.open(archive, "wt") as handle:
+        handle.write("gene\tP1\tP2\nG1\t1\t2\n")
+
+    class FullDisk:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def write(self, chunk):
+            raise OSError(errno.EDQUOT, "Disk quota exceeded")
+
+    monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: FullDisk())
+    with pytest.raises(UserInputError, match="could not be written .*Disk quota exceeded.*TMPDIR"):
+        marker_matrix._gunzip(archive, tmp_path / "plain.tsv")
+
+
 def test_tcga_sample_barcodes_are_matched_to_patient_barcodes(tmp_path: Path) -> None:
     patients = ["TCGA-05-4244", "TCGA-05-4249", "TCGA-05-4250", "TCGA-35-3615"]
     samples = [

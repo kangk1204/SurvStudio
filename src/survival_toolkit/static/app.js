@@ -540,6 +540,7 @@ function updateResultVisibility() {
   const markerTable = hasRenderedTable(refs.markersTableShell);
   reveal(refs.markersMetaBanner, markerInsight);
   reveal(refs.markersInsightBoard, markerInsight);
+  reveal(refs.markersSummaryPlot, hasRenderedPlot(refs.markersSummaryPlot));
   reveal(refs.markersRankPlot, hasRenderedPlot(refs.markersRankPlot));
   reveal(refs.markersTableShell?.closest(".table-card"), markerTable);
 
@@ -578,7 +579,7 @@ function resultAnchorFor(tabName, { mode = "single" } = {}) {
     cox: [refs.coxPlot, refs.coxDiagnosticsPlot, refs.coxMartingalePlot, refs.coxResultsShell],
     predictive: [refs.benchmarkSummaryGrid, refs.benchmarkComparisonPlot, refs.benchmarkComparisonShell, refs.benchmarkWorkbench],
     tables: [refs.cohortTableShell],
-    markers: [refs.markersStabilityPlot, refs.markersInsightBoard],
+    markers: [refs.markersSummaryPlot, refs.markersStabilityPlot, refs.markersInsightBoard],
     ml: mode === "compare"
       ? [refs.mlComparisonPlot, refs.mlComparisonShell, refs.mlMetaBanner]
       : [refs.mlImportancePlot, refs.mlMetaBanner, refs.mlInsightBoard],

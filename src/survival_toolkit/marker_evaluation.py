@@ -240,7 +240,11 @@ def prepare_marker_cohort(
         else:
             kept.append(index)
     if not kept:
-        raise ValueError("No usable markers remain after removing constant, near-constant or mostly missing columns.")
+        reasons = "; ".join(f"{item['marker']} ({item['reason']})" for item in dropped[:5])
+        raise ValueError(
+            f"No usable markers remain: {reasons}{' ...' if len(dropped) > 5 else ''}. "
+            f"Markers may have at most {max_missing_fraction:.0%} missing values and need more than one common value."
+        )
 
     clinical_design = None
     clinical_names: list[str] = []

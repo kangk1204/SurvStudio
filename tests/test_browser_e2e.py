@@ -1747,6 +1747,9 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             page.locator('[data-tab="markers"]').click()
             _assert_tab_active(page, "markers")
 
+            # With no column ticked, the attached file alone must enable Run.
+            page.locator("#clearMarkersButton").click()
+            assert page.locator("#runMarkersButton").is_disabled()
             page.locator("#markerMatrixDetails > summary").click()
             assert page.locator("#markerMatrixIdColumn").input_value() == "patient_id"
             page.locator("#markerMatrixFile").set_input_files(str(matrix_path))
@@ -1756,6 +1759,7 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             assert "21 markers from expression.tsv" in page.locator("#markerSelectionLine").inner_text()
             assert page.locator("#selectAllMarkersButton").is_disabled()
             assert page.locator("#attachMarkerMatrixButton").is_disabled()
+            assert page.locator("#runMarkersButton").is_enabled()
 
             page.locator("#panel-markers .options-details > summary").click()
             page.locator("#markerPermutations").fill("99")
@@ -1769,6 +1773,7 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             page.locator("#removeMarkerMatrixButton").click()
             assert page.locator("#markerMatrixStatus").is_hidden()
             assert page.locator("#selectAllMarkersButton").is_enabled()
+            assert page.locator("#runMarkersButton").is_disabled()
             page.wait_for_function("document.querySelector('[data-run-status=\"markers\"]').textContent === 'Settings changed'")
 
             browser.close()

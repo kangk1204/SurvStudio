@@ -21,6 +21,7 @@ import shutil
 import tempfile
 import threading
 import time
+import zlib
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, NamedTuple, Sequence
@@ -75,16 +76,34 @@ def matrix_format(filename: str) -> tuple[str, bool]:
 
 
 def _gunzip(source: Path, target: Path) -> None:
+    # A full or over-quota temporary disk must not be reported as a damaged upload, so reading
+    # the archive and writing the unpacked copy fail with different messages.
+    def write_failed(exc: OSError) -> UserInputError:
+        return UserInputError(
+            f"The unpacked matrix could not be written to {target.parent} ({exc.strerror or exc}). "
+            "Free space there, or set TMPDIR to a folder on a larger disk and restart SurvStudio."
+        )
+
     written = 0
     try:
-        with gzip.open(source, "rb") as packed, target.open("wb") as plain:
-            while chunk := packed.read(1 << 20):
-                written += len(chunk)
-                if written > MAX_DECOMPRESSED_BYTES:
-                    raise UserInputError(f"The compressed matrix unpacks to more than {MAX_DECOMPRESSED_BYTES // 1024 ** 3} GB.")
+        plain = target.open("wb")
+    except OSError as exc:
+        raise write_failed(exc) from exc
+    with gzip.open(source, "rb") as packed, plain:
+        while True:
+            try:
+                chunk = packed.read(1 << 20)
+            except (OSError, EOFError, zlib.error) as exc:
+                raise UserInputError("The .gz file could not be unpacked; is it a gzip-compressed text file?") from exc
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > MAX_DECOMPRESSED_BYTES:
+                raise UserInputError(f"The compressed matrix unpacks to more than {MAX_DECOMPRESSED_BYTES // 1024 ** 3} GB.")
+            try:
                 plain.write(chunk)
-    except (OSError, EOFError) as exc:
-        raise UserInputError("The .gz file could not be unpacked; is it a gzip-compressed text file?") from exc
+            except OSError as exc:
+                raise write_failed(exc) from exc
 
 
 def _sniffed_suffix(path: Path) -> str:

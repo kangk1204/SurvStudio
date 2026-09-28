@@ -797,7 +797,9 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
     assert 'Select at least one covariate for the Cox model.' in text
     assert 'Select at least one variable for the cohort table.' in text
     assert '!endpointReady || !hasMarkers || isScopeBusy("km")' in text
-    assert '!endpointReady || !hasMarkers || isScopeBusy("markers")' in text
+    # The marker evaluation also runs on an attached marker file with no column ticked.
+    assert '!endpointReady || !hasEvaluationMarkers || isScopeBusy("markers")' in text
+    assert 'hasMarkers || (typeof markerMatrixAttached === "function" && markerMatrixAttached())' in text
     assert '!endpointReady || !hasCoxCovariates || isScopeBusy("cox")' in text
     assert '!endpointReady || !hasTableVariables || isScopeBusy("tables")' in text
     assert 'cohortVariableSearchInput: document.getElementById("cohortVariableSearchInput"),' in text
@@ -7142,6 +7144,7 @@ def test_index_exposes_the_markers_tab_with_validation_and_exploratory_search() 
         "runMarkersButton",
         "markerChecklist",
         "markerClinicalChecklist",
+        "markersSummaryPlot",
         "markersStabilityPlot",
         "markersRankPlot",
         "markersTableShell",

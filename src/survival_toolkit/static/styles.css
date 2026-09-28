@@ -1941,9 +1941,35 @@ h3 {
 }
 
 .benchmark-table-note {
+  flex: 1 1 320px;
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.4;
+}
+
+.benchmark-note-details {
+  margin-top: 4px;
+}
+
+/* The note grows downward when its method notes open; the heading and Export stay at the top. */
+.table-card-head:has(.benchmark-note-details) {
+  align-items: flex-start;
+}
+
+.benchmark-note-details > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.benchmark-note-details ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.benchmark-note-details li + li {
+  margin-top: 3px;
 }
 
 .benchmark-table th,
@@ -2172,6 +2198,13 @@ tr:nth-child(even) td {
 
 .check-item input {
   width: auto;
+}
+
+.check-item-note {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .check-item.hidden-by-filter {

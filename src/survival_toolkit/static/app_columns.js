@@ -665,7 +665,7 @@ function updateEventPositiveOptions() {
   updateEventColumnGuidance();
 }
 
-function renderChecklist(container, values, selected = []) {
+function renderChecklist(container, values, selected = [], notes = {}) {
   if (!container) return;
   container.innerHTML = "";
   values.forEach((value) => {
@@ -679,6 +679,12 @@ function renderChecklist(container, values, selected = []) {
     const span = document.createElement("span");
     span.textContent = value;
     label.append(input, span);
+    if (notes[value]) {
+      const note = document.createElement("small");
+      note.className = "check-item-note";
+      note.textContent = notes[value];
+      label.appendChild(note);
+    }
     container.appendChild(label);
   });
   applyChecklistSearch(container);

@@ -571,6 +571,7 @@ function resizeVisiblePlotsNow() {
 function allPlotRefs() {
   return [
     refs.kmPlot,
+    refs.markersSummaryPlot,
     refs.markersStabilityPlot,
     refs.markersRankPlot,
     refs.markerValidationPlot,

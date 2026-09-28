@@ -319,7 +319,15 @@ def fit_cox(
     iterations = 0
     for iterations in range(1, max_iterations + 1):
         score, information = _score_and_information_at(time, event, design, codes, design @ beta, ties)
-        step = np.linalg.lstsq(information, score, rcond=None)[0]
+        # A diverging fit (monotone likelihood, as for a heavy-tailed marker that separates the
+        # events) can leave the information non-finite; it then ends as not converged instead of
+        # failing the whole marker screen.
+        if not (np.all(np.isfinite(score)) and np.all(np.isfinite(information))):
+            break
+        try:
+            step = np.linalg.lstsq(information, score, rcond=None)[0]
+        except np.linalg.LinAlgError:
+            break
         if not np.all(np.isfinite(step)):
             break
         for _ in range(40):
@@ -336,11 +344,18 @@ def fit_cox(
             converged = True
             break
     _, information = _score_and_information_at(time, event, design, codes, design @ beta, ties)
-    try:
-        covariance = np.linalg.inv(information)
-    except np.linalg.LinAlgError:
-        covariance = np.linalg.pinv(information)
+    if not np.all(np.isfinite(information)):
+        covariance = np.full_like(information, np.nan)
         converged = False
+    else:
+        try:
+            covariance = np.linalg.inv(information)
+        except np.linalg.LinAlgError:
+            try:
+                covariance = np.linalg.pinv(information)
+            except np.linalg.LinAlgError:
+                covariance = np.full_like(information, np.nan)
+            converged = False
     return CoxFit(beta=beta, covariance=covariance, loglik=float(loglik), converged=converged, iterations=iterations)
 
 
