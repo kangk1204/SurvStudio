@@ -689,10 +689,14 @@ function updateEventPositiveOptions() {
   const eventColumn = refs.eventColumn.value;
   const meta = getColumnMeta(eventColumn);
   const values = meta?.unique_preview?.filter((value) => value !== null) ?? [];
-  const preserveSelection = refs.eventColumn?.dataset?.lastColumn === eventColumn;
+  // The chosen event value is kept only for the same column of the same dataset: "status" is coded 1 = event
+  // in one dataset (veteran, 0/1) and 1 = censored in another (lung, 1/2). A derived snapshot or a history
+  // entry restores its own value through applyControlSnapshot.
+  const selectionKey = JSON.stringify([state.dataset?.dataset_id ?? "", eventColumn]);
+  const preserveSelection = refs.eventColumn?.dataset?.eventValueKey === selectionKey;
   const previousValue = preserveSelection ? refs.eventPositiveValue.value : "";
   const eventColumnWarning = currentEventColumnWarning();
-  if (refs.eventColumn) refs.eventColumn.dataset.lastColumn = eventColumn;
+  if (refs.eventColumn) refs.eventColumn.dataset.eventValueKey = selectionKey;
   refs.eventPositiveValue.innerHTML = "";
   if (values.length === 0) {
     // Without observed values there is nothing safe to default to; require an explicit choice.
