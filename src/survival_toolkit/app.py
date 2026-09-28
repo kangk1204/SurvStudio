@@ -238,6 +238,8 @@ def _configured_request_hosts(bind_host: str, allowed_hosts: str) -> tuple[froze
     bind = _normalize_hostname(bind_host)
     if bind in _WILDCARD_BIND_HOSTS:
         hosts.update(_local_interface_hostnames())
+        # A page opened as http://0.0.0.0:<port> (or [::]) reaches this server and sends that literal as its Host.
+        hosts.update(_WILDCARD_BIND_HOSTS)
     elif bind:
         hosts.add(bind)
     return frozenset(hosts), allow_any

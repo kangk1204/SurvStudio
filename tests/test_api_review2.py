@@ -866,6 +866,31 @@ def test_prediction_blocks_with_integers_beyond_float_range_are_422(field: str) 
     assert "finite" in _detail(response)
 
 
+@pytest.mark.parametrize("bind", ["0.0.0.0", "::"])
+def test_wildcard_binds_answer_requests_addressed_to_the_wildcard_literal(monkeypatch: pytest.MonkeyPatch, bind: str) -> None:
+    monkeypatch.setattr(app_module, "_local_interface_hostnames", lambda: {"192.168.1.20"})
+    monkeypatch.setenv(app_module.BIND_HOST_ENV_VAR, bind)
+    monkeypatch.setenv(app_module.ALLOWED_HOSTS_ENV_VAR, "")
+    app_module._configured_request_hosts.cache_clear()
+    try:
+        for host in ("0.0.0.0:8000", "[::]:8000"):
+            assert client.get("/api/health", headers={"Host": host}).status_code == 200, host
+        # State-changing requests still need an Origin that matches the Host.
+        same_origin = client.post("/api/load-example", headers={"Host": "0.0.0.0:8000", "Origin": "http://0.0.0.0:8000"})
+        assert same_origin.status_code == 200, same_origin.text
+        cross_site = client.post("/api/load-example", headers={"Host": "0.0.0.0:8000", "Origin": "http://evil.example"})
+        assert cross_site.status_code == 403
+    finally:
+        app_module._configured_request_hosts.cache_clear()
+
+    monkeypatch.setenv(app_module.BIND_HOST_ENV_VAR, "127.0.0.1")
+    app_module._configured_request_hosts.cache_clear()
+    try:
+        assert client.get("/api/health", headers={"Host": "0.0.0.0:8000"}).status_code == 400
+    finally:
+        app_module._configured_request_hosts.cache_clear()
+
+
 # ── Request body limits on JSON routes ──────────────────────────
 
 
