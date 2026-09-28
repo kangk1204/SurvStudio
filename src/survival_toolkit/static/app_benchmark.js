@@ -746,13 +746,15 @@
 
     function intervalDetail(board) {
       if (board.intervals?.status !== "ready") return "";
-      const referenceName = intervalReferenceName(board.intervals.result);
-      const paired = referenceName
+      const result = board.intervals.result || {};
+      const referenceName = intervalReferenceName(result);
+      // With a reference model, how its paired ΔC reads; without one, the server's note on why there is no ΔC.
+      const reference = referenceName
         ? `ΔC vs ${referenceName} is paired: every draw scores all models on the same resampled patients, so a model whose ΔC interval contains 0 is not distinguishable from ${referenceName} on this split.`
-        : "";
+        : String(result.reference_note || "").trim();
       // The server caps the draws by a work budget and says so; the reader should know the intervals used fewer.
-      const budget = board.intervals.result?.bootstrap_note;
-      return [paired, budget].filter(Boolean).join(" ");
+      const budget = result.bootstrap_note;
+      return [reference, budget].filter(Boolean).join(" ");
     }
 
     // One line stays in view; everything a reader needs only when writing up folds into "Method notes".

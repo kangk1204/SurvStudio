@@ -167,6 +167,9 @@ def test_a_board_without_cox_ph_shows_no_delta_c_column(tmp_path: Path, example_
     dl_only = client.post("/api/model-comparison-intervals", json={"predictions": [compare_payloads["dl"]["test_predictions"]]})
     assert dl_only.status_code == 200, dl_only.text
     assert dl_only.json()["reference"] is None
+    # The server says why there is no reference (and the note is data: it must stay inert text).
+    reference_note = "Cox PH is not among these <models>, so no difference to a reference is reported."
+    dl_only_payload = {**dl_only.json(), "reference_note": reference_note}
     result = _run_page(tmp_path, r"""
       await loadDataset(page, fixtures.dataset);
       page.fetchHandler = (request) => {
@@ -181,14 +184,17 @@ def test_a_board_without_cox_ph_shows_no_delta_c_column(tmp_path: Path, example_
         headers: page.run("refs.benchmarkComparisonShell.querySelectorAll('th').map((th) => th.textContent.trim())"),
         cells: page.run("refs.benchmarkComparisonShell.querySelectorAll('tbody tr')[0].children.length"),
         note: page.run("refs.benchmarkTableNote.textContent"),
+        noteHtml: page.run("refs.benchmarkTableNote.innerHTML"),
         shapes: page.run("(refs.benchmarkComparisonPlot.layout?.shapes || []).length"),
       };
-    """, dataset=example_dataset, compare=compare_payloads, dlOnly=dl_only.json())
+    """, dataset=example_dataset, compare=compare_payloads, dlOnly=dl_only_payload)
 
     assert "95% CI" in result["headers"]
     assert not any("ΔC" in header for header in result["headers"])
     assert result["cells"] == len(result["headers"])
     assert "ΔC vs Cox PH is paired" not in result["note"]
+    assert reference_note in result["note"]
+    assert "&lt;models&gt;" in result["noteHtml"]
 
     with_cox = _run_page(tmp_path, _compare_all_script(r"""
       return {
