@@ -1109,12 +1109,21 @@ def _legacy_recipe_hash(recipe: dict[str, Any]) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _centred_baseline(time: np.ndarray, event: np.ndarray, linear_predictor: np.ndarray) -> dict[str, Any] | None:
-    """Breslow cumulative baseline hazard at the development mean linear predictor, stored on the log scale.
+def _centred_baseline(
+    time: np.ndarray,
+    event: np.ndarray,
+    linear_predictor: np.ndarray,
+    ties: str = "efron",
+) -> dict[str, Any] | None:
+    """Cumulative baseline hazard at the development mean linear predictor, stored on the log scale.
 
     Stored at a linear predictor of 0 instead, the baseline underflows (or rounds to 1) whenever the
     markers sit far from 0, as log2 expression values do: a mean linear predictor of -9 multiplies the
     cumulative hazard by e^9. Centred, it stays near the cohort's own cumulative hazard.
+
+    The increments follow the model's tie method, as R's ``survfit.coxph`` does: d deaths tied at a time
+    add d / S0 with Breslow ties and sum_k 1 / (S0 - (k / d) S0_dead), k = 0..d-1, with Efron ties, where
+    S0 sums the risk of everyone at risk and S0_dead that of the d deaths. Without tied deaths they agree.
     """
     centre = float(np.mean(linear_predictor))
     risk = np.exp(np.clip(linear_predictor - centre, -_LP_CLIP, _LP_CLIP))
@@ -1124,10 +1133,20 @@ def _centred_baseline(time: np.ndarray, event: np.ndarray, linear_predictor: np.
         return None
     order = np.argsort(time, kind="mergesort")
     at_risk = np.cumsum(risk[order][::-1])[::-1][np.searchsorted(time[order], event_times, side="left")]
-    deaths = np.bincount(np.searchsorted(event_times, time[died]), minlength=event_times.size).astype(float)
+    group = np.searchsorted(event_times, time[died])
+    deaths = np.bincount(group, minlength=event_times.size).astype(float)
+    if ties == "efron":
+        dead_risk = np.bincount(group, weights=risk[died], minlength=event_times.size)
+        by_time = np.sort(group, kind="mergesort")
+        # Rank k = 0..d-1 of each death among those tied with it.
+        rank = np.arange(by_time.size) - np.searchsorted(by_time, by_time, side="left")
+        shares = 1.0 / (at_risk[by_time] - rank / deaths[by_time] * dead_risk[by_time])
+        increments = np.bincount(by_time, weights=shares, minlength=event_times.size)
+    else:
+        increments = deaths / at_risk
     return {
         "times": event_times,
-        "log_cumulative_hazard": np.log(np.cumsum(deaths / at_risk)),
+        "log_cumulative_hazard": np.log(np.cumsum(increments)),
         "lp_center": centre,
     }
 
@@ -1178,7 +1197,7 @@ def freeze_recipe(
     linear_predictor = _signature_risk(cohort, all_rows, signature)
     baseline = None
     if cohort.strata is None:
-        baseline = _centred_baseline(cohort.time, cohort.event, linear_predictor)
+        baseline = _centred_baseline(cohort.time, cohort.event, linear_predictor, ties)
     clinical_only = None
     # Also locked when no marker was selected: the model is then the clinical model itself, and validation
     # reports its gain over the clinical covariates as exactly zero instead of leaving it out.

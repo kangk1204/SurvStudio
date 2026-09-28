@@ -293,6 +293,59 @@ def test_validation_refuses_locked_markers_with_infinite_values() -> None:
     assert any("5 missing signal value(s) imputed" in note for note in report["notes"])
 
 
+# 5: the locked baseline hazard follows the model's tie method.
+
+# R survival 3.8.6:
+#   i <- 1:60; time <- ((37 * i) %% 23) + 1; x <- sin(1.7 * i) - time / 10; event <- as.integer(i %% 4 != 0)
+#   f <- coxph(Surv(time, event) ~ x, ties = ties); s <- survfit(f, newdata = data.frame(x = mean(x)))
+#   s$cumhaz[s$n.event > 0]   (every time 1..23 has a death; most have several)
+_R_BASELINE = {
+    "efron": {
+        "beta": 0.89861411337,
+        "cumhaz": [
+            0.0234186791053, 0.0496052179763, 0.0783249943705, 0.111022446536, 0.129065821273, 0.168319264516,
+            0.234404736289, 0.284179111845, 0.312778662447, 0.373940784826, 0.442529225967, 0.524515459546,
+            0.614912296514, 0.72580282408, 0.858817783067, 1.01926190427, 1.32363711309, 1.44995442503,
+            1.61113490936, 2.21976363837, 2.81108784645, 4.17437804361, 7.92477506675,
+        ],
+    },
+    "breslow": {
+        "beta": 0.870160358567,
+        "cumhaz": [
+            0.0232564590924, 0.0494236332584, 0.0783890970939, 0.110547457715, 0.128800909522, 0.168068813843,
+            0.231461085568, 0.280880285682, 0.309595527764, 0.369371561866, 0.436102971129, 0.516378917604,
+            0.605347671812, 0.710859331425, 0.838206010011, 0.994829515336, 1.266789515, 1.39137185446,
+            1.54978190049, 2.07275474696, 2.60828623071, 3.7745637469, 6.21394170385,
+        ],
+    },
+}
+
+
+@pytest.mark.parametrize("ties", ["efron", "breslow"])
+def test_the_locked_baseline_hazard_matches_r_survfit_for_either_tie_method(ties: str) -> None:
+    i = np.arange(1, 61, dtype=float)
+    time = (37 * i) % 23 + 1
+    x = np.sin(1.7 * i) - time / 10
+    event = (i % 4 != 0).astype(int)
+    expected = _R_BASELINE[ties]
+    fit = fit_cox(time, event, x, None, ties)
+    assert fit.beta[0] == pytest.approx(expected["beta"], rel=1e-8)
+    baseline = marker_evaluation._centred_baseline(time, event, fit.beta[0] * x, ties)
+    assert baseline["times"].tolist() == list(range(1, 24))
+    # With Efron ties the Breslow increments gave 6.21 instead of R's 7.92 at the last time.
+    assert np.exp(baseline["log_cumulative_hazard"]) == pytest.approx(expected["cumhaz"], rel=1e-7)
+
+
+def test_without_tied_deaths_the_efron_baseline_is_the_breslow_one() -> None:
+    rng = np.random.default_rng(6)
+    time = rng.exponential(size=80)
+    event = rng.integers(0, 2, size=80)
+    linear_predictor = rng.normal(size=80)
+    efron = marker_evaluation._centred_baseline(time, event, linear_predictor, "efron")
+    breslow = marker_evaluation._centred_baseline(time, event, linear_predictor, "breslow")
+    assert np.array_equal(efron["log_cumulative_hazard"], breslow["log_cumulative_hazard"])
+
+
 # 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
 
 
