@@ -300,3 +300,88 @@ def test_attainable_permutation_p_follows_the_valid_shuffles() -> None:
     best_split, search_space = _summary_inputs(**{"Permutation valid resamples": 15})
     cautions = analysis._signature_scientific_summary(best_split, search_space)["cautions"]
     assert any("With 15 valid permutations the smallest attainable permutation p is 0.0625" in caution for caution in cautions)
+
+
+# ---------------------------------------------------------------------------------------
+# Kaplan-Meier tests (R5#2, R5#4, R5#9)
+
+
+def _pairs(result: dict) -> dict[str, dict]:
+    return {row["Comparison"]: row for row in result["pairwise_table"]}
+
+
+def test_zero_variance_pair_is_not_testable_and_the_other_tests_match_r() -> None:
+    # A and B each hold one patient dying at time 5: their pair has zero log-rank variance and
+    # R's survdiff stops with "system is exactly singular"; the global and other pairs are fine.
+    frame = pd.DataFrame(
+        {
+            "time": [5.0, 5.0, 1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0, 9.0],
+            "event": [1, 1, 1, 0, 1, 0, 1, 1, 0, 1],
+            "g": ["A", "B"] + ["C"] * 8,
+        }
+    )
+    km = analysis.compute_km_analysis(frame, "time", "event", group_column="g")
+    assert km["test"]["chisq"] == pytest.approx(1.10983800869, rel=1e-10)
+    assert km["test"]["p_value"] == pytest.approx(0.574118760438, rel=1e-10)
+    pairs = _pairs(km)
+    untestable = pairs["A vs B"]
+    assert untestable["Chi-square"] is None and untestable["P value"] is None and untestable["BH adjusted p"] is None
+    assert untestable["Note"] == "Not testable: zero log-rank variance"
+    for name in ("A vs C", "B vs C"):
+        assert pairs[name]["Chi-square"] == pytest.approx(0.782107545075, rel=1e-10)
+        assert pairs[name]["P value"] == pytest.approx(0.376497351651, rel=1e-10)
+        assert pairs[name]["Note"] == ""
+        # BH over the two testable pairs only.
+        assert pairs[name]["BH adjusted p"] == pytest.approx(0.376497351651, rel=1e-10)
+    assert any("1 pairwise comparison(s) could not be tested" in caution for caution in km["scientific_summary"]["cautions"])
+    fleming = analysis.compute_km_analysis(frame, "time", "event", group_column="g", logrank_weight="fleming_harrington", fh_p=1.0)
+    assert fleming["test"]["chisq"] == pytest.approx(0.733740314628, rel=1e-10)
+
+
+def test_all_tied_events_keep_the_global_test_and_a_singular_global_test_is_reported() -> None:
+    frame = pd.DataFrame({"time": [3.0, 3.0, 3.0, 3.0, 9.0], "event": [1, 1, 1, 1, 0], "g": ["A", "A", "B", "B", "C"]})
+    km = analysis.compute_km_analysis(frame, "time", "event", group_column="g")
+    # R: chisq 4 on 2 df; A vs C and B vs C chisq 2; A vs B cannot be tested.
+    assert km["test"]["chisq"] == pytest.approx(4.0, rel=1e-12)
+    assert km["test"]["p_value"] == pytest.approx(0.135335283237, rel=1e-10)
+    pairs = _pairs(km)
+    assert pairs["A vs B"]["P value"] is None
+    assert pairs["A vs C"]["Chi-square"] == pytest.approx(2.0) and pairs["A vs C"]["P value"] == pytest.approx(0.15729920705, rel=1e-10)
+
+    singular = analysis.compute_km_analysis(frame.iloc[:4], "time", "event", group_column="g")
+    assert singular["test"] is None and singular["test_p_value"] is None and singular["logrank_p"] is None
+    assert [row["P value"] for row in singular["pairwise_table"]] == [None]
+    summary = singular["scientific_summary"]
+    assert "could not be computed" in summary["headline"]
+    assert any("global between-group test could not be computed" in caution for caution in summary["cautions"])
+    assert singular["curves"] and singular["summary_table"]
+
+
+def test_log_rank_p_values_are_upper_tails_that_do_not_round_to_zero() -> None:
+    frame = pd.DataFrame(
+        {
+            "time": np.concatenate([np.arange(1.0, 61.0), np.arange(61.0, 121.0), np.arange(121.0, 151.0)]),
+            "event": [1] * 120 + [1, 0] * 15,
+            "g": ["A"] * 60 + ["B"] * 60 + ["C"] * 30,
+        }
+    )
+    km = analysis.compute_km_analysis(frame, "time", "event", group_column="g")
+    # R: survdiff chisq 253.403569097 on 2 df, pchisq(lower.tail = FALSE) 9.42137137286e-56.
+    assert km["test"]["chisq"] == pytest.approx(253.403569097, rel=1e-10)
+    assert km["test"]["p_value"] == pytest.approx(9.42137137286e-56, rel=1e-8)
+    assert km["logrank_p"] == km["test"]["p_value"]
+    pairs = _pairs(km)
+    assert pairs["A vs B"]["P value"] == pytest.approx(1.35704429185e-33, rel=1e-8)
+    assert pairs["A vs C"]["P value"] == pytest.approx(1.7781747131e-19, rel=1e-8)
+    assert pairs["A vs B"]["BH adjusted p"] > 0.0
+
+
+def test_pairwise_log_rank_loop_stops_when_the_request_is_cancelled(monkeypatch) -> None:
+    frame = pd.DataFrame({"time": np.arange(1.0, 31.0), "event": [1, 0, 1] * 10, "g": ["A", "B", "C"] * 10})
+
+    def _cancelled() -> None:
+        raise JobCancelledError("stop")
+
+    monkeypatch.setattr(analysis, "raise_if_cancelled", _cancelled)
+    with pytest.raises(JobCancelledError):
+        analysis.compute_km_analysis(frame, "time", "event", group_column="g")

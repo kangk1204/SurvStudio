@@ -3866,6 +3866,7 @@ def _km_scientific_summary(
     rmst_contrast: dict[str, Any] | None = None,
     rmst_horizon: float | None = None,
     display_horizon: float | None = None,
+    global_test_untestable: bool = False,
 ) -> dict[str, Any]:
     group_count = len(summary_rows)
     min_group_n = min(int(row["N"]) for row in summary_rows)
@@ -3897,7 +3898,7 @@ def _km_scientific_summary(
         if test_payload is not None:
             test_name = _weighted_test_label(test_payload["test"], fh_p=fh_p)
             strengths.append(f"Global {test_name} comparison was run across {group_count} groups.")
-        elif not single_group:
+        elif not single_group and not global_test_untestable:
             strengths.append("Survival was estimated per group; between-group hypothesis tests were not run for this grouping.")
         if (
             rmst_horizon is not None
@@ -3913,6 +3914,20 @@ def _km_scientific_summary(
                 "Pairwise BH-adjusted comparisons are shown alongside the global test, so pre-specify in the manuscript how omnibus and pairwise evidence will be interpreted."
             )
             standing_cautions += 1
+        # Data-driven cautions follow the standing notes counted above.
+        if global_test_untestable:
+            cautions.append(
+                "The global between-group test could not be computed because its log-rank variance is singular "
+                "(for example every event of the compared groups falls at one time that nobody at risk survives); "
+                "R's survdiff stops with an error on such data."
+            )
+        untestable_pairs = [str(row.get("Comparison")) for row in pairwise_rows if row.get("P value") is None]
+        if untestable_pairs:
+            cautions.append(
+                f"{len(untestable_pairs)} pairwise comparison(s) could not be tested because their log-rank variance is zero "
+                f"(for example every event of both groups at one time that nobody at risk survives): "
+                f"{_summarize_labels(untestable_pairs, max_items=3)}. They are left out of the BH adjustment."
+            )
     elif group_column and outcome_informed_group:
         strengths.append("Outcome-informed groups were visualized descriptively without a fresh between-group hypothesis test.")
     else:
@@ -3964,6 +3979,9 @@ def _km_scientific_summary(
     elif single_group:
         headline = f"Only one group of {group_column} was observed, so survival was estimated for a single cohort without a between-group test."
         next_steps.append(f"Check {group_column}: every analyzable row has the same value, so it cannot compare subcohorts.")
+    elif group_column and global_test_untestable:
+        headline = "Survival was estimated per group, but the global between-group test could not be computed on these data."
+        next_steps.append("Merge or leave out the groups whose events all fall at one time before testing the curves formally.")
     elif group_column:
         headline = "Survival was estimated per group without a between-group hypothesis test."
         next_steps.append("Run the between-group test before comparing the curves formally.")
@@ -6665,6 +6683,9 @@ def _km_group_estimates(
     return summary_row, dict(risk_row), curve, rmst_stats
 
 
+_KM_NOT_TESTABLE_NOTE = "Not testable: zero log-rank variance"
+
+
 def _km_group_tests(
     frame: pd.DataFrame,
     group_labels: Sequence[str],
@@ -6674,15 +6695,23 @@ def _km_group_tests(
     group_column: str,
     logrank_weight: str,
     fh_p: float,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """The global weighted log-rank test plus BH-adjusted pairwise tests."""
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """The global weighted log-rank test plus BH-adjusted pairwise tests.
+
+    A comparison whose log-rank variance is zero (for example two groups whose every event
+    falls at one time that nobody at risk survives) cannot be tested; R's survdiff stops with an
+    error there. Such a pair is reported with no statistic and a note, and left out of the BH
+    adjustment; when the global test itself cannot be computed it is returned as None. P-values
+    are upper chi-square tails (``chi2.sf``), which stay positive for strong separation where
+    ``1 - chi2.cdf`` rounds to 0.
+    """
     time_values = frame[time_column].to_numpy(dtype=float)
     event_values = frame[event_column].to_numpy(dtype=int)
     group_values = frame[group_column].astype(str).to_numpy()
     weight_type = KM_WEIGHT_MAP[logrank_weight]
     kwargs: dict[str, Any] = {"fh_p": fh_p} if weight_type == "fh" else {}
 
-    def _weighted_test(mask: np.ndarray | None) -> tuple[float, float]:
+    def _weighted_test(mask: np.ndarray | None) -> tuple[float, float] | None:
         rows = np.ones(time_values.shape[0], dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
         times, events, groups = time_values[rows], event_values[rows], group_values[rows]
         # As R's survdiff does, groups with no one at risk at any event time (zero expected
@@ -6697,30 +6726,42 @@ def _km_group_tests(
         if len(at_risk_groups) < len(set(groups.tolist())):
             keep = np.isin(groups, sorted(at_risk_groups))
             times, events, groups = times[keep], events[keep], groups[keep]
-        # Fleming-Harrington weights take log(1 - d/n); when everyone still at risk has the
-        # event that is log(0) = -inf, so S is 0 from then on, as intended.
-        with np.errstate(divide="ignore"):
-            return survdiff(times, events, groups, weight_type=weight_type, **kwargs)
+        try:
+            # Fleming-Harrington weights take log(1 - d/n); when everyone still at risk has the
+            # event that is log(0) = -inf, so S is 0 from then on, as intended.
+            with np.errstate(divide="ignore"):
+                chisq, _ = survdiff(times, events, groups, weight_type=weight_type, **kwargs)
+        except np.linalg.LinAlgError:
+            return None
+        chisq = float(chisq)
+        if not math.isfinite(chisq):
+            return None
+        return chisq, float(stats.chi2.sf(chisq, len(at_risk_groups) - 1))
 
-    chisq, p_value = _weighted_test(None)
-    test_payload = {
-        "test": logrank_weight,
-        "chisq": float(chisq),
-        "p_value": float(p_value),
-    }
+    global_test = _weighted_test(None)
+    test_payload = (
+        None
+        if global_test is None
+        else {"test": logrank_weight, "chisq": global_test[0], "p_value": global_test[1]}
+    )
     pairwise_rows: list[dict[str, Any]] = []
     for left, right in itertools.combinations(group_labels, 2):
-        chisq_pair, p_pair = _weighted_test(frame[group_column].isin([left, right]).to_numpy())
+        raise_if_cancelled()
+        outcome = _weighted_test(frame[group_column].isin([left, right]).to_numpy())
         pairwise_rows.append(
             {
                 "Comparison": f"{left} vs {right}",
-                "Chi-square": float(chisq_pair),
-                "P value": float(p_pair),
+                "Chi-square": None if outcome is None else outcome[0],
+                "P value": None if outcome is None else outcome[1],
             }
         )
-    adjusted = _bh_adjust([row["P value"] for row in pairwise_rows])
+    adjusted = _bh_adjust([np.nan if row["P value"] is None else row["P value"] for row in pairwise_rows])
     for row, adjusted_p in zip(pairwise_rows, adjusted, strict=True):
-        row["BH adjusted p"] = adjusted_p
+        row["BH adjusted p"] = _safe_float(adjusted_p)
+    if any(row["P value"] is None for row in pairwise_rows):
+        # Every row carries the note column, so tables built from the first row show it.
+        for row in pairwise_rows:
+            row["Note"] = _KM_NOT_TESTABLE_NOTE if row["P value"] is None else ""
     return test_payload, pairwise_rows
 
 
@@ -6896,6 +6937,7 @@ def compute_km_analysis(
     suppress_group_inference = bool(suppress_group_inference or outcome_informed_group)
     test_payload = None
     pairwise_rows: list[dict[str, Any]] = []
+    global_test_untestable = False
     if group_column and len(group_labels) >= 2 and not suppress_group_inference:
         test_payload, pairwise_rows = _km_group_tests(
             frame,
@@ -6906,6 +6948,7 @@ def compute_km_analysis(
             logrank_weight=logrank_weight,
             fh_p=fh_p,
         )
+        global_test_untestable = test_payload is None
 
     cohort_summary = _km_cohort_summary(frame, time_column=time_column, event_column=event_column)
     rmst_contrast = _km_rmst_contrast(
@@ -6927,6 +6970,7 @@ def compute_km_analysis(
         rmst_contrast=rmst_contrast,
         rmst_horizon=rmst_horizon,
         display_horizon=display_horizon,
+        global_test_untestable=global_test_untestable,
     )
     duplicate_caution = duplicate_identifier_caution(df)
     if duplicate_caution and isinstance(scientific_summary, dict):
