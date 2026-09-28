@@ -264,12 +264,13 @@ function markerSummary(payload) {
   if (!addedValue) cautions.push("No clinical covariates were given, so markers are judged on marginal association only. Add clinical covariates to test added value.");
   const clinicalOnly = markerModelIsClinicalOnly(signature);
   if (clinicalOnly) cautions.push("No marker was selected, so the final model is the clinical-only model (the clinical covariates alone).");
-  if (signature.signature_optimism != null && Number(signature.signature_optimism) > 0.02) {
+  // Without an apparent C-index there is no fitted full-cohort model, so nothing to call optimistic.
+  if (signature.apparent_c != null && signature.signature_optimism != null && Number(signature.signature_optimism) > 0.02) {
     cautions.push(`The ${clinicalOnly ? "clinical-only" : "selected-marker"} model's apparent C-index is optimistic by about ${Number(signature.signature_optimism).toFixed(3)}; report the corrected value.`);
   }
   const leftOut = markerLeftOutComparison(signature, addedValue);
   if (leftOut && leftOut.gain < 0.02) {
-    cautions.push(leftOut.text + (clinicalOnly ? "" : " The selected markers add little discrimination beyond the clinical covariates."));
+    cautions.push(leftOut.text + (markerModelIsSelectedMarkers(signature) ? " The selected markers add little discrimination beyond the clinical covariates." : ""));
   }
   if ((cohort.dropped_markers || []).length) {
     const dropped = cohort.dropped_markers;
@@ -349,6 +350,12 @@ function markerModelIsClinicalOnly(signature) {
   return signature?.apparent_c != null && Array.isArray(signature?.markers) && !signature.markers.length;
 }
 
+// True when a selected-marker model was fitted in the full cohort (it has an apparent C-index and holds markers),
+// as the server's report reads it; otherwise left-out results describe the whole selection procedure.
+function markerModelIsSelectedMarkers(signature) {
+  return signature?.apparent_c != null && !markerModelIsClinicalOnly(signature);
+}
+
 // The model of the whole procedure against the clinical covariates alone, both in the patients left out of each
 // subsample; with paired subsamples the mean paired gain and their number.
 function markerLeftOutComparison(signature, addedValue) {
@@ -361,9 +368,12 @@ function markerLeftOutComparison(signature, addedValue) {
   const where = Number.isInteger(replicates) && replicates > 0
     ? (replicates === 1 ? "the one subsample that could be scored" : `each of ${formatCount(replicates)} subsamples`)
     : "each subsample";
-  const subject = markerModelIsClinicalOnly(signature)
-    ? "the whole selection procedure (it selected no marker in the full cohort, so the final model is the clinical-only model)"
-    : "the selected-marker model";
+  let subject = "the whole selection procedure";
+  if (markerModelIsSelectedMarkers(signature)) {
+    subject = "the selected-marker model";
+  } else if (markerModelIsClinicalOnly(signature)) {
+    subject = "the whole selection procedure (it selected no marker in the full cohort, so the final model is the clinical-only model)";
+  }
   return {
     gain,
     text: `In the patients left out of ${where}, ${subject} reached C ${formatValue(model)} against ${formatValue(clinical)} for the clinical covariates alone (${gain >= 0 ? "+" : ""}${gain.toFixed(3)}).`,

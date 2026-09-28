@@ -721,6 +721,38 @@ def test_marker_summary_does_not_claim_what_was_not_tested(tmp_path: Path, untes
     assert "Permutations above 0" in no_permutations["next"]
 
 
+def test_the_left_out_c_index_of_an_unfitted_model_is_the_whole_procedures(tmp_path: Path) -> None:
+    """With no full-cohort model (its fit failed), the left-out C-index is the selection procedure's, as on the server."""
+    result = _run_page(tmp_path, r"""
+      const analysis = {
+        primary_lens: "added_value",
+        tier_counts: { robust: 0, suggestive: 0 },
+        cohort: { n: 300, events: 120, n_markers_evaluated: 12 },
+        settings: { alpha: 0.05, robust_frequency: 0.5, robust_direction: 0.9 },
+        resampling: { n_valid: 5, fraction: 0.632, stability_assessed: true },
+        null: { n_permutations: 199, lens2_null: "smith" },
+      };
+      const summarize = (signature) => {
+        page.context.__payload = { analysis: { ...analysis, signature } };
+        const summary = page.run("markerSummary(__payload)");
+        return [...summary.cautions, ...summary.strengths].join(" | ");
+      };
+      const leftOut = { signature_c_left_out: 0.645, clinical_c_left_out: 0.64, signature_gain_left_out: 0.004, n_clinical_replicates: 5, signature_optimism: 0.03 };
+      return {
+        unfitted: summarize({ ...leftOut, markers: [], clinical_only: false, apparent_c: null, optimism_corrected_c: null }),
+        fitted: summarize({ ...leftOut, markers: ["GENE_A"], clinical_only: false, apparent_c: 0.7, optimism_corrected_c: 0.67 }),
+      };
+    """)
+
+    assert "In the patients left out of each of 5 subsamples, the whole selection procedure reached C 0.645 against 0.64" in result["unfitted"]
+    assert "selected-marker" not in result["unfitted"]
+    assert "The selected markers add little" not in result["unfitted"]
+    assert "apparent C-index is optimistic" not in result["unfitted"]
+    assert "In the patients left out of each of 5 subsamples, the selected-marker model reached C 0.645" in result["fitted"]
+    assert "The selected markers add little discrimination beyond the clinical covariates." in result["fitted"]
+    assert "The selected-marker model's apparent C-index is optimistic by about 0.030" in result["fitted"]
+
+
 _MATRIX = "{ matrix_id: 'm1', filename: 'expr.tsv', n_markers: 20, n_matched: 300, n_patients: 360, id_column: 'patient_id' }"
 
 
