@@ -37,6 +37,7 @@ from survival_toolkit.analysis import (
     _safe_float,
 )
 from survival_toolkit.encoding import (
+    canonical_category_values,
     coerce_feature_subset,
     fit_feature_encoder as _fit_shared_feature_encoder,
     ordered_category_values as _ordered_category_values,
@@ -1839,7 +1840,7 @@ def _prepare_training_matrices(
         extra_columns=list(features),
         drop_missing_extra_columns=False,
     )
-    reject_numeric_text_features(frame, features)
+    reject_numeric_text_features(frame, features, list(categorical_features or []))
 
     if internal_evaluation:
         split = _prepare_model_evaluation_split(
@@ -2387,7 +2388,7 @@ def compare_survival_models(
         extra_columns=list(features),
         drop_missing_extra_columns=False,
     )
-    reject_numeric_text_features(frame, features)
+    reject_numeric_text_features(frame, features, list(categorical_features or []))
 
     n_patients = int(frame.shape[0])
     n_events = int(frame[event_column].sum())
@@ -3154,7 +3155,7 @@ def cross_validate_survival_models(
         extra_columns=list(features),
         drop_missing_extra_columns=False,
     )
-    reject_numeric_text_features(frame, features)
+    reject_numeric_text_features(frame, features, list(categorical_features or []))
     resolved_categorical = _resolved_categorical_features(frame, features, categorical_features)
     n_patients = int(frame.shape[0])
     n_events = int(frame[event_column].sum())
@@ -3726,7 +3727,8 @@ def compute_partial_dependence(
                 )
 
             mean_risks: list[float | None] = []
-            category_counts = analysis_frame[feature_name].astype("string").value_counts(dropna=True)
+            # Count by the encoder's canonical labels ("1", not "1.0"), the labels category_values uses.
+            category_counts = canonical_category_values(analysis_frame[feature_name]).value_counts(dropna=True)
             for category in category_values:
                 raise_if_cancelled()
                 frame_variant = analysis_frame.copy()

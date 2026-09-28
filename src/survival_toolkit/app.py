@@ -4205,7 +4205,7 @@ async def deep_model(request_model: DeepModelRequest, request: Request) -> dict[
                     model_name=request_model.model_type.upper(),
                     monitor_loss_history=result.get("monitor_history", result.get("monitor_loss_history")),
                     best_monitor_epoch=result.get("best_monitor_epoch"),
-                    epochs_trained=result.get("epochs_trained"),
+                    epochs_trained=result.get("early_stopping_epochs", result.get("epochs_trained")),
                     max_epochs_requested=result.get("max_epochs_requested"),
                     stopped_early=result.get("stopped_early"),
                     monitor_label=str(result.get("monitor_metric_label", "Monitor loss")),
@@ -4492,6 +4492,9 @@ async def pdp(request_model: PDPRequest, request: Request) -> dict[str, Any]:
                     n_estimators=request_model.n_estimators,
                     max_depth=request_model.max_depth,
                     random_state=request_model.random_state,
+                    # Partial dependence needs only the fitted model; this refit is not cached for reuse.
+                    compute_importance=False,
+                    compute_brier=False,
                 )
                 if request_model.model_type == "gbs":
                     trained = train_gradient_boosted_survival(

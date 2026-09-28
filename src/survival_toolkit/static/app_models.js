@@ -419,6 +419,8 @@ async function runDlModel() {
     const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
     renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning results.");
     const epochsTrained = stats.epochs_trained ?? stats.epochs ?? payload.request_config?.epochs;
+    // The early-stopping run's length; epochs_trained is the refit that produced the reported model.
+    const earlyStoppingEpochs = stats.early_stopping_epochs ?? epochsTrained;
     const dlMetricLabel = stats.evaluation_mode === "repeated_cv"
       ? "Mean repeated-CV C-index"
       : (stats.evaluation_mode === "repeated_cv_incomplete"
@@ -441,8 +443,8 @@ async function runDlModel() {
     const dlTrainingStatus = repeatedCvLike
       ? ""
       : (stats.stopped_early
-        ? `, stopped early at epoch ${formatValue(epochsTrained)}`
-        : (stats.max_epochs_requested != null && Number(epochsTrained) >= Number(stats.max_epochs_requested)
+        ? `, stopped early at epoch ${formatValue(earlyStoppingEpochs)}`
+        : (stats.max_epochs_requested != null && Number(earlyStoppingEpochs) >= Number(stats.max_epochs_requested)
           ? `, trained to max epoch (${formatValue(stats.max_epochs_requested)})`
           : ""));
     const dlBestMonitorSuffix = repeatedCvLike

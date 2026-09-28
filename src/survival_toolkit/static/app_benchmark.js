@@ -716,7 +716,10 @@
 
     function intervalDetail(board) {
       if (board.intervals?.status !== "ready") return "";
-      return "ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients, so a model whose ΔC interval contains 0 is not distinguishable from Cox PH on this split.";
+      const paired = "ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients, so a model whose ΔC interval contains 0 is not distinguishable from Cox PH on this split.";
+      // The server caps the draws by a work budget and says so; the reader should know the intervals used fewer.
+      const budget = board.intervals.result?.bootstrap_note;
+      return budget ? `${paired} ${budget}` : paired;
     }
 
     // One line stays in view; everything a reader needs only when writing up folds into "Method notes".

@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 
 from survival_toolkit.encoding import (
+    canonical_category_values,
     fit_feature_encoder as _fit_shared_feature_encoder,
     reject_numeric_text_features,
     transform_feature_encoder as _transform_shared_feature_encoder,
@@ -427,10 +428,11 @@ def _coerce_deep_frame(
         frame[event_column] = coerce_event(frame[event_column], event_positive_value=event_positive_value)
         # Split passes skip this: the full frame was checked, and the training split is
         # checked again by the shared encoder, exactly as for the ML models.
-        reject_numeric_text_features(frame, features)
+        reject_numeric_text_features(frame, features, categorical_features)
     for col in features:
         if col in categorical_features:
-            frame[col] = frame[col].astype("string")
+            # The encoder's canonical labels ("1", not "1.0" when a blank made the codes decimal), as for ML.
+            frame[col] = canonical_category_values(frame[col]).astype("string")
             continue
         raw_values = frame[col]
         if event_already_coded and isinstance(raw_values.dtype, pd.StringDtype):
