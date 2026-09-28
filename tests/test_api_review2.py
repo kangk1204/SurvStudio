@@ -621,3 +621,58 @@ def test_incomplete_recipes_are_user_errors_but_library_lookup_errors_are_not(mo
     lenient = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
     response = lenient.post("/api/marker-validation", json={"dataset_id": dataset_id, "recipe": recipe, "n_bootstrap": 0})
     assert response.status_code == 500, response.text
+
+
+# ── Outcome information and outcome columns ─────────────────────
+
+
+def test_a_group_cut_from_an_outcome_informed_column_is_outcome_informed() -> None:
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    # Numeric labels let a median split re-cut the outcome-informed groups; that split needs the
+    # larger group coded 0, which depends on where the cutpoint falls, so both codings are tried.
+    for lower_label, upper_label in (("0", "1"), ("1", "0")):
+        optimal = client.post(
+            "/api/derive-group",
+            json={
+                "dataset_id": dataset_id,
+                "source_column": "biomarker_score",
+                "method": "optimal_cutpoint",
+                "time_column": "os_months",
+                "event_column": "os_event",
+                "lower_label": lower_label,
+                "upper_label": upper_label,
+                "permutation_iterations": 0,
+            },
+        )
+        assert optimal.status_code == 200, optimal.text
+        informed = optimal.json()["derived_column"]
+        laundered = client.post(
+            "/api/derive-group",
+            json={"dataset_id": optimal.json()["dataset_id"], "source_column": informed, "method": "median_split", "new_column_name": "laundered"},
+        )
+        if laundered.status_code == 200:
+            break
+    assert laundered.status_code == 200, laundered.text
+    payload = laundered.json()
+    assert payload["derived_column_provenance"]["laundered"]["outcome_informed"] is True
+    assert payload["derive_summary"]["outcome_informed"] is True
+    assert payload["derive_summary"]["recipe"]["outcome_informed"] is True
+
+    cox = client.post(
+        "/api/cox",
+        json={
+            "dataset_id": payload["dataset_id"],
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "covariates": ["laundered"],
+            "categorical_covariates": ["laundered"],
+        },
+    )
+    assert cox.status_code == 400, cox.text
+    assert "Outcome-informed" in _detail(cox)
+    km = client.post(
+        "/api/kaplan-meier",
+        json={"dataset_id": payload["dataset_id"], "time_column": "os_months", "event_column": "os_event", "group_column": "laundered"},
+    )
+    assert km.status_code == 200, km.text
+    assert km.json()["analysis"]["outcome_informed_group"] is True

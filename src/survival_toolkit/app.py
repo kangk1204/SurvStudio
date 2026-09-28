@@ -3846,6 +3846,13 @@ async def derive_group(request_model: DeriveGroupRequest, request: Request) -> d
                 permutation_iterations=request_model.permutation_iterations,
                 random_seed=request_model.random_seed,
             )
+            # Groups cut from an outcome-informed column (an optimal cutpoint or a signature) carry the
+            # outcome information on, whatever the method of the new cut.
+            if not summary.get("outcome_informed") and str(request_model.source_column) in _outcome_informed_columns(stored):
+                summary["outcome_informed"] = True
+                summary["outcome_informed_source"] = str(request_model.source_column)
+                if isinstance(summary.get("recipe"), dict):
+                    summary["recipe"]["outcome_informed"] = True
             provenance = dict(stored.metadata.get("derived_column_provenance", {}))
             provenance[column_name] = {
                 "outcome_informed": bool(summary.get("outcome_informed")),
