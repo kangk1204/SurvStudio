@@ -20,7 +20,13 @@ from survival_toolkit.encoding import (
     transform_feature_encoder,
     unseen_category_counts,
 )
-from survival_toolkit.errors import UserInputError
+from survival_toolkit.errors import (
+    InternalAnalysisError,
+    JobCancelledError,
+    UserInputError,
+    must_propagate,
+    user_input_boundary,
+)
 from survival_toolkit.marker_matrix import match_summary, read_marker_matrix
 
 
@@ -383,3 +389,80 @@ def test_a_locked_marker_model_refuses_an_external_numeric_covariate_coded_as_te
 
     with pytest.raises(UserInputError, match=r'"age" was numeric when the model was fitted, but 40 of its values'):
         validate_locked_recipe(external, result["locked_recipe"], n_bootstrap=0)
+
+
+# ── Exception policy ─────────────────────────────────────────────
+
+
+def _survstudio_function(source: str):
+    """A function whose frames count as SurvStudio code (the module name decides)."""
+    namespace: dict = {"__name__": "survival_toolkit._review_probe", "np": np}
+    exec(compile(source, "survival_toolkit/_review_probe.py", "exec"), namespace)
+    return namespace["probe"]
+
+
+def _raised(function) -> BaseException:
+    try:
+        function()
+    except BaseException as exc:  # noqa: BLE001 - the tests inspect the exception
+        return exc
+    raise AssertionError("the probe did not raise")
+
+
+def test_must_propagate_covers_memory_cancellation_and_survstudio_bugs() -> None:
+    index_bug = _raised(_survstudio_function("def probe():\n    return [1, 2][5]\n"))
+    numpy_index_bug = _raised(_survstudio_function("def probe():\n    return np.zeros(3)[5]\n"))
+    division_bug = _raised(_survstudio_function("def probe():\n    return 1 / len([])\n"))
+    type_bug = _raised(_survstudio_function("def probe():\n    return None + 1\n"))
+    for exc in (MemoryError(), JobCancelledError("stop"), KeyError("x"), index_bug, numpy_index_bug, division_bug, type_bug):
+        assert must_propagate(exc), repr(exc)
+
+    # Raised outside SurvStudio (here: in the test module or inside a library), they are data failures.
+    local_index = _raised(lambda: [1, 2][5])
+    local_division = _raised(lambda: 1 / len([]))
+    library_index = _raised(lambda: pd.Series([1.0]).iloc[5])
+    for exc in (local_index, local_division, library_index, ValueError("singular"), np.linalg.LinAlgError("singular")):
+        assert not must_propagate(exc), repr(exc)
+
+
+def test_must_propagate_sees_through_internal_analysis_errors() -> None:
+    @user_input_boundary
+    def wrapped(bug):
+        bug()
+
+    type_bug = _survstudio_function("def probe():\n    return None + 1\n")
+    with pytest.raises(InternalAnalysisError) as raised:
+        wrapped(type_bug)
+    assert must_propagate(raised.value)
+
+    library_error = _raised(lambda: wrapped(lambda: np.zeros(3) + np.zeros(4)))
+    assert isinstance(library_error, InternalAnalysisError) and not must_propagate(library_error)
+
+    # Nested wrappers, and memory errors kept as the cause.
+    def nested():
+        try:
+            wrapped(type_bug)
+        except InternalAnalysisError as inner:
+            raise InternalAnalysisError() from inner
+
+    assert must_propagate(_raised(nested))
+    wrapped_memory = InternalAnalysisError()
+    wrapped_memory.__cause__ = MemoryError()
+    assert must_propagate(wrapped_memory)
+    # A cycle of causes ends the search instead of recursing forever.
+    first, second = InternalAnalysisError(), InternalAnalysisError()
+    first.__cause__, second.__cause__ = second, first
+    assert not must_propagate(first)
+
+
+def test_user_input_boundary_behaviour_is_unchanged() -> None:
+    @user_input_boundary
+    def run(action):
+        return action()
+
+    with pytest.raises(UserInputError, match="bad setting"):
+        run(_survstudio_function("def probe():\n    raise ValueError('bad setting')\n"))
+    with pytest.raises(IndexError):
+        run(_survstudio_function("def probe():\n    return [][1]\n"))
+    with pytest.raises(InternalAnalysisError):
+        run(lambda: np.zeros(3) + np.zeros(4))

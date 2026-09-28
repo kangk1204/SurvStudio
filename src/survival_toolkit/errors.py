@@ -86,23 +86,33 @@ def is_programming_error(exc: BaseException) -> bool:
 
     Per-model and per-fold fallbacks record data-driven failures (singular designs, too few
     events, non-convergence) and carry on; they must re-raise these instead of reporting a
-    coding error as "model failed on fold k". A ``TypeError`` raised inside a third-party
-    library usually reflects unusable input (for example mixed-type columns) and is not
-    treated as a bug here.
+    coding error as "model failed on fold k". A ``TypeError``, ``IndexError`` or
+    ``ZeroDivisionError`` raised inside a third-party library usually reflects unusable input
+    (for example mixed-type columns or an empty fold) and is not treated as a bug here; raised
+    by SurvStudio's own code (including numpy indexing called from it), it is.
     """
 
     if isinstance(exc, (AttributeError, KeyError, NameError, AssertionError)):
         return True
-    return isinstance(exc, TypeError) and _raised_by_survstudio(exc)
+    return isinstance(exc, (TypeError, IndexError, ZeroDivisionError)) and _raised_by_survstudio(exc)
 
 
 def must_propagate(exc: BaseException) -> bool:
     """True when a per-model or per-fold fallback must re-raise instead of recording a failure.
 
-    Covers programming errors and cancellation of the whole analysis.
+    Covers cancellation of the whole analysis, exhausted memory, programming errors, and an
+    ``InternalAnalysisError`` (what ``user_input_boundary`` makes of a SurvStudio ``TypeError``)
+    whose cause, followed through further such errors, must propagate.
     """
 
-    return isinstance(exc, JobCancelledError) or is_programming_error(exc)
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (JobCancelledError, MemoryError)) or is_programming_error(current):
+            return True
+        current = current.__cause__ if isinstance(current, InternalAnalysisError) else None
+    return False
 
 
 def user_input_boundary(func: Callable[P, T]) -> Callable[P, T]:
