@@ -51,6 +51,7 @@ from survival_toolkit.analysis import (
     compute_cohort_table,
     compute_cox_analysis,
     compute_km_analysis,
+    detect_duplicate_identifier_columns,
     discover_feature_signature,
     derive_group_column,
     ensure_model_feature_candidate_limit,
@@ -1610,6 +1611,12 @@ def _extend_profile_template_for_appended_columns(
         suggested_time_columns=suggestions.get("time_columns", []),
         binary_candidate_columns=binary_candidate_columns,
     )
+    # Repeated-identifier findings are per column and listed in column order, so the appended
+    # columns' findings follow the earlier ones.
+    duplicate_identifier_columns = [
+        *list(next_template.get("duplicate_identifier_columns") or []),
+        *detect_duplicate_identifier_columns(dataframe[current_column_names[len(previous_column_names) :]]),
+    ]
     next_template.update(
         {
             "n_rows": int(dataframe.shape[0]),
@@ -1621,6 +1628,7 @@ def _extend_profile_template_for_appended_columns(
             "binary_candidate_columns": binary_candidate_columns,
             "model_feature_candidate_count": len(model_feature_candidates),
             "suggestions": suggestions,
+            "duplicate_identifier_columns": duplicate_identifier_columns,
         }
     )
     return next_template

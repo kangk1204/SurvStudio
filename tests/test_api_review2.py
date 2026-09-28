@@ -911,6 +911,121 @@ def test_wildcard_binds_answer_requests_addressed_to_the_wildcard_literal(monkey
         app_module._configured_request_hosts.cache_clear()
 
 
+# ── Stronger checks of caches, profiles, figures and validation ──
+
+
+def test_ml_artifact_cache_isolates_frames_and_shares_the_fitted_model() -> None:
+    import pandas as pd
+
+    class _FittedForest:
+        """Stands in for a fitted scikit-survival model, which is an object, not a container."""
+
+        estimators_: list = []
+
+    model = _FittedForest()
+    frame = pd.DataFrame({"age": [10.0, 20.0]})
+    encoder = {"numeric_features": ["age"], "categorical_mappings": {}}
+    cache = app_module._MlArtifactCache(max_items=2)
+    signature = {"model_type": "rsf", "features": ["age"]}
+    cache.remember(
+        dataset_id="dataset-1",
+        model_type="rsf",
+        signature=signature,
+        result={"_model": model, "_X_encoded": frame, "_feature_encoder": encoder, "_analysis_frame": frame},
+    )
+    # The caller keeps working with its own frame and encoder after the fit is cached.
+    frame.iloc[0, 0] = -1.0
+    encoder["numeric_features"].append("changed")
+
+    first = cache.get(dataset_id="dataset-1", model_type="rsf", signature=signature)
+    second = cache.get(dataset_id="dataset-1", model_type="rsf", signature=signature)
+    assert first["_X_encoded"].iloc[0, 0] == 10.0 and first["_feature_encoder"]["numeric_features"] == ["age"]
+    first["_analysis_frame"].iloc[1, 0] = 99.0
+    first["_feature_encoder"]["numeric_features"].append("mutated")
+    assert second["_analysis_frame"].iloc[1, 0] == 20.0 and second["_feature_encoder"]["numeric_features"] == ["age"]
+    # Every consumer only predicts with the fitted model, so it is shared instead of copied.
+    assert first["_model"] is model and second["_model"] is model
+    assert cache.get(dataset_id="dataset-1", model_type="rsf", signature={**signature, "features": ["x"]}) is None
+
+
+def test_reused_profiles_of_derived_snapshots_match_a_fresh_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    from survival_toolkit.analysis import profile_dataframe
+
+    text = (
+        "patient_id,os_months,os_event,score,site\n"
+        "A,1.5,1,0.2,Montréal\nA,2.5,0,0.9,Québec\nB,3.5,1,0.4,Montréal\nC,4.5,0,0.7,Québec\n"
+    )
+    upload = client.post("/api/upload", files={"file": ("cohort.csv", text.encode("cp1252"), "text/csv")})
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["text_encoding"] not in (None, "utf-8")
+    assert [entry["column"] for entry in upload.json()["duplicate_identifier_columns"]] == ["patient_id"]
+
+    def _unexpected_profile(*args, **kwargs):
+        raise AssertionError("a derived snapshot must reuse the cached profile")
+
+    monkeypatch.setattr(app_module, "profile_dataframe", _unexpected_profile)
+    # Two groups on four rows: an identifier-like name with repeated values, flagged like any column.
+    derived = client.post(
+        "/api/derive-group",
+        json={"dataset_id": upload.json()["dataset_id"], "source_column": "score", "method": "median_split", "new_column_name": "patient_id_group"},
+    )
+    assert derived.status_code == 200, derived.text
+    payload = derived.json()
+    stored = app_module.store.get(payload["dataset_id"], copy_dataframe=False)
+    fresh = app_module._json_ready(profile_dataframe(stored.dataframe, dataset_id=stored.dataset_id, filename=stored.filename))
+    for key, value in fresh.items():
+        assert payload[key] == value, key
+    assert [entry["column"] for entry in payload["duplicate_identifier_columns"]] == ["patient_id", "patient_id_group"]
+
+
+def test_deep_model_loss_figure_uses_the_early_stopping_run_of_a_real_fit() -> None:
+    pytest.importorskip("torch")
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    response = client.post(
+        "/api/deep-model",
+        json={
+            "dataset_id": dataset_id,
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "features": ["age", "biomarker_score", "immune_index"],
+            "model_type": "deepsurv",
+            "hidden_layers": [8],
+            "epochs": 30,
+            "early_stopping_patience": 2,
+            "random_seed": 3,
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    analysis, loss = payload["analysis"], payload["figures"]["loss"]
+    run_length = analysis["early_stopping_epochs"]
+    assert len(loss["data"][0]["y"]) == run_length == len(analysis["loss_history"])
+    assert [trace["name"] for trace in loss["data"]] == ["Training loss", analysis["monitor_metric_label"]]
+    annotations = " ".join(str(note.get("text", "")) for note in loss["layout"].get("annotations", []))
+    if analysis["stopped_early"]:
+        assert f"Stopped early at epoch {run_length}" in annotations
+    assert f"Best monitor epoch: {analysis['best_monitor_epoch']}" in annotations
+
+
+def test_marker_validation_on_an_independent_cohort() -> None:
+    from survival_toolkit.sample_data import make_example_dataset
+
+    _, recipe = _locked_recipe()
+    external_frame = make_example_dataset(seed=11, n_patients=240)
+    upload = client.post("/api/upload", files={"file": ("external.csv", external_frame.to_csv(index=False).encode(), "text/csv")})
+    assert upload.status_code == 200, upload.text
+    response = client.post("/api/marker-validation", json={"dataset_id": upload.json()["dataset_id"], "recipe": recipe, "n_bootstrap": 60})
+    assert response.status_code == 200, response.text
+    validation = response.json()["validation"]
+    assert validation["cohort"]["n"] == 240
+    assert validation["cohort"]["events"] == int(external_frame["os_event"].sum())
+    metrics = validation["metrics"]
+    assert 0.5 < metrics["c_index"] < 1.0
+    low, high = metrics["c_index_ci"]
+    assert low < metrics["c_index"] < high
+    assert {row["marker"] for row in validation["markers"]} == set(recipe["markers"])
+
+
 # ── Request body limits on JSON routes ──────────────────────────
 
 
