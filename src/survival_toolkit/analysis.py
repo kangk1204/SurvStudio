@@ -8111,6 +8111,37 @@ def preview_cox_analysis_inputs(
     }
 
 
+# Same limits as the cohort-table API: groups become columns and each text level becomes a row.
+_COHORT_TABLE_MAX_GROUPS = 50
+_COHORT_TABLE_MAX_LEVELS = 200
+
+
+def _cohort_group_column_key(label: str, taken: set[str]) -> str:
+    """Column key of a group; a label that repeats a fixed column name gets a "(group)" suffix."""
+    key = label
+    suffix = 1
+    while key in taken:
+        key = f"{label} (group)" if suffix == 1 else f"{label} (group {suffix})"
+        suffix += 1
+    return key
+
+
+def _cohort_summary_decimals(values: pd.Series) -> int:
+    """Two decimals, or more when a variable's typical size is below 0.1, so it keeps two significant digits."""
+    magnitudes = np.abs(values.to_numpy(dtype=float))
+    magnitudes = magnitudes[magnitudes > 0.0]
+    if magnitudes.size == 0:
+        return 2
+    return int(min(8, max(2, 1 - math.floor(math.log10(float(np.median(magnitudes)))))))
+
+
+def _finite_numeric_or_missing(series: pd.Series) -> pd.Series:
+    """A numeric column with +/-Inf set to missing, so the table counts those values as missing."""
+    values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+    infinite = np.isinf(values)
+    return series.mask(pd.Series(infinite, index=series.index)) if infinite.any() else series
+
+
 @user_input_boundary
 def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_column: str | None = None) -> dict[str, Any]:
     variables = list(dict.fromkeys(variable for variable in variables if variable != group_column))
@@ -8127,6 +8158,7 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
     # whole cohort and the per-group counts slice the same labels (a group whose values happen
     # to be integer-valued must still match the "1.0" level of the cohort).
     group_masks: OrderedDict[str, np.ndarray] = OrderedDict()
+    group_keys: list[str] = []
     if group_column:
         string_group = _canonical_level_strings(frame[group_column])
         keep = string_group.notna().to_numpy(dtype=bool)
@@ -8134,11 +8166,21 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
         string_group = string_group[keep]
         group_masks[overall_label] = np.ones(len(frame), dtype=bool)
         group_labels = _sorted_group_labels(string_group, group_column)
+        if len(group_labels) > _COHORT_TABLE_MAX_GROUPS:
+            raise ValueError(
+                f'"{group_column}" has {len(group_labels):,} distinct values; a grouped cohort table compares at most '
+                f"{_COHORT_TABLE_MAX_GROUPS} groups. Group the column into fewer categories first."
+            )
+        # Group levels are column keys next to the fixed "Variable", "Statistic", and overall
+        # columns; a level with one of those names gets its own key instead of overwriting them.
+        taken = {"Variable", "Statistic", overall_label}
         for label in group_labels:
-            group_masks[label] = (string_group == label).to_numpy(dtype=bool, na_value=False)
+            key = _cohort_group_column_key(label, taken)
+            taken.add(key)
+            group_keys.append(key)
+            group_masks[key] = (string_group == label).to_numpy(dtype=bool, na_value=False)
     else:
         group_masks[overall_label] = np.ones(len(frame), dtype=bool)
-        group_labels = []
 
     rows: list[dict[str, Any]] = []
     rows.append(
@@ -8152,6 +8194,9 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
     for variable in variables:
         series = frame[variable]
         is_boolean = is_bool_dtype(series)
+        if is_numeric_dtype(series) and not is_boolean:
+            # +/-Inf (for example log(0) of an expression value) is not a value to average.
+            series = _finite_numeric_or_missing(series)
         is_binary_numeric = (not is_boolean) and is_numeric_dtype(series) and _is_binary_numeric_series(series)
         missing_row = {
             "Variable": variable,
@@ -8160,17 +8205,23 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
         }
         if is_numeric_dtype(series) and not is_binary_numeric and not is_boolean:
             row = {"Variable": variable, "Statistic": "Mean ± SD | Median [IQR]"}
+            numeric_series = pd.Series(
+                pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, na_value=np.nan), index=series.index
+            )
+            # One precision per variable, from its typical size across the cohort, so small values
+            # (allele fractions around 0.002) do not print as 0.00.
+            decimals = _cohort_summary_decimals(numeric_series.dropna())
             for label, mask in group_masks.items():
-                values = pd.to_numeric(series[mask], errors="coerce").dropna()
+                values = numeric_series[mask].dropna()
                 if values.empty:
                     row[label] = "NA"
                     continue
                 sd_value = values.std(ddof=1)
                 # A single observation has no SD; do not print it as 0.00.
-                sd_text = f"{sd_value:.2f}" if len(values) > 1 and np.isfinite(sd_value) else "NA"
+                sd_text = f"{sd_value:.{decimals}f}" if len(values) > 1 and np.isfinite(sd_value) else "NA"
                 row[label] = (
-                    f"{values.mean():.2f} ± {sd_text} | "
-                    f"{values.median():.2f} [{values.quantile(0.25):.2f}, {values.quantile(0.75):.2f}]"
+                    f"{values.mean():.{decimals}f} ± {sd_text} | "
+                    f"{values.median():.{decimals}f} [{values.quantile(0.25):.{decimals}f}, {values.quantile(0.75):.{decimals}f}]"
                 )
             rows.append(row)
             rows.append(missing_row)
@@ -8178,6 +8229,12 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
 
         source_series = _canonical_level_strings(series)
         levels = _ordered_level_strings(source_series, variable)
+        if len(levels) > _COHORT_TABLE_MAX_LEVELS:
+            raise ValueError(
+                f'"{variable}" has {len(levels):,} distinct values; a cohort table lists at most '
+                f"{_COHORT_TABLE_MAX_LEVELS} levels per categorical variable. Leave out ID or free-text columns "
+                "or group the values into fewer categories."
+            )
         for level in levels:
             row = {"Variable": variable, "Statistic": str(level)}
             for label, mask in group_masks.items():
@@ -8189,7 +8246,7 @@ def compute_cohort_table(df: pd.DataFrame, variables: Sequence[str], group_colum
         rows.append(missing_row)
 
     return {
-        "columns": ["Variable", "Statistic", overall_label, *group_labels],
+        "columns": ["Variable", "Statistic", overall_label, *group_keys],
         "rows": rows,
         "row_mask_hash": _row_mask_hash(frame.index),
         "overall_scope": (

@@ -687,3 +687,59 @@ def test_cox_names_a_c_index_interval_level_only_when_an_interval_exists() -> No
     assert stats["c_index"] is not None
     assert stats["c_index_ci_lower"] is None and stats["c_index_ci_upper"] is None
     assert stats["c_index_ci_level"] is None and stats["c_index_ci_method"] is None
+
+
+# ---------------------------------------------------------------------------------------
+# Cohort table (R5#7, R5#11, R5#12)
+
+
+def test_cohort_table_counts_infinite_values_as_missing() -> None:
+    frame = pd.DataFrame({"expr": [1.0, 2.0, np.inf, 3.0, 4.0, -np.inf], "grp": ["a", "a", "a", "b", "b", "b"]})
+    rows = {row["Statistic"]: row for row in analysis.compute_cohort_table(frame, ["expr"], group_column="grp")["rows"]}
+    summary = rows["Mean ± SD | Median [IQR]"]
+    assert summary["Overall (grouped subset)"] == "2.50 ± 1.29 | 2.50 [1.75, 3.25]"
+    assert summary["a"] == "1.50 ± 0.71 | 1.50 [1.25, 1.75]"
+    assert summary["b"] == "3.50 ± 0.71 | 3.50 [3.25, 3.75]"
+    assert (rows["Missing"]["Overall (grouped subset)"], rows["Missing"]["a"], rows["Missing"]["b"]) == (2, 1, 1)
+
+
+def test_cohort_table_keeps_group_columns_apart_from_the_fixed_columns() -> None:
+    frame = pd.DataFrame(
+        {
+            "age": [50.0, 60.0, 70.0, 80.0, 65.0],
+            "grp": ["Overall (grouped subset)", "B", "B", "Overall (grouped subset)", "Variable"],
+        }
+    )
+    table = analysis.compute_cohort_table(frame, ["age"], group_column="grp")
+    assert table["columns"] == [
+        "Variable",
+        "Statistic",
+        "Overall (grouped subset)",
+        "B",
+        "Overall (grouped subset) (group)",
+        "Variable (group)",
+    ]
+    size = table["rows"][0]
+    assert size["Variable"] == "Cohort size" and size["Statistic"] == "N"
+    assert (size["Overall (grouped subset)"], size["B"], size["Overall (grouped subset) (group)"], size["Variable (group)"]) == (5, 2, 2, 1)
+
+
+def test_cohort_table_shows_small_values_with_enough_decimals() -> None:
+    rng = np.random.default_rng(9)
+    frame = pd.DataFrame({"vaf": rng.uniform(0.001, 0.004, 50), "age": rng.normal(60, 8, 50)})
+    rows = {row["Variable"]: row for row in analysis.compute_cohort_table(frame, ["vaf", "age"])["rows"] if row["Statistic"] != "Missing"}
+    vaf = rows["vaf"]["Overall"]
+    assert not vaf.startswith("0.00 ±")
+    mean_text = vaf.split(" ± ")[0]
+    assert len(mean_text.split(".")[1]) == 4 and float(mean_text) == pytest.approx(frame["vaf"].mean(), abs=5e-5)
+    # Values of ordinary size keep two decimals.
+    assert rows["age"]["Overall"].split(" ± ")[0] == f"{frame['age'].mean():.2f}"
+
+
+def test_cohort_table_caps_groups_and_levels_like_the_api() -> None:
+    frame = pd.DataFrame({"age": np.arange(60.0), "site": [f"s{i}" for i in range(60)], "note": [f"n{i}" for i in range(60)]})
+    with pytest.raises(ValueError, match="compares at most 50 groups"):
+        analysis.compute_cohort_table(frame, ["age"], group_column="site")
+    wide = pd.DataFrame({"note": [f"n{i}" for i in range(250)]})
+    with pytest.raises(ValueError, match="at most 200 levels"):
+        analysis.compute_cohort_table(wide, ["note"])
