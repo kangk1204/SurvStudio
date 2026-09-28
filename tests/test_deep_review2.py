@@ -200,3 +200,82 @@ def test_duplicate_feature_names_get_a_clear_message() -> None:
     df = make_example_dataset(seed=4, n_patients=60)
     with pytest.raises(UserInputError, match="listed more than once: age"):
         dm.compare_deep_survival_models(df, "os_months", "os_event", ["age", "age"], epochs=1, hidden_layers=[4], included_models=["DeepSurv"])
+
+
+# R8#5 / R8#6 / R9#14 / R9#15: package-API arguments ---------------------------------------
+
+
+def test_a_caller_split_needs_the_prepared_tensors_it_indexes() -> None:
+    df = make_example_dataset(seed=5, n_patients=60).reset_index(drop=True)
+    df.loc[2, "os_months"] = np.nan  # removed by cleaning, so later positions shift
+    split = {
+        "train_idx": np.setdiff1d(np.arange(58), np.arange(10, 20)),
+        "eval_idx": np.arange(10, 20),
+        "evaluation_mode": "holdout",
+        "evaluation_note": "caller split",
+    }
+    with pytest.raises(UserInputError, match="evaluation_split can only be supplied together"):
+        dm.train_deepsurv(df, "os_months", "os_event", FEATURES, evaluation_split=split, **TINY)
+
+
+@pytest.mark.parametrize("fraction", [0.0, -0.3, float("nan"), 0.7, True])
+def test_locked_test_fractions_outside_the_web_bounds_are_refused(fraction) -> None:
+    df = make_example_dataset(seed=4, n_patients=60)
+    with pytest.raises(UserInputError, match="locked_test_fraction must be None"):
+        dm.compare_deep_survival_models(
+            df, "os_months", "os_event", FEATURES, epochs=1, hidden_layers=[4], included_models=["DeepSurv"],
+            evaluation_strategy="repeated_cv", cv_folds=2, cv_repeats=1, locked_test_fraction=fraction,
+        )
+    with pytest.raises(UserInputError, match="locked_test_fraction must be None"):
+        dm.evaluate_single_deep_survival_model(
+            "deepsurv", df=df, time_column="os_months", event_column="os_event", features=FEATURES, epochs=1,
+            hidden_layers=[4], evaluation_strategy="repeated_cv", cv_folds=2, cv_repeats=1, locked_test_fraction=fraction,
+        )
+
+
+@pytest.mark.parametrize(
+    "setting, match",
+    [
+        ({"epochs": 0}, "number of epochs"),
+        ({"epochs": -5}, "number of epochs"),
+        ({"epochs": 2.5}, "number of epochs"),
+        ({"batch_size": 0}, "batch size"),
+        ({"learning_rate": 0.0}, "learning rate"),
+        ({"learning_rate": -0.01}, "learning rate"),
+        ({"learning_rate": float("nan")}, "learning rate"),
+    ],
+)
+def test_training_settings_are_validated_at_every_entry_point(setting, match) -> None:
+    df = make_example_dataset(seed=4, n_patients=60)
+    kwargs = {**TINY, **setting}
+    with pytest.raises(UserInputError, match=match):
+        dm.train_deepsurv(df, "os_months", "os_event", FEATURES, **kwargs)
+    with pytest.raises(UserInputError, match=match):
+        dm.train_neural_mtlr(df, "os_months", "os_event", FEATURES, num_time_bins=5, **kwargs)
+    with pytest.raises(UserInputError, match=match):
+        dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, included_models=["DeepSurv"], **kwargs)
+
+
+def test_zero_attention_heads_are_refused_with_a_clear_message() -> None:
+    df = make_example_dataset(seed=4, n_patients=60)
+    with pytest.raises(UserInputError, match="number of attention heads"):
+        dm.train_survival_transformer(df, "os_months", "os_event", FEATURES, d_model=8, n_heads=0, n_layers=1, epochs=1)
+    with pytest.raises(UserInputError, match="number of attention heads"):
+        dm.compare_deep_survival_models(
+            df, "os_months", "os_event", FEATURES, epochs=1, hidden_layers=[4], d_model=8, n_heads=0, n_layers=1,
+            included_models=["DeepSurv", "Survival Transformer"],
+        )
+    # The setting is ignored (and not checked) when the transformer is not compared.
+    compared = dm.compare_deep_survival_models(
+        df, "os_months", "os_event", FEATURES, epochs=1, hidden_layers=[4], n_heads=0, included_models=["DeepSurv"],
+    )
+    assert [row["model"] for row in compared["comparison_table"]] == ["DeepSurv"]
+
+
+def test_an_explicit_empty_vae_hidden_layer_list_is_not_replaced_by_the_default() -> None:
+    df = make_example_dataset(seed=4, n_patients=60)
+    with pytest.raises(UserInputError, match="at least one hidden layer"):
+        dm.train_survival_vae(df, "os_months", "os_event", FEATURES, hidden_layers=[], latent_dim=2, epochs=1)
+    with pytest.raises(ValueError, match="at least one hidden layer"):
+        dm.SurvivalVAENet(4, hidden_layers=[], latent_dim=2)
+    assert [module.out_features for module in dm.SurvivalVAENet(4, hidden_dim=6, latent_dim=2).encoder if isinstance(module, torch.nn.Linear)] == [6]

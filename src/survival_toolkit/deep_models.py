@@ -984,6 +984,51 @@ def _validated_hidden_layers(hidden_layers: Sequence[Any] | None) -> list[int]:
     return widths
 
 
+def _validated_positive_integer(value: Any, label: str) -> int:
+    """A whole number of at least 1 (an integral float such as 10.0 is accepted)."""
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer, float, np.floating)):
+        raise ValueError(f"{label} must be a whole number of at least 1 (got {value!r}).")
+    number = float(value)
+    if not math.isfinite(number) or number != math.floor(number) or number < 1:
+        raise ValueError(f"{label} must be a whole number of at least 1 (got {value!r}).")
+    return int(number)
+
+
+def _validated_training_settings(*, epochs: Any, batch_size: Any, learning_rate: Any) -> tuple[int, int, float]:
+    """Epochs, batch size, and learning rate checked at the Python entry points.
+
+    The web form enforces its own bounds; package callers passing 0 epochs (or a negative
+    count) would otherwise get an untrained network reported with a C-index.
+    """
+    epochs = _validated_positive_integer(epochs, "The number of epochs")
+    batch_size = _validated_positive_integer(batch_size, "The batch size")
+    if isinstance(learning_rate, bool) or not isinstance(learning_rate, (int, np.integer, float, np.floating)):
+        raise ValueError(f"The learning rate must be a positive finite number (got {learning_rate!r}).")
+    if not math.isfinite(float(learning_rate)) or float(learning_rate) <= 0.0:
+        raise ValueError(f"The learning rate must be a positive finite number (got {learning_rate!r}).")
+    return epochs, batch_size, float(learning_rate)
+
+
+_LOCKED_TEST_FRACTION_BOUNDS = (0.05, 0.5)
+
+
+def _validated_locked_test_fraction(value: Any) -> float | None:
+    """``None`` (no locked test set) or a fraction within the web form's bounds.
+
+    0, a negative value, or NaN used to leave the run without a locked test set silently.
+    """
+    if value is None:
+        return None
+    low, high = _LOCKED_TEST_FRACTION_BOUNDS
+    valid_type = not isinstance(value, bool) and isinstance(value, (int, np.integer, float, np.floating))
+    if not valid_type or not (low <= float(value) <= high):
+        raise ValueError(
+            f"locked_test_fraction must be None (no locked test set) or a fraction between {low} and {high} "
+            f"(got {value!r})."
+        )
+    return float(value)
+
+
 def _mlp_parameter_count(in_features: int, widths: Sequence[int]) -> tuple[int, int]:
     """Parameters of a stack of Linear layers (weights and biases) and its output width."""
     total = 0
@@ -1138,6 +1183,13 @@ def _prepare_deep_training_inputs(
         return prepared_data, evaluation_split
     if df is None:
         raise ValueError("Raw dataframe input is required when prepared_data is not provided.")
+    if evaluation_split is not None:
+        # Its positions would index the cleaned frame, not the caller's rows: rows removed for
+        # a missing outcome shift every later position onto a different patient.
+        raise ValueError(
+            "evaluation_split can only be supplied together with the prepared_data it was built for; "
+            "with a raw dataframe the trainer draws the shared holdout split itself."
+        )
 
     clean_frame = _coerce_deep_frame(
         df,
@@ -1147,13 +1199,11 @@ def _prepare_deep_training_inputs(
         categorical_features=categorical_features,
         event_positive_value=event_positive_value,
     )
-    resolved_split = dict(evaluation_split) if evaluation_split is not None else _build_holdout_split(
+    resolved_split = _build_holdout_split(
         clean_frame[event_column].astype(int).to_numpy(),
         random_seed,
         source_rows=clean_frame.attrs.get("source_row_index"),
     )
-    if evaluation_split is not None:
-        _reject_leaky_evaluation_split(resolved_split, n_samples=int(clean_frame.shape[0]))
 
     if str(resolved_split.get("evaluation_mode")) == "holdout":
         train_idx = np.asarray(resolved_split["train_idx"], dtype=int)
@@ -2369,6 +2419,10 @@ def compare_deep_survival_models(
         )
     if evaluation_strategy != "repeated_cv" and locked_test_fraction is not None:
         raise ValueError("A locked test set is only available with repeated cross-validation.")
+    locked_test_fraction = _validated_locked_test_fraction(locked_test_fraction)
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
     hidden_layers = _validated_hidden_layers(hidden_layers)
     trainer_specs = _deep_trainer_specs(
         hidden_layers=hidden_layers,
@@ -2385,6 +2439,8 @@ def compare_deep_survival_models(
         trainer_specs = [spec for spec in trainer_specs if spec[0] in included]
         if not trainer_specs:
             raise ValueError("No deep-learning models remain after applying the requested model filter.")
+    if any(spec[0] == "Survival Transformer" for spec in trainer_specs):
+        _validated_positive_integer(n_heads, "The number of attention heads")
     settings = _DeepRunSettings(
         time_column=time_column,
         event_column=event_column,
@@ -2562,7 +2618,8 @@ def _deep_repeated_cv_comparison(
     cohort_fields = _cohort_summary_fields(clean_frame.attrs)
     source_rows = clean_frame.attrs.get("source_row_index")
     all_events = clean_frame[event_column].astype(int).to_numpy()
-    use_locked_test = locked_test_fraction is not None and float(locked_test_fraction) > 0.0
+    # Validated by the caller: None, or a fraction between 0.05 and 0.5.
+    use_locked_test = locked_test_fraction is not None
     if use_locked_test:
         dev_positions, test_positions = locked_test_split(
             all_events,
@@ -3739,6 +3796,9 @@ def train_deepsurv(
       training partition (``refit_on_training_partition``).
     """
     _require_torch()
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
     hidden_layers = _validated_hidden_layers(hidden_layers)
     context = _prepare_deep_training_context(
         df,
@@ -4077,6 +4137,9 @@ def train_deephit(
     predicted_survival_curves, and feature_importance.
     """
     _require_torch()
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
     hidden_layers = _validated_hidden_layers(hidden_layers)
     context = _prepare_deep_training_context(
         df,
@@ -4384,6 +4447,9 @@ def train_neural_mtlr(
     predicted_survival_curves, calibration_data, and feature_importance.
     """
     _require_torch()
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
     # The same default architecture as the multi-model comparison.
     hidden_layers = _validated_hidden_layers(hidden_layers)
     context = _prepare_deep_training_context(
@@ -4797,6 +4863,12 @@ def train_survival_transformer(
       is optimized on the full training risk set each epoch.
     """
     _require_torch()
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
+    n_heads = _validated_positive_integer(n_heads, "The number of attention heads")
+    if d_model % n_heads != 0:
+        raise ValueError("Transformer width must be divisible by attention heads.")
     context = _prepare_deep_training_context(
         df,
         time_column=time_column,
@@ -4820,8 +4892,6 @@ def train_survival_transformer(
         n_layers=int(n_layers),
         d_model=int(d_model),
     )
-    if d_model % n_heads != 0:
-        raise ValueError("Transformer width must be divisible by attention heads.")
     _guard_deep_parameter_budget(
         "Survival Transformer", n_features=int(data["n_features"]), d_model=int(d_model), n_layers=int(n_layers)
     )
@@ -4996,7 +5066,11 @@ class SurvivalVAENet(_TorchModuleBase):
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
-        hidden_layers = list(hidden_layers or ([hidden_dim] if hidden_dim is not None else _DEFAULT_HIDDEN_LAYERS))
+        hidden_layers = list(
+            hidden_layers if hidden_layers is not None else ([hidden_dim] if hidden_dim is not None else _DEFAULT_HIDDEN_LAYERS)
+        )
+        if not hidden_layers:
+            raise ValueError("Survival VAE needs at least one hidden layer.")
         encoder_layers: list[nn.Module] = []
         prev_dim = in_features
         for layer_dim in hidden_layers:
@@ -5232,10 +5306,16 @@ def train_survival_vae(
       objective is optimized on the full training partition each epoch.
     """
     _require_torch()
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
     # ``hidden_dim`` is the older single-layer spelling; the default matches the comparison's.
     hidden_layers = _validated_hidden_layers(
-        hidden_layers or ([hidden_dim] if hidden_dim is not None else _DEFAULT_HIDDEN_LAYERS)
+        hidden_layers if hidden_layers is not None else ([hidden_dim] if hidden_dim is not None else _DEFAULT_HIDDEN_LAYERS)
     )
+    if not hidden_layers:
+        # An explicit empty list is refused rather than silently replaced by the default.
+        raise ValueError("Survival VAE needs at least one hidden layer.")
     context = _prepare_deep_training_context(
         df,
         time_column=time_column,
