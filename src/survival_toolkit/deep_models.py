@@ -24,12 +24,14 @@ from concurrent.futures import FIRST_COMPLETED, BrokenExecutor, ProcessPoolExecu
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator, NamedTuple, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, NamedTuple, Sequence
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 from survival_toolkit.encoding import (
+    _checked_features,
     canonical_category_values,
     fit_feature_encoder as _fit_shared_feature_encoder,
     reject_numeric_text_features,
@@ -370,10 +372,13 @@ def _coerce_deep_frame(
 ) -> pd.DataFrame:
     """Clean raw data for deep models before fitting an encoder.
 
+    The full pass builds the cohort with the ML cohort builder (``_deep_cohort_frame``), so the
+    deep models analyse exactly the rows, and apply exactly the outcome checks, of the ML models.
+
     ``event_already_coded`` marks frames that already went through this function (their
     event column is 0/1). Re-reading a 0/1 column against the user's original event label
-    (for example "Dead") would fail or mis-code the events. Such split passes also keep the
-    feature types decided on the full cleaned frame.
+    (for example "Dead") would fail or mis-code the events. Such split passes keep the rows,
+    outcome coding, and feature types of the full cleaned frame.
     """
     _require_torch()
 
@@ -397,64 +402,28 @@ def _coerce_deep_frame(
             f"{missing_preview}."
         )
 
-    from survival_toolkit.analysis import (
-        _validate_endpoint_family_pair,
-        _validate_event_column_choice,
-        _validate_time_column_choice,
-        coerce_event,
-    )
-
-    if not event_already_coded:
-        # The outcome checks of the ML cohort builder (analysis._cohort_frame): a matched
-        # endpoint pair, a follow-up duration rather than calendar dates, and a real event
-        # indicator (not a censoring flag).
-        _validate_endpoint_family_pair(time_column, event_column)
-        _validate_time_column_choice(df, time_column)
-        _validate_event_column_choice(df, event_column)
-
-    categorical_features = list(categorical_features or [])
-    frame = df[required_columns].copy()
-    frame = frame.replace([np.inf, -np.inf], np.nan)
-    # Text such as "inf" only becomes infinite here; drop it like the ML cohort builder does,
-    # so both modules analyse (and split) the same rows.
-    frame[time_column] = pd.to_numeric(frame[time_column], errors="coerce").replace([np.inf, -np.inf], np.nan)
-
     if event_already_coded:
+        frame = df[required_columns].copy()
         coded_events = pd.to_numeric(frame[event_column], errors="coerce")
         if not bool(coded_events.dropna().isin([0.0, 1.0]).all()):
             raise ValueError("Internal error: a cleaned deep-learning frame must carry a 0/1 event column.")
         frame[event_column] = coded_events.astype(float)
+        frame[time_column] = pd.to_numeric(frame[time_column], errors="coerce")
+        frame = frame.dropna(subset=[time_column, event_column])
+        frame = frame.loc[frame[time_column] >= 0]
+        source_row_index = frame.index.tolist()
+        frame = frame.reset_index(drop=True)
+        # Positions in this slice; the slice inherits the full frame's attrs, which do not apply to it.
+        frame.attrs = {"source_row_index": source_row_index, "dropped_nonpositive_time_rows": 0}
     else:
-        frame[event_column] = coerce_event(frame[event_column], event_positive_value=event_positive_value)
-        # Split passes skip this: the full frame was checked, and the training split is
-        # checked again by the shared encoder, exactly as for the ML models.
-        reject_numeric_text_features(frame, features, categorical_features)
-    for col in features:
-        if col in categorical_features:
-            # The encoder's canonical labels ("1", not "1.0" when a blank made the codes decimal), as for ML.
-            frame[col] = canonical_category_values(frame[col]).astype("string")
-            continue
-        raw_values = frame[col]
-        if event_already_coded and isinstance(raw_values.dtype, pd.StringDtype):
-            # Categorical on the full cleaned frame: a split whose rows happen to hold only
-            # number-like levels must not turn it into a numeric column.
-            continue
-        numeric_values = pd.to_numeric(raw_values, errors="coerce")
-        if bool((raw_values.notna() & numeric_values.isna()).any()):
-            # Text that is not a number with a few stray values (rejected above) is a
-            # categorical variable, as the shared encoder treats it for the ML models.
-            frame[col] = raw_values.astype("string")
-        else:
-            frame[col] = numeric_values
-
-    frame = frame.dropna(subset=[time_column, event_column]).copy()
-    # Time 0 is a valid follow-up time; only negative times are dropped.
-    positive_mask = frame[time_column] >= 0
-    frame = frame.loc[positive_mask]
-    source_row_index = frame.index.tolist()
-    frame = frame.reset_index(drop=True)
-    frame.attrs["dropped_nonpositive_time_rows"] = int((~positive_mask).sum())
-    frame.attrs["source_row_index"] = source_row_index
+        frame = _deep_cohort_frame(
+            df,
+            time_column=time_column,
+            event_column=event_column,
+            features=features,
+            categorical_features=list(categorical_features or []),
+            event_positive_value=event_positive_value,
+        )
 
     if frame.empty:
         raise InsufficientDeepSampleError("No analyzable rows remain after removing missing/invalid values.")
@@ -468,6 +437,134 @@ def _coerce_deep_frame(
     return frame
 
 
+def _deep_cohort_frame(
+    df: pd.DataFrame,
+    *,
+    time_column: str,
+    event_column: str,
+    features: Sequence[str],
+    categorical_features: Sequence[str],
+    event_positive_value: Any,
+) -> pd.DataFrame:
+    """The analysed cohort of the ML models (``analysis._cohort_frame``) with deep-model feature types.
+
+    The ML cohort builder parses follow-up times ("1,234"), refuses text that is not a time
+    ("12 months"), a time column missing for (nearly) every row of one outcome, times that are
+    never positive, and a cleaning that removes every censored row, and returns the caution
+    for a time column whose name does not look like follow-up time. Rows with a missing
+    feature are kept (the encoder imputes them), as for the ML models.
+
+    Feature types are decided once, here, on the whole cleaned cohort, and split passes keep
+    them: a feature is categorical when it is declared categorical, is a pandas Categorical,
+    or is text whose non-missing values do not all read as finite numbers. Categorical
+    features are stored as canonical text labels (``_category_labels``); text features whose
+    values all read as numbers are numeric.
+    """
+    from survival_toolkit.analysis import _cohort_frame
+
+    features = _checked_features(df, features)
+    declared = list(categorical_features)
+    pandas_categoricals = [column for column in features if isinstance(df[column].dtype, pd.CategoricalDtype)]
+    source = df
+    if pandas_categoricals:
+        # Decoded before the cohort builder turns them into text, so integer categories read
+        # "1", not "1.0". A shallow copy: the caller's frame is left unchanged.
+        source = df.copy(deep=False)
+        for column in pandas_categoricals:
+            source[column] = _category_labels(df[column])
+    cohort = _cohort_frame(
+        source,
+        time_column,
+        event_column,
+        event_positive_value=event_positive_value,
+        extra_columns=features,
+        drop_missing_extra_columns=False,
+    )
+    frame = cohort[[*features, time_column, event_column]].copy()
+    text_features: list[Any] = []
+    for column in features:
+        values = frame[column]
+        if column in declared or column in pandas_categoricals:
+            # The encoder's canonical labels ("1", not "1.0" when a blank made the codes decimal), as for ML.
+            frame[column] = _category_labels(values)
+        elif is_numeric_dtype(values.dtype):
+            continue
+        elif _all_finite_numbers(values):
+            frame[column] = pd.Series(
+                pd.to_numeric(values, errors="coerce").to_numpy(dtype=float, na_value=np.nan),
+                index=values.index,
+            )
+        else:
+            text_features.append(column)
+    # Continuous numbers with a few stray text values, and text with too many levels, are
+    # refused (the shared rule of the ML, deep-learning, and Cox paths); other text is categorical.
+    reject_numeric_text_features(frame, text_features, declared)
+    for column in text_features:
+        frame[column] = _category_labels(frame[column])
+    frame.attrs = {
+        "source_row_index": list(cohort.attrs.get("source_row_index", [])),
+        "dropped_nonpositive_time_rows": int(cohort.attrs.get("dropped_nonpositive_time_rows", 0)),
+        # Rows without a usable time or event (``drop_missing_extra_columns=False``: features are kept).
+        "dropped_missing_outcome_rows": int(cohort.attrs.get("dropped_missing_rows", 0)),
+        "time_column_note": cohort.attrs.get("time_column_note"),
+    }
+    return frame
+
+
+def _all_finite_numbers(values: pd.Series) -> bool:
+    """Whether every non-missing value of a text column reads as a finite number."""
+    numbers = pd.to_numeric(values.dropna(), errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+    return bool(np.isfinite(numbers).all())
+
+
+def _category_labels(values: pd.Series) -> pd.Series:
+    """Canonical text labels of a categorical feature (``encoding.canonical_category_values``).
+
+    A pandas Categorical is decoded to its category values first, so integer categories read
+    "1", "2" even when a missing value made them decimal, as for a declared code column.
+    """
+    if isinstance(values.dtype, pd.CategoricalDtype):
+        values = pd.Series(
+            pd.api.extensions.take(np.asarray(values.cat.categories), values.cat.codes.to_numpy(), allow_fill=True),
+            index=values.index,
+            name=values.name,
+        )
+    return canonical_category_values(values).astype("string")
+
+
+def _cohort_summary_fields(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Cohort-building counts and the time-column caution, for the scientific summaries.
+
+    ``source`` is a cleaned frame's ``attrs`` or prepared tensors that carry the same keys.
+    """
+    return {
+        "dropped_nonpositive_time_rows": int(source.get("dropped_nonpositive_time_rows", 0) or 0),
+        "dropped_missing_outcome_rows": int(source.get("dropped_missing_outcome_rows", 0) or 0),
+        "time_column_note": source.get("time_column_note") or None,
+    }
+
+
+def _cohort_cautions(
+    dropped_nonpositive_time_rows: int,
+    dropped_missing_outcome_rows: int,
+    time_column_note: str | None,
+) -> list[str]:
+    """Cautions about rows the cohort builder removed and about an unusual time column."""
+    cautions: list[str] = []
+    if int(dropped_missing_outcome_rows) > 0:
+        cautions.append(
+            f"{int(dropped_missing_outcome_rows)} row(s) with a missing or non-finite survival time or a missing event "
+            "were excluded before deep-model preprocessing."
+        )
+    if int(dropped_nonpositive_time_rows) > 0:
+        cautions.append(
+            f"{int(dropped_nonpositive_time_rows)} row(s) with negative survival time were excluded before deep-model preprocessing."
+        )
+    if time_column_note:
+        cautions.append(str(time_column_note))
+    return cautions
+
+
 def _categorical_feature_columns(frame: pd.DataFrame, features: Sequence[str]) -> list[str]:
     """Features a cleaned frame treats as categorical (``_coerce_deep_frame`` stores them as text)."""
     return [column for column in features if isinstance(frame[column].dtype, pd.StringDtype)]
@@ -478,11 +575,17 @@ def _fit_deep_encoder(
     features: Sequence[str],
     categorical_features: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Fit the shared tabular encoder with numeric standardization enabled."""
+    """Fit the shared tabular encoder with numeric standardization enabled.
+
+    Every feature the cleaned frame stores as text is passed as categorical, so a training
+    split keeps the type decided on the whole cohort even when its rows happen to hold only
+    number-like levels.
+    """
+    categorical = list(dict.fromkeys([*(categorical_features or []), *_categorical_feature_columns(frame, features)]))
     return _fit_shared_feature_encoder(
         frame,
         features,
-        categorical_features,
+        categorical,
         standardize_numeric=True,
     )
 
@@ -1077,7 +1180,7 @@ def _prepare_deep_training_inputs(
                 clean_rows[int(eval_idx[position])] if clean_rows is not None else int(eval_idx[position])
                 for position in split_eval["eval_source_positions"]
             ]
-            split_data["dropped_nonpositive_time_rows"] = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
+            split_data.update(_cohort_summary_fields(clean_frame.attrs))
             return split_data, split_eval
         except InsufficientDeepSampleError:
             # Only a too-small or event-free training split falls back to apparent
@@ -1105,7 +1208,7 @@ def _prepare_deep_training_inputs(
         event_column=event_column,
         encoder=encoder,
     )
-    full_data["dropped_nonpositive_time_rows"] = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
+    full_data.update(_cohort_summary_fields(clean_frame.attrs))
     return full_data, resolved_split
 
 
@@ -1556,11 +1659,15 @@ def _scientific_summary_dl(
     refit_note: str | None = None,
     reported_epochs: int | None = None,
     unseen_category_rows: int = 0,
+    dropped_missing_outcome_rows: int = 0,
+    time_column_note: str | None = None,
 ) -> dict[str, Any]:
     """Build an insight board dict for deep learning models.
 
     ``loss_history`` is the early-stopping run; ``reported_epochs`` (when given) is the
     number of epochs behind the reported weights, which differs after a refit.
+    ``dropped_missing_outcome_rows`` and ``time_column_note`` come from the cohort builder
+    (``_cohort_summary_fields``).
     """
     metric_name = _metric_name_for_evaluation(evaluation_mode)
     c_val = float(c_index) if c_index is not None else None
@@ -1600,10 +1707,7 @@ def _scientific_summary_dl(
 
     if evaluation_note:
         cautions.append(evaluation_note)
-    if int(dropped_nonpositive_time_rows) > 0:
-        cautions.append(
-            f"{int(dropped_nonpositive_time_rows)} row(s) with negative survival time were excluded before deep-model preprocessing."
-        )
+    cautions.extend(_cohort_cautions(dropped_nonpositive_time_rows, dropped_missing_outcome_rows, time_column_note))
     if evaluation_mode == "holdout" and int(unseen_category_rows) > 0:
         # Imported only when needed: repeated-CV worker processes need not load the ML module.
         from survival_toolkit.ml_models import _unseen_category_caution
@@ -1696,6 +1800,7 @@ def _scientific_summary_dl(
             {"label": "Training samples", "value": train_samples},
             {"label": "Training events", "value": train_events},
             {"label": "Dropped for negative time", "value": int(dropped_nonpositive_time_rows) or None},
+            {"label": "Dropped for missing outcome", "value": int(dropped_missing_outcome_rows) or None},
             {"label": "Evaluation samples", "value": eval_samples},
             {"label": "Features", "value": n_features},
             {"label": "Epochs", "value": epochs_trained or epochs},
@@ -2322,7 +2427,6 @@ def _deep_holdout_comparison(
         event_positive_value=settings.event_positive_value,
         random_seed=random_seed,
     )
-    dropped_nonpositive_time_rows = int(shared_data.get("dropped_nonpositive_time_rows", 0))
     shared_monitor_indices = _build_monitor_indices(
         shared_eval_split["train_idx"],
         shared_data["event_tensor"],
@@ -2384,7 +2488,7 @@ def _deep_holdout_comparison(
         n_selected_features=len(settings.features),
         evaluation_mode="holdout",
         random_seed=random_seed,
-        dropped_nonpositive_time_rows=dropped_nonpositive_time_rows,
+        **_cohort_summary_fields(shared_data),
         cohort_counts={
             "n_patients": int(shared_data["n_samples"]),
             "n_events": int(float(shared_data["event_tensor"].sum().item())),
@@ -2455,7 +2559,7 @@ def _deep_repeated_cv_comparison(
         categorical_features=settings.categorical_features,
         event_positive_value=settings.event_positive_value,
     )
-    dropped_nonpositive_time_rows = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
+    cohort_fields = _cohort_summary_fields(clean_frame.attrs)
     source_rows = clean_frame.attrs.get("source_row_index")
     all_events = clean_frame[event_column].astype(int).to_numpy()
     use_locked_test = locked_test_fraction is not None and float(locked_test_fraction) > 0.0
@@ -2625,7 +2729,7 @@ def _deep_repeated_cv_comparison(
         cv_folds=cv_folds,
         cv_repeats=cv_repeats,
         fold_results=fold_results,
-        dropped_nonpositive_time_rows=dropped_nonpositive_time_rows,
+        **cohort_fields,
         cohort_counts=cohort_counts,
         locked_errors=locked_errors,
     )
@@ -3070,6 +3174,8 @@ def _finalize_deep_comparison(
     cv_repeats: int | None = None,
     fold_results: list[dict[str, Any]] | None = None,
     dropped_nonpositive_time_rows: int = 0,
+    dropped_missing_outcome_rows: int = 0,
+    time_column_note: str | None = None,
     cohort_counts: dict[str, Any] | None = None,
     locked_errors: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
@@ -3182,10 +3288,7 @@ def _finalize_deep_comparison(
         )
     if errors:
         cautions.append(f"{len(errors)} deep model fit(s) failed and were excluded from the ranking.")
-    if int(dropped_nonpositive_time_rows) > 0:
-        cautions.append(
-            f"{int(dropped_nonpositive_time_rows)} row(s) with negative survival time were excluded before deep-model preprocessing."
-        )
+    cautions.extend(_cohort_cautions(dropped_nonpositive_time_rows, dropped_missing_outcome_rows, time_column_note))
     if evaluation_mode == "repeated_cv" and any(int(row.get("n_apparent_fallbacks", 0) or 0) > 0 for row in comparison):
         cautions.append(
             "Some repeated-CV folds fell back to apparent evaluation inside model training and were excluded from the repeated-CV aggregate."
@@ -3271,6 +3374,7 @@ def _finalize_deep_comparison(
             {"label": metric_name, "value": best.get("c_index")},
             {"label": "Evaluation mode", "value": result_evaluation_mode},
             {"label": "Dropped for negative time", "value": int(dropped_nonpositive_time_rows) or None},
+            {"label": "Dropped for missing outcome", "value": int(dropped_missing_outcome_rows) or None},
             {"label": "Failures", "value": len(errors) + len(locked_errors)},
         ],
     }
@@ -3797,10 +3901,10 @@ def train_deepsurv(
         first.loss_history,
         evaluation_mode,
         evaluation_note,
-        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
         unseen_category_rows=context.unseen_category_rows,
+        **_cohort_summary_fields(data),
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
@@ -4152,10 +4256,10 @@ def train_deephit(
         first.loss_history,
         evaluation_mode,
         evaluation_note,
-        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
         unseen_category_rows=context.unseen_category_rows,
+        **_cohort_summary_fields(data),
     )
 
     return {
@@ -4498,10 +4602,10 @@ def train_neural_mtlr(
         first.loss_history,
         evaluation_mode,
         evaluation_note,
-        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
         unseen_category_rows=context.unseen_category_rows,
+        **_cohort_summary_fields(data),
     )
 
     return {
@@ -4831,10 +4935,10 @@ def train_survival_transformer(
         first.loss_history,
         evaluation_mode,
         evaluation_note,
-        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
         unseen_category_rows=context.unseen_category_rows,
+        **_cohort_summary_fields(data),
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
@@ -5312,10 +5416,10 @@ def train_survival_vae(
         first.loss_history,
         evaluation_mode,
         evaluation_note,
-        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
         unseen_category_rows=context.unseen_category_rows,
+        **_cohort_summary_fields(data),
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
