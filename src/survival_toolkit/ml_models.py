@@ -1998,6 +1998,9 @@ def _prepare_training_matrices(
         drop_missing_extra_columns=False,
     )
     reject_numeric_text_features(frame, features, list(categorical_features or []))
+    # Feature types are decided once on the whole cohort (declared categorical features plus the
+    # text features the encoder one-hot codes), so a split never decides a feature's type anew.
+    resolved_categorical = _resolved_categorical_features(frame, features, categorical_features)
 
     if internal_evaluation:
         split = _prepare_model_evaluation_split(
@@ -2005,7 +2008,7 @@ def _prepare_training_matrices(
             time_column=time_column,
             event_column=event_column,
             features=features,
-            categorical_features=categorical_features,
+            categorical_features=resolved_categorical,
             random_state=random_state,
         )
         matrices = {
@@ -2023,7 +2026,7 @@ def _prepare_training_matrices(
             )
         }
     else:
-        feature_encoder = _fit_feature_encoder(frame, features, categorical_features)
+        feature_encoder = _fit_feature_encoder(frame, features, resolved_categorical)
         full_encoded = _transform_feature_encoder(frame, feature_encoder).reset_index(drop=True)
         full_frame = frame.reset_index(drop=True)
         if full_encoded.empty:
@@ -2052,9 +2055,8 @@ def _prepare_training_matrices(
     matrices["y_train"] = _prepare_sksurv_data(matrices["train_frame"], time_column, event_column)
     matrices["y_eval"] = _prepare_sksurv_data(matrices["eval_frame"], time_column, event_column)
     matrices["y_full"] = _prepare_sksurv_data(matrices["full_frame"], time_column, event_column)
-    matrices["imputed_numeric_counts"] = _median_imputed_counts(frame, features, categorical_features)
-    # Declared categorical features plus the text features the encoder one-hot codes.
-    matrices["categorical_features"] = _resolved_categorical_features(frame, features, categorical_features)
+    matrices["imputed_numeric_counts"] = _median_imputed_counts(frame, features, resolved_categorical)
+    matrices["categorical_features"] = resolved_categorical
     matrices["unseen_category_rows"] = (
         _unseen_category_rows(matrices["train_frame"], matrices["eval_frame"], matrices["categorical_features"])
         if matrices["evaluation_mode"] == "holdout"
@@ -2611,6 +2613,8 @@ def compare_survival_models(
         drop_missing_extra_columns=False,
     )
     reject_numeric_text_features(frame, features, list(categorical_features or []))
+    # Feature types are decided once on the whole cohort, so no split decides a feature's type anew.
+    resolved_categorical = _resolved_categorical_features(frame, features, categorical_features)
 
     n_patients = int(frame.shape[0])
     n_events = int(frame[event_column].sum())
@@ -2649,7 +2653,7 @@ def compare_survival_models(
                 time_column=time_column,
                 event_column=event_column,
                 features=features,
-                categorical_features=categorical_features,
+                categorical_features=resolved_categorical,
                 random_state=random_state,
                 **extra_kwargs,
             )
@@ -2732,14 +2736,13 @@ def compare_survival_models(
     duplicate_caution = duplicate_identifier_caution(df)
     if duplicate_caution:
         scientific_summary["cautions"].insert(0, duplicate_caution)
-    resolved_categorical = _resolved_categorical_features(frame, features, categorical_features)
     unseen_caution = _unseen_category_caution(
         _unseen_category_rows(train_frame, test_frame, resolved_categorical) if evaluation_mode == "holdout" else 0,
         "evaluation",
     )
     if unseen_caution:
         scientific_summary["cautions"].append(unseen_caution)
-    imputed_counts = _median_imputed_counts(frame, features, categorical_features)
+    imputed_counts = _median_imputed_counts(frame, features, resolved_categorical)
     imputation_caution = _median_imputation_caution(imputed_counts)
     if imputation_caution:
         scientific_summary["cautions"].append(imputation_caution)
@@ -3425,8 +3428,9 @@ def cross_validate_survival_models(
         drop_missing_extra_columns=False,
     )
     reject_numeric_text_features(frame, features, list(categorical_features or []))
+    # Feature types are decided once on the whole cohort, so no fold decides a feature's type anew.
     resolved_categorical = _resolved_categorical_features(frame, features, categorical_features)
-    imputed_counts = _median_imputed_counts(frame, features, categorical_features)
+    imputed_counts = _median_imputed_counts(frame, features, resolved_categorical)
     n_patients = int(frame.shape[0])
     n_events = int(frame[event_column].sum())
     source_rows = _frame_source_rows(frame)
@@ -3495,7 +3499,7 @@ def cross_validate_survival_models(
                         time_column=time_column,
                         event_column=event_column,
                         features=features,
-                        categorical_features=categorical_features,
+                        categorical_features=resolved_categorical,
                         random_state=repeat_seed,
                         **extra_kwargs,
                     )
@@ -3554,7 +3558,7 @@ def cross_validate_survival_models(
                     time_column=time_column,
                     event_column=event_column,
                     features=features,
-                    categorical_features=categorical_features,
+                    categorical_features=resolved_categorical,
                     random_state=random_state,
                     **extra_kwargs,
                 )

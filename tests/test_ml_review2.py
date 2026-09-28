@@ -739,6 +739,28 @@ def test_results_name_the_features_coded_as_categorical(monkeypatch) -> None:
 
 
 @requires_sksurv
+def test_splits_keep_the_feature_types_decided_on_the_whole_cohort(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=20, n_patients=200).copy()
+    code = pd.Series(np.random.default_rng(4).integers(1, 13, size=len(df)).astype(str), index=df.index, dtype=object)
+    held_out = set(_holdout_rows(df, ["age"], 43))
+    code.loc[sorted(held_out)] = "x"
+    code.loc[[index for index in df.index if index not in held_out][:2]] = "x"
+    df["code"] = code
+    # On the whole cohort "code" is a text feature with 13 levels, 22.5% of them "x", so it is
+    # categorical; the training split alone would look like numbers with two stray entries.
+    fitted = ml.train_gradient_boosted_survival(df, "os_months", "os_event", ["age", "code"], n_estimators=5,
+                                                compute_importance=False, compute_brier=False)
+    assert fitted["categorical_features"] == ["code"]
+    assert fitted["_feature_encoder"]["categorical_features"] == ["code"]
+    _patch_fits(monkeypatch, ml, _fit_evaluate_gbs_split=ml._fit_evaluate_gbs_split)
+    comparison = ml.compare_survival_models(df, "os_months", "os_event", ["age", "code"], n_estimators=5)
+    assert comparison["errors"] == []
+    assert next(row for row in comparison["comparison_table"] if row["model"] == "Gradient Boosted Survival")["c_index"] is not None
+
+
+@requires_sksurv
 def test_counterfactual_without_a_fitted_encoder_keeps_the_categorical_target_levels() -> None:
     from survival_toolkit import ml_models as ml
 
