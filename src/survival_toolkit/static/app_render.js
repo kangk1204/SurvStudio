@@ -101,7 +101,10 @@ function renderInsightBoard(container, summary, emptyMessage) {
     </article>`;
 }
 
-function deriveGroupCountLabel(group) {
+// Only an optimal cutpoint names its groups by risk direction; the High and Low of the other splits are the
+// source values.
+function deriveGroupCountLabel(group, method) {
+  if (method !== "optimal_cutpoint") return group;
   if (group === "High") return "High risk";
   if (group === "Low") return "Low risk";
   return group;
@@ -140,12 +143,28 @@ function deriveMethodUsesCutoff(method) {
   return method === "percentile_split" || method === "extreme_split";
 }
 
+// Percentile specs compare as numbers, the way the server reads them: "25, 25.0" is its "25,25".
+function normalizeDerivePercentileSpec(value) {
+  return normalizeDeriveSummaryText(value)
+    .split(",")
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .map((token) => normalizeDeriveSummaryNumber(token))
+    .join(",");
+}
+
+// A blank Column name asks for the automatic name, "<source>__<method>" ("_2", "_3", ... when it is taken).
+function isAutomaticDerivedColumnName(name, sourceColumn, method) {
+  const base = `${sourceColumn}__${method}`;
+  return name === base || (name.startsWith(`${base}_`) && /^\d+$/.test(name.slice(base.length + 1)));
+}
+
 function currentDeriveDraftConfig() {
   const method = normalizeDeriveSummaryText(refs.deriveMethod?.value);
   return {
     sourceColumn: normalizeDeriveSummaryText(refs.deriveSource?.value),
     method,
-    cutoffText: deriveMethodUsesCutoff(method) ? normalizeDeriveSummaryText(refs.deriveCutoff?.value) : "",
+    cutoffText: deriveMethodUsesCutoff(method) ? normalizeDerivePercentileSpec(refs.deriveCutoff?.value) : "",
     columnName: normalizeDeriveSummaryText(refs.deriveColumnName?.value),
     minGroupFraction: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(refs.deriveMinGroupFraction?.value) : "",
     permutationIterations: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(refs.derivePermutationIterations?.value) : "",
@@ -161,7 +180,7 @@ function storedDeriveRecipeConfig(derivedColumn, summary) {
     sourceColumn: normalizeDeriveSummaryText(recipe.source_column),
     method,
     cutoffText: deriveMethodUsesCutoff(method)
-      ? normalizeDeriveSummaryText(recipe.cutoff_spec ?? summary?.cutoff_spec ?? recipe.cutoff ?? summary?.cutoff)
+      ? normalizeDerivePercentileSpec(recipe.cutoff_spec ?? summary?.cutoff_spec ?? recipe.cutoff ?? summary?.cutoff)
       : "",
     columnName: normalizeDeriveSummaryText(recipe.column_name || normalizedColumn),
     minGroupFraction: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(recipe.min_group_fraction ?? summary?.min_group_fraction) : "",
@@ -175,7 +194,8 @@ function deriveDraftMatchesStoredRecipe(derivedColumn, summary) {
   if (!Object.values(stored).some(Boolean)) return true;
   const draft = currentDeriveDraftConfig();
   return ["sourceColumn", "method", "cutoffText", "columnName", "minGroupFraction", "permutationIterations", "randomSeed"]
-    .every((key) => draft[key] === stored[key]);
+    .every((key) => draft[key] === stored[key]
+      || (key === "columnName" && !draft.columnName && isAutomaticDerivedColumnName(stored.columnName, stored.sourceColumn, stored.method)));
 }
 
 function currentDerivedSummaryPayload() {
@@ -262,7 +282,7 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
     ${counts.length ? `
       <div class="count-summary-label">${escapeHtml(currentUsesDerived ? "Counts for the current derived grouping" : "Counts for the stored derived column")}</div>
       <div class="count-strip">
-        ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(deriveGroupCountLabel(item.group))}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
+        ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(deriveGroupCountLabel(item.group, summary?.method))}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
       </div>
     ` : ""}
     <div class="signature-summary-grid">

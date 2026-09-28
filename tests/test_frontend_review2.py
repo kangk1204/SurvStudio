@@ -506,3 +506,66 @@ def test_unticking_all_event_columns_is_an_endpoint_change(tmp_path: Path) -> No
     assert "26 events" in result["unticked"]["line"]
     assert "not a standard event column name" in result["blocked"]
     assert "30 events" in result["afterTick"]
+
+
+# ── Derived groupings ───────────────────────────────────────────
+
+
+def test_only_an_optimal_cutpoint_labels_its_groups_as_risk(tmp_path: Path) -> None:
+    """R13-1: a median split's "High"/"Low" are source values, not risk groups."""
+    result = _run_page(tmp_path, r"""
+      const pills = (method) => {
+        page.context.__method = method;
+        page.run(`renderDerivedGroupSummary("biomarker__" + __method, { method: __method, counts: [{ group: "Low", n: 22 }, { group: "High", n: 18 }] })`);
+        return page.run("refs.deriveSummary.querySelectorAll('.count-pill span').map((span) => span.textContent)");
+      };
+      return { median: pills("median_split"), optimal: pills("optimal_cutpoint") };
+    """)
+
+    assert result == {"median": ["Low", "High"], "optimal": ["Low risk", "High risk"]}
+
+
+def _derive_script(controls: str, recipe: str) -> str:
+    return r"""
+      await loadDataset(page, fixtures.dataset);
+      page.run("activateTab('cox'); refs.derivePanel.classList.remove('hidden'); syncDeriveToggleButton();");
+      page.change("#deriveSource", "biomarker");
+    """ + controls + r"""
+      const recipe = """ + recipe + r""";
+      const columns = [...fixtures.dataset.columns, { name: recipe.column_name, kind: "categorical", n_unique: 2, unique_preview: ["Low", "High"], missing: 0, non_missing: 40 }];
+      page.fetchHandler = (request) => (request.url.endsWith("/api/derive-group")
+        ? { status: 200, body: { ...fixtures.dataset, dataset_id: "synthetic-2", columns, derived_column: recipe.column_name,
+            derive_summary: { method: recipe.method, cutoff_spec: recipe.cutoff_spec || null, counts: [{ group: "Low", n: 22 }, { group: "High", n: 18 }], recipe } } }
+        : { status: 200, body: { preview: { analyzable_rows: 40, outcome_rows: 40, events: 26, estimated_parameters: 1, events_per_parameter: 26 } } });
+      page.run("refs.deriveButton.click()");
+      await page.settle();
+      const notes = () => page.run("refs.deriveSummary.querySelectorAll('.note-box').map((note) => note.textContent).join(' | ')");
+      const created = { group: page.run("refs.groupColumn.value"), notes: notes() };
+      page.change("#deriveMethod", "tertile_split");
+      return { created, afterEdit: notes() };
+    """
+
+
+def test_a_blank_column_name_describes_the_automatically_named_grouping(tmp_path: Path) -> None:
+    """R13-4: right after Create with a blank name, the card does not say the controls "do not describe" it."""
+    result = _run_page(tmp_path, _derive_script(
+        r"""page.change("#deriveMethod", "median_split"); page.change("#deriveColumnName", "");""",
+        r"""{ source_column: "biomarker", column_name: "biomarker__median_split_2", method: "median_split" }""",
+    ), dataset=_synthetic_dataset())
+
+    assert result["created"]["group"] == "biomarker__median_split_2"
+    assert "do not describe" not in result["created"]["notes"]
+    # A real edit of the draft still says so.
+    assert "They do not describe biomarker__median_split_2." in result["afterEdit"]
+
+
+def test_percentile_specs_compare_as_numbers(tmp_path: Path) -> None:
+    """R13-4: "25, 25" typed in the form is the server's "25,25"."""
+    result = _run_page(tmp_path, _derive_script(
+        r"""page.change("#deriveMethod", "percentile_split"); page.change("#deriveCutoff", "25, 25.0"); page.change("#deriveColumnName", "tails");""",
+        r"""{ source_column: "biomarker", column_name: "tails", method: "percentile_split", cutoff_spec: "25,25" }""",
+    ), dataset=_synthetic_dataset())
+
+    assert result["created"]["group"] == "tails"
+    assert "do not describe" not in result["created"]["notes"]
+    assert "They do not describe tails." in result["afterEdit"]
