@@ -2798,12 +2798,17 @@ def test_csv_loader_handles_single_column_decimal_comma_and_utf16() -> None:
     assert load_dataframe("time,event\n1,0\n2,1\n".encode("utf-16"), "u16.csv")["event"].tolist() == [0, 1]
 
 
-def test_median_follow_up_and_km_median_use_s_le_half_convention() -> None:
+def test_median_follow_up_and_km_median_follow_r_survfit() -> None:
     from survival_toolkit.analysis import _median_follow_up
 
+    # R survfit: a curve that stays at 0.5 to the end keeps the time it reached 0.5 ...
     assert _median_follow_up(pd.Series([1.0, 2.0, 3.0, 4.0]), pd.Series([0, 0, 1, 1])) == pytest.approx(2.0)
     km = compute_km_analysis(pd.DataFrame({"t": [1.0, 2.0, 3.0, 4.0], "e": [1, 1, 0, 0]}), "t", "e")
     assert km["summary_table"][0]["Median survival"] == pytest.approx(2.0)
+    # ... and one that drops below 0.5 later takes the midpoint of the flat stretch.
+    assert _median_follow_up(pd.Series(np.arange(1.0, 7.0)), pd.Series([0, 0, 0, 0, 1, 1])) == pytest.approx(3.5)
+    km = compute_km_analysis(pd.DataFrame({"t": [1.0, 2.0, 3.0, 4.0], "e": [1, 1, 1, 1]}), "t", "e")
+    assert km["summary_table"][0]["Median survival"] == pytest.approx(2.5)
 
 
 def test_signature_discovery_accepts_boolean_candidates() -> None:

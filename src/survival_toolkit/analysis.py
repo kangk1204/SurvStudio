@@ -4707,21 +4707,33 @@ def _signature_scientific_summary(
 
 
 def _km_median_time(times: np.ndarray, events: np.ndarray) -> float | None:
-    """Smallest time with Kaplan-Meier S(t) <= 0.5 (lifelines/SAS convention).
+    """Kaplan-Meier median survival as R's survfit reports it (print and summary tables).
 
-    ``SurvfuncRight.quantile`` requires S(t) < 0.5 strictly, so it skips a time
-    where the curve lands exactly on 0.5 (common with small or even-sized groups).
+    The median is the first time with S(t) <= 0.5. When the curve lands exactly on 0.5 (within
+    sqrt(machine epsilon), as in R) and drops below it later, the median is the midpoint between
+    that time and the time of the drop, so four patients dying at times 1..4 have median 2.5,
+    as the ordinary sample median (SAS PROC LIFETEST takes the same midpoint; lifelines returns
+    the left end). A curve that stays at 0.5 to the end of follow-up has median at the time it
+    reached 0.5. ``SurvfuncRight.quantile`` requires S(t) < 0.5 strictly and skips that time.
     """
     sf = SurvfuncRight(np.asarray(times, dtype=float), np.asarray(events, dtype=float))
     survival = np.asarray(sf.surv_prob, dtype=float)
-    reached = np.flatnonzero(survival <= 0.5 + 1e-12)
+    event_times = np.asarray(sf.surv_times, dtype=float)
+    tolerance = math.sqrt(float(np.finfo(float).eps))
+    reached = np.flatnonzero(survival < 0.5 + tolerance)
     if reached.size == 0:
         return None
-    return _safe_float(float(np.asarray(sf.surv_times, dtype=float)[reached[0]]))
+    first = int(reached[0])
+    median = float(event_times[first])
+    if abs(float(survival[first]) - 0.5) < tolerance:
+        drops = np.flatnonzero(survival[first:] < survival[first])
+        if drops.size:
+            median = (median + float(event_times[first + int(drops[0])])) / 2.0
+    return _safe_float(median)
 
 
 def _median_follow_up(time_values: pd.Series, event_values: pd.Series) -> float | None:
-    """Reverse Kaplan-Meier median follow-up (censoring treated as the event)."""
+    """Reverse Kaplan-Meier median follow-up (censoring treated as the event), with R's median rule."""
     censor_status = 1 - event_values.astype(int)
     if censor_status.sum() == 0:
         return None

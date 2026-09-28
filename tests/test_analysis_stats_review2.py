@@ -568,3 +568,36 @@ def test_numbers_stored_as_text_are_numeric_cox_covariates() -> None:
     assert preview(coded, "os_months", "os_event", ["age", "stage"])["categorical_covariates"] == ["age", "stage"]
     mixed = as_text.assign(age=as_text["age"].where(df.index % 7 != 0, "unknown"))
     assert preview(mixed, "os_months", "os_event", ["age", "stage"])["categorical_covariates"] == ["age", "stage"]
+
+
+# ---------------------------------------------------------------------------------------
+# Median survival and median follow-up (R4#5)
+
+
+@pytest.mark.parametrize(
+    ("times", "events", "r_median"),
+    [
+        # R: summary(survfit(Surv(times, events) ~ 1))$table["median"].
+        ([1, 2, 3, 4], [1, 1, 1, 1], 2.5),
+        ([1, 2, 3, 4], [1, 1, 0, 0], 2.0),
+        ([1, 2, 3, 4, 5], [1, 1, 0, 1, 0], 4.0),
+        ([1, 2, 3, 4, 5, 6], [1, 1, 1, 1, 1, 1], 3.5),
+        ([1, 1, 2, 2], [1, 1, 1, 1], 1.5),
+        ([1, 2, 2, 3, 4, 5], [1, 1, 1, 1, 1, 1], 2.5),
+        ([1, 2, 3, 4, 5, 6], [1, 1, 1, 0, 1, 1], 4.0),
+        ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [1, 0, 1, 0, 1, 1, 0, 1, 1, 1], 8.0),
+    ],
+)
+def test_km_median_matches_r_survfit(times: list[int], events: list[int], r_median: float) -> None:
+    frame = pd.DataFrame({"t": np.asarray(times, dtype=float), "e": events})
+    km = analysis.compute_km_analysis(frame, "t", "e")
+    assert km["summary_table"][0]["Median survival"] == pytest.approx(r_median, abs=1e-12)
+
+
+def test_median_follow_up_uses_the_same_rule_on_the_reverse_curve() -> None:
+    # R: survfit(Surv(t, 1 - e) ~ 1) medians 3.5 and 2.
+    follow_up = analysis._median_follow_up
+    assert follow_up(pd.Series(np.arange(1.0, 7.0)), pd.Series([0, 0, 0, 0, 1, 1])) == pytest.approx(3.5)
+    assert follow_up(pd.Series([1.0, 2.0, 3.0, 4.0]), pd.Series([0, 0, 1, 1])) == pytest.approx(2.0)
+    km = analysis.compute_km_analysis(pd.DataFrame({"t": np.arange(1.0, 7.0), "e": [0, 0, 0, 0, 1, 1]}), "t", "e")
+    assert km["cohort"]["median_follow_up"] == pytest.approx(3.5)
