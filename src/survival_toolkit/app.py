@@ -65,10 +65,13 @@ from survival_toolkit import __version__ as SURVSTUDIO_VERSION
 from survival_toolkit.concurrency import cancellation_scope, raise_if_cancelled
 from survival_toolkit.design_audit import audit_design, design_from_dict
 from survival_toolkit.errors import (
+    DependencyError,
     InternalAnalysisError,
     JobCancelledError,
     NotFoundError,
     UserInputError,
+    _raised_by_survstudio,
+    is_programming_error,
     must_propagate,
     user_input_boundary,
 )
@@ -1802,6 +1805,19 @@ def _raw_feature_encoded_widths(feature_encoder: dict[str, Any], requested_featu
     return widths
 
 
+def _must_propagate_through_boundary(exc: BaseException) -> bool:
+    """``must_propagate``, also for a coding error that ``user_input_boundary`` wrapped.
+
+    The public analysis functions turn a TypeError raised by SurvStudio code into an
+    InternalAnalysisError; that is still a coding error, not a failure to report as a result.
+    """
+
+    if must_propagate(exc):
+        return True
+    cause = exc.__cause__
+    return isinstance(exc, InternalAnalysisError) and cause is not None and must_propagate(cause)
+
+
 def _coerce_score(value: Any) -> float | None:
     try:
         score = float(value)
@@ -2604,25 +2620,34 @@ def _export_provenance_notes(provenance: dict[str, Any] | None) -> list[str]:
     return notes
 
 
+# Memory exhaustion reported by PyTorch ("CUDA out of memory", "DefaultCPUAllocator: can't allocate memory").
+_OUT_OF_MEMORY_MESSAGE = re.compile(r"\bout of memory\b|\bcan(?:'|no)t allocate memory\b", re.IGNORECASE)
+# Non-finite values named in a library message, as whole words ("infer" or "information" do not count).
+_NON_FINITE_MESSAGE = re.compile(r"\b(?:nan|inf|infinity|non-finite|overflow|underflow)\b|too large for dtype", re.IGNORECASE)
+_UNPROCESSABLE_REQUEST_DETAIL = "The request could not be processed with the selected dataset and settings."
+
+
 def _classify_runtime_request_error(exc: Exception) -> tuple[int, str] | None:
+    """The 4xx status and guidance for a numerical failure that the request's data or settings cause.
+
+    Only specific exception types count, and messages only by whole words: a message that merely
+    contains "shape", "alloc" or "inf" (as in "Could not infer dtype") is a server fault and is
+    reported as one.
+    """
+
     if isinstance(exc, np.linalg.LinAlgError):
         return (
             400,
             "The analysis hit a linear-algebra stability problem (for example, a singular or redundant design matrix). "
             "Reduce overlapping variables, sparse categories, or feature count and try again.",
         )
-
-    raw_message = str(exc).strip()
-    lowered = raw_message.lower()
     if type(exc).__name__ == "ConvergenceError":
         return (
             400,
             "The model did not converge. Reduce overlapping variables, sparse categories, or feature count and try again.",
         )
     if isinstance(exc, InternalAnalysisError):
-        cause_message = str(exc.__cause__ or "").lower()
-        if any(token in cause_message for token in ("nan", "infinity", "inf ", "non-finite", "too large for dtype")):
-            logger.warning("Analysis rejected non-finite internal values", exc_info=exc)
+        if _NON_FINITE_MESSAGE.search(str(exc.__cause__ or "")):
             return (
                 400,
                 "The analysis encountered missing, infinite, or out-of-range values in the selected columns. "
@@ -2635,72 +2660,98 @@ def _classify_runtime_request_error(exc: Exception) -> tuple[int, str] | None:
             "The analysis hit a numerical stability problem. Reduce sparse levels, simplify the model, or narrow the feature set and try again.",
         )
     if isinstance(exc, RuntimeError):
-        if any(token in lowered for token in ("out of memory", "cuda", "cudnn", "cublas", "allocator", "alloc")):
+        message = str(exc)
+        if type(exc).__name__ == "OutOfMemoryError" or _OUT_OF_MEMORY_MESSAGE.search(message):
             return (
                 400,
-                "The run ran out of memory or hit a CUDA runtime limit. Reduce batch size, model width, or feature count and try again.",
+                "The run ran out of memory. Reduce batch size, model width, or feature count and try again.",
             )
-        if any(token in lowered for token in ("nan", "inf", "non-finite", "numerical", "overflow", "underflow")):
+        if _NON_FINITE_MESSAGE.search(message):
             return (
                 400,
                 "The run became numerically unstable. Check for invalid values, simplify the model, or reduce the learning rate and try again.",
             )
-        if any(token in lowered for token in ("size mismatch", "shape", "dimension")):
-            return (
-                400,
-                "The run failed because the model inputs were incompatible with the requested configuration. Review the selected features and model settings.",
-            )
     return None
 
 
+def _dependency_error_detail(exc: ImportError) -> str:
+    """What a 503 says about a package that could not be imported.
+
+    SurvStudio's own install hints (a DependencyError, or an ImportError that SurvStudio code
+    raised with a message) are shown as written. A library's import failure can name server
+    paths, so it is summarised by the module that is missing.
+    """
+
+    if isinstance(exc, DependencyError) or (exc.name is None and exc.path is None and _raised_by_survstudio(exc)):
+        message = str(exc).strip()
+        if message:
+            return message
+    module = str(exc.name or "").split(".", 1)[0]
+    subject = f'The package "{module}"' if module else "A package"
+    return (
+        f"{subject} that this analysis needs is not installed or could not be loaded. Install SurvStudio's optional "
+        'dependencies (for example pip install -e ".[all]") and restart it; the server log has the details.'
+    )
+
+
 def fail_bad_request(exc: Exception) -> NoReturn:
+    """Raise the HTTP error for an exception from a request handler.
+
+    User input errors keep their message (404 for a missing dataset or column, else 400).
+    Numerical failures caused by the data map to a 400 with guidance, and an untyped
+    ValueError to a generic 400. TypeErrors, the coding errors `is_programming_error` names and
+    every other failure are 500s with a generic message. Every path but a user input error is
+    logged with its traceback.
+    """
+
     if isinstance(exc, HTTPException):
         raise exc
     if isinstance(exc, JobCancelledError):
         # 499 (client closed request): the page abandoned this request, nobody reads the body.
+        logger.info("Request cancelled by its client: %s", exc)
         raise HTTPException(status_code=499, detail=str(exc)) from exc
+    if isinstance(exc, UserInputError):
+        status_code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    exc_info = (type(exc), exc, exc.__traceback__)
     if isinstance(exc, MemoryError):
+        logger.error("Request ran out of memory", exc_info=exc_info)
         raise HTTPException(
             status_code=500,
             detail="The analysis ran out of memory. Reduce the cohort size, feature count, or model complexity and try again.",
         ) from exc
     if isinstance(exc, csv.Error):
         # Raised by the csv module for an over-long field or broken quoting in an uploaded file.
+        logger.warning("Rejected an unreadable delimited upload", exc_info=exc_info)
         raise HTTPException(
             status_code=400,
             detail="The file could not be read as delimited text: a field is too long or its quoting is malformed.",
         ) from exc
     if isinstance(exc, UnicodeDecodeError):
+        logger.warning("Rejected an upload that is not UTF-8 text", exc_info=exc_info)
         raise HTTPException(
             status_code=400,
             detail="The file is not valid UTF-8 text. Save it as UTF-8 (for example \"CSV UTF-8\" in Excel) and try again.",
         ) from exc
     runtime_classification = _classify_runtime_request_error(exc)
     if runtime_classification is not None:
+        logger.warning("Request failed on its data or settings (%s)", type(exc).__name__, exc_info=exc_info)
         status_code, detail = runtime_classification
         raise HTTPException(status_code=status_code, detail=detail) from exc
     if isinstance(exc, ImportError):
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if isinstance(exc, NotFoundError):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if isinstance(exc, UserInputError):
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.error("A package the request needs could not be imported", exc_info=exc_info)
+        raise HTTPException(status_code=503, detail=_dependency_error_detail(exc)) from exc
     if isinstance(exc, InternalAnalysisError):
-        logger.error(
-            "Unexpected internal analysis error",
-            exc_info=(type(exc), exc, exc.__traceback__),
-        )
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    if isinstance(exc, (ValueError, TypeError)):
-        raise HTTPException(
-            status_code=400,
-            detail="The request could not be processed with the selected dataset and settings.",
-        ) from exc
-    logger.exception(
-        "Unhandled SurvStudio request error",
-        exc_info=(type(exc), exc, exc.__traceback__),
-    )
-    raise exc
+        logger.error("Unexpected internal analysis error", exc_info=exc_info)
+        raise HTTPException(status_code=500, detail=str(exc) or InternalAnalysisError.default_message) from exc
+    if isinstance(exc, TypeError) or is_programming_error(exc):
+        logger.error("SurvStudio coding error while handling a request", exc_info=exc_info)
+        raise HTTPException(status_code=500, detail=InternalAnalysisError.default_message) from exc
+    if isinstance(exc, ValueError):
+        logger.warning("Request failed with an untyped ValueError", exc_info=exc_info)
+        raise HTTPException(status_code=400, detail=_UNPROCESSABLE_REQUEST_DETAIL) from exc
+    logger.error("Unhandled SurvStudio request error", exc_info=exc_info)
+    raise HTTPException(status_code=500, detail=InternalAnalysisError.default_message) from exc
 
 
 _P_VALUE_LABEL_TOKENS = frozenset({"p", "pvalue", "pvalues", "pval", "qvalue", "qvalues"})
@@ -4311,8 +4362,9 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                     raise
                 except Exception as exc:
                     # A cancelled request or a coding error is not a SHAP failure to report next to the model.
-                    if must_propagate(exc):
+                    if _must_propagate_through_boundary(exc):
                         raise
+                    logger.warning("SHAP explanation failed; the model is reported without it", exc_info=exc)
                     shap_error = f"{type(exc).__name__}: {exc}"
                     if request_model.shap_safe_mode and "high-dimensional inputs" in str(exc).lower():
                         subset = _select_shap_safe_mode_subset(result, request_model.features)
@@ -4363,8 +4415,9 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                             except (MemoryError, KeyboardInterrupt):
                                 raise
                             except Exception as safe_mode_exc:
-                                if must_propagate(safe_mode_exc):
+                                if _must_propagate_through_boundary(safe_mode_exc):
                                     raise
+                                logger.warning("SHAP safe mode failed as well", exc_info=safe_mode_exc)
                                 shap_error = (
                                     f"{type(exc).__name__}: {exc} "
                                     f"SHAP safe mode also failed: {type(safe_mode_exc).__name__}: {safe_mode_exc}"
@@ -5045,11 +5098,15 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
                     random_seed=request_model.random_seed,
                     marker_scaling=request_model.marker_scaling,
                 )
-            except KeyError as exc:
-                raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
-            except (AttributeError, IndexError, TypeError) as exc:
-                # The recipe is client JSON guarded only by a content hash, which a client can recompute.
-                logger.warning("Rejected a malformed marker recipe", exc_info=exc)
+            except (KeyError, AttributeError, IndexError) as exc:
+                # The recipe is client JSON guarded only by a content hash, which a client can recompute, so a
+                # missing or mistyped field surfaces as a lookup error in SurvStudio's own code. The same errors
+                # raised inside a library are coding errors and reach the error handler (a logged 500).
+                if not _raised_by_survstudio(exc):
+                    raise
+                logger.warning("Rejected an incomplete or malformed marker recipe", exc_info=exc)
+                if isinstance(exc, KeyError):
+                    raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
                 raise UserInputError("The recipe is malformed; export it again from a marker evaluation.") from exc
             return _attach_dataset_hash(
                 {

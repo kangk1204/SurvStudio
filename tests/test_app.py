@@ -2744,9 +2744,14 @@ def test_missing_dataset_returns_404() -> None:
     assert "Unknown dataset id" in response.json()["detail"]
 
 
-def test_fail_bad_request_reraises_server_errors() -> None:
-    with pytest.raises(RuntimeError, match="boom"):
-        fail_bad_request(RuntimeError("boom"))
+def test_fail_bad_request_reports_unknown_server_errors_as_logged_generic_500(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("ERROR", logger="survival_toolkit.app"):
+        with pytest.raises(HTTPException) as excinfo:
+            fail_bad_request(RuntimeError("boom"))
+
+    assert excinfo.value.status_code == 500
+    assert "unexpected internal error" in excinfo.value.detail and "boom" not in excinfo.value.detail
+    assert any(record.exc_info and "boom" in str(record.exc_info[1]) for record in caplog.records)
 
 
 def test_fail_bad_request_wraps_memory_errors_with_guidance() -> None:
@@ -2774,8 +2779,10 @@ def test_fail_bad_request_maps_linalg_errors_to_400() -> None:
 
 
 def test_fail_bad_request_maps_dependency_errors_to_503() -> None:
+    from survival_toolkit.errors import DependencyError
+
     with pytest.raises(HTTPException) as excinfo:
-        fail_bad_request(ImportError("scikit-survival is required"))
+        fail_bad_request(DependencyError("scikit-survival is required"))
 
     assert excinfo.value.status_code == 503
     assert "scikit-survival" in excinfo.value.detail
@@ -2964,9 +2971,12 @@ def test_ml_model_endpoint_handles_categorical_dummy_name_collision() -> None:
     assert "tgrade_III" in importance_features
 
 
-def test_fail_bad_request_reraises_raw_key_errors() -> None:
-    with pytest.raises(KeyError, match="internal_missing_key"):
+def test_fail_bad_request_reports_raw_key_errors_as_generic_500() -> None:
+    with pytest.raises(HTTPException) as excinfo:
         fail_bad_request(KeyError("internal_missing_key"))
+
+    assert excinfo.value.status_code == 500
+    assert "internal_missing_key" not in excinfo.value.detail
 
 
 def test_fail_bad_request_sanitizes_nonlocal_value_errors() -> None:
@@ -3027,9 +3037,10 @@ def test_cors_rejects_null_origin_but_allows_localhost() -> None:
 
 def test_ml_model_endpoint_reports_missing_dependency(monkeypatch) -> None:
     import survival_toolkit.ml_models as ml_models
+    from survival_toolkit.errors import DependencyError
 
     def _raise_missing_dependency(*args, **kwargs):
-        raise ImportError("scikit-survival is required for Random Survival Forest.")
+        raise DependencyError("scikit-survival is required for Random Survival Forest.")
 
     monkeypatch.setattr(ml_models, "train_random_survival_forest", _raise_missing_dependency)
 
@@ -3056,9 +3067,10 @@ def test_ml_model_endpoint_reports_missing_dependency(monkeypatch) -> None:
 
 def test_deep_model_endpoint_reports_missing_torch_dependency(monkeypatch) -> None:
     import survival_toolkit.deep_models as deep_models
+    from survival_toolkit.errors import DependencyError
 
     def _raise_missing_dependency(*args, **kwargs):
-        raise ImportError("PyTorch is required for deep learning models.")
+        raise DependencyError("PyTorch is required for deep learning models.")
 
     monkeypatch.setattr(deep_models, "evaluate_single_deep_survival_model", _raise_missing_dependency)
 

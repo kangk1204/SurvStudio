@@ -444,3 +444,180 @@ def test_cleaned_headers_never_take_the_name_of_an_untouched_column() -> None:
     frame = app_module.store.get(upload.json()["dataset_id"], copy_dataframe=False).dataframe
     assert frame["Overall survival (months)"].tolist()[:3] == [1.0, 2.0, 3.0]
     assert frame["Overall survival (months)_2"].tolist()[:3] == [1000.0, 1001.0, 1002.0]
+
+
+# ── Error mapping: server faults are logged 500s, data problems 4xx ──
+
+
+def _raised(exc: BaseException, *, module: str = "tests._probe") -> BaseException:
+    """``exc`` raised (so it carries a traceback) from code whose module is ``module``."""
+    namespace: dict = {"__name__": module}
+    exec("def _raise(exc):\n    raise exc\n", namespace)
+    try:
+        namespace["_raise"](exc)
+    except BaseException as caught:  # noqa: BLE001 - the probe re-raises whatever it is given
+        return caught
+    raise AssertionError("the probe did not raise")
+
+
+@pytest.mark.parametrize(
+    ("exc", "status", "detail"),
+    [
+        (RuntimeError("Could not infer dtype of numpy.object_"), 500, "unexpected internal error"),
+        (RuntimeError("mat1 and mat2 shapes cannot be multiplied (64x10 and 12x64)"), 500, "unexpected internal error"),
+        (RuntimeError("DataLoader worker (pid 123) is killed by signal (allocation)"), 500, "unexpected internal error"),
+        (RuntimeError("CUDA error: device-side assert triggered"), 500, "unexpected internal error"),
+        (RuntimeError("Expected all tensors to be on the same device, dimension 1"), 500, "unexpected internal error"),
+        (TypeError("unsupported operand type(s) for +: 'NoneType' and 'int'"), 500, "unexpected internal error"),
+        (AttributeError("'NoneType' object has no attribute 'fit'"), 500, "unexpected internal error"),
+        (RuntimeError("CUDA out of memory. Tried to allocate 20.00 MiB"), 400, "ran out of memory"),
+        (RuntimeError("DefaultCPUAllocator: can't allocate memory: you tried to allocate 8 bytes"), 400, "ran out of memory"),
+        (RuntimeError("Function 'MulBackward0' returned nan values in its 0th output."), 400, "numerically unstable"),
+        (ValueError("parser internals"), 400, "could not be processed"),
+    ],
+)
+def test_request_errors_are_classified_by_type_and_whole_words(
+    caplog: pytest.LogCaptureFixture, exc: Exception, status: int, detail: str
+) -> None:
+    from fastapi import HTTPException
+
+    raised = _raised(exc)
+    with caplog.at_level("WARNING", logger="survival_toolkit.app"):
+        with pytest.raises(HTTPException) as excinfo:
+            app_module.fail_bad_request(raised)
+    assert excinfo.value.status_code == status
+    assert detail in excinfo.value.detail
+    # Every path but a user input error is logged with its traceback.
+    assert any(record.exc_info and record.exc_info[1] is raised for record in caplog.records)
+
+
+def test_user_input_errors_keep_their_message_and_are_not_logged(caplog: pytest.LogCaptureFixture) -> None:
+    from fastapi import HTTPException
+
+    from survival_toolkit.errors import UserInputError
+
+    with caplog.at_level("WARNING", logger="survival_toolkit.app"):
+        with pytest.raises(HTTPException) as excinfo:
+            app_module.fail_bad_request(_raised(UserInputError("Choose at least one marker.")))
+    assert (excinfo.value.status_code, excinfo.value.detail) == (400, "Choose at least one marker.")
+    assert not caplog.records
+
+
+def test_import_errors_show_only_survstudio_install_hints() -> None:
+    from fastapi import HTTPException
+
+    from survival_toolkit.errors import DependencyError
+
+    library_failure = ImportError(
+        "cannot import name '_C' from 'torch' (/home/user/.venv/lib/python3.11/site-packages/torch/__init__.py)",
+        name="torch",
+        path="/home/user/.venv/lib/python3.11/site-packages/torch/__init__.py",
+    )
+    hint = "scikit-survival is required for Random Survival Forest."
+    cases = [
+        (_raised(library_failure), False),
+        (_raised(ImportError("pip install something from /srv/private/path")), False),
+        (_raised(ImportError(hint), module="survival_toolkit._import_probe"), True),
+        (_raised(DependencyError(hint)), True),
+    ]
+    for exc, shows_message in cases:
+        with pytest.raises(HTTPException) as excinfo:
+            app_module.fail_bad_request(exc)
+        assert excinfo.value.status_code == 503
+        detail = excinfo.value.detail
+        assert "/home/user" not in detail and "/srv/private" not in detail
+        assert (detail == hint) is shows_message, detail
+    with pytest.raises(HTTPException) as excinfo:
+        app_module.fail_bad_request(_raised(library_failure))
+    assert '"torch"' in excinfo.value.detail
+
+
+def _shap_request() -> dict:
+    return {
+        "dataset_id": client.post("/api/load-example").json()["dataset_id"],
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "features": ["age", "biomarker_score"],
+        "model_type": "rsf",
+        "n_estimators": 10,
+        "compute_shap": True,
+    }
+
+
+def test_shap_coding_errors_behind_the_input_boundary_are_server_errors(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pytest.importorskip("sksurv")
+    import survival_toolkit.ml_models as ml_models
+    from survival_toolkit.errors import user_input_boundary
+
+    # A TypeError raised by SurvStudio code reaches the endpoint as an InternalAnalysisError.
+    namespace: dict = {"__name__": "survival_toolkit._shap_probe"}
+    exec("def broken(*args, **kwargs):\n    return None + 1\n", namespace)
+    monkeypatch.setattr(ml_models, "compute_shap_values", user_input_boundary(namespace["broken"]))
+    lenient = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    with caplog.at_level("ERROR", logger="survival_toolkit.app"):
+        response = lenient.post("/api/ml-model", json=_shap_request())
+    assert response.status_code == 500, response.text
+    assert "unexpected internal error" in _detail(response)
+    assert any(record.exc_info for record in caplog.records)
+
+
+def test_shap_data_failures_are_reported_next_to_the_model_and_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    pytest.importorskip("sksurv")
+    import survival_toolkit.ml_models as ml_models
+    from survival_toolkit.errors import user_input_boundary
+
+    # A ValueError raised inside a library is wrapped the same way but is a genuine SHAP failure.
+    namespace: dict = {"__name__": "shap._probe"}
+    exec("def failing(*args, **kwargs):\n    raise ValueError('The explainer could not handle this model')\n", namespace)
+    monkeypatch.setattr(ml_models, "compute_shap_values", user_input_boundary(namespace["failing"]))
+    with caplog.at_level("WARNING", logger="survival_toolkit.app"):
+        response = client.post("/api/ml-model", json=_shap_request())
+    assert response.status_code == 200, response.text
+    assert response.json()["shap_error"]
+    assert any("SHAP" in record.getMessage() and record.exc_info for record in caplog.records)
+
+
+def _locked_recipe() -> tuple[str, dict]:
+    dataset_id = client.post("/api/load-example").json()["dataset_id"]
+    body = {
+        "dataset_id": dataset_id,
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "event_positive_value": 1,
+        "marker_columns": ["biomarker_score", "immune_index"],
+        "clinical_columns": ["age", "stage"],
+        "categorical_clinical": ["stage"],
+        "n_permutations": 9,
+        "n_resamples": 2,
+        "random_seed": 7,
+    }
+    response = client.post("/api/marker-evaluation", json=body)
+    assert response.status_code == 200, response.text
+    return dataset_id, response.json()["analysis"]["locked_recipe"]
+
+
+def test_incomplete_recipes_are_user_errors_but_library_lookup_errors_are_not(monkeypatch: pytest.MonkeyPatch) -> None:
+    import copy
+
+    from survival_toolkit.marker_evaluation import recipe_hash
+
+    dataset_id, recipe = _locked_recipe()
+    incomplete = copy.deepcopy(recipe)
+    del incomplete["outcome"]["event_positive_value"]
+    incomplete["recipe_hash"] = recipe_hash(incomplete)
+    response = client.post("/api/marker-validation", json={"dataset_id": dataset_id, "recipe": incomplete, "n_bootstrap": 0})
+    assert response.status_code == 400, response.text
+    # The recipe check may name the missing field itself; otherwise the lookup error is mapped here.
+    assert "recipe is incomplete" in _detail(response) or "locked model is malformed" in _detail(response)
+
+    def _library_key_error(*args, **kwargs):
+        return {}["missing"]  # raised outside SurvStudio code: a coding error, not a recipe problem
+
+    monkeypatch.setattr(app_module, "validate_locked_recipe", _library_key_error)
+    lenient = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    response = lenient.post("/api/marker-validation", json={"dataset_id": dataset_id, "recipe": recipe, "n_bootstrap": 0})
+    assert response.status_code == 500, response.text
