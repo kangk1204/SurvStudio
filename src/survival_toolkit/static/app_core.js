@@ -985,9 +985,24 @@ async function refreshCoxPreview({ force = false } = {}) {
   renderCoxPreviewLine();
 }
 
+// The key of the preview request the controls describe now; "" when there is none (no covariate, or an
+// endpoint that is not ready).
+function currentCoxPreviewKey() {
+  try {
+    return coxPreviewRequestKey(coxPreviewRequestFromCurrentState());
+  } catch {
+    return "";
+  }
+}
+
 function scheduleCoxPreview({ delay = 180, force = false } = {}) {
   if (runtime.coxPreviewTimer) {
     window.clearTimeout(runtime.coxPreviewTimer);
+  }
+  // A preview (or a message) for other settings leaves the line at once instead of after the debounce, and its
+  // request is cancelled, so the line never describes settings the controls no longer show.
+  if (runtime.coxPreview.status !== "idle" && runtime.coxPreview.key !== currentCoxPreviewKey()) {
+    resetCoxPreview();
   }
   const effectiveDelay = delay <= 0 ? 60 : delay;
   runtime.coxPreviewTimer = window.setTimeout(() => {

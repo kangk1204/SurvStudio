@@ -1120,6 +1120,31 @@ def test_cox_diagnostics_that_are_unavailable_say_why(tmp_path: Path, example_da
     assert result["martingale"] == {"hidden": False, "cardHidden": False, "text": "No continuous covariates to screen for functional form."}
 
 
+def test_a_cox_preview_of_other_settings_is_never_shown(tmp_path: Path, example_dataset: dict) -> None:
+    """R13-2/R14-11: once the covariates change, the old preview leaves the line at once, not after the debounce."""
+    result = _run_page(tmp_path, r"""
+      page.fetchHandler = (request) => {
+        if (!request.url.endsWith("/api/cox-preview")) return { status: 500, body: { detail: "unexpected" } };
+        const parameters = request.json().covariates.length;
+        return { status: 200, body: { preview: { analyzable_rows: 360, outcome_rows: 360, events: 250, estimated_parameters: parameters, events_per_parameter: 250 / parameters } } };
+      };
+      await loadDataset(page, fixtures.dataset);
+      await page.settle();
+      const line = () => page.run("refs.coxPreviewLine.textContent");
+      const before = line();
+      const extra = page.run(`allCheckboxValues(refs.covariateChecklist).find((value) => !/stage/.test(value)
+        && !selectedCheckboxValues(refs.covariateChecklist).includes(value))`);
+      page.change(`#covariateChecklist input[value="${extra}"]`, true);
+      const immediately = line();
+      await page.settle();
+      return { before, immediately, after: line(), selected: page.run("selectedCheckboxValues(refs.covariateChecklist).length") };
+    """, dataset=example_dataset)
+
+    assert f"{result['selected'] - 1} parameters" in result["before"]
+    assert result["immediately"] == ""
+    assert f"{result['selected']} parameters" in result["after"]
+
+
 def test_the_cox_preview_is_shown_as_soon_as_a_dataset_loads(tmp_path: Path, example_dataset: dict) -> None:
     """R13-14: the default Cox covariates get their usable-row preview without a click."""
     result = _run_page(tmp_path, _COX_PREVIEW + r"""
