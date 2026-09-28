@@ -258,7 +258,12 @@ async function runUnifiedPredictiveComparison() {
   const startFamily = predictiveFamilyGoal();
   // Both families must see the same seed, evaluation mode, CV design, and locked test set.
   alignPredictiveEvaluationControls(startFamily);
-  validatePredictiveEvaluationControls(startFamily);
+  // Everything both phases check is checked before the first starts, so an invalid DL setting does not
+  // surface only after the ML phase has run (each check includes the shared evaluation settings).
+  currentBaseConfig();
+  if (!currentSharedModelSelections("ml").features.length) throw new Error("Select at least one ML/DL model feature.");
+  validateMlControls({ compare: true });
+  validateDlControls({ compare: true });
   const startDatasetId = state.dataset?.dataset_id;
   const previousMlPayload = state.ml;
   const previousDlPayload = state.dl;
@@ -279,7 +284,8 @@ async function runUnifiedPredictiveComparison() {
     );
     if (superseded(mlAttempt)) return;
     const mlFreshCompare = Boolean(mlAttempt?.ok && benchmarkCompareRows("ml").length);
-    if (!mlFreshCompare) {
+    // A `busy` attempt never started: another run of that family holds its scope and owns its result.
+    if (!mlFreshCompare && !mlAttempt?.busy) {
       restorePredictiveFamilyAfterFailedCompare("ml", previousMlPayload);
     }
 
@@ -294,10 +300,13 @@ async function runUnifiedPredictiveComparison() {
     );
     if (superseded(dlAttempt)) return;
     const dlFreshCompare = Boolean(dlAttempt?.ok && benchmarkCompareRows("dl").length);
-    if (!dlFreshCompare) {
+    if (!dlFreshCompare && !dlAttempt?.busy) {
       restorePredictiveFamilyAfterFailedCompare("dl", previousDlPayload);
     }
 
+    const skippedFamilies = [["ml", mlAttempt], ["dl", dlAttempt]]
+      .filter(([, attempt]) => attempt?.busy)
+      .map(([goal]) => benchmarkGoalMeta(goal).label);
     const familyCount = Number(mlFreshCompare) + Number(dlFreshCompare);
     if (familyCount === 2) {
       runtime.compareCache.unified = {
@@ -314,6 +323,12 @@ async function runUnifiedPredictiveComparison() {
         successMessage: "Unified predictive comparison complete.",
         backgroundMessage: "Compare All Models finished in the background. Open Prediction models to review the leaderboard.",
       });
+    } else if (skippedFamilies.length) {
+      showToast(
+        `Compare All Models skipped ${skippedFamilies.join(" and ")} because another ${skippedFamilies.join(" and ")} run was already in progress. Run Compare All Models again when that run finishes.`,
+        "warning",
+        5200,
+      );
     } else if (familyCount === 1) {
       showToast("Predictive comparison finished, but only one model family returned comparison rows. Review the board and any error messages before trusting the result.", "warning", 4200);
     } else {

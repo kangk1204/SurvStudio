@@ -748,7 +748,7 @@ def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repea
     assert 'goHome({ syncHistory: true, historyMode: "replace" });' in text
     assert 'The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.' in text
     assert 'showError(errorMessageText(error));' in text
-    assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");' in text
+    assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || familyBusy("ml");' in text
     assert 'setActionDisabledState(refs.runMlButton, mlSingleDisabled, mlSingleTitle);' in text
     assert 'Run Analysis uses deterministic holdout only. Use Compare All for repeated CV screening.' in text
     assert 'if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {' in text
@@ -6713,7 +6713,7 @@ def test_loading_helpers_publish_busy_state_and_repeat_cv_blocked_ml_run_does_no
 
     assert 'button.setAttribute("aria-busy", loading ? "true" : "false");' in app_js
     assert 'button.setAttribute("aria-busy", "false");' in app_js
-    assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");' in app_js
+    assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || familyBusy("ml");' in app_js
 
 
 def test_compare_all_actions_surface_pending_feedback() -> None:

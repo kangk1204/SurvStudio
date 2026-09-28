@@ -349,7 +349,8 @@ function wireDownloads() {
 async function withLoading(button, action, scopeOverride = null, { swallowErrors = true } = {}) {
   // One resolver for clicks and Ctrl+Enter, so every run holds its busy scope however it was started.
   const scope = scopeOverride || runScopeForButton(button);
-  if (scope && isScopeBusy(scope)) return;
+  // Another run holds the scope: nothing started, and nothing failed.
+  if (scope && isScopeBusy(scope)) return { ok: false, busy: true };
   if (scope) {
     setScopeBusy(scope, true, button);
   } else {

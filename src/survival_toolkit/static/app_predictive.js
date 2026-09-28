@@ -631,6 +631,10 @@ function syncAnalysisRunButtonAvailability() {
   const mlSingleMessage = mlRepeatedCv
     ? "Run Analysis uses deterministic holdout only. Use Compare All for repeated CV screening."
     : "";
+  // While Compare All runs, a run started from an ML or DL panel would take over one of its phases.
+  const compareAllBusy = isScopeBusy("predictive");
+  const familyBusy = (goal) => isScopeBusy(goal) || compareAllBusy;
+  const familyBusyTitle = (title) => (compareAllBusy ? "Wait for Compare All Models to finish." : title);
 
   setActionDisabledState(
     refs.runKmButton,
@@ -658,29 +662,29 @@ function syncAnalysisRunButtonAvailability() {
     !endpointReady ? readyMessage : (!hasTableVariables ? tableVariableMessage : ""),
   );
 
-  const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");
+  const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || familyBusy("ml");
   const mlSingleTitle = !endpointReady
     ? readyMessage
-    : (!hasSharedFeatures ? sharedFeatureMessage : mlSingleMessage);
+    : (!hasSharedFeatures ? sharedFeatureMessage : familyBusyTitle(mlSingleMessage));
   setActionDisabledState(refs.runMlButton, mlSingleDisabled, mlSingleTitle);
 
-  const mlCompareDisabled = !endpointReady || !hasSharedFeatures || isScopeBusy("ml");
+  const mlCompareDisabled = !endpointReady || !hasSharedFeatures || familyBusy("ml");
   const mlCompareTitle = !endpointReady
     ? readyMessage
-    : (!hasSharedFeatures ? sharedFeatureMessage : "");
+    : (!hasSharedFeatures ? sharedFeatureMessage : familyBusyTitle(""));
   setActionDisabledState(refs.runCompareButton, mlCompareDisabled, mlCompareTitle);
   setActionDisabledState(refs.runCompareInlineButton, mlCompareDisabled, mlCompareTitle);
 
-  const dlSingleDisabled = !endpointReady || !hasSharedFeatures || isScopeBusy("dl");
+  const dlSingleDisabled = !endpointReady || !hasSharedFeatures || familyBusy("dl");
   const dlSingleTitle = !endpointReady
     ? readyMessage
-    : (!hasSharedFeatures ? sharedFeatureMessage : "");
+    : (!hasSharedFeatures ? sharedFeatureMessage : familyBusyTitle(""));
   setActionDisabledState(refs.runDlButton, dlSingleDisabled, dlSingleTitle);
 
-  const dlCompareDisabled = !endpointReady || !hasSharedFeatures || isScopeBusy("dl");
+  const dlCompareDisabled = !endpointReady || !hasSharedFeatures || familyBusy("dl");
   const dlCompareTitle = !endpointReady
     ? readyMessage
-    : (!hasSharedFeatures ? sharedFeatureMessage : "");
+    : (!hasSharedFeatures ? sharedFeatureMessage : familyBusyTitle(""));
   setActionDisabledState(refs.runDlCompareButton, dlCompareDisabled, dlCompareTitle);
   setActionDisabledState(refs.runDlCompareInlineButton, dlCompareDisabled, dlCompareTitle);
 

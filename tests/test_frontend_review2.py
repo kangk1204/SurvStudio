@@ -247,3 +247,99 @@ def test_starting_a_run_keeps_the_banner_of_a_run_in_flight_and_clears_a_notice(
     assert result["during"].startswith("Evaluating 2 marker(s)")
     assert result["duringAfterKm"] == result["during"]
     assert result["after"] == "runtime-banner hidden"
+
+
+# ── Compare All ─────────────────────────────────────────────────
+
+
+_FAMILY_RUN_BUTTONS = "['runMlButton', 'runCompareButton', 'runCompareInlineButton', 'runDlButton', 'runDlCompareButton', 'runDlCompareInlineButton']"
+
+
+def test_family_run_buttons_stay_off_while_compare_all_runs(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:
+    """R15-4: the ML and DL panels' Run buttons cannot start a run that would take over a Compare All phase."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const mlHold = deferred();
+      const dlHold = deferred();
+      page.fetchHandler = (request) => {
+        const body = request.json();
+        if (request.url.endsWith("/api/ml-model")) return mlHold.promise.then(() => ({ status: 200, body: { analysis: fixtures.compare.ml, request_config: body } }));
+        if (request.url.endsWith("/api/deep-model")) return dlHold.promise.then(() => ({ status: 200, body: { analysis: fixtures.compare.dl, request_config: body } }));
+        if (request.url.endsWith("/api/model-comparison-intervals")) return { status: 200, body: fixtures.compare.intervals };
+        return { status: 500, body: { detail: "unexpected" } };
+      };
+      const enabled = () => page.run(`""" + _FAMILY_RUN_BUTTONS + r""".filter((key) => !refs[key].disabled)`);
+      page.run("activateTab('benchmark'); refs.runPredictiveCompareAllButton.click()");
+      await page.settle(3);
+      const duringMl = enabled();
+      mlHold.resolve();
+      await page.settle(10);
+      const duringDl = enabled();
+      dlHold.resolve();
+      await page.settle(40);
+      return { duringMl, duringDl, after: enabled() };
+    """, dataset=example_dataset, compare=compare_payloads)
+
+    assert result["duringMl"] == []
+    assert result["duringDl"] == []
+    assert len(result["after"]) == 6
+
+
+def test_a_family_busy_with_another_run_is_skipped_not_reported_as_failed(
+    tmp_path: Path, example_dataset: dict, compare_payloads: dict
+) -> None:
+    """R15-4: when the DL scope is busy, Compare All leaves that run's result alone and says why DL is missing."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+    """ + _DL_SINGLE_HANDLER + r"""
+      const mlHold = deferred();
+      const dlHold = deferred();
+      page.fetchHandler = (request) => {
+        const body = request.json();
+        if (request.url.endsWith("/api/ml-model")) return mlHold.promise.then(() => ({ status: 200, body: { analysis: fixtures.compare.ml, request_config: body } }));
+        if (request.url.endsWith("/api/deep-model")) return body.model_type === "compare"
+          ? { status: 200, body: { analysis: fixtures.compare.dl, request_config: body } }
+          : dlHold.promise.then(() => dlSingle(request));
+        return { status: 500, body: { detail: "unexpected" } };
+      };
+      page.run("activateTab('benchmark'); refs.runPredictiveCompareAllButton.click()");
+      await page.settle(3);
+      // A DeepSurv run started while the ML phase runs (its button is off; this starts it directly).
+      page.run("setPredictiveModel('deepsurv', { syncHistory: false }); withLoading(refs.runDlButton, runDlModel)");
+      await page.settle(3);
+      mlHold.resolve();
+      await page.settle(40);
+      dlHold.resolve();
+      await page.settle(40);
+      return {
+        deepRequests: page.requests.filter((request) => request.url.endsWith("/api/deep-model")).map((request) => request.json().model_type),
+        dlMode: page.run("panelModeForPayload(state.dl)"),
+        toasts: page.toasts(),
+      };
+    """, dataset=example_dataset, compare=compare_payloads)
+
+    assert result["deepRequests"] == ["deepsurv"]
+    assert result["dlMode"] == "single"
+    assert any("skipped Deep Learning" in toast for toast in result["toasts"]), result["toasts"]
+    assert not any("only one model family returned comparison rows" in toast for toast in result["toasts"])
+
+
+def test_compare_all_checks_every_setting_before_the_first_phase(tmp_path: Path, example_dataset: dict) -> None:
+    """R15-5: an invalid DL setting or an empty feature list stops Compare All before any model runs."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.fetchHandler = () => ({ status: 500, body: { detail: "unexpected" } });
+      page.run("activateTab('benchmark'); refs.dlHiddenLayers.value = '64,,64'");
+      page.run("refs.runPredictiveCompareAllButton.click()");
+      await page.settle();
+      const invalidDl = { requests: page.requests.filter((request) => /ml-model|deep-model/.test(request.url)).length, toasts: page.toasts() };
+      page.run("refs.dlHiddenLayers.value = '64,64'; setSharedModelFeatureSelection([])");
+      await page.run("withLoading(refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, 'predictive')");
+      await page.settle();
+      return { invalidDl, noFeatures: page.toasts().slice(invalidDl.toasts.length) };
+    """, dataset=example_dataset)
+
+    assert result["invalidDl"]["requests"] == 0
+    assert len(result["invalidDl"]["toasts"]) == 1
+    assert result["invalidDl"]["toasts"][0].startswith("Hidden layers must be a comma-separated list of positive integers.")
+    assert result["noFeatures"] == ["Select at least one ML/DL model feature."]
