@@ -250,6 +250,8 @@ def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
         "training_time_ms": round((time.monotonic() - started) * 1000, 1),
         "training_samples": result.get("training_samples"),
         "evaluation_samples": result.get("evaluation_samples"),
+        "training_events": result.get("training_events"),
+        "evaluation_events": result.get("evaluation_events"),
         "epochs_trained": result.get("epochs_trained"),
         "early_stopping_epochs": result.get("early_stopping_epochs"),
         **({"holdout_risk": result.get("holdout_risk")} if task.get("keep_holdout_risk") else {}),
@@ -2234,6 +2236,8 @@ def _deep_training_fields(
         "early_stopping_fit_samples": int(context.fit_idx.numel()),
         "monitor_samples": int(context.monitor_idx.numel()) if first.monitor_used and context.monitor_idx is not None else 0,
         "evaluation_samples": int(context.eval_idx.numel()),
+        "training_events": int(context.e_all[context.train_idx].sum().item()),
+        "evaluation_events": int(context.e_all[context.eval_idx].sum().item()),
         "n_features": context.data["n_features"],
     }
 
@@ -2531,12 +2535,19 @@ def _deep_holdout_comparison(
                 "n_features": result.get("n_features"),
                 "training_samples": result.get("training_samples"),
                 "evaluation_samples": result.get("evaluation_samples"),
+                # The ML comparison rows' names for the event counts (manuscript tables read them).
+                "train_events": result.get("training_events"),
+                "test_events": result.get("evaluation_events"),
                 "training_time_ms": training_time_ms,
             })
         except Exception as exc:
             if _must_propagate_deep(exc):
                 raise
             errors.append({"model": model_name, "error": str(exc)})
+    events = shared_data["event_tensor"].detach().cpu().numpy().reshape(-1)
+    train_rows = np.asarray(shared_eval_split["train_idx"], dtype=int)
+    eval_rows = np.asarray(shared_eval_split["eval_idx"], dtype=int)
+    holdout_split = str(shared_eval_split.get("evaluation_mode")) == "holdout"
     result = _finalize_deep_comparison(
         comparison,
         errors,
@@ -2548,25 +2559,26 @@ def _deep_holdout_comparison(
         cohort_counts={
             "n_patients": int(shared_data["n_samples"]),
             "n_events": int(float(shared_data["event_tensor"].sum().item())),
+            "n_fit_patients": int(train_rows.size),
+            "n_fit_events": int(events[train_rows].sum()),
+            "n_evaluation_patients": int(eval_rows.size),
+            "n_evaluation_events": int(events[eval_rows].sum()),
             "evaluation_split_fingerprint": shared_eval_split.get("evaluation_split_fingerprint"),
         },
+        extra_cautions=_unseen_category_cautions(
+            [(int(shared_eval_split.get("unseen_category_rows", 0) or 0) if holdout_split else 0, "evaluation")]
+        ),
     )
-    if str(shared_eval_split.get("evaluation_mode")) == "holdout":
-        _append_unseen_category_cautions(
-            result, [(int(shared_eval_split.get("unseen_category_rows", 0) or 0), "evaluation")]
-        )
     result["test_predictions"] = _deep_prediction_block(shared_data, shared_eval_split, holdout_risks)
     return result
 
 
-def _append_unseen_category_cautions(result: dict[str, Any], counts: Sequence[tuple[int, str]]) -> None:
-    """Add the ML module's unseen-category caution for each (row count, scope) pair."""
+def _unseen_category_cautions(counts: Sequence[tuple[int, str]]) -> list[str]:
+    """The ML module's unseen-category caution for each (row count, scope) pair with rows."""
     from survival_toolkit.ml_models import _unseen_category_caution
 
-    for n_rows, scope in counts:
-        caution = _unseen_category_caution(int(n_rows), scope)
-        if caution:
-            result["scientific_summary"]["cautions"].append(caution)
+    cautions = [_unseen_category_caution(int(n_rows), scope) for n_rows, scope in counts]
+    return [caution for caution in cautions if caution]
 
 
 def _deep_prediction_block(
@@ -2789,21 +2801,18 @@ def _deep_repeated_cv_comparison(
         **cohort_fields,
         cohort_counts=cohort_counts,
         locked_errors=locked_errors,
-    )
-    if parallel_execution_note:
-        result["parallel_execution_note"] = parallel_execution_note
-        result["scientific_summary"]["cautions"].append(parallel_execution_note)
-    _append_unseen_category_cautions(
-        result,
-        [
-            (unseen_fold_rows, "cross-validation evaluation (summed over folds)"),
-            (
-                _unseen_category_rows(dev_frame, locked_test_frame, categorical_columns)
-                if locked_test_frame is not None
-                else 0,
-                "locked-test",
-            ),
-        ],
+        parallel_execution_note=parallel_execution_note,
+        extra_cautions=_unseen_category_cautions(
+            [
+                (unseen_fold_rows, "cross-validation evaluation (summed over folds)"),
+                (
+                    _unseen_category_rows(dev_frame, locked_test_frame, categorical_columns)
+                    if locked_test_frame is not None
+                    else 0,
+                    "locked-test",
+                ),
+            ]
+        ),
     )
     result["locked_test_predictions"] = locked_predictions
     return result
@@ -3151,6 +3160,18 @@ def _mean_epochs(rows: Sequence[dict[str, Any]], key: str) -> int | None:
     return int(round(float(np.mean(values)))) if values else None
 
 
+def _failure_summary(errors: Sequence[dict[str, Any]], *, unit: str) -> str:
+    """Each model's failure messages, once per distinct message with how many ``unit`` failed with it."""
+    counts: dict[tuple[str, str], int] = {}
+    for item in errors:
+        if isinstance(item, dict) and "error" in item:
+            key = (str(item.get("model")), str(item["error"]))
+            counts[key] = counts.get(key, 0) + 1
+    return "; ".join(
+        f"{model}{f' ({count} {unit})' if count > 1 else ''}: {message}" for (model, message), count in counts.items()
+    )
+
+
 def _summarize_deep_cv_rows(
     trainer_specs: list[tuple[str, Any, dict[str, Any]]],
     fold_results: list[dict[str, Any]],
@@ -3160,58 +3181,66 @@ def _summarize_deep_cv_rows(
     cv_repeats: int,
     locked_results: dict[str, dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    """One comparison row per model from its repeated-CV folds (and locked test, if any)."""
+    """One comparison row per model from its repeated-CV folds (and locked test, if any).
+
+    Fold rows are always clean holdout estimates: ``_run_deep_compare_task`` records a fold
+    that fell back to apparent evaluation as a failed fold, so failures are the only reason a
+    model misses folds.
+    """
     from survival_toolkit.ml_models import _summarize_repeated_cv_rows, repeated_cv_row_fields
 
     comparison: list[dict[str, Any]] = []
     for model_name, _, _ in trainer_specs:
-        model_rows = [row for row in fold_results if row["model"] == model_name and row["c_index"] is not None]
+        model_rows = [
+            row
+            for row in fold_results
+            if row["model"] == model_name
+            and row.get("c_index") is not None
+            and str(row.get("evaluation_mode", "holdout")) == "holdout"
+        ]
         n_failures = sum(1 for err in errors if err["model"] == model_name)
         expected_evaluations = cv_folds * cv_repeats
-        holdout_rows = [row for row in model_rows if str(row.get("evaluation_mode")) == "holdout"]
-        fallback_rows = [row for row in model_rows if str(row.get("evaluation_mode")) != "holdout"]
         summary = (
             _summarize_repeated_cv_rows(
-                holdout_rows,
+                model_rows,
                 train_n_key="training_samples",
                 test_n_key="evaluation_samples",
-                train_events_key=None,
-                test_events_key=None,
+                train_events_key="training_events",
+                test_events_key="evaluation_events",
             )
-            if holdout_rows
+            if model_rows
             else None
         )
-        n_failures += len(fallback_rows)
-        incomplete = (len(holdout_rows) + n_failures) < expected_evaluations or n_failures > 0
+        incomplete = (len(model_rows) + n_failures) < expected_evaluations or n_failures > 0
         if summary is None and n_failures == 0:
             continue
 
         def _single_seed(key: str) -> int | None:
-            values = {int(row[key]) for row in holdout_rows if row.get(key) is not None}
+            values = {int(row[key]) for row in model_rows if row.get(key) is not None}
             return next(iter(values)) if len(values) == 1 else None
 
         row = {
             "model": model_name,
             **repeated_cv_row_fields(summary, incomplete=incomplete),
-            "n_evaluations": len(holdout_rows),
+            "n_evaluations": len(model_rows),
             "n_failures": n_failures,
-            "n_apparent_fallbacks": len(fallback_rows),
             "cv_folds": cv_folds,
             "cv_repeats": cv_repeats,
             "training_seed": _single_seed("training_seed"),
             "split_seed": _single_seed("split_seed"),
             "monitor_seed": _single_seed("monitor_seed"),
-            "training_seeds": sorted({int(item["training_seed"]) for item in holdout_rows if item.get("training_seed") is not None}),
-            "split_seeds": sorted({int(item["split_seed"]) for item in holdout_rows if item.get("split_seed") is not None}),
-            "monitor_seeds": sorted({int(item["monitor_seed"]) for item in holdout_rows if item.get("monitor_seed") is not None}),
-            "epochs_trained": int(round(np.mean([item["epochs_trained"] for item in holdout_rows]))) if holdout_rows else None,
-            "early_stopping_epochs": _mean_epochs(holdout_rows, "early_stopping_epochs"),
+            "training_seeds": sorted({int(item["training_seed"]) for item in model_rows if item.get("training_seed") is not None}),
+            "split_seeds": sorted({int(item["split_seed"]) for item in model_rows if item.get("split_seed") is not None}),
+            "monitor_seeds": sorted({int(item["monitor_seed"]) for item in model_rows if item.get("monitor_seed") is not None}),
+            "epochs_trained": _mean_epochs(model_rows, "epochs_trained"),
+            "early_stopping_epochs": _mean_epochs(model_rows, "early_stopping_epochs"),
         }
         if locked_results is not None:
             locked = locked_results.get(model_name) or {}
             row.update({
                 "locked_test_c_index": None if locked.get("c_index") is None else float(locked["c_index"]),
                 "locked_test_samples": locked.get("evaluation_samples"),
+                "locked_test_events": locked.get("evaluation_events"),
                 "locked_test_training_samples": locked.get("training_samples"),
                 "locked_test_error": locked.get("error"),
             })
@@ -3235,34 +3264,40 @@ def _finalize_deep_comparison(
     time_column_note: str | None = None,
     cohort_counts: dict[str, Any] | None = None,
     locked_errors: Sequence[dict[str, Any]] = (),
+    parallel_execution_note: str | None = None,
+    extra_cautions: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Rank the compared models and build the shared comparison payload and summary.
 
     ``errors`` are fits left out of the ranking (or of a model's CV aggregate);
     ``locked_errors`` are locked-test refits that failed for models that stay ranked. Both
-    are reported in ``errors`` and make the ranking incomplete.
+    are reported in ``errors`` and make the ranking incomplete. A row without a C-index (a
+    repeated-CV model with a failed fold, whose aggregate is withheld) is not ranked, and
+    when no row can be ranked no model is named best. The parallel-execution note and
+    ``extra_cautions`` (unseen categorical levels) are cautions like the others, so they
+    count towards the status.
     """
     cohort_counts = dict(cohort_counts or {})
     locked_errors = list(locked_errors)
-    if not comparison:
+    repeated_cv = evaluation_mode == "repeated_cv"
+    if not comparison or (repeated_cv and not fold_results):
+        # Every fit failed (in repeated CV: every fold of every model).
         raise ValueError(
             "All deep-learning models failed to train. Errors: "
-            + "; ".join(
-                f"{item['model']}: {item['error']}"
-                for item in errors
-                if isinstance(item, dict) and "error" in item
-            )
+            + _failure_summary(errors, unit="folds" if repeated_cv else "fits")
         )
 
     for row in comparison:
         row["model"] = str(row.get("model") or "Unknown model")
 
     evaluation_modes = sorted({str(row.get("evaluation_mode", "unknown")) for row in comparison})
-    mixed_evaluation = len(evaluation_modes) > 1
+    # Holdout rows that fell back to apparent evaluation; repeated-CV rows are instead complete
+    # or incomplete, which the ranking below handles.
+    mixed_evaluation = not repeated_cv and len(evaluation_modes) > 1
     result_evaluation_mode = evaluation_mode
     ranked_rows: list[dict[str, Any]]
     unranked_rows: list[dict[str, Any]]
-    if evaluation_mode != "repeated_cv":
+    if not repeated_cv:
         if mixed_evaluation:
             result_evaluation_mode = "mixed_holdout_apparent"
             ranked_rows = [row for row in comparison if str(row.get("evaluation_mode")) == "holdout"]
@@ -3279,10 +3314,11 @@ def _finalize_deep_comparison(
         unranked_rows = []
         if any(str(row.get("evaluation_mode")) != "repeated_cv" for row in comparison):
             result_evaluation_mode = "repeated_cv_incomplete"
+    unranked_rows.extend(row for row in ranked_rows if row.get("c_index") is None)
+    ranked_rows = [row for row in ranked_rows if row.get("c_index") is not None]
 
-    ranked_rows.sort(key=lambda row: row["c_index"] if row["c_index"] is not None else -1.0, reverse=True)
-    if unranked_rows:
-        unranked_rows.sort(key=lambda row: row["model"])
+    ranked_rows.sort(key=lambda row: float(row["c_index"]), reverse=True)
+    unranked_rows.sort(key=lambda row: row["model"])
     comparison = ranked_rows + unranked_rows
     for rank, row in enumerate(ranked_rows, start=1):
         row["rank"] = rank
@@ -3290,13 +3326,16 @@ def _finalize_deep_comparison(
     for row in unranked_rows:
         row["rank"] = None
         row["comparable_for_ranking"] = False
-    best = ranked_rows[0] if ranked_rows else comparison[0]
+    best = ranked_rows[0] if ranked_rows else None
+    locked_test = bool(cohort_counts.get("locked_test_note"))
 
-    metric_name = _metric_name_for_evaluation(
-        "holdout"
-        if best.get("evaluation_mode") == "holdout"
-        else ("repeated_cv" if evaluation_mode == "repeated_cv" else "apparent")
-    )
+    if repeated_cv:
+        metric_mode = "repeated_cv"
+    elif best is not None:
+        metric_mode = "holdout" if best.get("evaluation_mode") == "holdout" else "apparent"
+    else:
+        metric_mode = "holdout" if result_evaluation_mode in {"holdout", "mixed_holdout_apparent"} else "apparent"
+    metric_name = _metric_name_for_evaluation(metric_mode)
 
     strengths = [
         f"{len(comparison)} deep model(s) were trained on the same feature set ({n_selected_features} selected input columns).",
@@ -3306,20 +3345,13 @@ def _finalize_deep_comparison(
         for row in comparison
         if row.get("training_seed") is not None
     }
-    if evaluation_mode == "repeated_cv":
+    if repeated_cv:
         strengths.append(
             f"Each model was evaluated across {cv_repeats} repeat(s) of {cv_folds}-fold stratified cross-validation."
         )
         if len(comparison) == 1:
             strengths.append(
                 "The same repeated-CV settings can be rerun with Train Model when the evaluation strategy and seed are left unchanged."
-            )
-        fallback_models = [
-            row["model"] for row in comparison if int(row.get("n_apparent_fallbacks", 0) or 0) > 0
-        ]
-        if fallback_models:
-            strengths.append(
-                f"{len(fallback_models)} model(s) retained at least one clean fold but had additional apparent-fallback folds excluded from the repeated-CV aggregate."
             )
     elif len(shared_training_seeds) == 1:
         shared_seed = next(iter(shared_training_seeds))
@@ -3330,10 +3362,8 @@ def _finalize_deep_comparison(
         strengths.append(
             f"{len(ranked_rows)} model(s) retained a clean holdout estimate and remained rank-comparable."
         )
-    if best.get("c_index") is not None:
+    if best is not None:
         strengths.append(f"Screening top deep model was {best['model']} with {metric_name} = {best['c_index']:.3f}.")
-    else:
-        strengths.append(f"Best-ranked model was {best['model']}, but the concordance estimate was not available.")
     strengths.append(
         "When early stopping held out a monitor subset, each model's reported weights were refit on the whole training partition for the selected number of epochs, so deep and classical models are fitted on the same rows."
     )
@@ -3344,24 +3374,31 @@ def _finalize_deep_comparison(
             "Rows with apparent fallback were excluded from the rank ordering because they are not directly comparable to holdout-evaluated rows."
         )
     if errors:
-        cautions.append(f"{len(errors)} deep model fit(s) failed and were excluded from the ranking.")
-    cautions.extend(_cohort_cautions(dropped_nonpositive_time_rows, dropped_missing_outcome_rows, time_column_note))
-    if evaluation_mode == "repeated_cv" and any(int(row.get("n_apparent_fallbacks", 0) or 0) > 0 for row in comparison):
         cautions.append(
-            "Some repeated-CV folds fell back to apparent evaluation inside model training and were excluded from the repeated-CV aggregate."
+            f"{len(errors)} fold-level fit(s) failed; a model with a failed fold has no repeated-CV aggregate and is not ranked."
+            if repeated_cv
+            else f"{len(errors)} deep model fit(s) failed and were excluded from the ranking."
         )
+    cautions.extend(_cohort_cautions(dropped_nonpositive_time_rows, dropped_missing_outcome_rows, time_column_note))
     if result_evaluation_mode == "repeated_cv_incomplete":
         cautions.append(
             "Repeated-CV incomplete means one or more folds were excluded because they failed or fell back to apparent evaluation."
         )
-    if best.get("evaluation_mode") != "holdout" and evaluation_mode != "repeated_cv":
+    if best is None:
+        cautions.append(
+            "No model completed every repeated-CV fold, so none was ranked and no repeated-CV C-index is reported; "
+            "review the fold errors before rerunning."
+            if repeated_cv
+            else "No model reported a concordance estimate, so none was ranked."
+        )
+    elif best.get("evaluation_mode") != "holdout" and not repeated_cv:
         cautions.append(
             "The top-ranked model did not report a clean holdout C-index, so the ranking is optimistic."
         )
 
-    if cohort_counts.get("locked_test_note"):
+    if locked_test:
         strengths.append(str(cohort_counts["locked_test_note"]))
-        best_locked = best.get("locked_test_c_index")
+        best_locked = None if best is None else best.get("locked_test_c_index")
         if best_locked is not None:
             strengths.append(
                 f"The CV-selected model ({best['model']}) reached a locked-test C-index of {float(best_locked):.3f}; "
@@ -3369,11 +3406,21 @@ def _finalize_deep_comparison(
             )
         cautions.insert(
             0,
-            "Models were ranked by development-set repeated CV; report the locked-test C-index of the CV-selected model as the independent performance estimate, not the best locked-test value across models.",
+            "Models were ranked by development-set repeated CV; report the locked-test C-index of the CV-selected model as the independent performance estimate, not the best locked-test value across models."
+            if best is not None
+            else "No model completed every development-set repeated-CV fold, so no model was CV-selected and none of the locked-test C-indices is a performance estimate to report.",
+        )
+    elif best is not None and len(comparison) > 1:
+        # The ML comparisons' screening caution: the top model was chosen on the estimates it is reported with.
+        cautions.insert(
+            0,
+            "The top-ranked model was selected and scored within the same repeated-CV screening run; treat this as model screening rather than final external validation. Reserve a locked test set or use an external cohort for the performance you report."
+            if repeated_cv
+            else "The top-ranked model was selected and scored on the same evaluation split; treat this as screening rather than final external validation.",
         )
     if locked_errors:
         failed_names = ", ".join(str(error["model"]) for error in locked_errors)
-        selected_failed = any(str(error["model"]) == best["model"] for error in locked_errors)
+        selected_failed = best is not None and any(str(error["model"]) == best["model"] for error in locked_errors)
         locked_caution = (
             f"{len(locked_errors)} model(s) failed when refit on the development set and scored on the locked test set "
             f"({failed_names}); their locked-test C-index is blank"
@@ -3392,13 +3439,18 @@ def _finalize_deep_comparison(
     duplicate_caution = duplicate_identifier_caution(df)
     if duplicate_caution:
         cautions.insert(0, duplicate_caution)
+    if parallel_execution_note:
+        cautions.append(str(parallel_execution_note))
+    cautions.extend(str(caution) for caution in extra_cautions if caution)
 
     next_steps = [
         "Use the ranking to narrow candidates, then rerun the strongest architecture with external validation or repeated resampling.",
         "Prefer simpler models if the best deep model only matches the apparent-performance range of classical methods.",
     ]
 
-    best_c = None if best.get("c_index") is None else float(best["c_index"])
+    # Decided after every caution is in place (including the parallel-execution note and the
+    # unseen-level cautions), so a caution can never sit next to a "robust" badge.
+    best_c = None if best is None else float(best["c_index"])
     if best_c is None:
         status = "review"
     elif best_c < 0.55:
@@ -3408,27 +3460,28 @@ def _finalize_deep_comparison(
     else:
         status = "robust"
 
-    summary = {
-        "status": status,
-        "headline": (
+    if best is None:
+        headline = (
+            "No deep model could be ranked: every model lost at least one repeated-CV fold, so no repeated-CV C-index is reported."
+            if repeated_cv
+            else "No deep model could be ranked because no concordance estimate was available."
+        )
+    else:
+        headline = (
             f"Deep model screening placed {best['model']} first"
             + (" among holdout-evaluable models" if mixed_evaluation else "")
-            + f" with {metric_name.lower()} "
-            f"of {best['c_index']:.3f}."
-            if best.get("c_index") is not None
-            else (
-                f"Deep model comparison ranked {best['model']} first"
-                + (" among holdout-evaluable models" if mixed_evaluation else "")
-                + ", but concordance could not be estimated."
-            )
-        ),
+            + f" with {metric_name.lower()} of {best['c_index']:.3f}."
+        )
+    summary = {
+        "status": status,
+        "headline": headline,
         "strengths": strengths,
         "cautions": cautions,
         "next_steps": next_steps,
         "metrics": [
             {"label": "Models compared", "value": len(comparison)},
-            {"label": "Best model", "value": best["model"]},
-            {"label": metric_name, "value": best.get("c_index")},
+            {"label": "Best model", "value": None if best is None else best["model"]},
+            {"label": metric_name, "value": None if best is None else best.get("c_index")},
             {"label": "Evaluation mode", "value": result_evaluation_mode},
             {"label": "Dropped for negative time", "value": int(dropped_nonpositive_time_rows) or None},
             {"label": "Dropped for missing outcome", "value": int(dropped_missing_outcome_rows) or None},
@@ -3451,7 +3504,13 @@ def _finalize_deep_comparison(
         "scientific_summary": summary,
         "insight_board": summary,
     }
+    if parallel_execution_note:
+        result["parallel_execution_note"] = parallel_execution_note
     for key in (
+        "n_fit_patients",
+        "n_fit_events",
+        "n_evaluation_patients",
+        "n_evaluation_events",
         "locked_test_fraction",
         "n_development_patients",
         "n_development_events",
@@ -3569,13 +3628,19 @@ def evaluate_single_deep_survival_model(
                 else aggregate_mode.replace("_", " ")
             )
         )
+        n_failed_folds = int(row.get("n_failures") or 0)
         summary = {
             "status": compare_result["scientific_summary"]["status"],
             "headline": (
                 f"{canonical_name} completed {cv_repeats}x{cv_folds} {mode_label} with mean C-index "
                 f"of {row['c_index']:.3f}."
                 if row.get("c_index") is not None
-                else f"{canonical_name} completed {cv_repeats}x{cv_folds} {mode_label}, but the aggregate C-index could not be computed."
+                else (
+                    f"The {cv_repeats}x{cv_folds} repeated-CV C-index of {canonical_name} was withheld: "
+                    f"{n_failed_folds} of {cv_repeats * cv_folds} fold(s) failed."
+                    if n_failed_folds
+                    else f"{canonical_name} completed {cv_repeats}x{cv_folds} {mode_label}, but the aggregate C-index could not be computed."
+                )
             ),
             "strengths": list(compare_result["scientific_summary"].get("strengths", [])),
             "cautions": list(compare_result["scientific_summary"].get("cautions", [])),
@@ -3593,15 +3658,11 @@ def evaluate_single_deep_survival_model(
         }
         if row.get("locked_test_c_index") is not None:
             summary["metrics"].append({"label": "Locked-test C-index", "value": row.get("locked_test_c_index")})
+        # The comparison's cautions already carry the parallel-execution note and the
+        # incomplete-CV explanation.
         summary["cautions"].append(
             "This result is an aggregate repeated-CV estimate. Feature-importance and loss-curve outputs require a separate single-fit run."
         )
-        if compare_result.get("parallel_execution_note"):
-            summary["cautions"].append(str(compare_result["parallel_execution_note"]))
-        if aggregate_mode == "repeated_cv_incomplete":
-            summary["cautions"].append(
-                "Repeated-CV incomplete means one or more folds were excluded because they failed or fell back to apparent evaluation."
-            )
         result = {
             "model": canonical_name,
             "model_type": model_type,
@@ -3611,6 +3672,9 @@ def evaluate_single_deep_survival_model(
             "cv_repeats": cv_repeats,
             "n_evaluations": row.get("n_evaluations"),
             "n_failures": row.get("n_failures"),
+            # The failed folds' messages (and locked-test refit failures), as in the comparison.
+            "errors": list(compare_result.get("errors") or []),
+            "ranking_complete": compare_result.get("ranking_complete"),
             "n_features": row.get("n_features"),
             "epochs_trained": row.get("epochs_trained"),
             "early_stopping_epochs": row.get("early_stopping_epochs"),
@@ -3646,6 +3710,7 @@ def evaluate_single_deep_survival_model(
         if "locked_test_c_index" in row:
             result["locked_test_c_index"] = row.get("locked_test_c_index")
             result["locked_test_samples"] = row.get("locked_test_samples")
+            result["locked_test_events"] = row.get("locked_test_events")
             result["locked_test_error"] = row.get("locked_test_error")
         return result
 

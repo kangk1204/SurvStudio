@@ -279,3 +279,194 @@ def test_an_explicit_empty_vae_hidden_layer_list_is_not_replaced_by_the_default(
     with pytest.raises(ValueError, match="at least one hidden layer"):
         dm.SurvivalVAENet(4, hidden_layers=[], latent_dim=2)
     assert [module.out_features for module in dm.SurvivalVAENet(4, hidden_dim=6, latent_dim=2).encoder if isinstance(module, torch.nn.Linear)] == [6]
+
+
+# R8#4 / R9#1 / R9#2 / R9#3 / R9#4 / R9#5 / R9#11: comparison summaries ----------------------
+
+
+def _stub(c_index: float, *, fail_first: bool = False, mode_first: str | None = None):
+    """A trainer that returns a fixed result (no network), optionally failing or falling back on its first call."""
+    calls = {"n": 0}
+
+    def _run(*args, **kwargs):
+        calls["n"] += 1
+        if fail_first and calls["n"] == 1:
+            raise RuntimeError("simulated fold failure")
+        split = kwargs["evaluation_split"]
+        return {
+            "c_index": c_index,
+            "evaluation_mode": mode_first if mode_first and calls["n"] == 1 else "holdout",
+            "epochs_trained": 1,
+            "early_stopping_epochs": 1,
+            "n_features": 3,
+            "training_samples": len(split["train_idx"]),
+            "evaluation_samples": len(split["eval_idx"]),
+            "training_events": 20,
+            "evaluation_events": 10,
+        }
+
+    return _run
+
+
+def _install_stubs(monkeypatch: pytest.MonkeyPatch, **overrides) -> None:
+    trainers = {
+        "train_deepsurv": _stub(0.74),
+        "train_deephit": _stub(0.70),
+        "train_neural_mtlr": _stub(0.69),
+        "train_survival_transformer": _stub(0.66),
+        "train_survival_vae": _stub(0.62),
+    }
+    trainers.update(overrides)
+    for name, trainer in trainers.items():
+        monkeypatch.setattr(dm, name, trainer)
+
+
+def _cv(df: pd.DataFrame, **kwargs) -> dict:
+    return dm.compare_deep_survival_models(
+        df, "os_months", "os_event", FEATURES, evaluation_strategy="repeated_cv", cv_folds=2, cv_repeats=1,
+        random_seed=3, **kwargs,
+    )
+
+
+def test_repeated_cv_rows_without_an_aggregate_are_not_ranked(monkeypatch) -> None:
+    _install_stubs(monkeypatch, train_deepsurv=_stub(0.74, fail_first=True))
+    result = _cv(make_example_dataset(seed=17, n_patients=80))
+    rows = {row["model"]: row for row in result["comparison_table"]}
+    assert rows["DeepSurv"]["c_index"] is None
+    assert rows["DeepSurv"]["rank"] is None and rows["DeepSurv"]["comparable_for_ranking"] is False
+    assert [row["model"] for row in result["comparison_table"]] == [
+        "DeepHit", "Neural MTLR", "Survival Transformer", "Survival VAE", "DeepSurv",
+    ]
+    assert [row["rank"] for row in result["comparison_table"]] == [1, 2, 3, 4, None]
+    summary = result["scientific_summary"]
+    # Holdout-only wording stays out of a repeated-CV summary.
+    assert "holdout-evaluable" not in summary["headline"]
+    assert not any("clean holdout estimate" in strength for strength in summary["strengths"])
+    assert not any("apparent fallback were excluded" in caution for caution in summary["cautions"])
+    assert "1 fold-level fit(s) failed; a model with a failed fold has no repeated-CV aggregate and is not ranked." in summary["cautions"]
+    assert result["evaluation_mode"] == "repeated_cv_incomplete" and result["ranking_complete"] is False
+
+
+def test_no_model_is_named_best_when_none_has_a_cv_aggregate(monkeypatch) -> None:
+    _install_stubs(monkeypatch)
+    original = dm._run_deep_compare_task
+
+    def _task(task):
+        if task["repeat"] == 1 and task["fold"] == 1:
+            raise ValueError("simulated fold failure")
+        return original(task)
+
+    monkeypatch.setattr(dm, "_run_deep_compare_task", _task)
+    result = _cv(make_example_dataset(seed=17, n_patients=80), included_models=["DeepSurv", "DeepHit"], locked_test_fraction=0.3)
+    assert [row["rank"] for row in result["comparison_table"]] == [None, None]
+    summary = result["scientific_summary"]
+    assert summary["headline"].startswith("No deep model could be ranked")
+    assert _metrics(result)["Best model"] is None
+    assert not any("CV-selected model (" in strength for strength in summary["strengths"])
+    assert summary["cautions"][0].startswith("No model completed every development-set repeated-CV fold")
+    assert summary["status"] == "review"
+    # The locked-test estimates are still shown, with their event counts.
+    assert all(row["locked_test_c_index"] is not None and row["locked_test_events"] for row in result["comparison_table"])
+
+
+def test_a_repeated_cv_run_whose_every_fit_failed_raises_like_the_holdout_comparison(monkeypatch) -> None:
+    def _boom(*args, **kwargs):
+        raise RuntimeError("DeepSurv loss became NaN or Inf during training.")
+
+    _install_stubs(monkeypatch, train_deepsurv=_boom, train_deephit=_boom)
+    df = make_example_dataset(seed=17, n_patients=80)
+    with pytest.raises(UserInputError, match=r"All deep-learning models failed to train\. Errors: DeepSurv \(2 folds\): DeepSurv loss"):
+        _cv(df, included_models=["DeepSurv", "DeepHit"])
+    with pytest.raises(UserInputError, match="All deep-learning models failed to train"):
+        dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, included_models=["DeepSurv", "DeepHit"])
+
+
+@pytest.mark.parametrize(
+    "strategy, caution",
+    [
+        ("holdout", "The top-ranked model was selected and scored on the same evaluation split"),
+        ("repeated_cv", "The top-ranked model was selected and scored within the same repeated-CV screening run"),
+    ],
+)
+def test_comparisons_carry_the_ml_screening_caution(monkeypatch, strategy, caution) -> None:
+    _install_stubs(monkeypatch)
+    result = dm.compare_deep_survival_models(
+        make_example_dataset(seed=17, n_patients=120), "os_months", "os_event", FEATURES,
+        evaluation_strategy=strategy, cv_folds=2, cv_repeats=1, random_seed=3,
+    )
+    summary = result["scientific_summary"]
+    assert summary["cautions"][0].startswith(caution)
+    assert summary["status"] == "review"
+
+
+def test_the_status_is_decided_after_the_late_cautions() -> None:
+    df = make_example_dataset(seed=4, n_patients=120)
+
+    def _finalize(**kwargs):
+        comparison = [{"model": "DeepSurv", "c_index": 0.80, "evaluation_mode": "holdout", "training_seed": 1, "split_seed": 1, "monitor_seed": 1}]
+        return dm._finalize_deep_comparison(
+            comparison, [], df=df, n_selected_features=3, evaluation_mode="holdout", random_seed=1,
+            cohort_counts={"n_patients": 120, "n_events": 60}, **kwargs,
+        )
+
+    assert _finalize()["scientific_summary"]["status"] == "robust"
+    unseen = dm._unseen_category_cautions([(3, "evaluation")])
+    flagged = _finalize(extra_cautions=unseen)
+    assert flagged["scientific_summary"]["status"] == "review"
+    assert flagged["scientific_summary"]["cautions"][-1] == unseen[0]
+    noted = _finalize(parallel_execution_note="Parallel repeated-CV execution was disabled; folds ran sequentially.")
+    assert noted["scientific_summary"]["status"] == "review"
+    assert noted["parallel_execution_note"].startswith("Parallel repeated-CV execution was disabled")
+
+
+def test_single_model_repeated_cv_keeps_the_fold_errors_and_does_not_repeat_cautions(monkeypatch) -> None:
+    _install_stubs(monkeypatch, train_deepsurv=_stub(0.70, fail_first=True))
+    monkeypatch.setattr(dm, "_available_cpu_count", lambda: 1)
+    single = dm.evaluate_single_deep_survival_model(
+        "deepsurv", df=make_example_dataset(seed=17, n_patients=80), time_column="os_months", event_column="os_event",
+        features=FEATURES, evaluation_strategy="repeated_cv", cv_folds=2, cv_repeats=1, random_seed=3, parallel_jobs=2,
+    )
+    cautions = single["scientific_summary"]["cautions"]
+    assert len(cautions) == len(set(cautions))
+    assert sum("only 1 CPU" in caution for caution in cautions) == 1
+    assert [error["error"] for error in single["errors"]] == ["simulated fold failure"]
+    assert single["ranking_complete"] is False
+    assert single["scientific_summary"]["headline"] == "The 1x2 repeated-CV C-index of DeepSurv was withheld: 1 of 2 fold(s) failed."
+
+
+def test_a_fold_that_falls_back_to_apparent_evaluation_is_a_failed_fold(monkeypatch) -> None:
+    _install_stubs(monkeypatch, train_deepsurv=_stub(0.74, mode_first="holdout_fallback_apparent"))
+    result = _cv(make_example_dataset(seed=17, n_patients=80), included_models=["DeepSurv", "DeepHit"])
+    rows = {row["model"]: row for row in result["comparison_table"]}
+    assert rows["DeepSurv"]["n_failures"] == 1 and rows["DeepSurv"]["rank"] is None
+    assert "n_apparent_fallbacks" not in rows["DeepSurv"]
+    assert "did not retain a clean holdout evaluation" in result["errors"][0]["error"]
+    summary = result["scientific_summary"]
+    assert not any("apparent-fallback" in text for text in [*summary["strengths"], *summary["cautions"]])
+
+
+def test_deep_rows_and_tables_carry_event_counts() -> None:
+    df = make_example_dataset(seed=17, n_patients=120)
+    common = dict(epochs=1, hidden_layers=[4], included_models=["DeepSurv"], random_seed=3)
+    holdout = dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, **common)
+    row = holdout["comparison_table"][0]
+    block = holdout["test_predictions"]
+    assert row["test_events"] == holdout["n_evaluation_events"] == int(sum(block["event"]))
+    assert row["evaluation_samples"] == holdout["n_evaluation_patients"] == len(block["row_ids"])
+    assert row["train_events"] == holdout["n_fit_events"] == holdout["n_events"] - holdout["n_evaluation_events"]
+    assert holdout["manuscript_tables"]["model_performance_table"][0]["Evaluation Events, n"] == holdout["n_evaluation_events"]
+
+    cv = dm.compare_deep_survival_models(
+        df, "os_months", "os_event", FEATURES, evaluation_strategy="repeated_cv", cv_folds=2, cv_repeats=1,
+        locked_test_fraction=0.3, **common,
+    )
+    cv_row = cv["comparison_table"][0]
+    assert cv_row["test_events"] == int(round(np.mean([fold["evaluation_events"] for fold in cv["fold_results"]])))
+    assert cv_row["train_events"] == int(round(np.mean([fold["training_events"] for fold in cv["fold_results"]])))
+    assert cv_row["locked_test_events"] == cv["n_locked_test_events"]
+    table_row = cv["manuscript_tables"]["model_performance_table"][0]
+    assert table_row["Locked-test Events, n"] == cv["n_locked_test_events"]
+    assert table_row["Mean Evaluation Events, n"] == cv_row["test_events"]
+
+    single = dm.train_deepsurv(df, "os_months", "os_event", FEATURES, random_seed=3, **TINY)
+    assert single["training_events"] + single["evaluation_events"] == holdout["n_events"]
