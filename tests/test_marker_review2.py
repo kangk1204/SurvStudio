@@ -238,3 +238,127 @@ def test_errors_raised_by_checks_in_a_subsample_stop_the_analysis(monkeypatch: p
         # Before, every subsample was counted as failed and the analysis finished without its stability.
         with pytest.raises(UserInputError):
             evaluate_markers(frame, **common)
+
+
+# 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
+
+
+def _duplicates_reference(values: np.ndarray, labels: list[str]) -> dict:
+    """The whole-panel implementation the blocked screen replaced, kept as the definition (cohorts up to MAX_PATIENTS)."""
+    from collections import defaultdict
+
+    from survival_toolkit import duplicates
+
+    report = {"checked": False, "identical_checked": False, "markers_used": 0, "note": None, "pairs": [], "identical": [],
+              "n_pairs": 0, "n_identical": 0, "mostly_missing": [], "n_mostly_missing": 0}
+    if values.shape[1]:
+        sparse = np.isnan(values).mean(axis=1) > duplicates.MAX_MISSING_SHARE
+        if sparse.any():
+            report.update(mostly_missing=[labels[index] for index in np.flatnonzero(sparse)], n_mostly_missing=int(sparse.sum()))
+            values = values[~sparse]
+            labels = [label for label, drop in zip(labels, sparse) if not drop]
+    n_patients, n_markers = values.shape
+    if n_patients < 3:
+        report["note"] = "Too few patients to compare."
+        return report
+    sampled = values[:, :: max(1, n_markers // 200)] if n_markers else values
+    distinct = np.array([np.unique(column[~np.isnan(column)]).size for column in sampled.T]) if n_markers else np.zeros(0)
+    if n_markers >= duplicates.MIN_IDENTICAL_MARKERS and np.median(distinct) >= duplicates.MIN_DISTINCT_VALUES:
+        groups = defaultdict(list)
+        for label, row in zip(labels, np.round(np.where(np.isnan(values), np.inf, values), 9) + 0.0):
+            groups[row.tobytes()].append(label)
+        identical = [members for members in groups.values() if len(members) > 1]
+        report.update(identical_checked=True, identical=identical, n_identical=len(identical))
+    if n_markers < duplicates.MIN_MARKERS:
+        report["note"] = f"Near-identical profiles are checked on panels of at least {duplicates.MIN_MARKERS} markers."
+        return report
+    with np.errstate(invalid="ignore"):
+        spread = np.nanvar(values, axis=0)
+    usable = np.flatnonzero(np.isfinite(spread) & (spread > 0))
+    chosen = usable[np.argsort(-spread[usable], kind="mergesort")[: duplicates.TOP_MARKERS]]
+    block = values[:, chosen]
+    block = np.where(np.isnan(block), np.nanmedian(block, axis=0)[None, :], block)
+    block = (block - block.mean(axis=0)) / block.std(axis=0)
+    block = block - block.mean(axis=1, keepdims=True)
+    norms = np.linalg.norm(block, axis=1, keepdims=True)
+    block = np.divide(block, norms, out=np.zeros_like(block), where=norms > 0)
+    correlation = block @ block.T
+    np.fill_diagonal(correlation, -np.inf)
+    best = correlation.argmax(axis=1)
+    top_two = np.sort(correlation, axis=1)[:, -2:]
+    pairs = []
+    for i, j in enumerate(best):
+        if j <= i or best[j] != i:
+            continue
+        r = float(correlation[i, j])
+        gap = r - max(float(top_two[i, 0]), float(top_two[j, 0]))
+        if r >= duplicates.MIN_R and gap >= duplicates.MIN_GAP:
+            pairs.append({"a": labels[i], "b": labels[j], "r": r, "gap": gap})
+    pairs.sort(key=lambda pair: -pair["r"])
+    report.update(checked=True, markers_used=int(chosen.size), pairs=pairs, n_pairs=len(pairs))
+    return report
+
+
+def _repeated_panel(rng: np.random.Generator, n: int, p: int) -> np.ndarray:
+    subtype = rng.integers(0, 5, n)
+    values = rng.normal(size=(5, p))[subtype] * 1.5 + rng.normal(size=(n, p))
+    values[rng.random(values.shape) < 0.05] = np.nan
+    values[rng.integers(0, n)] = np.nan  # mostly missing patients take part in neither check
+    values[rng.integers(0, n), : int(0.7 * p)] = np.nan
+    for _ in range(2):
+        first, second = rng.integers(0, n, size=2)
+        values[second] = values[first]
+    first, second = rng.integers(0, n, size=2)
+    values[second] = values[first] + rng.normal(scale=0.2, size=p)
+    return values
+
+
+@pytest.mark.parametrize("order", ["C", "F"])
+def test_the_blocked_duplicate_screen_equals_the_whole_panel_computation(monkeypatch: pytest.MonkeyPatch, order: str) -> None:
+    from survival_toolkit import duplicates
+
+    # Blocks of a few rows or columns, so every block boundary is crossed; the marker evaluation passes
+    # a Fortran-ordered panel.
+    monkeypatch.setattr(duplicates, "_BLOCK_VALUES", 3000)
+    rng = np.random.default_rng(12)
+    # 90 x 232 leaves a last block of one column, which is merged into the one before it.
+    for n, p in ((60, 25), (90, 232), (150, 5300), (40, 201)):
+        values = np.asarray(_repeated_panel(rng, n, p), order=order)
+        labels = [f"P{index}" for index in range(n)]
+        expected = _duplicates_reference(values.copy(order="K"), labels)
+        assert duplicates.possible_duplicates(values, labels) == expected, (n, p)
+        assert expected["identical"] and (p < duplicates.MIN_MARKERS or expected["pairs"])
+
+
+def test_the_duplicate_screen_bounds_its_memory_and_stops_when_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import tracemalloc
+
+    from survival_toolkit import duplicates
+    from survival_toolkit.concurrency import cancellation_scope
+    from survival_toolkit.errors import JobCancelledError
+
+    monkeypatch.setattr(duplicates, "_BLOCK_VALUES", 1 << 16)
+    rng = np.random.default_rng(3)
+    values = rng.normal(size=(200, 20000))
+    values[rng.random(values.shape) < 0.02] = np.nan
+    values[150] = values[20]
+    labels = [str(index) for index in range(200)]
+    tracemalloc.start()
+    try:
+        report = duplicates.possible_duplicates(values, labels)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert report["identical"] == [["20", "150"]] and report["checked"]
+    # Before, rounding the whole panel for the identical check, the variance of every marker and the sorted
+    # correlation matrix took about five times the panel.
+    assert peak < 0.8 * values.nbytes
+    stop = threading.Event()
+    stop.set()
+    with cancellation_scope(stop), pytest.raises(JobCancelledError):
+        duplicates.possible_duplicates(values, labels)
+    # Cohorts too large to compare are returned before any pass over the panel.
+    monkeypatch.setattr(duplicates, "MAX_PATIENTS", 150)
+    large = duplicates.possible_duplicates(values, labels)
+    assert not large["checked"] and not large["identical_checked"] and "up to 150 patients" in large["note"]
