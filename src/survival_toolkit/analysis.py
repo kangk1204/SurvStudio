@@ -9,6 +9,7 @@ import math
 import re
 import warnings
 from collections import OrderedDict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple, Sequence
 
@@ -345,6 +346,9 @@ _DELIMITER_SNIFF_MAX_CHARS = 64 * 1024
 # Share of non-ASCII characters that must be Hangul syllables before a byte stream that
 # is not UTF-8 is read as Korean CP949 (the default "CSV" export of Korean Excel).
 _CP949_HANGUL_SHARE = 0.5
+# Bytes from the first byte that is not UTF-8 that decide the fallback encoding when a file is
+# UTF-8 only in its sniffed prefix.
+_LATE_ENCODING_PROBE_BYTES = 64 * 1024
 TEXT_ENCODING_LABELS = {
     "utf-8": "UTF-8",
     "utf-8-sig": "UTF-8",
@@ -388,12 +392,64 @@ def _decode_text_sample(sample: bytes, encoding: str, *, complete: bool) -> str:
     return text[: cut + 1] if cut >= 0 else text
 
 
+@lru_cache(maxsize=1)
+def _ks_x_1001_hangul() -> frozenset[str]:
+    """The 2,350 Hangul syllables and the Hangul letters of KS X 1001, the core of CP949.
+
+    Korean text uses these almost exclusively. The other CP949 syllables (the Unified Hangul
+    Code extension) include pairs of a byte 0x81-0xC6 and an ASCII letter, such as 0xC4 0x72,
+    which is also "Är" in Windows-1252: Western text read as CP949 becomes those rare syllables.
+    """
+    characters: set[str] = set()
+    for lead in (0xA4, *range(0xB0, 0xC9)):
+        for trail in range(0xA1, 0xFF):
+            try:
+                characters.add(bytes((lead, trail)).decode("cp949"))
+            except UnicodeDecodeError:
+                continue
+    return frozenset(char for char in characters if "가" <= char <= "힣" or "ㄱ" <= char <= "ㆎ")
+
+
 def _hangul_share(text: str) -> float:
+    """Share of the non-ASCII characters that are KS X 1001 Hangul (what CP949 Korean text is made of)."""
     non_ascii = [char for char in text if ord(char) > 127]
     if not non_ascii:
         return 0.0
-    hangul = sum(1 for char in non_ascii if "가" <= char <= "힣" or "ㄱ" <= char <= "ㆎ")
-    return hangul / len(non_ascii)
+    hangul = _ks_x_1001_hangul()
+    return sum(1 for char in non_ascii if char in hangul) / len(non_ascii)
+
+
+def _bytes_after_first_non_utf8(open_source: Any) -> bytes:
+    """Up to 64 KiB of the source from its first byte that is not UTF-8 (b"" when every byte is)."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+    with open_source() as handle:
+        while True:
+            chunk = handle.read(_TEXT_SNIFF_BYTES)
+            if not chunk:
+                return b""
+            try:
+                decoder.decode(chunk, final=False)
+            except UnicodeDecodeError as exc:
+                window = bytes(exc.object[exc.start : exc.start + _LATE_ENCODING_PROBE_BYTES])
+                if len(window) < _LATE_ENCODING_PROBE_BYTES:
+                    window += handle.read(_LATE_ENCODING_PROBE_BYTES - len(window))
+                return window
+
+
+def _encodings_after_late_utf8_error(open_source: Any, remaining: Sequence[str]) -> list[str]:
+    """The encodings to try when a file is UTF-8 in its sniffed prefix but not further on.
+
+    Windows-1252 comes first unless the undecodable bytes read as Korean CP949 text (mostly
+    KS X 1001 Hangul); trying CP949 first would turn Western text such as "Ärzte" into Hangul.
+    """
+    window = _bytes_after_first_non_utf8(open_source)
+    try:
+        text = codecs.getincrementaldecoder("cp949")(errors="strict").decode(window, final=False)
+    except UnicodeDecodeError:
+        text = ""
+    korean = bool(text) and _hangul_share(text) >= _CP949_HANGUL_SHARE
+    order = ("cp949", "cp1252", "latin-1") if korean else ("cp1252", "latin-1")
+    return [encoding for encoding in order if encoding in remaining]
 
 
 def _text_encoding_candidates(sample: bytes, *, complete: bool) -> list[str]:
@@ -614,7 +670,9 @@ def _read_csv_with_fallback(
         raise ValueError("The uploaded file is empty. Add a header row and at least one data row.")
 
     last_error: Exception | None = None
-    for encoding in _text_encoding_candidates(sample, complete=complete):
+    candidates = _text_encoding_candidates(sample, complete=complete)
+    while candidates:
+        encoding = candidates.pop(0)
         try:
             sample_text = _decode_text_sample(sample, encoding, complete=complete)
         except UnicodeDecodeError as exc:
@@ -638,6 +696,9 @@ def _read_csv_with_fallback(
         except UnicodeDecodeError as exc:
             # A later part of the file does not fit this encoding; try the next one.
             last_error = exc
+            if encoding in {"utf-8", "utf-8-sig"}:
+                # The sniffed prefix was UTF-8, so the fallback is judged from the bytes that are not.
+                candidates = _encodings_after_late_utf8_error(_open, candidates)
             continue
         frame.attrs["source_encoding"] = encoding
         return frame

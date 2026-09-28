@@ -121,6 +121,36 @@ def test_excel_reader_errors_are_user_errors_but_code_errors_are_not_masked(monk
 
 
 # ---------------------------------------------------------------------------------------
+# Text encodings (R3 #12)
+
+
+def test_western_bytes_after_the_sniffed_prefix_fall_back_to_windows_1252() -> None:
+    late = ("time,event,site\n" + "1,0,A\n" * 200_000 + "2,1,Ärzteklinik\n").encode("cp1252")
+    assert len(late) > analysis._TEXT_SNIFF_BYTES
+    frame = load_dataframe(late, "late.csv")
+    assert frame.attrs["source_encoding"] == "cp1252"
+    assert frame["site"].iloc[-1] == "Ärzteklinik"
+
+
+def test_korean_bytes_after_the_sniffed_prefix_are_read_as_cp949() -> None:
+    late = ("time,event,site\n" + "1,0,A\n" * 200_000 + "2,1,서울대학교병원\n").encode("cp949")
+    frame = load_dataframe(late, "late.csv")
+    assert frame.attrs["source_encoding"] == "cp949"
+    assert frame["site"].iloc[-1] == "서울대학교병원"
+
+
+def test_western_text_that_also_decodes_as_cp949_is_read_as_windows_1252() -> None:
+    # "Är" and "Ån" are valid (rare) CP949 syllables, which once made this file "Korean".
+    western = "name,time,event\nÄrzte,12.5,1\nÅnge,7,0\nÄrger,3,1\n".encode("cp1252")
+    assert western.decode("cp949")  # the whole sample decodes as CP949
+    frame = load_dataframe(western, "western.csv")
+    assert frame.attrs["source_encoding"] == "cp1252"
+    assert frame["name"].tolist() == ["Ärzte", "Ånge", "Ärger"]
+    korean = "환자,생존기간,사망\n김,12.5,1\n이,7,0\n".encode("cp949")
+    assert load_dataframe(korean, "korean.csv").attrs["source_encoding"] == "cp949"
+
+
+# ---------------------------------------------------------------------------------------
 # Decimal marks and thousands separators (R3 #1, #8) and numbers that look like dates (#5)
 
 _EU_DAYS = ["1.234", "856", "2.045", "310", "1.502", "95", "3.020", "640", "1.100", "75"]
