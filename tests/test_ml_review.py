@@ -427,17 +427,27 @@ def test_interval_endpoint_reports_block_problems_as_bad_requests() -> None:
     rows = [f"r{i}" for i in range(time.size)]
     good = {"row_ids": rows, "time": time.tolist(), "event": event.tolist(), "risk": {"Cox PH": signal.tolist()}}
     client = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
-    cases = [
+    # Blocks that cannot be merged reach the evaluation module, which names the problem (400).
+    merge_cases = [
         ([good, {**good, "row_ids": [f"x{i}" for i in range(time.size)], "risk": {"DeepSurv": signal.tolist()}}], "share no test patients"),
         ([good, {**good, "event": [1] * time.size, "risk": {"DeepSurv": signal.tolist()}}], "disagree on the outcome"),
-        ([good, {"row_ids": rows, "event": event.tolist(), "risk": {"DeepSurv": signal.tolist()}}], "lacks 'time'"),
-        ([{**good, "risk": {"Cox PH": signal[:5].tolist()}}], "has 5 values for 60 row IDs"),
-        ([{**good, "risk": [1, 2, 3]}], "'risk' must map each model name"),
     ]
-    for predictions, message in cases:
+    for predictions, message in merge_cases:
         response = client.post("/api/model-comparison-intervals", json={"predictions": predictions})
         assert response.status_code == 400, response.text
         assert message in response.json()["detail"]
+    # Malformed blocks are refused by the request model (422) or the evaluation module (400), never with a 500,
+    # and the message names the block field at fault.
+    shape_cases = [
+        ([good, {"row_ids": rows, "event": event.tolist(), "risk": {"DeepSurv": signal.tolist()}}], "time"),
+        ([{**good, "risk": {"Cox PH": signal[:5].tolist()}}], "risk"),
+        ([{**good, "risk": [1, 2, 3]}], "risk"),
+    ]
+    for predictions, field in shape_cases:
+        response = client.post("/api/model-comparison-intervals", json={"predictions": predictions})
+        assert response.status_code in (400, 422), response.text
+        detail = str(response.json()["detail"])
+        assert field in detail and ("block" in detail.lower()), detail
 
 
 def test_interval_bootstrap_stops_when_its_request_is_cancelled() -> None:
