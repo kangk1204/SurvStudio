@@ -490,6 +490,25 @@ def test_the_number_of_permutations_does_not_change_the_subsamples() -> None:
     assert lens(first, "p_fwer") == lens(more_subsamples, "p_fwer") and lens(first, "q_perm") == lens(more_subsamples, "q_perm")
 
 
+# 11: a dataset whose index repeats a label is read row by row.
+
+
+def test_a_dataset_index_with_repeated_labels_is_read_by_position() -> None:
+    frame = _copy_cohort(4, n=120).drop(columns=["age_copy"])
+    frame.loc[5, "g1"] = np.nan
+    common = dict(time_column="time", event_column="event", marker_columns=[f"g{index}" for index in range(4)], clinical_columns=["age"],
+                  settings=_QUICK)
+    reference = evaluate_markers(frame, **common)
+    repeated = frame.set_axis([index // 2 for index in range(len(frame))])  # two samples per patient label
+    # Before, reading the markers by label returned both rows of each label and failed with a numpy broadcast error.
+    result = evaluate_markers(repeated, **common)
+    assert result["marker_table"] == reference["marker_table"] and result["cohort"]["n"] == 120
+    recipe = result["locked_recipe"]
+    external = _copy_cohort(5, n=120).drop(columns=["age_copy"])
+    report = validate_locked_recipe(external.set_axis([0] * len(external)), recipe, n_bootstrap=0)
+    assert report["metrics"] == validate_locked_recipe(external, recipe, n_bootstrap=0)["metrics"]
+
+
 # 3: the duplicate screen reads the panel in blocks, stops when cancelled, and gives the same results.
 
 

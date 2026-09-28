@@ -231,6 +231,7 @@ def prepare_marker_cohort(
     missing = [column for column in [*markers, *clinical, *strata] if column not in df.columns]
     if missing:
         raise ValueError("Columns not found in the dataset: " + ", ".join(missing[:5]) + ".")
+    df = _unique_rows(df)
 
     # Only the outcome and clinical columns go through the cohort checks, which inspect every
     # column they are given; a genome-wide panel would make them the slowest step.
@@ -1281,11 +1282,23 @@ def freeze_recipe(
     return recipe
 
 
+def _unique_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """The dataset with rows addressed by position when its index repeats a label.
+
+    Markers are read by row label, and a repeated label (two samples of one patient, say) would
+    return both rows for each; row numbers name the patients instead.
+    """
+    return df if df.index.is_unique else df.reset_index(drop=True)
+
+
 def _patient_labels(df: pd.DataFrame, source_rows: Sequence[Any], id_column: str | None) -> list[str]:
-    """How the duplicate screen names patients: by ``id_column`` when given, else by dataset row number."""
-    if id_column and id_column in df.columns and df.index.is_unique:
+    """How the duplicate screen names patients: by ``id_column`` when given, else by dataset row number.
+
+    ``df`` has a unique index (see ``_unique_rows``).
+    """
+    if id_column and id_column in df.columns:
         return [str(value) for value in df.loc[list(source_rows), id_column]]
-    positions = pd.Index(df.index).get_indexer(list(source_rows)) if df.index.is_unique else np.full(len(source_rows), -1)
+    positions = pd.Index(df.index).get_indexer(list(source_rows))
     return [f"row {position + 1}" if position >= 0 else str(label) for position, label in zip(positions, source_rows)]
 
 
@@ -1308,6 +1321,7 @@ def evaluate_markers(
     ``id_column`` only names patients in the duplicate screen; without it they are named by row number.
     """
     settings = _validated_settings(settings or MarkerSettings())
+    df = _unique_rows(df)
     cohort = prepare_marker_cohort(
         df,
         time_column=time_column,
@@ -1753,6 +1767,7 @@ def validate_locked_recipe(
     expected_hash = _legacy_recipe_hash(recipe) if version == 1 else recipe_hash(recipe)
     if recipe.get("recipe_hash") != expected_hash:
         raise ValueError("The recipe does not match its hash; it was edited after it was locked.")
+    df = _unique_rows(df)
     mapping = {str(key): str(value) for key, value in (column_mapping or {}).items()}
 
     def external(name: str) -> str:
