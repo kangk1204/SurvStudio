@@ -15,6 +15,7 @@ from test_frontend_review import (  # noqa: F401 (pytest fixtures used by name)
     _compare_all_script,
     _locked_test_compare,
     _run_page,
+    _signature_script,
     client,
     compare_payloads,
     example_dataset,
@@ -739,6 +740,37 @@ def test_a_refused_checklist_export_names_the_field_the_server_rejected(tmp_path
     """)
 
     assert result == {"refused": "format: Input should be 'docx' or 'markdown'", "unreadable": "Checklist export failed."}
+
+
+def test_discover_has_its_own_busy_scope_and_its_csv_says_why_it_waits(tmp_path: Path, example_dataset: dict) -> None:
+    """R13-11/R13-12: while a cut-point search runs, KM stays usable and the signature CSV asks to wait for the run."""
+    result = _run_page(tmp_path, _signature_script(r"""
+      const firstRun = { csvEnabled: !page.run("refs.downloadSignatureButton.disabled") };
+      const hold = deferred();
+      const answer = page.fetchHandler;
+      page.fetchHandler = (request) => (request.url.endsWith("/api/discover-signature") ? hold.promise.then(() => answer(request)) : answer(request));
+      page.run("refs.runSignatureSearchButton.click()");
+      await page.settle(3);
+      page.run("refs.downloadSignatureButton.disabled = false; refs.downloadSignatureButton.click()");
+      const during = {
+        toast: page.toasts().pop(),
+        kmButtonDisabled: page.run("refs.runKmButton.disabled"),
+        kmStatus: page.run("document.querySelector('[data-run-status=km]').textContent"),
+        discoverBusy: page.run("refs.runSignatureSearchButton.disabled"),
+      };
+      hold.resolve();
+      await page.settle();
+      return { firstRun, during, after: { busy: page.run("isScopeBusy('signature') || isScopeBusy('km')"), discoverDisabled: page.run("refs.runSignatureSearchButton.disabled") } };
+    """), dataset=example_dataset)
+
+    assert result["firstRun"] == {"csvEnabled": True}
+    assert result["during"] == {
+        "toast": "Wait for the current run to finish before exporting this result.",
+        "kmButtonDisabled": False,
+        "kmStatus": "",
+        "discoverBusy": True,
+    }
+    assert result["after"] == {"busy": False, "discoverDisabled": False}
 
 
 def test_manuscript_tables_show_the_headers_they_export(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:

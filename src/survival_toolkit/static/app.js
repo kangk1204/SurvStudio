@@ -129,8 +129,12 @@ function wireDownloads() {
     ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadSignatureButton.addEventListener("click", () => {
+    if (isScopeBusy("signature")) {
+      showToast("Wait for the current run to finish before exporting this result.", "warning", 3200);
+      return;
+    }
     const payload = currentSignatureResult();
-    if (!payload || isScopeBusy("km")) {
+    if (!payload) {
       showToast("Visible settings no longer match the current signature result. Run again before exporting.", "warning", 3600);
       return;
     }
@@ -1057,7 +1061,8 @@ function initListeners() {
   });
   refs.deriveButton.addEventListener("click", () => withLoading(refs.deriveButton, deriveGroup));
   refs.runKmButton.addEventListener("click", () => withLoading(refs.runKmButton, runKaplanMeier));
-  refs.runSignatureSearchButton.addEventListener("click", () => withLoading(refs.runSignatureSearchButton, runSignatureSearch, "km"));
+  // The cut-point search (Markers tab) has its own busy scope: it does not hold Kaplan-Meier's run or exports.
+  refs.runSignatureSearchButton.addEventListener("click", () => withLoading(refs.runSignatureSearchButton, runSignatureSearch, "signature"));
   refs.runCoxButton.addEventListener("click", () => withLoading(refs.runCoxButton, runCox));
   refs.runCohortTableButton.addEventListener("click", () => withLoading(refs.runCohortTableButton, runCohortTable));
   refs.runMlButton.addEventListener("click", () => withLoading(refs.runMlButton, runMlModel));

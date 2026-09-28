@@ -520,7 +520,8 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
     ? snapshot.groupColumn
     : null;
 
-  const discardedScopes = ["cox", "markers", "tables", "ml", "dl"].filter((scope) => isScopeBusy(scope));
+  // Kaplan-Meier can run while a cut-point search (its own scope) creates the snapshot.
+  const discardedScopes = ["km", "cox", "markers", "tables", "ml", "dl"].filter((scope) => isScopeBusy(scope));
 
   state.dataset = payload;
   clearAnalysisOutputs();

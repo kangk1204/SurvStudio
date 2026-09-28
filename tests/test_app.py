@@ -804,7 +804,7 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
     assert 'Select at least one marker to search for cut-point combinations.' in text
     assert 'Select at least one covariate for the Cox model.' in text
     assert 'Select at least one variable for the cohort table.' in text
-    assert '!endpointReady || !hasMarkers || isScopeBusy("km")' in text
+    assert '!endpointReady || !hasMarkers || isScopeBusy("signature")' in text
     # The marker evaluation also runs on an attached marker file with no column ticked.
     assert '!endpointReady || !hasEvaluationMarkers || isScopeBusy("markers")' in text
     assert 'const matrixAttached = typeof markerMatrixAttached === "function" && markerMatrixAttached();' in text
@@ -5083,8 +5083,10 @@ def test_frontend_exports_require_current_results_and_signature_scope_guard() ->
     assert 'if (!requireCurrentResultForExport("tables", { payload })) return;' in app_js
     assert 'if (!requireCurrentResultForExport("ml", { payload })) return;' in app_js
     assert 'if (!requireCurrentResultForExport("dl", { payload })) return;' in app_js
-    assert 'if (!payload || isScopeBusy("km")) {' in app_js
-    assert 'refs.runSignatureSearchButton, runSignatureSearch, "km"' in app_js
+    # The cut-point search has its own busy scope, and its CSV waits for a running search with the right reason
+    # (tests/test_frontend_review2.py drives both).
+    assert 'if (isScopeBusy("signature")) {' in app_js
+    assert 'refs.runSignatureSearchButton, runSignatureSearch, "signature"' in app_js
     assert "function syncDownloadButtonAvailability()" in app_js
 
 

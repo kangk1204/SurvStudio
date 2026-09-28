@@ -643,7 +643,7 @@ function syncAnalysisRunButtonAvailability() {
   );
   setActionDisabledState(
     refs.runSignatureSearchButton,
-    !endpointReady || !hasMarkers || isScopeBusy("km"),
+    !endpointReady || !hasMarkers || isScopeBusy("signature"),
     !endpointReady ? readyMessage : (!hasMarkers ? signatureFeatureMessage : ""),
   );
   setActionDisabledState(
