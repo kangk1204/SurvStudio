@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import math
 import os
+import sys
 import threading
 import time
 import warnings
@@ -3636,22 +3637,44 @@ def cross_validate_survival_models(
 # ===================================================================
 
 
-# Kernel SHAP draws its coalitions from NumPy's global random state. SHAP runs hold this
-# lock while they seed that state and restore it afterwards, so concurrent runs neither
-# interleave draws nor leave the process-wide state changed.
-_GLOBAL_NUMPY_RNG_LOCK = threading.Lock()
+# Kernel SHAP samples its feature coalitions with ``np.random.choice`` and
+# ``np.random.permutation``, the process-wide random state. A run gives the explainer's
+# module a view of NumPy whose ``random`` is a seeded local RandomState instead, so the
+# attributions are reproducible and other code's random state is neither reseeded nor
+# consumed. Runs hold this lock because they share that module.
+_KERNEL_SHAP_RNG_LOCK = threading.Lock()
 _DEFAULT_SHAP_SEED = 42
 
 
+class _NumpyWithLocalRandom:
+    """``numpy`` as seen by the Kernel SHAP module, with ``numpy.random`` one seeded RandomState."""
+
+    def __init__(self, seed: int) -> None:
+        # A RandomState draws the same numbers as the global functions after ``np.random.seed(seed)``.
+        self.random = np.random.RandomState(int(seed) % _SEED_MODULUS)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(np, name)
+
+
 @contextmanager
-def _seeded_global_numpy_rng(seed: int) -> Iterator[None]:
-    with _GLOBAL_NUMPY_RNG_LOCK:
-        saved_state = np.random.get_state()
-        np.random.seed(int(seed) % (2**32))
+def _kernel_shap_local_rng(explainer_class: Any, seed: int) -> Iterator[None]:
+    module = sys.modules.get(str(getattr(explainer_class, "__module__", "")))
+    if module is None or not module.__name__.startswith("shap."):
+        # A stand-in explainer, not shap's: nothing there samples from NumPy's random state.
+        yield
+        return
+    with _KERNEL_SHAP_RNG_LOCK:
+        original = module.__dict__.get("np")
+        if original is not np:
+            # This shap version does not sample through a module-level ``np``.
+            yield
+            return
+        module.np = _NumpyWithLocalRandom(seed)
         try:
             yield
         finally:
-            np.random.set_state(saved_state)
+            module.np = original
 
 
 def _shap_seed(model: Any, random_state: int | None) -> int:
@@ -3748,16 +3771,19 @@ def compute_shap_values(
             return _predict_risk_scores(model, x)
 
         kernel_nsamples = min(160, max(40, X_bg.shape[1] * 6))
-        with _seeded_global_numpy_rng(seed):
+        with _kernel_shap_local_rng(shap.KernelExplainer, seed):
             explainer = shap.KernelExplainer(_predict_fn, X_bg)
+            # shap's default l1_reg ("num_features(10)") would keep at most ten non-zero
+            # attributions per patient; every encoded feature is estimated instead.
             try:
                 shap_values = explainer.shap_values(
                     X_eval,
                     nsamples=kernel_nsamples,
+                    l1_reg=False,
                     silent=True,
                 )
             except TypeError:
-                shap_values = explainer.shap_values(X_eval, nsamples=kernel_nsamples)
+                shap_values = explainer.shap_values(X_eval, nsamples=kernel_nsamples, l1_reg=False)
 
     # shap_values may be 2-D (n_samples, n_features) or 3-D for multi-output
     if isinstance(shap_values, (list, tuple)):

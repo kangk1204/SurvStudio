@@ -377,6 +377,45 @@ def test_comparisons_flag_missing_brier_metrics_of_the_top_model(monkeypatch) ->
     assert summary["status"] == "review" and summary["cautions"]
 
 
+# ── SHAP ────────────────────────────────────────────────────────────────────
+
+
+def test_kernel_shap_estimates_every_feature_and_draws_from_its_own_random_state(monkeypatch) -> None:
+    shap = pytest.importorskip("shap")
+    from survival_toolkit import ml_models as ml
+
+    class _Unsupported:
+        def __init__(self, model):
+            raise ValueError("Model type not yet supported by TreeExplainer")
+
+    monkeypatch.setattr(ml, "shap", types.SimpleNamespace(TreeExplainer=_Unsupported, KernelExplainer=shap.KernelExplainer))
+    seen_states: list[np.ndarray] = []
+
+    class _Linear:
+        random_state = 7
+
+        def predict(self, X):
+            # What any other code drawing from NumPy's global random state would see meanwhile.
+            seen_states.append(np.random.get_state()[1][:8].copy())
+            X = np.asarray(X, dtype=float)
+            return X @ np.arange(1.0, X.shape[1] + 1.0)
+
+    X = pd.DataFrame(np.random.default_rng(0).normal(size=(30, 12)), columns=[f"f{i:02d}" for i in range(12)])
+    np.random.seed(123)
+    before = np.random.get_state()[1].copy()
+    first = ml.compute_shap_values(_Linear(), X)
+    # The global state is neither reseeded during the run nor changed after it.
+    assert all(np.array_equal(state, before[:8]) for state in seen_states)
+    assert np.array_equal(np.random.get_state()[1], before)
+    assert first["method"] == "kernel" and first["random_state"] == 7
+    # Every one of the 12 features gets an attribution (shap's default l1_reg kept at most 10 per row).
+    values = np.array([row["shap_values"] for row in first["shap_summary"]], dtype=float).T
+    assert int((np.abs(values) > 1e-9).sum(axis=1).max()) == 12
+    second = ml.compute_shap_values(_Linear(), X)
+    for one, two in zip(first["shap_summary"], second["shap_summary"], strict=True):
+        np.testing.assert_allclose(one["shap_values"], two["shap_values"], rtol=0, atol=0)
+
+
 def test_shap_tree_explainer_memory_errors_are_not_an_unsupported_model(monkeypatch) -> None:
     from survival_toolkit import ml_models as ml
 

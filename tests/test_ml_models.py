@@ -1376,9 +1376,10 @@ def test_compute_shap_values_caps_kernel_fallback_work(monkeypatch) -> None:
         def __init__(self, predict_fn, background) -> None:
             seen["background_shape"] = background.shape
 
-        def shap_values(self, eval_matrix, nsamples=None, silent=None):
+        def shap_values(self, eval_matrix, nsamples=None, l1_reg="num_features(10)", silent=None):
             seen["eval_shape"] = eval_matrix.shape
             seen["nsamples"] = nsamples
+            seen["l1_reg"] = l1_reg
             seen["silent"] = silent
             return np.ones((eval_matrix.shape[0], eval_matrix.shape[1]), dtype=float)
 
@@ -1401,6 +1402,8 @@ def test_compute_shap_values_caps_kernel_fallback_work(monkeypatch) -> None:
     assert seen["background_shape"] == (40, 5)
     assert seen["eval_shape"] == (60, 5)
     assert seen["nsamples"] == 40
+    # No L1 feature selection: shap's default would keep at most ten non-zero attributions per row.
+    assert seen["l1_reg"] is False
     assert seen["silent"] is True
 
 
