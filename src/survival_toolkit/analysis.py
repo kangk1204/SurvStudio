@@ -6285,8 +6285,10 @@ def _resolve_cox_categorical_covariates(
     """
     # Missing columns are reported together with the outcome columns by _cohort_frame.
     present = [column for column in covariates if column in df.columns]
-    reject_numeric_text_features(df, present)
     explicit = list(dict.fromkeys(categorical_covariates or []))
+    # Covariates the user marked categorical are used as they are (the Cox design check still refuses
+    # identifier-like ones); the others get the shared text-feature checks.
+    reject_numeric_text_features(df, present, explicit)
     covariate_set = set(covariates)
     unselected = [str(column) for column in explicit if column not in covariate_set]
     if unselected:

@@ -300,7 +300,8 @@ def test_marker_matrix_with_an_overlong_text_field_is_a_400() -> None:
         files={"file": ("matrix.csv", payload, "text/csv")},
     )
     assert response.status_code == 400
-    assert "delimited text" in _detail(response)
+    # The matrix reader bounds and parses the first lines itself, so either stage may name the problem.
+    assert "delimited text" in _detail(response) or "could not be read as a table" in _detail(response)
 
 
 def test_unreadable_parquet_upload_gets_a_generic_message() -> None:

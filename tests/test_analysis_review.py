@@ -432,10 +432,19 @@ def test_identifier_like_categorical_covariate_is_refused_before_the_fit() -> No
     frame["age"] = np.random.default_rng(3).normal(60, 8, 300)
     frame["case_submitter_id"] = [f"case-{i:06d}" for i in range(300)]
     start = time.perf_counter()
+    # Left undeclared, the shared text-feature check refuses the column in the fit and in the preview alike.
+    for call in (compute_cox_analysis, preview_cox_analysis_inputs):
+        with pytest.raises(ValueError, match="300 distinct text values"):
+            call(frame, "os_months", "os_event", ["age", "case_submitter_id"])
+    # Declared categorical, the Cox design check refuses the fit before building it and the preview warns.
     with pytest.raises(ValueError, match="300 observed levels, which looks like an identifier"):
-        compute_cox_analysis(frame, "os_months", "os_event", ["age", "case_submitter_id"])
+        compute_cox_analysis(
+            frame, "os_months", "os_event", ["age", "case_submitter_id"], categorical_covariates=["case_submitter_id"]
+        )
     assert time.perf_counter() - start < 10.0
-    preview = preview_cox_analysis_inputs(frame, "os_months", "os_event", ["age", "case_submitter_id"])
+    preview = preview_cox_analysis_inputs(
+        frame, "os_months", "os_event", ["age", "case_submitter_id"], categorical_covariates=["case_submitter_id"]
+    )
     assert any("looks like an identifier" in warning for warning in preview["stability_warnings"])
 
 
