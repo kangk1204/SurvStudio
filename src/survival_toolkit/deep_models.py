@@ -1557,8 +1557,6 @@ def _scientific_summary_dl(
     ``loss_history`` is the early-stopping run; ``reported_epochs`` (when given) is the
     number of epochs behind the reported weights, which differs after a refit.
     """
-    from survival_toolkit.ml_models import _unseen_category_caution
-
     metric_name = _metric_name_for_evaluation(evaluation_mode)
     c_val = float(c_index) if c_index is not None else None
 
@@ -1601,9 +1599,13 @@ def _scientific_summary_dl(
         cautions.append(
             f"{int(dropped_nonpositive_time_rows)} row(s) with negative survival time were excluded before deep-model preprocessing."
         )
-    unseen_caution = _unseen_category_caution(int(unseen_category_rows), "evaluation") if evaluation_mode == "holdout" else None
-    if unseen_caution:
-        cautions.append(unseen_caution)
+    if evaluation_mode == "holdout" and int(unseen_category_rows) > 0:
+        # Imported only when needed: repeated-CV worker processes need not load the ML module.
+        from survival_toolkit.ml_models import _unseen_category_caution
+
+        unseen_caution = _unseen_category_caution(int(unseen_category_rows), "evaluation")
+        if unseen_caution:
+            cautions.append(unseen_caution)
 
     if train_samples < 100:
         cautions.append("Sample size is small for a deep learning model; results may be unreliable.")
@@ -2747,6 +2749,9 @@ def _abandon_process_pool(executor: Any) -> None:
     for process in processes:
         try:
             process.join(timeout=max(0.0, deadline - time.monotonic()))
+            # The pool's manager thread may reap the process first; wait until the exit is recorded.
+            while process.exitcode is None and time.monotonic() < deadline:
+                time.sleep(0.05)
         except (AssertionError, OSError, ValueError):
             continue
 

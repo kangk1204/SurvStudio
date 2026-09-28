@@ -122,23 +122,29 @@ def test_parameter_count_estimate_matches_the_built_network(model_name, build, a
     assert dm._estimate_deep_parameter_count(model_name, n_features=n_features, **architecture) == built
 
 
-def test_trainers_refuse_oversized_networks_before_building_them(monkeypatch) -> None:
+def _refuse_construction(monkeypatch: pytest.MonkeyPatch, *network_names: str) -> None:
+    """Make building these networks fail loudly, so a missing guard cannot allocate gigabytes."""
+
     def _must_not_build(*args, **kwargs):
         raise AssertionError("the oversized network must be refused before it is built")
 
-    monkeypatch.setattr(dm, "DeepSurvNet", _must_not_build)
+    for name in network_names:
+        monkeypatch.setattr(dm, name, _must_not_build)
+
+
+def test_trainers_refuse_oversized_networks_before_building_them(monkeypatch) -> None:
+    _refuse_construction(monkeypatch, "DeepSurvNet", "SurvivalTransformerNet")
     df = make_example_dataset(seed=4, n_patients=80)
-    started = time.monotonic()
     with pytest.raises(UserInputError, match="trainable parameters"):
         dm.train_deepsurv(df, "os_months", "os_event", FEATURES, hidden_layers=[2_000_000_000, 2_000_000_000], epochs=1)
-    assert time.monotonic() - started < 30
     with pytest.raises(UserInputError, match="trainable parameters"):
         dm.train_survival_transformer(df, "os_months", "os_event", FEATURES, d_model=4096, n_heads=4, n_layers=2, epochs=1)
     with pytest.raises(UserInputError, match="positive integers"):
         dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, hidden_layers=[64, 0], epochs=1)
 
 
-def test_comparison_reports_the_parameter_budget_as_a_model_failure() -> None:
+def test_comparison_reports_the_parameter_budget_as_a_model_failure(monkeypatch) -> None:
+    _refuse_construction(monkeypatch, "DeepSurvNet")
     df = make_example_dataset(seed=4, n_patients=80)
     result = dm.compare_deep_survival_models(
         df, "os_months", "os_event", FEATURES, hidden_layers=[40_000] * 20, epochs=1,
@@ -439,9 +445,9 @@ def test_cancelling_parallel_cv_terminates_the_running_workers(monkeypatch) -> N
     try:
         with pytest.raises(JobCancelledError):
             with cancellation_scope(cancel):
-                # Each fold would train for minutes.
+                # Each fold trains for minutes (bounded, so a regression fails instead of hanging).
                 dm.compare_deep_survival_models(
-                    df, "time", "event", [f"x{i}" for i in range(10)], hidden_layers=[64, 64], epochs=1_000_000,
+                    df, "time", "event", [f"x{i}" for i in range(10)], hidden_layers=[64, 64], epochs=300_000,
                     early_stopping_patience=None, evaluation_strategy="repeated_cv", cv_folds=2, cv_repeats=1,
                     parallel_jobs=2, included_models=["DeepSurv"], random_seed=3,
                 )
