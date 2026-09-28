@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import types
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -778,6 +777,28 @@ def test_splits_keep_the_feature_types_decided_on_the_whole_cohort(monkeypatch) 
     comparison = ml.compare_survival_models(df, "os_months", "os_event", ["age", "code"], n_estimators=5)
     assert comparison["errors"] == []
     assert next(row for row in comparison["comparison_table"] if row["model"] == "Gradient Boosted Survival")["c_index"] is not None
+
+
+@requires_sksurv
+def test_a_text_level_only_in_the_evaluation_rows_keeps_the_feature_categorical_in_every_split(monkeypatch) -> None:
+    from survival_toolkit import ml_models as ml
+
+    df = make_example_dataset(seed=20, n_patients=200).copy()
+    features = ["age", "biomarker_score", "grade"]
+    grade = pd.Series(np.random.default_rng(6).integers(1, 4, size=len(df)).astype(str), index=df.index, dtype=object)
+    grade.loc[_holdout_rows(df, ["age"], 1)] = "Unknown"
+    df["grade"] = grade
+    # On the whole cohort "grade" is text with a non-numeric level, so it is categorical; the
+    # training split alone holds only "1", "2" and "3", which must not make it numeric there.
+    comparison = ml.compare_survival_models(df, "os_months", "os_event", features, n_estimators=5)
+    assert comparison["errors"] == [] and len(comparison["comparison_table"]) == 4
+    assert comparison["categorical_features"] == ["grade"]
+    # In cross-validation the "Unknown" row is a training row in some folds and a test row in
+    # another; boosting (unlike an unpenalized Cox fit) copes with a one-row level.
+    _patch_fits(monkeypatch, ml, _fit_evaluate_gbs_split=ml._fit_evaluate_gbs_split)
+    cv = ml.cross_validate_survival_models(df, "os_months", "os_event", features, n_estimators=5, cv_folds=3,
+                                           cv_repeats=1)
+    assert cv["errors"] == [] and cv["evaluation_mode"] == "repeated_cv"
 
 
 @requires_sksurv

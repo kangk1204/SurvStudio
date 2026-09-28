@@ -1608,9 +1608,10 @@ def _prepare_model_evaluation_split(
     The shared stratified holdout is used whenever the cohort allows one; a cohort too small
     for a holdout is scored on the rows it is fitted on (apparent evaluation). The encoder
     keeps every row (missing values are imputed from the training rows), so encoding never
-    removes the evaluation rows.
+    removes the evaluation rows. Feature types are decided on the whole ``frame``, so the
+    training split never decides a feature's type anew.
     """
-    categorical_features = list(categorical_features or [])
+    categorical_features = _resolved_categorical_features(frame, features, categorical_features)
     train_frame, eval_frame, evaluation_mode = _split_train_test(
         frame,
         event_column,

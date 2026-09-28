@@ -2257,7 +2257,8 @@ def test_feature_encoder_uses_reference_baselines_and_skips_constant_indicators(
             "age": [50.0, 60.0, 70.0, 55.0, 65.0, 75.0],
         }
     )
-    encoder = fit_feature_encoder(frame, ["stage", "grade", "age"])
+    # "grade" holds only numbers written as text, so it is categorical because it is declared so.
+    encoder = fit_feature_encoder(frame, ["stage", "grade", "age"], ["grade"])
     assert encoder["categorical_mappings"]["stage"]["baseline_level"] == "Stage I"
     # Numeric-looking levels sort numerically, so "2" (not "10") is the baseline.
     assert encoder["categorical_mappings"]["grade"]["baseline_level"] == "2"
