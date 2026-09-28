@@ -489,6 +489,13 @@ def test_a_model_without_selected_markers_is_labelled_clinical_only() -> None:
     signature = result["signature"]
     assert signature["markers"] == [] and signature["clinical_only"] is True
     assert any("clinical covariates alone" in note for note in signature["notes"])
+    # The locked clinical model validates with a gain over the clinical covariates of exactly zero.
+    recipe = result["locked_recipe"]
+    assert recipe["markers"] == [] and recipe["clinical_only_model"]["terms"] == recipe["model"]["terms"]
+    external = frame.sample(frac=1.0, random_state=5).reset_index(drop=True)
+    metrics = validate_locked_recipe(external, recipe, n_bootstrap=50)["metrics"]
+    assert metrics["clinical_only_c_index"] == pytest.approx(metrics["c_index"])
+    assert metrics["delta_c_index"] == pytest.approx(0.0)
     selected = evaluate_markers(
         _clinical_cohort(22), time_column="os_time", event_column="os_event", marker_columns=_markers(_clinical_cohort(22)),
         clinical_columns=["age"], settings=_QUICK,

@@ -1103,7 +1103,9 @@ def freeze_recipe(
     if cohort.strata is None:
         baseline = _centred_baseline(cohort.time, cohort.event, linear_predictor)
     clinical_only = None
-    if clinical_terms and marker_terms:
+    # Also locked when no marker was selected: the model is then the clinical model itself, and validation
+    # reports its gain over the clinical covariates as exactly zero instead of leaving it out.
+    if clinical_terms:
         clinical_only = {
             "terms": clinical_terms,
             "coefficients": _clinical_params(cohort, all_rows, signature.design_columns, ties),
