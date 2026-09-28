@@ -500,7 +500,61 @@ def test_bulk_list_buttons_wait_for_their_run(tmp_path: Path) -> None:
     assert result == {"busy": [True, True, True, True], "idle": [False, False, False, False]}
 
 
+def test_marker_defaults_are_shared_by_requests_and_result_currency(tmp_path: Path) -> None:
+    """#26: the currency check read its own copy of the marker defaults."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.run("refs.markerPermutations.value = ''; refs.markerResamples.value = ''; refs.markerRandomSeed.value = ''");
+      const request = page.run("markerRequestFields()");
+      const currency = page.run("normalizedRequestConfig('markers', { dataset_id: 'cats' })");
+      const defaults = page.run("({ ...MARKER_NUMERIC_DEFAULTS })");
+      return { request: [request.n_permutations, request.n_resamples, request.random_seed],
+        currency: [currency.n_permutations, currency.n_resamples, currency.random_seed], defaults };
+    """, dataset=_categorical_dataset())
+
+    assert result["defaults"] == {"n_permutations": 1000, "n_resamples": 200, "random_seed": 20260926}
+    assert result["currency"] == result["request"] == [1000, 200, 20260926]
+
+
 # ── Workspace chrome ───────────────────────────────────────────
+
+
+def test_chrome_renders_touch_layout_only_when_a_card_moves(tmp_path: Path) -> None:
+    """#28: every chrome render read ~20 scroll offsets and serialised the cut-point figure."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.run(`var __captures = 0; var __serialised = 0;
+        var __capture = captureReparentUiState;
+        captureReparentUiState = function () { __captures += 1; return __capture(); };
+        var __inner = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(refs.cutpointPlot), "innerHTML");
+        Object.defineProperty(refs.cutpointPlot, "innerHTML", { configurable: true,
+          get() { __serialised += 1; return __inner.get.call(this); }, set(value) { __inner.set.call(this, value); } });`);
+      page.run("renderWorkspaceChrome(); renderWorkspaceChrome();");
+      const steady = page.run("({ captures: __captures, serialised: __serialised, hidden: refs.cutpointPlot.classList.contains('hidden') })");
+      page.run("Plotly.newPlot(refs.cutpointPlot, [{ x: [1], y: [2] }], {}); refs.cutpointPlot.appendChild(document.createElement('div')); renderWorkspaceChrome()");
+      const drawn = page.run("refs.cutpointPlot.classList.contains('hidden')");
+      page.run("goHome({ syncHistory: false })");
+      return { steady, drawn, capturesOnMove: page.run("__captures"), cardsBack: page.run("refs.mlWorkspaceCard.parentElement === refs.mlPanel") };
+    """, dataset=_categorical_dataset())
+
+    assert result["steady"] == {"captures": 0, "serialised": 0, "hidden": True}
+    assert result["drawn"] is False
+    assert result["capturesOnMove"] == 1
+    assert result["cardsBack"] is True
+
+
+def test_dead_workspace_code_is_gone() -> None:
+    """#23: the predictive run-status branch and its leaderboard check had no caller."""
+    sources = "\n".join(path.read_text(encoding="utf-8") for path in sorted(_STATIC_DIR.glob("app*.js")))
+    for name in (
+        "predictiveLeaderboardIsCurrent",
+        "return currentMl && currentDl ? { ml: currentMl, dl: currentDl } : null;",
+        "Compare All result shown as stale reference",
+        "Visible settings match the predictive leaderboard shown here.",
+        'const predictiveBusy = goal === "predictive"',
+        "return Boolean(state.signature);",
+    ):
+        assert name not in sources, name
 
 
 # ── Markup and styles ──────────────────────────────────────────

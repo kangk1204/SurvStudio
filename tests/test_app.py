@@ -1132,9 +1132,10 @@ def test_reparenting_preserves_focus_scroll_and_schedules_extra_plot_resize() ->
 
     assert "function captureReparentUiState() {" in text
     assert "function restoreReparentUiState(snapshot) {" in text
-    assert "const preservedUiState = captureReparentUiState();" in text
+    # Focus and scroll are read (a forced layout) only when a card moves; see test_frontend_workspace_review2.py.
+    assert "const preservedUiState = didMove ? captureReparentUiState() : null;" in text
     assert "restoreReparentUiState(preservedUiState);" in text
-    assert "if (didMove) scheduleVisiblePlotResize(40);" in text
+    assert "scheduleVisiblePlotResize(40);" in text
     assert "window.setTimeout(resizeVisiblePlotsNow, 260);" in text
 
 
@@ -4869,14 +4870,6 @@ def test_benchmark_board_warns_about_cross_family_tie_methods_and_ibs_asymmetry(
     assert "/api/model-comparison-intervals" in benchmark_js
 
 
-def test_predictive_current_result_requires_both_current_compare_payloads() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-
-    assert 'const currentMl = currentCompareGoalPayload("ml");' in app_js
-    assert 'const currentDl = currentCompareGoalPayload("dl");' in app_js
-    assert "return currentMl && currentDl ? { ml: currentMl, dl: currentDl } : null;" in app_js
-
-
 def test_cox_analysis_reuses_one_model_stats_definition() -> None:
     analysis_py = (
         Path(__file__).resolve().parents[1]
@@ -4913,17 +4906,6 @@ def test_guided_chrome_rerenders_benchmark_starter_visibility() -> None:
     assert "renderUnifiedBenchmarkSummary(board);" in app_js
     assert "renderUnifiedBenchmarkTable(board);" in app_js
     assert "syncBenchmarkBoardChrome();" in app_js
-
-
-def test_predictive_leaderboard_is_current_only_for_a_complete_board() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-
-    assert "function predictiveLeaderboardIsCurrent() {" in app_js
-    assert "&& !board?.hasMixedEvaluation" in app_js
-    assert "&& !board?.visibleHasMixedRunGroups" in app_js
-    assert '&& (board?.visibleRows?.length || 0) > 0,' in app_js
-    assert "if (predictiveLeaderboardIsCurrent()) {" in app_js
-    assert "unified: null," in app_js
 
 
 def test_frontend_download_helpers_accept_fallback_mime_type() -> None:
@@ -6648,7 +6630,9 @@ def test_optional_extras_include_format_ml_dl_and_export_dependencies() -> None:
 def test_cutpoint_scan_stays_hidden_until_it_has_a_plot() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'refs.cutpointPlot.classList.toggle("hidden", refs.cutpointPlot.innerHTML.trim().length === 0);' in app_js
+    # Checked without serialising the drawn figure; the behaviour is tested in test_frontend_workspace_review2.py.
+    assert "const empty = !refs.cutpointPlot.children.length && !refs.cutpointPlot.textContent.trim();" in app_js
+    assert 'refs.cutpointPlot.classList.toggle("hidden", empty);' in app_js
 
 
 def test_cohort_table_run_uses_its_button_as_loading_target() -> None:
