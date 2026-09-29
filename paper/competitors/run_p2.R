@@ -11,15 +11,16 @@ suppressPackageStartupMessages(library(glmnet))
 args <- arguments(list(source = "real", input = "", cohorts = "", expression = "", out = "", seed = "5201314", p = "0.05"))
 began <- Sys.time()
 dir.create(args$out, recursive = TRUE, showWarnings = FALSE)
-if (args$source == "real") {
-  cohorts <- real_cohorts(args$input, strsplit(args$cohorts, ",")[[1]])
-} else {
-  cohorts <- null_cohorts(args$input, read_table(args$expression))
-}
-train <- cohorts[[1]]
-screen <- unicox(train)
+source_ <- cohort_source(args)
+development <- source_$development()
+screen <- unicox(development)
+genes_screened <- nrow(screen)
+rm(development)
 write_csv(screen, file.path(args$out, "unicox.csv"))
 kept <- screen$gene[!is.na(screen$p) & screen$p < as.numeric(args$p)]
+# Every cohort with the genes passing the screen (the development cohort first).
+cohorts <- source_$cohorts(kept)
+train <- cohorts[[1]]
 
 p2 <- function(train, kept, seed) {
   x <- as.matrix(train[, kept, drop = FALSE])
@@ -54,7 +55,7 @@ risk <- do.call(rbind, lapply(names(cohorts), function(name) {
   data.frame(cohort = name, ID = frame$ID, OS.time = frame$OS.time, OS = frame$OS, risk = score)
 }))
 write_csv(risk, file.path(args$out, "risk.csv"))
-info <- list(genes = ncol(train) - 3, unicox_kept = length(kept), selected = length(selected),
+info <- list(genes = genes_screened, unicox_kept = length(kept), selected = length(selected),
              lambda_min = if (length(kept) >= 2) result$cv$lambda.min else NA, cox_converged = converged,
              seconds = as.numeric(difftime(Sys.time(), began, units = "secs")), seed = as.integer(args$seed),
              glmnet = as.character(packageVersion("glmnet")), survival = as.character(packageVersion("survival")),

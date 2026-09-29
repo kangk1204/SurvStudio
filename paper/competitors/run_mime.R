@@ -26,18 +26,18 @@ suppressPackageStartupMessages(library(snowfall))
 snowfall::sfInit(parallel = FALSE)
 began <- Sys.time()
 dir.create(args$out, recursive = TRUE, showWarnings = FALSE)
-if (args$source == "real") {
-  cohorts <- real_cohorts(args$input, strsplit(args$cohorts, ",")[[1]])
-} else {
-  cohorts <- null_cohorts(args$input, read_table(args$expression))
-}
-train <- cohorts[[1]]
-screen <- unicox(train)
+source_ <- cohort_source(args)
+development <- source_$development()
+screen <- unicox(development)
+rm(development)
 write_csv(screen, file.path(args$out, "unicox.csv"))
 passing <- screen[!is.na(screen$p) & screen$p < as.numeric(args$p), ]
 passing <- passing[order(passing$p), ]
 candidates <- head(passing$gene, as.integer(args$cap))
 writeLines(candidates, file.path(args$out, "candidates.txt"))
+# Every cohort with the candidate genes only (the development cohort first): Mime keeps no other column.
+cohorts <- source_$cohorts(candidates)
+train <- cohorts[[1]]
 
 # Mode "all" without the models whose first algorithm is StepCox: Mime's source with its section "3.StepCox" (from its
 # heading to the heading of section 4, CoxBoost) cut out, after checking that the source is the installed function.
