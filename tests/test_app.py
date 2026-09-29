@@ -349,20 +349,22 @@ def test_frontend_limits_fresh_model_feature_defaults_and_marks_dl_batch_size_sc
     assert "Ignored for this architecture because training is full-batch." in text
 
 
-def test_readme_states_current_scope_and_validation_limitations() -> None:
+def test_reference_manual_states_current_scope_and_validation_limitations() -> None:
+    # The technical detail lives in the reference manual; the README is the beginner's guide and links to it.
+    # Whitespace is collapsed, so a rewrapped line does not break a phrase.
+    manual = " ".join((Path(__file__).resolve().parents[1] / "docs" / "reference.md").read_text(encoding="utf-8").split())
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
 
-    assert "single-event survival analysis" in readme
-    assert "right-censored data" in readme
-    assert "no left-truncated entry-time handling" in readme
-    assert "no competing-risks analysis" in readme
-    assert "external validation in the interface covers locked marker models" in readme
-    assert "Apparent C-index" in readme
-    assert "Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time" in readme
-    assert "Martingale residual trend plots" in readme
-    assert 'pip install -e ".[all]"' in readme
-    assert "LASSO-Cox (penalized Cox)" in readme
-    assert "0.50` is chance-level ranking" in readme
+    assert "(docs/reference.md)" in readme
+    assert "single-event, right-censored survival analysis" in manual
+    assert "left-truncated (delayed-entry) data or competing risks" in manual
+    assert "External validation in the web interface covers the locked marker model" in manual
+    assert "Apparent C-index" in manual
+    assert "Grambsch-Therneau score tests on scaled Schoenfeld residuals against log time" in manual
+    assert "Martingale residual plots are a visual screen" in manual
+    assert 'pip install -e ".[all]"' in manual
+    assert "LASSO-Cox (penalized Cox)" in manual
+    assert "A C-index of 0.50 is chance-level ranking" in manual
 
 
 def test_input_checks_and_analysis_jobs_run_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2319,18 +2321,17 @@ def test_get_ml_artifact_returns_isolated_copy() -> None:
     assert second["_X_encoded"].iloc[0, 0] == pytest.approx(10.0)
 
 
-def test_readme_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -> None:
-    readme = Path(__file__).resolve().parents[1] / "README.md"
-    text = readme.read_text(encoding="utf-8")
+def test_reference_manual_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -> None:
+    manual = Path(__file__).resolve().parents[1] / "docs" / "reference.md"
+    text = " ".join(manual.read_text(encoding="utf-8").split())
 
-    assert "Synthetic Example Workflow" in text
-    assert "This synthetic dataset does **not** use `stage_group` or `treatment_group`." in text
-    assert "survival-toolkit inspect path/to/data.csv" in text
-    assert "This is the fastest way to catch file-format problems before uploading a cohort in the browser." in text
-    assert 'pip install -e ".[formats]"' in text
-    assert 'requires `pip install -e ".[formats]"`: `xlsx`, `xls`, `parquet`' in text
-    assert "## DL Runtime Note" in text
-    assert "Batch Size` currently affects DeepHit and Neural MTLR only." in text
+    assert "For the synthetic demo, the Markers tab evaluates `biomarker_score` and `immune_index`" in text
+    assert "That dataset has no `stage_group` or `treatment_group` columns" in text
+    assert "`survstudio inspect path/to/data.csv`" in text
+    assert "It is the fastest way to catch file-format problems." in text
+    assert "| `xlsx`, `xls`, `parquet` | the `formats` extra" in text
+    assert "## 11. Deep-learning run time" in text
+    assert "`Batch Size` affects DeepHit and Neural MTLR only." in text
     assert "weight_decay=1e-4" in text
     assert "with a stabilized ranking-loss scale (`sigma=1.0`)" in text
     assert "neuralized right-cumulative MTLR parameterization" in text
