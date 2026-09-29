@@ -926,10 +926,10 @@ def write_json(path: Path, value: Any) -> None:
 
 # ── Provenance of results/: which run wrote each file, and from which results files ──────────────────────────────
 def analysis_files() -> list[Path]:
-    """What a result depends on besides SurvStudio and the data: common.py, every numbered analysis script (not the
-    self-check) and the committed tables they read (the breast duplicate pairs and the breast and LUAD data
+    """What a result depends on besides SurvStudio and the data: common.py, every numbered analysis script (15b too;
+    not the self-check) and the committed tables they read (the breast duplicate pairs and the breast and LUAD data
     manifests)."""
-    scripts = [path for path in SCRIPTS.glob("[0-9][0-9]_*.py") if path.name != "00_self_check.py"]
+    scripts = [path for path in SCRIPTS.glob("[0-9][0-9]*_*.py") if path.name != "00_self_check.py"]
     tables = [SCRIPTS.parent / name for name in ("breast_duplicate_pairs.csv", "breast_data_manifest.csv", "luad_data_manifest.csv")]
     return sorted([SCRIPTS / "common.py", *scripts, *(path for path in tables if path.exists())], key=lambda path: path.name)
 
