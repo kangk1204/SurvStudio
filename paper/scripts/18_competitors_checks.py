@@ -10,8 +10,9 @@
 5. P2 (run_p2.R) on a toy dataset against a direct computation: univariate Cox by the formula interface, cv.glmnet
    and coxph called directly with the same seed, the risk score recomputed, and the final Cox fit against
    SurvStudio's own Cox fit (needs RSCRIPT, the competitors' R);
-6. SurvStudio's pooled numbers of case study II recomputed from external_validation.csv equal the paper's (0.665 vs
-   0.661, gain 0.000 (-0.032 to 0.032)), when results/ holds them.
+6. SurvStudio's pooled numbers of case study II, recomputed by competitors.pooled_c_gain from
+   external_validation.csv, equal the ones script 03 wrote to external_pooled.json (the C-index of the locked and of
+   the clinical-only model and their difference, each with every interval), when results/ holds them.
 Usage: python 18_competitors_checks.py   (writes results/competitors_checks.json)
 """
 
@@ -245,18 +246,24 @@ write.csv(data.frame(ID = v$ID, risk = as.numeric(as.matrix(v[, selected]) %%*%%
 
 
 def check_survstudio_pooled() -> None:
-    path = RESULTS / "external_validation.csv"
-    if not path.exists():
-        report["checks"]["survstudio_pooled"] = {"passed": None, "detail": "skipped: results/external_validation.csv is missing (run step 03)"}
+    path, pooled_path = RESULTS / "external_validation.csv", RESULTS / "external_pooled.json"
+    if not path.exists() or not pooled_path.exists():
+        report["checks"]["survstudio_pooled"] = {"passed": None, "detail": "skipped: results/ lacks external_validation.csv or "
+                                                                           "external_pooled.json (run step 03)"}
         print("--  survstudio_pooled skipped", flush=True)
         return
     validation = pd.read_csv(path)
     result = pooled_c_gain(validation[validation["scaling"] == "within_cohort"])
-    rounded = [round(result["model_c"]["estimate"], 3), round(result["clinical_c"]["estimate"], 3), round(result["delta_c"]["estimate"], 3) + 0.0,
-               round(result["delta_c"]["ci_lower"], 3), round(result["delta_c"]["ci_upper"], 3)]
-    assert rounded == [0.665, 0.661, 0.0, -0.032, 0.032], rounded
+    own = json.loads(pooled_path.read_text(encoding="utf-8"))["within_cohort"]
+    differences = {}
+    for key in ("model_c", "clinical_c", "delta_c"):
+        shared = [field for field in own[key] if field in result[key] and own[key][field] is not None and result[key][field] is not None]
+        assert {"estimate", "ci_lower", "ci_upper", "hksj_ci_lower", "hksj_ci_upper"} <= set(shared), (key, shared)
+        differences[key] = max(abs(float(result[key][field]) - float(own[key][field])) for field in shared)
+    assert max(differences.values()) < 1e-9, differences
     passed("survstudio_pooled", {"model_c": result["model_c"]["estimate"], "clinical_c": result["clinical_c"]["estimate"],
-                                 "gain": [result["delta_c"]["estimate"], result["delta_c"]["ci_lower"], result["delta_c"]["ci_upper"]]})
+                                 "gain": [result["delta_c"]["estimate"], result["delta_c"]["hksj_ci_lower"], result["delta_c"]["hksj_ci_upper"]],
+                                 "max_difference_from_external_pooled": differences})
 
 
 if __name__ == "__main__":
