@@ -108,7 +108,8 @@ def survstudio_section(patients: dict[str, pd.DataFrame]) -> dict:
     }
 
 
-def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: str, with_gains: bool = True) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
+def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: str, with_gains: bool = True,
+                 tests: pd.DataFrame | None = None) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     info = read_json(folder / "run.json")
     cindex = pd.read_csv(folder / "cindex.csv")
     models = list(dict.fromkeys(cindex["model"]))
@@ -226,6 +227,16 @@ def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: 
         section["splits"]["gain"] = summarise(split_part["gain"])
         section["splits"]["gain_interval_excludes_zero"] = float(((split_part["gain_lower"] > 0) | (split_part["gain_upper"] < 0)).mean())
         section["splits"]["gain_interval_above_zero"] = float((split_part["gain_lower"] > 0).mean())
+    if tests is not None:
+        # The usual design's winner's genes (Mime writes "-" in gene names as "."), each in the direction of its
+        # univariate Cox fit on TCGA, by script 15's replication rule.
+        unicox = pd.read_csv(folder / "unicox.csv").set_index("gene")
+        original = {gene.replace("-", "."): gene for gene in unicox.index}
+        used = [original.get(gene, gene) for gene in str(genes["genes"].get(usual["winner"], "")).split(";") if gene]
+        direction = np.sign(unicox.loc[[gene for gene in used if gene in unicox.index], "log_hr"]).astype(int)
+        replication = replicated(tests, direction[direction != 0])
+        section["all_seven_genes"] = {"genes": len(used), "evaluable": int(replication["replicated"].notna().sum()) if len(replication) else 0,
+                                      "replicated": int(replication["replicated"].fillna(False).sum()) if len(replication) else 0}
     return section, table, replay_table
 
 
@@ -340,14 +351,15 @@ def main() -> None:
     print("P3 done", flush=True)
     primary = REAL / f"mime_cap{CANDIDATE_CAP}"
     if (primary / "run.json").exists():
-        result["P1"], models, replay_table = mime_section(primary, patients, development, f"Mime, {CANDIDATE_CAP} candidates")
+        result["P1"], models, replay_table = mime_section(primary, patients, development, f"Mime, {CANDIDATE_CAP} candidates", tests=tests)
         write_csv_atomic(models, RESULTS / "competitors_mime_models.csv")
         write_csv_atomic(replay_table, RESULTS / "competitors_mime_replay.csv")
     else:
         print(f"no Mime run in {primary}: P1 left out", flush=True)
     sensitivity = REAL / f"mime_cap{SENSITIVITY_CAP}"
     if (sensitivity / "run.json").exists():
-        result["P1_sensitivity"], models_500, replay_500 = mime_section(sensitivity, patients, development, f"Mime, {SENSITIVITY_CAP} candidates, StepCox-first models left out")
+        result["P1_sensitivity"], models_500, replay_500 = mime_section(sensitivity, patients, development, f"Mime, {SENSITIVITY_CAP} candidates, StepCox-first models left out",
+                                                                        tests=tests)
         write_csv_atomic(models_500, RESULTS / "competitors_mime_models_500.csv")
         write_csv_atomic(replay_500, RESULTS / "competitors_mime_replay_500.csv")
     print("P1 done", flush=True)

@@ -54,8 +54,13 @@ def experiment_1(real: dict) -> list[dict]:
             "external_clinical_c": usual.get("clinical_c"),
             "gain": usual.get("gain"), "gain_lower": usual.get("gain_lower"), "gain_upper": usual.get("gain_upper"),
             "median_split_significant": f"{usual.get('selection_km_p05_count')} of 7 cohorts",
+            "genes_replicated": (mime.get("all_seven_genes") or {}).get("replicated"),
+            "genes_evaluable": (mime.get("all_seven_genes") or {}).get("evaluable"),
+            "replicated_share": ((mime["all_seven_genes"]["replicated"] / mime["all_seven_genes"]["evaluable"])
+                                 if (mime.get("all_seven_genes") or {}).get("evaluable") else None),
             "warns_about_optimism": "no",
-            "notes": "external C and gain here are in the cohorts used for selection, so they are not independent of it",
+            "notes": ("external C and gain here are in the cohorts used for selection, so they are not independent of it; the winner's "
+                      "genes replicate by script 15's rule in the direction of their univariate Cox fit on TCGA"),
         })
         splits = mime["splits"]
         rows.append({
