@@ -22,7 +22,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from common import GEO_COHORTS, RESULTS, read_result, survstudio_version, write_csv_atomic, write_json
+from common import CATEGORICAL, COVARIATES, GEO_COHORTS, RESULTS, read_result, survstudio_version, write_csv_atomic, write_json
 from competitors import (
     CANDIDATE_CAP,
     SELECTION_COHORTS,
@@ -47,6 +47,7 @@ from competitors import (
     risk_score_recipe,
     splits,
     summarise,
+    validation_data,
 )
 
 INPUT = WORK / "input"
@@ -325,6 +326,37 @@ def tier_check(tests: pd.DataFrame, genes: list[str]) -> dict:
             "largest_pooled_log_hr_difference": float(np.nanmax(np.abs(both["pooled_log_hr"] - both["pooled_log_hr_here"]))) if len(both) else None}
 
 
+def survstudio_same_genes(dev_patients: pd.DataFrame, dev_expression: pd.DataFrame, genes: list[str]) -> tuple[dict, pd.DataFrame]:
+    """SurvStudio's own analysis restricted to the comparison's genes, as scripts 01 and 03 run it on all of case study
+    I's: evaluate_markers with its default settings on TCGA (the genes as measured), and the locked model validated in
+    the seven GEO cohorts with its markers rescaled within each cohort, pooled as script 03 pools. Every marker it can
+    lock is then measured in every cohort, as for the other approaches."""
+    from common import validation_row
+    from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
+
+    frame = pd.concat([dev_patients[["os_months", "os_event", *COVARIATES]].reset_index(drop=True), dev_expression[genes].reset_index(drop=True)], axis=1)
+    result = evaluate_markers(frame, time_column="os_months", event_column="os_event", marker_columns=genes, clinical_columns=COVARIATES,
+                              categorical_clinical=CATEGORICAL, event_positive_value=1, settings=MarkerSettings())
+    recipe = result["locked_recipe"]
+    rows = []
+    for cohort, (patients, expression) in validation_data().items():
+        external = pd.concat([patients[["patient_id", "os_months", "os_event", *COVARIATES]].reset_index(drop=True),
+                              expression[[marker for marker in recipe["markers"] if marker in expression.columns]].reset_index(drop=True)], axis=1)
+        rows.append({"cohort": cohort, **validation_row(validate_locked_recipe(external, recipe, marker_scaling="within_cohort"))})
+    rows = pd.DataFrame(rows)
+    table = pd.DataFrame(result["marker_table"])
+    robust = table.loc[table["tier"] == "robust", "marker"].tolist()
+    signature = result["signature"]
+    section = {
+        "genes": len(genes), "tier_counts": result["tier_counts"], "robust_genes": robust, "signature_markers": signature["markers"],
+        "apparent_c": signature["apparent_c"], "optimism_corrected_c": signature["optimism_corrected_c"],
+        "left_out_c": signature["signature_c_left_out"], "clinical_left_out_c": signature["clinical_c_left_out"],
+        "left_out_gain": signature["signature_gain_left_out"], "external_within_cohort": pooled_c_gain(rows),
+        "weight_measured_min": float(rows["weight_measured"].min()),
+    }
+    return section, rows
+
+
 def main() -> None:
     began = time.time()
     patients = {cohort: pd.read_csv(INPUT / f"{cohort}_clinical.csv", dtype={"patient_id": str}) for cohort in COHORTS}
@@ -335,7 +367,7 @@ def main() -> None:
             raise SystemExit(f"{cohort}: the expression and clinical inputs list different patients.")
         expression[cohort] = frame.drop(columns=["ID", "OS.time", "OS"])
     genes = list(expression["TCGA"].columns)
-    _, _, development = development_data()
+    dev_patients, dev_expression, development = development_data()
     if not np.allclose(development.time, patients["TCGA"]["os_months"].to_numpy(dtype=float)):
         raise SystemExit("SurvStudio's prepared TCGA cohort is not in the order of the comparison's TCGA patients.")
     # Script 15's clinically adjusted test of every gene in every GEO cohort (the inputs are already z-scored within
@@ -346,6 +378,9 @@ def main() -> None:
     result["SurvStudio"] = survstudio_section(patients)
     result["SurvStudio"]["tiers_on_comparison_genes"] = tier_check(tests, genes)
     print("SurvStudio checked", flush=True)
+    result["SurvStudio_same_genes"], same_genes_cohorts = survstudio_same_genes(dev_patients, dev_expression, genes)
+    write_csv_atomic(same_genes_cohorts, RESULTS / "competitors_survstudio_same_genes.csv")
+    print("SurvStudio on the comparison's genes done", flush=True)
     result["P2"], p2_cohorts = p2_section(patients, development, tests)
     write_csv_atomic(p2_cohorts, RESULTS / "competitors_p2_cohorts.csv")
     print("P2 done", flush=True)

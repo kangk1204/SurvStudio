@@ -39,6 +39,22 @@ def experiment_1(real: dict) -> list[dict]:
         "warns_about_optimism": "yes: reports the optimism-corrected C, the paired left-out gain over the clinical model and evidence tiers",
         "notes": f"suggestive tier: {suggestive.get('replicated')}/{suggestive.get('evaluable')} replicated; external C with markers rescaled within each cohort",
     })
+    same = real.get("SurvStudio_same_genes")
+    if same:
+        external = same["external_within_cohort"]
+        rows.append({
+            "approach": "SurvStudio (the comparison's genes)",
+            "design": f"as case studies I-II, on the {same['genes']} genes every cohort measures (the other approaches' genes)",
+            "claim": f"{len(same['robust_genes'])} robust markers; locked {len(same['signature_markers'])}-marker model",
+            "genes_claimed": len(same["robust_genes"]), "training_c": same["apparent_c"],
+            "reported_c": same["optimism_corrected_c"], "reported_c_meaning": "optimism-corrected C",
+            "reported_gain": same["left_out_gain"], "reported_gain_meaning": "paired left-out gain over the clinical model in subsamples",
+            "external_c": external["model_c"]["estimate"], "external_c_lower": external["model_c"]["ci_lower"],
+            "external_c_upper": external["model_c"]["ci_upper"], "external_clinical_c": external["clinical_c"]["estimate"],
+            "gain": external["delta_c"]["estimate"], "gain_lower": external["delta_c"]["ci_lower"], "gain_upper": external["delta_c"]["ci_upper"],
+            "warns_about_optimism": "yes",
+            "notes": f"a sensitivity run of SurvStudio's own analysis; markers rescaled within each cohort; tiers {same['tier_counts']}",
+        })
     for key, label in (("P1", "P1 Mime"), ("P1_sensitivity", "P1 Mime (500 candidates)")):
         if key not in real:
             continue

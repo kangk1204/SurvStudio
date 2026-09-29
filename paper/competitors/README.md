@@ -62,6 +62,10 @@ come from `results/` (case studies I and II, scripts 06 and 15), so run `run_all
   cohort, random-effects pooled log hazard ratio per SD, same direction as claimed and 95% CI excluding zero). The
   claimed direction is the best cut-off's (P3) or the gene's multivariable coefficient (P2); recomputed here for
   SurvStudio's tiers on the same genes, it reproduces script 15's replication flags.
+- **SurvStudio on the same genes** (a sensitivity run): SurvStudio's locked model of case study I includes markers that
+  some GEO cohorts lack (it ran on 58% of its marker weight in GSE68465). `18_competitors_real.py` therefore also runs
+  SurvStudio's own analysis (evaluate_markers with its defaults, validate_locked_recipe with within-cohort rescaling,
+  as scripts 01 and 03) on the comparison's 9,938 genes.
 - **Seeds**: 5201314 for every R pipeline; the null replicates draw from `default_rng([20260929, r])`.
 
 ## Experiment 2: the null
@@ -119,6 +123,7 @@ memory, not only the cores: a run of 10 null Mime replicates beside the real-dat
 | `competitors_mime_gains.csv` | Each winner's SurvStudio validation in each cohort: the C of clinical + its risk score, the clinical-only C and their paired gain, with intervals |
 | `competitors_mime_*_500.csv` | The same for the 500-candidate sensitivity run |
 | `competitors_p2_cohorts.csv` | P2 per cohort: C with interval, median-split p and hazard ratio, SurvStudio's external validation of clinical + P2 |
+| `competitors_survstudio_same_genes.csv` | SurvStudio's locked model of the comparison's genes in each cohort (as script 03's rows) |
 | `competitors_p3_genes.csv` | P3 per gene: best p, cut-off, hazard ratio, cut-offs tried, median-cut p, replication |
 | `competitors_real.json` | Experiment 1, with SurvStudio's numbers and their checks |
 | `competitors_null_replicates.csv`, `competitors_null_splits.csv`, `competitors_null.json` | Experiment 2 per replicate, per replicate and split, and summarised |
