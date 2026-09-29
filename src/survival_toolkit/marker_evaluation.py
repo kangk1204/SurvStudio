@@ -1,4 +1,4 @@
-"""Honest one-step evaluation of candidate prognostic markers.
+"""One-step evaluation of candidate prognostic markers that checks the selection itself.
 
 A marker list is screened, and the whole screening procedure is then checked the way
 a reader should check a published marker claim:

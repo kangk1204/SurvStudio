@@ -1,4 +1,4 @@
-// SurvStudio front end, part 8/9: Honest marker evaluation, its locked model, and external validation.
+// SurvStudio front end, part 8/9: marker evaluation, its locked model, and external validation.
 // Classic scripts loaded in order by index.html; top-level declarations are shared by all
 // app_*.js parts, and only app.js (loaded last) runs startup code.
 

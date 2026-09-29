@@ -9,7 +9,7 @@
 - Result sections stay hidden until a run, each tab exports from one menu, and a status next to each Run button says whether the result is up to date, running, or out of date after a settings change.
 - Interpretation panels show the headline, key numbers and the first two cautions; the rest folds under "More detail".
 - The Cox tab previews usable patients, dropped rows, parameters and events per parameter before fitting.
-- New Markers tab: the honest marker evaluation with stability and rank-uncertainty plots, the marker table, export of the locked model as JSON, and validation of the locked model on another cohort file. The outcome-informed cut-point combination search moved here as an exploratory option and now searches the selected markers and clinical covariates.
+- New Markers tab: the marker evaluation (family-wise error control, added value over clinical covariates) with stability and rank-uncertainty plots, the marker table, export of the locked model as JSON, and validation of the locked model on another cohort file. The outcome-informed cut-point combination search moved here as an exploratory option and now searches the selected markers and clinical covariates.
 - New design-check page (`/design-check`, no data needed) for studies that fit many models and keep the best.
 - Prediction models: a "Train one model" entry next to Compare All, results hidden until a run, and the Survival Transformer and VAE labelled experimental.
 - Reporting checklists: the Markers tab exports a REMARK checklist and the prediction-model leaderboard a TRIPOD+AI checklist, as Word or Markdown. Each holds the run's methods and results paragraphs and every guideline item, marked as filled in by SurvStudio, partly filled in, or for the authors to complete.
