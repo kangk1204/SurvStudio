@@ -94,6 +94,17 @@ BOOTSTRAP_SEED = 20260926
 # Case study II, sensitivity: Uno's C truncated at 5 years.
 UNO_HORIZON_MONTHS = 60.0
 
+# The development runs of case studies I, IV and V (scripts 01, 07 and 09; 16 reruns them with other seeds): the
+# endpoint's columns and the clinical covariates the markers are judged against.
+DEVELOPMENT = {
+    "I": {"label": "TCGA-LUAD, overall survival", "time": "os_months", "event": "os_event", "covariates": COVARIATES,
+          "categorical": CATEGORICAL},
+    "IV": {"label": "METABRIC, overall survival", "time": "os_months", "event": "os_event", "covariates": BREAST_COVARIATES,
+           "categorical": BREAST_CATEGORICAL},
+    "V": {"label": "METABRIC ER-positive, recurrence", "time": "recurrence_months", "event": "recurrence_event",
+          "covariates": BREAST_ER_COVARIATES, "categorical": BREAST_ER_CATEGORICAL},
+}
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -464,6 +475,45 @@ def _with_expression(frame: pd.DataFrame, folder: Path, genes: list[str] | None,
     frame = frame.merge(collapsed, left_on="patient_id", right_index=True)
     frame.attrs.update(attrs)
     return frame, sorted(collapsed.columns.tolist())
+
+
+def tcga_development() -> tuple[pd.DataFrame, list[str], Any]:
+    """Case study I's development data as script 01 evaluates it: SurvStudio's bundled TCGA-LUAD clinical table and the
+    Xena HiSeqV2.gz matrix read for its patients (read_marker_matrix) and joined to them (matrix_frame), with overall
+    survival, age, sex and stage. Returns the frame, the genes of the matrix and the matrix itself (for its id_note)."""
+    from survival_toolkit.marker_matrix import matrix_frame, read_marker_matrix
+    from survival_toolkit.sample_data import load_tcga_luad_upload_ready_dataset
+
+    clinical = load_tcga_luad_upload_ready_dataset()
+    matrix = read_marker_matrix(XENA_EXPRESSION, XENA_EXPRESSION.name, patient_ids=clinical["patient_id"].tolist())
+    frame = matrix_frame(clinical, matrix, id_column="patient_id", columns=["os_months", "os_event", *COVARIATES])
+    return frame, list(matrix.marker_names), matrix
+
+
+def development_data(case: str) -> tuple[pd.DataFrame, list[str]]:
+    """The development data of case study I (tcga_development), IV (METABRIC, overall survival) or V (METABRIC's
+    ER-positive tumours, recurrence) as scripts 01, 07 and 09 evaluate them: the frame and its genes."""
+    if case == "I":
+        frame, genes, _ = tcga_development()
+        return frame, genes
+    if case == "IV":
+        return load_breast_cohort("METABRIC")
+    if case == "V":
+        return load_breast_cohort("METABRIC", endpoint="recurrence", er_positive=True)
+    raise ValueError(f"No development data for case study {case!r}.")
+
+
+def evaluate_development(case: str, frame: pd.DataFrame, genes: list[str], settings: Any = None) -> dict[str, Any]:
+    """SurvStudio's marker evaluation of a case study's development data as scripts 01, 07 and 09 run it: the added
+    value of each gene over the case study's clinical covariates (DEVELOPMENT), with SurvStudio's defaults unless
+    ``settings`` (a MarkerSettings) says otherwise."""
+    from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers
+
+    spec = DEVELOPMENT[case]
+    return evaluate_markers(
+        frame, time_column=spec["time"], event_column=spec["event"], marker_columns=genes, clinical_columns=spec["covariates"],
+        categorical_clinical=spec["categorical"], event_positive_value=1, settings=settings or MarkerSettings(),
+    )
 
 
 def geo_cohort(cohort: str, genes: Iterable[str] = ()) -> pd.DataFrame:

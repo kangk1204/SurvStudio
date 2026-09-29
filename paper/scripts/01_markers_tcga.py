@@ -1,7 +1,8 @@
 """Case study I: genome-wide marker evaluation in TCGA-LUAD with SurvStudio's defaults.
 
 Development data: the UCSC Xena HiSeqV2.gz matrix as downloaded and SurvStudio's bundled TCGA-LUAD clinical
-table; added value over age, sex and stage; 1,000 permutations and 200 subsamples (seed 20260926).
+table (common.tcga_development); added value over age, sex and stage; 1,000 permutations and 200 subsamples (seed
+20260926; common.evaluate_development).
 Writes the marker table, the locked model and a summary to paper/results/.
 """
 
@@ -11,25 +12,11 @@ import time
 
 import pandas as pd
 
-from common import CATEGORICAL, COVARIATES, RESULTS, XENA_EXPRESSION, survstudio_version, write_csv_atomic, write_json
-from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers
-from survival_toolkit.marker_matrix import matrix_frame, read_marker_matrix
-from survival_toolkit.sample_data import load_tcga_luad_upload_ready_dataset
+from common import RESULTS, XENA_EXPRESSION, evaluate_development, survstudio_version, tcga_development, write_csv_atomic, write_json
 
 began = time.time()
-clinical = load_tcga_luad_upload_ready_dataset()
-matrix = read_marker_matrix(XENA_EXPRESSION, XENA_EXPRESSION.name, patient_ids=clinical["patient_id"].tolist())
-frame = matrix_frame(clinical, matrix, id_column="patient_id", columns=["os_months", "os_event", *COVARIATES])
-result = evaluate_markers(
-    frame,
-    time_column="os_months",
-    event_column="os_event",
-    marker_columns=list(matrix.marker_names),
-    clinical_columns=COVARIATES,
-    categorical_clinical=CATEGORICAL,
-    event_positive_value=1,
-    settings=MarkerSettings(),
-)
+frame, genes, matrix = tcga_development()
+result = evaluate_development("I", frame, genes)
 seconds = time.time() - began
 
 rows = []
@@ -50,7 +37,7 @@ write_csv_atomic(table, RESULTS / "tcga_markers.csv")
 dropped = pd.DataFrame(result["cohort"]["dropped_markers"], columns=["marker", "reason"])
 reasons = dropped["reason"].str.replace(r" \(.*\)", "", regex=True).str.replace(r"^\d+% missing$", "missing", regex=True)
 funnel = {
-    "genes_in_file": len(matrix.marker_names),
+    "genes_in_file": len(genes),
     "tested": int(result["cohort"]["n_markers_evaluated"]),
     "left_out": {str(reason): int(count) for reason, count in reasons.value_counts().items()},
     "unadjusted_p_below_0_05": int((table["marginal_p_value"] < 0.05).sum()),
@@ -65,7 +52,7 @@ write_json(RESULTS / "tcga_markers_summary.json", {
     "survstudio": survstudio_version(),
     "seconds": round(seconds),
     "cohort": {key: result["cohort"][key] for key in ("n", "events", "n_markers_evaluated")},
-    "matrix": {"file": XENA_EXPRESSION.name, "id_note": matrix.id_note, "markers": len(matrix.marker_names)},
+    "matrix": {"file": XENA_EXPRESSION.name, "id_note": matrix.id_note, "markers": len(genes)},
     "settings": result["settings"],
     "tier_counts": result["tier_counts"],
     "robust": table.loc[table["tier"] == "robust", "marker"].tolist(),

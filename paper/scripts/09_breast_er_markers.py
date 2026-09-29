@@ -3,7 +3,8 @@ breast cancer, the setting in which gene expression is known to add to the clini
 
 METABRIC ER-positive tumours; relapse-free survival (cBioPortal) censored at 10 years; added value over age,
 tumour size, node status and grade; one expression column per gene (the most variable probe); SurvStudio's
-defaults (1,000 permutations, 200 subsamples, seed 20260926). The design was fixed before the run.
+defaults (1,000 permutations, 200 subsamples, seed 20260926). The design was fixed before the run. The data and the
+evaluation are common.development_data and common.evaluate_development ("V").
 Writes the marker table, the locked model and a summary to paper/results/.
 """
 
@@ -13,32 +14,12 @@ import time
 
 import pandas as pd
 
-from common import (
-    BREAST,
-    BREAST_ER_CATEGORICAL,
-    BREAST_ER_COVARIATES,
-    RESULTS,
-    load_breast_cohort,
-    sha256_file,
-    survstudio_version,
-    write_csv_atomic,
-    write_json,
-)
-from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers
+from common import BREAST, RESULTS, development_data, evaluate_development, sha256_file, survstudio_version, write_csv_atomic, write_json
 
 began = time.time()
-frame, genes = load_breast_cohort("METABRIC", endpoint="recurrence", er_positive=True)
+frame, genes = development_data("V")
 loaded = time.time() - began
-result = evaluate_markers(
-    frame,
-    time_column="recurrence_months",
-    event_column="recurrence_event",
-    marker_columns=genes,
-    clinical_columns=BREAST_ER_COVARIATES,
-    categorical_clinical=BREAST_ER_CATEGORICAL,
-    event_positive_value=1,
-    settings=MarkerSettings(),
-)
+result = evaluate_development("V", frame, genes)
 seconds = time.time() - began - loaded
 
 rows = []
