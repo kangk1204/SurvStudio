@@ -520,14 +520,19 @@ different patients.
 is fitted. The evaluation reports its apparent C-index; an optimism-corrected C-index (the apparent value minus
 the mean difference between the whole procedure's C-index in each subsample and in the patients left out of it);
 the C-index in the left-out patients next to that of the clinical covariates alone, paired subsample by
-subsample; and how much the top marker's effect shrinks outside the rows that selected it (the winner's curse of
+subsample, and their mean difference, the gain, with a 95% interval (the corrected resampled t interval of
+Nadeau and Bengio, which allows for the overlap between subsamples: `signature_gain_left_out_ci`, with
+`signature_gain_left_out_sd` and the same interval for the left-out C-index, `signature_c_left_out_ci`); and how much the top marker's effect shrinks outside the rows that selected it (the winner's curse of
 picking the strongest marker).
 
 **Summary figure and verdict.** The Markers tab opens its results with one figure: the number of markers that clear
 each bar (supplied, tested, p < 0.05, FDR q ≤ 0.05, family-wise p ≤ 0.05, robust; log scale for genome-wide
 panels) and the model's C-index from apparent to optimism-corrected to the left-out patients, beside the clinical
-covariates alone. The verdict card follows: Robust when at least one marker is robust and no repeated patients
-were flagged, otherwise Needs review, with the key numbers and the first two cautions (the rest under More
+covariates alone, with the gain and its interval under the C-index ladder. The verdict card follows: Robust when
+at least one marker is robust and no repeated patients were flagged, otherwise Needs review. On added value it
+follows the gain's interval: little discrimination when the interval lies below 0.02, added discrimination when
+it lies above 0, and an uncertain gain otherwise; results saved without an interval are judged on the mean gain
+against 0.02. The card gives the key numbers and the first two cautions (the rest under More
 detail). Then come the stability and rank plots and the marker table.
 `survival_toolkit.plots.build_marker_summary_figure(result)` draws the figure from Python.
 

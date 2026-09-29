@@ -178,14 +178,17 @@ The right panel shows the C-index of a model with the clinical covariates and th
 - **Apparent** (0.749): measured on the same patients the genes were chosen in. Always too optimistic.
 - **Optimism-corrected** (0.650): the expected value in new patients.
 - **Left-out patients** (0.658) against **Clinical only** (0.656): both measured in patients left out of each
-  subsample. The genes add almost nothing beyond age, sex and stage.
+  subsample. The note under the panel gives their difference, the gain, with its 95% interval: +0.002 (-0.042 to
+  0.046). The genes add almost nothing beyond age, sex and stage, and at most about 0.05.
 
 ![Summary figure: markers clearing each bar, and the C-index from apparent to left-out beside clinical only](github_images/markers_summary.png)
 
 **5. Read the verdict.** The card below the figure gives the verdict and the cautions that matter most. Here it says
 **Robust**: 5 of 19,112 genes (DKK1, NTSR1, TLE1, CTCFL and FAM117A) hold up beyond the clinical covariates. The
-cautions add that the apparent C-index is optimistic by 0.099 and that the genes add little discrimination beyond
-the clinical covariates. **More detail** lists what was checked and the next steps.
+cautions add that the apparent C-index is optimistic by 0.099 and that the gain over the clinical covariates is
+uncertain: its interval includes both no gain and a gain of 0.02 or more. SurvStudio calls the gain little only
+when the whole interval lies below 0.02, and real when it lies above 0. **More detail** lists what was checked and
+the next steps.
 
 ![Verdict card: 5 of 19,112 markers are robust beyond the clinical covariates, with two cautions](github_images/markers_verdict.png)
 
@@ -267,7 +270,9 @@ too. `.gz` files can be attached as downloaded.
   - *Marginal only*: linked to survival on its own, but not beyond the clinical covariates; it mostly tracks them.
   - *Not supported*: no evidence after the error control. Small real effects can still hide here.
 - **Added value over clinical covariates.** Whether a marker tells you something about survival that age, sex and
-  stage do not already tell you. This is the test that matters for a prognostic claim.
+  stage do not already tell you. This is the test that matters for a prognostic claim. SurvStudio measures it as
+  the gain in C-index over the clinical covariates in patients left out of the subsamples, with a 95% interval:
+  little added value when the interval lies below 0.02, added value when it lies above 0, uncertain otherwise.
 - **Cautions and "Needs review".** Cautions list what weakens the result (optimism, little added value, missing
   data, repeated patients). The verdict reads **Needs review** when no marker is robust or when two samples look
   like the same patient; then treat the markers as hypotheses, or keep one sample per patient and run again.
@@ -282,8 +287,8 @@ Sentences that report these results without overclaiming:
 
 > Of 19,112 genes, five passed family-wise error control and were stable across 200 subsamples. A model with the
 > selected genes had an optimism-corrected C-index of 0.650; in patients left out of the subsamples it reached
-> 0.658, against 0.656 for age, sex and stage alone, so the genes added little prognostic information beyond these
-> factors.
+> 0.658, against 0.656 for age, sex and stage alone (gain 0.002, 95% CI -0.042 to 0.046), so the genes added no
+> clear prognostic information beyond these factors.
 
 ## Troubleshooting
 
