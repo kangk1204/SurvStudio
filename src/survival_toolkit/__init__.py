@@ -12,7 +12,7 @@ import pandas as pd
 __all__ = ["__version__"]
 
 # Single source of the package version (pyproject.toml reads it via tool.setuptools.dynamic).
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # The dataset store hands out defensive snapshots and the analysis code derives frames from them; both
 # rely on copy-on-write semantics (no writes through views, lazy copies), which pandas 3 always uses.

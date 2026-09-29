@@ -1,7 +1,7 @@
 {
   "environment": {
-    "date": "2026-09-29",
-    "SurvStudio": "0.2.0",
+    "date": "2026-09-30",
+    "SurvStudio": "0.3.0",
     "Python": "3.11.15",
     "numpy": "2.4.6",
     "statsmodels": "0.15.0",

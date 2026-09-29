@@ -1,12 +1,12 @@
 # Numerical agreement with R, lifelines and scikit-survival
 
-Generated 2026-09-29 by `validation/agreement/run_agreement.py` on the bundled GBSG2 and TCGA-LUAD cohorts.
+Generated 2026-09-30 by `validation/agreement/run_agreement.py` on the bundled GBSG2 and TCGA-LUAD cohorts.
 R survival is the reference; the difference columns give the absolute difference from R. Empty cells: the package
 does not report that quantity (or the package is not installed).
 
 | Component | Version |
 |---|---|
-| SurvStudio | 0.2.0 |
+| SurvStudio | 0.3.0 |
 | Python | 3.11.15 |
 | numpy | 2.4.6 |
 | statsmodels | 0.15.0 |

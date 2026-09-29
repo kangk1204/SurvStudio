@@ -1,6 +1,8 @@
 # Release Notes
 
-## Unreleased — Prognostic marker evaluation, design check, and a simpler interface
+## 0.3.0 — 2026-09-30 — Prognostic marker evaluation, design check, and a simpler interface
+
+The Markers tab tests candidate markers for added value over clinical covariates with family-wise error control, repeats the selection on subsamples, compares the selected model with the clinical covariates in left-out patients with an interval for the gain, and locks the model for external validation. The interface is one workspace, the README is written for researchers who do not program, and the repository's paper folder reproduces every number and figure of the software paper.
 
 ### Interface
 
@@ -48,6 +50,13 @@
 - `survival_toolkit.reporting`: `remark_checklist` and `tripod_ai_checklist` build the checklists from a marker evaluation or model comparisons; `checklist_markdown` renders one.
 - API: `POST /api/marker-evaluation` (now with a `report` field), `POST /api/marker-validation`, `POST /api/design-audit`, `POST /api/tripod-ai-checklist` and `POST /api/checklist-export`.
 - The marker evaluation gives the left-out gain over the clinical covariates a 95% interval that allows for the overlap of the subsamples, the corrected resampled t of Nadeau and Bengio (Machine Learning 2003;52:239–281): `signature_gain_left_out_ci`, with the gain's SD over the subsamples in `signature_gain_left_out_sd` and the same interval for the left-out C-index in `signature_c_left_out_ci`. The Markers tab now says the selected markers add little discrimination only when the whole interval lies below 0.02 (before, whenever the mean gain did), says they add discrimination when it lies above 0, and calls the gain uncertain otherwise; results without an interval keep the old verdict. The REMARK text and the summary figure give the gain with its interval.
+
+### Documentation and reproduction
+
+- The README is rewritten for researchers without programming experience: installation on Windows, macOS and Linux, a first analysis step by step with screenshots of the interface, and what each result means. The full reference (every tab, setting, API endpoint and output) moved to `docs/reference.md`.
+- `examples/gse68465_validation_example.csv`: a GEO lung adenocarcinoma cohort (433 patients) prepared for validating a locked TCGA-LUAD marker model.
+- `paper/`: the scripts, data manifests and snapshot files that reproduce the software paper, including a simulation on real RNA-seq, five case studies with thirteen external cohorts, and a comparison with the pipelines commonly used to publish signatures (Mime, univariate Cox then LASSO, and the best cut-off screen). Each result file is stamped with the SurvStudio commit and analysis code that wrote it, and the figures are drawn only from results of one run.
+- The Markers tab shows C-indices with three decimals in its key numbers, comparison sentence and verdict.
 
 ### Validation
 
