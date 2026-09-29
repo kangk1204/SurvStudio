@@ -54,6 +54,12 @@ for step in "${steps[@]}"; do
       python_step 18_competitors_null.py generate "$NULL_REPLICATES"
       seq 0 $((NULL_REPLICATES - 1)) | xargs -P "$WORKERS" -I{} bash "$here/competitors/null_replicate.sh" p2 {}
       seq 0 $((MIME_REPLICATES - 1)) | xargs -P "$WORKERS" -I{} bash "$here/competitors/null_replicate.sh" mime {}
+      # A replicate where Mime stopped with an error is left out; the next designs take its place.
+      next=$MIME_REPLICATES
+      while [ "$(ls "$work"/null/rep_*/mime/run.json 2>/dev/null | wc -l)" -lt "$MIME_REPLICATES" ] && [ "$next" -lt "$NULL_REPLICATES" ]; do
+        bash "$here/competitors/null_replicate.sh" mime "$next"
+        next=$((next + 1))
+      done
       python_step 18_competitors_null.py p3 "$WORKERS"
       python_step 18_competitors_null.py summarise ;;
     table) python_step 18_competitors_table.py ;;

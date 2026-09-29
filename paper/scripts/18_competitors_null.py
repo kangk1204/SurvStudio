@@ -305,6 +305,9 @@ def summarise() -> None:
         if (folder / "mime" / "run.json").exists():
             split_rows.extend(p1_replicate(replicate, frames))
             record["p1_done"] = True
+        elif (folder / "mime.log").exists():
+            # Mime ran and stopped with an error (its mode "all" catches none): the replicate is left out of P1.
+            record["p1_failed"] = True
         per_replicate.append(record)
         print(f"replicate {replicate} summarised", flush=True)
     table = pd.DataFrame(per_replicate)
@@ -351,6 +354,8 @@ def null_summary(table: pd.DataFrame, splits_table: pd.DataFrame) -> dict:
         }
     if len(splits_table):
         summary["P1"] = {}
+        failed = table.loc[table.get("p1_failed", pd.Series(False, index=table.index)).fillna(False).astype(bool), "replicate"]
+        summary["P1_failed_replicates"] = [int(value) for value in failed]
         for design, part in splits_table.groupby("design"):
             part = part.dropna(subset=["winner"])
 

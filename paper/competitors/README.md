@@ -76,9 +76,10 @@ with new outcomes, seven pseudo-cohorts of the GEO cohorts' sizes (115, 81, 204,
 replacement from the TCGA patients with new outcomes, and 3,000 patients drawn the same way standing for new patients
 ("truth"). No gene carries information beyond the clinical covariates, but genes that go with stage are prognostic on
 their own, as in real data, so a marginal C above 0.5 is real while the gain over the clinical covariates is zero.
-Every replicate uses all 9,938 genes (no gene sampling was needed). P2 and P3 run on 200 replicates. P1 is set to 50
-(`MIME_REPLICATES`); the comparison's run stopped at 22 (replicates 0 to 21) within its share of a server that a
-reproduction of the paper used at the same time, and `run_competitors.sh null` resumes from there.
+Every replicate uses all 9,938 genes (no gene sampling was needed). P2 and P3 run on 200 replicates, P1 on 50
+(`MIME_REPLICATES`). Mime's mode "all" catches no error: where one of its fits stops (in the comparison's run, the
+quadratic program of survival-SVM after RSF found no solution in replicate 35), the replicate is left out of P1 and
+recorded (`P1_failed_replicates`), and the next design takes its place (replicate 50).
 
 Claims counted per replicate: P1, the winner's reported selection-cohort C (and whether it is at least 0.55 while its
 sealed honest C is below 0.55), and a median-split log-rank p < 0.05 in at least one selection cohort; P2, at least one
