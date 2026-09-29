@@ -530,6 +530,29 @@ def check_resume(root: Path) -> None:
             raise AssertionError(f"stamps {stamp} read as numbers still passed; the check is not testing the round trip")
 
 
+def check_gain_verdicts() -> None:
+    """The simulation summary's reading of the paired left-out gain: the old rule (gain below 0.02), and from the gain's
+    interval the coverage of the true gain (0 under the null) and one verdict per replicate, "adds little" (upper
+    limit below 0.02), else "adds" (lower limit above 0), else "uncertain"; without intervals, only the old rule."""
+    summary = importlib.import_module("06_simulation_summary")
+    scored = pd.DataFrame({"left_out_gain": [0.01, 0.03, 0.05, -0.01, 0.01], "left_out_gain_lower": [-0.01, 0.005, 0.01, -0.03, 0.004],
+                           "left_out_gain_upper": [0.015, 0.05, 0.08, 0.01, 0.019], "new_patients_c": 0.7, "new_patients_clinical_c": 0.68,
+                           "apparent_c": 0.75, "corrected_c": 0.69, "left_out_c": 0.7, "clinical_left_out_c": 0.69})
+    zero = summary.gain_verdicts(scored, pd.Series(0.0, index=scored.index))
+    assert zero["gain_interval_replicates"] == 5 and np.isclose(zero["gain_coverage"], 0.4) and np.isclose(zero["old_rule_adds_little"], 0.6)
+    assert np.isclose(zero["verdict_adds_little"], 0.6) and np.isclose(zero["verdict_adds"], 0.4) and zero["verdict_uncertain"] == 0.0, zero
+    uncertain = summary.gain_verdicts(scored.assign(left_out_gain_upper=0.04), pd.Series([0.02, 0.0, 0.05, -0.05, 0.03], index=scored.index))
+    assert np.isclose(uncertain["verdict_uncertain"], 0.4) and np.isclose(uncertain["verdict_adds"], 0.6), uncertain
+    assert np.isclose(uncertain["gain_coverage"], 0.4), "each replicate's interval against its own true gain"
+    bare = summary.gain_verdicts(scored.drop(columns=["left_out_gain_lower", "left_out_gain_upper"]), pd.Series(0.0, index=scored.index))
+    assert bare["gain_interval_replicates"] == 0 and bare["gain_coverage"] is None and np.isclose(bare["old_rule_adds_little"], 0.6)
+    # A null scenario with subsamples is scored against a true gain of 0; an alternative against its gain in new patients.
+    replicates = scored.assign(scenario="n", replicate=range(5), beta=0.0, max_mode_fraction=0.9, events=40, tested=100, fwer_false=0, error=np.nan)
+    settings = {"scenarios": {"n": {"beta": 0.0, "max_mode_fraction": 0.9, "subsamples": 100, "replicates": 5, "true_genes": 0}}}
+    row = summary.summarise(replicates, settings)[0]
+    assert row["gain_target"] == "zero" and np.isclose(row["gain_coverage"], 0.4) and np.isclose(row["true_gain_mean"], 0.02)
+
+
 def check_stamps(root: Path) -> None:
     """The stamps figures.py checks: a file changed after its run, a result computed from an older input, and files
     of different runs are each refused."""
@@ -665,6 +688,7 @@ def main() -> None:
     check_pooling()
     check_validation_rows()
     check_tier_replication()
+    check_gain_verdicts()
     check_survstudio()
     check_uno()
     files = common.check_breast_manifest()

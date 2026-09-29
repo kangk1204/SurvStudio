@@ -9,7 +9,12 @@ the observed 37% deaths.
 
 Scenarios: the global null with and without the near-constant filter (family-wise error), and the alternative
 at beta 0.3 and 0.45 with and without the filter (power, false discoveries, and the optimism-corrected C against
-the locked model's C in 3,000 new patients from the same design).
+the locked model's C in 3,000 new patients from the same design). Two scenarios were added after them, leaving them
+and their seeds unchanged: the global null with the filter and 100 subsamples (1,000 replicates: the left-out gain,
+the corrected C and the verdict where the genes add nothing), and a diffuse signal (300 replicates: 150 true genes,
+each with a log hazard ratio per SD drawn once per replicate, uniformly from 0.05 to 0.10 in size with a random sign).
+Every replicate with subsamples is scored in new patients, and records SurvStudio's paired left-out gain with its
+interval when SurvStudio reports one (signature_gain_left_out_ci).
 
 Resumable: each replicate is written as it finishes (the whole CSV rewritten through a temporary file), stamped with
 the SurvStudio commit, a hash of the design and a hash of the simulation's code (this script and common.py). A rerun
@@ -29,6 +34,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import NamedTuple
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -64,28 +70,43 @@ TARGET_EVENT_RATE = 0.37
 BASE_SEED = 20260928
 PERMUTATIONS = 1000
 NEW_PATIENTS = 3000
+
+
+class Scenario(NamedTuple):
+    beta: float  # |log hazard ratio| per SD of each true gene; the largest one when beta_low is set
+    max_mode_fraction: float
+    subsamples: int
+    replicates: int
+    true_genes: int
+    beta_low: float | None = None  # when set, each true gene's |log hazard ratio| is drawn uniformly from [beta_low, beta]
+
+
 SCENARIOS = {
-    # name: (beta per SD for the true markers, max_mode_fraction, subsamples, replicates)
-    "null_filter": (0.0, 0.9, 0, 400),
-    "null_no_filter": (0.0, 1.0, 0, 200),
-    "alt_0.30_filter": (0.30, 0.9, 100, 100),
-    "alt_0.30_no_filter": (0.30, 1.0, 100, 100),
-    "alt_0.45_filter": (0.45, 0.9, 100, 100),
-    "alt_0.45_no_filter": (0.45, 1.0, 100, 100),
+    "null_filter": Scenario(0.0, 0.9, 0, 400, 0),
+    "null_no_filter": Scenario(0.0, 1.0, 0, 200, 0),
+    "alt_0.30_filter": Scenario(0.30, 0.9, 100, 100, TRUE_MARKERS),
+    "alt_0.30_no_filter": Scenario(0.30, 1.0, 100, 100, TRUE_MARKERS),
+    "alt_0.45_filter": Scenario(0.45, 0.9, 100, 100, TRUE_MARKERS),
+    "alt_0.45_no_filter": Scenario(0.45, 1.0, 100, 100, TRUE_MARKERS),
+    # Added later, after the others, so theirs keep their positions and so their seeds.
+    "null_filter_subsamples": Scenario(0.0, 0.9, 100, 1000, 0),
+    "diffuse_filter": Scenario(0.10, 0.9, 100, 300, 150, beta_low=0.05),
 }
 # A gene outside the five true markers still carries their signal when it is co-expressed with them: its own
 # hypothesis ("no association beyond the clinical covariates") is then false. Genes whose partial correlation
 # with the true markers' linear predictor, given the clinical covariates, reaches LINKED_R are counted as linked;
 # only the others are false discoveries. Under the null every gene is unlinked.
 LINKED_R = 0.1
-# Every record is written with the same columns; the C-index ones stay empty under the null. left_out_gain is
+# Every record is written with the same columns; the C-index ones stay empty without subsamples. left_out_gain is
 # SurvStudio's paired left-out gain (signature_gain_left_out: the model's C minus the clinical model's C on the same
-# left-out patients, averaged over the subsamples where both exist).
+# left-out patients, averaged over the subsamples where both exist), and left_out_gain_lower and _upper its interval
+# (signature_gain_left_out_ci), empty when SurvStudio reports none.
 COLUMNS = [
     "scenario", "replicate", "beta", "max_mode_fraction", "subsamples", "events", "tested", "near_constant_in_draw",
     "fwer_true", "fwer_false", "robust_true", "robust_false", "marginal_hits", "seconds",
     "apparent_c", "corrected_c", "left_out_c", "clinical_left_out_c", "left_out_gain", "new_patients_c", "new_patients_clinical_c",
     "error", "linked_genes", "fwer_linked", "fwer_unlinked", "robust_linked", "robust_unlinked",
+    "true_genes", "left_out_gain_lower", "left_out_gain_upper",
     "survstudio_commit", "design_hash", "code_hash",
 ]
 
@@ -138,7 +159,7 @@ SIMULATION_DESIGN = {
     "median_months": MEDIAN_MONTHS, "administrative_months": ADMIN_MONTHS, "target_event_rate": TARGET_EVENT_RATE,
     "linked_r": LINKED_R, "base_seed": BASE_SEED, "permutations": PERMUTATIONS, "new_patients": NEW_PATIENTS,
     "patients": int(N), "genes": int(GENES.size),
-    "scenarios": [[name, beta, max_mode, subsamples] for name, (beta, max_mode, subsamples, _) in SCENARIOS.items()],
+    "scenarios": [[name, spec.beta, spec.max_mode_fraction, spec.subsamples, spec.true_genes, spec.beta_low] for name, spec in SCENARIOS.items()],
 }
 DESIGN_HASH = hashlib.sha256(json.dumps(SIMULATION_DESIGN, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 # The simulation's own code: a stored replicate is reused only while this script and common.py are unchanged, so a
@@ -158,12 +179,12 @@ def simulate(eta: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, np.
 def replicate(task: tuple[str, int]) -> dict:
     """One replicate; a failure is a result too (recorded with its error) and does not stop the run."""
     name, index = task
-    beta, max_mode, subsamples, _ = SCENARIOS[name]
+    spec = SCENARIOS[name]
     try:
         return {**_replicate(name, index), **STAMP}
     except Exception as exc:  # noqa: BLE001
-        return {"scenario": name, "replicate": index, "beta": beta, "max_mode_fraction": max_mode, "subsamples": subsamples,
-                "error": f"{type(exc).__name__}: {exc}"[:300], **STAMP}
+        return {"scenario": name, "replicate": index, "beta": spec.beta, "max_mode_fraction": spec.max_mode_fraction,
+                "subsamples": spec.subsamples, "true_genes": spec.true_genes, "error": f"{type(exc).__name__}: {exc}"[:300], **STAMP}
 
 
 def linked_genes(columns: np.ndarray, truth: list[int], effects: np.ndarray) -> set[str]:
@@ -180,7 +201,8 @@ def linked_genes(columns: np.ndarray, truth: list[int], effects: np.ndarray) -> 
 
 
 def _replicate(name: str, index: int) -> dict:
-    beta, max_mode, subsamples, _ = SCENARIOS[name]
+    spec = SCENARIOS[name]
+    beta, max_mode, subsamples = spec.beta, spec.max_mode_fraction, spec.subsamples
     rng = np.random.default_rng([BASE_SEED, list(SCENARIOS).index(name), index])
     columns = np.sort(rng.choice(GENES.size, GENES_PER_REPLICATE, replace=False))
     truth: list[int] = []
@@ -188,8 +210,12 @@ def _replicate(name: str, index: int) -> dict:
     effects = np.zeros(0)
     if beta > 0:
         candidates = columns[MODE_SHARE[columns] <= 0.5]
-        truth = sorted(rng.choice(candidates, TRUE_MARKERS, replace=False).tolist())
-        effects = beta * rng.choice([-1.0, 1.0], TRUE_MARKERS)
+        truth = sorted(rng.choice(candidates, spec.true_genes, replace=False).tolist())
+        # The first scenarios' draws, in their order: a fixed size with a random sign.
+        if spec.beta_low is None:
+            effects = beta * rng.choice([-1.0, 1.0], spec.true_genes)
+        else:
+            effects = rng.uniform(spec.beta_low, beta, spec.true_genes) * rng.choice([-1.0, 1.0], spec.true_genes)
         eta = eta + STANDARDISED[:, truth] @ effects
     time_, event = simulate(eta, rng)
     data = pd.DataFrame(EXPRESSION[:, columns], columns=GENES[columns])
@@ -208,7 +234,7 @@ def _replicate(name: str, index: int) -> dict:
     marginal = {row["marker"] for row in table if (row["marginal"]["p_fwer"] or 1.0) <= 0.05}
     linked = linked_genes(columns, truth, effects) - true_names
     record = {
-        "scenario": name, "replicate": index, "beta": beta, "max_mode_fraction": max_mode, "subsamples": subsamples,
+        "scenario": name, "replicate": index, "beta": beta, "max_mode_fraction": max_mode, "subsamples": subsamples, "true_genes": spec.true_genes,
         "events": int(event.sum()), "tested": int(result["cohort"]["n_markers_evaluated"]),
         "near_constant_in_draw": int(np.sum(MODE_SHARE[columns] > 0.9)),
         "fwer_true": len(fwer & true_names), "fwer_false": len(fwer - true_names),
@@ -220,18 +246,24 @@ def _replicate(name: str, index: int) -> dict:
     }
     signature = result.get("signature") or {}
     recipe = result.get("locked_recipe")
-    if beta > 0 and recipe and signature.get("apparent_c") is not None:
+    # Every scenario with subsamples (the alternatives from the start, the null with subsamples and the diffuse signal
+    # later) is scored in new patients; under the null the genes add nothing to their risk.
+    if subsamples > 0 and recipe and signature.get("apparent_c") is not None:
         rows = rng.integers(0, N, NEW_PATIENTS)
-        new_eta = ETA_CLINICAL[rows] + STANDARDISED[np.ix_(rows, truth)] @ effects
+        new_eta = ETA_CLINICAL[rows] + (STANDARDISED[np.ix_(rows, truth)] @ effects if truth else 0.0)
         new_time, new_event = simulate(new_eta, rng)
         external = pd.DataFrame(EXPRESSION[np.ix_(rows, columns)], columns=GENES[columns])
         external[COVARIATES] = CLINICAL.iloc[rows].reset_index(drop=True)
         external["time"], external["event"] = new_time, new_event
         truth_report = validate_locked_recipe(external, recipe, n_bootstrap=0)
+        interval = signature.get("signature_gain_left_out_ci")
+        if isinstance(interval, dict):
+            interval = [interval.get("lower"), interval.get("upper")]
+        lower, upper = interval if isinstance(interval, (list, tuple)) and len(interval) == 2 else (None, None)
         record.update({
             "apparent_c": signature["apparent_c"], "corrected_c": signature.get("optimism_corrected_c"),
             "left_out_c": signature.get("signature_c_left_out"), "clinical_left_out_c": signature.get("clinical_c_left_out"),
-            "left_out_gain": signature.get("signature_gain_left_out"),
+            "left_out_gain": signature.get("signature_gain_left_out"), "left_out_gain_lower": lower, "left_out_gain_upper": upper,
             "new_patients_c": truth_report["metrics"]["c_index"], "new_patients_clinical_c": truth_report["metrics"].get("clinical_only_c_index"),
         })
     return record
@@ -247,7 +279,7 @@ def write_replicates(path, rows: list[dict]) -> None:
 
 def main() -> None:
     workers = int(sys.argv[1]) if len(sys.argv) > 1 else 6
-    tasks = [(name, index) for name, (*_, replicates) in SCENARIOS.items() for index in range(replicates)]
+    tasks = [(name, index) for name, spec in SCENARIOS.items() for index in range(spec.replicates)]
     out = RESULTS / "simulation_replicates.csv"
     settings = RESULTS / "simulation_settings.json"
     if not commit_is_clean(STAMP["survstudio_commit"]):
@@ -288,7 +320,7 @@ def main() -> None:
         "permutations": PERMUTATIONS, "new_patients": NEW_PATIENTS,
         "clinical_log_hr": dict(zip(DESIGN.columns, CLINICAL_FIT.beta.tolist())),
         "patients": N, "genes": int(GENES.size),
-        "scenarios": {name: dict(zip(("beta", "max_mode_fraction", "subsamples", "replicates"), values)) for name, values in SCENARIOS.items()},
+        "scenarios": {name: spec._asdict() for name, spec in SCENARIOS.items()},
     })
     print(f"all done in {time.time() - began:.0f}s", flush=True)
 
