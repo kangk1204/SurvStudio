@@ -97,6 +97,32 @@ def test_marker_matrix_outcome_columns_are_rejected_like_dataset_columns(tmp_pat
     assert response.json()["marker_matrix"]["n_markers"] == 12
 
 
+def test_marker_matrix_genes_named_like_endpoints_are_judged_by_their_values(tmp_path: Path) -> None:
+    # EFS and TTR are genes as well as endpoint abbreviations, and the name rules read antisense genes such
+    # as DIO3OS as DIO3 and OS. The Xena TCGA-LUAD expression matrix holds all of them.
+    frame = make_example_dataset()
+    dataset_id = _example_id()
+    rng = np.random.default_rng(5)
+    genes = {name: rng.normal(8.0, 1.0, size=len(frame)) for name in ("EFS", "TTR", "DIO3OS", "ZNF397OS")}
+    expression = _attach_matrix(tmp_path, dataset_id, genes)
+    response = client.post("/api/marker-evaluation", json=_matrix_request(dataset_id, expression))
+    assert response.status_code == 200, response.text
+    assert response.json()["marker_matrix"]["n_markers"] == 16
+
+    # A follow-up time named like a clinical column is still refused by its name, and a gene-named copy of the
+    # event indicator by its values.
+    leaked = _attach_matrix(
+        tmp_path,
+        dataset_id,
+        {**genes, "followup_months": frame["os_months"].to_numpy(), "TTR2": frame["os_event"].to_numpy()},
+    )
+    response = client.post("/api/marker-evaluation", json=_matrix_request(dataset_id, leaked))
+    assert response.status_code == 400, response.text
+    detail = _detail(response)
+    assert "followup_months" in detail and "TTR2" in detail
+    assert "EFS" not in detail and "DIO3OS" not in detail
+
+
 def test_marker_evaluation_rejects_a_column_in_two_roles(tmp_path: Path) -> None:
     dataset_id = _example_id()
     base = {"dataset_id": dataset_id, "time_column": "os_months", "event_column": "os_event", **_FAST_MARKERS}

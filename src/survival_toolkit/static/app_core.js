@@ -619,7 +619,7 @@ function clearRuntimeNotice() {
 }
 
 function renderServerStoppedState(message) {
-  const resolvedMessage = message || "SurvStudio is stopping. You can close this tab or restart the server with `python -m survival_toolkit`.";
+  const resolvedMessage = message || "SurvStudio is stopping. You can close this tab or restart the server with `survstudio`.";
   const landing = document.createElement("div");
   landing.className = "landing";
   landing.style.display = "grid";
@@ -645,7 +645,7 @@ function renderServerStoppedState(message) {
   const restartParagraph = document.createElement("p");
   restartParagraph.append("Restart with ");
   const commandCode = document.createElement("code");
-  commandCode.textContent = "python -m survival_toolkit";
+  commandCode.textContent = "survstudio";
   restartParagraph.append(commandCode);
   restartParagraph.append(", then reopen ");
   const urlCode = document.createElement("code");
