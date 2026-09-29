@@ -43,9 +43,10 @@ survstudio
 and open <http://127.0.0.1:8000>.
 
 - The URL is the current `main` branch of the GitHub repository as a zip file, so no git is needed.
-- `--python 3.12` makes uv use Python 3.12, downloading it if needed. Every dependency has ready-made packages
-  (wheels) for Python 3.12 on Windows, macOS and Linux. The newest Python releases lack some of them (the `ecos`
-  solver that scikit-survival needs has no wheels for Python 3.13 or later), and building them needs a compiler.
+- `--python 3.12` makes uv use Python 3.12, downloading it if needed. For Python 3.12, PyPI has ready-made
+  packages (wheels) of nearly every dependency on Windows, macOS and Linux (the exceptions follow). The newest
+  Python releases lack more of them (the `ecos` solver that scikit-survival needs has no wheels for Python 3.13 or
+  later), and building them needs a compiler.
 - Some platforms still compile a small part during the install:
   - Macs with Apple silicon compile `ecos`, which needs Apple's command-line developer tools
     (`xcode-select --install`, once).

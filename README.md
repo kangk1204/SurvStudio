@@ -29,7 +29,7 @@ rest of your computer.
 **Windows**
 
 1. Open PowerShell: press the Windows key, type `PowerShell` and press Enter.
-2. Install uv. Copy this line, paste it into PowerShell (right-click) and press Enter:
+2. Install uv. Copy this line, paste it into PowerShell (Ctrl+V or right-click) and press Enter:
 
    ```powershell
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -92,8 +92,8 @@ learning, the lighter install downloads about 200 MB and has everything else:
 uv tool install --python 3.12 "survstudio[formats,ml] @ https://github.com/kangk1204/SurvStudio/archive/refs/heads/main.zip"
 ```
 
-`--python 3.12` makes uv use Python 3.12, for which every part of SurvStudio has ready-made packages. uv downloads
-it if needed and leaves any other Python on your computer alone.
+`--python 3.12` makes uv use Python 3.12, for which almost every part of SurvStudio comes ready-made (newer Python
+versions would need a compiler). uv downloads it if needed and leaves any other Python on your computer alone.
 
 **Update or remove.**
 
