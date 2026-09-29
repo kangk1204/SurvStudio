@@ -18,6 +18,8 @@ import pytest
 
 import survival_toolkit.marker_evaluation as marker_evaluation
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers
+from survival_toolkit.plots import build_marker_summary_figure
+from survival_toolkit.reporting import remark_checklist
 from test_frontend_review import _run_page, example_dataset, marker_payloads  # noqa: F401 (pytest fixtures used by name)
 
 _needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed for the front-end tests")
@@ -248,3 +250,69 @@ def test_the_markers_tab_shows_the_interval_the_server_computed(tmp_path: Path, 
     """, markers=marker_payloads)
 
     assert f"a gain of {gain:+.3f} (95% CI {low:.3f} to {high:.3f})." in result
+
+
+# ── REMARK text and the summary figure ───────────────────────────
+
+
+_REQUEST = {"time_column": "os_time", "event_column": "os_event", "event_positive_value": 1}
+
+
+def _added_value_result(**signature) -> dict:
+    """An added-value evaluation whose selected-marker model was scored in the patients left out of 40 subsamples."""
+    return {
+        "primary_lens": "added_value",
+        "marker_table": [],
+        "tier_counts": {"robust": 1, "suggestive": 0, "marginal only": 0, "not supported": 7},
+        "cohort": {"n": 300, "events": 120, "n_markers_evaluated": 8, "clinical_columns": ["age"], "strata_columns": [], "dropped_markers": []},
+        "settings": {"alpha": 0.05, "fdr_level": 0.1, "shortlist_size": 50, "max_signature_markers": 10},
+        "null": {"n_permutations": 1000, "lens2_null": "smith"},
+        "resampling": {"n_valid": 40, "n_failed": 0, "fraction": 0.632, "stability_assessed": True},
+        "signature": {
+            "markers": ["m1"], "clinical_only": False, "apparent_c": 0.72, "optimism_corrected_c": 0.69,
+            "signature_c_left_out": 0.68, "clinical_c_left_out": 0.66, "signature_gain_left_out": 0.012,
+            "n_signature_replicates": 40, "n_clinical_replicates": 40, **signature,
+        },
+        "duplicates": {},
+    }
+
+
+def test_the_remark_text_reports_the_interval_where_it_reports_the_gain() -> None:
+    report = remark_checklist(_added_value_result(signature_gain_left_out_ci=[-0.009, 0.033]), request=_REQUEST)
+
+    items = {entry["item"]: entry for entry in report["items"]}
+    gain = "against 0.660 for the clinical covariates alone (mean difference +0.012, 95% CI -0.009 to 0.033)."
+    assert f"In the patients left out of each of 40 subsamples, it reached a mean C-index of 0.680 {gain}" in report["results"]
+    assert gain in items["18"]["text"] and gain in items["19"]["text"]
+    # The methods name the interval's method.
+    assert items["10"]["text"] == report["methods"]
+    assert report["methods"].endswith(
+        "the 95% confidence interval of the mean difference used the corrected resampled t statistic (Nadeau and Bengio 2003), "
+        "which allows for the overlap between subsamples."
+    )
+
+
+def test_the_remark_text_of_a_result_without_the_interval_is_unchanged() -> None:
+    for signature in ({}, {"signature_gain_left_out_ci": None, "n_clinical_replicates": 1}):
+        report = remark_checklist(_added_value_result(**signature), request=_REQUEST)
+
+        assert "for the clinical covariates alone (mean difference +0.012)." in report["results"]
+        assert "95% CI" not in report["results"] and "Nadeau" not in report["methods"]
+
+
+def _gain_notes(figure: dict) -> list[str]:
+    return [str(note["text"]) for note in figure["layout"]["annotations"] if "Left-out gain" in str(note.get("text", ""))]
+
+
+def test_the_summary_figure_gives_the_gain_and_its_interval_under_the_c_index_ladder() -> None:
+    with_interval = build_marker_summary_figure(_added_value_result(signature_gain_left_out_ci=[-0.009, 0.033]))
+    without_interval = build_marker_summary_figure(_added_value_result())
+    marginal = build_marker_summary_figure({**_added_value_result(signature_gain_left_out_ci=[-0.009, 0.033]), "primary_lens": "marginal"})
+
+    assert _gain_notes(with_interval) == ["Left-out gain over the clinical covariates:<br><b>+0.012</b> (95% CI -0.009 to 0.033)"]
+    assert _gain_notes(without_interval) == ["Left-out gain over the clinical covariates:<br><b>+0.012</b>"]
+    # The bottom margin grows by the note's height, so the panels keep their size.
+    assert (with_interval["layout"]["height"], with_interval["layout"]["margin"]["b"]) == (440, 110)
+    # Without clinical covariates there is no gain to give.
+    assert _gain_notes(marginal) == []
+    assert (marginal["layout"]["height"], marginal["layout"]["margin"]["b"]) == (400, 70)
