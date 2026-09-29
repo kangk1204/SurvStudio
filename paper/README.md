@@ -45,6 +45,8 @@ bash paper/run_all.sh                              # all steps, then all figures
 bash paper/run_all.sh 03 04                        # selected steps, then only the figures drawn from their results
 bash paper/run_step.sh 06_simulation.py 24         # one script with arguments (here 24 workers)
 bash paper/run_step.sh 16_seed_variability.py 6 --seeds 2 --cases I   # a quick look: 2 seeds of case study I
+bash paper/competitors/setup_r_env.sh             # the comparison's R environment (conda R 4.4, Mime at a pinned commit)
+bash paper/run_competitors.sh                     # the comparison with other pipelines, after run_all.sh (see competitors/README.md)
 ```
 
 The scripts read these environment variables:
@@ -57,7 +59,8 @@ The scripts read these environment variables:
 | `SURVSTUDIO_DATA` | `paper/data` | the data folder |
 | `SIM_WORKERS` | 8 | processes for the simulation (06) in `run_all.sh` |
 | `SEED_WORKERS` | 4 | processes for the seed variability (16) in `run_all.sh`; the cores are shared out among them |
-| `RSCRIPT` | `Rscript` | R for `prepare_data.sh` |
+| `RSCRIPT` | `Rscript` | R for `prepare_data.sh`; for `run_competitors.sh`, the comparison's environment (`paper/competitors/renv/bin/Rscript`) |
+| `WORKERS`, `MIME_CORES`, `NULL_REPLICATES`, `MIME_REPLICATES` | see `competitors/README.md` | processes and replicates of `run_competitors.sh` |
 
 `run_all.sh` leaves out the duplicate audits (scripts 11 and 12); run them with `run_step.sh` when checking the committed
 `breast_duplicate_pairs.csv`.
@@ -87,6 +90,7 @@ The scripts read these environment variables:
 | `scripts/17_cohort_table.py` | The cohort table (`cohort_table.csv`): the development cohorts and every cohort screened for case studies II, IV and V, with platform, source, endpoint, role, patients and events screened and used, median follow-up (reverse Kaplan-Meier), and why a cohort was left out; the counts are checked against the analyses' results. The breast platforms are the ones the MetaGxBreast datasets' probe identifiers and source series identify |
 | `breast_duplicate_pairs.csv` | The confirmed breast duplicate pairs (output of script 11, committed); with the curators' annotations they define the patients (see Breast cohorts) |
 | `breast_data_manifest.csv`, `luad_data_manifest.csv`, `scripts/breast_manifest.py`, `scripts/luad_manifest.py` | Every breast and LUAD data file the analyses read, with its size and SHA-256 (see Data), and the scripts that write the manifests |
+| `run_competitors.sh`, `competitors/`, `scripts/competitors.py`, `scripts/18_competitors_*.py` | Comparison with the pipelines commonly used to publish prognostic signatures (Mime, univariate Cox → LASSO → Cox, KM Plotter's best cut-off): TCGA-LUAD → the seven GEO cohorts, and the claims each makes under script 06's null; needs `competitors/setup_r_env.sh` and `run_all.sh`'s results; see `competitors/README.md` |
 | `scripts/figures.py` | Figures 1 to 4 and Supplementary Figures S1 to S6 (PNG and PDF, see Figures) from `results/`, each only from results of one run (see Results and stamps); `figures.py estimates simulation` draws a subset |
 | `scripts/simulation_smoke.py` | A few replicates of the simulation with timings, and the summary over them: `simulation_smoke.py 2 null_filter_subsamples diffuse_filter` runs two of each named scenario (by default one null and one alternative replicate) |
 

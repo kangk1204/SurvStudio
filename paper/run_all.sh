@@ -8,7 +8,8 @@
 # python3); FIGURE_PYTHON (matplotlib) defaults to the same. SURVSTUDIO_DATA: the data folder, by default paper/data
 # (written by prepare_data.sh). SIM_WORKERS: processes for the simulation (06), default 8; SEED_WORKERS: processes for
 # the seed variability (16), default 4. figures.py draws a figure only from results of one run (see README.md), so after
-# a partial rerun, rerun the steps it names.
+# a partial rerun, rerun the steps it names. The comparison with other pipelines (scripts 18) needs its own R
+# environment and runs with run_competitors.sh, after this script.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 SURVSTUDIO_SRC="${SURVSTUDIO_SRC:-$(cd "$here/.." && pwd)}"
