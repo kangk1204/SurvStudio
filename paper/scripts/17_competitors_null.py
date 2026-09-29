@@ -271,6 +271,9 @@ def p1_replicate(replicate: int, frames: dict[str, pd.DataFrame]) -> list[dict]:
             if sealed:
                 record["sealed_reported_mean"] = float(reported.loc[winner, list(sealed)].mean())
                 record["sealed_honest_mean"] = float(honest.loc[winner, list(sealed)].mean())
+                sealed_means = honest[list(sealed)].mean(axis=1)
+                record["sealed_honest_mean_all_models"] = float(sealed_means.mean())
+                record["winner_beats_share_of_models_sealed"] = float((sealed_means < sealed_means[winner]).mean())
             record["truth_honest_c"] = float(honest.loc[winner, "truth"])
             record["truth_reported_c"] = float(reported.loc[winner, "truth"]) if "truth" in reported.columns else np.nan
             tests = [median_split(frames[c]["os_months"], frames[c]["os_event"], orientation[winner] * scores[winner][c]) for c in chosen]
@@ -361,6 +364,10 @@ def null_summary(table: pd.DataFrame, splits_table: pd.DataFrame) -> dict:
                 entry["sealed_reported_mean"] = describe(part["sealed_reported_mean"])
                 entry["optimism_vs_sealed"] = describe(part["reported_c"] - part["sealed_honest_mean"])
                 entry["claim_not_holding"] = rate((part["reported_c"] >= CLAIM_C) & (part["sealed_honest_mean"] < CLAIM_C))
+                # Mime's C above the honest C in the sealed cohorts: each cohort's own Cox fit sets the score's direction.
+                entry["reported_minus_honest_sealed"] = describe(part["sealed_reported_mean"] - part["sealed_honest_mean"])
+                entry["sealed_honest_mean_all_models"] = describe(part["sealed_honest_mean_all_models"])
+                entry["winner_beats_share_of_models_sealed"] = describe(part["winner_beats_share_of_models_sealed"])
             summary["P1"][design] = entry
     try:
         simulation = read_result("simulation_summary.json")

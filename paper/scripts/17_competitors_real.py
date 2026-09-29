@@ -166,6 +166,19 @@ def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: 
     replay_table["selection_km_p05_count"] = [sum(km[w][c][0] < 0.05 for c in s.split(";")) if isinstance(w, str) else np.nan
                                               for w, s in zip(replay_table["winner"], replay_table["selection"])]
     replay_table["winner_genes"] = [genes["n_genes"].get(w, np.nan) if isinstance(w, str) else np.nan for w in replay_table["winner"]]
+    # Does the selection carry over? Every model's mean honest C in the sealed cohorts: their average (a model picked
+    # at random) and the share of models the winner beats there.
+    average, beaten = [], []
+    for winner, sealed in zip(replay_table["winner"], replay_table["sealed"]):
+        if not isinstance(winner, str) or not sealed:
+            average.append(np.nan)
+            beaten.append(np.nan)
+            continue
+        sealed_means = honest[sealed.split(";")].mean(axis=1)
+        average.append(float(sealed_means.mean()))
+        beaten.append(float((sealed_means < sealed_means[winner]).mean()))
+    replay_table["sealed_honest_mean_all_models"] = average
+    replay_table["winner_beats_share_of_models_sealed"] = beaten
     gains = pd.DataFrame()
     if with_gains:
         rows = []
@@ -184,9 +197,14 @@ def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: 
         replay_table = pd.concat([replay_table, pd.DataFrame(pooled_rows)], axis=1)
     split_part = replay_table[replay_table["design"] != "all seven"]
     usual = replay_table[replay_table["design"] == "all seven"].iloc[0]
+    pooled_row = table.set_index("model").loc[usual["winner"]]
     section = {
         "label": label, "run": info, "models": len(models), "candidates": info["candidates"], "unicox_passing": info["unicox_passing"],
         "models_with_reversed_orientation": int(sum(value < 0 for value in orientation.values())),
+        # Model-cohort pairs where Mime's C exceeds the honest C by more than 0.001: the cohort's own Cox fit reversed
+        # a score that runs backwards there.
+        "reported_above_honest_pairs": int((reported[GEO_COHORTS].to_numpy() - honest[GEO_COHORTS].to_numpy() > 0.001).sum()),
+        "model_cohort_pairs": int(reported[GEO_COHORTS].notna().to_numpy().sum()),
         "splits": {
             "count": int(len(split_part)), "distinct_winners": split_part["winner"].value_counts().to_dict(),
             "reported_c": summarise(split_part["reported_c"]), "training_c": summarise(split_part["training_c"]),
@@ -196,8 +214,13 @@ def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: 
             "optimism_vs_sealed_pooled": summarise(split_part["reported_c"] - split_part["sealed_honest_pooled"]),
             "selection_optimism": summarise(split_part["selection_optimism"]),
             "selection_km_p05_any": float(split_part["selection_km_p05_any"].mean()),
+            "sealed_honest_mean_all_models": summarise(split_part["sealed_honest_mean_all_models"]),
+            "winner_beats_share_of_models_sealed": summarise(split_part["winner_beats_share_of_models_sealed"]),
         },
         "all_seven": {key: (None if isinstance(value, float) and not np.isfinite(value) else value) for key, value in usual.items()},
+        # The usual design's winner in all seven cohorts, the ones that chose it: its pooled honest C there.
+        "all_seven_pooled_honest_c": {"estimate": float(pooled_row["pooled_honest_c_geo"]), "ci_lower": float(pooled_row["pooled_honest_lower"]),
+                                      "ci_upper": float(pooled_row["pooled_honest_upper"])},
     }
     if with_gains:
         section["splits"]["gain"] = summarise(split_part["gain"])
