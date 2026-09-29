@@ -1767,10 +1767,27 @@ _MATRIX_BINARY_SCAN_CELLS = 4_000_000
 _GENE_SYMBOL_NAME = re.compile(r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*")
 
 
+def _values_reproduce_times(values: pd.Series, times: pd.Series) -> bool:
+    """Whether a marker's values are the follow-up times, as they are or rescaled: equal up to rounding, or ranked
+    identically, on the patients where both are known."""
+
+    marker = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    follow_up = pd.to_numeric(times, errors="coerce").to_numpy(dtype=float)
+    known = np.isfinite(marker) & np.isfinite(follow_up)
+    if known.sum() < 3 or np.unique(follow_up[known]).size < 3:
+        return False
+    marker, follow_up = marker[known], follow_up[known]
+    if np.allclose(marker, follow_up, rtol=1e-6, atol=1e-9):
+        return True
+    ranks = pd.DataFrame({"marker": marker, "time": follow_up}).rank()
+    return bool(abs(ranks["marker"].corr(ranks["time"])) >= 0.999)
+
+
 def _matrix_outcome_markers(
     frame: pd.DataFrame,
     markers: Sequence[str],
     *,
+    time_column: str,
     event_column: str,
     event_positive_value: Any,
 ) -> list[str]:
@@ -1784,13 +1801,21 @@ def _matrix_outcome_markers(
     A marker named like a gene symbol is judged by its values only. EFS and TTR are genes as well as
     endpoint abbreviations, and the name rules read antisense genes such as DIO3OS as DIO3 and OS, so
     by name every genome-wide expression matrix would be refused. Outcome columns named the way
-    clinical tables name them (os_months, OS.time, time) are still refused by their names.
+    clinical tables name them (os_months, OS.time, time) are still refused by their names. A gene-named
+    marker that the name rules flag is refused when its values are the follow-up times (a bare "OS" or
+    "PFS" column of months); one that codes a different event than the event column (a bare "DSS" status
+    when the endpoint is overall survival) is not caught.
     """
 
     marker_names = [str(marker) for marker in markers]
     marker_set = set(marker_names)
     named_like_genes = {name for name in marker_names if _GENE_SYMBOL_NAME.fullmatch(name)}
-    flagged = ({str(column) for column in _survival_outcome_like_columns(frame)} & marker_set) - named_like_genes
+    outcome_named = {str(column) for column in _survival_outcome_like_columns(frame)} & marker_set
+    flagged = outcome_named - named_like_genes
+    if time_column in frame.columns:
+        flagged |= {
+            name for name in sorted(outcome_named & named_like_genes) if _values_reproduce_times(frame[name], frame[time_column])
+        }
     zero_one: list[str] = []
     step = max(1, _MATRIX_BINARY_SCAN_CELLS // max(int(frame.shape[0]), 1))
     for start in range(0, len(marker_names), step):
@@ -5265,6 +5290,7 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
                 leaked = _matrix_outcome_markers(
                     frame,
                     markers,
+                    time_column=request_model.time_column,
                     event_column=request_model.event_column,
                     event_positive_value=request_model.event_positive_value,
                 )

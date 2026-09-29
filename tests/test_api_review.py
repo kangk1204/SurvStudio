@@ -122,6 +122,15 @@ def test_marker_matrix_genes_named_like_endpoints_are_judged_by_their_values(tmp
     assert "followup_months" in detail and "TTR2" in detail
     assert "EFS" not in detail and "DIO3OS" not in detail
 
+    # A bare endpoint abbreviation written like a gene symbol is refused when it holds the follow-up times,
+    # as they are or rescaled to years.
+    for name, times in (("OS", frame["os_months"]), ("PFS", frame["os_months"] / 12.0)):
+        leaked = _attach_matrix(tmp_path, dataset_id, {**genes, name: times.to_numpy()})
+        response = client.post("/api/marker-evaluation", json=_matrix_request(dataset_id, leaked))
+        assert response.status_code == 400, response.text
+        detail = _detail(response)
+        assert name in detail and "EFS" not in detail
+
 
 def test_marker_evaluation_rejects_a_column_in_two_roles(tmp_path: Path) -> None:
     dataset_id = _example_id()
