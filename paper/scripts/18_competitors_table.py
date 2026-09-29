@@ -114,9 +114,18 @@ def experiment_2(null: dict) -> list[dict]:
         "approach": "SurvStudio", "claim": "at least one marker declared (FWER <= 0.05 beyond the clinical covariates)",
         "claim_rate": survstudio.get("fwer"), "claim_rate_mcse": survstudio.get("fwer_mcse"), "replicates": survstudio.get("replicates"),
         "mean_claimed": survstudio.get("false_per_replicate"),
-        "notes": "script 06 (null with the near-constant filter, 2,000 genes per replicate); the null-with-subsamples scenario: "
-                 + ("see null_with_subsamples" if subsamples else "not yet in results/"),
+        "notes": "script 06 (null with the near-constant filter, 2,000 genes per replicate); the null with subsamples: "
+                 + ("the next row" if subsamples else "not yet available"),
     })
+    if subsamples:
+        rows.append({
+            "approach": "SurvStudio", "design": "script 06's null with 100 subsamples per replicate (null_filter_subsamples)",
+            "claim": "the gain verdict 'adds' (the paired left-out gain's interval above 0)",
+            "claim_rate": subsamples.get("verdict_adds"), "replicates": subsamples.get("replicates"),
+            "notes": (f"verdicts: adds little {subsamples.get('verdict_adds_little')}, uncertain {subsamples.get('verdict_uncertain')}; "
+                      f"FWER {subsamples.get('fwer')}; gain interval coverage {subsamples.get('gain_coverage')}; SurvStudio "
+                      f"{(subsamples.get('survstudio') or {}).get('commit')}"),
+        })
     if "P1" in null:
         for design, entry in null["P1"].items():
             rows.append({

@@ -18,10 +18,13 @@ the cohort.
   python 18_competitors_null.py summarise              P1 and P2 from the R runs (rep_NNNN/mime, rep_NNNN/p2) and P3:
                                                         competitors_null_replicates.csv, competitors_null_splits.csv and
                                                         competitors_null.json in results/
+SurvStudio's numbers under the same null come from script 06 (results/simulation_summary.json); when that run lacks
+the null with subsamples, SUBSAMPLES_SUMMARY may name the simulation_summary.json of a newer run that has it.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import multiprocessing as mp
@@ -382,10 +385,23 @@ def null_summary(table: pd.DataFrame, splits_table: pd.DataFrame) -> dict:
         null = next(row for row in simulation["scenarios"] if row["scenario"] == "null_filter")
         summary["SurvStudio"] = {"source": "script 06, scenario null_filter", "replicates": null["replicates"], "fwer": null["fwer"],
                                  "fwer_mcse": null["fwer_mcse"], "false_per_replicate": null["false_per_replicate"],
-                                 "null_with_subsamples": next((row for row in simulation["scenarios"] if row["scenario"].startswith("null") and row.get("scenario") not in {"null_filter", "null_no_filter"}), None)}
+                                 "null_with_subsamples": subsample_scenario(simulation)}
+        # The null with subsamples (script 06's null_filter_subsamples, with SurvStudio's gain verdicts) may come from a
+        # newer run of script 06 than results/ holds: SUBSAMPLES_SUMMARY names its simulation_summary.json.
+        other = os.environ.get("SUBSAMPLES_SUMMARY")
+        if summary["SurvStudio"]["null_with_subsamples"] is None and other:
+            text = Path(other).read_bytes()
+            summary["SurvStudio"]["null_with_subsamples"] = subsample_scenario(json.loads(text.decode("utf-8")))
+            summary["SurvStudio"]["null_with_subsamples_source"] = {"file": other, "sha256": hashlib.sha256(text).hexdigest()}
     except (OSError, StopIteration, KeyError) as problem:
         summary["SurvStudio"] = {"missing": str(problem)}
     return summary
+
+
+def subsample_scenario(simulation: dict) -> dict | None:
+    """Script 06's null scenario with subsamples (null_filter_subsamples), with its survstudio stamp; None when absent."""
+    row = next((row for row in simulation.get("scenarios", []) if row.get("scenario") == "null_filter_subsamples"), None)
+    return None if row is None else {**row, "survstudio": simulation.get("survstudio")}
 
 
 if __name__ == "__main__":

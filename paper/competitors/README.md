@@ -80,7 +80,9 @@ Claims counted per replicate: P1, the winner's reported selection-cohort C (and 
 sealed honest C is below 0.55), and a median-split log-rank p < 0.05 in at least one selection cohort; P2, at least one
 gene selected with a training median-split p < 0.05, and an external median-split p < 0.05 in at least one of the seven
 cohorts; P3, at least one gene with best-cutoff p < 0.05 and the number of such genes. SurvStudio: script 06's null
-family-wise error (0.055 over 400 replicates).
+family-wise error (0.055 over 400 replicates) and, from a run of script 06 that has it (`results/`, else the
+`simulation_summary.json` that `SUBSAMPLES_SUMMARY` names), the verdicts on the gain in its null with subsamples.
+Rates over the 35 splits of the P1 replicates get their Monte Carlo SE from the replicates' own rates.
 
 ## Running it
 
