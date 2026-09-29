@@ -217,6 +217,18 @@ def test_the_verdict_follows_the_interval_of_the_gain(tmp_path: Path) -> None:
 
 
 @_needs_node
+def test_the_key_numbers_keep_the_third_decimal_of_the_c_index(tmp_path: Path) -> None:
+    result = _run_page(tmp_path, _SUMMARIZE + r"""
+      page.context.__payload = { analysis: { ...analysis, signature: { ...selected, optimism_corrected_c: 0.65, clinical_c_left_out: 0.6,
+        signature_gain_left_out: 0.002, signature_gain_left_out_ci: [-0.04, 0.05] } } };
+      const summary = page.run("markerSummary(__payload)");
+      return Object.fromEntries(summary.metrics.map((metric) => [metric.label, metric.value]));
+    """)
+
+    assert result["Model C (corrected)"] == "0.650"
+    assert result["Clinical-only C (left out)"] == "0.600"
+
+@_needs_node
 def test_a_result_without_the_interval_keeps_the_verdict_on_the_mean_gain(tmp_path: Path) -> None:
     """Results saved before the interval existed, or with a single paired subsample, are judged by the mean gain against 0.02."""
     result = _run_page(tmp_path, _SUMMARIZE + r"""

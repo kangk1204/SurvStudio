@@ -12,6 +12,11 @@ function formatCount(value) {
   return Number.isFinite(number) ? number.toLocaleString("en-US") : "NA";
 }
 
+// C-indices are compared at the third decimal, so they keep it (0.650, not 0.65).
+function formatCIndexValue(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "NA";
+}
+
 function markerMatrixAttached() {
   return Boolean(state.markerMatrix?.matrix_id);
 }
@@ -304,8 +309,8 @@ function markerSummary(payload) {
       { label: "Markers", value: formatCount(evaluated) },
       { label: "Robust", value: robust },
       { label: "Suggestive", value: suggestive },
-      { label: clinicalOnly ? "Clinical-only model C (corrected)" : "Model C (corrected)", value: signature.optimism_corrected_c },
-      ...(leftOut ? [{ label: "Clinical-only C (left out)", value: signature.clinical_c_left_out }] : []),
+      { label: clinicalOnly ? "Clinical-only model C (corrected)" : "Model C (corrected)", value: formatCIndexValue(signature.optimism_corrected_c) },
+      ...(leftOut ? [{ label: "Clinical-only C (left out)", value: formatCIndexValue(signature.clinical_c_left_out) }] : []),
     ],
     strengths: [
       ...(leftOut?.verdict === "adds" ? [leftOut.text] : []),
