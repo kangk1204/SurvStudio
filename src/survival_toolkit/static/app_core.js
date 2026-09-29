@@ -44,6 +44,8 @@ const appState = {
     derive: 0,
   },
   runtimeBannerSerial: 0,
+  runtimeBannerHeld: false,
+  pendingUploads: 0,
   requestControllers: {},
   coxMartingaleTerm: "",
   resultPreference: {
@@ -387,9 +389,11 @@ const AUTO_CATEGORICAL_UNIQUE_THRESHOLD = 6;
 const COX_STAGE_VARIABLE_PREFERENCE = ["stage_group", "pathologic_stage", "stage"];
 const DEFAULT_TIME_UNIT_LABEL = "Time";
 const DEFAULT_LOCKED_TEST_PERCENT = 30;
-// Defaults of the numeric settings (the server's defaults). Request builders, input checks and result
-// currency all read a blank field as its default, so a run never sends Number("") = 0 while the result
-// currency assumes the default (and ML and DL never split the patients with different seeds).
+// Defaults of the numeric settings: the value each field starts with on the page (index.html). The server's
+// own defaults can differ (its cut-point search runs no permutations or validation splits unless asked), so
+// the page always sends these. Request builders, input checks and result currency all read a blank field as
+// its default, so a run never sends Number("") = 0 while the result currency assumes the default (and ML and
+// DL never split the patients with different seeds).
 const KM_NUMERIC_DEFAULTS = Object.freeze({ confidence_level: 0.95, risk_table_points: 6, fh_p: 1 });
 const ML_NUMERIC_DEFAULTS = Object.freeze({ n_estimators: 100, learning_rate: 0.1, random_state: 42, cv_folds: 5, cv_repeats: 3 });
 const DL_NUMERIC_DEFAULTS = Object.freeze({
@@ -507,6 +511,14 @@ function isSupersededRequestError(error) {
   return Boolean(error?.superseded) || error?.name === "AbortError";
 }
 
+// An error of an answered request keeps its HTTP status, so a caller can tell a refused request (4xx, which
+// would be refused again) from a server failure (5xx); a network failure has no status.
+function httpError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
 async function fetchJSON(url, options = {}) {
   // Spread the caller's options first so their own headers cannot drop the JSON content type.
   const { headers: callerHeaders, ...fetchOptions } = options;
@@ -538,7 +550,7 @@ async function fetchJSON(url, options = {}) {
       const genericMessage = response.ok
         ? "The server returned an invalid JSON response."
         : (rawText.trim() || "Request failed.");
-      throw new Error(genericMessage);
+      throw httpError(genericMessage, response.status);
     }
   }
   if (!response.ok) {
@@ -550,9 +562,9 @@ async function fetchJSON(url, options = {}) {
       const datasetName = state.dataset?.filename || state.dataset?.dataset_id || "current cohort";
       goHome({ syncHistory: true, historyMode: "replace" });
       setRuntimeBanner(`The previously loaded cohort (${datasetName}) is no longer available on the server. Reload it to continue.`, "warning");
-      throw new Error("The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.");
+      throw httpError("The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.", response.status);
     }
-    throw new Error(message);
+    throw httpError(message, response.status);
   }
   return payload;
 }
@@ -580,9 +592,11 @@ function errorMessageText(error, fallbackText = "Request failed.") {
 }
 
 // Returns a serial that identifies this banner, so a run can later clear the banner it set without
-// wiping a newer one (releaseRuntimeBanner).
-function setRuntimeBanner(text = "", tone = "info") {
+// wiping a newer one (releaseRuntimeBanner). A run in flight sets its progress banner `held`; starting
+// another action clears only a banner nobody holds, such as the notice of a finished load (clearRuntimeNotice).
+function setRuntimeBanner(text = "", tone = "info", { held = false } = {}) {
   runtime.runtimeBannerSerial = Number(runtime.runtimeBannerSerial || 0) + 1;
+  runtime.runtimeBannerHeld = Boolean(text) && Boolean(held);
   if (!refs.runtimeBanner) return runtime.runtimeBannerSerial;
   if (!text) {
     refs.runtimeBanner.textContent = "";
@@ -597,6 +611,11 @@ function setRuntimeBanner(text = "", tone = "info") {
 // Clears the banner only while it is still the one that `serial` set.
 function releaseRuntimeBanner(serial) {
   if (serial && serial === runtime.runtimeBannerSerial) setRuntimeBanner("");
+}
+
+// A newly started action clears a leftover notice, but not the progress banner of a run still in flight.
+function clearRuntimeNotice() {
+  if (!runtime.runtimeBannerHeld) setRuntimeBanner("");
 }
 
 function renderServerStoppedState(message) {
@@ -648,9 +667,14 @@ function normalizedPredictiveFamily(family) {
   return family === "dl" ? "dl" : "ml";
 }
 
+// The mode (one model, or a comparison) of the ML or DL result the page holds, or of the last finished run
+// when it holds none. Currency and visibility follow the result actually held, so a run that fails (or is
+// still running) never hides the still-valid result of the other mode.
 function preferredResultMode(goal) {
-  if (goal === "ml" || goal === "dl") return runtime.resultPreference?.[goal] || "single";
-  return "single";
+  if (goal !== "ml" && goal !== "dl") return "single";
+  const payload = goal === "ml" ? state.ml : state.dl;
+  if (payload) return payloadRepresentsCompareRun(payload) ? "compare" : "single";
+  return runtime.resultPreference?.[goal] || "single";
 }
 
 const ANALYSIS_GOALS = ["km", "cox", "markers", "predictive", "tables", "ml", "dl"];
@@ -961,9 +985,24 @@ async function refreshCoxPreview({ force = false } = {}) {
   renderCoxPreviewLine();
 }
 
+// The key of the preview request the controls describe now; "" when there is none (no covariate, or an
+// endpoint that is not ready).
+function currentCoxPreviewKey() {
+  try {
+    return coxPreviewRequestKey(coxPreviewRequestFromCurrentState());
+  } catch {
+    return "";
+  }
+}
+
 function scheduleCoxPreview({ delay = 180, force = false } = {}) {
   if (runtime.coxPreviewTimer) {
     window.clearTimeout(runtime.coxPreviewTimer);
+  }
+  // A preview (or a message) for other settings leaves the line at once instead of after the debounce, and its
+  // request is cancelled, so the line never describes settings the controls no longer show.
+  if (runtime.coxPreview.status !== "idle" && runtime.coxPreview.key !== currentCoxPreviewKey()) {
+    resetCoxPreview();
   }
   const effectiveDelay = delay <= 0 ? 60 : delay;
   runtime.coxPreviewTimer = window.setTimeout(() => {

@@ -76,9 +76,10 @@ def test_marker_evidence_funnel_counts_each_bar_on_the_primary_lens():
     }
     counts = {stage["label"]: stage["count"] for stage in marker_evidence_funnel(result)}
     assert counts == {"Supplied": 5, "Tested": 4, "p < 0.05": 3, "FDR q ≤ 0.05": 2, "Family-wise p ≤ 0.05": 1, "Robust": 1}
-    # Without a fitted model the right panel says so instead of drawing an empty ladder.
+    # Without a fitted model the right panel says why instead of drawing an empty ladder: with clinical covariates
+    # there was always a model to fit, so it could not be fitted.
     figure = build_marker_summary_figure(result)
-    assert any(note.get("text") == "No marker entered the model." for note in figure["layout"]["annotations"])
+    assert any(note.get("text") == "The model could not be fitted in the full cohort." for note in figure["layout"]["annotations"])
 
 
 def test_marker_evaluation_rejects_outcome_columns_as_markers():
@@ -286,7 +287,7 @@ def test_marker_evaluation_flags_a_patient_profiled_twice_by_patient_id(tmp_path
     duplicates = payload["analysis"]["duplicates"]
     ids = frame["patient_id"].tolist()
     assert duplicates["checked"] and [(pair["a"], pair["b"]) for pair in duplicates["pairs"]] == [(ids[15], ids[200])]
-    assert "flagged 1 pair(s)" in payload["report"]["results"]
+    assert "flagged 1 pair of patients with near-identical profiles" in payload["report"]["results"]
     # Two markers in the table: too few to compare profiles, so nothing is claimed.
     small = client.post("/api/marker-evaluation", json=_marker_request(dataset["dataset_id"])).json()["analysis"]["duplicates"]
     assert not small["checked"] and small["pairs"] == []

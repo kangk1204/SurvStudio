@@ -1,0 +1,588 @@
+"""Second review of the marker-matrix reader, the shared feature encoder, the evaluation helpers, the
+exception policy and the dataset store."""
+
+from __future__ import annotations
+
+import gzip
+import threading
+import tracemalloc
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from survival_toolkit import marker_matrix
+from survival_toolkit.encoding import (
+    coerce_feature_subset,
+    fit_feature_encoder,
+    reject_numeric_text_features,
+    text_level_overflow,
+    transform_feature_encoder,
+    unseen_category_counts,
+)
+from survival_toolkit.errors import (
+    DatasetNotFoundError,
+    InternalAnalysisError,
+    JobCancelledError,
+    UserInputError,
+    must_propagate,
+    user_input_boundary,
+)
+from survival_toolkit.evaluation import c_index_intervals, prediction_block
+from survival_toolkit.marker_matrix import match_summary, read_marker_matrix
+from survival_toolkit.store import DatasetStore
+
+
+def _patients(n: int = 30) -> list[str]:
+    return [f"P{index:03d}" for index in range(n)]
+
+
+def _genes(patients: list, n_genes: int = 5, seed: int = 2) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame(
+        rng.normal(size=(n_genes, len(patients))).round(3),
+        index=[f"GENE{index}" for index in range(n_genes)],
+        columns=[str(patient) for patient in patients],
+    )
+
+
+# ── Marker matrix: layout detection ──────────────────────────────
+
+
+def test_numeric_ids_on_both_axes_are_not_guessed(tmp_path: Path) -> None:
+    # Entrez gene IDs 1..2000 as row names and sequential numeric patient IDs 1..300: the first 300
+    # genes "match" patients, more of them than the 150 real patients in the header.
+    rng = np.random.default_rng(0)
+    patient_ids = list(range(1, 301))
+    samples = patient_ids[::2]
+    values = rng.normal(size=(2000, len(samples))).round(3)
+    frame = pd.DataFrame(values, index=np.arange(1, 2001), columns=[str(sample) for sample in samples])
+    path = tmp_path / "entrez.tsv"
+    frame.to_csv(path, sep="\t", index_label="GeneID")
+
+    with pytest.raises(UserInputError, match="Choose the layout") as refused:
+        read_marker_matrix(path, "entrez.tsv", patient_ids=patient_ids)
+    assert "150 of 150" in str(refused.value) and "300 of 2,000" in str(refused.value)
+
+    matrix = read_marker_matrix(path, "entrez.tsv", patient_ids=patient_ids, orientation="markers_in_rows")
+    assert matrix.orientation == "markers_in_rows"
+    assert len(matrix.marker_names) == 2000 and matrix.sample_keys == tuple(str(sample) for sample in samples)
+    # Patient 3 (the second column), gene 2 (the second row).
+    assert matrix.values[1, 1] == pytest.approx(values[1, 1])
+    assert match_summary(matrix, patient_ids)["n_matched"] == 150
+
+
+def test_layout_follows_the_share_of_matching_ids_not_their_count(tmp_path: Path) -> None:
+    # 30 patients, all in the dataset, against 5,000 numeric gene IDs of which 40 happen to be patient IDs too.
+    rng = np.random.default_rng(1)
+    patient_ids = list(range(1, 2001))
+    samples = list(range(1001, 1031))
+    genes = list(range(1, 41)) + list(range(100_001, 104_961))
+    frame = pd.DataFrame(rng.normal(size=(len(genes), len(samples))).round(3), index=genes, columns=[str(sample) for sample in samples])
+
+    by_marker = tmp_path / "by_marker.tsv"
+    frame.to_csv(by_marker, sep="\t", index_label="gene")
+    matrix = read_marker_matrix(by_marker, "by_marker.tsv", patient_ids=patient_ids)
+    assert matrix.orientation == "markers_in_rows" and matrix.sample_keys == tuple(str(sample) for sample in samples)
+
+    by_patient = tmp_path / "by_patient.csv"
+    frame.T.to_csv(by_patient, index_label="sample")
+    matrix = read_marker_matrix(by_patient, "by_patient.csv", patient_ids=patient_ids)
+    assert matrix.orientation == "samples_in_rows" and len(matrix.marker_names) == len(genes)
+
+
+# ── Marker matrix: header and row shapes ─────────────────────────
+
+
+def _trailing_separator_text(header: list[str], rows: list[list[str]], *, header_too: bool = False) -> str:
+    """Every data line (and optionally the header) ends with a tab, as some writers produce."""
+    head = "\t".join(header) + ("\t" if header_too else "")
+    return head + "\n" + "".join("\t".join(row) + "\t\n" for row in rows)
+
+
+def test_rows_ending_with_a_separator_do_not_shift_the_column_names(tmp_path: Path) -> None:
+    patients = [f"P{index:02d}" for index in range(12)]
+    genes = ["TP53", "EGFR", "KRAS"]
+    values = np.random.default_rng(5).integers(0, 1000, size=(len(genes), len(patients)))
+    path = tmp_path / "trailing.tsv"
+
+    for header_too in (False, True):
+        rows = [[gene, *map(str, row)] for gene, row in zip(genes, values)]
+        path.write_text(_trailing_separator_text(["gene", *patients], rows, header_too=header_too), encoding="utf-8")
+        matrix = read_marker_matrix(path, "trailing.tsv", patient_ids=patients)
+        assert matrix.orientation == "markers_in_rows" and matrix.sample_keys == tuple(patients)
+        assert matrix.marker_names == tuple(genes)
+        # values holds one row per patient: TP53 of every patient is the first gene row.
+        assert matrix.values[:, 0].tolist() == values[0].tolist()
+        assert not np.isnan(matrix.values).any()
+
+        rows = [[patient, *map(str, values[:, index])] for index, patient in enumerate(patients)]
+        path.write_text(_trailing_separator_text(["id", *genes], rows, header_too=header_too), encoding="utf-8")
+        matrix = read_marker_matrix(path, "trailing.tsv", patient_ids=patients)
+        assert matrix.orientation == "samples_in_rows" and matrix.marker_names == tuple(genes)
+        assert matrix.values[0].tolist() == values[:, 0].tolist()
+
+
+def test_r_write_table_layout_is_still_read_with_missing_values_in_the_last_column(tmp_path: Path) -> None:
+    patients = _patients()
+    genes = _genes(patients)
+    lines = ["\t".join(patients)]
+    for index, (gene, row) in enumerate(genes.iterrows()):
+        cells = [f"{value}" for value in row]
+        if index in (2, 4):
+            cells[-1] = "NA"  # R writes a missing value as NA
+        if index == 3:
+            cells[-1] = ""  # or, with na = "", as an empty field
+        lines.append("\t".join([gene, *cells]))
+    path = tmp_path / "r.tsv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    matrix = read_marker_matrix(path, "r.tsv", patient_ids=patients)
+
+    assert matrix.orientation == "markers_in_rows" and matrix.sample_keys == tuple(patients)
+    assert matrix.values[0, :].tolist() == pytest.approx(genes[patients[0]].to_numpy(dtype=np.float32))
+    assert np.isnan(matrix.values[-1, [2, 3, 4]]).all() and not np.isnan(matrix.values[:-1]).any()
+
+
+def test_a_header_one_field_short_is_refused_when_the_first_row_ends_with_an_empty_field(tmp_path: Path) -> None:
+    patients = _patients()
+    genes = _genes(patients)
+    lines = ["\t".join(patients)]
+    for index, (gene, row) in enumerate(genes.iterrows()):
+        cells = [f"{value}" for value in row]
+        if index == 0:
+            cells[-1] = ""
+        lines.append("\t".join([gene, *cells]))
+    path = tmp_path / "unclear.tsv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    with pytest.raises(UserInputError, match="one field more than the header"):
+        read_marker_matrix(path, "unclear.tsv", patient_ids=patients)
+
+
+def test_rows_with_another_number_of_fields_than_the_header_are_refused(tmp_path: Path) -> None:
+    patients = _patients()
+    genes = _genes(patients, n_genes=40, seed=1)
+    lines = genes.to_csv(index_label="gene").splitlines()
+    path = tmp_path / "short.csv"
+
+    # The last line cut off after nine values, as by an interrupted download.
+    cut = [*lines[:-1], ",".join(lines[-1].split(",")[:10])]
+    path.write_text("\n".join(cut) + "\n", encoding="utf-8")
+    with pytest.raises(UserInputError, match="line 41 has 10 fields"):
+        read_marker_matrix(path, "short.csv", patient_ids=patients)
+
+    # A short line in the middle, and a long one.
+    short = [*lines]
+    short[7] = ",".join(short[7].split(",")[:-1])
+    path.write_text("\n".join(short) + "\n", encoding="utf-8")
+    with pytest.raises(UserInputError, match="line 8 has 30 fields"):
+        read_marker_matrix(path, "short.csv", patient_ids=patients)
+    long = [*lines]
+    long[12] += ",1.5"
+    path.write_text("\n".join(long) + "\n", encoding="utf-8")
+    with pytest.raises(UserInputError, match="line 13 has 32 fields"):
+        read_marker_matrix(path, "short.csv", patient_ids=patients)
+
+    # Blank lines are skipped as pandas skips them, and quoted names may hold separators.
+    quoted = [lines[0], *[f'"{line.split(",", 1)[0]}, x",{line.split(",", 1)[1]}' for line in lines[1:]]]
+    path.write_text("\n\n".join(quoted) + "\n\n", encoding="utf-8")
+    matrix = read_marker_matrix(path, "short.csv", patient_ids=patients)
+    assert matrix.marker_names[:2] == ("GENE0, x", "GENE1, x") and matrix.values.shape == (30, 40)
+
+
+# ── Marker matrix: text encodings and file names ─────────────────
+
+
+def test_utf16_matrices_count_each_line_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    patients = _patients()
+    genes = _genes(patients, n_genes=40, seed=1)
+    # U+0A0A is written as the bytes 0A 0A in UTF-16: two "line feeds" to a byte counter.
+    genes.index = [*genes.index[:-1], "ਊਊ"]
+    text = genes.to_csv(sep="\t", index_label="gene", lineterminator="\r\n")
+    path = tmp_path / "unicode.txt"
+    # Exactly at the limits: counting each "\r\n" twice (and U+0A0A as line ends) would refuse it.
+    monkeypatch.setattr(marker_matrix, "MAX_MATRIX_CELLS", 40 * 30)
+    monkeypatch.setattr(marker_matrix, "MAX_MATRIX_MARKERS", 40)
+    for encoding in ("utf-16", "utf-16-le", "utf-16-be"):
+        path.write_bytes(text.encode(encoding))
+        assert marker_matrix._count_data_lines(path, encoding) == 40, encoding
+        matrix = read_marker_matrix(path, "unicode.txt", patient_ids=patients)
+        assert matrix.values.shape == (30, 40) and matrix.marker_names[-1] == "ਊਊ", encoding
+        assert matrix.values[:, 3] == pytest.approx(genes.iloc[3].to_numpy(dtype=np.float32))
+    # One row over the limit is still refused.
+    monkeypatch.setattr(marker_matrix, "MAX_MATRIX_MARKERS", 39)
+    with pytest.raises(UserInputError, match="40 markers"):
+        read_marker_matrix(path, "unicode.txt", patient_ids=patients)
+
+
+def test_a_file_name_without_a_suffix_gets_its_separator_from_the_header(tmp_path: Path) -> None:
+    patients = _patients()
+    genes = _genes(patients, n_genes=3)
+    # UCSC Xena names its files without a suffix (HiSeqV2); the separator is read from the first line.
+    for name, separator in (("HiSeqV2", "\t"), ("expression", ",")):
+        path = tmp_path / name
+        genes.to_csv(path, sep=separator, index_label="sample")
+        matrix = read_marker_matrix(path, name, patient_ids=patients)
+        assert matrix.orientation == "markers_in_rows" and matrix.values.shape == (30, 3), name
+        assert matrix.values[:, 1] == pytest.approx(genes.loc["GENE1"].to_numpy(dtype=np.float32))
+
+
+def test_sniffing_the_separator_reads_a_bounded_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(marker_matrix, "MAX_HEADER_CHARS", 1000)
+    path = tmp_path / "one_long_line"
+    path.write_bytes(b"x" * 5_000_000)
+    tracemalloc.start()
+    try:
+        assert marker_matrix._sniffed_suffix(path) == ".csv"
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 1_000_000
+    compressed = tmp_path / "HiSeqV2.gz"
+    compressed.write_bytes(gzip.compress(("x" * 2000 + "\ty\n").encode("utf-8")))
+    with pytest.raises(UserInputError):
+        read_marker_matrix(compressed, "HiSeqV2.gz", patient_ids=["P0"])
+
+
+# ── Marker matrix: Parquet ───────────────────────────────────────
+
+
+def test_parquet_matrices_are_bounded_by_their_own_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("pyarrow")
+    patients = _patients()
+    monkeypatch.setattr(marker_matrix, "MAX_MATRIX_MARKERS", 20)
+    wide = _genes(patients, n_genes=5)  # 5 markers and 30 patient columns
+    wide.index.name = "gene"
+    wide.to_parquet(tmp_path / "wide.parquet")
+    matrix = read_marker_matrix(tmp_path / "wide.parquet", "wide.parquet", patient_ids=patients)
+    assert matrix.orientation == "markers_in_rows" and matrix.values.shape == (30, 5)
+
+    tall = _genes(patients, n_genes=25)
+    tall.index.name = "gene"
+    tall.to_parquet(tmp_path / "tall.parquet")
+    with pytest.raises(UserInputError, match="25 markers"):
+        read_marker_matrix(tmp_path / "tall.parquet", "tall.parquet", patient_ids=patients)
+
+
+def test_a_parquet_file_with_unreadable_data_is_a_user_error(tmp_path: Path) -> None:
+    pytest.importorskip("pyarrow")
+    patients = _patients()
+    frame = _genes(patients, n_genes=200, seed=4)
+    frame.index.name = "gene"
+    path = tmp_path / "damaged.parquet"
+    frame.to_parquet(path, compression="snappy")
+    raw = bytearray(path.read_bytes())
+    # Damage the column data between the leading magic bytes and the footer the pre-check reads.
+    for offset in range(64, len(raw) // 2, 7):
+        raw[offset] ^= 0xFF
+    path.write_bytes(bytes(raw))
+    with pytest.raises(UserInputError, match="Parquet file could not be read"):
+        read_marker_matrix(path, "damaged.parquet", patient_ids=patients)
+
+
+# ── Shared encoder: feature types at fit and transform ───────────
+
+
+def test_numbers_stored_as_text_are_numeric_features() -> None:
+    rng = np.random.default_rng(3)
+    psa = [f"{value:.2f}" for value in rng.lognormal(1.0, 1.0, 120)]
+    ages = rng.integers(40, 85, size=120)
+    frame = pd.DataFrame(
+        {
+            # A Parquet or Arrow string column of numbers, and an Excel column with some numbers typed as text.
+            "psa": pd.array(psa, dtype="string"),
+            "age": pd.Series([f" {age}" if index % 5 == 0 else (f"+{age}" if index % 7 == 0 else int(age)) for index, age in enumerate(ages)], dtype=object),
+            "x": rng.normal(size=120),
+        }
+    )
+
+    reject_numeric_text_features(frame, ["psa", "age", "x"], [])
+    assert text_level_overflow(frame["psa"]) is None
+    selected, categorical, numeric = coerce_feature_subset(frame, ["psa", "age", "x"])
+    assert categorical == [] and numeric == ["psa", "age", "x"]
+    assert selected["age"].dtype == np.float64 and selected["age"].tolist() == [float(age) for age in ages]
+
+    encoder = fit_feature_encoder(frame, ["psa", "age", "x"])
+    assert encoder["numeric_features"] == ["psa", "age", "x"] and encoder["feature_names"] == ["psa", "age", "x"]
+    encoded = transform_feature_encoder(frame, encoder)
+    assert encoded["psa"].tolist() == pytest.approx([float(value) for value in psa])
+
+    # Declared categorical, or a pandas Categorical, a column stays categorical.
+    assert fit_feature_encoder(frame, ["age", "x"], ["age"])["categorical_features"] == ["age"]
+    codes = pd.DataFrame({"code": pd.Categorical([1, 2, 3, 1, 2, 3]), "x": np.arange(6.0)})
+    assert fit_feature_encoder(codes, ["code", "x"])["categorical_features"] == ["code"]
+    # A text column with a value that is not a number stays categorical.
+    grades = pd.DataFrame({"grade": ["1", "2", "3", "Unknown", "2", "1"], "x": np.arange(6.0)})
+    assert fit_feature_encoder(grades, ["grade", "x"])["categorical_features"] == ["grade"]
+
+
+def test_text_feature_messages_name_the_values_that_are_not_numbers() -> None:
+    rng = np.random.default_rng(4)
+    values = [f"{value:.2f}" for value in rng.lognormal(1.0, 1.0, 120)]
+
+    # A stray "inf" is a value that is not a finite number, not a number.
+    with_inf = pd.DataFrame({"psa": [*values, "inf"]})
+    with pytest.raises(ValueError, match=r'"psa" looks numeric but contains 1 non-numeric value\(s\) such as "inf"'):
+        reject_numeric_text_features(with_inf, ["psa"], [])
+
+    # Numbers stored as a pandas Categorical: the message does not claim that some are not numbers.
+    as_categories = pd.DataFrame({"psa": pd.Categorical([float(value) for value in values])})
+    with pytest.raises(ValueError) as refused:
+        reject_numeric_text_features(as_categories, ["psa"], [])
+    message = str(refused.value)
+    assert "stored as categories" in message and "are not" not in message and "such as )" not in message
+    assert "mark it as categorical" in message
+
+    # Cells holding only spaces are described instead of shown as "".
+    ages = [str(age) for age in rng.integers(40, 85, size=60)]
+    ages[::20] = ["  "] * 3
+    with pytest.raises(ValueError, match="such as a cell with only spaces or empty text"):
+        reject_numeric_text_features(pd.DataFrame({"age": ages}), ["age"], [])
+
+
+def test_numeric_features_holding_text_at_transform_are_refused_not_imputed() -> None:
+    development = pd.DataFrame({"age": [50.0, 60.0, 70.0, 80.0, 65.0], "grade": [1, 2, 3, 1, 2]})
+    encoder = fit_feature_encoder(development, ["age", "grade"], ["grade"])
+
+    external = pd.DataFrame({"age": ["55", ".", "unknown", "75", "90"], "grade": [1, 2, 3, 2, 1]})
+    with pytest.raises(ValueError, match=r'"age" was numeric when the model was fitted, but 2 of its values are not numbers, such as "\.", "unknown"'):
+        transform_feature_encoder(external, encoder)
+    # Only the categorical levels are compared here, so the text in "age" does not matter.
+    assert unseen_category_counts(external, encoder) == {"grade": 0}
+
+    # Blank cells stay missing and take the fitted median; numbers written as text are numbers.
+    blanks = pd.DataFrame({"age": pd.Series(["55", "", "  ", None, 90], dtype=object), "grade": [1, 2, 3, 2, 1]})
+    assert transform_feature_encoder(blanks, encoder)["age"].tolist() == [55.0, 65.0, 65.0, 65.0, 90.0]
+    as_text = pd.DataFrame({"age": pd.array(["55", "65.5", None, "1e2", "70"], dtype="string"), "grade": ["1", "2", "3", "2", "1"]})
+    encoded = transform_feature_encoder(as_text, encoder)
+    assert encoded["age"].tolist() == [55.0, 65.5, 65.0, 100.0, 70.0]
+    assert encoded["grade_2"].tolist() == [0.0, 1.0, 0.0, 1.0, 0.0]
+
+
+def test_a_locked_marker_model_refuses_an_external_numeric_covariate_coded_as_text() -> None:
+    from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
+
+    rng = np.random.default_rng(7)
+    n = 200
+    age = rng.normal(62, 9, n).round(0)
+    values = rng.normal(size=(n, 3))
+    linear = 0.04 * (age - 62) + 0.8 * values[:, 0]
+    event_time = rng.exponential(np.exp(-linear))
+    censor_time = rng.exponential(1.5, n)
+    development = pd.DataFrame(
+        {
+            "os_time": np.minimum(event_time, censor_time),
+            "os_event": (event_time <= censor_time).astype(int),
+            "age": age,
+            **{f"m{index}": values[:, index] for index in range(3)},
+        }
+    )
+    result = evaluate_markers(
+        development,
+        time_column="os_time",
+        event_column="os_event",
+        marker_columns=["m0", "m1", "m2"],
+        clinical_columns=["age"],
+        settings=MarkerSettings(n_permutations=19, n_resamples=4, random_seed=2),
+    )
+    external = development.copy()
+    external["age"] = external["age"].astype(object)
+    external.loc[:39, "age"] = "."  # a SAS-style missing code for 40 patients
+
+    # Validation checks the clinical covariates before the encoder does, with a message about the external data.
+    with pytest.raises(UserInputError, match=r'Clinical covariate "age" holds 40 value\(s\) in the external dataset that are not numbers'):
+        validate_locked_recipe(external, result["locked_recipe"], n_bootstrap=0)
+
+
+# ── Exception policy ─────────────────────────────────────────────
+
+
+def _survstudio_function(source: str):
+    """A function whose frames count as SurvStudio code (the module name decides)."""
+    namespace: dict = {"__name__": "survival_toolkit._review_probe", "np": np}
+    exec(compile(source, "survival_toolkit/_review_probe.py", "exec"), namespace)
+    return namespace["probe"]
+
+
+def _raised(function) -> BaseException:
+    try:
+        function()
+    except BaseException as exc:  # noqa: BLE001 - the tests inspect the exception
+        return exc
+    raise AssertionError("the probe did not raise")
+
+
+def test_must_propagate_covers_memory_cancellation_and_survstudio_bugs() -> None:
+    index_bug = _raised(_survstudio_function("def probe():\n    return [1, 2][5]\n"))
+    numpy_index_bug = _raised(_survstudio_function("def probe():\n    return np.zeros(3)[5]\n"))
+    division_bug = _raised(_survstudio_function("def probe():\n    return 1 / len([])\n"))
+    type_bug = _raised(_survstudio_function("def probe():\n    return None + 1\n"))
+    for exc in (MemoryError(), JobCancelledError("stop"), KeyError("x"), index_bug, numpy_index_bug, division_bug, type_bug):
+        assert must_propagate(exc), repr(exc)
+
+    # Raised outside SurvStudio (here: in the test module or inside a library), they are data failures.
+    local_index = _raised(lambda: [1, 2][5])
+    local_division = _raised(lambda: 1 / len([]))
+    library_index = _raised(lambda: pd.Series([1.0]).iloc[5])
+    for exc in (local_index, local_division, library_index, ValueError("singular"), np.linalg.LinAlgError("singular")):
+        assert not must_propagate(exc), repr(exc)
+
+
+def test_must_propagate_sees_through_internal_analysis_errors() -> None:
+    @user_input_boundary
+    def wrapped(bug):
+        bug()
+
+    type_bug = _survstudio_function("def probe():\n    return None + 1\n")
+    with pytest.raises(InternalAnalysisError) as raised:
+        wrapped(type_bug)
+    assert must_propagate(raised.value)
+
+    library_error = _raised(lambda: wrapped(lambda: np.zeros(3) + np.zeros(4)))
+    assert isinstance(library_error, InternalAnalysisError) and not must_propagate(library_error)
+
+    # Nested wrappers, and memory errors kept as the cause.
+    def nested():
+        try:
+            wrapped(type_bug)
+        except InternalAnalysisError as inner:
+            raise InternalAnalysisError() from inner
+
+    assert must_propagate(_raised(nested))
+    wrapped_memory = InternalAnalysisError()
+    wrapped_memory.__cause__ = MemoryError()
+    assert must_propagate(wrapped_memory)
+    # A cycle of causes ends the search instead of recursing forever.
+    first, second = InternalAnalysisError(), InternalAnalysisError()
+    first.__cause__, second.__cause__ = second, first
+    assert not must_propagate(first)
+
+
+def test_user_input_boundary_behaviour_is_unchanged() -> None:
+    @user_input_boundary
+    def run(action):
+        return action()
+
+    with pytest.raises(UserInputError, match="bad setting"):
+        run(_survstudio_function("def probe():\n    raise ValueError('bad setting')\n"))
+    with pytest.raises(IndexError):
+        run(_survstudio_function("def probe():\n    return [][1]\n"))
+    with pytest.raises(InternalAnalysisError):
+        run(lambda: np.zeros(3) + np.zeros(4))
+
+
+# ── Evaluation helpers ───────────────────────────────────────────
+
+
+def test_prediction_block_refuses_risk_scores_that_do_not_line_up() -> None:
+    kwargs = {"row_ids": ["a", "b", "c"], "time": [1.0, 2.0, 3.0], "event": [1, 0, 1]}
+    with pytest.raises(InternalAnalysisError, match="RSF"):
+        prediction_block(**kwargs, risks={"Cox PH": (None, [0.1, 0.2, 0.3]), "RSF": ([0, 1], [1.0, 2.0, 3.0])})
+    with pytest.raises(InternalAnalysisError, match="DeepSurv"):
+        prediction_block(**kwargs, risks={"DeepSurv": (None, [0.1, 0.2])})
+    block = prediction_block(**kwargs, risks={"Cox PH": (None, [0.1, 0.2, 0.3]), "RSF": ([0, 2], [1.0, 3.0])})
+    assert block["row_ids"] == ["a", "c"] and block["risk"] == {"Cox PH": [0.1, 0.3], "RSF": [1.0, 3.0]}
+
+
+def test_interval_messages_tell_a_length_mismatch_from_missing_scores() -> None:
+    rng = np.random.default_rng(4)
+    time = rng.exponential(size=40)
+    event = rng.integers(0, 2, size=40)
+    with pytest.raises(UserInputError, match="one risk score per test patient: RSF has 10 for 40 patients"):
+        c_index_intervals(time, event, {"Cox PH": rng.normal(size=40), "RSF": rng.normal(size=10)})
+    with pytest.raises(UserInputError, match="finite risk score"):
+        c_index_intervals(time, event, {"Cox PH": np.full(40, np.nan)})
+
+
+# ── Dataset store ────────────────────────────────────────────────
+
+
+def test_dataset_store_expires_on_a_monotonic_clock() -> None:
+    now = [1000.0]
+    store = DatasetStore(ttl_seconds=60)
+    store._clock = lambda: now[0]
+    frame = pd.DataFrame({"a": [1, 2, 3]})
+    stored = store.create(frame, "a.csv")
+
+    # A wall-clock jump (a changed system time) does not age the dataset ...
+    store._datasets[stored.dataset_id].last_accessed = datetime.now(timezone.utc) - timedelta(days=1)
+    now[0] += 59
+    assert store.get(stored.dataset_id).dataset_id == stored.dataset_id
+    # ... idle time on the store's own clock does, counted from the last use.
+    now[0] += 61
+    with pytest.raises(DatasetNotFoundError):
+        store.get(stored.dataset_id)
+
+    leased = store.create(frame, "b.csv")
+    with store.lease(leased.dataset_id):
+        now[0] += 3600
+        assert store.get(leased.dataset_id).dataset_id == leased.dataset_id
+    # Releasing the lease counts as a use; idle time after it expires the dataset at the next sweep.
+    now[0] += 61
+    store.create(frame, "c.csv")
+    assert not store.contains(leased.dataset_id)
+
+
+def test_dataset_store_copies_and_hashes_outside_its_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = DatasetStore()
+    held: list[bool] = []
+
+    def spy(name):
+        original = getattr(DatasetStore, name)
+
+        def call(*args, **kwargs):
+            held.append(store._lock._is_owned())
+            return original(*args, **kwargs)
+
+        return call
+
+    monkeypatch.setattr(store, "_copy_dataframe", spy("_copy_dataframe"))
+    monkeypatch.setattr(store, "_dataframe_hash", spy("_dataframe_hash"))
+    original_metadata_copy = store._copy_metadata
+
+    def metadata_copy(metadata):
+        held.append(store._lock._is_owned())
+        return original_metadata_copy(metadata)
+
+    monkeypatch.setattr(store, "_copy_metadata", metadata_copy)
+    frame = pd.DataFrame({"a": np.arange(10.0)})
+
+    stored = store.create(frame, "a.csv", metadata={"note": {"x": 1}})
+    fetched = store.get(stored.dataset_id)
+    updated = store.update_dataframe(stored.dataset_id, frame.assign(a=frame["a"] * 2))
+    store.update_metadata(stored.dataset_id, {"note": {"x": 2}})
+
+    assert held and not any(held)
+    assert fetched.dataframe["a"].tolist() == list(np.arange(10.0))
+    assert updated.dataframe["a"].tolist() == list(np.arange(10.0) * 2)
+    assert updated.metadata["dataset_hash"] != stored.metadata["dataset_hash"]
+    assert store.get(stored.dataset_id).metadata["note"] == {"x": 2}
+
+
+def test_dataset_store_readers_see_one_consistent_version_while_it_is_replaced() -> None:
+    store = DatasetStore()
+    frames = [pd.DataFrame({"a": np.full(2000, float(version))}) for version in range(2)]
+    stored = store.create(frames[0], "a.csv")
+    hashes = {DatasetStore._dataframe_hash(frame): float(frame["a"].iloc[0]) for frame in frames}
+    problems: list[str] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            current = store.get(stored.dataset_id)
+            value = float(current.dataframe["a"].iloc[0])
+            if hashes.get(current.metadata["dataset_hash"]) != value:
+                problems.append("hash and table disagree")
+
+    threads = [threading.Thread(target=reader) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for version in range(40):
+        store.update_dataframe(stored.dataset_id, frames[version % 2])
+    stop.set()
+    for thread in threads:
+        thread.join()
+    assert problems == []

@@ -13,6 +13,7 @@ All functions return plain dicts (JSON-serializable) suitable for FastAPI respon
 from __future__ import annotations
 
 import gc
+import logging
 import math
 import multiprocessing as mp
 import os
@@ -24,12 +25,14 @@ from concurrent.futures import FIRST_COMPLETED, BrokenExecutor, ProcessPoolExecu
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator, NamedTuple, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, NamedTuple, Sequence
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 from survival_toolkit.encoding import (
+    _checked_features,
     canonical_category_values,
     fit_feature_encoder as _fit_shared_feature_encoder,
     reject_numeric_text_features,
@@ -46,11 +49,13 @@ from survival_toolkit.evaluation import (
 )
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
 
+# An optional dependency also counts as missing when its compiled libraries fail to load (on
+# Windows a missing or mismatched DLL raises OSError rather than ImportError).
 try:
     from sklearn.model_selection import StratifiedKFold
 
     _SKLEARN_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
     StratifiedKFold = None
     _SKLEARN_AVAILABLE = False
 
@@ -61,15 +66,17 @@ try:
     from torch.utils.data import DataLoader, TensorDataset
 
     TORCH_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
     TORCH_AVAILABLE = False
 
 try:
     from sksurv.metrics import concordance_index_censored as _sksurv_concordance
 
     _SKSURV_METRICS_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
     _SKSURV_METRICS_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import torch.nn as _torch_nn
@@ -161,18 +168,48 @@ def _derived_seed(base_seed: int, offset: int = 0) -> int:
 _MUST_PROPAGATE_MARK = "_survstudio_must_propagate"
 
 
+def _raised_in_survstudio(exc: BaseException) -> bool:
+    """Whether the innermost frame of the exception's traceback is SurvStudio code."""
+    traceback = exc.__traceback__
+    module_name = ""
+    while traceback is not None:
+        module_name = str(traceback.tb_frame.f_globals.get("__name__", ""))
+        traceback = traceback.tb_next
+    return module_name == "survival_toolkit" or module_name.startswith("survival_toolkit.")
+
+
 def _must_propagate_deep(exc: BaseException) -> bool:
     """``must_propagate`` for the deep-model fallbacks, seeing through ``user_input_boundary``.
 
     The public trainers turn a ``TypeError`` raised by SurvStudio code (a coding bug) into an
     ``InternalAnalysisError``; per-model and per-fold fallbacks must re-raise it instead of
-    recording an ordinary model failure. Worker processes mark such errors before they are
-    pickled back to the parent, because pickling drops ``__cause__``.
+    recording an ordinary model failure, as they must an ``IndexError`` or
+    ``ZeroDivisionError`` raised by SurvStudio code. Running out of memory also ends the run:
+    the next model or fold would only exhaust the memory again. Worker processes mark such
+    errors before they are pickled back to the parent, because pickling drops ``__cause__``.
     """
-    if getattr(exc, _MUST_PROPAGATE_MARK, False) or must_propagate(exc):
+    if (
+        isinstance(exc, MemoryError)
+        or getattr(exc, _MUST_PROPAGATE_MARK, False)
+        or must_propagate(exc)
+        or (isinstance(exc, (IndexError, ZeroDivisionError)) and _raised_in_survstudio(exc))
+    ):
         return True
     cause = exc.__cause__
-    return isinstance(exc, InternalAnalysisError) and cause is not None and must_propagate(cause)
+    return isinstance(exc, InternalAnalysisError) and cause is not None and _must_propagate_deep(cause)
+
+
+def _failure_message(exc: BaseException) -> str:
+    """The message recorded for a failed fit.
+
+    The trainers' input boundary replaces an error raised inside a library with a generic
+    internal-error message that points to the server log; the library's own message (the
+    cause) says what went wrong, as the ML module's model failures do. The full traceback is
+    logged where the failure is recorded.
+    """
+    cause = exc.__cause__ if isinstance(exc, InternalAnalysisError) else None
+    source = cause if cause is not None else exc
+    return str(source).strip() or type(source).__name__
 
 
 def _mark_must_propagate(exc: BaseException) -> None:
@@ -230,6 +267,12 @@ def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
     )
     evaluation_mode = str(result.get("evaluation_mode", "unknown"))
     if task.get("require_holdout_evaluation") and evaluation_mode != "holdout":
+        if task.get("repeat") is None:
+            # The refit on the development set, scored on the locked test set.
+            raise ValueError(
+                "The locked test set did not give a clean holdout evaluation of the model refit on the development set "
+                f"(reported '{evaluation_mode}'), so its locked-test C-index is blank."
+            )
         raise ValueError(
             "Deep repeated-CV fold did not retain a clean holdout evaluation "
             f"(reported '{evaluation_mode}')."
@@ -248,6 +291,8 @@ def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
         "training_time_ms": round((time.monotonic() - started) * 1000, 1),
         "training_samples": result.get("training_samples"),
         "evaluation_samples": result.get("evaluation_samples"),
+        "training_events": result.get("training_events"),
+        "evaluation_events": result.get("evaluation_events"),
         "epochs_trained": result.get("epochs_trained"),
         "early_stopping_epochs": result.get("early_stopping_epochs"),
         **({"holdout_risk": result.get("holdout_risk")} if task.get("keep_holdout_risk") else {}),
@@ -296,12 +341,17 @@ def _run_deep_compare_fold_task(task: dict[str, Any]) -> dict[str, Any]:
             if _must_propagate_deep(exc):
                 _mark_must_propagate(exc)
                 raise
+            # Logged here, where the traceback and the cause still exist (a worker's exceptions
+            # lose their cause when they are pickled back to the parent).
+            logger.exception(
+                "Deep-learning model %s failed in repeated-CV repeat %s, fold %s.", model_name, task["repeat"], task["fold"]
+            )
             errors.append(
                 {
                     "model": model_name,
                     "repeat": task["repeat"],
                     "fold": task["fold"],
-                    "error": str(exc),
+                    "error": _failure_message(exc),
                 }
             )
     return {"fold_results": fold_results, "errors": errors}
@@ -370,10 +420,13 @@ def _coerce_deep_frame(
 ) -> pd.DataFrame:
     """Clean raw data for deep models before fitting an encoder.
 
+    The full pass builds the cohort with the ML cohort builder (``_deep_cohort_frame``), so the
+    deep models analyse exactly the rows, and apply exactly the outcome checks, of the ML models.
+
     ``event_already_coded`` marks frames that already went through this function (their
     event column is 0/1). Re-reading a 0/1 column against the user's original event label
-    (for example "Dead") would fail or mis-code the events. Such split passes also keep the
-    feature types decided on the full cleaned frame.
+    (for example "Dead") would fail or mis-code the events. Such split passes keep the rows,
+    outcome coding, and feature types of the full cleaned frame.
     """
     _require_torch()
 
@@ -397,64 +450,28 @@ def _coerce_deep_frame(
             f"{missing_preview}."
         )
 
-    from survival_toolkit.analysis import (
-        _validate_endpoint_family_pair,
-        _validate_event_column_choice,
-        _validate_time_column_choice,
-        coerce_event,
-    )
-
-    if not event_already_coded:
-        # The outcome checks of the ML cohort builder (analysis._cohort_frame): a matched
-        # endpoint pair, a follow-up duration rather than calendar dates, and a real event
-        # indicator (not a censoring flag).
-        _validate_endpoint_family_pair(time_column, event_column)
-        _validate_time_column_choice(df, time_column)
-        _validate_event_column_choice(df, event_column)
-
-    categorical_features = list(categorical_features or [])
-    frame = df[required_columns].copy()
-    frame = frame.replace([np.inf, -np.inf], np.nan)
-    # Text such as "inf" only becomes infinite here; drop it like the ML cohort builder does,
-    # so both modules analyse (and split) the same rows.
-    frame[time_column] = pd.to_numeric(frame[time_column], errors="coerce").replace([np.inf, -np.inf], np.nan)
-
     if event_already_coded:
+        frame = df[required_columns].copy()
         coded_events = pd.to_numeric(frame[event_column], errors="coerce")
         if not bool(coded_events.dropna().isin([0.0, 1.0]).all()):
             raise ValueError("Internal error: a cleaned deep-learning frame must carry a 0/1 event column.")
         frame[event_column] = coded_events.astype(float)
+        frame[time_column] = pd.to_numeric(frame[time_column], errors="coerce")
+        frame = frame.dropna(subset=[time_column, event_column])
+        frame = frame.loc[frame[time_column] >= 0]
+        source_row_index = frame.index.tolist()
+        frame = frame.reset_index(drop=True)
+        # Positions in this slice; the slice inherits the full frame's attrs, which do not apply to it.
+        frame.attrs = {"source_row_index": source_row_index, "dropped_nonpositive_time_rows": 0}
     else:
-        frame[event_column] = coerce_event(frame[event_column], event_positive_value=event_positive_value)
-        # Split passes skip this: the full frame was checked, and the training split is
-        # checked again by the shared encoder, exactly as for the ML models.
-        reject_numeric_text_features(frame, features, categorical_features)
-    for col in features:
-        if col in categorical_features:
-            # The encoder's canonical labels ("1", not "1.0" when a blank made the codes decimal), as for ML.
-            frame[col] = canonical_category_values(frame[col]).astype("string")
-            continue
-        raw_values = frame[col]
-        if event_already_coded and isinstance(raw_values.dtype, pd.StringDtype):
-            # Categorical on the full cleaned frame: a split whose rows happen to hold only
-            # number-like levels must not turn it into a numeric column.
-            continue
-        numeric_values = pd.to_numeric(raw_values, errors="coerce")
-        if bool((raw_values.notna() & numeric_values.isna()).any()):
-            # Text that is not a number with a few stray values (rejected above) is a
-            # categorical variable, as the shared encoder treats it for the ML models.
-            frame[col] = raw_values.astype("string")
-        else:
-            frame[col] = numeric_values
-
-    frame = frame.dropna(subset=[time_column, event_column]).copy()
-    # Time 0 is a valid follow-up time; only negative times are dropped.
-    positive_mask = frame[time_column] >= 0
-    frame = frame.loc[positive_mask]
-    source_row_index = frame.index.tolist()
-    frame = frame.reset_index(drop=True)
-    frame.attrs["dropped_nonpositive_time_rows"] = int((~positive_mask).sum())
-    frame.attrs["source_row_index"] = source_row_index
+        frame = _deep_cohort_frame(
+            df,
+            time_column=time_column,
+            event_column=event_column,
+            features=features,
+            categorical_features=list(categorical_features or []),
+            event_positive_value=event_positive_value,
+        )
 
     if frame.empty:
         raise InsufficientDeepSampleError("No analyzable rows remain after removing missing/invalid values.")
@@ -468,6 +485,134 @@ def _coerce_deep_frame(
     return frame
 
 
+def _deep_cohort_frame(
+    df: pd.DataFrame,
+    *,
+    time_column: str,
+    event_column: str,
+    features: Sequence[str],
+    categorical_features: Sequence[str],
+    event_positive_value: Any,
+) -> pd.DataFrame:
+    """The analysed cohort of the ML models (``analysis._cohort_frame``) with deep-model feature types.
+
+    The ML cohort builder parses follow-up times ("1,234"), refuses text that is not a time
+    ("12 months"), a time column missing for (nearly) every row of one outcome, times that are
+    never positive, and a cleaning that removes every censored row, and returns the caution
+    for a time column whose name does not look like follow-up time. Rows with a missing
+    feature are kept (the encoder imputes them), as for the ML models.
+
+    Feature types are decided once, here, on the whole cleaned cohort, and split passes keep
+    them: a feature is categorical when it is declared categorical, is a pandas Categorical,
+    or is text whose non-missing values do not all read as finite numbers. Categorical
+    features are stored as canonical text labels (``_category_labels``); text features whose
+    values all read as numbers are numeric.
+    """
+    from survival_toolkit.analysis import _cohort_frame
+
+    features = _checked_features(df, features)
+    declared = list(categorical_features)
+    pandas_categoricals = [column for column in features if isinstance(df[column].dtype, pd.CategoricalDtype)]
+    source = df
+    if pandas_categoricals:
+        # Decoded before the cohort builder turns them into text, so integer categories read
+        # "1", not "1.0". A shallow copy: the caller's frame is left unchanged.
+        source = df.copy(deep=False)
+        for column in pandas_categoricals:
+            source[column] = _category_labels(df[column])
+    cohort = _cohort_frame(
+        source,
+        time_column,
+        event_column,
+        event_positive_value=event_positive_value,
+        extra_columns=features,
+        drop_missing_extra_columns=False,
+    )
+    frame = cohort[[*features, time_column, event_column]].copy()
+    text_features: list[Any] = []
+    for column in features:
+        values = frame[column]
+        if column in declared or column in pandas_categoricals:
+            # The encoder's canonical labels ("1", not "1.0" when a blank made the codes decimal), as for ML.
+            frame[column] = _category_labels(values)
+        elif is_numeric_dtype(values.dtype):
+            continue
+        elif _all_finite_numbers(values):
+            frame[column] = pd.Series(
+                pd.to_numeric(values, errors="coerce").to_numpy(dtype=float, na_value=np.nan),
+                index=values.index,
+            )
+        else:
+            text_features.append(column)
+    # Continuous numbers with a few stray text values, and text with too many levels, are
+    # refused (the shared rule of the ML, deep-learning, and Cox paths); other text is categorical.
+    reject_numeric_text_features(frame, text_features, declared)
+    for column in text_features:
+        frame[column] = _category_labels(frame[column])
+    frame.attrs = {
+        "source_row_index": list(cohort.attrs.get("source_row_index", [])),
+        "dropped_nonpositive_time_rows": int(cohort.attrs.get("dropped_nonpositive_time_rows", 0)),
+        # Rows without a usable time or event (``drop_missing_extra_columns=False``: features are kept).
+        "dropped_missing_outcome_rows": int(cohort.attrs.get("dropped_missing_rows", 0)),
+        "time_column_note": cohort.attrs.get("time_column_note"),
+    }
+    return frame
+
+
+def _all_finite_numbers(values: pd.Series) -> bool:
+    """Whether every non-missing value of a text column reads as a finite number."""
+    numbers = pd.to_numeric(values.dropna(), errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+    return bool(np.isfinite(numbers).all())
+
+
+def _category_labels(values: pd.Series) -> pd.Series:
+    """Canonical text labels of a categorical feature (``encoding.canonical_category_values``).
+
+    A pandas Categorical is decoded to its category values first, so integer categories read
+    "1", "2" even when a missing value made them decimal, as for a declared code column.
+    """
+    if isinstance(values.dtype, pd.CategoricalDtype):
+        values = pd.Series(
+            pd.api.extensions.take(np.asarray(values.cat.categories), values.cat.codes.to_numpy(), allow_fill=True),
+            index=values.index,
+            name=values.name,
+        )
+    return canonical_category_values(values).astype("string")
+
+
+def _cohort_summary_fields(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Cohort-building counts and the time-column caution, for the scientific summaries.
+
+    ``source`` is a cleaned frame's ``attrs`` or prepared tensors that carry the same keys.
+    """
+    return {
+        "dropped_nonpositive_time_rows": int(source.get("dropped_nonpositive_time_rows", 0) or 0),
+        "dropped_missing_outcome_rows": int(source.get("dropped_missing_outcome_rows", 0) or 0),
+        "time_column_note": source.get("time_column_note") or None,
+    }
+
+
+def _cohort_cautions(
+    dropped_nonpositive_time_rows: int,
+    dropped_missing_outcome_rows: int,
+    time_column_note: str | None,
+) -> list[str]:
+    """Cautions about rows the cohort builder removed and about an unusual time column."""
+    cautions: list[str] = []
+    if int(dropped_missing_outcome_rows) > 0:
+        cautions.append(
+            f"{int(dropped_missing_outcome_rows)} row(s) with a missing or non-finite survival time or a missing event "
+            "were excluded before deep-model preprocessing."
+        )
+    if int(dropped_nonpositive_time_rows) > 0:
+        cautions.append(
+            f"{int(dropped_nonpositive_time_rows)} row(s) with negative survival time were excluded before deep-model preprocessing."
+        )
+    if time_column_note:
+        cautions.append(str(time_column_note))
+    return cautions
+
+
 def _categorical_feature_columns(frame: pd.DataFrame, features: Sequence[str]) -> list[str]:
     """Features a cleaned frame treats as categorical (``_coerce_deep_frame`` stores them as text)."""
     return [column for column in features if isinstance(frame[column].dtype, pd.StringDtype)]
@@ -478,11 +623,17 @@ def _fit_deep_encoder(
     features: Sequence[str],
     categorical_features: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Fit the shared tabular encoder with numeric standardization enabled."""
+    """Fit the shared tabular encoder with numeric standardization enabled.
+
+    Every feature the cleaned frame stores as text is passed as categorical, so a training
+    split keeps the type decided on the whole cohort even when its rows happen to hold only
+    number-like levels.
+    """
+    categorical = list(dict.fromkeys([*(categorical_features or []), *_categorical_feature_columns(frame, features)]))
     return _fit_shared_feature_encoder(
         frame,
         features,
-        categorical_features,
+        categorical,
         standardize_numeric=True,
     )
 
@@ -504,37 +655,13 @@ def _transform_deep_frame(
         "event_tensor": torch.from_numpy(frame[event_column].values.astype(np.float32)),
         "feature_names": list(encoder["feature_names"]),
         "scaler_params": dict(encoder["scaler_params"]),
+        # Input columns the encoder one-hot codes (declared plus auto-coded), for reporting.
+        "categorical_features": list(encoder.get("categorical_features", [])),
         "categorical_feature_indices": list(encoder.get("categorical_feature_indices", [])),
         "numeric_feature_indices": list(encoder.get("numeric_feature_indices", [])),
         "n_samples": int(x_array.shape[0]),
         "n_features": int(x_array.shape[1]),
     }
-
-
-def _prepare_deep_data(
-    df: pd.DataFrame,
-    time_column: str,
-    event_column: str,
-    features: Sequence[str],
-    categorical_features: Sequence[str] | None = None,
-    event_positive_value: Any = None,
-) -> dict[str, Any]:
-    """Prepare data for deep models using a single-cohort fitted encoder."""
-    frame = _coerce_deep_frame(
-        df,
-        time_column=time_column,
-        event_column=event_column,
-        features=features,
-        categorical_features=categorical_features,
-        event_positive_value=event_positive_value,
-    )
-    encoder = _fit_deep_encoder(frame, features, categorical_features)
-    return _transform_deep_frame(
-        frame,
-        time_column=time_column,
-        event_column=event_column,
-        encoder=encoder,
-    )
 
 
 def _prepare_deep_split_data(
@@ -599,6 +726,7 @@ def _prepare_deep_split_data(
     feature_meta = {
         "feature_names": list(train_data["feature_names"]),
         "scaler_params": dict(train_data["scaler_params"]),
+        "categorical_features": list(train_data.get("categorical_features", [])),
         "categorical_feature_indices": list(train_data.get("categorical_feature_indices", [])),
         "numeric_feature_indices": list(train_data.get("numeric_feature_indices", [])),
     }
@@ -881,6 +1009,51 @@ def _validated_hidden_layers(hidden_layers: Sequence[Any] | None) -> list[int]:
     return widths
 
 
+def _validated_positive_integer(value: Any, label: str) -> int:
+    """A whole number of at least 1 (an integral float such as 10.0 is accepted)."""
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer, float, np.floating)):
+        raise ValueError(f"{label} must be a whole number of at least 1 (got {value!r}).")
+    number = float(value)
+    if not math.isfinite(number) or number != math.floor(number) or number < 1:
+        raise ValueError(f"{label} must be a whole number of at least 1 (got {value!r}).")
+    return int(number)
+
+
+def _validated_training_settings(*, epochs: Any, batch_size: Any, learning_rate: Any) -> tuple[int, int, float]:
+    """Epochs, batch size, and learning rate checked at the Python entry points.
+
+    The web form enforces its own bounds; package callers passing 0 epochs (or a negative
+    count) would otherwise get an untrained network reported with a C-index.
+    """
+    epochs = _validated_positive_integer(epochs, "The number of epochs")
+    batch_size = _validated_positive_integer(batch_size, "The batch size")
+    if isinstance(learning_rate, bool) or not isinstance(learning_rate, (int, np.integer, float, np.floating)):
+        raise ValueError(f"The learning rate must be a positive finite number (got {learning_rate!r}).")
+    if not math.isfinite(float(learning_rate)) or float(learning_rate) <= 0.0:
+        raise ValueError(f"The learning rate must be a positive finite number (got {learning_rate!r}).")
+    return epochs, batch_size, float(learning_rate)
+
+
+_LOCKED_TEST_FRACTION_BOUNDS = (0.05, 0.5)
+
+
+def _validated_locked_test_fraction(value: Any) -> float | None:
+    """``None`` (no locked test set) or a fraction within the web form's bounds.
+
+    0, a negative value, or NaN used to leave the run without a locked test set silently.
+    """
+    if value is None:
+        return None
+    low, high = _LOCKED_TEST_FRACTION_BOUNDS
+    valid_type = not isinstance(value, bool) and isinstance(value, (int, np.integer, float, np.floating))
+    if not valid_type or not (low <= float(value) <= high):
+        raise ValueError(
+            f"locked_test_fraction must be None (no locked test set) or a fraction between {low} and {high} "
+            f"(got {value!r})."
+        )
+    return float(value)
+
+
 def _mlp_parameter_count(in_features: int, widths: Sequence[int]) -> tuple[int, int]:
     """Parameters of a stack of Linear layers (weights and biases) and its output width."""
     total = 0
@@ -1035,6 +1208,13 @@ def _prepare_deep_training_inputs(
         return prepared_data, evaluation_split
     if df is None:
         raise ValueError("Raw dataframe input is required when prepared_data is not provided.")
+    if evaluation_split is not None:
+        # Its positions would index the cleaned frame, not the caller's rows: rows removed for
+        # a missing outcome shift every later position onto a different patient.
+        raise ValueError(
+            "evaluation_split can only be supplied together with the prepared_data it was built for; "
+            "with a raw dataframe the trainer draws the shared holdout split itself."
+        )
 
     clean_frame = _coerce_deep_frame(
         df,
@@ -1044,13 +1224,11 @@ def _prepare_deep_training_inputs(
         categorical_features=categorical_features,
         event_positive_value=event_positive_value,
     )
-    resolved_split = dict(evaluation_split) if evaluation_split is not None else _build_holdout_split(
+    resolved_split = _build_holdout_split(
         clean_frame[event_column].astype(int).to_numpy(),
         random_seed,
         source_rows=clean_frame.attrs.get("source_row_index"),
     )
-    if evaluation_split is not None:
-        _reject_leaky_evaluation_split(resolved_split, n_samples=int(clean_frame.shape[0]))
 
     if str(resolved_split.get("evaluation_mode")) == "holdout":
         train_idx = np.asarray(resolved_split["train_idx"], dtype=int)
@@ -1077,7 +1255,7 @@ def _prepare_deep_training_inputs(
                 clean_rows[int(eval_idx[position])] if clean_rows is not None else int(eval_idx[position])
                 for position in split_eval["eval_source_positions"]
             ]
-            split_data["dropped_nonpositive_time_rows"] = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
+            split_data.update(_cohort_summary_fields(clean_frame.attrs))
             return split_data, split_eval
         except InsufficientDeepSampleError:
             # Only a too-small or event-free training split falls back to apparent
@@ -1105,7 +1283,7 @@ def _prepare_deep_training_inputs(
         event_column=event_column,
         encoder=encoder,
     )
-    full_data["dropped_nonpositive_time_rows"] = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
+    full_data.update(_cohort_summary_fields(clean_frame.attrs))
     return full_data, resolved_split
 
 
@@ -1154,39 +1332,72 @@ def _compute_c_index_torch(
     return _harrell_c_index(time_np.astype(float), event_np.astype(int), risk_np.astype(float))
 
 
-def _logsumexp_numpy(values: np.ndarray) -> float:
-    if values.size == 0:
-        return float("-inf")
-    max_value = float(np.max(values))
-    if not np.isfinite(max_value):
-        return max_value
-    stable = np.exp(values - max_value)
-    return float(max_value + np.log(np.sum(stable)))
+def _has_comparable_pair(times: Any, events: Any) -> bool:
+    """Whether Harrell's C-index is defined on these patients at all, for any model.
+
+    A pair is comparable when an event is followed by a longer follow-up (or by a censoring at
+    the same time); without one, every model's C-index is undefined. Times are compared as the
+    float32 values the deep models score, as in the ML module's check.
+    """
+    from survival_toolkit.analysis import _harrell_c_index
+
+    time_values = np.asarray(times, dtype=np.float32).astype(float).reshape(-1)
+    event_values = np.asarray(events, dtype=float).reshape(-1)
+    return _harrell_c_index(time_values, event_values, np.zeros(time_values.size, dtype=float)) is not None
 
 
 def _survival_from_log_cumulative_hazard(log_cumulative_hazard: np.ndarray) -> np.ndarray:
-    safe_log = np.asarray(log_cumulative_hazard, dtype=float)
-    survival = np.ones_like(safe_log)
-    positive_mask = np.isfinite(safe_log)
-    if not positive_mask.any():
-        return survival
-    very_large = safe_log >= 50.0
-    moderate = positive_mask & ~very_large
-    survival[very_large] = 0.0
-    survival[moderate] = np.exp(-np.exp(safe_log[moderate]))
-    survival[~positive_mask] = 1.0
-    return survival
+    """S = exp(-H) from log H: 1 where log H is -inf (no hazard), 0 where it is +inf or large.
+
+    A NaN stays NaN instead of being reported as certain survival.
+    """
+    log_hazard = np.asarray(log_cumulative_hazard, dtype=float)
+    # exp(-exp(50)) is already 0.0 in float64; capping avoids overflow warnings, and
+    # np.minimum keeps NaN.
+    return np.exp(-np.exp(np.minimum(log_hazard, 50.0)))
+
+
+def _breslow_log_baseline_cumulative_hazard(
+    times: np.ndarray,
+    events: np.ndarray,
+    risk: np.ndarray,
+    grid: np.ndarray,
+) -> np.ndarray:
+    """log of the Breslow baseline cumulative hazard at each time of the sorted ``grid``.
+
+    H0(t) = sum over event times t_k <= t of d_k / sum_{j: t_j >= t_k} exp(r_j). The risk-set
+    sums come from one reverse cumulative log-sum-exp over the rows sorted by time, so the
+    curve costs O(n log n), and the whole computation stays in log space: shifting every risk
+    score by a constant shifts log H0 by the opposite constant (the predicted survival is
+    unchanged), however negative or large the scores are.
+    """
+    times = np.asarray(times, dtype=float).reshape(-1)
+    events = np.asarray(events, dtype=float).reshape(-1)
+    risk = np.asarray(risk, dtype=float).reshape(-1)
+    grid = np.asarray(grid, dtype=float).reshape(-1)
+    if times.size == 0 or grid.size == 0:
+        return np.full(grid.shape, -np.inf)
+    order = np.argsort(times, kind="stable")
+    sorted_times = times[order]
+    # log sum_{j >= i} exp(r_j) over the rows sorted by time: the log risk-set sum of position i.
+    reverse_log_sums = np.logaddexp.accumulate(risk[order][::-1])[::-1]
+    first_at_risk = np.searchsorted(sorted_times, grid, side="left")
+    event_times, event_counts = np.unique(times[events == 1], return_counts=True)
+    matched = np.searchsorted(event_times, grid)
+    deaths = np.zeros(grid.size)
+    found = matched < event_times.size
+    found[found] = event_times[matched[found]] == grid[found]
+    deaths[found] = event_counts[matched[found]]
+    at_risk = first_at_risk < times.size
+    log_increments = np.full(grid.size, -np.inf)
+    usable = at_risk & (deaths > 0)
+    log_increments[usable] = np.log(deaths[usable]) - reverse_log_sums[first_at_risk[usable]]
+    return np.logaddexp.accumulate(log_increments)
 
 
 def _expected_time_risk(pmf_with_tail: torch.Tensor, time_grid: torch.Tensor) -> torch.Tensor:
     """Fixed prognostic risk score from a discrete-time PMF with tail mass."""
     return -(pmf_with_tail * time_grid.reshape(1, -1)).sum(dim=1)
-
-
-def _survival_after_event_bins(pmf_with_tail: torch.Tensor) -> torch.Tensor:
-    """Return survival after each event bin end, preserving tail mass."""
-    event_pmf = pmf_with_tail[:, :-1]
-    return 1.0 - torch.cumsum(event_pmf, dim=1)
 
 
 def _build_evaluation_split(
@@ -1471,6 +1682,26 @@ def _digitize_time_bins(
     return indices
 
 
+def _survival_at_reference_time(
+    survival_at_edges: np.ndarray,
+    bin_edges: np.ndarray,
+    t_ref: float,
+    num_time_bins: int,
+) -> np.ndarray:
+    """Each row's survival at ``t_ref``, interpolated between the edges of the bin holding it.
+
+    Column k of ``survival_at_edges`` is the survival at ``bin_edges[k]``; column 0 is the
+    first edge (the earliest fitting time, where survival is 1), not time 0 at which the
+    plotted curves start.
+    """
+    ref_bin = int(_digitize_time_bins(np.asarray([t_ref]), bin_edges, num_time_bins)[0])
+    edge_low = float(bin_edges[ref_bin])
+    edge_high = float(bin_edges[min(ref_bin + 1, len(bin_edges) - 1)])
+    weight = 0.0 if edge_high <= edge_low else min(max((t_ref - edge_low) / (edge_high - edge_low), 0.0), 1.0)
+    next_column = min(ref_bin + 1, survival_at_edges.shape[1] - 1)
+    return (1.0 - weight) * survival_at_edges[:, ref_bin] + weight * survival_at_edges[:, next_column]
+
+
 def _append_evaluation_note(note: str | None, extra_note: str | None) -> str:
     base = str(note or "").strip()
     extra = str(extra_note or "").strip()
@@ -1556,17 +1787,25 @@ def _scientific_summary_dl(
     refit_note: str | None = None,
     reported_epochs: int | None = None,
     unseen_category_rows: int = 0,
+    dropped_missing_outcome_rows: int = 0,
+    time_column_note: str | None = None,
+    reported_loss_history: Sequence[float] | None = None,
 ) -> dict[str, Any]:
     """Build an insight board dict for deep learning models.
 
     ``loss_history`` is the early-stopping run; ``reported_epochs`` (when given) is the
     number of epochs behind the reported weights, which differs after a refit.
+    ``reported_loss_history`` (when given) holds the training losses of the reported weights
+    (the refit, or the early-stopping run up to the restored epoch): the final loss and the
+    loss-trend notes describe it. ``dropped_missing_outcome_rows`` and ``time_column_note``
+    come from the cohort builder (``_cohort_summary_fields``).
     """
     metric_name = _metric_name_for_evaluation(evaluation_mode)
     c_val = float(c_index) if c_index is not None else None
 
     early_stopping_epochs = int(len(loss_history))
     epochs_trained = int(reported_epochs) if reported_epochs is not None else early_stopping_epochs
+    reported_losses = [float(value) for value in (loss_history if reported_loss_history is None else reported_loss_history)]
 
     if c_val is None:
         status = "review"
@@ -1590,7 +1829,7 @@ def _scientific_summary_dl(
         )
         + f" with {n_features} features.",
     ]
-    if len(loss_history) >= 2 and loss_history[-1] < loss_history[0]:
+    if len(reported_losses) >= 2 and reported_losses[-1] < reported_losses[0]:
         strengths.append("Training loss decreased over epochs, indicating successful optimization.")
     if refit_note:
         strengths.append(refit_note)
@@ -1600,10 +1839,7 @@ def _scientific_summary_dl(
 
     if evaluation_note:
         cautions.append(evaluation_note)
-    if int(dropped_nonpositive_time_rows) > 0:
-        cautions.append(
-            f"{int(dropped_nonpositive_time_rows)} row(s) with negative survival time were excluded before deep-model preprocessing."
-        )
+    cautions.extend(_cohort_cautions(dropped_nonpositive_time_rows, dropped_missing_outcome_rows, time_column_note))
     if evaluation_mode == "holdout" and int(unseen_category_rows) > 0:
         # Imported only when needed: repeated-CV worker processes need not load the ML module.
         from survival_toolkit.ml_models import _unseen_category_caution
@@ -1643,8 +1879,8 @@ def _scientific_summary_dl(
             "judge it by the bootstrap intervals over the test patients of a model comparison or by repeated cross-validation."
         )
 
-    if len(loss_history) >= 5:
-        tail = loss_history[-5:]
+    if len(reported_losses) >= 5:
+        tail = reported_losses[-5:]
         if max(tail) - min(tail) < 1e-6:
             cautions.append("Loss plateaued in the final epochs; model may benefit from more epochs or a learning rate change.")
     if model_name == "DeepSurv":
@@ -1696,10 +1932,11 @@ def _scientific_summary_dl(
             {"label": "Training samples", "value": train_samples},
             {"label": "Training events", "value": train_events},
             {"label": "Dropped for negative time", "value": int(dropped_nonpositive_time_rows) or None},
+            {"label": "Dropped for missing outcome", "value": int(dropped_missing_outcome_rows) or None},
             {"label": "Evaluation samples", "value": eval_samples},
             {"label": "Features", "value": n_features},
             {"label": "Epochs", "value": epochs_trained or epochs},
-            {"label": "Final loss", "value": float(loss_history[-1]) if loss_history else None},
+            {"label": "Final loss", "value": reported_losses[-1] if reported_losses else None},
             *(
                 [{"label": "Early-stopping epochs", "value": early_stopping_epochs}]
                 if early_stopping_epochs and early_stopping_epochs != epochs_trained
@@ -1812,10 +2049,10 @@ def _training_run_metadata(
 def _serialized_torch_training(func: Callable[..., Any]) -> Callable[..., Any]:
     """Run deep-learning training one call at a time in this process, on pinned torch threads.
 
-    ``_seed_torch`` seeds process-wide generators (numpy, ``random``, torch) and weight
-    initialisation and dropout draw from them, so two trainings interleaved on server
-    threads would consume each other's random numbers and the same seed would not
-    reproduce. Worker processes of the parallel repeated-CV path each have their own lock.
+    ``_seed_torch`` seeds torch's process-wide generator, and weight initialisation and
+    dropout draw from it, so two trainings interleaved on server threads would consume each
+    other's random numbers and the same seed would not reproduce. Worker processes of the
+    parallel repeated-CV path each have their own lock.
 
     A job queued behind another training keeps polling its cancellation signal while it
     waits, so a cancelled request does not hold a heavy-job slot until the lock frees.
@@ -2004,12 +2241,14 @@ def _fit_with_refit(
     first run selects the number of epochs, a fresh model (same seed) is fitted on the
     whole training partition for that many epochs.
 
-    Returns ``(final_phase, early_stopping_phase, refit_info)``.
+    Returns ``(final_phase, early_stopping_phase, refit_info)``. When the monitor subset could
+    not be scored (``monitor_used`` false), no epoch was selected and the refit trains for the
+    full number of epochs; the monitor rows still join the fit.
     """
     first = fit_phase(context.fit_idx, context.monitor_idx, epochs, patience)
     held_out_rows = context.monitor_idx is not None and int(context.fit_idx.numel()) < int(context.train_idx.numel())
     if not (refit and held_out_rows):
-        return first, first, {"refit_on_training_partition": False, "refit_epochs": None}
+        return first, first, {"refit_on_training_partition": False, "refit_epochs": None, "monitor_used": first.monitor_used}
     meta = _training_run_metadata(
         first.loss_history,
         first.monitor_history,
@@ -2020,7 +2259,7 @@ def _fit_with_refit(
     )
     refit_epochs = int(meta["best_monitor_epoch"] or len(first.loss_history))
     final = fit_phase(context.train_idx, None, refit_epochs, None)
-    return final, first, {"refit_on_training_partition": True, "refit_epochs": refit_epochs}
+    return final, first, {"refit_on_training_partition": True, "refit_epochs": refit_epochs, "monitor_used": first.monitor_used}
 
 
 def _deep_training_fields(
@@ -2079,7 +2318,14 @@ def _deep_training_fields(
         "early_stopping_fit_samples": int(context.fit_idx.numel()),
         "monitor_samples": int(context.monitor_idx.numel()) if first.monitor_used and context.monitor_idx is not None else 0,
         "evaluation_samples": int(context.eval_idx.numel()),
+        "training_events": int(context.e_all[context.train_idx].sum().item()),
+        "evaluation_events": int(context.e_all[context.eval_idx].sum().item()),
         "n_features": context.data["n_features"],
+        # Input columns that were one-hot coded (declared plus auto-coded); None for
+        # caller-prepared tensors that do not record them.
+        "categorical_features": (
+            None if context.data.get("categorical_features") is None else list(context.data["categorical_features"])
+        ),
     }
 
 
@@ -2087,18 +2333,34 @@ def _deep_fit_summary_counts(
     context: _DeepTrainingContext,
     refit_info: dict[str, Any],
 ) -> tuple[int, int, str | None]:
-    """Rows, events, and a refit note for the scientific summary of the reported model."""
+    """Rows, events, and a refit note for the scientific summary of the reported model.
+
+    The note says that early stopping picked the epoch count, so it is only given when the
+    monitor subset produced a value to pick it on.
+    """
     refitted = bool(refit_info["refit_on_training_partition"])
     final_rows = context.train_idx if refitted else context.fit_idx
     events = int(context.e_all[final_rows].sum().item())
     note = None
-    if refitted:
+    if refitted and refit_info.get("monitor_used", True):
         note = (
             f"Early stopping picked epoch {refit_info['refit_epochs']} on a held-out monitor subset of "
             f"{int(context.monitor_idx.numel())} training rows; the reported model was then refit on all "
             f"{int(context.train_idx.numel())} training rows for that many epochs."
         )
     return int(final_rows.numel()), events, note
+
+
+def _reported_loss_history(
+    first: _FitPhase,
+    final: _FitPhase,
+    refit_info: dict[str, Any],
+    reported_epochs: int,
+) -> list[float]:
+    """Training losses of the reported weights: the refit, or the early-stopping run up to the restored epoch."""
+    if refit_info["refit_on_training_partition"]:
+        return list(final.loss_history)
+    return list(first.loss_history[: max(int(reported_epochs), 0)])
 
 
 def _holdout_and_apparent_c_index(
@@ -2114,8 +2376,13 @@ def _holdout_and_apparent_c_index(
     apparent_c_index = _compute_c_index_torch(
         risk_scores[context.train_idx], context.t_all[context.train_idx], context.e_all[context.train_idx]
     )
-    holdout_c_index = _compute_c_index_torch(
-        risk_scores[context.eval_idx], context.t_all[context.eval_idx], context.e_all[context.eval_idx]
+    # In apparent mode the evaluation rows are the training rows, so there is no holdout estimate.
+    holdout_c_index = (
+        _compute_c_index_torch(
+            risk_scores[context.eval_idx], context.t_all[context.eval_idx], context.e_all[context.eval_idx]
+        )
+        if context.evaluation_mode == "holdout"
+        else None
     )
     c_index = holdout_c_index if holdout_c_index is not None else apparent_c_index
     evaluation_mode = context.evaluation_mode
@@ -2212,10 +2479,27 @@ class _DeepRunSettings(NamedTuple):
         }
 
 
-def _record_fold_error(errors: list[dict[str, Any]], model_name: str, repeat: Any, fold: Any, exc: BaseException) -> None:
+def _record_fold_failure(
+    errors: list[dict[str, Any]],
+    model_names: Sequence[str],
+    repeat: Any,
+    fold: Any,
+    exc: BaseException,
+) -> None:
+    """Record one failed fold for each named model; errors that must propagate are re-raised.
+
+    The failure is logged once with its traceback, and the recorded message keeps the cause
+    of a library error (``_failure_message``).
+    """
     if _must_propagate_deep(exc):
         raise exc
-    errors.append({"model": model_name, "repeat": repeat, "fold": fold, "error": str(exc)})
+    logger.exception("Deep-learning repeated-CV repeat %s, fold %s failed.", repeat, fold, exc_info=exc)
+    message = _failure_message(exc)
+    errors.extend({"model": str(name), "repeat": repeat, "fold": fold, "error": message} for name in model_names)
+
+
+def _record_fold_error(errors: list[dict[str, Any]], model_name: str, repeat: Any, fold: Any, exc: BaseException) -> None:
+    _record_fold_failure(errors, [model_name], repeat, fold, exc)
 
 
 @user_input_boundary
@@ -2264,6 +2548,10 @@ def compare_deep_survival_models(
         )
     if evaluation_strategy != "repeated_cv" and locked_test_fraction is not None:
         raise ValueError("A locked test set is only available with repeated cross-validation.")
+    locked_test_fraction = _validated_locked_test_fraction(locked_test_fraction)
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
     hidden_layers = _validated_hidden_layers(hidden_layers)
     trainer_specs = _deep_trainer_specs(
         hidden_layers=hidden_layers,
@@ -2280,6 +2568,8 @@ def compare_deep_survival_models(
         trainer_specs = [spec for spec in trainer_specs if spec[0] in included]
         if not trainer_specs:
             raise ValueError("No deep-learning models remain after applying the requested model filter.")
+    if any(spec[0] == "Survival Transformer" for spec in trainer_specs):
+        _validated_positive_integer(n_heads, "The number of attention heads")
     settings = _DeepRunSettings(
         time_column=time_column,
         event_column=event_column,
@@ -2322,7 +2612,6 @@ def _deep_holdout_comparison(
         event_positive_value=settings.event_positive_value,
         random_seed=random_seed,
     )
-    dropped_nonpositive_time_rows = int(shared_data.get("dropped_nonpositive_time_rows", 0))
     shared_monitor_indices = _build_monitor_indices(
         shared_eval_split["train_idx"],
         shared_data["event_tensor"],
@@ -2371,12 +2660,20 @@ def _deep_holdout_comparison(
                 "n_features": result.get("n_features"),
                 "training_samples": result.get("training_samples"),
                 "evaluation_samples": result.get("evaluation_samples"),
+                # The ML comparison rows' names for the event counts (manuscript tables read them).
+                "train_events": result.get("training_events"),
+                "test_events": result.get("evaluation_events"),
                 "training_time_ms": training_time_ms,
             })
         except Exception as exc:
             if _must_propagate_deep(exc):
                 raise
-            errors.append({"model": model_name, "error": str(exc)})
+            logger.exception("Deep-learning model %s failed in the holdout comparison.", model_name)
+            errors.append({"model": model_name, "error": _failure_message(exc)})
+    events = shared_data["event_tensor"].detach().cpu().numpy().reshape(-1)
+    train_rows = np.asarray(shared_eval_split["train_idx"], dtype=int)
+    eval_rows = np.asarray(shared_eval_split["eval_idx"], dtype=int)
+    holdout_split = str(shared_eval_split.get("evaluation_mode")) == "holdout"
     result = _finalize_deep_comparison(
         comparison,
         errors,
@@ -2384,29 +2681,32 @@ def _deep_holdout_comparison(
         n_selected_features=len(settings.features),
         evaluation_mode="holdout",
         random_seed=random_seed,
-        dropped_nonpositive_time_rows=dropped_nonpositive_time_rows,
+        **_cohort_summary_fields(shared_data),
         cohort_counts={
             "n_patients": int(shared_data["n_samples"]),
             "n_events": int(float(shared_data["event_tensor"].sum().item())),
+            "n_fit_patients": int(train_rows.size),
+            "n_fit_events": int(events[train_rows].sum()),
+            "n_evaluation_patients": int(eval_rows.size),
+            "n_evaluation_events": int(events[eval_rows].sum()),
             "evaluation_split_fingerprint": shared_eval_split.get("evaluation_split_fingerprint"),
         },
+        extra_cautions=_unseen_category_cautions(
+            [(int(shared_eval_split.get("unseen_category_rows", 0) or 0) if holdout_split else 0, "evaluation")]
+        ),
     )
-    if str(shared_eval_split.get("evaluation_mode")) == "holdout":
-        _append_unseen_category_cautions(
-            result, [(int(shared_eval_split.get("unseen_category_rows", 0) or 0), "evaluation")]
-        )
+    # The features one-hot coded after the whole-cohort typing decision (declared plus auto-coded).
+    result["categorical_features"] = list(shared_data.get("categorical_features") or [])
     result["test_predictions"] = _deep_prediction_block(shared_data, shared_eval_split, holdout_risks)
     return result
 
 
-def _append_unseen_category_cautions(result: dict[str, Any], counts: Sequence[tuple[int, str]]) -> None:
-    """Add the ML module's unseen-category caution for each (row count, scope) pair."""
+def _unseen_category_cautions(counts: Sequence[tuple[int, str]]) -> list[str]:
+    """The ML module's unseen-category caution for each (row count, scope) pair with rows."""
     from survival_toolkit.ml_models import _unseen_category_caution
 
-    for n_rows, scope in counts:
-        caution = _unseen_category_caution(int(n_rows), scope)
-        if caution:
-            result["scientific_summary"]["cautions"].append(caution)
+    cautions = [_unseen_category_caution(int(n_rows), scope) for n_rows, scope in counts]
+    return [caution for caution in cautions if caution]
 
 
 def _deep_prediction_block(
@@ -2455,10 +2755,11 @@ def _deep_repeated_cv_comparison(
         categorical_features=settings.categorical_features,
         event_positive_value=settings.event_positive_value,
     )
-    dropped_nonpositive_time_rows = int(clean_frame.attrs.get("dropped_nonpositive_time_rows", 0))
+    cohort_fields = _cohort_summary_fields(clean_frame.attrs)
     source_rows = clean_frame.attrs.get("source_row_index")
     all_events = clean_frame[event_column].astype(int).to_numpy()
-    use_locked_test = locked_test_fraction is not None and float(locked_test_fraction) > 0.0
+    # Validated by the caller: None, or a fraction between 0.05 and 0.5.
+    use_locked_test = locked_test_fraction is not None
     if use_locked_test:
         dev_positions, test_positions = locked_test_split(
             all_events,
@@ -2486,6 +2787,9 @@ def _deep_repeated_cv_comparison(
     categorical_columns = _categorical_feature_columns(clean_frame, settings.features)
     design_splits: list[tuple[np.ndarray, np.ndarray]] = []
     unseen_fold_rows = 0
+    dev_times = dev_frame[settings.time_column].to_numpy(dtype=float)
+    # Test folds without a comparable pair of patients, skipped for every model alike.
+    skipped_folds: list[dict[str, int]] = []
     # Collect only split indices (cheap numpy arrays - no tensors).
     fold_splits: list[dict[str, Any]] = []
     for repeat_idx in range(cv_repeats):
@@ -2499,6 +2803,12 @@ def _deep_repeated_cv_comparison(
         )
         for fold_idx, (train_rows, eval_rows) in enumerate(splitter.split(dev_frame, events), start=1):
             design_splits.append((dev_positions[train_rows], dev_positions[eval_rows]))
+            if not _has_comparable_pair(dev_times[eval_rows], events[eval_rows]):
+                # No event in this test fold is followed by a longer follow-up, so the C-index is
+                # undefined for every model alike: the fold is skipped for all of them (as in the
+                # ML module) instead of leaving every model incomplete.
+                skipped_folds.append({"repeat": repeat_idx + 1, "fold": fold_idx})
+                continue
             unseen_fold_rows += _unseen_category_rows(
                 dev_frame.iloc[train_rows], dev_frame.iloc[eval_rows], categorical_columns
             )
@@ -2512,6 +2822,13 @@ def _deep_repeated_cv_comparison(
                 "train_rows": train_rows,
                 "eval_rows": eval_rows,
             })
+    n_total_folds = cv_folds * cv_repeats
+    n_scored_folds = n_total_folds - len(skipped_folds)
+    if n_scored_folds == 0:
+        raise ValueError(
+            "No cross-validation test fold had a comparable pair of patients (an event followed by a longer "
+            "follow-up), so the C-index is undefined in every fold. Use fewer folds or a cohort with more events."
+        )
 
     fold_results: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -2529,8 +2846,9 @@ def _deep_repeated_cv_comparison(
                 event_positive_value=settings.event_positive_value,
             )
         except Exception as exc:
-            for model_spec in model_specs:
-                _record_fold_error(errors, model_spec["model_name"], split["repeat"], split["fold"], exc)
+            _record_fold_failure(
+                errors, [spec["model_name"] for spec in model_specs], split["repeat"], split["fold"], exc
+            )
             return None
         return {
             "repeat": split["repeat"],
@@ -2557,6 +2875,15 @@ def _deep_repeated_cv_comparison(
         errors=errors,
         parallel_jobs=parallel_jobs,
     )
+    # Parallel folds finish in any order. Summing the fold C-indices in a fixed order (repeat,
+    # fold, model) makes parallel and sequential runs give bit-identical aggregates.
+    model_order = {str(spec["model_name"]): position for position, spec in enumerate(model_specs)}
+
+    def _fold_order(item: dict[str, Any]) -> tuple[int, int, int]:
+        return (int(item.get("repeat") or 0), int(item.get("fold") or 0), model_order.get(str(item.get("model")), len(model_order)))
+
+    fold_results.sort(key=_fold_order)
+    errors.sort(key=_fold_order)
 
     locked_results: dict[str, dict[str, Any]] = {}
     locked_predictions: dict[str, Any] | None = None
@@ -2589,6 +2916,7 @@ def _deep_repeated_cv_comparison(
         cv_folds=cv_folds,
         cv_repeats=cv_repeats,
         locked_results=locked_results if use_locked_test else None,
+        n_scored_folds=n_scored_folds,
     )
     # A model whose refit on the development set fails has no locked-test estimate. That is an
     # error of the run, but its cross-validation result still ranks it.
@@ -2605,7 +2933,20 @@ def _deep_repeated_cv_comparison(
             design_splits,
             kind="repeated_cv+locked_test" if use_locked_test else "repeated_cv",
         ),
+        # Test folds without a comparable pair of patients, skipped for every model alike (the
+        # shared manuscript tables add a note for them).
+        "n_skipped_folds": len(skipped_folds),
+        "skipped_folds": skipped_folds,
     }
+    skipped_fold_cautions = (
+        [
+            f"{len(skipped_folds)} of {n_total_folds} cross-validation test folds had no comparable pair of patients "
+            "(no event followed by a longer follow-up), so the C-index is undefined there for every model; those folds "
+            f"were skipped for all models alike, and the cross-validated means use the other {n_scored_folds} folds."
+        ]
+        if skipped_folds
+        else []
+    )
     if use_locked_test:
         cohort_counts.update({
             "locked_test_fraction": float(locked_test_fraction),
@@ -2625,25 +2966,27 @@ def _deep_repeated_cv_comparison(
         cv_folds=cv_folds,
         cv_repeats=cv_repeats,
         fold_results=fold_results,
-        dropped_nonpositive_time_rows=dropped_nonpositive_time_rows,
+        **cohort_fields,
         cohort_counts=cohort_counts,
         locked_errors=locked_errors,
-    )
-    if parallel_execution_note:
-        result["parallel_execution_note"] = parallel_execution_note
-        result["scientific_summary"]["cautions"].append(parallel_execution_note)
-    _append_unseen_category_cautions(
-        result,
-        [
-            (unseen_fold_rows, "cross-validation evaluation (summed over folds)"),
-            (
-                _unseen_category_rows(dev_frame, locked_test_frame, categorical_columns)
-                if locked_test_frame is not None
-                else 0,
-                "locked-test",
+        parallel_execution_note=parallel_execution_note,
+        extra_cautions=[
+            *skipped_fold_cautions,
+            *_unseen_category_cautions(
+                [
+                    (unseen_fold_rows, "cross-validation evaluation (summed over folds)"),
+                    (
+                        _unseen_category_rows(dev_frame, locked_test_frame, categorical_columns)
+                        if locked_test_frame is not None
+                        else 0,
+                        "locked-test",
+                    ),
+                ]
             ),
         ],
     )
+    # The features one-hot coded after the whole-cohort typing decision (declared plus auto-coded).
+    result["categorical_features"] = list(categorical_columns)
     result["locked_test_predictions"] = locked_predictions
     return result
 
@@ -2662,8 +3005,9 @@ def _collect_fold_task_result(
         return
     if exc is None:
         return
-    for model_spec in task_meta["model_specs"]:
-        _record_fold_error(errors, model_spec["model_name"], task_meta["repeat"], task_meta["fold"], exc)
+    _record_fold_failure(
+        errors, [spec["model_name"] for spec in task_meta["model_specs"]], task_meta["repeat"], task_meta["fold"], exc
+    )
 
 
 def _run_fold_tasks_sequentially(
@@ -2672,9 +3016,14 @@ def _run_fold_tasks_sequentially(
     *,
     fold_results: list[dict[str, Any]],
     errors: list[dict[str, Any]],
-    initial_task: dict[str, Any] | None = None,
+    initial_tasks: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Run fold tasks one at a time, building each task's tensors only when it is due."""
+    """Run fold tasks one at a time, building each task's tensors only when it is due.
+
+    ``initial_tasks`` holds tasks already built (the first fold, when a parallel run fell
+    back to sequential folds). They are popped from the list, so once run their tensors are
+    freed instead of staying referenced for the rest of the run.
+    """
 
     def _run(task: dict[str, Any]) -> None:
         raise_if_cancelled()
@@ -2685,9 +3034,10 @@ def _run_fold_tasks_sequentially(
         else:
             _collect_fold_task_result(task, fold_results=fold_results, errors=errors, task_result=task_result)
 
-    if initial_task is not None:
-        _run(initial_task)
-        initial_task = None
+    while initial_tasks:
+        task = initial_tasks.pop(0)
+        _run(task)
+        del task
         gc.collect()
     for split in fold_splits:
         task = build_task(split)
@@ -2782,7 +3132,8 @@ def _run_deep_fold_tasks(
 
     Returns a note when parallel execution was requested but fell back to sequential. A
     worker that dies (for example killed for memory) does not end the run: the folds it
-    left unfinished are rerun sequentially. Cancellation is checked every
+    left unfinished are rerun sequentially when the memory guard says one fold fits in this
+    process, and are otherwise reported as failed folds. Cancellation is checked every
     ``_CANCELLATION_POLL_SECONDS`` and terminates the workers.
     """
     remaining = list(fold_splits)
@@ -2804,44 +3155,46 @@ def _run_deep_fold_tasks(
     if first_task is None:
         return None
 
+    model_names = [str(spec["model_name"]) for spec in first_task.get("model_specs") or []]
     estimated_task_bytes = _estimate_deep_compare_task_bytes(first_task)
+    training_bytes = _estimate_fold_task_training_bytes(first_task, fold_splits)
+
+    def _sequential_from_first_task(note: str) -> str:
+        nonlocal first_task
+        # Handed over in a list and released here, so the first fold's tensors are freed
+        # once it has run instead of staying referenced for the whole sequential run.
+        initial_tasks = [first_task]
+        first_task = None
+        _run_fold_tasks_sequentially(
+            remaining, build_task, fold_results=fold_results, errors=errors, initial_tasks=initial_tasks
+        )
+        return note
+
     estimated_inflight_bytes = estimated_task_bytes * max_workers
     if estimated_inflight_bytes >= _DEEP_COMPARE_PARALLEL_MAX_INFLIGHT_BYTES:
-        note = (
+        return _sequential_from_first_task(
             "Parallel repeated-CV execution was disabled because fold payloads were too large "
             f"for safe multi-process buffering ({estimated_inflight_bytes / (1024 ** 2):.1f} MiB estimated in flight "
             f"across {max_workers} worker(s)); SurvStudio fell back to sequential folds."
         )
-        _run_fold_tasks_sequentially(
-            remaining, build_task, fold_results=fold_results, errors=errors, initial_task=first_task
-        )
-        return note
     available_memory = _available_system_memory_bytes()
     if available_memory is None:
-        note = (
+        return _sequential_from_first_task(
             "Parallel repeated-CV execution was disabled because available system memory "
             "could not be determined for this runtime; SurvStudio fell back to sequential folds."
         )
-        _run_fold_tasks_sequentially(
-            remaining, build_task, fold_results=fold_results, errors=errors, initial_task=first_task
-        )
-        return note
     estimated_parallel_bytes = _estimate_parallel_deep_compare_memory_bytes(
         payload_bytes=estimated_task_bytes,
         max_workers=max_workers,
-        training_bytes=_estimate_fold_task_training_bytes(first_task, fold_splits),
+        training_bytes=training_bytes,
     )
     if estimated_parallel_bytes >= available_memory:
-        note = (
+        return _sequential_from_first_task(
             "Parallel repeated-CV execution was disabled because available system memory "
             f"({available_memory / (1024 ** 2):.1f} MiB) was below the estimated worker footprint "
             f"({estimated_parallel_bytes / (1024 ** 2):.1f} MiB including process startup overhead and model training); "
             "SurvStudio fell back to sequential folds."
         )
-        _run_fold_tasks_sequentially(
-            remaining, build_task, fold_results=fold_results, errors=errors, initial_task=first_task
-        )
-        return note
 
     pool_broken = False
     try:
@@ -2897,6 +3250,7 @@ def _run_deep_fold_tasks(
             if pool_broken:
                 _abandon_process_pool(executor)
     except (NotImplementedError, PermissionError, OSError) as exc:
+        first_task = None  # an unsubmitted first fold is rebuilt below when it is due
         # Keep folds that already finished and rerun only the rest, so no fold is counted twice.
         _run_fold_tasks_sequentially(
             _unfinished_fold_splits(fold_splits, fold_results, errors),
@@ -2909,7 +3263,37 @@ def _run_deep_fold_tasks(
             f"SurvStudio fell back to sequential folds ({type(exc).__name__})."
         )
     if pool_broken:
+        first_task = None
         unfinished = _unfinished_fold_splits(fold_splits, fold_results, errors)
+        # The worker was most likely killed for memory. Rerunning its folds in this (server)
+        # process is only safe when the memory guard says one fold fits here.
+        needed_bytes = estimated_task_bytes + training_bytes + _DEEP_COMPARE_PARALLEL_MEMORY_RESERVE_BYTES
+        available_after = _available_system_memory_bytes()
+        if unfinished and (available_after is None or needed_bytes >= available_after):
+            memory_text = (
+                "could not be determined"
+                if available_after is None
+                else f"({available_after / (1024 ** 2):.1f} MiB) was below the estimated footprint of one fold "
+                f"({needed_bytes / (1024 ** 2):.1f} MiB)"
+            )
+            message = (
+                "A parallel repeated-CV worker process stopped unexpectedly (for example, it ran out of memory), and this "
+                f"fold was not rerun in the SurvStudio process because the available memory {memory_text}."
+            )
+            logger.error(
+                "Deep-learning repeated CV: %d unfinished fold(s) not rerun after a worker process stopped: %s",
+                len(unfinished),
+                message,
+            )
+            for split in unfinished:
+                errors.extend(
+                    {"model": name, "repeat": split["repeat"], "fold": split["fold"], "error": message} for name in model_names
+                )
+            return (
+                "A parallel repeated-CV worker process stopped unexpectedly (for example, it ran out of memory); its "
+                f"{len(unfinished)} unfinished fold(s) were not rerun because the available memory {memory_text}, "
+                "and they are reported as failed folds."
+            )
         _run_fold_tasks_sequentially(unfinished, build_task, fold_results=fold_results, errors=errors)
         return (
             "A parallel repeated-CV worker process stopped unexpectedly (for example, it ran out of memory); "
@@ -2947,7 +3331,9 @@ def _deep_locked_test_results(
     except Exception as exc:
         if _must_propagate_deep(exc):
             raise
-        return {str(spec["model_name"]): {"error": str(exc)} for spec in model_specs}, None
+        logger.exception("Preparing the deep-learning locked-test evaluation failed.")
+        message = _failure_message(exc)
+        return {str(spec["model_name"]): {"error": message} for spec in model_specs}, None
     for model_spec in model_specs:
         model_name = str(model_spec["model_name"])
         try:
@@ -2971,7 +3357,8 @@ def _deep_locked_test_results(
         except Exception as exc:
             if _must_propagate_deep(exc):
                 raise
-            locked_results[model_name] = {"error": str(exc)}
+            logger.exception("Deep-learning model %s failed when refit on the development set for the locked test.", model_name)
+            locked_results[model_name] = {"error": _failure_message(exc)}
     risks = {
         name: (None, risk)
         for name, result in locked_results.items()
@@ -2990,6 +3377,18 @@ def _mean_epochs(rows: Sequence[dict[str, Any]], key: str) -> int | None:
     return int(round(float(np.mean(values)))) if values else None
 
 
+def _failure_summary(errors: Sequence[dict[str, Any]], *, unit: str) -> str:
+    """Each model's failure messages, once per distinct message with how many ``unit`` failed with it."""
+    counts: dict[tuple[str, str], int] = {}
+    for item in errors:
+        if isinstance(item, dict) and "error" in item:
+            key = (str(item.get("model")), str(item["error"]))
+            counts[key] = counts.get(key, 0) + 1
+    return "; ".join(
+        f"{model}{f' ({count} {unit})' if count > 1 else ''}: {message}" for (model, message), count in counts.items()
+    )
+
+
 def _summarize_deep_cv_rows(
     trainer_specs: list[tuple[str, Any, dict[str, Any]]],
     fold_results: list[dict[str, Any]],
@@ -2998,59 +3397,70 @@ def _summarize_deep_cv_rows(
     cv_folds: int,
     cv_repeats: int,
     locked_results: dict[str, dict[str, Any]] | None,
+    n_scored_folds: int | None = None,
 ) -> list[dict[str, Any]]:
-    """One comparison row per model from its repeated-CV folds (and locked test, if any)."""
+    """One comparison row per model from its repeated-CV folds (and locked test, if any).
+
+    Fold rows are always clean holdout estimates: ``_run_deep_compare_task`` records a fold
+    that fell back to apparent evaluation as a failed fold, so failures are the only reason a
+    model misses folds. A model is complete when it was scored on every one of the
+    ``n_scored_folds`` folds that had a comparable pair (all folds by default); folds skipped
+    for every model alike do not make a model incomplete.
+    """
     from survival_toolkit.ml_models import _summarize_repeated_cv_rows, repeated_cv_row_fields
 
+    expected_evaluations = cv_folds * cv_repeats if n_scored_folds is None else int(n_scored_folds)
     comparison: list[dict[str, Any]] = []
     for model_name, _, _ in trainer_specs:
-        model_rows = [row for row in fold_results if row["model"] == model_name and row["c_index"] is not None]
+        model_rows = [
+            row
+            for row in fold_results
+            if row["model"] == model_name
+            and row.get("c_index") is not None
+            and str(row.get("evaluation_mode", "holdout")) == "holdout"
+        ]
         n_failures = sum(1 for err in errors if err["model"] == model_name)
-        expected_evaluations = cv_folds * cv_repeats
-        holdout_rows = [row for row in model_rows if str(row.get("evaluation_mode")) == "holdout"]
-        fallback_rows = [row for row in model_rows if str(row.get("evaluation_mode")) != "holdout"]
         summary = (
             _summarize_repeated_cv_rows(
-                holdout_rows,
+                model_rows,
                 train_n_key="training_samples",
                 test_n_key="evaluation_samples",
-                train_events_key=None,
-                test_events_key=None,
+                train_events_key="training_events",
+                test_events_key="evaluation_events",
             )
-            if holdout_rows
+            if model_rows
             else None
         )
-        n_failures += len(fallback_rows)
-        incomplete = (len(holdout_rows) + n_failures) < expected_evaluations or n_failures > 0
+        incomplete = len(model_rows) < expected_evaluations or n_failures > 0
         if summary is None and n_failures == 0:
             continue
 
         def _single_seed(key: str) -> int | None:
-            values = {int(row[key]) for row in holdout_rows if row.get(key) is not None}
+            values = {int(row[key]) for row in model_rows if row.get(key) is not None}
             return next(iter(values)) if len(values) == 1 else None
 
         row = {
             "model": model_name,
             **repeated_cv_row_fields(summary, incomplete=incomplete),
-            "n_evaluations": len(holdout_rows),
+            "n_evaluations": len(model_rows),
             "n_failures": n_failures,
-            "n_apparent_fallbacks": len(fallback_rows),
             "cv_folds": cv_folds,
             "cv_repeats": cv_repeats,
             "training_seed": _single_seed("training_seed"),
             "split_seed": _single_seed("split_seed"),
             "monitor_seed": _single_seed("monitor_seed"),
-            "training_seeds": sorted({int(item["training_seed"]) for item in holdout_rows if item.get("training_seed") is not None}),
-            "split_seeds": sorted({int(item["split_seed"]) for item in holdout_rows if item.get("split_seed") is not None}),
-            "monitor_seeds": sorted({int(item["monitor_seed"]) for item in holdout_rows if item.get("monitor_seed") is not None}),
-            "epochs_trained": int(round(np.mean([item["epochs_trained"] for item in holdout_rows]))) if holdout_rows else None,
-            "early_stopping_epochs": _mean_epochs(holdout_rows, "early_stopping_epochs"),
+            "training_seeds": sorted({int(item["training_seed"]) for item in model_rows if item.get("training_seed") is not None}),
+            "split_seeds": sorted({int(item["split_seed"]) for item in model_rows if item.get("split_seed") is not None}),
+            "monitor_seeds": sorted({int(item["monitor_seed"]) for item in model_rows if item.get("monitor_seed") is not None}),
+            "epochs_trained": _mean_epochs(model_rows, "epochs_trained"),
+            "early_stopping_epochs": _mean_epochs(model_rows, "early_stopping_epochs"),
         }
         if locked_results is not None:
             locked = locked_results.get(model_name) or {}
             row.update({
                 "locked_test_c_index": None if locked.get("c_index") is None else float(locked["c_index"]),
                 "locked_test_samples": locked.get("evaluation_samples"),
+                "locked_test_events": locked.get("evaluation_events"),
                 "locked_test_training_samples": locked.get("training_samples"),
                 "locked_test_error": locked.get("error"),
             })
@@ -3070,36 +3480,44 @@ def _finalize_deep_comparison(
     cv_repeats: int | None = None,
     fold_results: list[dict[str, Any]] | None = None,
     dropped_nonpositive_time_rows: int = 0,
+    dropped_missing_outcome_rows: int = 0,
+    time_column_note: str | None = None,
     cohort_counts: dict[str, Any] | None = None,
     locked_errors: Sequence[dict[str, Any]] = (),
+    parallel_execution_note: str | None = None,
+    extra_cautions: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Rank the compared models and build the shared comparison payload and summary.
 
     ``errors`` are fits left out of the ranking (or of a model's CV aggregate);
     ``locked_errors`` are locked-test refits that failed for models that stay ranked. Both
-    are reported in ``errors`` and make the ranking incomplete.
+    are reported in ``errors`` and make the ranking incomplete. A row without a C-index (a
+    repeated-CV model with a failed fold, whose aggregate is withheld) is not ranked, and
+    when no row can be ranked no model is named best. The parallel-execution note and
+    ``extra_cautions`` (unseen categorical levels) are cautions like the others, so they
+    count towards the status.
     """
     cohort_counts = dict(cohort_counts or {})
     locked_errors = list(locked_errors)
-    if not comparison:
+    repeated_cv = evaluation_mode == "repeated_cv"
+    if not comparison or (repeated_cv and not fold_results):
+        # Every fit failed (in repeated CV: every fold of every model).
         raise ValueError(
             "All deep-learning models failed to train. Errors: "
-            + "; ".join(
-                f"{item['model']}: {item['error']}"
-                for item in errors
-                if isinstance(item, dict) and "error" in item
-            )
+            + _failure_summary(errors, unit="folds" if repeated_cv else "fits")
         )
 
     for row in comparison:
         row["model"] = str(row.get("model") or "Unknown model")
 
     evaluation_modes = sorted({str(row.get("evaluation_mode", "unknown")) for row in comparison})
-    mixed_evaluation = len(evaluation_modes) > 1
+    # Holdout rows that fell back to apparent evaluation; repeated-CV rows are instead complete
+    # or incomplete, which the ranking below handles.
+    mixed_evaluation = not repeated_cv and len(evaluation_modes) > 1
     result_evaluation_mode = evaluation_mode
     ranked_rows: list[dict[str, Any]]
     unranked_rows: list[dict[str, Any]]
-    if evaluation_mode != "repeated_cv":
+    if not repeated_cv:
         if mixed_evaluation:
             result_evaluation_mode = "mixed_holdout_apparent"
             ranked_rows = [row for row in comparison if str(row.get("evaluation_mode")) == "holdout"]
@@ -3116,10 +3534,11 @@ def _finalize_deep_comparison(
         unranked_rows = []
         if any(str(row.get("evaluation_mode")) != "repeated_cv" for row in comparison):
             result_evaluation_mode = "repeated_cv_incomplete"
+    unranked_rows.extend(row for row in ranked_rows if row.get("c_index") is None)
+    ranked_rows = [row for row in ranked_rows if row.get("c_index") is not None]
 
-    ranked_rows.sort(key=lambda row: row["c_index"] if row["c_index"] is not None else -1.0, reverse=True)
-    if unranked_rows:
-        unranked_rows.sort(key=lambda row: row["model"])
+    ranked_rows.sort(key=lambda row: float(row["c_index"]), reverse=True)
+    unranked_rows.sort(key=lambda row: row["model"])
     comparison = ranked_rows + unranked_rows
     for rank, row in enumerate(ranked_rows, start=1):
         row["rank"] = rank
@@ -3127,13 +3546,16 @@ def _finalize_deep_comparison(
     for row in unranked_rows:
         row["rank"] = None
         row["comparable_for_ranking"] = False
-    best = ranked_rows[0] if ranked_rows else comparison[0]
+    best = ranked_rows[0] if ranked_rows else None
+    locked_test = bool(cohort_counts.get("locked_test_note"))
 
-    metric_name = _metric_name_for_evaluation(
-        "holdout"
-        if best.get("evaluation_mode") == "holdout"
-        else ("repeated_cv" if evaluation_mode == "repeated_cv" else "apparent")
-    )
+    if repeated_cv:
+        metric_mode = "repeated_cv"
+    elif best is not None:
+        metric_mode = "holdout" if best.get("evaluation_mode") == "holdout" else "apparent"
+    else:
+        metric_mode = "holdout" if result_evaluation_mode in {"holdout", "mixed_holdout_apparent"} else "apparent"
+    metric_name = _metric_name_for_evaluation(metric_mode)
 
     strengths = [
         f"{len(comparison)} deep model(s) were trained on the same feature set ({n_selected_features} selected input columns).",
@@ -3143,20 +3565,13 @@ def _finalize_deep_comparison(
         for row in comparison
         if row.get("training_seed") is not None
     }
-    if evaluation_mode == "repeated_cv":
+    if repeated_cv:
         strengths.append(
             f"Each model was evaluated across {cv_repeats} repeat(s) of {cv_folds}-fold stratified cross-validation."
         )
         if len(comparison) == 1:
             strengths.append(
                 "The same repeated-CV settings can be rerun with Train Model when the evaluation strategy and seed are left unchanged."
-            )
-        fallback_models = [
-            row["model"] for row in comparison if int(row.get("n_apparent_fallbacks", 0) or 0) > 0
-        ]
-        if fallback_models:
-            strengths.append(
-                f"{len(fallback_models)} model(s) retained at least one clean fold but had additional apparent-fallback folds excluded from the repeated-CV aggregate."
             )
     elif len(shared_training_seeds) == 1:
         shared_seed = next(iter(shared_training_seeds))
@@ -3167,10 +3582,8 @@ def _finalize_deep_comparison(
         strengths.append(
             f"{len(ranked_rows)} model(s) retained a clean holdout estimate and remained rank-comparable."
         )
-    if best.get("c_index") is not None:
+    if best is not None:
         strengths.append(f"Screening top deep model was {best['model']} with {metric_name} = {best['c_index']:.3f}.")
-    else:
-        strengths.append(f"Best-ranked model was {best['model']}, but the concordance estimate was not available.")
     strengths.append(
         "When early stopping held out a monitor subset, each model's reported weights were refit on the whole training partition for the selected number of epochs, so deep and classical models are fitted on the same rows."
     )
@@ -3181,27 +3594,31 @@ def _finalize_deep_comparison(
             "Rows with apparent fallback were excluded from the rank ordering because they are not directly comparable to holdout-evaluated rows."
         )
     if errors:
-        cautions.append(f"{len(errors)} deep model fit(s) failed and were excluded from the ranking.")
-    if int(dropped_nonpositive_time_rows) > 0:
         cautions.append(
-            f"{int(dropped_nonpositive_time_rows)} row(s) with negative survival time were excluded before deep-model preprocessing."
+            f"{len(errors)} fold-level fit(s) failed; a model with a failed fold has no repeated-CV aggregate and is not ranked."
+            if repeated_cv
+            else f"{len(errors)} deep model fit(s) failed and were excluded from the ranking."
         )
-    if evaluation_mode == "repeated_cv" and any(int(row.get("n_apparent_fallbacks", 0) or 0) > 0 for row in comparison):
-        cautions.append(
-            "Some repeated-CV folds fell back to apparent evaluation inside model training and were excluded from the repeated-CV aggregate."
-        )
+    cautions.extend(_cohort_cautions(dropped_nonpositive_time_rows, dropped_missing_outcome_rows, time_column_note))
     if result_evaluation_mode == "repeated_cv_incomplete":
         cautions.append(
             "Repeated-CV incomplete means one or more folds were excluded because they failed or fell back to apparent evaluation."
         )
-    if best.get("evaluation_mode") != "holdout" and evaluation_mode != "repeated_cv":
+    if best is None:
+        cautions.append(
+            "No model completed every repeated-CV fold, so none was ranked and no repeated-CV C-index is reported; "
+            "review the fold errors before rerunning."
+            if repeated_cv
+            else "No model reported a concordance estimate, so none was ranked."
+        )
+    elif best.get("evaluation_mode") != "holdout" and not repeated_cv:
         cautions.append(
             "The top-ranked model did not report a clean holdout C-index, so the ranking is optimistic."
         )
 
-    if cohort_counts.get("locked_test_note"):
+    if locked_test:
         strengths.append(str(cohort_counts["locked_test_note"]))
-        best_locked = best.get("locked_test_c_index")
+        best_locked = None if best is None else best.get("locked_test_c_index")
         if best_locked is not None:
             strengths.append(
                 f"The CV-selected model ({best['model']}) reached a locked-test C-index of {float(best_locked):.3f}; "
@@ -3209,11 +3626,21 @@ def _finalize_deep_comparison(
             )
         cautions.insert(
             0,
-            "Models were ranked by development-set repeated CV; report the locked-test C-index of the CV-selected model as the independent performance estimate, not the best locked-test value across models.",
+            "Models were ranked by development-set repeated CV; report the locked-test C-index of the CV-selected model as the independent performance estimate, not the best locked-test value across models."
+            if best is not None
+            else "No model completed every development-set repeated-CV fold, so no model was CV-selected and none of the locked-test C-indices is a performance estimate to report.",
+        )
+    elif best is not None and len(comparison) > 1:
+        # The ML comparisons' screening caution: the top model was chosen on the estimates it is reported with.
+        cautions.insert(
+            0,
+            "The top-ranked model was selected and scored within the same repeated-CV screening run; treat this as model screening rather than final external validation. Reserve a locked test set or use an external cohort for the performance you report."
+            if repeated_cv
+            else "The top-ranked model was selected and scored on the same evaluation split; treat this as screening rather than final external validation.",
         )
     if locked_errors:
         failed_names = ", ".join(str(error["model"]) for error in locked_errors)
-        selected_failed = any(str(error["model"]) == best["model"] for error in locked_errors)
+        selected_failed = best is not None and any(str(error["model"]) == best["model"] for error in locked_errors)
         locked_caution = (
             f"{len(locked_errors)} model(s) failed when refit on the development set and scored on the locked test set "
             f"({failed_names}); their locked-test C-index is blank"
@@ -3232,13 +3659,18 @@ def _finalize_deep_comparison(
     duplicate_caution = duplicate_identifier_caution(df)
     if duplicate_caution:
         cautions.insert(0, duplicate_caution)
+    if parallel_execution_note:
+        cautions.append(str(parallel_execution_note))
+    cautions.extend(str(caution) for caution in extra_cautions if caution)
 
     next_steps = [
         "Use the ranking to narrow candidates, then rerun the strongest architecture with external validation or repeated resampling.",
         "Prefer simpler models if the best deep model only matches the apparent-performance range of classical methods.",
     ]
 
-    best_c = None if best.get("c_index") is None else float(best["c_index"])
+    # Decided after every caution is in place (including the parallel-execution note and the
+    # unseen-level cautions), so a caution can never sit next to a "robust" badge.
+    best_c = None if best is None else float(best["c_index"])
     if best_c is None:
         status = "review"
     elif best_c < 0.55:
@@ -3248,29 +3680,31 @@ def _finalize_deep_comparison(
     else:
         status = "robust"
 
-    summary = {
-        "status": status,
-        "headline": (
+    if best is None:
+        headline = (
+            "No deep model could be ranked: every model lost at least one repeated-CV fold, so no repeated-CV C-index is reported."
+            if repeated_cv
+            else "No deep model could be ranked because no concordance estimate was available."
+        )
+    else:
+        headline = (
             f"Deep model screening placed {best['model']} first"
             + (" among holdout-evaluable models" if mixed_evaluation else "")
-            + f" with {metric_name.lower()} "
-            f"of {best['c_index']:.3f}."
-            if best.get("c_index") is not None
-            else (
-                f"Deep model comparison ranked {best['model']} first"
-                + (" among holdout-evaluable models" if mixed_evaluation else "")
-                + ", but concordance could not be estimated."
-            )
-        ),
+            + f" with {metric_name.lower()} of {best['c_index']:.3f}."
+        )
+    summary = {
+        "status": status,
+        "headline": headline,
         "strengths": strengths,
         "cautions": cautions,
         "next_steps": next_steps,
         "metrics": [
             {"label": "Models compared", "value": len(comparison)},
-            {"label": "Best model", "value": best["model"]},
-            {"label": metric_name, "value": best.get("c_index")},
+            {"label": "Best model", "value": None if best is None else best["model"]},
+            {"label": metric_name, "value": None if best is None else best.get("c_index")},
             {"label": "Evaluation mode", "value": result_evaluation_mode},
             {"label": "Dropped for negative time", "value": int(dropped_nonpositive_time_rows) or None},
+            {"label": "Dropped for missing outcome", "value": int(dropped_missing_outcome_rows) or None},
             {"label": "Failures", "value": len(errors) + len(locked_errors)},
         ],
     }
@@ -3290,7 +3724,15 @@ def _finalize_deep_comparison(
         "scientific_summary": summary,
         "insight_board": summary,
     }
+    if parallel_execution_note:
+        result["parallel_execution_note"] = parallel_execution_note
     for key in (
+        "n_fit_patients",
+        "n_fit_events",
+        "n_evaluation_patients",
+        "n_evaluation_events",
+        "n_skipped_folds",
+        "skipped_folds",
         "locked_test_fraction",
         "n_development_patients",
         "n_development_events",
@@ -3408,13 +3850,19 @@ def evaluate_single_deep_survival_model(
                 else aggregate_mode.replace("_", " ")
             )
         )
+        n_failed_folds = int(row.get("n_failures") or 0)
         summary = {
             "status": compare_result["scientific_summary"]["status"],
             "headline": (
                 f"{canonical_name} completed {cv_repeats}x{cv_folds} {mode_label} with mean C-index "
                 f"of {row['c_index']:.3f}."
                 if row.get("c_index") is not None
-                else f"{canonical_name} completed {cv_repeats}x{cv_folds} {mode_label}, but the aggregate C-index could not be computed."
+                else (
+                    f"The {cv_repeats}x{cv_folds} repeated-CV C-index of {canonical_name} was withheld: "
+                    f"{n_failed_folds} of {cv_repeats * cv_folds} fold(s) failed."
+                    if n_failed_folds
+                    else f"{canonical_name} completed {cv_repeats}x{cv_folds} {mode_label}, but the aggregate C-index could not be computed."
+                )
             ),
             "strengths": list(compare_result["scientific_summary"].get("strengths", [])),
             "cautions": list(compare_result["scientific_summary"].get("cautions", [])),
@@ -3432,15 +3880,11 @@ def evaluate_single_deep_survival_model(
         }
         if row.get("locked_test_c_index") is not None:
             summary["metrics"].append({"label": "Locked-test C-index", "value": row.get("locked_test_c_index")})
+        # The comparison's cautions already carry the parallel-execution note and the
+        # incomplete-CV explanation.
         summary["cautions"].append(
             "This result is an aggregate repeated-CV estimate. Feature-importance and loss-curve outputs require a separate single-fit run."
         )
-        if compare_result.get("parallel_execution_note"):
-            summary["cautions"].append(str(compare_result["parallel_execution_note"]))
-        if aggregate_mode == "repeated_cv_incomplete":
-            summary["cautions"].append(
-                "Repeated-CV incomplete means one or more folds were excluded because they failed or fell back to apparent evaluation."
-            )
         result = {
             "model": canonical_name,
             "model_type": model_type,
@@ -3450,6 +3894,9 @@ def evaluate_single_deep_survival_model(
             "cv_repeats": cv_repeats,
             "n_evaluations": row.get("n_evaluations"),
             "n_failures": row.get("n_failures"),
+            # The failed folds' messages (and locked-test refit failures), as in the comparison.
+            "errors": list(compare_result.get("errors") or []),
+            "ranking_complete": compare_result.get("ranking_complete"),
             "n_features": row.get("n_features"),
             "epochs_trained": row.get("epochs_trained"),
             "early_stopping_epochs": row.get("early_stopping_epochs"),
@@ -3462,6 +3909,7 @@ def evaluate_single_deep_survival_model(
             "monitor_seeds": row.get("monitor_seeds", []),
             "repeat_results": row.get("repeat_results", []),
             "parallel_execution_note": compare_result.get("parallel_execution_note"),
+            "categorical_features": compare_result.get("categorical_features"),
             "torch_num_threads": compare_result.get("torch_num_threads"),
             "comparison_table": [dict(row)],
             "fold_results": [
@@ -3473,6 +3921,8 @@ def evaluate_single_deep_survival_model(
             "insight_board": summary,
         }
         for key in (
+            "n_skipped_folds",
+            "skipped_folds",
             "locked_test_fraction",
             "n_development_patients",
             "n_development_events",
@@ -3485,6 +3935,7 @@ def evaluate_single_deep_survival_model(
         if "locked_test_c_index" in row:
             result["locked_test_c_index"] = row.get("locked_test_c_index")
             result["locked_test_samples"] = row.get("locked_test_samples")
+            result["locked_test_events"] = row.get("locked_test_events")
             result["locked_test_error"] = row.get("locked_test_error")
         return result
 
@@ -3515,8 +3966,7 @@ def evaluate_single_deep_survival_model(
             df, latent_dim=latent_dim, hidden_layers=hidden_layers, n_clusters=n_clusters, **shared_kwargs
         ),
     }
-    if model_type not in trainer_map:
-        raise ValueError(f"Unknown model type: {model_type}")
+    # ``_canonical_deep_model_name`` above already refused an unknown model type.
     result = trainer_map[model_type]()
     result.pop("holdout_risk", None)
     return result
@@ -3635,6 +4085,9 @@ def train_deepsurv(
       training partition (``refit_on_training_partition``).
     """
     _require_torch()
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
     hidden_layers = _validated_hidden_layers(hidden_layers)
     context = _prepare_deep_training_context(
         df,
@@ -3733,39 +4186,14 @@ def train_deepsurv(
     if len(unique_times) == 0:
         unique_times = np.sort(np.unique(train_time_np))
 
-    # Breslow baseline hazard estimation
-    # Sort training samples once; use searchsorted to avoid O(N) boolean mask per time point.
-    train_risk_np = risk_np[train_idx_np]
-    sort_order = np.argsort(train_time_np, kind="stable")
-    sorted_times_train = train_time_np[sort_order]
-    sorted_risk_train = train_risk_np[sort_order]
-    sorted_events_train = train_event_np[sort_order]
-    # Precompute event counts at each unique time (O(N) via np.unique).
-    event_times_train = sorted_times_train[sorted_events_train == 1]
-    event_uniq, event_counts_arr = np.unique(event_times_train, return_counts=True)
-    event_count_map: dict[float, float] = dict(zip(event_uniq.tolist(), event_counts_arr.tolist()))
-    baseline_cumhaz = np.zeros(len(unique_times))
-    for k, t_k in enumerate(unique_times):
-        first_at_risk = int(np.searchsorted(sorted_times_train, t_k, side="left"))
-        at_risk_risk = sorted_risk_train[first_at_risk:]
-        if at_risk_risk.size == 0:
-            baseline_cumhaz[k] = baseline_cumhaz[k - 1] if k > 0 else 0.0
-            continue
-        d_k = event_count_map.get(float(t_k), 0.0)
-        log_risk_sum = _logsumexp_numpy(at_risk_risk)
-        risk_sum = 0.0 if not np.isfinite(log_risk_sum) else float(np.exp(min(log_risk_sum, 700.0)))
-        h0_k = d_k / max(risk_sum, 1e-12)
-        baseline_cumhaz[k] = (baseline_cumhaz[k - 1] if k > 0 else 0.0) + h0_k
+    # Breslow baseline cumulative hazard on the training partition (log scale).
+    log_baseline_cumhaz = _breslow_log_baseline_cumulative_hazard(
+        train_time_np, train_event_np, risk_np[train_idx_np], unique_times
+    )
 
     predicted_survival_function: list[dict[str, Any]] = []
     for idx in representative_indices:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            log_cumhaz_i = np.where(
-                baseline_cumhaz > 0.0,
-                np.log(baseline_cumhaz) + float(risk_np[idx]),
-                -np.inf,
-            )
-        surv_i = _survival_from_log_cumulative_hazard(log_cumhaz_i)
+        surv_i = _survival_from_log_cumulative_hazard(log_baseline_cumhaz + float(risk_np[idx]))
         timeline = [0.0] + [float(t) for t in unique_times]
         survival = [1.0] + [float(s) for s in surv_i]
         predicted_survival_function.append({
@@ -3797,10 +4225,11 @@ def train_deepsurv(
         first.loss_history,
         evaluation_mode,
         evaluation_note,
-        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
+        reported_loss_history=_reported_loss_history(first, final, refit_info, int(training_fields["epochs_trained"])),
         unseen_category_rows=context.unseen_category_rows,
+        **_cohort_summary_fields(data),
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
@@ -3911,9 +4340,11 @@ def _deephit_loss(
     # Ranking loss component (pairwise)
     if event_mask.sum() > 0 and n > 1:
         event_indices = torch.where(event_mask)[0]
-        ranking_terms: list[torch.Tensor] = []
-        # Evaluate all event-driven pairings, but chunk the event dimension so
-        # monitoring on larger holdout sets does not allocate one huge matrix.
+        # The mean over every comparable pair, accumulated as a sum and a count per chunk of
+        # events: evaluating all event-driven pairings (for example on a large monitor subset)
+        # never holds more than one chunk's pair terms.
+        ranking_sum: torch.Tensor | None = None
+        ranking_count = 0
         chunk_size = 128
         for start in range(0, int(event_indices.shape[0]), chunk_size):
             chunk = event_indices[start:start + chunk_size]
@@ -3931,10 +4362,12 @@ def _deephit_loss(
             # predicted incidence by the event time as the subject who failed.
             diff = subject_cif - event_cif.unsqueeze(0)
             scaled_diff = torch.clamp(diff / _DEEPHIT_RANKING_SIGMA, min=-20.0, max=20.0)
-            ranking_terms.append(F.softplus(scaled_diff)[later_mask])
+            chunk_terms = F.softplus(scaled_diff)[later_mask]
+            ranking_sum = chunk_terms.sum() if ranking_sum is None else ranking_sum + chunk_terms.sum()
+            ranking_count += int(chunk_terms.numel())
         ranking_loss = (
-            torch.cat(ranking_terms).mean()
-            if ranking_terms
+            ranking_sum / ranking_count
+            if ranking_sum is not None
             else torch.tensor(0.0, device=pmf.device)
         )
     else:
@@ -3973,6 +4406,9 @@ def train_deephit(
     predicted_survival_curves, and feature_importance.
     """
     _require_torch()
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
     hidden_layers = _validated_hidden_layers(hidden_layers)
     context = _prepare_deep_training_context(
         df,
@@ -4152,10 +4588,11 @@ def train_deephit(
         first.loss_history,
         evaluation_mode,
         evaluation_note,
-        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
+        reported_loss_history=_reported_loss_history(first, final, refit_info, int(training_fields["epochs_trained"])),
         unseen_category_rows=context.unseen_category_rows,
+        **_cohort_summary_fields(data),
     )
 
     return {
@@ -4280,6 +4717,9 @@ def train_neural_mtlr(
     predicted_survival_curves, calibration_data, and feature_importance.
     """
     _require_torch()
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
     # The same default architecture as the multi-model comparison.
     hidden_layers = _validated_hidden_layers(hidden_layers)
     context = _prepare_deep_training_context(
@@ -4446,17 +4886,7 @@ def train_neural_mtlr(
         evt_times = t_np[e_np == 1]
         t_ref = float(np.median(evt_times)) if evt_times.size else float(np.median(t_np))
         t_ref = min(t_ref, float(bin_edges[-1]))
-        ref_bin = int(_digitize_time_bins(np.asarray([t_ref]), bin_edges, num_time_bins)[0])
-
-        # Predicted survival at t_ref: interpolate between the edges of the
-        # reference bin instead of taking the value at the end of the bin.
-        edge_low = float(timeline[ref_bin])
-        edge_high = float(timeline[min(ref_bin + 1, len(timeline) - 1)])
-        weight = 0.0 if edge_high <= edge_low else min(max((t_ref - edge_low) / (edge_high - edge_low), 0.0), 1.0)
-        survival_at_ref = (
-            (1.0 - weight) * survival_np[artifact_idx_np, ref_bin]
-            + weight * survival_np[artifact_idx_np, min(ref_bin + 1, survival_np.shape[1] - 1)]
-        )
+        survival_at_ref = _survival_at_reference_time(survival_np[artifact_idx_np], bin_edges, t_ref, num_time_bins)
         predicted_event_prob = 1.0 - survival_at_ref
         decile_indices = np.argsort(predicted_event_prob)
         chunk_size = len(decile_indices) // n_deciles
@@ -4498,10 +4928,11 @@ def train_neural_mtlr(
         first.loss_history,
         evaluation_mode,
         evaluation_note,
-        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
+        reported_loss_history=_reported_loss_history(first, final, refit_info, int(training_fields["epochs_trained"])),
         unseen_category_rows=context.unseen_category_rows,
+        **_cohort_summary_fields(data),
     )
 
     return {
@@ -4693,6 +5124,12 @@ def train_survival_transformer(
       is optimized on the full training risk set each epoch.
     """
     _require_torch()
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
+    n_heads = _validated_positive_integer(n_heads, "The number of attention heads")
+    if d_model % n_heads != 0:
+        raise ValueError("Transformer width must be divisible by attention heads.")
     context = _prepare_deep_training_context(
         df,
         time_column=time_column,
@@ -4716,8 +5153,6 @@ def train_survival_transformer(
         n_layers=int(n_layers),
         d_model=int(d_model),
     )
-    if d_model % n_heads != 0:
-        raise ValueError("Transformer width must be divisible by attention heads.")
     _guard_deep_parameter_budget(
         "Survival Transformer", n_features=int(data["n_features"]), d_model=int(d_model), n_layers=int(n_layers)
     )
@@ -4795,7 +5230,8 @@ def train_survival_transformer(
     with torch.inference_mode():
         attention_weights = model.get_attention_weights(x_sample)
 
-    # Per-feature attention score: average attention received by each feature across layers
+    # Per-feature attention score: the share of attention each feature receives in the last layer
+    # (averaged over heads and the sampled patients).
     feature_attention: list[dict[str, Any]] = []
     if attention_weights:
         last_layer_attn = np.array(attention_weights[-1])  # (n_features, n_features)
@@ -4831,10 +5267,11 @@ def train_survival_transformer(
         first.loss_history,
         evaluation_mode,
         evaluation_note,
-        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
+        reported_loss_history=_reported_loss_history(first, final, refit_info, int(training_fields["epochs_trained"])),
         unseen_category_rows=context.unseen_category_rows,
+        **_cohort_summary_fields(data),
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,
@@ -4892,7 +5329,11 @@ class SurvivalVAENet(_TorchModuleBase):
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
-        hidden_layers = list(hidden_layers or ([hidden_dim] if hidden_dim is not None else _DEFAULT_HIDDEN_LAYERS))
+        hidden_layers = list(
+            hidden_layers if hidden_layers is not None else ([hidden_dim] if hidden_dim is not None else _DEFAULT_HIDDEN_LAYERS)
+        )
+        if not hidden_layers:
+            raise ValueError("Survival VAE needs at least one hidden layer.")
         encoder_layers: list[nn.Module] = []
         prev_dim = in_features
         for layer_dim in hidden_layers:
@@ -5128,10 +5569,16 @@ def train_survival_vae(
       objective is optimized on the full training partition each epoch.
     """
     _require_torch()
+    epochs, batch_size, learning_rate = _validated_training_settings(
+        epochs=epochs, batch_size=batch_size, learning_rate=learning_rate
+    )
     # ``hidden_dim`` is the older single-layer spelling; the default matches the comparison's.
     hidden_layers = _validated_hidden_layers(
-        hidden_layers or ([hidden_dim] if hidden_dim is not None else _DEFAULT_HIDDEN_LAYERS)
+        hidden_layers if hidden_layers is not None else ([hidden_dim] if hidden_dim is not None else _DEFAULT_HIDDEN_LAYERS)
     )
+    if not hidden_layers:
+        # An explicit empty list is refused rather than silently replaced by the default.
+        raise ValueError("Survival VAE needs at least one hidden layer.")
     context = _prepare_deep_training_context(
         df,
         time_column=time_column,
@@ -5312,10 +5759,11 @@ def train_survival_vae(
         first.loss_history,
         evaluation_mode,
         evaluation_note,
-        dropped_nonpositive_time_rows=int(data.get("dropped_nonpositive_time_rows", 0)),
         refit_note=refit_note,
         reported_epochs=int(training_fields["epochs_trained"]),
+        reported_loss_history=_reported_loss_history(first, final, refit_info, int(training_fields["epochs_trained"])),
         unseen_category_rows=context.unseen_category_rows,
+        **_cohort_summary_fields(data),
     )
     batching_meta = _batching_metadata(
         requested_batch_size=batch_size,

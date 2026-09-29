@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from survival_toolkit.concurrency import raise_if_cancelled
-from survival_toolkit.errors import UserInputError
+from survival_toolkit.errors import InternalAnalysisError, UserInputError
 
 # One holdout convention for every model family. Classical ML and deep models
 # must be scored on the same evaluation rows to be rank-comparable, so both
@@ -144,7 +144,8 @@ def prediction_block(
     ``row_ids``, ``time`` and ``event`` describe every test patient in order; each model
     gives the positions it scored (None for all) and its risk scores there, higher
     meaning earlier events. Row IDs are the stored dataset's row labels as text, so
-    blocks from different model families can be matched patient by patient.
+    blocks from different model families can be matched patient by patient. Scores that
+    do not line up with their positions are an internal error, never a model left out.
     """
     n = len(row_ids)
     aligned: dict[str, dict[int, float]] = {}
@@ -153,7 +154,10 @@ def prediction_block(
         scored = list(range(n)) if positions is None else [int(position) for position in positions]
         values = [float(value) for value in values]
         if len(scored) != len(values):
-            continue
+            raise InternalAnalysisError(
+                f"The test-set predictions of {name} could not be paired with the test patients: {len(values)} risk "
+                f"scores for {len(scored)} scored patients. This is an internal error; please report it with the server log."
+            )
         lookup = {position: value for position, value in zip(scored, values) if np.isfinite(value)}
         aligned[str(name)] = lookup
         common &= set(lookup)
@@ -294,8 +298,11 @@ def c_index_intervals(
     if not np.isfinite(time).all():
         raise UserInputError("Every test patient needs a finite follow-up time.")
     event = event_values.astype(int)
-    if any(column.shape[0] != time.shape[0] for column in columns):
-        raise UserInputError("Every model needs a finite risk score for every test patient.")
+    for name, column in zip(names, columns):
+        if column.shape[0] != time.shape[0]:
+            raise UserInputError(
+                f"Every model needs one risk score per test patient: {name} has {column.shape[0]} for {time.shape[0]} patients."
+            )
     matrix = np.column_stack(columns)
     if not np.isfinite(matrix).all():
         raise UserInputError("Every model needs a finite risk score for every test patient.")

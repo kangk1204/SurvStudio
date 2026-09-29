@@ -17,7 +17,7 @@ import math
 from typing import Any, Callable, Sequence
 
 from survival_toolkit import __version__
-from survival_toolkit.duplicates import MIN_GAP, MIN_IDENTICAL_MARKERS, MIN_MARKERS, MIN_R
+from survival_toolkit.duplicates import MAX_PATIENTS, MIN_GAP, MIN_IDENTICAL_MARKERS, MIN_MARKERS, MIN_R
 
 STATUS_LABELS = {"reported": "Filled in by SurvStudio", "partly": "Partly filled in", "author": "Authors to complete"}
 CHECKLIST_COLUMNS = ("Item", "Section", "Topic", "Status", "Text")
@@ -103,6 +103,24 @@ def signature_is_clinical_only(signature: dict[str, Any] | None) -> bool:
     if signature.get("clinical_only") is not None:
         return bool(signature["clinical_only"])
     return signature.get("apparent_c") is not None and not signature.get("markers")
+
+
+def signature_fit_failed(result: dict[str, Any]) -> bool:
+    """Whether a marker evaluation's final model could not be fitted in the full cohort: it has no apparent C-index
+    although there was a model to fit, the clinical covariates (added value) or markers the screen selected (a
+    Benjamini-Hochberg q-value at most alpha on the primary lens)."""
+    signature = result.get("signature") or {}
+    if signature.get("apparent_c") is not None or signature_is_clinical_only(signature) or signature.get("markers"):
+        return False
+    if result.get("primary_lens") == "added_value":
+        return True
+    primary = str(result.get("primary_lens") or "marginal")
+    alpha = _finite((result.get("settings") or {}).get("alpha"))
+    return alpha is not None and any(
+        (q_value := _finite(row[primary].get("q_bh"))) is not None and q_value <= alpha
+        for row in result.get("marker_table") or []
+        if isinstance(row.get(primary), dict)
+    )
 
 
 def _n_permutations(result: dict[str, Any]) -> int:
@@ -195,6 +213,8 @@ def _tier_sentence(result: dict[str, Any], added_value: bool) -> str:
             f"{_percent(settings.get('robust_direction', 0.9))} of them; markers with {evidence} that did not meet the "
             "stability rule were called suggestive" + marginal
         )
+    # The current engine never calls a marker robust without subsamples, but 0.2.0 builds before 28 September 2026
+    # did (on its family-wise p-value alone), and this text still has to describe their results.
     if int((result.get("tier_counts") or {}).get("robust", 0) or 0) > 0:
         return (
             "Without subsamples the stability rule could not be applied, so a marker was called robust on its family-wise "
@@ -216,6 +236,16 @@ def _identical_check_ran(duplicates: dict[str, Any], n_markers: int) -> bool | N
     if n_markers < MIN_IDENTICAL_MARKERS:
         return False
     return None
+
+
+def _near_identical_limit(duplicates: dict[str, Any], n_markers: int) -> str:
+    """Why near-identical profiles were not compared: the panel had too few markers, or the cohort too many patients
+    (the screen's note says which; a result without it, by the panel size)."""
+    note = str(duplicates.get("note") or "")
+    capped = f"{MAX_PATIENTS:,} patients" in note if note else n_markers >= MIN_MARKERS
+    if capped:
+        return f"near-identical profiles are compared only in cohorts of up to {MAX_PATIENTS:,} patients"
+    return f"near-identical profiles are checked only on panels of at least {MIN_MARKERS} markers"
 
 
 def _duplicate_screen_sentence(result: dict[str, Any]) -> str:
@@ -240,13 +270,13 @@ def _duplicate_screen_sentence(result: dict[str, Any]) -> str:
         return text + "."
     if identical is True:
         return (
-            "Patients with identical values on every marker were flagged as possible repeated samples; near-identical profiles "
-            f"are checked only on panels of at least {MIN_MARKERS} markers."
+            "Patients with identical values on every marker were flagged as possible repeated samples; "
+            f"{_near_identical_limit(duplicates, n_markers)}."
         )
     if identical is None:
         return (
             f"Patients with identical values on every marker were flagged as possible repeated samples {conditional}; "
-            f"near-identical profiles are checked only on panels of at least {MIN_MARKERS} markers."
+            f"{_near_identical_limit(duplicates, n_markers)}."
         )
     return ""
 
@@ -266,8 +296,11 @@ def _signature_methods_sentence(result: dict[str, Any], added_value: bool) -> st
         "its apparent C-index was corrected for optimism by subtracting the mean difference between the C-index of the whole "
         "procedure{scope} in each subsample and in the patients left out of it"
     )
-    if _stability_assessed(result):
+    n_valid, n_failed = _resample_counts(result)
+    if n_valid > 0:
         missing_reason = "because no subsample gave a model that could be scored in the patients left out"
+    elif n_failed > 0:
+        missing_reason = "because every subsample failed"
     else:
         missing_reason = "because no subsample was available"
     corrected = signature.get("optimism_corrected_c") is not None
@@ -363,6 +396,7 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
     if _n_permutations(result) <= 0:
         text += " No permutations were run, so no family-wise p-values or permutation q-values were available."
     elif not _stability_assessed(result):
+        # Robust markers without subsamples come only from 0.2.0 builds before 28 September 2026 (see _tier_sentence).
         text += (
             " Stability over subsamples was not assessed, so the robust markers rest on their family-wise p-value alone."
             if robust
@@ -377,15 +411,20 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
         else:
             text += f" The selected-marker model ({_names(signature.get('markers') or [])}) had an apparent C-index of {_number(apparent)}"
             text += f" and an optimism-corrected C-index of {_number(corrected)}." if corrected is not None else " (not corrected for optimism)."
-    text += _left_out_comparison(signature, added_value, subject="the whole procedure" if clinical_only else "it")
+    elif signature_fit_failed(result):
+        text += " The final model could not be fitted in the full cohort, so it has no apparent or optimism-corrected C-index."
+    # "It" only follows a sentence about the selected-marker model; otherwise the left-out C-index is the procedure's.
+    text += _left_out_comparison(
+        signature, added_value, subject="it" if apparent is not None and not clinical_only else "the whole procedure"
+    )
     duplicates = result.get("duplicates") or {}
     n_pairs, n_identical = int(duplicates.get("n_pairs") or 0), int(duplicates.get("n_identical") or 0)
     if n_pairs or n_identical:
         flagged = []
         if n_pairs:
-            flagged.append(f"{n_pairs} pair(s) of patients with near-identical profiles")
+            flagged.append(f"{_count(n_pairs, 'pair')} of patients with near-identical profiles")
         if n_identical:
-            flagged.append(f"{n_identical} group(s) of patients with identical values")
+            flagged.append(f"{_count(n_identical, 'group')} of patients with identical values")
         text += f" The screen for repeated samples flagged {' and '.join(flagged)}."
     elif _duplicate_screen_ran(result):
         text += " The screen for repeated samples flagged no patients."
@@ -417,14 +456,18 @@ def _internal_validation_text(result: dict[str, Any], added_value: bool) -> str:
         text += f", and {model} C-index was corrected from {_number(apparent)} to {_number(corrected)}"
     elif apparent is not None:
         text += f"; {model} apparent C-index ({_number(apparent)}) could not be corrected for optimism"
+    elif signature_fit_failed(result):
+        text += "; the final model could not be fitted in the full cohort"
     shrinkage = _finite(signature.get("top_marker_shrinkage"))
     if shrinkage is not None:
+        # The engine follows each subsample's top marker by score statistic, whether or not its q-value selected it.
         text += (
-            f"; in the patients left out, the strongest marker's log hazard ratio was {_percent(shrinkage)} of its value in the "
-            "subsamples that selected it"
+            "; in the patients left out, the log hazard ratio of each subsample's strongest marker (the one with the largest "
+            f"score statistic, whether or not it was selected) was on average {_percent(shrinkage)} of its value in the subsample"
         )
+    selected_model = apparent is not None and not clinical_only
     text += "." + _left_out_comparison(
-        signature, added_value, subject="the whole procedure" if clinical_only else "the selected-marker model"
+        signature, added_value, subject="the selected-marker model" if selected_model else "the whole procedure"
     )
     return text + closing
 
@@ -467,11 +510,19 @@ def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None =
     added_value = result.get("primary_lens") == "added_value"
     n_adjusted = _exact_fit_count(result, "adjusted")
     n_unadjusted = _exact_fit_count(result, "marginal")
+    # Exact Cox fits are run for the shortlist (the strongest markers and every supported one); a fit whose
+    # coefficient runs to infinity gives no estimate.
+    n_shortlisted = sum(1 for row in result.get("marker_table", []) if row.get("exact"))
 
     def exact_markers(count: int) -> str:
         if count == markers_evaluated:
             return "the marker" if count == 1 else f"all {count} markers"
-        return f"{_count(count, 'marker')} (the {settings.get('shortlist_size')} strongest and every supported one)"
+        missing = max(n_shortlisted - count, 0)
+        without = f"{_count(missing, 'marker')} had no estimate" if missing else ""
+        if n_shortlisted >= markers_evaluated:
+            return f"{count} of the {markers_evaluated} markers" + (f" ({without})" if without else "")
+        scope = f"the {settings.get('shortlist_size')} strongest and every supported one"
+        return f"{_count(count, 'marker')} ({scope}" + (f"; {without})" if without else ")")
 
     matrix = (dataset or {}).get("marker_matrix")
     marker_text = (
@@ -515,7 +566,11 @@ def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None =
         _item("7", "Study design", "Clinical endpoints", "reported", _endpoint_text(request)),
         _item("8", "Study design", "Candidate variables", "reported",
               f"{_count(markers_evaluated, 'candidate marker')}; clinical covariates: {_names(cohort.get('clinical_columns') or [])}; strata: {_names(cohort.get('strata_columns') or [])}."
-              + (f" {len(dropped)} marker(s) were excluded before the analysis ({_dropped_text(dropped)})." if dropped else "")),
+              + (
+                  f" {_count(len(dropped), 'marker')} {'was' if len(dropped) == 1 else 'were'} excluded before the analysis ({_dropped_text(dropped)})."
+                  if dropped
+                  else ""
+              )),
         _item("9", "Study design", "Sample size rationale", "partly",
               f"{cohort.get('n')} patients and {events} events for {_count(markers_evaluated, 'candidate marker')} "
               + (f"({events / max(markers_evaluated, 1):.1f} events per marker)" if events >= markers_evaluated else "(fewer events than markers, so the evaluation is a screen)")
@@ -529,11 +584,16 @@ def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None =
         _item("14", "Results", "Relation of the markers to standard prognostic variables", "partly" if added_value else "author",
               marginal_text + "Show how the reported markers relate to the standard prognostic variables."
               if added_value else "Show how the markers relate to the standard prognostic variables."),
+        # With clinical covariates the table's interval columns belong to the adjusted hazard ratio, and the
+        # unadjusted one (Unadjusted HR) is a point estimate; without them the table's HR and interval are unadjusted.
         _item("15", "Results", "Univariable analyses", "reported",
               "The marker table gives every marker's unadjusted score-test p-value"
-              + (" (Unadjusted P) and, for " if added_value else " and, for ")
-              + f"{exact_markers(n_unadjusted)}, the hazard ratio with a 95% confidence interval from an unadjusted Cox model"
-              + (" (Unadjusted HR)." if added_value else ".")
+              + (
+                  f" (Unadjusted P) and, for {exact_markers(n_unadjusted)}, the hazard ratio from an unadjusted Cox model as a point "
+                  "estimate (Unadjusted HR); the table's confidence intervals belong to the adjusted hazard ratios."
+                  if added_value
+                  else f" and, for {exact_markers(n_unadjusted)}, the hazard ratio with a 95% confidence interval from an unadjusted Cox model."
+              )
               + " Kaplan-Meier curves by marker level can be drawn in the Survival curves tab with a cut-point fixed in advance."),
         _item("16", "Results", "Multivariable analyses with confidence intervals", "partly",
               f"The marker table gives, for {exact_markers(n_adjusted)}, hazard ratios with 95% Wald confidence intervals from Cox models "
@@ -594,6 +654,15 @@ def _layers_text(layers: Any) -> str:
     return f"{len(sizes)} hidden layers ({', '.join(sizes[:-1])} and {sizes[-1]} units)"
 
 
+def _fitted_models(result: dict[str, Any]) -> set[str]:
+    """Models fitted at least once; a model whose every fold failed, or that only has an error, never ran."""
+    return {
+        str(row.get("model"))
+        for row in _rows(result)
+        if (n_evaluations := _n_evaluations(result, row)) is None or n_evaluations > 0
+    }
+
+
 def _hyperparameter_text(result: dict[str, Any]) -> str:
     request = result.get("request_config") or {}
     if not request:
@@ -604,19 +673,31 @@ def _hyperparameter_text(result: dict[str, Any]) -> str:
             f"{_layers_text(request.get('hidden_layers'))}, dropout {request.get('dropout')} and batch size {request.get('batch_size')}"
         )
         if request.get("early_stopping_patience"):
+            # The deep-model trainers then refit each network on the whole training partition, monitoring rows included
+            # (refit_on_training_partition).
             text += (
                 f", stopping early after {request.get('early_stopping_patience')} epochs without improvement on a monitoring subset "
-                "drawn from each training partition"
+                "drawn from each training partition; each network was then refit on the whole training partition for the number of "
+                "epochs early stopping selected"
             )
         return text + "."
-    text = f"Random survival forests and gradient boosting used {request.get('n_estimators')} trees"
-    if request.get("max_depth") is not None:
-        text += f" with maximum depth {request.get('max_depth')}"
-    return (
-        text
-        + f" (learning rate {request.get('learning_rate')} for boosting); the LASSO-Cox penalty was chosen by inner cross-validation, "
-        "stratified by event status, within each training partition."
-    )
+    # Only the models that ran: without scikit-survival, for example, Cox PH is the only one.
+    from survival_toolkit.ml_models import _GBS_DEFAULT_MAX_DEPTH
+
+    fitted = _fitted_models(result)
+    trees, depth = request.get("n_estimators"), request.get("max_depth")
+    parts = []
+    if "Random Survival Forest" in fitted:
+        parts.append(f"random survival forests used {trees} trees " + ("without a depth limit" if depth is None else f"of maximum depth {depth}"))
+    if "Gradient Boosted Survival" in fitted:
+        # An empty depth gives boosting its shallow default, not fully grown trees.
+        parts.append(
+            f"gradient boosting used {trees} trees of maximum depth {_GBS_DEFAULT_MAX_DEPTH if depth is None else depth} "
+            f"with learning rate {request.get('learning_rate')}"
+        )
+    if "LASSO-Cox" in fitted:
+        parts.append("the LASSO-Cox penalty was chosen by inner cross-validation, stratified by event status, within each training partition")
+    return _capitalized("; ".join(parts)) + "." if parts else ""
 
 
 def _incomplete_row(row: dict[str, Any]) -> bool:
@@ -641,13 +722,17 @@ def _fold_failure_text(result: dict[str, Any], row: dict[str, Any]) -> str:
 
 
 def _unranked_reason(result: dict[str, Any], row: dict[str, Any]) -> str | None:
-    """None when the row can be ranked by its C-index, else why it cannot."""
-    if row.get("comparable_for_ranking") is False:
-        return "apparent evaluation on the patients used for fitting, not comparable with the others"
+    """None when the row can be ranked by its C-index, else why it cannot.
+
+    Rows left unranked because they lost cross-validation folds or have no C-index are also marked
+    not comparable, so those reasons are checked before the apparent-evaluation one.
+    """
     if str(result.get("evaluation_mode", "")).startswith("repeated_cv") and _incomplete_row(row):
         return _fold_failure_text(result, row)
     if _finite(row.get("c_index")) is None:
         return "no C-index"
+    if row.get("comparable_for_ranking") is False:
+        return "apparent evaluation on the patients used for fitting, not comparable with the others"
     return None
 
 
@@ -688,7 +773,36 @@ def _evaluation_text(result: dict[str, Any]) -> str:
             f"{_holdout_text(result)} for {_names(holdout_models)}; {_names(apparent_models)} fell back to apparent performance "
             f"on the patients used for fitting, which is optimistic, and {'was' if len(apparent_models) == 1 else 'were'} not ranked"
         )
-    return "the patients used for fitting (apparent performance, which is optimistic)"
+    return "scoring the models on the patients used for fitting (apparent performance, which is optimistic)"
+
+
+def _apparent_models(result: dict[str, Any]) -> list[str]:
+    """Models whose C-index is apparent performance on the patients used for fitting, as ``_evaluation_text`` reads
+    the evaluation mode."""
+    mode = str(result.get("evaluation_mode", ""))
+    if mode.startswith("repeated_cv") or mode == "holdout":
+        return []
+    if mode == "mixed_holdout_apparent":
+        return [str(row.get("model")) for row in _rows(result) if str(row.get("evaluation_mode")) != "holdout"]
+    return [str(row.get("model")) for row in _rows(result)]
+
+
+def _limitations_text(results: Sequence[dict[str, Any]], locked_text: str) -> str:
+    """Where the performance comes from: internal validation, apparent performance, or both."""
+    apparent = [name for result in results for name in _apparent_models(result)]
+    models = [str(row.get("model")) for result in results for row in _rows(result)]
+    if models and len(apparent) == len(models):
+        return (
+            "Performance is apparent: every model was scored on the patients used for fitting, which is optimistic. Internal "
+            "validation (a holdout set or cross-validation) and an external cohort are needed to judge the models."
+        )
+    text = "Performance comes from internal validation in one data set" + locked_text
+    if apparent:
+        text += (
+            f", except for {_names(apparent)}, which {'was' if len(apparent) == 1 else 'were'} scored on the patients used for "
+            "fitting (apparent performance, which is optimistic)"
+        )
+    return text + "; an external cohort is needed to judge transportability."
 
 
 def _evaluation_sentence(results: Sequence[dict[str, Any]]) -> str:
@@ -884,7 +998,14 @@ def tripod_ai_checklist(results: Sequence[dict[str, Any]], *, dataset: dict[str,
     def features(result: dict[str, Any]) -> list[Any]:
         return list((result.get("request_config") or {}).get("features") or [])
 
+    def resolved_categorical(result: dict[str, Any]) -> bool:
+        return isinstance(result.get("categorical_features"), (list, tuple))
+
     def categorical(result: dict[str, Any]) -> list[Any]:
+        # The encoder also reference-codes every predictor stored as text; a result that lists the categorical
+        # predictors it resolved is quoted, otherwise the request names only the declared ones.
+        if resolved_categorical(result):
+            return list(result["categorical_features"])
         return list((result.get("request_config") or {}).get("categorical_features") or [])
 
     def participants(result: dict[str, Any]) -> str:
@@ -924,7 +1045,9 @@ def tripod_ai_checklist(results: Sequence[dict[str, Any]], *, dataset: dict[str,
                   results,
                   lambda result: f"{_count(len(features(result)), 'predictor')}: {_names(features(result), limit=30)}; categorical: {_names(categorical(result))}",
               ))
-              + ". Describe how and when they were measured."),
+              + "."
+              + ("" if all(resolved_categorical(result) for result in results) else " Any predictor stored as text was also reference-coded as a categorical predictor.")
+              + " Describe how and when they were measured."),
         _item("10", "Methods", "Sample size", "partly",
               _capitalized(_by_family(
                   results,
@@ -956,8 +1079,7 @@ def tripod_ai_checklist(results: Sequence[dict[str, Any]], *, dataset: dict[str,
         _item("24", "Results", "Model updating", "author", "Report any model updating, or state that none was done."),
         _item("25", "Discussion", "Interpretation", "author", "Give an overall interpretation, including fairness where relevant."),
         _item("26", "Discussion", "Limitations", "partly",
-              "Performance comes from internal validation in one data set" + locked_text
-              + "; an external cohort is needed to judge transportability."
+              _limitations_text(results, locked_text)
               + (
                   f" Choosing the best of {n_ranked} models on the same data makes its C-index optimistic (the winner's curse); "
                   + ("report the chosen model's locked-test C-index." if all_locked else "judge it on data that played no part in the choice.")

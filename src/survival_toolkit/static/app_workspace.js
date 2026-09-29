@@ -20,6 +20,10 @@ function trimmedSetting(value) {
   return String(value ?? "").trim();
 }
 
+// Defaults of the marker evaluation's numeric settings (the server's defaults), for the request builder
+// (markerRequestFields) and result currency alike, like the KM/ML/DL defaults in app_core.js.
+const MARKER_NUMERIC_DEFAULTS = Object.freeze({ n_permutations: 1000, n_resamples: 200, random_seed: 20260926 });
+
 function normalizeBaseRequestConfig(requestConfig) {
   return {
     dataset_id: String(requestConfig?.dataset_id || ""),
@@ -67,9 +71,9 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
       marker_matrix_id_column: requestConfig.marker_matrix_id_column || null,
       clinical_columns: sortedStrings(requestConfig.clinical_columns || []),
       categorical_clinical: sortedStrings(requestConfig.categorical_clinical || []),
-      n_permutations: numberOrDefault(requestConfig.n_permutations, 1000),
-      n_resamples: numberOrDefault(requestConfig.n_resamples, 200),
-      random_seed: numberOrDefault(requestConfig.random_seed, 20260926),
+      n_permutations: numberOrDefault(requestConfig.n_permutations, MARKER_NUMERIC_DEFAULTS.n_permutations),
+      n_resamples: numberOrDefault(requestConfig.n_resamples, MARKER_NUMERIC_DEFAULTS.n_resamples),
+      random_seed: numberOrDefault(requestConfig.random_seed, MARKER_NUMERIC_DEFAULTS.random_seed),
       nonlinear_lens: String(requestConfig.nonlinear_lens || "off"),
     };
   }
@@ -265,27 +269,6 @@ function matchesRequestConfig(goal, requestConfig, { expectsCompareOverride = nu
 }
 
 function currentGoalResult(goal) {
-  if (goal === "predictive") {
-    if (typeof benchmarkBoardState === "function") {
-      const board = benchmarkBoardState();
-      if (
-        !board
-        || board.predictiveBusy
-        || board.showingStaleBoard
-        || board.hasMixedEvaluation
-        || board.visibleHasMixedRunGroups
-        || board.visibleHasSplitMismatch
-        || !Array.isArray(board.visibleFamilies)
-        || board.visibleFamilies.length !== 2
-        || !board.visibleRows.length
-      ) {
-        return null;
-      }
-    }
-    const currentMl = currentCompareGoalPayload("ml");
-    const currentDl = currentCompareGoalPayload("dl");
-    return currentMl && currentDl ? { ml: currentMl, dl: currentDl } : null;
-  }
   const payload = {
     km: state.km,
     cox: state.cox,
@@ -336,65 +319,24 @@ function goalPayload(goal) {
 }
 
 function goalHasAnyOutput(goal) {
-  if (goal === "predictive") {
-    return Boolean(
-      state.ml
-      || state.dl
-      || runtime.compareCache?.ml
-      || runtime.compareCache?.dl
-      || runtime.compareCache?.unified?.ml
-      || runtime.compareCache?.unified?.dl,
-    );
-  }
   if (goal === "tables") {
     return currentCohortTableOutputState().hasOutput;
-  }
-  if (goal === "signature") {
-    return Boolean(state.signature);
   }
   return Boolean(goalPayload(goal));
 }
 
+// The status of one analysis's result. The ML and DL families report theirs on the Prediction models board,
+// so the combined "predictive" goal has none.
 function goalResultStatusState(goal, { currentLabel = "Ready", noResultLabel = "No result yet" } = {}) {
-  if (!goal || !ANALYSIS_GOALS.includes(goal)) return null;
+  if (!goal || goal === "predictive" || !ANALYSIS_GOALS.includes(goal)) return null;
   const scope = runScopeForGoal(goal);
-  const predictiveBusy = goal === "predictive" && (isScopeBusy("predictive") || isScopeBusy("ml") || isScopeBusy("dl"));
-  if ((scope && isScopeBusy(scope)) || predictiveBusy) {
+  if (scope && isScopeBusy(scope)) {
     return {
       tone: "running",
       label: "Running",
       title: `${goalLabel(goal)} in progress`,
       text: "Wait for the current run to finish before exporting this result or changing shared inputs.",
     };
-  }
-  if (goal === "predictive") {
-    const selectedModel = predictiveModelMeta(currentPredictiveModelKey());
-    const selectedSingleCurrent = Boolean(selectedPredictiveSingleResult(selectedModel.family));
-    if (runtime.predictiveWorkbenchIntent === "train" && selectedSingleCurrent) {
-      return {
-        tone: "ready",
-        label: currentLabel,
-        title: `${selectedModel.label} result is current`,
-        text: "Visible settings match the selected model result shown here.",
-      };
-    }
-    if (predictiveLeaderboardIsCurrent()) {
-      const board = typeof benchmarkBoardState === "function" ? benchmarkBoardState() : null;
-      if (board?.showingStaleBoard) {
-        return {
-          tone: "warning",
-          label: "Stale reference",
-          title: "Compare All result shown as stale reference",
-          text: "Visible leaderboard is a stale Compare All snapshot. Rerun Compare All Models to refresh it.",
-        };
-      }
-      return {
-        tone: "ready",
-        label: currentLabel,
-        title: "Compare All result is current",
-        text: "Visible settings match the predictive leaderboard shown here.",
-      };
-    }
   }
   const hasCurrentResult = goal === "tables"
     ? currentCohortTableOutputState().isCurrent
@@ -524,45 +466,35 @@ function restoreReparentUiState(snapshot) {
   }
 }
 
-function predictiveLeaderboardIsCurrent() {
-  if (typeof benchmarkBoardState !== "function") return false;
-  const board = benchmarkBoardState();
-  return Boolean(
-    !board?.predictiveBusy
-    && Array.isArray(board?.visibleFamilies)
-    && board.visibleFamilies.length === 2
-    && !board?.hasMixedEvaluation
-    && !board?.visibleHasMixedRunGroups
-    && !board?.visibleHasSplitMismatch
-    && (board?.visibleRows?.length || 0) > 0,
-  );
-}
-
+// Runs on every chrome render, so it touches layout only when there is something to move.
 function syncWorkspaceLayout() {
-  const preservedUiState = captureReparentUiState();
-  let didMove = false;
   // The ML and DL workspace cards live in the Prediction models tab once a dataset is open.
   const merged = Boolean(state.dataset);
-  [
+  const placements = [
     [refs.mlWorkspaceCard, refs.benchmarkMlMount, refs.mlPanel],
     [refs.dlWorkspaceCard, refs.benchmarkDlMount, refs.dlPanel],
-  ].forEach(([card, mount, panel]) => {
-    if (!card || !mount || !panel) return;
-    const target = merged ? mount : panel;
-    if (card.parentElement !== target) {
-      target.appendChild(card);
-      didMove = true;
-    }
+  ]
+    .filter(([card, mount, panel]) => card && mount && panel)
+    .map(([card, mount, panel]) => [card, merged ? mount : panel]);
+  const didMove = placements.some(([card, target]) => card.parentElement !== target);
+  // Moving a card loses focus and scroll positions, so they are kept around a move; reading them forces a layout.
+  const preservedUiState = didMove ? captureReparentUiState() : null;
+  placements.forEach(([card, target]) => {
+    if (card.parentElement !== target) target.appendChild(card);
     card.classList.toggle("predictive-workbench-card", merged);
     syncPredictiveWorkbenchCardActions(card, merged);
   });
   syncDeriveToggleButton();
   renderPredictiveWorkbench();
   if (refs.cutpointPlot) {
-    refs.cutpointPlot.classList.toggle("hidden", refs.cutpointPlot.innerHTML.trim().length === 0);
+    // Child elements mean a drawn scan; serialising it (innerHTML) to find out would be costly.
+    const empty = !refs.cutpointPlot.children.length && !refs.cutpointPlot.textContent.trim();
+    refs.cutpointPlot.classList.toggle("hidden", empty);
   }
-  restoreReparentUiState(preservedUiState);
-  if (didMove) scheduleVisiblePlotResize(40);
+  if (didMove) {
+    restoreReparentUiState(preservedUiState);
+    scheduleVisiblePlotResize(40);
+  }
 }
 
 function resizeVisiblePlotsNow() {
@@ -812,8 +744,13 @@ function applyControlSnapshot(snapshot) {
   renderEventColumnOptions({
     preferred: snapshot.eventColumn && columnNames.has(snapshot.eventColumn) ? snapshot.eventColumn : null,
     silent: true,
+    restoring: true,
   });
   setSelectValueIfPresent(refs.eventPositiveValue, snapshot.eventPositiveValue);
+  // The warnings follow the restored endpoint: reading the event value again keeps it and drops a "choose the
+  // event value" note it answers, and the time check sees the restored event column.
+  updateEventPositiveOptions();
+  updateTimeColumnGuidance();
   refreshVariableSelections();
   setSelectValueIfPresent(refs.groupColumn, snapshot.groupColumn ?? "");
   setInputValue(refs.timeUnitLabel, snapshot.timeUnitLabel);
@@ -887,15 +824,18 @@ function applyControlSnapshot(snapshot) {
   updateWeightVisibility();
   updateMlEvaluationControls();
   updateDlEvaluationControls();
+  updateMlModelControlVisibility();
   updateDlModelControlVisibility();
   setCheckedValues(refs.covariateChecklist, snapshot.covariates || []);
   setCheckedValues(refs.categoricalChecklist, snapshot.categoricals || []);
   setCheckedValues(refs.strataChecklist, snapshot.coxStrata || []);
   setCheckedValues(refs.modelFeatureChecklist, snapshot.modelFeatures || []);
-  setCheckedValues(refs.modelCategoricalChecklist, snapshot.modelCategoricals || []);
-  setCheckedValues(refs.dlModelFeatureChecklist, snapshot.modelFeatures || []);
-  setCheckedValues(refs.dlModelCategoricalChecklist, snapshot.dlModelCategoricals || snapshot.modelCategoricals || []);
   syncModelFeatureMirrors(refs.modelFeatureChecklist);
+  // The categorical flags come after mirroring the features, which ticks every likely categorical feature: a
+  // flag the user unticked stays unticked. (A snapshot without the lists keeps those automatic flags.)
+  if (Array.isArray(snapshot.modelCategoricals)) setCheckedValues(refs.modelCategoricalChecklist, snapshot.modelCategoricals);
+  const dlCategoricals = Array.isArray(snapshot.dlModelCategoricals) ? snapshot.dlModelCategoricals : snapshot.modelCategoricals;
+  if (Array.isArray(dlCategoricals)) setCheckedValues(refs.dlModelCategoricalChecklist, dlCategoricals);
   syncModelCategoricalMirrors(refs.modelCategoricalChecklist);
   syncModelCategoricalMirrors(refs.dlModelCategoricalChecklist);
   setCheckedValues(refs.cohortVariableChecklist, snapshot.cohortVariables || []);
@@ -934,15 +874,20 @@ function syncHistoryState(mode = "replace") {
 }
 
 async function restoreHistoryState(historyState) {
+  // Every entry SurvStudio makes has a state (the first one is replaced at startup). One without comes from a
+  // fragment link such as "#workspace" and must not close the open workspace: it takes the current state, so
+  // going back and forward to it stays here.
+  if (!historyState && state.dataset) {
+    syncHistoryState("replace");
+    return;
+  }
   const restoreToken = ++runtime.historyRestoreToken;
-  const restoredPredictiveFamily = normalizedPredictiveFamily(historyState?.predictiveFamily);
   if (!historyState || historyState.view !== "workspace" || !historyState.datasetId) {
-    runtime.predictiveFamily = restoredPredictiveFamily;
-    runtime.predictiveWorkbenchIntent = null;
     goHome({ syncHistory: false });
     return;
   }
 
+  const restoredPredictiveFamily = normalizedPredictiveFamily(historyState?.predictiveFamily);
   runtime.historySyncPaused = true;
   try {
     runtime.predictiveFamily = restoredPredictiveFamily;
@@ -976,6 +921,33 @@ async function restoreHistoryState(historyState) {
     runtime.historySyncPaused = false;
   }
 }
+
+// Leaving the page in this tab (a reload, a typed address, a link) discards every result held in memory, so
+// while there are results the browser asks first. Links such as "Check its design" open a new tab instead.
+function confirmLeavingWithResults(event) {
+  if (!state.dataset || !refs.workspace?.isConnected || !hasCompletedResults()) return;
+  event.preventDefault();
+  // Older browsers ask only when returnValue is set.
+  event.returnValue = "";
+}
+
+// "Skip to workspace" moves the focus itself: following its #workspace link would add a history entry
+// without a state. Before a dataset is open, the landing page is the main region.
+function skipToMainRegion(event) {
+  const link = event.target instanceof Element ? event.target.closest(".skip-link") : null;
+  if (!link) return;
+  event.preventDefault();
+  const region = [refs.workspace, refs.landing].find((element) => element && !element.classList.contains("hidden"));
+  if (!region) return;
+  // Focusable just for this move, so clicks inside the region later do not focus it.
+  region.setAttribute("tabindex", "-1");
+  region.addEventListener("blur", () => region.removeAttribute("tabindex"), { once: true });
+  region.focus();
+}
+
+// Page-level listeners, registered as this part loads; their handlers only run once the page is up.
+window.addEventListener("beforeunload", confirmLeavingWithResults);
+document.addEventListener("click", skipToMainRegion);
 
 function syncDeriveToggleButton() {
   if (!refs.deriveToggle || !refs.derivePanel) return;

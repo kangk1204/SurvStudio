@@ -43,12 +43,48 @@ def _float_values(series: pd.Series) -> pd.Series:
     return pd.Series(numeric.to_numpy(dtype="float64", na_value=np.nan), index=series.index, name=series.name)
 
 
+def _finite_numbers(text: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """Text values as floats (NaN where they are not numbers) and whether each is a finite number."""
+
+    numbers = pd.Series(pd.to_numeric(text, errors="coerce").to_numpy(dtype="float64", na_value=np.nan), index=text.index)
+    return numbers, pd.Series(np.isfinite(numbers.to_numpy()), index=text.index)
+
+
+def numeric_text_values(series: pd.Series) -> pd.Series | None:
+    """The numbers of a text column whose every value is a finite number; ``None`` otherwise.
+
+    This is the typing rule the ML, deep-learning and Cox paths share: a column that is not
+    marked categorical and is not a pandas Categorical is a number when its dtype is numeric, or
+    when it is text (from Parquet, Excel or an object column) whose non-missing values all read
+    as finite numbers once surrounding spaces are removed, as a CSV file of the same values would
+    be read. Any other text makes it categorical. Returns ``None`` for numeric, boolean and
+    Categorical columns (their dtype decides) and for text that is not all numbers.
+    """
+
+    if is_numeric_dtype(series) or is_bool_dtype(series) or isinstance(series.dtype, pd.CategoricalDtype):
+        return None
+    present = series.notna().to_numpy(dtype=bool)
+    numbers, finite = _finite_numbers(series[present].astype(str).str.strip())
+    if not bool(finite.all()):
+        return None
+    values = np.full(len(series), np.nan)
+    values[present] = numbers.to_numpy()
+    return pd.Series(values, index=series.index, name=series.name)
+
+
+def _quoted_examples(values: Sequence[Any]) -> str:
+    """Example values in quotes; a blank-looking value (stripped to "") is described instead of shown as ""."""
+
+    return ", ".join(f'"{value}"' if str(value) else "a cell with only spaces or empty text" for value in values)
+
+
 def numeric_text_contamination(series: pd.Series) -> dict[str, Any] | None:
     """Describe stray text in a column that otherwise holds continuous numbers.
 
     Returns ``None`` for numeric, boolean, and genuinely categorical columns. A column such
     as ``[12.5, 13.1, ..., "unknown"]`` is read as text, so without this check it would be
-    encoded as a categorical variable with one level per distinct number.
+    encoded as a categorical variable with one level per distinct number. Text that reads as
+    an infinite number ("inf") is not a finite number and counts as stray text.
     """
 
     if is_numeric_dtype(series) or is_bool_dtype(series):
@@ -57,8 +93,7 @@ def numeric_text_contamination(series: pd.Series) -> dict[str, Any] | None:
     if non_missing.empty:
         return None
     text = non_missing.astype(str).str.strip()
-    numeric = pd.to_numeric(text, errors="coerce")
-    numeric_mask = numeric.notna()
+    numeric, numeric_mask = _finite_numbers(text)
     n_numeric = int(numeric_mask.sum())
     n_text = int((~numeric_mask).sum())
     if n_text == 0 or n_numeric < _NUMERIC_TEXT_MIN_SHARE * len(text):
@@ -72,7 +107,8 @@ def numeric_text_contamination(series: pd.Series) -> dict[str, Any] | None:
 def text_level_overflow(series: pd.Series) -> dict[str, Any] | None:
     """Describe a text column with more than ``MAX_TEXT_LEVELS`` distinct values.
 
-    Returns ``None`` for numeric and boolean columns and for text columns with few enough levels.
+    Returns ``None`` for numeric and boolean columns, for text columns that are numbers under the
+    shared typing rule (``numeric_text_values``), and for text columns with few enough levels.
     """
 
     if is_numeric_dtype(series) or is_bool_dtype(series):
@@ -84,28 +120,40 @@ def text_level_overflow(series: pd.Series) -> dict[str, Any] | None:
     if n_levels <= MAX_TEXT_LEVELS:
         return None
     text = non_missing.astype(str).str.strip()
-    numeric_mask = pd.to_numeric(text, errors="coerce").notna()
+    _, numeric_mask = _finite_numbers(text)
+    categories = isinstance(series.dtype, pd.CategoricalDtype)
+    if bool(numeric_mask.all()) and not categories:
+        # Numbers stored as text: the column is used as a number.
+        return None
     with_points = pd.to_numeric(text.str.replace(",", ".", regex=False), errors="coerce").notna()
     return {
         "n_levels": n_levels,
         "n_values": int(len(text)),
         "n_numeric": int(numeric_mask.sum()),
         "decimal_comma": bool(with_points.mean() >= _NUMERIC_TEXT_MIN_SHARE and text.str.contains(",", regex=False).any()),
+        "categories": categories,
         "examples": list(dict.fromkeys(text[~numeric_mask].tolist()))[:3],
     }
 
 
 def _text_level_message(feature: Any, details: dict[str, Any], *, declarations: bool) -> str:
-    examples = ", ".join(f'"{value}"' for value in details["examples"])
+    examples = _quoted_examples(details["examples"])
     n_levels = details["n_levels"]
+    n_text = details["n_values"] - details["n_numeric"]
     if details["decimal_comma"]:
         message = (
             f'Feature "{feature}" looks like numbers written with commas (such as {examples}); as text it would become a '
             f"categorical feature with {n_levels} levels. Write the numbers with a decimal point and without thousands "
             "separators so the column is read as numbers."
         )
+    elif n_text == 0:
+        # Only a pandas Categorical of numbers gets here; numbers stored as text are used as numbers.
+        message = (
+            f'Feature "{feature}" holds {n_levels} distinct numbers stored as categories (a pandas Categorical), so it would '
+            f"become a categorical feature with {n_levels} levels. Convert the column to numbers to use it as a number, or "
+            f"recode it into at most {MAX_TEXT_LEVELS} categories."
+        )
     elif details["n_numeric"] >= 0.5 * details["n_values"]:
-        n_text = details["n_values"] - details["n_numeric"]
         message = (
             f'Feature "{feature}" is stored as text: {details["n_numeric"]} of {details["n_values"]} values are numbers but '
             f"{n_text} {'is' if n_text == 1 else 'are'} not (such as {examples}), so it would become a categorical feature "
@@ -146,7 +194,7 @@ def reject_numeric_text_features(
             continue
         details = numeric_text_contamination(series)
         if details is not None:
-            examples = ", ".join(f'"{value}"' for value in details["examples"])
+            examples = _quoted_examples(details["examples"])
             raise ValueError(
                 f'Feature "{feature}" looks numeric but contains {details["n_non_numeric"]} non-numeric '
                 f"value(s) such as {examples}. Recode those values as missing (blank cells) so the column "
@@ -196,11 +244,14 @@ def coerce_feature_subset(
     features: Sequence[str],
     categorical_features: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, list[str], list[str]]:
-    """Resolve feature dtypes into deterministic categorical/numeric subsets.
+    """Resolve feature dtypes into deterministic categorical/numeric subsets (the typing used when fitting).
 
-    Categorical features become canonical text labels (``canonical_category_values``), so their
-    levels do not depend on whether a code column was read as whole numbers or as decimals;
-    numeric features become float64 with NaN for missing values.
+    A feature is categorical when it is listed in ``categorical_features``, is a pandas
+    Categorical, or is text that is not all finite numbers; text whose values all read as
+    numbers is numeric (``numeric_text_values``). Categorical features become canonical text
+    labels (``canonical_category_values``), so their levels do not depend on whether a code column
+    was read as whole numbers or as decimals; numeric features become float64 with NaN for
+    missing values.
     """
 
     features = _checked_features(df, features)
@@ -208,11 +259,17 @@ def coerce_feature_subset(
     selected = df.loc[:, features].copy()
     resolved_categorical: list[str] = []
     for column in features:
-        if column in categorical_features or not is_numeric_dtype(selected[column]):
-            selected[column] = canonical_category_values(selected[column])
-            resolved_categorical.append(column)
-            continue
-        selected[column] = _float_values(selected[column])
+        series = selected[column]
+        if column not in categorical_features:
+            if is_numeric_dtype(series):
+                selected[column] = _float_values(series)
+                continue
+            numbers = numeric_text_values(series)
+            if numbers is not None:
+                selected[column] = numbers
+                continue
+        selected[column] = canonical_category_values(series)
+        resolved_categorical.append(column)
     numeric_features = [column for column in features if column not in resolved_categorical]
     return selected, resolved_categorical, numeric_features
 
@@ -255,13 +312,43 @@ def unseen_category_counts(df: pd.DataFrame, encoder: dict[str, Any]) -> dict[st
     ``transform_feature_encoder`` compares them, so 1.0 and 1 count as the same level.
     """
 
-    selected, _, _ = coerce_feature_subset(df, encoder["features"], encoder.get("categorical_features"))
+    _checked_features(df, encoder["features"])
     counts: dict[str, int] = {}
     for column in encoder.get("categorical_features", []):
         levels = [str(level) for level in encoder["categorical_mappings"][column]["all_levels"]]
-        values = _stored_level_values(selected[column], levels).dropna()
+        values = _stored_level_values(canonical_category_values(df[column]), levels).dropna()
         counts[column] = int((~values.isin(levels)).sum())
     return counts
+
+
+def _numeric_feature_values(series: pd.Series, feature: Any) -> pd.Series:
+    """A feature that was numeric when the encoder was fitted, as float64 with NaN for missing values.
+
+    Numbers written as text are numbers, and blank cells (empty or holding only spaces) are
+    missing, so they take the imputed value. Any other text is refused: imputing it would score
+    a value such as "." or "unknown" as the development median without a word.
+    """
+
+    if isinstance(series.dtype, pd.CategoricalDtype):
+        series = series.astype(object)
+    if is_numeric_dtype(series) or is_bool_dtype(series):
+        return _float_values(series)
+    values = pd.to_numeric(series, errors="coerce").to_numpy(dtype="float64", na_value=np.nan, copy=True)
+    failed = series.notna().to_numpy(dtype=bool) & np.isnan(values)
+    if failed.any():
+        text = series[failed].astype(str).str.strip()
+        retried = pd.to_numeric(text, errors="coerce").to_numpy(dtype="float64", na_value=np.nan)
+        unparsed = np.isnan(retried) & text.ne("").to_numpy(dtype=bool)
+        if unparsed.any():
+            n_unparsed = int(unparsed.sum())
+            examples = _quoted_examples(list(dict.fromkeys(text[unparsed].tolist()))[:3])
+            raise ValueError(
+                f'Feature "{feature}" was numeric when the model was fitted, but {n_unparsed} of its values '
+                f"{'is not a number' if n_unparsed == 1 else 'are not numbers'}, such as {examples}. Recode them as "
+                "numbers, and leave a cell blank where the value is missing; text is not treated as a missing value."
+            )
+        values[failed] = retried
+    return pd.Series(values, index=series.index, name=series.name)
 
 
 def ordered_category_values(series: pd.Series) -> list[str]:
@@ -406,18 +493,19 @@ def transform_feature_encoder(
     *,
     output: Literal["dataframe", "numpy"] = "dataframe",
 ) -> pd.DataFrame | np.ndarray:
-    """Transform features with a fitted shared encoder."""
+    """Transform features with a fitted shared encoder.
 
-    selected, _, _ = coerce_feature_subset(
-        df,
-        encoder["features"],
-        encoder.get("categorical_features"),
-    )
+    Each feature is read as it was when the encoder was fitted (its stored categorical and numeric
+    lists), whatever its dtype in ``df``: a numeric feature holding text that is not a number is
+    refused rather than imputed (see ``_numeric_feature_values``).
+    """
+
+    _checked_features(df, encoder["features"])
     encoded_columns: dict[str, pd.Series] = {}
 
     for column in encoder.get("categorical_features", []):
         mapping = encoder["categorical_mappings"][column]
-        values = _stored_level_values(selected[column], mapping["all_levels"])
+        values = _stored_level_values(canonical_category_values(df[column]), mapping["all_levels"])
         all_levels = pd.Index(mapping["all_levels"], dtype="string")
         level_columns = mapping.get("level_columns") or {}
         for level in mapping["retained_levels"]:
@@ -431,7 +519,7 @@ def transform_feature_encoder(
             encoded_columns[mapping["missing_column"]] = values.isna().astype(float)
 
     for column in encoder.get("numeric_features", []):
-        numeric_series = pd.to_numeric(selected[column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        numeric_series = _numeric_feature_values(df[column], column).replace([np.inf, -np.inf], np.nan)
         impute_value = float(encoder.get("numeric_impute_values", {}).get(column, 0.0))
         numeric_series = numeric_series.fillna(impute_value).astype(float)
         if encoder.get("standardize_numeric"):
@@ -439,7 +527,7 @@ def transform_feature_encoder(
             numeric_series = (numeric_series - float(params.get("mean", 0.0))) / float(params.get("std", 1.0))
         encoded_columns[column] = numeric_series
 
-    encoded = pd.DataFrame(encoded_columns, index=selected.index)
+    encoded = pd.DataFrame(encoded_columns, index=df.index)
     encoded = encoded.reindex(columns=encoder["feature_names"], fill_value=0.0)
     encoded = encoded.replace([np.inf, -np.inf], np.nan)
 

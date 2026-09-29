@@ -47,7 +47,8 @@ function buttonsForScope(scope) {
       ...(runtime.workbenchRevealed && predictiveFamilyGoal() === "dl" ? [refs.runPredictiveWorkbenchButton] : []),
     ];
   }
-  if (scope === "km") return [refs.runKmButton, refs.runSignatureSearchButton];
+  if (scope === "km") return [refs.runKmButton];
+  if (scope === "signature") return [refs.runSignatureSearchButton];
   if (scope === "cox") {
     return [
       refs.runCoxButton,
@@ -55,9 +56,11 @@ function buttonsForScope(scope) {
       refs.clearCoxCovariatesButton,
       refs.selectAllCoxCategoricalsButton,
       refs.clearCoxCategoricalsButton,
+      refs.selectAllCoxStrataButton,
+      refs.clearCoxStrataButton,
     ];
   }
-  if (scope === "tables") return [refs.runCohortTableButton];
+  if (scope === "tables") return [refs.runCohortTableButton, refs.selectAllCohortVariablesButton, refs.clearCohortVariablesButton];
   if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];
   if (scope === "derive") return [refs.deriveButton];
   return [];
@@ -72,7 +75,8 @@ function runScopeForButton(button) {
   }
   if ([refs.runMlButton, refs.runCompareButton, refs.runCompareInlineButton].includes(button)) return "ml";
   if ([refs.runDlButton, refs.runDlCompareButton, refs.runDlCompareInlineButton].includes(button)) return "dl";
-  if (button === refs.runKmButton || button === refs.runSignatureSearchButton) return "km";
+  if (button === refs.runKmButton) return "km";
+  if (button === refs.runSignatureSearchButton) return "signature";
   if (button === refs.runCoxButton) return "cox";
   if (button === refs.runCohortTableButton) return "tables";
   if (button === refs.runMarkersButton || button === refs.runMarkerValidationButton) return "markers";
@@ -195,16 +199,7 @@ function getColumnMeta(columnName) {
 }
 
 function hasConfidentEventSuggestion() {
-  const binaryColumns = binaryCandidateColumns();
-  const eventLikeBinary = binaryColumns.filter(
-    (column) => isEventLikeColumnName(column) && !looksLikeBaselineStatusColumn(column),
-  );
-  if (eventLikeBinary.length) return true;
-  const suggestionSet = new Set(state.dataset?.suggestions?.event_columns || []);
-  const keywordBinary = binaryColumns.filter(
-    (column) => suggestionSet.has(column) && !looksLikeBaselineStatusColumn(column),
-  );
-  return keywordBinary.length > 0;
+  return likelyEventColumns().length > 0;
 }
 
 function currentGroupColumnWarning() {
@@ -238,7 +233,16 @@ function normalizeColumnLabel(columnName) {
   return String(columnName || "").trim().toLowerCase();
 }
 
-function isEventLikeColumnName(columnName) {
+// Column-name tokens as the server splits them: "isCensored" and "os_censor" hold the token "censored" / "censor".
+function columnNameTokens(columnName) {
+  return String(columnName || "")
+    .replace(/([a-z0-9])(?=[A-Z])/g, "$1_")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function hasEventLikeName(columnName) {
   const normalized = normalizeColumnLabel(columnName);
   if (!normalized) return false;
   if (normalized === "event" || normalized === "status") return true;
@@ -257,7 +261,66 @@ function isEventLikeColumnName(columnName) {
   ].some((pattern) => pattern.test(normalized));
 }
 
+// A column the server suggests as the event indicator whose values read as event coding (0/1, 1/2, Dead/Alive).
+// The TCGA-CDR endpoints OS, PFI and DSS hold 0/1 events without an event word in their names; a suggestion
+// such as marital_status (Married/Single) stays a covariate.
+function isSuggestedEventColumn(columnName) {
+  if (!(state.dataset?.suggestions?.event_columns || []).includes(columnName)) return false;
+  const values = getColumnMeta(columnName)?.unique_preview?.filter((value) => value !== null) ?? [];
+  return hasRecognizableEventCoding(values);
+}
+
+// An event-like name, or one of the server's event suggestions (see isSuggestedEventColumn). The outcome check
+// of the covariate and model-feature lists reads this too, so a suggested event column such as OS is never
+// offered as a covariate.
+function isEventLikeColumnName(columnName) {
+  return hasEventLikeName(columnName) || isSuggestedEventColumn(columnName);
+}
+
+// Words that name the event itself, as on the server: a baseline-looking name that also carries one of them
+// ("treatment_failure", "progression_on_therapy") can still be the event column.
+function nameHasStrongEventWord(columnName) {
+  const normalized = normalizeColumnLabel(columnName);
+  if (!normalized) return false;
+  return [
+    /event/,
+    /death/,
+    /dead/,
+    /died/,
+    /deceas/,
+    /mort/,
+    /relaps/,
+    /recur/,
+    /progress/,
+    /failure/,
+    /vital/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+// A baseline characteristic (a mutation, sex, stage, treatment, ...) by name that does not also name the event.
 function looksLikeBaselineStatusColumn(columnName) {
+  return hasBaselineStatusName(columnName) && !nameHasStrongEventWord(columnName);
+}
+
+// Names the server reads as censoring flags ("censored", "cens", "isCensored") unless they also name the event
+// or its status ("censor_status", "death_censored").
+const CENSORING_NAME_TOKENS = new Set(["censor", "censored", "cens", "censoring"]);
+const EVENT_NAME_OVERRIDE_TOKENS = new Set(["event", "death", "dead", "died", "status", "vital"]);
+// Codes without an event meaning of their own: under a censoring name, 1/Yes/True means censored.
+const GENERIC_BINARY_CODE_TOKENS = new Set(["0", "1", "yes", "no", "y", "n", "true", "false", "t", "f"]);
+
+function looksLikeCensoringIndicatorName(columnName) {
+  const tokens = columnNameTokens(columnName);
+  return tokens.some((token) => CENSORING_NAME_TOKENS.has(token))
+    && !tokens.some((token) => EVENT_NAME_OVERRIDE_TOKENS.has(token));
+}
+
+function hasOnlyGenericBinaryCodes(values) {
+  const tokens = values.map((value) => normalizeEventToken(value)).filter(Boolean);
+  return tokens.length > 0 && tokens.every((token) => GENERIC_BINARY_CODE_TOKENS.has(token));
+}
+
+function hasBaselineStatusName(columnName) {
   const normalized = normalizeColumnLabel(columnName);
   if (!normalized) return false;
   return [
@@ -292,9 +355,11 @@ function datasetColumnNames() {
   return state.dataset?.columns?.map((column) => column.name) || [];
 }
 
+// The server suggests follow-up columns by name; only numeric ones can be a follow-up time ("long_term_survival"
+// holding yes/no is not).
 function recommendedTimeColumns() {
-  const names = new Set(datasetColumnNames());
-  return (state.dataset?.suggestions?.time_columns || []).filter((column) => names.has(column));
+  const numeric = new Set(state.dataset?.numeric_columns || []);
+  return (state.dataset?.suggestions?.time_columns || []).filter((column) => numeric.has(column));
 }
 
 function numericTimeCandidateColumns() {
@@ -532,18 +597,28 @@ function binaryCandidateColumns() {
   return datasetColumnNames().filter((column) => binarySet.has(column));
 }
 
+// Binary columns that look like the event indicator, in column order: an event-like name or a server event
+// suggestion (see isEventLikeColumnName) that names neither a baseline characteristic nor censoring.
+function likelyEventColumns() {
+  return binaryCandidateColumns().filter(
+    (column) => isEventLikeColumnName(column)
+      && !looksLikeBaselineStatusColumn(column)
+      && !looksLikeCensoringIndicatorName(column),
+  );
+}
+
+// The Event menu: the likely event columns, or every binary column when there is none.
 function recommendedEventColumns() {
-  const binaryColumns = binaryCandidateColumns();
-  const eventLikeBinary = binaryColumns.filter(
-    (column) => isEventLikeColumnName(column) && !looksLikeBaselineStatusColumn(column),
-  );
-  if (eventLikeBinary.length) return eventLikeBinary;
-  const suggestionSet = new Set(state.dataset?.suggestions?.event_columns || []);
-  const keywordBinary = binaryColumns.filter(
-    (column) => suggestionSet.has(column) && !looksLikeBaselineStatusColumn(column),
-  );
-  if (keywordBinary.length) return keywordBinary;
-  return binaryColumns;
+  const likely = likelyEventColumns();
+  return likely.length ? likely : binaryCandidateColumns();
+}
+
+// The columns a default may pick. An event word in the name is the stronger sign: a server suggestion found
+// only through a word such as "status" (insurance_status coded 0/1) is picked only when nothing else is likely.
+function defaultEventColumns() {
+  const likely = likelyEventColumns();
+  const named = likely.filter((column) => hasEventLikeName(column));
+  return named.length ? named : likely;
 }
 
 function currentEventColumnWarning() {
@@ -560,14 +635,26 @@ function currentEventColumnWarning() {
 
   const binarySet = new Set(state.dataset.binary_candidate_columns || []);
   const suggestionSet = new Set(state.dataset?.suggestions?.event_columns || []);
-  const looksBaselineLike = looksLikeBaselineStatusColumn(eventColumn);
   const previewValues = getColumnMeta(eventColumn)?.unique_preview?.filter((value) => value !== null) ?? [];
   const looksLikeRecognizableEventCoding = hasRecognizableEventCoding(previewValues);
+  // As on the server, a baseline-looking name is not an event column unless it also names the event and its
+  // values read as event coding ("treatment_failure" coded 0/1 is).
+  const looksBaselineLike = hasBaselineStatusName(eventColumn)
+    && !(nameHasStrongEventWord(eventColumn) && looksLikeRecognizableEventCoding);
   if (!binarySet.has(eventColumn)) {
     return {
       tone: "error",
       blocking: true,
       message: `"${eventColumn}" is not a binary event column. Choose a 0/1-style event column or recode it.`,
+    };
+  }
+
+  // The server refuses a censoring flag: read as 1 = event, it would invert the whole analysis.
+  if (looksLikeCensoringIndicatorName(eventColumn) && hasOnlyGenericBinaryCodes(previewValues)) {
+    return {
+      tone: "error",
+      blocking: true,
+      message: `"${eventColumn}" looks like a censoring indicator (usually 1, Yes, or True = censored), but SurvStudio needs an event indicator (1 = event). Add a recoded column such as event = 1 - ${eventColumn} and select that instead.`,
     };
   }
 
@@ -619,11 +706,10 @@ function updateEventColumnGuidance() {
   if (!state.dataset) return;
 
   const binaryColumns = binaryCandidateColumns();
-  const recommendedColumns = recommendedEventColumns();
   if (refs.eventColumnHelp) {
     if (refs.showAllEventColumns?.checked) {
       refs.eventColumnHelp.textContent = "Showing all columns. Use only a true binary event indicator.";
-    } else if (recommendedColumns.length && recommendedColumns.length < datasetColumnNames().length) {
+    } else if (hasConfidentEventSuggestion()) {
       refs.eventColumnHelp.textContent = "Showing likely event columns only.";
     } else if (binaryColumns.length) {
       refs.eventColumnHelp.textContent = "No clear event column name was found; showing binary columns.";
@@ -643,27 +729,22 @@ function updateEventColumnGuidance() {
   refs.eventColumnWarning.className = `event-warning event-warning-${warning.tone}`;
 }
 
-function renderEventColumnOptions({ preferred = null, silent = true } = {}) {
+// `preferred` without `restoring` is a caller's guess (a new dataset's first event suggestion, or its second
+// column): it is kept only when it is one of the likely event columns. The current choice (no `preferred`) and
+// a restored one stay while the menu lists them. Without a likely event column nothing is preselected.
+function renderEventColumnOptions({ preferred = null, silent = true, restoring = false } = {}) {
   if (!state.dataset) return;
   const allColumns = datasetColumnNames();
-  const options = refs.showAllEventColumns?.checked
-    ? allColumns
-    : (() => {
-        const recommended = recommendedEventColumns();
-        if (recommended.length) return recommended;
-        const binaryColumns = binaryCandidateColumns();
-        return binaryColumns.length ? binaryColumns : allColumns;
-      })();
+  const recommended = recommendedEventColumns();
+  const options = refs.showAllEventColumns?.checked || !recommended.length ? allColumns : recommended;
 
   const currentValue = preferred ?? refs.eventColumn?.value ?? "";
-  const confident = hasConfidentEventSuggestion();
-  const nextValue = options.includes(currentValue)
-    ? currentValue
-    : confident
-      ? inferDefault(options, recommendedEventColumns(), 0)
-      : "";
+  const defaults = defaultEventColumns();
+  const keepCurrent = options.includes(currentValue)
+    && (preferred === null || restoring || defaults.includes(currentValue));
+  const nextValue = keepCurrent ? currentValue : (defaults.find((column) => options.includes(column)) || "");
   renderSelect(refs.eventColumn, options, {
-    includeBlank: !confident || !nextValue,
+    includeBlank: !defaults.length || !nextValue,
     blankLabel: "Select event column",
     selected: nextValue || "",
   });
@@ -689,10 +770,14 @@ function updateEventPositiveOptions() {
   const eventColumn = refs.eventColumn.value;
   const meta = getColumnMeta(eventColumn);
   const values = meta?.unique_preview?.filter((value) => value !== null) ?? [];
-  const preserveSelection = refs.eventColumn?.dataset?.lastColumn === eventColumn;
+  // The chosen event value is kept only for the same column of the same dataset: "status" is coded 1 = event
+  // in one dataset (veteran, 0/1) and 1 = censored in another (lung, 1/2). A derived snapshot or a history
+  // entry restores its own value through applyControlSnapshot.
+  const selectionKey = JSON.stringify([state.dataset?.dataset_id ?? "", eventColumn]);
+  const preserveSelection = refs.eventColumn?.dataset?.eventValueKey === selectionKey;
   const previousValue = preserveSelection ? refs.eventPositiveValue.value : "";
   const eventColumnWarning = currentEventColumnWarning();
-  if (refs.eventColumn) refs.eventColumn.dataset.lastColumn = eventColumn;
+  if (refs.eventColumn) refs.eventColumn.dataset.eventValueKey = selectionKey;
   refs.eventPositiveValue.innerHTML = "";
   if (values.length === 0) {
     // Without observed values there is nothing safe to default to; require an explicit choice.
@@ -706,6 +791,7 @@ function updateEventPositiveOptions() {
         ? `No non-missing values were found in "${eventColumn}", so no event value can be selected. Choose a different event column.`
         : null,
     );
+    updateEventColumnGuidance();
     return;
   }
   const inferred = inferEventPositiveSelection(eventColumn, values, previousValue);
@@ -795,10 +881,12 @@ function selectedCheckboxValues(container) {
   return [...container.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
 }
 
+// With `visibleOnly` (the Select all buttons), the items a search filter shows plus those already ticked: a
+// filter narrows what Select all adds, never what stays selected.
 function allCheckboxValues(container, { visibleOnly = false } = {}) {
   if (!container) return [];
   return [...container.querySelectorAll('input[type="checkbox"]')]
-    .filter((input) => !visibleOnly || !input.closest(".check-item")?.classList.contains("hidden-by-filter"))
+    .filter((input) => !visibleOnly || input.checked || !input.closest(".check-item")?.classList.contains("hidden-by-filter"))
     .map((input) => input.value);
 }
 
@@ -836,10 +924,17 @@ function renderCoxCovariateWarning({ kept = null, removed = [] } = {}) {
   refs.coxCovariateWarning.className = "event-warning event-warning-warning";
 }
 
-function shouldAutoCategorizeCoxCovariate(columnName) {
-  const meta = getColumnMeta(columnName);
+// The rule the ML/DL lists and the covariate defaults of a new dataset use: text or two-valued columns, and
+// numeric ones with few distinct values (stage coded 1-4), are categorical. A covariate ticked later follows
+// it too, so its coding no longer depends on whether it came first in the file.
+function isAutoCategoricalColumnMeta(meta) {
   if (!meta) return false;
-  return meta.kind === "categorical" || meta.kind === "binary";
+  return ["categorical", "binary"].includes(meta.kind)
+    || (meta.n_unique != null && meta.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD);
+}
+
+function shouldAutoCategorizeCoxCovariate(columnName) {
+  return isAutoCategoricalColumnMeta(getColumnMeta(columnName));
 }
 
 function syncCoxCovariateSelection({

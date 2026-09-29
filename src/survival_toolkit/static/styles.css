@@ -220,6 +220,12 @@ body {
   transform: translateY(0);
 }
 
+/* The skip link moves the focus to the whole main region; no outline around all of it. */
+.workspace:focus,
+.landing:focus {
+  outline: none;
+}
+
 ::selection {
   background: rgba(37, 115, 135, 0.18);
   color: var(--ink);
@@ -927,11 +933,13 @@ body {
   box-sizing: border-box;
   max-height: 520px;
   overflow: hidden;
+  /* Expanding shows the controls at once; collapsing hides them only when the collapse ends (.hidden below). */
   transition:
     max-height var(--duration-slow) var(--ease-standard),
     opacity var(--duration-base) var(--ease-standard),
     margin-top var(--duration-slow) var(--ease-standard),
-    padding-top var(--duration-slow) var(--ease-standard);
+    padding-top var(--duration-slow) var(--ease-standard),
+    visibility 0s linear 0s;
 }
 
 .derive-panel .config-field,
@@ -2514,13 +2522,22 @@ tr:nth-child(even) td {
 
 /* ─── Derive Panel Transition ─── */
 
+/* Collapsed but still laid out for the transition; visibility keeps its controls out of the Tab order and
+   away from screen readers (it switches only at the end of the collapse, see .derive-panel). */
 .derive-panel.hidden {
   max-height: 0 !important;
   opacity: 0;
   margin-top: 0;
   padding-top: 0;
   border-top-color: transparent;
+  visibility: hidden;
   display: flex !important;
+  transition:
+    max-height var(--duration-slow) var(--ease-standard),
+    opacity var(--duration-base) var(--ease-standard),
+    margin-top var(--duration-slow) var(--ease-standard),
+    padding-top var(--duration-slow) var(--ease-standard),
+    visibility 0s linear var(--duration-slow);
 }
 
 /* ─── Keyboard Shortcut Hint ─── */

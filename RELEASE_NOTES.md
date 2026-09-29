@@ -115,6 +115,56 @@ Reports and figures
 - REMARK and TRIPOD+AI text follow what each run did: runs with no permutations or subsamples, clinical-only models, mixed or incomplete evaluations, and ML and DL comparisons with different settings.
 - The rank-uncertainty figure and the replication forest keep rank order, the cutpoint scan shows its chosen cutpoint, three-group KM plots use three colours, and p-values just below 0.05 are printed with enough digits to stay below it.
 
+### Fixes from a third full code review
+
+Statistics
+
+- Cox models are fitted by Newton–Raphson with step halving, as R's `coxph` does. Strong effects of rare binary covariates now give R's estimates instead of failing as "non-finite estimates", and coefficients that run to infinity are reported as not converged.
+- Marker evaluation: subsamples, left-out patients and external cohorts that lack the reference level of a categorical clinical covariate drop the aliased indicator instead of failing or reporting wrong Wald p-values. `marker_screen.fit_cox` reports aliased columns with NaN estimates, as R reports NA.
+- Permutations, subsamples and the non-linear lens draw from independent random streams of the seed, so the number of permutations no longer changes the stability results. Stochastic results differ from earlier versions for the same seed.
+- The locked model's baseline hazard uses Efron increments for Efron models (R `survfit.coxph`), so absolute risks change slightly when death times are tied. Stratified locked models get bootstrap C-index intervals.
+- Validation needs only the clinical columns the locked model uses, keeps a non-estimable marker in the Holm family at p = 1, notes horizons beyond the last development event, and refuses markers with infinite values and text in numeric clinical covariates instead of imputing them. In development, markers with infinite values are left out with a note.
+- Reference levels and group order no longer depend on row order: ER−, HER2−, Signature−, Low, Never and Rest are references, numeric codes sort numerically even beside text levels, AJCC sub-stages are ordered, and non-Latin labels are compared exactly.
+- Kaplan–Meier pairs with zero log-rank variance are reported as not testable instead of failing the analysis, log-rank p-values no longer round to 0, and median survival and median follow-up take the midpoint of a flat stretch at 0.5, as R does.
+- Signature search: bootstrap and replication support count skipped draws as failures under an estimability floor, a replication fold counts only in the discovery direction, rules at the minimum group size are no longer capped near 0.5 support, and variables with three or more levels also test their most common level.
+- Harrell's C refuses missing times (it could loop forever), the Cox C-index bootstrap is faster and can be cancelled, Cox tables follow the covariate order, and Table 1 counts infinite values as missing.
+- Text columns that hold only numbers (from Parquet or Excel) are numeric in Cox, ML and deep models alike, and pandas categoricals are categorical in all three. ML and deep models decide feature types once on the whole cohort.
+
+Data input and outcomes
+
+- European ";" exports read "1.234" day counts as 1234, missing-value markers no longer change how numbers are read, and a column whose decimal mark the file cannot decide is refused with a clear message.
+- Every loaded table gets a unique row index: R `write.table` row names become a "row_names" column, trailing separators no longer shift column labels, and Parquet indexes no longer leak into row matching.
+- Event columns named for the absence of the event (progression_free, event_free, is_alive and similar) coded 0/1 or Yes/No are refused, and "Not reported" and similar markers are missing, not censored.
+- Leakage guards catch death, alive, vital and censoring columns and complements of the event; baseline "_status" columns are no longer outcomes; a time column missing mostly for censored (or event) patients is refused or cautioned.
+- Deep models analyse exactly the ML cohort: comma-grouped follow-up times are parsed and the ML time-column checks apply.
+
+Marker matrices
+
+- Layout detection compares the share of matching IDs and asks for a choice when numeric gene and patient IDs both match. Lines ending with a separator, short or long rows, UTF-16 line ends and files without a suffix (UCSC Xena `HiSeqV2`) are handled, and applying a fitted model to text in a numeric feature stops with a message instead of imputing it.
+
+Machine learning and deep learning
+
+- Repeated cross-validation skips a test fold without a comparable pair for all models alike and reports it; no best or CV-selected model is named when none has a C-index; out-of-memory and internal errors end a run instead of being recorded as a failed model.
+- Kernel SHAP estimates every encoded feature (no ten-feature cap), gradient boosting is described as a boosted Cox model, and partial dependence and counterfactuals refuse what they cannot compute and keep categorical levels.
+- Deep comparisons carry the model-screening caution, report event counts and the categorical features used, give identical aggregates in parallel and sequential runs, and use a numerically stable Breslow baseline.
+- Package calls with a locked-test fraction outside 0.05–0.5, and invalid deep-learning settings, are refused.
+
+Server
+
+- Upload checks find every workbook part and Parquet text type, JSON requests over 128 MB are refused, and server faults are logged and returned as 500 instead of misleading 400s.
+- Outcome-informed groups stay flagged when re-cut, and outcome columns are refused as Kaplan–Meier groups, cutpoint variables and validation mappings.
+- Bootstrap intervals are budgeted by the actual cost of the C-index, so realistic test sets get all their draws, and exports of wide comparisons no longer fail on long notes.
+
+Front end
+
+- A newly loaded dataset never inherits the previous event value, so a status coded 1/2 is never read with 1 as the event. The Event menu follows the server's rules: TCGA-CDR OS, PFI and DSS are offered and censoring flags are refused.
+- The stale leaderboard ranks rows like the current one, a failed run no longer hides the other mode's valid result, changing the endpoint cancels a grouping being created, and only optimal-cutpoint groups are labelled High or Low risk.
+- Select all with a search filter adds to the selection, Back and Forward keep unticked categorical flags, and the marker summary makes no claims about stability or family-wise control that were not tested.
+
+Reports and figures
+
+- The replication forest plots the hazard ratio of the test that ran and lists markers without an estimate, the summary funnel marks the family-wise and robust bars as not computed without permutations, and REMARK and TRIPOD+AI text follow the evaluation mode and the models that ran.
+
 ## 0.2.0 — 2026-09-26 — Full code review
 
 Several fixes below change reported numbers (marked **changes results**). Exports now record the SurvStudio version that produced them, so re-run analyses exported by 0.1.0 before comparing them with new output.

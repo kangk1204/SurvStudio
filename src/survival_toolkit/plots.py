@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import textwrap
 from typing import Any
 
 import numpy as np
@@ -9,7 +10,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 
-from survival_toolkit.reporting import signature_is_clinical_only
+from survival_toolkit.reporting import _count, signature_fit_failed, signature_is_clinical_only
 
 PAPER = "#ffffff"
 INK = "#1a2332"
@@ -306,6 +307,34 @@ def _km_group_dash(label: Any, fallback_index: int) -> str:
     return ["solid", "dash", "dot", "dashdot"][fallback_index % 4]
 
 
+# The palette and the four dash patterns give at most 24 colour-dash pairs (four colours beside High and Low), and a
+# plot can hold 50 groups: a curve that repeats an earlier curve's pair gets a marker symbol of its own. Twelve
+# symbols cover the worst case, 48 groups beside High and Low sharing four pairs.
+_KM_REPEAT_SYMBOLS = (
+    "circle", "square", "diamond", "triangle-up", "triangle-down", "cross", "x", "star", "hexagon", "pentagon", "hourglass", "bowtie",
+)
+
+
+def _km_group_symbols(styles: list[tuple[str, str]]) -> list[str | None]:
+    """No marker for the first curve of each colour and dash, then a different symbol for each repeat of that pair."""
+    uses: dict[tuple[str, str], int] = {}
+    symbols: list[str | None] = []
+    for style in styles:
+        repeat = uses.get(style, 0)
+        uses[style] = repeat + 1
+        symbols.append(None if repeat == 0 else _KM_REPEAT_SYMBOLS[(repeat - 1) % len(_KM_REPEAT_SYMBOLS)])
+    return symbols
+
+
+# Names of the weighted tests for results without the analysis's own label (test_p_value_label).
+_KM_TEST_LABELS = {
+    "logrank": "log-rank",
+    "gehan_breslow": "Gehan-Breslow",
+    "tarone_ware": "Tarone-Ware",
+    "fleming_harrington": "Fleming-Harrington",
+}
+
+
 # ── KM & Cox (existing) ────────────────────────────────────────
 
 
@@ -316,10 +345,13 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
     confidence_percent = f"{confidence_level * 100:g}"
     unit_template = escape_plotly_template_text(time_unit_label)
     curve_colors = _km_group_colors([curve["group"] for curve in km_result["curves"]])
+    curve_dashes = [_km_group_dash(curve["group"], index) for index, curve in enumerate(km_result["curves"])]
+    curve_symbols = _km_group_symbols(list(zip(curve_colors, curve_dashes)))
     color_by_group = {str(curve["group"]): color for curve, color in zip(km_result["curves"], curve_colors)}
     for idx, curve in enumerate(km_result["curves"]):
         label = curve["group"]
         color = curve_colors[idx]
+        symbol = curve_symbols[idx]
         display_label = escape_plotly_text(label)
         template_label = escape_plotly_template_text(label)
         if show_confidence_bands:
@@ -342,9 +374,11 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
             go.Scatter(
                 x=curve["timeline"],
                 y=curve["survival"],
-                mode="lines",
+                mode="lines" if symbol is None else "lines+markers",
                 name=display_label,
-                line={"shape": "hv", "width": 3, "color": color, "dash": _km_group_dash(label, idx)},
+                line={"shape": "hv", "width": 3, "color": color, "dash": curve_dashes[idx]},
+                # A few markers along the curve are enough to tell it apart.
+                **({} if symbol is None else {"marker": {"symbol": symbol, "size": 8, "color": color, "maxdisplayed": 12}}),
                 hovertemplate=f"{template_label}<br>{unit_template}: %{{x:.2f}}<br>Survival: %{{y:.1%}}<extra></extra>",
             )
         )
@@ -386,7 +420,10 @@ def build_km_figure(km_result: dict[str, Any], time_unit_label: str = "Months", 
     notes = []
     if km_result.get("test"):
         test = km_result["test"]
-        notes.append(f"{test['test'].replace('_', ' ').title()} test: {_p_value_expression(test['p_value'])}")
+        # The analysis names the test it ran, with the Fleming-Harrington weight.
+        name = str(test.get("test") or "")
+        test_label = str(km_result.get("test_p_value_label") or _KM_TEST_LABELS.get(name, name.replace("_", " ")))
+        notes.append(f"{escape_plotly_text(test_label[:1].upper() + test_label[1:])} test: {_p_value_expression(test['p_value'])}")
     elif km_result.get("outcome_informed_group"):
         notes.append("Outcome-informed grouping: fresh raw p-value suppressed")
     if show_confidence_bands:
@@ -473,19 +510,9 @@ def _km_risk_rows(km_result: dict[str, Any]) -> tuple[list[float], list[dict[str
 
 def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
     raw_rows = list(reversed(cox_result["results_table"]))
-    rows = [
-        row
-        for row in raw_rows
-        if isinstance(row.get("Hazard ratio"), (int, float))
-        and isinstance(row.get("CI lower"), (int, float))
-        and isinstance(row.get("CI upper"), (int, float))
-        and np.isfinite(float(row["Hazard ratio"]))
-        and np.isfinite(float(row["CI lower"]))
-        and np.isfinite(float(row["CI upper"]))
-        and float(row["Hazard ratio"]) > 0.0
-        and float(row["CI lower"]) > 0.0
-        and float(row["CI upper"]) > 0.0
-    ]
+    # Finite and positive estimates only (a log axis cannot draw an infinite bound); the others are named in a note.
+    rows = [row for row in raw_rows if _drawable_interval(row, ("Hazard ratio", "CI lower", "CI upper"))]
+    not_drawn = [str(row.get("Label")) for row in cox_result["results_table"] if not _drawable_interval(row, ("Hazard ratio", "CI lower", "CI upper"))]
     labels = [row["Label"] for row in rows]
     display_labels, axis_layout = _feature_plot_axis_layout(labels, width=34, max_lines=3)
     hazard_ratios = [row["Hazard ratio"] for row in rows]
@@ -512,16 +539,24 @@ def build_cox_forest_figure(cox_result: dict[str, Any]) -> dict[str, Any]:
         )
     )
 
+    note, note_lines = _not_drawn_note(not_drawn, prefix="Not drawn (no finite hazard ratio or interval)", width=90) if not_drawn else ("", 0)
+    extra = 18 * note_lines + 12 if note_lines else 0
     fig.update_layout(
         **_COMMON_LAYOUT,
-        margin={"l": axis_layout["l"], "r": 40, "t": 28, "b": 70},
+        margin={"l": axis_layout["l"], "r": 40, "t": 28, "b": 70 + extra},
         title={
             "text": "",
             "font": {"family": "Source Serif 4, serif", "size": 24, "color": INK},
             "x": 0.02,
         },
-        height=max(420, axis_layout["height"]),
+        height=max(420, axis_layout["height"]) + extra,
     )
+    if note:
+        # The terms left out are named under the axis title.
+        fig.add_annotation(
+            text=note, xref="paper", yref="paper", x=0.0, y=0.0, xanchor="left", yanchor="top", yshift=-62,
+            showarrow=False, align="left", font={"size": 12, "color": INK},
+        )
     fig.add_annotation(
         text="Points = HR; whiskers = 95% Wald CI",
         xref="paper",
@@ -1060,9 +1095,17 @@ def build_model_comparison_figure(comparison: dict[str, Any]) -> dict[str, Any]:
 
     finite_vals = [v for v in safe_c if v is not None]
     y_max = max(finite_vals) if finite_vals else 1.0
-    note = "<br><sup>* apparent-fallback rows shown for transparency and excluded from rank ordering</sup>" if any(
-        not row.get("comparable_for_ranking", True) for row in table
-    ) else ""
+    unranked_modes = [str(row.get("evaluation_mode") or "") for row in table if not row.get("comparable_for_ranking", True)]
+    unranked_kinds = []
+    if any("apparent" in mode for mode in unranked_modes):
+        unranked_kinds.append("apparent-fallback rows")
+    if any("apparent" not in mode for mode in unranked_modes):
+        unranked_kinds.append("rows without a complete C-index estimate")
+    note = (
+        f"<br><sup>* {' and '.join(unranked_kinds)} shown for transparency and excluded from rank ordering</sup>"
+        if unranked_kinds
+        else ""
+    )
 
     fig = go.Figure()
     fig.add_trace(
@@ -1137,12 +1180,12 @@ def build_loss_curve_figure(
         )
     )
     if monitor_loss_history:
-        if best_monitor_epoch is None and monitor_loss_history:
-            best_monitor_epoch = (
-                int(np.argmin(np.asarray(monitor_loss_history, dtype=float))) + 1
-                if monitor_goal == "min"
-                else int(np.argmax(np.asarray(monitor_loss_history, dtype=float))) + 1
-            )
+        values = np.asarray(monitor_loss_history, dtype=float)
+        if best_monitor_epoch is None and np.isfinite(values).any():
+            # A missing (NaN) or infinite monitor value is never the best; with no finite value there is no best epoch.
+            worst = np.inf if monitor_goal == "min" else -np.inf
+            finite = np.where(np.isfinite(values), values, worst)
+            best_monitor_epoch = int(np.argmin(finite) if monitor_goal == "min" else np.argmax(finite)) + 1
         fig.add_trace(
             go.Scatter(
                 x=list(range(1, len(monitor_loss_history) + 1)),
@@ -1179,7 +1222,7 @@ def build_loss_curve_figure(
     elif max_epochs_requested and epochs_trained and epochs_trained >= max_epochs_requested:
         status_text = f"Trained to max epoch ({max_epochs_requested})"
     elif epochs_trained:
-        status_text = f"Trained for {epochs_trained} epoch(s)"
+        status_text = f"Trained for {_count(epochs_trained, 'epoch')}"
     fig.update_layout(
         **_COMMON_LAYOUT,
         margin={"l": 60, "r": 30, "t": 80, "b": 60},
@@ -1301,7 +1344,8 @@ def build_time_dependent_importance_figure(
         height=max(400, 60 + 36 * len(selected_features)),
     )
     fig.update_xaxes(title="Evaluation Time", **_COMMON_AXES)
-    fig.update_yaxes(**_COMMON_AXES)
+    # Rows run from the most important feature down, so the first one is drawn at the top.
+    fig.update_yaxes(autorange="reversed", **_COMMON_AXES)
     return figure_to_json(fig)
 
 
@@ -1388,7 +1432,9 @@ def build_marker_stability_figure(result: dict[str, Any]) -> dict[str, Any]:
     settings = result.get("settings") or {}
     fig = go.Figure()
     scatter = go.Scattergl if len(result.get("marker_table", [])) > 2_000 else go.Scatter
-    for tier, color in MARKER_TIER_COLORS.items():
+    # Plotly draws later traces on top: the grey "not supported" points go first so they cannot hide a robust or
+    # suggestive marker at the same place, and legendrank keeps the legend in tier order.
+    for rank, (tier, color) in reversed(list(enumerate(MARKER_TIER_COLORS.items(), start=1))):
         members = [
             row
             for row in result.get("marker_table", [])
@@ -1405,6 +1451,7 @@ def build_marker_stability_figure(result: dict[str, Any]) -> dict[str, Any]:
                 y=[row[primary]["direction_consistency"] for row in members],
                 mode="markers",
                 name=tier,
+                legendrank=rank,
                 marker={"size": 9, "color": color, "line": {"width": 0.6, "color": INK}},
                 customdata=[[escape_plotly_text(row["marker"]), escape_plotly_text(_format_p_value(row[primary].get("p_fwer")))] for row in members],
                 hovertemplate="%{customdata[0]}<br>Selected in %{x:.0%} of subsamples<br>Same direction in %{y:.0%}<br>Family-wise p = %{customdata[1]}<extra></extra>",
@@ -1414,8 +1461,11 @@ def build_marker_stability_figure(result: dict[str, Any]) -> dict[str, Any]:
     direction = float(settings.get("robust_direction", 0.9))
     fig.add_vline(x=frequency, line_dash="dash", line_color=INK, line_width=1, opacity=0.5)
     fig.add_hline(y=direction, line_dash="dash", line_color=INK, line_width=1, opacity=0.5)
+    rule = f"Robust: family-wise p ≤ {float(settings.get('alpha', 0.05)):g}, selected in ≥ {frequency:.0%}, same direction in ≥ {direction:.0%}"
+    if not _family_wise_computed(result):
+        rule += "<br>No permutations were run, so no marker could be robust."
     fig.add_annotation(
-        text=f"Robust: family-wise p ≤ {float(settings.get('alpha', 0.05)):g}, selected in ≥ {frequency:.0%}, same direction in ≥ {direction:.0%}",
+        text=rule,
         xref="paper",
         yref="paper",
         x=0.99,
@@ -1508,13 +1558,36 @@ def build_marker_rank_figure(result: dict[str, Any], *, top: int = 25) -> dict[s
 
 
 _FUNNEL_GREY = "rgba(148,163,184,0.75)"
+_NOT_PERMUTED = "not computed (no permutations)"
+
+
+def _family_wise_computed(result: dict[str, Any]) -> bool:
+    """Whether the run computed family-wise p-values: it ran permutations (results that do not say so, any finite
+    family-wise p-value)."""
+    n_permutations = (result.get("null") or {}).get("n_permutations")
+    if n_permutations is not None:
+        return int(n_permutations) > 0
+    primary = str(result.get("primary_lens", "marginal"))
+    return any(
+        _finite_number((row.get(primary) or {}).get("p_fwer")) for row in result.get("marker_table", []) if isinstance(row.get(primary), dict)
+    )
+
+
+def _no_subsample_evaluated(result: dict[str, Any]) -> bool:
+    """Whether the result says that no subsample was evaluated, so the robust tier could not be assessed."""
+    resampling = result.get("resampling") or {}
+    if resampling.get("stability_assessed") is not None:
+        return not resampling["stability_assessed"]
+    return "n_valid" in resampling and not int(resampling.get("n_valid") or 0)
 
 
 def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
     """How many markers clear each successively stricter bar on the primary lens.
 
     Each bar is (up to permutation noise) a subset of the one above: a BH q-value is never below its p-value,
-    and a robust marker is a family-wise rejection by definition.
+    and a robust marker is a family-wise rejection by definition. A bar the run could not compute (family-wise
+    p-values and the robust tier without permutations, the robust tier without subsamples) has no count and a
+    ``note`` saying why, so it is not read as zero markers.
     """
     primary = str(result.get("primary_lens", "marginal"))
     settings = result.get("settings") or {}
@@ -1529,6 +1602,13 @@ def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
 
     tested = int(cohort.get("n_markers_evaluated") or len(stats))
     dropped = len(cohort.get("dropped_markers") or [])
+    permuted = _family_wise_computed(result)
+    if not permuted:
+        robust_note = _NOT_PERMUTED
+    elif _no_subsample_evaluated(result):
+        robust_note = "not assessed (no subsamples)"
+    else:
+        robust_note = None
     stages = []
     if dropped:
         stages.append({"label": "Supplied", "count": tested + dropped, "color": "rgba(148,163,184,0.35)"})
@@ -1536,8 +1616,16 @@ def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
         {"label": "Tested", "count": tested, "color": _FUNNEL_GREY},
         {"label": f"p < {alpha:g}", "count": passing("p_value", alpha, strict=True), "color": _FUNNEL_GREY},
         {"label": f"FDR q ≤ {alpha:g}", "count": passing("q_bh", alpha), "color": GOLD},
-        {"label": f"Family-wise p ≤ {alpha:g}", "count": passing("p_fwer", alpha), "color": PLUM},
-        {"label": "Robust", "count": int((result.get("tier_counts") or {}).get("robust", 0)), "color": SAGE},
+        (
+            {"label": f"Family-wise p ≤ {alpha:g}", "count": passing("p_fwer", alpha), "color": PLUM}
+            if permuted
+            else {"label": f"Family-wise p ≤ {alpha:g}", "count": None, "color": _FUNNEL_GREY, "note": _NOT_PERMUTED}
+        ),
+        (
+            {"label": "Robust", "count": int((result.get("tier_counts") or {}).get("robust", 0)), "color": SAGE}
+            if robust_note is None
+            else {"label": "Robust", "count": None, "color": _FUNNEL_GREY, "note": robust_note}
+        ),
     ]
     return stages
 
@@ -1547,16 +1635,24 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
     model's C-index falls from its apparent value to the value in patients it did not see."""
     added_value = result.get("primary_lens") == "added_value"
     signature = result.get("signature") or {}
+    # The model the right panel is about: with no marker selected it holds the clinical covariates only; it can also
+    # have failed to fit in the full cohort, or not exist (no marker selected and no clinical covariates).
+    selected_model = False
+    if signature_is_clinical_only(signature):
+        model_title, empty_note = "C-index of the clinical-only model", "No C-index is available for the model."
+    elif signature_fit_failed(result):
+        model_title, empty_note = "C-index (full-cohort model not fitted)", "The model could not be fitted in the full cohort."
+    elif signature.get("markers") or signature.get("apparent_c") is not None:
+        model_title, empty_note = "C-index of the selected-marker model", "No C-index is available for the model."
+        selected_model = True
+    else:
+        model_title, empty_note = "C-index (no marker selected)", "No marker was selected, so there is no model."
     fig = make_subplots(
         rows=1,
         cols=2,
         column_widths=[0.55, 0.45],
         horizontal_spacing=0.2,
-        subplot_titles=(
-            "Markers clearing each bar",
-            # With no marker selected the model holds the clinical covariates only.
-            "C-index of the clinical-only model" if signature_is_clinical_only(signature) else "C-index of the selected-marker model",
-        ),
+        subplot_titles=("Markers clearing each bar", model_title),
     )
     for annotation in fig.layout.annotations:
         annotation.font = {"size": 14, "color": INK, "family": "Sora, sans-serif"}
@@ -1566,16 +1662,22 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
     # which keeps zero at zero; a small panel keeps plain counts.
     stages = marker_evidence_funnel(result)
     labels = [stage["label"] for stage in stages]
-    log_scale = max(stage["count"] for stage in stages) > 50
-    lengths = [float(np.log10(stage["count"] + 1)) if log_scale else float(stage["count"]) for stage in stages]
+    counts = [stage["count"] for stage in stages]
+    # A bar that was not computed has no length and says why beside it.
+    log_scale = max((count for count in counts if count is not None), default=0) > 50
+    lengths = [0.0 if count is None else float(np.log10(count + 1)) if log_scale else float(count) for count in counts]
     fig.add_trace(
         go.Bar(
             x=lengths,
             y=labels,
             orientation="h",
             marker={"color": [stage["color"] for stage in stages], "line": {"width": 0}},
-            customdata=[f"{stage['count']:,}" for stage in stages],
-            hovertemplate="%{y}: %{customdata} markers<extra></extra>",
+            customdata=[stage.get("note") if stage["count"] is None else f"{stage['count']:,}" for stage in stages],
+            hovertemplate=(
+                "%{y}: %{customdata} markers<extra></extra>"
+                if None not in counts
+                else [f"%{{y}}: {'%{customdata}' if count is None else '%{customdata} markers'}<extra></extra>" for count in counts]
+            ),
             showlegend=False,
         ),
         row=1,
@@ -1587,9 +1689,12 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
             x=[length + 0.025 * longest for length in lengths],
             y=labels,
             mode="text",
-            text=[f"<b>{stage['count']:,}</b>" for stage in stages],
+            text=[stage.get("note") if stage["count"] is None else f"<b>{stage['count']:,}</b>" for stage in stages],
             textposition="middle right",
-            textfont={"size": 13, "color": INK},
+            textfont={
+                "size": 13,
+                "color": INK if None not in counts else [INK if count is not None else "rgba(100,116,139,0.95)" for count in counts],
+            },
             hoverinfo="skip",
             showlegend=False,
         ),
@@ -1612,10 +1717,12 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
         fig.update_xaxes(title="Markers", range=[0, longest * 1.22], dtick=max(1, int(np.ceil(longest / 5))), row=1, col=1, **_COMMON_AXES)
     fig.update_yaxes(autorange="reversed", row=1, col=1, **_COMMON_AXES)
 
+    # The left-out C-index comes from the model each subsample selected and fitted: the selected-marker model's
+    # in the usual case, else plainly the whole procedure's (it could select markers in a subsample).
     ladder = [
         ("Apparent", signature.get("apparent_c"), ACCENT),
         ("Optimism-corrected", signature.get("optimism_corrected_c"), SLATE),
-        ("Left-out patients", signature.get("signature_c_left_out"), SAGE),
+        ("Left-out patients" if selected_model else "Whole procedure<br>(left-out)", signature.get("signature_c_left_out"), SAGE),
     ]
     if added_value:
         ladder.append(("Clinical only<br>(left-out)", signature.get("clinical_c_left_out"), "rgba(100,116,139,0.9)"))
@@ -1649,7 +1756,7 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
         fig.update_yaxes(autorange="reversed", row=1, col=2, **_COMMON_AXES)
     else:
         fig.add_annotation(
-            text="No marker entered the model.",
+            text=empty_note,
             xref="x2 domain",
             yref="y2 domain",
             x=0.5,
@@ -1668,15 +1775,53 @@ def _finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and bool(np.isfinite(float(value)))
 
 
+def _drawable_interval(estimate: Any, keys: tuple[str, ...]) -> bool:
+    """Whether an estimate and its interval can be drawn on a log axis: finite and positive (an infinite bound cannot)."""
+    return all(_finite_number(estimate.get(key)) and float(estimate[key]) > 0 for key in keys)
+
+
+def _not_drawn_note(
+    entries: list[str], *, prefix: str = "Not drawn", limit: int = 8, width: int = 110, max_lines: int = 3
+) -> tuple[str, int]:
+    """"Not drawn: a (reason), b (reason)" for a figure note, wrapped, escaped and cut after ``limit`` entries."""
+    shown = ", ".join(entries[:limit]) + (f" and {len(entries) - limit} more" if len(entries) > limit else "")
+    lines = textwrap.wrap(f"{prefix}: {shown}", width=width) or [""]
+    if len(lines) > max_lines:
+        lines = lines[: max_lines - 1] + [_truncate_label_fragment(" ".join(lines[max_lines - 1 :]), width)]
+    return "<br>".join(escape_plotly_text(line) for line in lines), len(lines)
+
+
+_REPLICATION_FIT_LABELS = {"added_value": "with the clinical covariates", "marginal": "marker alone"}
+
+
+def _replication_fit(row: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+    """The external fit a locked marker's replication test used, with its lens: with the clinical covariates for
+    "added_value", without them for "marginal", and none when ``tested`` is None (that fit was not estimable).
+    Results without ``tested`` used the adjusted fit when there was one."""
+    lens = row["tested"] if "tested" in row else ("added_value" if row.get("adjusted") else "marginal")
+    fit = row.get("adjusted") if lens == "added_value" else row.get("marginal") if lens == "marginal" else None
+    return (lens, fit) if isinstance(fit, dict) else (None, None)
+
+
 def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any]:
     """The locked model in the external cohort: its C-index beside the clinical covariates alone (top), and each
-    locked marker's external hazard ratio, coloured by whether it replicated (bottom)."""
+    locked marker's external hazard ratio from the fit its replication test used, coloured by whether it replicated
+    (bottom). Markers without a drawable estimate are named in a note under the forest instead."""
     rows = []
+    not_drawn: list[str] = []
     for row in validation.get("markers", []):
-        tested = row.get("adjusted") or row.get("marginal")
-        # Finite and positive, as the Cox forest requires: an infinite bound cannot be drawn on a log axis.
-        if tested and all(_finite_number(tested.get(key)) and tested[key] > 0 for key in ("hazard_ratio", "ci_lower", "ci_upper")):
-            rows.append((row, tested))
+        lens, tested = _replication_fit(row)
+        name = str(row.get("marker"))
+        if row.get("absent"):
+            not_drawn.append(f"{name} (not measured)")
+        elif tested is None:
+            not_drawn.append(f"{name} (not estimable)")
+        elif _drawable_interval(tested, ("hazard_ratio", "ci_lower", "ci_upper")):
+            rows.append((row, {**tested, "lens": lens}))
+        elif _drawable_interval(tested, ("hazard_ratio",)):
+            not_drawn.append(f"{name} (interval not finite)")
+        else:
+            not_drawn.append(f"{name} (estimate not finite)")
     rows.reverse()
     labels = [str(row["marker"]) for row, _ in rows]
     display_labels, axis_layout = _feature_plot_axis_layout(labels, width=30, max_lines=2)
@@ -1763,10 +1908,14 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
                     "width": 0,
                 },
                 customdata=[
-                    [escape_plotly_text(row["marker"]), escape_plotly_text(_format_p_value(row.get("replication_p_holm")))]
-                    for row, _ in members
+                    [
+                        escape_plotly_text(row["marker"]),
+                        escape_plotly_text(_format_p_value(row.get("replication_p_holm"))),
+                        _REPLICATION_FIT_LABELS.get(str(tested["lens"]), ""),
+                    ]
+                    for row, tested in members
                 ],
-                hovertemplate="%{customdata[0]}<br>HR %{x:.3f}<br>Replication p (Holm) = %{customdata[1]}<extra></extra>",
+                hovertemplate="%{customdata[0]}<br>HR %{x:.3f} (%{customdata[2]})<br>Replication p (Holm) = %{customdata[1]}<extra></extra>",
             ),
             row=2,
             col=1,
@@ -1784,8 +1933,25 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
             showarrow=False,
             font={"size": 14, "color": INK},
         )
-    _marker_layout(fig, "Locked Model in the External Cohort", height=area + 80 + 110, left=axis_layout["l"])
-    fig.update_layout(margin={"b": 110}, legend={"orientation": "h", "yanchor": "top", "y": -88 / area, "xanchor": "left", "x": 0.0})
+    # Markers without a drawable estimate are named under the legend, never drawn with another fit's hazard ratio.
+    note, note_lines = _not_drawn_note(not_drawn, width=95) if not_drawn else ("", 0)
+    bottom = 110 + (18 * note_lines + 24 if note_lines else 0)
+    if note:
+        fig.add_annotation(
+            text=note,
+            xref="paper",
+            yref="paper",
+            x=0.0,
+            y=0.0,
+            xanchor="left",
+            yanchor="top",
+            yshift=-122,
+            showarrow=False,
+            align="left",
+            font={"size": 12, "color": INK},
+        )
+    _marker_layout(fig, "Locked Model in the External Cohort", height=area + 80 + bottom, left=axis_layout["l"])
+    fig.update_layout(margin={"b": bottom}, legend={"orientation": "h", "yanchor": "top", "y": -88 / area, "xanchor": "left", "x": 0.0})
     bounds = [tested[key] for _, tested in rows for key in ("ci_lower", "ci_upper")]
     fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_log_axis_ticks([1.0, *bounds]), row=2, col=1, **_COMMON_AXES)
     # Markers keep the recipe's order (first at the top) instead of being grouped by replication status.

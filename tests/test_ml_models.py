@@ -1040,12 +1040,20 @@ def test_time_dependent_importance_returns_time_major_matrix() -> None:
         time_column="os_months",
         event_column="os_event",
         features=["age", "biomarker_score", "immune_index"],
-        eval_times=[12.0, 24.0, 36.0],
+        eval_times=[12.0, 24.0],
+        n_estimators=20,
     )
     assert result["importance_matrix_orientation"] == "time_major"
-    assert len(result["importance_matrix"]) == len(result["eval_times"])
-    assert len(result["importance_matrix"][0]) == len(result["features"])
-    assert len(result["importance_matrix_feature_major"]) == len(result["features"])
+    # Two time points and three features, so a transposed matrix could not pass.
+    assert result["eval_times"] == [12.0, 24.0] and len(result["features"]) == 3
+    assert [len(row) for row in result["importance_matrix"]] == [3, 3]
+    assert [len(row) for row in result["importance_matrix_feature_major"]] == [2, 2, 2]
+    for time_index in range(2):
+        for feature_index in range(3):
+            assert (
+                result["importance_matrix"][time_index][feature_index]
+                == result["importance_matrix_feature_major"][feature_index][time_index]
+            )
 
 
 def test_counterfactual_survival_handles_zero_baseline_risk(monkeypatch) -> None:
@@ -1203,25 +1211,35 @@ def test_partial_dependence_supports_categorical_raw_feature() -> None:
 def test_partial_dependence_orders_categories_like_the_reference_levels() -> None:
     import pandas as pd
 
+    import survival_toolkit.ml_models as ml_models
     from survival_toolkit.ml_models import compute_partial_dependence
 
-    class _OrdinalModel:
+    class _StageModel:
         def predict(self, X):
-            return X[:, 0].astype(float)
+            # One point of risk for stage II and two for stage III.
+            return np.asarray(X, dtype=float) @ np.array([1.0, 2.0])
 
     analysis_frame = pd.DataFrame({"stage": pd.Series(["Stage I", "Stage III", "Stage II"], dtype="string")})
-    encoded = pd.DataFrame({"stage": [0.0, 1.0, 2.0]})
+    encoder = ml_models._fit_feature_encoder(analysis_frame, ["stage"], ["stage"])
+    encoded = ml_models._transform_feature_encoder(analysis_frame, encoder)
 
     pdp = compute_partial_dependence(
-        _OrdinalModel(),
+        _StageModel(),
         encoded,
         feature_name="stage",
         categorical_features=["stage"],
+        feature_encoder=encoder,
         analysis_frame=analysis_frame,
     )
 
-    # Same clinical ordering as the encoder baseline and the Cox reference level.
+    # Same clinical ordering as the encoder baseline and the Cox reference level, and each
+    # category's curve value is the risk the model gives that category.
     assert pdp["values"] == ["Stage I", "Stage II", "Stage III"]
+    assert pdp["mean_risk"] == [0.0, 1.0, 2.0]
+    # Without the encoder a category cannot be placed on the encoded columns, so no silent all-None curve.
+    with pytest.raises(ValueError, match="needs the fitted feature encoder"):
+        compute_partial_dependence(_StageModel(), encoded, feature_name="stage", categorical_features=["stage"],
+                                   analysis_frame=analysis_frame)
 
 
 def test_partial_dependence_raises_on_internal_prediction_failure() -> None:
@@ -1376,9 +1394,10 @@ def test_compute_shap_values_caps_kernel_fallback_work(monkeypatch) -> None:
         def __init__(self, predict_fn, background) -> None:
             seen["background_shape"] = background.shape
 
-        def shap_values(self, eval_matrix, nsamples=None, silent=None):
+        def shap_values(self, eval_matrix, nsamples=None, l1_reg="num_features(10)", silent=None):
             seen["eval_shape"] = eval_matrix.shape
             seen["nsamples"] = nsamples
+            seen["l1_reg"] = l1_reg
             seen["silent"] = silent
             return np.ones((eval_matrix.shape[0], eval_matrix.shape[1]), dtype=float)
 
@@ -1401,6 +1420,8 @@ def test_compute_shap_values_caps_kernel_fallback_work(monkeypatch) -> None:
     assert seen["background_shape"] == (40, 5)
     assert seen["eval_shape"] == (60, 5)
     assert seen["nsamples"] == 40
+    # No L1 feature selection: shap's default would keep at most ten non-zero attributions per row.
+    assert seen["l1_reg"] is False
     assert seen["silent"] is True
 
 
@@ -1434,9 +1455,10 @@ def test_compute_shap_values_accepts_list_output_from_older_shap(monkeypatch) ->
 
         def shap_values(self, matrix):
             arr = np.asarray(matrix, dtype=float)
+            # Two outputs that rank the features in opposite orders.
             return [
-                np.zeros_like(arr),
-                np.ones_like(arr),
+                arr * np.array([3.0, 2.0, 1.0]),
+                arr * np.array([1.0, 2.0, 3.0]),
             ]
 
     monkeypatch.setattr(ml_models, "SHAP_AVAILABLE", True)
@@ -1452,8 +1474,10 @@ def test_compute_shap_values_accepts_list_output_from_older_shap(monkeypatch) ->
     result = ml_models.compute_shap_values(model, encoded, feature_names=list(encoded.columns))
 
     assert result["method"] == "tree"
-    assert result["feature_importance"][0]["feature"] == "a"
-    assert result["shap_summary"]
+    # The last output is used: mean |SHAP| of c = 3 * mean(2, 5, 8, 11) = 19.5 ranks it first.
+    assert [row["feature"] for row in result["feature_importance"]] == ["c", "b", "a"]
+    assert result["feature_importance"][0]["mean_abs_shap"] == pytest.approx(19.5)
+    assert result["shap_summary"][0]["shap_values"] == [6.0, 15.0, 24.0, 33.0]
 
 
 def test_compute_shap_values_requires_predict_callable(monkeypatch) -> None:
@@ -1540,10 +1564,10 @@ def test_tree_model_training_keeps_encoded_matrices_and_targets_aligned(
     import survival_toolkit.ml_models as ml_models
 
     train_encoded = pd.DataFrame({"age": [50.0, 60.0, 70.0]})
-    eval_encoded = pd.DataFrame({"age": [80.0, 90.0]})
+    eval_encoded = pd.DataFrame({"age": [80.0, 90.0, 75.0]})
     full_encoded = pd.concat([train_encoded, eval_encoded], ignore_index=True)
     train_frame = pd.DataFrame({"os_months": [10.0, 20.0, 30.0], "os_event": [1.0, 0.0, 1.0]})
-    eval_frame = pd.DataFrame({"os_months": [40.0, 50.0], "os_event": [0.0, 1.0]})
+    eval_frame = pd.DataFrame({"os_months": [40.0, 50.0, 60.0], "os_event": [1.0, 1.0, 0.0]})
     full_frame = pd.concat([train_frame, eval_frame], ignore_index=True)
 
     class _DummyTreeModel:
@@ -1558,7 +1582,8 @@ def test_tree_model_training_keeps_encoded_matrices_and_targets_aligned(
             return self
 
         def predict(self, X):
-            return np.linspace(0.1, 0.9, X.shape[0], dtype=float)
+            # The risk score is the age, so every score can be traced back to its row.
+            return np.asarray(X, dtype=float)[:, 0]
 
     monkeypatch.setattr(ml_models, "SKSURV_AVAILABLE", True)
     monkeypatch.setattr(ml_models, model_attr, _DummyTreeModel)
@@ -1577,19 +1602,10 @@ def test_tree_model_training_keeps_encoded_matrices_and_targets_aligned(
             "feature_encoder": None,
         },
     )
-    monkeypatch.setattr(
-        ml_models,
-        "_prepare_sksurv_data",
-        lambda frame, time_column, event_column: np.array(
-            list(zip(frame[event_column].astype(bool), frame[time_column].astype(float), strict=False)),
-            dtype=[("event", bool), ("time", float)],
-        ),
-    )
-    monkeypatch.setattr(ml_models, "_sksurv_c_index", lambda y, scores: 0.61)
 
     train_fn = getattr(ml_models, train_fn_name)
     kwargs = {
-        "df": full_frame.assign(age=[50.0, 60.0, 70.0, 80.0, 90.0]),
+        "df": full_frame.assign(age=[50.0, 60.0, 70.0, 80.0, 90.0, 75.0]),
         "time_column": "os_months",
         "event_column": "os_event",
         "features": ["age"],
@@ -1601,6 +1617,14 @@ def test_tree_model_training_keeps_encoded_matrices_and_targets_aligned(
 
     assert result["_X_encoded"].shape[0] == result["_y"].shape[0] == full_frame.shape[0]
     assert result["_X_eval_encoded"].shape[0] == result["_y_eval"].shape[0] == eval_frame.shape[0]
+    # Row by row: scores and outcomes stay paired, so the holdout C-index is exactly the one of
+    # (risk 80, event at 40), (risk 90, event at 50), (risk 75, censored at 60): 2 of 3 pairs concordant.
+    assert result["evaluation_risk_scores"] == [80.0, 90.0, 75.0]
+    assert result["predicted_risk_scores"] == [50.0, 60.0, 70.0, 80.0, 90.0, 75.0]
+    assert result["_y_eval"]["time"].tolist() == [40.0, 50.0, 60.0]
+    assert result["_y_eval"]["event"].tolist() == [True, True, False]
+    assert result["_y"]["time"].tolist() == full_frame["os_months"].tolist()
+    assert result["model_stats"]["c_index"] == pytest.approx(2.0 / 3.0)
 
 
 def test_random_survival_forest_uses_parallel_tree_jobs(monkeypatch) -> None:
@@ -1752,24 +1776,10 @@ def test_partial_dependence_uses_encoder_levels_for_categorical_features() -> No
         def predict(self, x):
             return np.asarray(x[:, 0], dtype=float)
 
-    analysis_frame = pd.DataFrame({"marker": pd.Series(["a", "z", "a"], dtype="string")})
-    encoder = {
-        "features": ["marker"],
-        "categorical_features": ["marker"],
-        "categorical_mappings": {
-            "marker": {
-                "all_levels": ["a", "__unknown"],
-                "retained_levels": ["a"],
-                "missing_label": "__missing",
-                "unknown_column": "marker____unknown",
-                "missing_column": "marker__missing",
-            }
-        },
-        "encoded_columns": ["marker__a", "marker____unknown", "marker__missing"],
-        "feature_names": ["marker__a", "marker____unknown", "marker__missing"],
-        "numeric_features": [],
-        "numeric_impute_values": {},
-    }
+    # The encoder was fitted on training rows that hold "a" and "z"; the analysed rows also hold
+    # "q", a level the model never saw, which is therefore not a point of the curve.
+    encoder = ml_models._fit_feature_encoder(pd.DataFrame({"marker": ["a", "z", "a"]}), ["marker"], ["marker"])
+    analysis_frame = pd.DataFrame({"marker": pd.Series(["a", "z", "a", "q"], dtype="string")})
     encoded = ml_models._transform_feature_encoder(analysis_frame, encoder)
 
     result = ml_models.compute_partial_dependence(
@@ -1782,7 +1792,9 @@ def test_partial_dependence_uses_encoder_levels_for_categorical_features() -> No
     )
 
     assert result["feature_type"] == "categorical"
-    assert result["values"] == ["a", "__unknown"]
+    assert result["values"] == ["a", "z"]
+    assert result["mean_risk"] == [0.0, 1.0]
+    assert result["category_counts"] == {"a": 2, "z": 1}
 
 
 def test_integrated_brier_score_restricts_eval_times_to_support_event_window() -> None:
@@ -2122,7 +2134,10 @@ def test_unseen_categorical_levels_are_reported() -> None:
 
     train = pd.DataFrame({"site": ["A", "A", "B"]})
     evaluation = pd.DataFrame({"site": ["A", "C", None, "C"]})
-    assert _unseen_category_rows(train, evaluation, ["site"]) == 2
+    # Two unseen levels, and a missing value the training rows never had: the encoder has no
+    # missing-value column then, so that row is scored as the reference level as well.
+    assert _unseen_category_rows(train, evaluation, ["site"]) == 3
+    assert _unseen_category_rows(pd.DataFrame({"site": ["A", None, "B"]}), evaluation, ["site"]) == 2
 
 
 def test_ipcw_brier_weights_follow_the_events_first_convention() -> None:
@@ -2242,7 +2257,8 @@ def test_feature_encoder_uses_reference_baselines_and_skips_constant_indicators(
             "age": [50.0, 60.0, 70.0, 55.0, 65.0, 75.0],
         }
     )
-    encoder = fit_feature_encoder(frame, ["stage", "grade", "age"])
+    # "grade" holds only numbers written as text, so it is categorical because it is declared so.
+    encoder = fit_feature_encoder(frame, ["stage", "grade", "age"], ["grade"])
     assert encoder["categorical_mappings"]["stage"]["baseline_level"] == "Stage I"
     # Numeric-looking levels sort numerically, so "2" (not "10") is the baseline.
     assert encoder["categorical_mappings"]["grade"]["baseline_level"] == "2"

@@ -129,8 +129,12 @@ function wireDownloads() {
     ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
   refs.downloadSignatureButton.addEventListener("click", () => {
+    if (isScopeBusy("signature")) {
+      showToast("Wait for the current run to finish before exporting this result.", "warning", 3200);
+      return;
+    }
     const payload = currentSignatureResult();
-    if (!payload || isScopeBusy("km")) {
+    if (!payload) {
       showToast("Visible settings no longer match the current signature result. Run again before exporting.", "warning", 3600);
       return;
     }
@@ -158,30 +162,29 @@ function wireDownloads() {
       "text/csv;charset=utf-8;",
     ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
-  if (refs.downloadCoxPngButton) refs.downloadCoxPngButton.addEventListener("click", () => {
+  refs.downloadCoxPngButton.addEventListener("click", () => {
     const payload = currentGoalResult("cox");
     if (!requireCurrentResultForExport("cox", { payload })) return;
     if (!requireCurrentPlotForExport(refs.coxPlot, payload)) return;
     downloadPlotImage(refs.coxPlot, buildDownloadFilename("cox_forest", "png").replace(/\.png$/, ""), "png");
   });
-  if (refs.downloadCoxSvgButton) refs.downloadCoxSvgButton.addEventListener("click", () => {
+  refs.downloadCoxSvgButton.addEventListener("click", () => {
     const payload = currentGoalResult("cox");
     if (!requireCurrentResultForExport("cox", { payload })) return;
     if (!requireCurrentPlotForExport(refs.coxPlot, payload)) return;
     downloadPlotImage(refs.coxPlot, buildDownloadFilename("cox_forest", "svg").replace(/\.svg$/, ""), "svg");
   });
+  // Exported by the server like the XLSX and the other tables, so the file records the dataset it came from.
   refs.downloadCohortTableButton.addEventListener("click", () => {
     const payload = state.cohort;
     if (!requireCurrentResultForExport("tables", { payload })) return;
-    const exportPayload = buildCohortTableExportPayload("csv");
-    downloadCsv(
+    void downloadServerTable(
       buildDownloadFilename("cohort_summary", "csv", { includeGroup: true, group: cohortTableOutputGroup() }),
-      payload?.analysis?.rows,
-      payload?.analysis?.columns,
-      { caption: exportPayload.caption, notes: exportPayload.notes },
-    );
+      buildCohortTableExportPayload("csv"),
+      "text/csv;charset=utf-8;",
+    ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
-  if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.addEventListener("click", () => {
+  refs.downloadCohortTableXlsxButton.addEventListener("click", () => {
     const payload = state.cohort;
     if (!requireCurrentResultForExport("tables", { payload })) return;
     void downloadServerTable(
@@ -200,13 +203,13 @@ function wireDownloads() {
       "text/csv;charset=utf-8;",
     ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
-  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.addEventListener("click", () => {
+  refs.downloadMlComparisonPngButton.addEventListener("click", () => {
     const payload = currentGoalResult("ml");
     if (!requireCurrentResultForExport("ml", { payload })) return;
     if (!requireCurrentPlotForExport(refs.mlComparisonPlot, payload)) return;
     downloadPlotImage(refs.mlComparisonPlot, buildDownloadFilename("ml_model_comparison", "png").replace(/\.png$/, ""), "png");
   });
-  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.addEventListener("click", () => {
+  refs.downloadMlComparisonSvgButton.addEventListener("click", () => {
     const payload = currentGoalResult("ml");
     if (!requireCurrentResultForExport("ml", { payload })) return;
     if (!requireCurrentPlotForExport(refs.mlComparisonPlot, payload)) return;
@@ -270,13 +273,13 @@ function wireDownloads() {
       "text/csv;charset=utf-8;",
     ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
-  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.addEventListener("click", () => {
+  refs.downloadDlComparisonPngButton.addEventListener("click", () => {
     const payload = currentGoalResult("dl");
     if (!requireCurrentResultForExport("dl", { payload })) return;
     if (!requireCurrentPlotForExport(refs.dlComparisonPlot, payload)) return;
     downloadPlotImage(refs.dlComparisonPlot, buildDownloadFilename("dl_model_comparison", "png").replace(/\.png$/, ""), "png");
   });
-  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.addEventListener("click", () => {
+  refs.downloadDlComparisonSvgButton.addEventListener("click", () => {
     const payload = currentGoalResult("dl");
     if (!requireCurrentResultForExport("dl", { payload })) return;
     if (!requireCurrentPlotForExport(refs.dlComparisonPlot, payload)) return;
@@ -330,13 +333,13 @@ function wireDownloads() {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ).catch((error) => showError(errorMessageText(error, "Download failed.")));
   });
-  if (refs.downloadKmPngButton) refs.downloadKmPngButton.addEventListener("click", () => {
+  refs.downloadKmPngButton.addEventListener("click", () => {
     const payload = currentGoalResult("km");
     if (!requireCurrentResultForExport("km", { payload })) return;
     if (!requireCurrentPlotForExport(refs.kmPlot, payload)) return;
     downloadPlotImage(refs.kmPlot, buildDownloadFilename("km_curve", "png", { includeGroup: true }).replace(/\.png$/, ""), "png");
   });
-  if (refs.downloadKmSvgButton) refs.downloadKmSvgButton.addEventListener("click", () => {
+  refs.downloadKmSvgButton.addEventListener("click", () => {
     const payload = currentGoalResult("km");
     if (!requireCurrentResultForExport("km", { payload })) return;
     if (!requireCurrentPlotForExport(refs.kmPlot, payload)) return;
@@ -346,23 +349,24 @@ function wireDownloads() {
 
 // ── Utilities ──────────────────────────────────────────────────
 
-async function withLoading(button, action, scopeOverride = null, { swallowErrors = true } = {}) {
+async function withLoading(button, action, scopeOverride = null) {
   // One resolver for clicks and Ctrl+Enter, so every run holds its busy scope however it was started.
   const scope = scopeOverride || runScopeForButton(button);
-  if (scope && isScopeBusy(scope)) return;
+  // Another run holds the scope: nothing started, and nothing failed.
+  if (scope && isScopeBusy(scope)) return { ok: false, busy: true };
   if (scope) {
     setScopeBusy(scope, true, button);
   } else {
     setButtonLoading(button, true);
   }
-  setRuntimeBanner("");
+  // Only a notice left by an earlier action: the banner of a run still in flight belongs to that run.
+  clearRuntimeNotice();
   try {
     const value = await action();
     return { ok: true, value };
   } catch (error) {
     if (isSupersededRequestError(error)) return { ok: false, error, superseded: true };
     showError(errorMessageText(error));
-    if (!swallowErrors) throw error;
     return { ok: false, error };
   } finally {
     if (scope) {
@@ -397,26 +401,21 @@ function activeRunTarget() {
   return null;
 }
 
-function reviewBenchmarkSourceTab(tabName, mode = null) {
-  const nextMode = mode || (tabName === "ml" ? benchmarkPanelMode("ml") : benchmarkPanelMode("dl"));
+// The family's workbench mount always exists (a required ref), so it is where the view scrolls.
+function reviewBenchmarkSourceTab(tabName) {
   setPredictiveWorkbenchFamily(tabName, { syncHistory: false });
   activateTab("benchmark", { historyMode: "push" });
   requestAnimationFrame(() => {
-    const sectionTarget = tabName === "ml" ? (refs.benchmarkMlMount || refs.mlWorkspaceCard) : (refs.benchmarkDlMount || refs.dlWorkspaceCard);
-    if (sectionTarget) {
-      sectionTarget.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
-    scrollToAnalysisResult(tabName, { mode: nextMode || "single" });
+    (tabName === "ml" ? refs.benchmarkMlMount : refs.benchmarkDlMount).scrollIntoView({ behavior: "smooth", block: "start" });
   });
 }
 
-function reviewBenchmarkModel(modelKey, mode = null) {
+function reviewBenchmarkModel(modelKey) {
   runtime.workbenchRevealed = true;
   runtime.predictiveWorkbenchIntent = "train";
   const meta = predictiveModelMeta(modelKey);
   setPredictiveModel(meta.key, { syncHistory: false });
-  reviewBenchmarkSourceTab(meta.family, mode);
+  reviewBenchmarkSourceTab(meta.family);
 }
 
 function closePredictiveWorkbench() {
@@ -486,8 +485,9 @@ function updateResultVisibility() {
   reveal(refs.signatureInsightBoard?.closest(".table-card"), signatureInsight);
   reveal(refs.signatureShell?.closest(".table-card"), signatureTable);
 
-  const coxDiagnosticsPlot = hasRenderedPlot(refs.coxDiagnosticsPlot);
-  const coxMartingalePlot = hasRenderedPlot(refs.coxMartingalePlot);
+  // A diagnostic that could not be computed shows its explanation (a message plot) like a plot.
+  const coxDiagnosticsPlot = hasRenderedPlot(refs.coxDiagnosticsPlot) || hasPlotMessage(refs.coxDiagnosticsPlot);
+  const coxMartingalePlot = hasRenderedPlot(refs.coxMartingalePlot) || hasPlotMessage(refs.coxMartingalePlot);
   const coxInsight = hasRenderedInsight(refs.coxInsightBoard);
   const coxResults = hasRenderedTable(refs.coxResultsShell);
   const coxDiagnostics = hasRenderedTable(refs.coxDiagnosticsShell);
@@ -516,7 +516,7 @@ function updateResultVisibility() {
 
   ["ml", "dl"].forEach((goal) => {
     const isMl = goal === "ml";
-    const resultMode = runtime.resultPreference?.[goal] || "single";
+    const resultMode = preferredResultMode(goal);
     const importancePlot = isMl ? refs.mlImportancePlot : refs.dlImportancePlot;
     const secondPlot = isMl ? refs.mlShapPlot : refs.dlLossPlot;
     const comparisonPlot = isMl ? refs.mlComparisonPlot : refs.dlComparisonPlot;
@@ -572,7 +572,9 @@ function scrollToAnalysisResult(tabName, { mode = "single" } = {}) {
 
 function shouldRevealCompletedResult(goal) {
   if (goal === "predictive") return activeTabName() === "benchmark";
-  if (activeTabName() === "benchmark" && ["ml", "dl"].includes(goal)) return true;
+  // An ML or DL result is revealed in place only while the Prediction tab shows that family: a user who moved
+  // on to the other family's controls stays there (a toast says the run finished).
+  if (goal === "ml" || goal === "dl") return activeTabName() === "benchmark" && predictiveFamilyGoal() === goal;
   return activeTabName() === goal;
 }
 
@@ -597,7 +599,9 @@ function initTabKeyboard() {
   const strip = document.querySelector(".tab-strip");
   if (!strip) return;
   strip.addEventListener("keydown", (e) => {
-    const tabs = refs.tabButtons.filter((button) => button.offsetParent !== null);
+    // The ML and DL buttons (hidden) open the Prediction models tab, so only buttons that stand for their own
+    // tab take part: an arrow key always moves to another tab. Like a click, a key replaces the history entry.
+    const tabs = refs.tabButtons.filter((button) => button.offsetParent !== null && !["ml", "dl"].includes(button.dataset.tab));
     const idx = tabs.indexOf(e.target);
     if (idx < 0) return;
     let next = -1;
@@ -605,7 +609,7 @@ function initTabKeyboard() {
     else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (idx - 1 + tabs.length) % tabs.length;
     else if (e.key === "Home") next = 0;
     else if (e.key === "End") next = tabs.length - 1;
-    if (next >= 0) { e.preventDefault(); activateTab(tabs[next].dataset.tab, { historyMode: "push", focusTabButton: true }); }
+    if (next >= 0) { e.preventDefault(); activateTab(tabs[next].dataset.tab, { historyMode: "replace", focusTabButton: true }); }
   });
 }
 
@@ -654,6 +658,18 @@ function initTooltips() {
   }, true);
 }
 
+// A file dropped while another uploads replaces that upload (fetchLatestDatasetPayload); the upload button
+// stays busy until the last upload has ended, not until the replaced one has.
+async function startUpload() {
+  runtime.pendingUploads = Number(runtime.pendingUploads || 0) + 1;
+  try {
+    return await withLoading(refs.uploadButton, uploadDataset);
+  } finally {
+    runtime.pendingUploads -= 1;
+    if (runtime.pendingUploads > 0) setButtonLoading(refs.uploadButton, true);
+  }
+}
+
 function initDragDrop() {
   const zone = refs.uploadZone;
   if (!zone) return;
@@ -663,7 +679,7 @@ function initDragDrop() {
   zone.addEventListener("dragover", (e) => e.preventDefault());
   zone.addEventListener("drop", (e) => {
     e.preventDefault(); dragCounter = 0; zone.classList.remove("drag-over");
-    if (e.dataTransfer.files.length) { refs.datasetFile.files = e.dataTransfer.files; withLoading(refs.uploadButton, uploadDataset); }
+    if (e.dataTransfer.files.length) { refs.datasetFile.files = e.dataTransfer.files; void startUpload(); }
   });
 }
 
@@ -727,7 +743,7 @@ function initListeners() {
     withLoading(refs.runPredictiveWorkbenchButton, runPredictiveSelectedModel);
   });
   refs.openPredictiveWorkbenchButton?.addEventListener("click", () => {
-    reviewBenchmarkModel(currentPredictiveModelKey(), "single");
+    reviewBenchmarkModel(currentPredictiveModelKey());
   });
   refs.closePredictiveWorkbenchButton?.addEventListener("click", () => {
     closePredictiveWorkbench();
@@ -735,12 +751,12 @@ function initListeners() {
   refs.benchmarkSummaryGrid?.addEventListener("click", (event) => {
     const modelButton = closestFromEvent(event, "[data-benchmark-model]");
     if (modelButton) {
-      reviewBenchmarkModel(modelButton.dataset.benchmarkModel || currentPredictiveModelKey(), modelButton.dataset.benchmarkMode || null);
+      reviewBenchmarkModel(modelButton.dataset.benchmarkModel || currentPredictiveModelKey());
       return;
     }
     const button = closestFromEvent(event, "[data-benchmark-tab]");
     if (!button) return;
-    reviewBenchmarkSourceTab(button.dataset.benchmarkTab || "ml", button.dataset.benchmarkMode || null);
+    reviewBenchmarkSourceTab(button.dataset.benchmarkTab || "ml");
   });
   refs.benchmarkComparisonShell?.addEventListener("click", (event) => {
     const paramsButton = closestFromEvent(event, "[data-benchmark-params-goal]");
@@ -754,12 +770,12 @@ function initListeners() {
     }
     const modelButton = closestFromEvent(event, "[data-benchmark-model]");
     if (modelButton) {
-      reviewBenchmarkModel(modelButton.dataset.benchmarkModel || currentPredictiveModelKey(), modelButton.dataset.benchmarkMode || null);
+      reviewBenchmarkModel(modelButton.dataset.benchmarkModel || currentPredictiveModelKey());
       return;
     }
     const button = closestFromEvent(event, "[data-benchmark-tab]");
     if (!button) return;
-    reviewBenchmarkSourceTab(button.dataset.benchmarkTab || "ml", button.dataset.benchmarkMode || null);
+    reviewBenchmarkSourceTab(button.dataset.benchmarkTab || "ml");
   });
   window.addEventListener("popstate", (event) => {
     void restoreHistoryState(event.state);
@@ -771,7 +787,7 @@ function initListeners() {
     refs.datasetFile.value = "";
   });
   refs.datasetFile.addEventListener("change", () => {
-    if (refs.datasetFile.files?.length) withLoading(refs.uploadButton, uploadDataset);
+    if (refs.datasetFile.files?.length) void startUpload();
   });
   refs.uploadButton.addEventListener("click", () => refs.datasetFile.click());
   refs.shutdownButton?.addEventListener("click", () => {
@@ -804,7 +820,7 @@ function initListeners() {
       queueHistorySync();
     }
   });
-  refs.eventColumn.addEventListener("change", () => {
+  const onEventColumnChange = () => {
     clearAnalysisOutputs();
     updateTimeColumnGuidance();
     updateEventPositiveOptions();
@@ -813,7 +829,8 @@ function initListeners() {
     renderSharedFeatureSummary();
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
-  });
+  };
+  refs.eventColumn.addEventListener("change", onEventColumnChange);
   refs.eventPositiveValue.addEventListener("change", () => {
     clearAnalysisOutputs();
     updateEventPositiveOptions();
@@ -822,12 +839,20 @@ function initListeners() {
     queueHistorySync();
     scheduleCoxPreview({ delay: 0 });
   });
+  // "All columns" lists every column in the Event menu. Unticking it can reset the event column: that is an
+  // endpoint change like any other. Ticking it can unblock the chosen column, so the Cox preview is checked again.
   refs.showAllEventColumns?.addEventListener("change", () => {
+    const previous = refs.eventColumn.value;
     renderEventColumnOptions({ silent: false });
+    if (refs.eventColumn.value !== previous) {
+      onEventColumnChange();
+      return;
+    }
     refreshVariableSelections();
     updateDatasetBadge();
     renderSharedFeatureSummary();
     queueHistorySync();
+    scheduleCoxPreview({ delay: 0 });
   });
   refs.groupColumn.addEventListener("change", () => {
     rerenderDerivedGroupSummaryIfVisible();
@@ -879,7 +904,7 @@ function initListeners() {
   });
   refs.selectAllCoxCovariatesButton?.addEventListener("click", () => {
     const covariates = allCheckboxValues(refs.covariateChecklist, { visibleOnly: true });
-    setCheckedValues(refs.covariateChecklist, covariates);
+    addVisibleCheckboxesToSelection(refs.covariateChecklist);
     syncCoxCovariateSelection({ preferredScope: "covariate", autoCategoricalValues: covariates });
     renderSharedFeatureSummary();
     queueHistorySync();
@@ -914,8 +939,7 @@ function initListeners() {
     showToast("Cleared Cox categorical flags.", "success", 2200);
   });
   refs.selectAllCoxStrataButton?.addEventListener("click", () => {
-    const strata = allCheckboxValues(refs.strataChecklist, { visibleOnly: true });
-    setCheckedValues(refs.strataChecklist, strata);
+    addVisibleCheckboxesToSelection(refs.strataChecklist);
     syncCoxCovariateSelection({ preferredScope: "strata" });
     renderSharedFeatureSummary();
     queueHistorySync();
@@ -939,8 +963,7 @@ function initListeners() {
     applyChecklistSearch(refs.cohortVariableChecklist);
   });
   refs.selectAllCohortVariablesButton?.addEventListener("click", () => {
-    const variables = allCheckboxValues(refs.cohortVariableChecklist, { visibleOnly: true });
-    setCheckedValues(refs.cohortVariableChecklist, variables);
+    addVisibleCheckboxesToSelection(refs.cohortVariableChecklist);
     renderSharedFeatureSummary();
     queueHistorySync();
     showToast("Selected all visible cohort table variables.", "success", 2200);
@@ -1006,7 +1029,8 @@ function initListeners() {
   });
   refs.coxMartingaleVariableSelect?.addEventListener("change", () => {
     runtime.coxMartingaleTerm = refs.coxMartingaleVariableSelect.value || "";
-    void renderCoxMartingalePlot(runtime.coxMartingaleTerm);
+    renderCoxMartingalePlot(runtime.coxMartingaleTerm)
+      .catch((error) => showError(errorMessageText(error, "The martingale residual plot could not be drawn.")));
   });
   refs.dlEvaluationStrategy.addEventListener("change", () => {
     mirrorPredictiveEvaluationControl(refs.dlEvaluationStrategy);
@@ -1045,7 +1069,8 @@ function initListeners() {
   });
   refs.deriveButton.addEventListener("click", () => withLoading(refs.deriveButton, deriveGroup));
   refs.runKmButton.addEventListener("click", () => withLoading(refs.runKmButton, runKaplanMeier));
-  refs.runSignatureSearchButton.addEventListener("click", () => withLoading(refs.runSignatureSearchButton, runSignatureSearch, "km"));
+  // The cut-point search (Markers tab) has its own busy scope: it does not hold Kaplan-Meier's run or exports.
+  refs.runSignatureSearchButton.addEventListener("click", () => withLoading(refs.runSignatureSearchButton, runSignatureSearch, "signature"));
   refs.runCoxButton.addEventListener("click", () => withLoading(refs.runCoxButton, runCox));
   refs.runCohortTableButton.addEventListener("click", () => withLoading(refs.runCohortTableButton, runCohortTable));
   refs.runMlButton.addEventListener("click", () => withLoading(refs.runMlButton, runMlModel));

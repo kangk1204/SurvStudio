@@ -4,8 +4,9 @@
 
 // ── ML Models ──────────────────────────────────────────────────
 
+// A run records its result mode (runtime.resultPreference) only once its result is in: a run that fails or
+// is cancelled leaves the result of the other mode current and shown (preferredResultMode).
 async function runMlModel() {
-  runtime.resultPreference.ml = "single";
   if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {
     throw new Error("Run Analysis uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.");
   }
@@ -55,6 +56,7 @@ async function runMlModel() {
   loading.finish();
   const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
   state.ml = payload;
+  runtime.resultPreference.ml = "single";
   setPanelResultMode(refs.mlPanel, "single");
   refs.downloadMlComparisonButton.disabled = true;
   if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = true;
@@ -131,7 +133,6 @@ async function runMlModel() {
 }
 
 async function runCompareModels({ suppressCompletionToast = false, compareGroupId = null, compareSource = "single_family_compare" } = {}) {
-  runtime.resultPreference.ml = "compare";
   const base = currentBaseConfig();
   const { features, categoricalFeatures } = currentSharedModelSelections("ml");
   if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
@@ -149,7 +150,10 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
     cvFolds,
     cvRepeats,
   });
-  const runBanner = setRuntimeBanner("Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info");
+  // Inside Compare All the Compare All banner stays up for both phases.
+  const runBanner = compareSource === "predictive_compare_all"
+    ? 0
+    : setRuntimeBanner("Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info", { held: true });
   const loading = beginShellLoading([refs.mlComparisonShell]);
 
   try {
@@ -181,6 +185,7 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
     loading.finish();
     tagComparePayload(payload, compareGroupId || nextCompareRunGroupId("ml-compare"), compareSource);
     state.ml = payload;
+    runtime.resultPreference.ml = "compare";
     runtime.compareCache.ml = payload;
     setPanelResultMode(refs.mlPanel, "compare");
 
@@ -194,7 +199,8 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
       refs.mlComparisonShell.innerHTML = '<div class="empty-state">No model returned a comparison row.</div>';
     }
     if (payload.analysis?.manuscript_tables?.model_performance_table) {
-      renderTable(refs.mlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
+      // Manuscript headers are publication-ready ("Training Time, ms"): shown exactly as they are exported.
+      renderTable(refs.mlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
     }
     if (payload.figure?.data?.length) {
       refs.mlComparisonPlot.classList.remove("hidden");
@@ -208,12 +214,17 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
     }
     renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "Model comparison.");
     const comparisonRows = payload.analysis?.comparison_table || [];
-    const bestRow = comparisonRows[0] || {};
+    // The rank-1 row, not the first one: without a complete CV aggregate no model is ranked.
+    const rankOne = comparisonRankOneRow(comparisonRows);
+    const bestRow = rankOne || {};
     const evaluationMode = payload.analysis?.evaluation_mode || "unknown";
     const repeatedCvLike = evaluationMode === "repeated_cv" || evaluationMode === "repeated_cv_incomplete";
     const evalLabel = compareEvaluationLabel(payload.analysis, evaluationMode);
     const mlMetricLabel = repeatedCvLike ? "Mean C-index" : "C-index";
-    refs.mlMetaBanner.textContent = `Screening top model=${formatValue(bestRow.model)}, ${mlMetricLabel}=${formatValue(bestRow.c_index)}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}${lockedTestBannerSuffix(payload.analysis, bestRow)}`;
+    const mlLead = comparisonRows.length && !rankOne
+      ? (repeatedCvLike ? "No model was CV-selected (no complete cross-validation aggregate)" : "No model was ranked")
+      : `Screening top model=${formatValue(bestRow.model)}, ${mlMetricLabel}=${formatValue(bestRow.c_index)}`;
+    refs.mlMetaBanner.textContent = `${mlLead}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}${lockedTestBannerSuffix(payload.analysis, rankOne)}`;
     refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
     if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !plotShowsResult(refs.mlComparisonPlot, payload);
     if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !plotShowsResult(refs.mlComparisonPlot, payload);
@@ -253,7 +264,12 @@ async function runUnifiedPredictiveComparison() {
   const startFamily = predictiveFamilyGoal();
   // Both families must see the same seed, evaluation mode, CV design, and locked test set.
   alignPredictiveEvaluationControls(startFamily);
-  validatePredictiveEvaluationControls(startFamily);
+  // Everything both phases check is checked before the first starts, so an invalid DL setting does not
+  // surface only after the ML phase has run (each check includes the shared evaluation settings).
+  currentBaseConfig();
+  if (!currentSharedModelSelections("ml").features.length) throw new Error("Select at least one ML/DL model feature.");
+  validateMlControls({ compare: true });
+  validateDlControls({ compare: true });
   const startDatasetId = state.dataset?.dataset_id;
   const previousMlPayload = state.ml;
   const previousDlPayload = state.dl;
@@ -261,7 +277,7 @@ async function runUnifiedPredictiveComparison() {
   // A cancelled phase (a new dataset, derived snapshot or endpoint cleared the results) ends the whole
   // comparison: nothing from the old cohort is restored and no further run starts on the new one.
   const superseded = (attempt) => Boolean(attempt?.superseded) || state.dataset?.dataset_id !== startDatasetId;
-  const runBanner = setRuntimeBanner("Comparing the full predictive stack across classical ML and deep learning. This can take several minutes on larger cohorts.", "info");
+  const runBanner = setRuntimeBanner("Comparing the full predictive stack across classical ML and deep learning. This can take several minutes on larger cohorts.", "info", { held: true });
   try {
     const mlAttempt = await withLoading(
       refs.runCompareButton,
@@ -274,7 +290,8 @@ async function runUnifiedPredictiveComparison() {
     );
     if (superseded(mlAttempt)) return;
     const mlFreshCompare = Boolean(mlAttempt?.ok && benchmarkCompareRows("ml").length);
-    if (!mlFreshCompare) {
+    // A `busy` attempt never started: another run of that family holds its scope and owns its result.
+    if (!mlFreshCompare && !mlAttempt?.busy) {
       restorePredictiveFamilyAfterFailedCompare("ml", previousMlPayload);
     }
 
@@ -289,10 +306,13 @@ async function runUnifiedPredictiveComparison() {
     );
     if (superseded(dlAttempt)) return;
     const dlFreshCompare = Boolean(dlAttempt?.ok && benchmarkCompareRows("dl").length);
-    if (!dlFreshCompare) {
+    if (!dlFreshCompare && !dlAttempt?.busy) {
       restorePredictiveFamilyAfterFailedCompare("dl", previousDlPayload);
     }
 
+    const skippedFamilies = [["ml", mlAttempt], ["dl", dlAttempt]]
+      .filter(([, attempt]) => attempt?.busy)
+      .map(([goal]) => benchmarkGoalMeta(goal).label);
     const familyCount = Number(mlFreshCompare) + Number(dlFreshCompare);
     if (familyCount === 2) {
       runtime.compareCache.unified = {
@@ -309,6 +329,12 @@ async function runUnifiedPredictiveComparison() {
         successMessage: "Unified predictive comparison complete.",
         backgroundMessage: "Compare All Models finished in the background. Open Prediction models to review the leaderboard.",
       });
+    } else if (skippedFamilies.length) {
+      showToast(
+        `Compare All Models skipped ${skippedFamilies.join(" and ")} because another ${skippedFamilies.join(" and ")} run was already in progress. Run Compare All Models again when that run finishes.`,
+        "warning",
+        5200,
+      );
     } else if (familyCount === 1) {
       showToast("Predictive comparison finished, but only one model family returned comparison rows. Review the board and any error messages before trusting the result.", "warning", 4200);
     } else {
@@ -322,7 +348,6 @@ async function runUnifiedPredictiveComparison() {
 // ── Deep Learning ──────────────────────────────────────────────
 
 async function runDlModel() {
-  runtime.resultPreference.dl = "single";
   const base = currentBaseConfig();
   validateDlControls();
   const { features, categoricalFeatures } = currentSharedModelSelections("dl");
@@ -343,7 +368,7 @@ async function runDlModel() {
     cvFolds: dlSetting("cv_folds", refs.dlCvFolds),
     cvRepeats: dlSetting("cv_repeats", refs.dlCvRepeats),
   });
-  const runBanner = setRuntimeBanner("Training the selected deep-learning model. This can take noticeably longer than a classical fit.", "info");
+  const runBanner = setRuntimeBanner("Training the selected deep-learning model. This can take noticeably longer than a classical fit.", "info", { held: true });
 
   try {
     let payload;
@@ -371,6 +396,7 @@ async function runDlModel() {
     loading.finish();
     const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
     state.dl = payload;
+    runtime.resultPreference.dl = "single";
     setPanelResultMode(refs.dlPanel, "single");
     const stats = payload.analysis || {};
 
@@ -405,7 +431,7 @@ async function runDlModel() {
       refs.dlComparisonShell.innerHTML = '<div class="empty-state">Run "Compare All" to benchmark all deep models on the same feature set.</div>';
     }
     if (repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table) {
-      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
+      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
     } else {
       refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Run "Compare All" to populate manuscript-ready deep comparison rows.</div>';
     }
@@ -466,7 +492,6 @@ async function runDlModel() {
 }
 
 async function runDlCompareModels({ suppressCompletionToast = false, compareGroupId = null, compareSource = "single_family_compare" } = {}) {
-  runtime.resultPreference.dl = "compare";
   const base = currentBaseConfig();
   validateDlControls({ compare: true });
   const { features, categoricalFeatures } = currentSharedModelSelections("dl");
@@ -482,7 +507,10 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
     cvFolds: dlSetting("cv_folds", refs.dlCvFolds),
     cvRepeats: dlSetting("cv_repeats", refs.dlCvRepeats),
   });
-  const runBanner = setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");
+  // Inside Compare All the Compare All banner stays up for both phases.
+  const runBanner = compareSource === "predictive_compare_all"
+    ? 0
+    : setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info", { held: true });
   const loading = beginShellLoading([refs.dlComparisonShell]);
 
   try {
@@ -514,6 +542,7 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
     loading.finish();
     tagComparePayload(payload, compareGroupId || nextCompareRunGroupId("dl-compare"), compareSource);
     state.dl = payload;
+    runtime.resultPreference.dl = "compare";
     runtime.compareCache.dl = payload;
     setPanelResultMode(refs.dlPanel, "compare");
 
@@ -528,7 +557,7 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
       refs.dlComparisonShell.innerHTML = '<div class="empty-state">No deep model returned a comparison row.</div>';
     }
     if (payload.analysis?.manuscript_tables?.model_performance_table) {
-      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table);
+      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
     }
     if (payload.figures?.comparison?.data?.length) {
       refs.dlComparisonPlot.classList.remove("hidden");
@@ -544,7 +573,10 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
     clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Single-model training and monitor metric curves appear when you train one deep model.</span></div>');
     const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
     renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning comparison results.");
-    const bestRow = payload.analysis?.comparison_table?.[0] || {};
+    const dlRows = payload.analysis?.comparison_table || [];
+    // The rank-1 row, not the first one: without a complete CV aggregate no model is ranked.
+    const rankOne = comparisonRankOneRow(dlRows);
+    const bestRow = rankOne || {};
     const dlEvalMode = payload.analysis?.evaluation_mode || "unknown";
     const dlEvalLabel = compareEvaluationLabel(payload.analysis, dlEvalMode);
     const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Screening top holdout-comparable" : "Screening top model";
@@ -559,7 +591,12 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
     const repeatedCvRerunNote = dlEvalMode === "repeated_cv"
       ? ", rerun a single architecture with Run Analysis while keeping repeated CV selected"
       : "";
-    refs.dlMetaBanner.textContent = `${dlBestLabel}=${formatValue(bestRow.model)}, ${dlMetricLabel}=${formatValue(bestRow.c_index)}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(payload.analysis?.comparison_table?.length || 0)}${lockedTestBannerSuffix(payload.analysis, bestRow)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
+    const dlLead = dlRows.length && !rankOne
+      ? (dlEvalMode === "repeated_cv" || dlEvalMode === "repeated_cv_incomplete"
+        ? "No model was CV-selected (no complete cross-validation aggregate)"
+        : "No model was ranked")
+      : `${dlBestLabel}=${formatValue(bestRow.model)}, ${dlMetricLabel}=${formatValue(bestRow.c_index)}`;
+    refs.dlMetaBanner.textContent = `${dlLead}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(dlRows.length)}${lockedTestBannerSuffix(payload.analysis, rankOne)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
     refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
     if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !plotShowsResult(refs.dlComparisonPlot, payload);
     if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !plotShowsResult(refs.dlComparisonPlot, payload);

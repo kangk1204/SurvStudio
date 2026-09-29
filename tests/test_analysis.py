@@ -227,6 +227,9 @@ def test_bootstrap_signature_metrics_reports_skipped_resamples(monkeypatch) -> N
 
     assert metrics["Bootstrap valid resamples"] == 0
     assert metrics["Bootstrap skipped resamples"] == 4
+    # Every row is signature+, so no resample has a comparison group and nothing is estimated.
+    assert metrics["Bootstrap support (p<alpha)"] is None
+    assert metrics["Bootstrap HR direction consistency"] is None and metrics["Bootstrap median p"] is None
 
 
 def test_cox_preview_warns_when_events_per_parameter_is_extremely_low() -> None:
@@ -851,9 +854,26 @@ def test_km_analysis_keeps_rmst_ci_when_risk_set_is_exhausted() -> None:
 def test_km_rmst_standard_errors_match_survrm2_convention_on_tcga() -> None:
     df = pd.read_csv(Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "data" / "tcga_luad_upload_ready.csv")
     result = compute_km_analysis(df, "os_months", "os_event", "stage_group")
+    # Reference values from R 4 with survival 3.8.6: survfit(Surv(os_months, os_event) ~ 1) per stage
+    # group, restricted at the shortest group follow-up (88.07 months), with the variance formula of
+    # survRM2::rmst1 (Greenwood terms d / (n (n - d)) weighted by the squared area after each event
+    # time, no n / (n - 1) correction). survRM2 was not installed, so its rmst1 formula was applied to
+    # the survfit output directly.
+    reference = {
+        "Stage I": (61.3004096782, 2.5986477879),
+        "Stage II": (43.6288937667, 3.8330724375),
+        "Stage III": (35.8646347781, 4.2409324037),
+        "Stage IV": (32.0596143644, 6.0489523150),
+    }
+    assert result["rmst_horizon"] == pytest.approx(88.07)
+    z_value = 1.959963984540054  # two-sided 95% normal quantile
+    assert sorted(row["Group"] for row in result["summary_table"]) == sorted(reference)
     for row in result["summary_table"]:
-        assert row["RMST SE"] is not None and row["RMST SE"] > 0.0
-        assert row["RMST CI lower"] < row["RMST"] < row["RMST CI upper"]
+        rmst, se = reference[row["Group"]]
+        assert row["RMST"] == pytest.approx(rmst, rel=1e-9)
+        assert row["RMST SE"] == pytest.approx(se, rel=1e-9)
+        assert row["RMST CI lower"] == pytest.approx(rmst - z_value * se, rel=1e-9)
+        assert row["RMST CI upper"] == pytest.approx(rmst + z_value * se, rel=1e-9)
 
 
 def test_km_group_curves_stop_at_each_group_last_follow_up() -> None:
@@ -2352,13 +2372,19 @@ def test_discover_feature_signature_ranks_and_persists_best_group() -> None:
     assert payload["search_space"]["significance_level"] == 0.05
     assert payload["search_space"]["combination_operator"] == "and"
     assert payload["search_space"]["random_seed"] == 1234
-    assert payload["search_space"]["significant_signatures"] >= 0
-    support = payload["best_split"]["Bootstrap support (p<alpha)"]
-    assert support is None or 0.0 <= support <= 1.0
-    permutation_p = payload["best_split"]["Permutation p"]
-    assert permutation_p is None or 0.0 <= permutation_p <= 1.0
-    direction_consistency = payload["best_split"]["Bootstrap HR direction consistency"]
-    assert direction_consistency is None or 0.0 <= direction_consistency <= 1.0
+    # Significant rows rank first, so the table holds as many of them as fit in top_k.
+    shown_significant = sum(bool(row["Statistically significant"]) for row in payload["results_table"])
+    assert shown_significant == min(payload["search_space"]["significant_signatures"], len(payload["results_table"]))
+    # Shares of the 10 requested resamples and (k + 1) / (valid + 1) permutation p-values.
+    best = payload["best_split"]
+    support = best["Bootstrap support (p<alpha)"]
+    direction_consistency = best["Bootstrap HR direction consistency"]
+    assert support is not None and 0.0 <= support <= 1.0 and support * 10 == pytest.approx(round(support * 10))
+    assert direction_consistency is not None and direction_consistency * 10 == pytest.approx(round(direction_consistency * 10))
+    permutation_p = best["Permutation p"]
+    permutation_draws = best["Permutation valid resamples"] + 1
+    assert permutation_p is not None and 1 <= round(permutation_p * permutation_draws) <= permutation_draws
+    assert permutation_p * permutation_draws == pytest.approx(round(permutation_p * permutation_draws))
     assert isinstance(payload["best_split"]["Statistically significant"], bool)
     assert payload["best_split"]["Combination operator"] == "AND"
     assert payload["scientific_summary"]["headline"]
@@ -2781,12 +2807,17 @@ def test_csv_loader_handles_single_column_decimal_comma_and_utf16() -> None:
     assert load_dataframe("time,event\n1,0\n2,1\n".encode("utf-16"), "u16.csv")["event"].tolist() == [0, 1]
 
 
-def test_median_follow_up_and_km_median_use_s_le_half_convention() -> None:
+def test_median_follow_up_and_km_median_follow_r_survfit() -> None:
     from survival_toolkit.analysis import _median_follow_up
 
+    # R survfit: a curve that stays at 0.5 to the end keeps the time it reached 0.5 ...
     assert _median_follow_up(pd.Series([1.0, 2.0, 3.0, 4.0]), pd.Series([0, 0, 1, 1])) == pytest.approx(2.0)
     km = compute_km_analysis(pd.DataFrame({"t": [1.0, 2.0, 3.0, 4.0], "e": [1, 1, 0, 0]}), "t", "e")
     assert km["summary_table"][0]["Median survival"] == pytest.approx(2.0)
+    # ... and one that drops below 0.5 later takes the midpoint of the flat stretch.
+    assert _median_follow_up(pd.Series(np.arange(1.0, 7.0)), pd.Series([0, 0, 0, 0, 1, 1])) == pytest.approx(3.5)
+    km = compute_km_analysis(pd.DataFrame({"t": [1.0, 2.0, 3.0, 4.0], "e": [1, 1, 1, 1]}), "t", "e")
+    assert km["summary_table"][0]["Median survival"] == pytest.approx(2.5)
 
 
 def test_signature_discovery_accepts_boolean_candidates() -> None:

@@ -35,9 +35,13 @@ def test_build_km_figure_returns_json_structure() -> None:
         "display_horizon": 3.0,
     }
     figure = build_km_figure(km_result)
-    assert "data" in figure
-    assert "layout" in figure
-    assert len(figure["data"]) >= 2  # CI band + line
+    band, line, censored = figure["data"]
+    assert band["fill"] == "toself" and band["showlegend"] is False
+    assert line["name"] == "A" and line["x"] == [0.0, 1.0, 2.0] and line["y"] == [1.0, 0.8, 0.6]
+    assert line["line"]["shape"] == "hv"
+    assert censored["x"] == [1.5] and censored["y"] == [0.8]
+    notes = " ".join(annotation["text"] for annotation in figure["layout"]["annotations"])
+    assert "Log-rank test: p = 0.040" in notes and "Shaded bands: 95% pointwise CI" in notes
 
 
 def test_build_km_figure_uses_fixed_high_low_colors_regardless_of_curve_order() -> None:
@@ -469,7 +473,7 @@ def test_build_cutpoint_scan_figure_with_data() -> None:
 
 def test_build_cutpoint_scan_figure_empty() -> None:
     figure = build_cutpoint_scan_figure({"scan_data": []})
-    assert "data" in figure
+    assert figure["data"] == [] and not figure["layout"].get("annotations") and not figure["layout"].get("shapes")
 
 
 def test_build_feature_importance_figure() -> None:
@@ -478,8 +482,11 @@ def test_build_feature_importance_figure() -> None:
         {"feature": "stage", "importance": 0.2},
     ]
     figure = build_feature_importance_figure(importances, model_name="RSF")
-    assert "data" in figure
-    assert len(figure["data"]) == 1
+    (bars,) = figure["data"]
+    # Horizontal bars listed least important first, so the most important one is drawn at the top.
+    assert bars["type"] == "bar" and bars["orientation"] == "h"
+    assert bars["y"] == ["stage", "age"] and bars["x"] == [0.2, 0.3]
+    assert figure["layout"]["title"]["text"] == "RSF Feature Importance"
 
 
 def test_build_feature_importance_figure_supports_custom_title_label() -> None:
@@ -640,8 +647,12 @@ def test_build_model_comparison_figure_handles_missing_values() -> None:
         ]
     }
     figure = build_model_comparison_figure(comparison)
-    assert "data" in figure
-    assert "layout" in figure
+    (bars,) = figure["data"]
+    assert bars["x"] == ["Cox PH", "RSF"]
+    assert bars["y"] == [None, 0.7] and bars["text"] == ["NA", "0.700"]
+    assert "C-index = NA" in bars["customdata"][0]
+    # The axis still scales to the model that has a C-index.
+    assert figure["layout"]["yaxis"]["range"] == [0, pytest.approx(0.84)]
 
 
 def test_build_model_comparison_figure_treats_nan_c_index_as_missing() -> None:
@@ -686,10 +697,11 @@ def test_build_time_dependent_importance_figure_orients_matrix_correctly() -> No
         ],
     }
     figure = build_time_dependent_importance_figure(result, top_n=2)
-    assert "data" in figure
     assert figure["data"][0]["type"] == "heatmap"
     assert figure["data"][0]["x"] == ["1.0", "2.0"]
+    # Most important first, on an axis that runs top-down: biomarker is the top row.
     assert figure["data"][0]["y"] == ["biomarker", "age"]
+    assert figure["layout"]["yaxis"]["autorange"] == "reversed"
     assert figure["data"][0]["z"] == [[0.5, 0.4], [0.1, 0.2]]
 
 
@@ -881,7 +893,7 @@ def test_build_km_figure_prints_numbers_at_risk_under_the_axis() -> None:
     assert [(annotation["x"], annotation["text"]) for annotation in counts[:3]] == [(0.0, "50"), (10.0, "31"), (20.0, "12")]
     assert figure["layout"]["xaxis"]["tickvals"] == [0.0, 10.0, 20.0]
     # The test result and the band note sit in the lower left, off the curves' start at 100%.
-    note = next(annotation for annotation in annotations if "Logrank" in annotation["text"])
+    note = next(annotation for annotation in annotations if "Log-rank test" in annotation["text"])
     assert note["y"] == 0.02 and "Shaded bands" in note["text"]
     assert figure["layout"]["margin"]["b"] > 70
 

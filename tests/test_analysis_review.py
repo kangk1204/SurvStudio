@@ -3,6 +3,7 @@ summaries, and the signature search)."""
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Any
 
@@ -117,11 +118,45 @@ def test_text_time_values_that_are_not_numbers_are_refused_not_dropped() -> None
     assert km["cohort"]["time_max"] == pytest.approx(1234.5)
 
 
-def test_delimiter_sniffing_is_linear_on_crafted_input_and_still_detects_delimiters() -> None:
-    crafted = "\n".join([',"a' * 700] * 50)
-    start = time.perf_counter()
-    analysis._sniff_delimiter(crafted * 2, ",")
-    assert time.perf_counter() - start < 1.0
+def _traced_line_count(function: Any, *args: Any) -> int:
+    """Python lines executed inside ``function`` itself: a deterministic measure of its work."""
+    code = function.__code__
+    count = 0
+
+    def _tracer(frame: Any, event: str, arg: Any) -> Any:
+        nonlocal count
+        if frame.f_code is not code:
+            return None
+        if event == "line":
+            count += 1
+        return _tracer
+
+    previous = sys.gettrace()
+    sys.settrace(_tracer)
+    try:
+        function(*args)
+    finally:
+        sys.settrace(previous)
+    return count
+
+
+def test_delimiter_sniffing_is_linear_on_crafted_input_and_still_detects_delimiters(monkeypatch) -> None:
+    # csv.Sniffer's quote regexes are quadratic on crafted input, so the sniffer must not use it.
+    class _NoSniffer:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise AssertionError("csv.Sniffer must not be used")
+
+    monkeypatch.setattr(analysis.csv, "Sniffer", _NoSniffer)
+    record = ',"a' * 700 + "\n"  # a crafted record of 2,101 characters
+    assert analysis._sniff_delimiter(record * 100, ",") == ","
+    # One pass per character: twice the text takes about twice the work ...
+    small = _traced_line_count(analysis._delimiter_counts_per_record, record * 8)
+    double = _traced_line_count(analysis._delimiter_counts_per_record, record * 16)
+    assert 1.8 * small <= double <= 2.2 * small
+    # ... and the scan stops at the character cap, however long the text is.
+    assert len(record * 40) > analysis._DELIMITER_SNIFF_MAX_CHARS
+    capped = _traced_line_count(analysis._delimiter_counts_per_record, record * 40)
+    assert _traced_line_count(analysis._delimiter_counts_per_record, record * 400) == capped
     assert analysis._sniff_delimiter("a;b;c\n1,5;2;3\n4;5,5;6\n", ",") == ";"
     assert analysis._sniff_delimiter('name,age\n"Smith, John",40\n"Doe, Jane",41\n', ";") == ","
     assert analysis._sniff_delimiter("a\tb\n1\tx|y\n2\tz|w\n", ",") == "\t"
@@ -758,7 +793,7 @@ def test_permutation_p_values_are_roughly_calibrated_under_the_null() -> None:
     assert hits / n_datasets <= 0.25
 
 
-def test_bootstrap_minimums_scale_with_the_resample_and_skips_count_as_failures() -> None:
+def test_bootstrap_resamples_use_an_estimability_floor_and_skips_count_as_failures() -> None:
     rng = np.random.default_rng(5)
     n = 400
     flag = np.zeros(n, dtype=int)
@@ -780,9 +815,11 @@ def test_bootstrap_minimums_scale_with_the_resample_and_skips_count_as_failures(
     )
     best = payload["best_split"]
     assert best["Signature"] == 'mut == "mutant"'
-    assert best["Bootstrap valid resamples"] > 30
+    # Resamples of 160 rows hold about 21 carriers: the discovery minimum of 40 rows is not
+    # re-applied, so none is skipped (a minimum scaled to 16 rows used to skip 5 of the 40).
+    assert best["Bootstrap valid resamples"] == 40 and best["Bootstrap skipped resamples"] == 0
     support = best["Bootstrap support (p<alpha)"]
-    assert support <= best["Bootstrap valid resamples"] / 40 + 1e-12
+    assert support * 40 == pytest.approx(round(support * 40)) and support >= 0.9
 
     metrics = analysis._bootstrap_signature_metrics(
         frame=pd.DataFrame({"time": [1.0, 2.0, 3.0, 4.0], "event": [1, 1, 0, 1], "flag": ["a", "b", "a", "b"]}),
@@ -798,6 +835,8 @@ def test_bootstrap_minimums_scale_with_the_resample_and_skips_count_as_failures(
     )
     valid = metrics["Bootstrap valid resamples"]
     assert valid + metrics["Bootstrap skipped resamples"] == 20
+    # Four rows resampled with replacement often leave a side with one row or no event.
+    assert metrics["Bootstrap skipped resamples"] > 0
     if metrics["Bootstrap HR direction consistency"] is not None:
         assert metrics["Bootstrap HR direction consistency"] <= valid / 20 + 1e-12
 

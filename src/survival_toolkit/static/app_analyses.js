@@ -34,6 +34,19 @@ function currentBaseConfig() {
   };
 }
 
+// True while the controls still describe the endpoint (time, event, event value) of `config`.
+function sameEndpoint(config) {
+  let base;
+  try {
+    base = currentBaseConfig();
+  } catch {
+    return false;
+  }
+  return String(base.time_column) === String(config?.time_column ?? "")
+    && String(base.event_column) === String(config?.event_column ?? "")
+    && String(base.event_positive_value).trim() === String(config?.event_positive_value ?? "").trim();
+}
+
 function validateGroupingSelection() {
   const warning = currentGroupColumnWarning();
   if (warning?.tone === "error") throw new Error(warning.message);
@@ -213,12 +226,13 @@ function validateDlControls({ compare = false } = {}) {
 }
 
 function renderDatasetPreview() {
-  // The file's own column order and names: object keys would put numeric names such as "7157" first,
-  // and header or p-value formatting would rewrite the data (a column named "ki67_p" is not a p-value).
+  // The file's own column order, names and values: object keys would put numeric names such as "7157" first,
+  // and header, number or p-value formatting would rewrite the data (a column named "ki67_p" is not a
+  // p-value, and a 13-digit patient ID is not "1.70e+12").
   const rows = state.dataset.preview || [];
   const present = new Set(rows.flatMap((row) => Object.keys(row || {})));
   const columns = datasetColumnNames().filter((column) => present.has(column));
-  renderTable(refs.datasetPreviewShell, rows, columns.length ? columns : null, { pValueColumns: [], rawHeaders: true });
+  renderTable(refs.datasetPreviewShell, rows, columns.length ? columns : null, { pValueColumns: [], rawHeaders: true, rawValues: true });
 }
 
 function duplicateIdentifierColumns(dataset = state.dataset) {
@@ -337,6 +351,11 @@ function activateTab(tabName, { historyMode = "replace", focusTabButton = false,
   });
 }
 
+// The server's first suggested event column that the dataset has; "" when it suggests none.
+function suggestedEventColumn(columnNames, suggestions) {
+  return (suggestions?.event_columns || []).find((column) => columnNames.includes(column)) || "";
+}
+
 function updateControlsFromDataset({ scrollToTop = false } = {}) {
   const columnNames = state.dataset.columns.map((c) => c.name);
   const suggestions = state.dataset.suggestions;
@@ -345,17 +364,16 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   if (refs.covariateSearchInput) refs.covariateSearchInput.value = "";
   if (refs.categoricalSearchInput) refs.categoricalSearchInput.value = "";
   if (refs.cohortVariableSearchInput) refs.cohortVariableSearchInput.value = "";
-  // Only a likely follow-up column is preselected; otherwise Time stays blank for the user to choose.
+  // Only a likely follow-up column is preselected; otherwise Time stays blank for the user to choose. Event
+  // likewise starts from a suggested event column only, never from a guessed column position.
   renderTimeColumnOptions({ preferred: "", silent: true });
-  renderEventColumnOptions({
-    preferred: inferDefault(columnNames, suggestions.event_columns, 1),
-    silent: true,
-  });
+  renderEventColumnOptions({ preferred: suggestedEventColumn(columnNames, suggestions), silent: true });
   renderSelect(refs.groupColumn, columnNames, { includeBlank: true, blankLabel: "Overall only", selected: null });
-  // Display settings from a previous dataset (max time in its units, its time unit) must not carry over.
+  // Display settings from a previous dataset (max time in its units, its time unit) must not carry over, and
+  // neither do its variable selections: a new dataset starts from its own defaults.
   if (refs.maxTime) refs.maxTime.value = "";
   applyAutomaticTimeUnitLabel({ force: true });
-  refreshVariableSelections();
+  refreshVariableSelections({ useDefaults: true });
   updateDatasetBadge();
   renderSharedFeatureSummary();
   renderDatasetPreview();
@@ -364,6 +382,8 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   showWorkspace();
   if (scrollToTop) scrollWorkspaceEntryToTop();
   renderWorkspaceChrome();
+  // The default Cox covariates get their usable-row preview without waiting for a change.
+  scheduleCoxPreview({ delay: 0 });
 }
 
 function clearSignatureSummary() {
@@ -390,6 +410,8 @@ function clearOutcomeInformedGroupingOutputs() {
 function clearAnalysisOutputs() {
   invalidateRequestTokens(["km", "cox", "tables", "signature", "ml", "dl"]);
   invalidateRequestTokens(["markers", "markerValidation"]);
+  // A grouping being created is cancelled too: an optimal cutpoint is optimised for the endpoint of its request.
+  invalidateRequestTokens(["derive"]);
   clearMarkerOutputs();
   clearOutcomeInformedGroupingOutputs();
   state.km = null;
@@ -469,7 +491,9 @@ function updateAfterDataset(payload, { scrollToTop = false } = {}) {
   // A different dataset makes any pending derive/signature response obsolete.
   invalidateRequestTokens(["derive", "signature"]);
   state.dataset = payload;
-  // A marker matrix belongs to the patients of the dataset it was attached to; derived-column snapshots keep it.
+  // A marker matrix belongs to the patients of the dataset it was attached to; derived-column snapshots keep it,
+  // and another dataset frees it on the server.
+  deleteMarkerMatrixOnServer(state.markerMatrix?.matrix_id);
   state.markerMatrix = null;
   // Results, banners, plots, and export buttons of the previous dataset.
   clearAnalysisOutputs();
@@ -497,12 +521,13 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
     : "";
   const preferredEvent = snapshot?.eventColumn && columnNames.includes(snapshot.eventColumn)
     ? snapshot.eventColumn
-    : inferDefault(columnNames, suggestions.event_columns || [], 1);
+    : suggestedEventColumn(columnNames, suggestions);
   const preferredGroup = snapshot?.groupColumn && columnNames.includes(snapshot.groupColumn)
     ? snapshot.groupColumn
     : null;
 
-  const discardedScopes = ["cox", "markers", "tables", "ml", "dl"].filter((scope) => isScopeBusy(scope));
+  // Kaplan-Meier can run while a cut-point search (its own scope) creates the snapshot.
+  const discardedScopes = ["km", "cox", "markers", "tables", "ml", "dl"].filter((scope) => isScopeBusy(scope));
 
   state.dataset = payload;
   clearAnalysisOutputs();
@@ -583,7 +608,7 @@ function applyLoadedDataset(payload) {
 async function uploadDataset() {
   if (!refs.datasetFile.files?.length) throw new Error("Choose a dataset file first.");
   const selectedFile = refs.datasetFile.files[0];
-  const uploadBanner = setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info");
+  const uploadBanner = setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info", { held: true });
   const formData = new FormData();
   formData.append("file", selectedFile);
   let payload;
@@ -594,7 +619,11 @@ async function uploadDataset() {
     releaseRuntimeBanner(uploadBanner);
     throw error;
   }
-  if (!payload) return;
+  if (!payload) {
+    // A newer load replaced this one.
+    releaseRuntimeBanner(uploadBanner);
+    return;
+  }
   const previousDatasetName = state.dataset?.filename || "";
   const clearedResults = Boolean(state.dataset) && hasCompletedResults();
   applyLoadedDataset(payload);
@@ -657,9 +686,14 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
     }
   }
   const deriveToken = beginRequestToken("derive");
-  refs.deriveStatus.textContent = isOptimal
+  const progressStatus = isOptimal
     ? "Scanning a new grouping column..."
     : "Creating a new grouping column...";
+  refs.deriveStatus.textContent = progressStatus;
+  // A failed, cancelled or discarded request takes its own progress line with it, never a newer message.
+  const clearProgressStatus = () => {
+    if (refs.deriveStatus.textContent === progressStatus) refs.deriveStatus.textContent = "";
+  };
 
   const body = {
     dataset_id: sourceDatasetId,
@@ -688,11 +722,23 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
       body: JSON.stringify(body),
     });
   } catch (error) {
-    if (requestTokenMatches("derive", deriveToken)) refs.deriveStatus.textContent = "";
+    clearProgressStatus();
     throw error;
   }
   if (!requestTokenMatches("derive", deriveToken) || state.dataset?.dataset_id !== sourceDatasetId) {
     // The workspace moved on (another dataset or a newer derived snapshot); never swap it back.
+    clearProgressStatus();
+    return;
+  }
+  if (isOptimal && !sameEndpoint(optimalOutcome)) {
+    // The endpoint changed without the change handlers (a restored history entry, for example): a cut point
+    // optimised for the old endpoint must not group patients under the new one.
+    clearProgressStatus();
+    showToast(
+      "The endpoint changed while the optimal cutpoint was being scanned, so the grouping was not created. Create it again for the current endpoint.",
+      "warning",
+      5200,
+    );
     return;
   }
   updateAfterDerivedDataset(payload, { deferChrome: shouldRefreshKm });
@@ -708,9 +754,6 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
     setSelectValueIfPresent(refs.groupColumn, preservedGroup);
   }
   syncDeriveControlsState();
-  const shouldClearTableOutput = shouldAutoApplyDerivedGroup
-    && currentCohortTableOutputState().hasOutput
-    && activeTabName() === "tables";
   runtime.lastDerivedGroup = {
     derivedColumn: payload.derived_column,
     summary: payload.derive_summary,
@@ -724,11 +767,8 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
     : "";
   updateDatasetBadge();
   renderDerivedGroupSummary(payload.derived_column, payload.derive_summary);
-  if (shouldClearTableOutput) {
-    clearCohortTableOutput({ rerenderChrome: false, syncHistory: false });
-  } else {
-    renderSharedFeatureSummary();
-  }
+  // The new snapshot already cleared every result, the cohort table included (updateAfterDerivedDataset).
+  renderSharedFeatureSummary();
   renderWorkspaceChrome();
   queueHistorySync();
   if (toastMode !== "silent") {
@@ -736,7 +776,7 @@ async function deriveGroup({ autoApplyOverride = null, refreshKmOverride = null,
       shouldRefreshKm
         ? `Created ${payload.derived_column} and updated Group by. ${featureUseMessage} Kaplan-Meier is refreshing now.`
         : shouldAutoApplyDerivedGroup
-          ? `Created ${payload.derived_column} and updated Group by. ${featureUseMessage}${shouldClearTableOutput ? " Previous cohort table output was cleared; build the table again to match the new grouping." : ""}`
+          ? `Created ${payload.derived_column} and updated Group by. ${featureUseMessage}`
           : `Created ${payload.derived_column}. Current Group by remains ${preservedGroup}. ${featureUseMessage} Use Group by or Run again when you want to analyze the new grouping.`,
       "success",
       5200,

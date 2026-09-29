@@ -33,6 +33,9 @@ _TOLER_INF = float(np.sqrt(1e-9))
 # A log hazard ratio beyond 10 per SD of the covariate (a hazard ratio above 20,000 per SD) is
 # the monotone-likelihood signature itself, whatever the pending step.
 _MAX_LOG_HR_PER_SD = 10.0
+# A column whose information left after the columns before it is below this share of its variance
+# (times the number of events) cannot be estimated; the score screen flags collinear markers alike.
+_ALIASED_INFORMATION = 1e-10
 
 
 class CoxNull(NamedTuple):
@@ -52,6 +55,11 @@ class CoxFit(NamedTuple):
     a covariate whose carriers never have the event). The likelihood still converges, so such a
     fit keeps ``converged``, as in R, but its flagged coefficients and their variances are
     meaningless; callers that report or average coefficients treat them as failed fits.
+
+    A column the model cannot estimate (constant, or a linear combination of the columns before it,
+    as the last indicator of a categorical covariate whose reference level is missing) gets a NaN
+    coefficient and NaN variances, as R's ``coxph`` reports NA; the other columns hold the fit
+    without it.
     """
 
     beta: np.ndarray
@@ -316,6 +324,10 @@ def fit_cox(
     Uses the screen's risk-set sums, so a fit costs a few passes over the rows; it replaces
     statsmodels' PHReg, whose Efron fit loops over event times in Python. Convergence
     follows R's coxph: the partial log-likelihood changes by less than 1e-9 relative.
+
+    Columns the partial likelihood cannot estimate are found from the information at beta = 0
+    (see ``_aliased_columns``) and left out of the fit, as R's coxph does: their coefficients and
+    variances are NaN, and the other columns hold the fit without them.
     """
     ties = _check_ties(ties)
     time = np.asarray(time, dtype=float).reshape(-1)
@@ -328,10 +340,17 @@ def fit_cox(
     codes = _as_strata(strata, time.shape[0])
     beta = np.zeros(design.shape[1], dtype=float)
     loglik = cox_partial_loglik(time, event, design @ beta, codes, ties)
+    # The information's null space does not depend on beta (every risk weight stays positive), so
+    # aliasing is judged at the start, where no coefficient has run away yet.
+    score, information = _score_and_information_at(time, event, design, codes, design @ beta, ties)
+    aliased = _aliased_columns(design, information, int(event.sum()))
+    if aliased.any():
+        return _fit_without_aliased(time, event, design, codes, ties, aliased, max_iterations)
     converged = False
     iterations = 0
     for iterations in range(1, max_iterations + 1):
-        score, information = _score_and_information_at(time, event, design, codes, design @ beta, ties)
+        if iterations > 1:
+            score, information = _score_and_information_at(time, event, design, codes, design @ beta, ties)
         # A diverging fit (monotone likelihood, as for a heavy-tailed marker that separates the
         # events) can leave the information non-finite; it then ends as not converged instead of
         # failing the whole marker screen.
@@ -364,10 +383,9 @@ def fit_cox(
         try:
             covariance = np.linalg.inv(information)
         except np.linalg.LinAlgError:
-            try:
-                covariance = np.linalg.pinv(information)
-            except np.linalg.LinAlgError:
-                covariance = np.full_like(information, np.nan)
+            # Estimable at the start but singular at the fitted value: a coefficient ran so far that its
+            # risk weights vanished. No variance is reported rather than a pseudo-inverse's.
+            covariance = np.full_like(information, np.nan)
             converged = False
     return CoxFit(
         beta=beta,
@@ -376,6 +394,71 @@ def fit_cox(
         converged=converged,
         iterations=iterations,
         separated=_runaway_coefficients(design, beta, score, information),
+    )
+
+
+def _aliased_columns(design: np.ndarray, information: np.ndarray, n_events: int) -> np.ndarray:
+    """Columns of the design that the partial likelihood cannot estimate.
+
+    A column is aliased when it is constant, or when the information it keeps after the columns
+    before it (its pivot in a sequential Cholesky factorisation, as in R's ``cholesky2``) is at most
+    ``_ALIASED_INFORMATION`` times its variance times the number of events: it is then a linear
+    combination of those columns within the risk sets, as the last indicator of a categorical
+    covariate is when the reference level is missing. Of two aliased columns the later one is
+    flagged, as R's ``coxph`` does. The rule matches the score screen's collinearity rule, so it is
+    scale-free and only flags columns that carry no information of their own.
+    """
+    k = information.shape[0]
+    aliased = np.zeros(k, dtype=bool)
+    if k == 0 or not np.all(np.isfinite(information)):
+        return aliased
+    constant = ~(np.ptp(design, axis=0) > 0)
+    centred = design - design.mean(axis=0, keepdims=True)
+    variance = np.mean(centred * centred, axis=0)
+    scale = np.where(constant, 0.0, 1.0 / np.sqrt(np.maximum(variance, 1e-300) * max(int(n_events), 1)))
+    # The information in units of each column's variance: a pivot near 1 is a column fully informative.
+    remaining = information * np.outer(scale, scale)
+    for column in range(k):
+        pivot = remaining[column, column]
+        if constant[column] or not pivot > _ALIASED_INFORMATION:
+            aliased[column] = True
+            continue
+        # Schur complement: the information of the later columns left after this one.
+        weights = remaining[column + 1 :, column] / pivot
+        remaining[column + 1 :, column + 1 :] -= np.outer(weights, remaining[column, column + 1 :])
+    return aliased
+
+
+def _fit_without_aliased(
+    time: np.ndarray,
+    event: np.ndarray,
+    design: np.ndarray,
+    codes: np.ndarray,
+    ties: str,
+    aliased: np.ndarray,
+    max_iterations: int,
+) -> CoxFit:
+    """The fit on the estimable columns, with NaN coefficients and variances for the aliased ones."""
+    k = design.shape[1]
+    keep = np.flatnonzero(~aliased)
+    beta = np.full(k, np.nan)
+    covariance = np.full((k, k), np.nan)
+    separated = np.zeros(k, dtype=bool)
+    if keep.size == 0:
+        loglik = cox_partial_loglik(time, event, np.zeros(time.shape[0]), codes, ties)
+        return CoxFit(beta=beta, covariance=covariance, loglik=loglik, converged=True, iterations=0, separated=separated)
+    reduced = fit_cox(time, event, design[:, keep], codes, ties, max_iterations=max_iterations)
+    beta[keep] = reduced.beta
+    covariance[np.ix_(keep, keep)] = reduced.covariance
+    if reduced.separated is not None:
+        separated[keep] = reduced.separated
+    return CoxFit(
+        beta=beta,
+        covariance=covariance,
+        loglik=reduced.loglik,
+        converged=reduced.converged,
+        iterations=reduced.iterations,
+        separated=separated,
     )
 
 
@@ -432,8 +515,9 @@ def fit_cox_null(
     if design.shape[0] != n:
         raise ValueError("Z must have one row per subject.")
     fit = fit_cox(time, event, design, strata, ties)
+    # An aliased column (NaN coefficient) adds nothing to the linear predictor, as in R's predict.coxph.
     return CoxNull(
-        eta=design @ fit.beta,
+        eta=design @ np.where(np.isnan(fit.beta), 0.0, fit.beta),
         beta=fit.beta,
         covariance=np.atleast_2d(fit.covariance),
         loglik=fit.loglik,

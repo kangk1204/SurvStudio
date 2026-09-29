@@ -101,7 +101,10 @@ function renderInsightBoard(container, summary, emptyMessage) {
     </article>`;
 }
 
-function deriveGroupCountLabel(group) {
+// Only an optimal cutpoint names its groups by risk direction; the High and Low of the other splits are the
+// source values.
+function deriveGroupCountLabel(group, method) {
+  if (method !== "optimal_cutpoint") return group;
   if (group === "High") return "High risk";
   if (group === "Low") return "Low risk";
   return group;
@@ -140,12 +143,28 @@ function deriveMethodUsesCutoff(method) {
   return method === "percentile_split" || method === "extreme_split";
 }
 
+// Percentile specs compare as numbers, the way the server reads them: "25, 25.0" is its "25,25".
+function normalizeDerivePercentileSpec(value) {
+  return normalizeDeriveSummaryText(value)
+    .split(",")
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .map((token) => normalizeDeriveSummaryNumber(token))
+    .join(",");
+}
+
+// A blank Column name asks for the automatic name, "<source>__<method>" ("_2", "_3", ... when it is taken).
+function isAutomaticDerivedColumnName(name, sourceColumn, method) {
+  const base = `${sourceColumn}__${method}`;
+  return name === base || (name.startsWith(`${base}_`) && /^\d+$/.test(name.slice(base.length + 1)));
+}
+
 function currentDeriveDraftConfig() {
   const method = normalizeDeriveSummaryText(refs.deriveMethod?.value);
   return {
     sourceColumn: normalizeDeriveSummaryText(refs.deriveSource?.value),
     method,
-    cutoffText: deriveMethodUsesCutoff(method) ? normalizeDeriveSummaryText(refs.deriveCutoff?.value) : "",
+    cutoffText: deriveMethodUsesCutoff(method) ? normalizeDerivePercentileSpec(refs.deriveCutoff?.value) : "",
     columnName: normalizeDeriveSummaryText(refs.deriveColumnName?.value),
     minGroupFraction: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(refs.deriveMinGroupFraction?.value) : "",
     permutationIterations: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(refs.derivePermutationIterations?.value) : "",
@@ -161,7 +180,7 @@ function storedDeriveRecipeConfig(derivedColumn, summary) {
     sourceColumn: normalizeDeriveSummaryText(recipe.source_column),
     method,
     cutoffText: deriveMethodUsesCutoff(method)
-      ? normalizeDeriveSummaryText(recipe.cutoff_spec ?? summary?.cutoff_spec ?? recipe.cutoff ?? summary?.cutoff)
+      ? normalizeDerivePercentileSpec(recipe.cutoff_spec ?? summary?.cutoff_spec ?? recipe.cutoff ?? summary?.cutoff)
       : "",
     columnName: normalizeDeriveSummaryText(recipe.column_name || normalizedColumn),
     minGroupFraction: method === "optimal_cutpoint" ? normalizeDeriveSummaryNumber(recipe.min_group_fraction ?? summary?.min_group_fraction) : "",
@@ -175,7 +194,8 @@ function deriveDraftMatchesStoredRecipe(derivedColumn, summary) {
   if (!Object.values(stored).some(Boolean)) return true;
   const draft = currentDeriveDraftConfig();
   return ["sourceColumn", "method", "cutoffText", "columnName", "minGroupFraction", "permutationIterations", "randomSeed"]
-    .every((key) => draft[key] === stored[key]);
+    .every((key) => draft[key] === stored[key]
+      || (key === "columnName" && !draft.columnName && isAutomaticDerivedColumnName(stored.columnName, stored.sourceColumn, stored.method)));
 }
 
 function currentDerivedSummaryPayload() {
@@ -262,7 +282,7 @@ function renderDerivedGroupSummary(derivedColumn, summary) {
     ${counts.length ? `
       <div class="count-summary-label">${escapeHtml(currentUsesDerived ? "Counts for the current derived grouping" : "Counts for the stored derived column")}</div>
       <div class="count-strip">
-        ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(deriveGroupCountLabel(item.group))}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
+        ${counts.map((item) => `<div class="count-pill"><span>${escapeHtml(deriveGroupCountLabel(item.group, summary?.method))}</span><strong>${escapeHtml(formatValue(item.n))}</strong></div>`).join("")}
       </div>
     ` : ""}
     <div class="signature-summary-grid">
@@ -325,8 +345,9 @@ const COHORT_TABLE_EMPTY_STATE_HTML = '<div class="empty-state">Check variables 
 // `pValueColumns` lists the columns shown as p-values; without it, the labels of analysis outputs decide
 // (isPValueLikeLabel). Tables whose column names come from the data (Table 1 group levels, the data
 // preview) pass `pValueColumns: []` and `rawHeaders: true`, so a group named "Test positive" or a column
-// named "ki67_p" is shown as it is.
-function renderTable(shell, rows, columns = null, { labels = {}, pValueColumns = null, rawHeaders = false } = {}) {
+// named "ki67_p" is shown as it is. `rawValues` shows every value as it is too (the data preview: a 13-digit
+// ID or a value with six decimals is data, not a result to round).
+function renderTable(shell, rows, columns = null, { labels = {}, pValueColumns = null, rawHeaders = false, rawValues = false } = {}) {
   if (!rows || rows.length === 0) {
     shell.innerHTML = '<div class="empty-state">No rows returned.</div>';
     return;
@@ -351,7 +372,11 @@ function renderTable(shell, rows, columns = null, { labels = {}, pValueColumns =
     visibleColumns.forEach((column) => {
       const td = document.createElement("td");
       const value = ownEntry(row, column);
-      td.textContent = typeof value === "number" && isPValueColumn(column) ? formatPValue(value) : formatValue(value);
+      if (rawValues) {
+        td.textContent = value === null || value === undefined || value === "" ? "NA" : String(value);
+      } else {
+        td.textContent = typeof value === "number" && isPValueColumn(column) ? formatPValue(value) : formatValue(value);
+      }
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -373,13 +398,24 @@ function comparisonRankIsMissing(rank) {
   return rank === null || rank === undefined || rank === "" || !Number.isFinite(Number(rank));
 }
 
+// The CV-selected (rank 1) row of a comparison, or null when the comparison ranked no model (no model had a
+// complete cross-validation aggregate). Rows of results without a rank field are in rank order.
+function comparisonRankOneRow(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!comparisonRowsHaveKey(list, "rank")) return list[0] || null;
+  return list.find((row) => Number(row?.rank) === 1) || null;
+}
+
 function lockedTestSummaryNote(analysis) {
   const rows = Array.isArray(analysis?.comparison_table) ? analysis.comparison_table : [];
   if (!comparisonRowsHaveKey(rows, "locked_test_c_index")) return "";
-  const rankOne = rows.find((row) => Number(row?.rank) === 1) || rows[0] || {};
+  const rankOne = comparisonRankOneRow(rows);
+  const lockedTest = `The locked test set${analysis?.n_locked_test_patients != null ? ` (${formatValue(analysis.n_locked_test_patients)} patients, ${formatValue(analysis.n_locked_test_events)} events)` : ""} was not used for ranking`;
   const parts = [
     `Models are ranked by development-set repeated CV${analysis?.n_development_patients != null ? ` (${formatValue(analysis.n_development_patients)} patients)` : ""}.`,
-    `The locked test set${analysis?.n_locked_test_patients != null ? ` (${formatValue(analysis.n_locked_test_patients)} patients, ${formatValue(analysis.n_locked_test_events)} events)` : ""} was not used for ranking; report the locked-test C-index of the rank-1 model (${formatValue(rankOne.model)}: ${formatValue(rankOne.locked_test_c_index)}) as the independent estimate, not the best locked-test value across models.`,
+    rankOne
+      ? `${lockedTest}; report the locked-test C-index of the rank-1 model (${formatValue(rankOne.model)}: ${formatValue(rankOne.locked_test_c_index)}) as the independent estimate, not the best locked-test value across models.`
+      : `${lockedTest}. No model had a complete cross-validation aggregate, so none was selected and there is no rank-1 locked-test C-index to report; do not pick a model by its locked-test value.`,
   ];
   if (analysis?.locked_test_note) parts.push(String(analysis.locked_test_note));
   return parts.join(" ");
@@ -456,17 +492,6 @@ function lockedTestBannerSuffix(analysis, bestRow) {
   return `, locked-test C-index of rank-1 model=${formatValue(bestRow.locked_test_c_index)}${heldOut}`;
 }
 
-function clearCohortTableOutput({ rerenderChrome = true, syncHistory = true } = {}) {
-  state.cohort = null;
-  if (refs.cohortTableShell) refs.cohortTableShell.innerHTML = COHORT_TABLE_EMPTY_STATE_HTML;
-  if (refs.downloadCohortTableButton) refs.downloadCohortTableButton.disabled = true;
-  if (refs.downloadCohortTableXlsxButton) refs.downloadCohortTableXlsxButton.disabled = true;
-  renderSharedFeatureSummary();
-  syncDownloadButtonAvailability();
-  if (rerenderChrome) renderWorkspaceChrome();
-  if (syncHistory) queueHistorySync();
-}
-
 function downloadCsv(filename, rows, columns = null, { caption = "", notes = [] } = {}) {
   return downloadHelpers.downloadCsv({ filename, rows, columns, showToast, caption, notes });
 }
@@ -514,14 +539,14 @@ async function downloadChecklist(report, format, stem) {
     body: JSON.stringify({ ...report, format }),
   });
   if (!response.ok) {
-    let message = "Checklist export failed.";
+    // The server's detail, a validation list (422) included; a body that is not JSON keeps the generic message.
+    let payload = {};
     try {
-      const detail = (await response.json())?.detail;
-      if (typeof detail === "string" && detail.trim()) message = detail.trim();
+      payload = JSON.parse(await response.text());
     } catch {
-      // Keep the generic message when the error body is not JSON.
+      payload = {};
     }
-    throw new Error(message);
+    throw new Error(extractErrorMessage(payload, "Checklist export failed."));
   }
   triggerBlobDownload(buildDownloadFilename(stem, format === "docx" ? "docx" : "md"), await response.blob());
 }
@@ -702,6 +727,14 @@ function buildSignatureTableExportPayload(rows, caption, resultPayload = null) {
   };
 }
 
+// Exported rows hold scalar cells only: the per-repeat and per-fold detail of a comparison (repeat_results,
+// fold_results) and any other nested value would reach the file as a Python literal.
+function scalarExportRows(rows) {
+  return (rows || []).map((row) => Object.fromEntries(
+    Object.entries(row || {}).filter(([, value]) => value === null || typeof value !== "object"),
+  ));
+}
+
 function buildComparisonTableExportPayload(rows, caption, resultPayload = null) {
   const resultPayloadForHash = resultPayload;
   const analysis = resultPayload?.analysis || {};
@@ -709,9 +742,10 @@ function buildComparisonTableExportPayload(rows, caption, resultPayload = null) 
   if (analysis?.evaluation_mode === "mixed_holdout_apparent") {
     extraNotes.push("This comparison mixes holdout-comparable models with apparent-only screening rows. Do not treat the ranking as a single external-validation table.");
   }
+  const exportRows = scalarExportRows(rows);
   return {
-    rows: rows || [],
-    columns: exportColumnsFromRows(rows || []),
+    rows: exportRows,
+    columns: exportColumnsFromRows(exportRows),
     format: "csv",
     style: "plain",
     caption,
@@ -860,15 +894,16 @@ function stabilizeCoxPlotResetAxes(plotEl) {
     if (!resetRequested || !stableState || stableState.applying) return;
 
     stableState.applying = true;
-    Promise.resolve(
-      Plotly.relayout(plotEl, {
+    // The executor turns a relayout that throws into a rejection too; a failed reset only leaves Plotly's own axes.
+    new Promise((resolve) => {
+      resolve(Plotly.relayout(plotEl, {
         height: stableState.height,
         "xaxis.autorange": false,
         "xaxis.range": stableState.xRange.slice(),
         "yaxis.autorange": false,
         "yaxis.range": stableState.yRange.slice(),
-      })
-    ).finally(() => {
+      }));
+    }).catch(() => {}).finally(() => {
       if (plotEl.__stableResetAxesState) plotEl.__stableResetAxesState.applying = false;
     });
   });

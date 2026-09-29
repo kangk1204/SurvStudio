@@ -128,13 +128,13 @@ def test_fit_cox_matches_statsmodels(ties: str, stratified: bool) -> None:
     assert fit.loglik == pytest.approx(float(reference.llf), rel=1e-10)
 
 
-def test_fit_cox_reports_a_separated_covariate_as_not_converged() -> None:
+def test_fit_cox_flags_a_separated_covariate_as_running_to_infinity() -> None:
     time = np.arange(1.0, 21.0)
     event = np.ones(20, dtype=int)
     separated = (time <= 10).astype(float)  # every early event has x = 1: the MLE is infinite
     fit = fit_cox(time, event, separated)
-    assert not fit.converged or abs(fit.beta[0]) > 5
     # The likelihood converges (as in R), but the coefficient is flagged as running to infinity.
+    assert fit.converged and fit.beta[0] > 5
     assert fit.separated.tolist() == [True]
 
 

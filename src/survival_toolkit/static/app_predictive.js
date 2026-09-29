@@ -86,32 +86,39 @@ function sharedModelCategoricalCandidates() {
     .map((column) => column.name);
 }
 
-function refreshVariableSelections() {
+// A newly loaded dataset (`useDefaults`) starts every list from its defaults, whatever columns it shares by
+// name with the previous one. Otherwise (an endpoint change, a derived snapshot of the same data, a restored
+// page) each list keeps the columns the user chose that are still on offer, a list the user emptied included.
+function refreshVariableSelections({ useDefaults = false } = {}) {
   if (!state.dataset) return;
   const availableCovariates = modelFeatureCandidateColumns();
-  const previousCovariates = selectedCheckboxValues(refs.covariateChecklist).filter((v) => availableCovariates.includes(v));
-  const previousCategoricals = selectedCheckboxValues(refs.categoricalChecklist).filter((v) => availableCovariates.includes(v));
-  const previousStrata = selectedCheckboxValues(refs.strataChecklist).filter((v) => availableCovariates.includes(v));
-  const previousModelFeatures = selectedCheckboxValues(refs.modelFeatureChecklist).filter((v) => availableCovariates.includes(v));
-  const previousModelCategoricals = selectedCheckboxValues(refs.modelCategoricalChecklist).filter((v) => availableCovariates.includes(v));
-  const previousDlModelCategoricals = selectedCheckboxValues(refs.dlModelCategoricalChecklist).filter((v) => availableCovariates.includes(v));
-  const previousTableVars = selectedCheckboxValues(refs.cohortVariableChecklist).filter((v) => availableCovariates.includes(v));
+  const kept = (container, defaults) => (useDefaults
+    ? defaults
+    : selectedCheckboxValues(container).filter((value) => availableCovariates.includes(value)));
   const defaultCategoricals = state.dataset.columns
     .filter((c) => ["categorical", "binary"].includes(c.kind) || (c.n_unique != null && c.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD))
     .map((c) => c.name)
     .filter((name) => availableCovariates.includes(name));
   const defaultModelFeatures = availableCovariates.slice(0, DEFAULT_MODEL_FEATURE_SELECTION_LIMIT);
-  renderChecklist(refs.covariateChecklist, availableCovariates, previousCovariates.length ? previousCovariates : availableCovariates.slice(0, 4));
-  renderChecklist(refs.categoricalChecklist, availableCovariates, previousCategoricals.length ? previousCategoricals : defaultCategoricals);
-  renderChecklist(refs.strataChecklist, availableCovariates, previousStrata);
-  renderChecklist(refs.modelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
-  renderChecklist(refs.modelCategoricalChecklist, availableCovariates, previousModelCategoricals.length ? previousModelCategoricals : defaultCategoricals);
-  renderChecklist(refs.dlModelFeatureChecklist, availableCovariates, previousModelFeatures.length ? previousModelFeatures : defaultModelFeatures);
-  renderChecklist(refs.dlModelCategoricalChecklist, availableCovariates, previousDlModelCategoricals.length ? previousDlModelCategoricals : defaultCategoricals);
-  renderChecklist(refs.cohortVariableChecklist, availableCovariates, previousTableVars.length ? previousTableVars : availableCovariates.slice(0, 6));
+  // Every previous selection is read before any list is rebuilt.
+  const covariates = kept(refs.covariateChecklist, availableCovariates.slice(0, 4));
+  const categoricals = kept(refs.categoricalChecklist, defaultCategoricals);
+  const strata = kept(refs.strataChecklist, []);
+  const modelFeatures = kept(refs.modelFeatureChecklist, defaultModelFeatures);
+  const modelCategoricals = kept(refs.modelCategoricalChecklist, defaultCategoricals);
+  const dlModelCategoricals = kept(refs.dlModelCategoricalChecklist, defaultCategoricals);
+  const tableVariables = kept(refs.cohortVariableChecklist, availableCovariates.slice(0, 6));
+  renderChecklist(refs.covariateChecklist, availableCovariates, covariates);
+  renderChecklist(refs.categoricalChecklist, availableCovariates, categoricals);
+  renderChecklist(refs.strataChecklist, availableCovariates, strata);
+  renderChecklist(refs.modelFeatureChecklist, availableCovariates, modelFeatures);
+  renderChecklist(refs.modelCategoricalChecklist, availableCovariates, modelCategoricals);
+  renderChecklist(refs.dlModelFeatureChecklist, availableCovariates, modelFeatures);
+  renderChecklist(refs.dlModelCategoricalChecklist, availableCovariates, dlModelCategoricals);
+  renderChecklist(refs.cohortVariableChecklist, availableCovariates, tableVariables);
   const numericOptions = state.dataset.numeric_columns.filter((c) => !isSurvivalOutcomeLikeColumn(c));
   renderSelect(refs.deriveSource, numericOptions, { selected: numericOptions.includes(refs.deriveSource.value) ? refs.deriveSource.value : numericOptions[0] || null });
-  refreshMarkerSelections();
+  refreshMarkerSelections({ useDefaults });
   renderSharedFeatureSummary();
   renderCoxPreviewLine();
 }
@@ -191,6 +198,13 @@ function setCheckedValues(container, values) {
   });
 }
 
+// "Select all" of a searchable list: the items the search shows join the selection; choices it hides stay ticked.
+function addVisibleCheckboxesToSelection(container) {
+  const selection = [...new Set([...selectedCheckboxValues(container), ...allCheckboxValues(container, { visibleOnly: true })])];
+  setCheckedValues(container, selection);
+  return selection;
+}
+
 function summarizeFeatureNames(values, limit = 4) {
   if (!values.length) return "none selected";
   if (values.length <= limit) return values.join(", ");
@@ -261,7 +275,7 @@ function currentPredictiveModelKey() {
 
 function selectedPredictiveSingleResult(goal) {
   if (!["ml", "dl"].includes(goal)) return null;
-  if ((runtime.resultPreference?.[goal] || "single") !== "single") return null;
+  if (preferredResultMode(goal) !== "single") return null;
   const payload = currentGoalResult(goal);
   if (!payload) return null;
   const requestConfig = payload.request_config || payload.analysis?.request_config || null;
@@ -324,11 +338,14 @@ function panelModeForPayload(payload) {
 function restorePredictiveFamilyAfterFailedCompare(goal, previousPayload) {
   const panel = goal === "ml" ? refs.mlPanel : refs.dlPanel;
   const previousWasCompare = payloadRepresentsCompareRun(previousPayload);
+  const restored = previousWasCompare ? null : (previousPayload || null);
   if (goal === "ml") {
-    state.ml = previousWasCompare ? null : (previousPayload || null);
+    state.ml = restored;
   } else {
-    state.dl = previousWasCompare ? null : (previousPayload || null);
+    state.dl = restored;
   }
+  // The result mode follows the restored result, so a restored single-model result stays current and shown.
+  runtime.resultPreference[goal] = "single";
   setPanelResultMode(panel, previousWasCompare ? "idle" : panelModeForPayload(previousPayload));
 }
 
@@ -344,10 +361,7 @@ function benchmarkReviewAction(row) {
   const modelKey = predictiveModelKeyFromComparisonLabel(row.model);
   if (modelKey) {
     return {
-      dataset: {
-        benchmarkModel: modelKey,
-        benchmarkMode: row.sourceMode || "",
-      },
+      dataset: { benchmarkModel: modelKey },
       label: "Train a model",
       disabled: false,
     };
@@ -361,10 +375,7 @@ function benchmarkReviewAction(row) {
     };
   }
   return {
-    dataset: {
-      benchmarkTab: row.familyTab,
-      benchmarkMode: row.sourceMode || "",
-    },
+    dataset: { benchmarkTab: row.familyTab },
     label: `Open ${row.familyTab.toUpperCase()} controls`,
     disabled: false,
   };
@@ -628,6 +639,10 @@ function syncAnalysisRunButtonAvailability() {
   const mlSingleMessage = mlRepeatedCv
     ? "Run Analysis uses deterministic holdout only. Use Compare All for repeated CV screening."
     : "";
+  // While Compare All runs, a run started from an ML or DL panel would take over one of its phases.
+  const compareAllBusy = isScopeBusy("predictive");
+  const familyBusy = (goal) => isScopeBusy(goal) || compareAllBusy;
+  const familyBusyTitle = (title) => (compareAllBusy ? "Wait for Compare All Models to finish." : title);
 
   setActionDisabledState(
     refs.runKmButton,
@@ -636,7 +651,7 @@ function syncAnalysisRunButtonAvailability() {
   );
   setActionDisabledState(
     refs.runSignatureSearchButton,
-    !endpointReady || !hasMarkers || isScopeBusy("km"),
+    !endpointReady || !hasMarkers || isScopeBusy("signature"),
     !endpointReady ? readyMessage : (!hasMarkers ? signatureFeatureMessage : ""),
   );
   setActionDisabledState(
@@ -655,29 +670,29 @@ function syncAnalysisRunButtonAvailability() {
     !endpointReady ? readyMessage : (!hasTableVariables ? tableVariableMessage : ""),
   );
 
-  const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");
+  const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || familyBusy("ml");
   const mlSingleTitle = !endpointReady
     ? readyMessage
-    : (!hasSharedFeatures ? sharedFeatureMessage : mlSingleMessage);
+    : (!hasSharedFeatures ? sharedFeatureMessage : familyBusyTitle(mlSingleMessage));
   setActionDisabledState(refs.runMlButton, mlSingleDisabled, mlSingleTitle);
 
-  const mlCompareDisabled = !endpointReady || !hasSharedFeatures || isScopeBusy("ml");
+  const mlCompareDisabled = !endpointReady || !hasSharedFeatures || familyBusy("ml");
   const mlCompareTitle = !endpointReady
     ? readyMessage
-    : (!hasSharedFeatures ? sharedFeatureMessage : "");
+    : (!hasSharedFeatures ? sharedFeatureMessage : familyBusyTitle(""));
   setActionDisabledState(refs.runCompareButton, mlCompareDisabled, mlCompareTitle);
   setActionDisabledState(refs.runCompareInlineButton, mlCompareDisabled, mlCompareTitle);
 
-  const dlSingleDisabled = !endpointReady || !hasSharedFeatures || isScopeBusy("dl");
+  const dlSingleDisabled = !endpointReady || !hasSharedFeatures || familyBusy("dl");
   const dlSingleTitle = !endpointReady
     ? readyMessage
-    : (!hasSharedFeatures ? sharedFeatureMessage : "");
+    : (!hasSharedFeatures ? sharedFeatureMessage : familyBusyTitle(""));
   setActionDisabledState(refs.runDlButton, dlSingleDisabled, dlSingleTitle);
 
-  const dlCompareDisabled = !endpointReady || !hasSharedFeatures || isScopeBusy("dl");
+  const dlCompareDisabled = !endpointReady || !hasSharedFeatures || familyBusy("dl");
   const dlCompareTitle = !endpointReady
     ? readyMessage
-    : (!hasSharedFeatures ? sharedFeatureMessage : "");
+    : (!hasSharedFeatures ? sharedFeatureMessage : familyBusyTitle(""));
   setActionDisabledState(refs.runDlCompareButton, dlCompareDisabled, dlCompareTitle);
   setActionDisabledState(refs.runDlCompareInlineButton, dlCompareDisabled, dlCompareTitle);
 
@@ -820,7 +835,7 @@ function syncBenchmarkWorkbenchVisibility() {
 function renderPredictiveWorkbench() {
   const family = normalizedPredictiveFamily(runtime.predictiveFamily);
   const selectedModel = predictiveModelMeta(currentPredictiveModelKey());
-  const familyMode = runtime.resultPreference?.[family] || "single";
+  const familyMode = preferredResultMode(family);
   const unifiedWorkspaceActive = activeTabName() === "benchmark";
   runtime.predictiveFamily = family;
 
@@ -908,10 +923,6 @@ function benchmarkResultLabel(goal) {
   return "Not run";
 }
 
-function benchmarkPanelMode(goal) {
-  return benchmarkGoalMeta(goal).panel?.dataset?.resultMode || "idle";
-}
-
 function benchmarkEvaluationLabel(mode) {
   const labels = {
     holdout: "Holdout",
@@ -942,8 +953,8 @@ function syncPredictiveWorkbenchCompareVisibility() {
   const dlManuscriptCard = refs.dlManuscriptShell?.closest(".table-card");
   const mlHasPlot = hasRenderedPlot(refs.mlComparisonPlot);
   const dlHasPlot = hasRenderedPlot(refs.dlComparisonPlot);
-  const mlCompareActive = (runtime.resultPreference?.ml || "single") === "compare";
-  const dlCompareActive = (runtime.resultPreference?.dl || "single") === "compare";
+  const mlCompareActive = preferredResultMode("ml") === "compare";
+  const dlCompareActive = preferredResultMode("dl") === "compare";
 
   refs.mlComparisonPlot?.classList.toggle("hidden", suppressCompare || !mlCompareActive || !mlHasPlot);
   refs.dlComparisonPlot?.classList.toggle("hidden", suppressCompare || !dlCompareActive || !dlHasPlot);

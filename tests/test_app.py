@@ -319,7 +319,7 @@ def test_frontend_surfaces_upload_success_feedback_and_allows_reselecting_same_f
 
     assert "function hasCompletedResults()" in text
     assert "function uploadFeedbackMessages(payload" in text
-    assert 'setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info");' in text
+    assert 'setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info", { held: true });' in text
     assert 'showToast(feedback.toast, "success", 3400);' in text
     assert 'refs.datasetFile.addEventListener("click", () => {' in text
     assert 'refs.datasetFile.value = "";' in text
@@ -505,7 +505,7 @@ def test_frontend_exposes_unified_benchmark_tab() -> None:
     assert "function benchmarkBoardState()" in benchmark_text
     assert "const benchmarkBoardApi = window.SurvStudioBenchmark.createBenchmarkBoardApi({" in text
     assert "function syncPredictiveWorkbenchCompareVisibility()" in text
-    assert "function reviewBenchmarkSourceTab(tabName, mode = null)" in text
+    assert "function reviewBenchmarkSourceTab(tabName)" in text
     assert '  if (resolvedTabName === "ml" || resolvedTabName === "dl") {' in text
     assert '#tab-ml,' in (Path(__file__).resolve().parents[1] / "src" / "survival_toolkit" / "static" / "styles.css").read_text(encoding="utf-8")
 
@@ -748,7 +748,7 @@ def test_frontend_recovers_from_missing_dataset_and_blocks_ml_single_model_repea
     assert 'goHome({ syncHistory: true, historyMode: "replace" });' in text
     assert 'The loaded dataset is no longer available on the server. Reload a dataset and run the analysis again.' in text
     assert 'showError(errorMessageText(error));' in text
-    assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");' in text
+    assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || familyBusy("ml");' in text
     assert 'setActionDisabledState(refs.runMlButton, mlSingleDisabled, mlSingleTitle);' in text
     assert 'Run Analysis uses deterministic holdout only. Use Compare All for repeated CV screening.' in text
     assert 'if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {' in text
@@ -792,10 +792,11 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
     text = app_js.read_text(encoding="utf-8")
 
     assert 'const matchingOutcomeWarning = identicalOutcomeColumnMessage();' in text
-    assert 'refs.eventColumn.addEventListener("change", () => {' in text
     assert 'const onTimeColumnChange = () => {\n    clearAnalysisOutputs();' in text
     assert 'refs.timeColumn.addEventListener("change", onTimeColumnChange);' in text
-    assert 'refs.eventColumn.addEventListener("change", () => {\n    clearAnalysisOutputs();' in text
+    # An Event reset by the "All columns" toggle takes the same path (tests/test_frontend_review2.py).
+    assert 'const onEventColumnChange = () => {\n    clearAnalysisOutputs();' in text
+    assert 'refs.eventColumn.addEventListener("change", onEventColumnChange);' in text
     assert 'refs.eventPositiveValue.addEventListener("change", () => {\n    clearAnalysisOutputs();' in text
     assert 'updateTimeColumnGuidance();' in text
     assert 'const coxCovariateCount = goalFeatureCount("cox");' in text
@@ -803,7 +804,7 @@ def test_frontend_updates_outcome_guidance_and_run_buttons_for_empty_selections(
     assert 'Select at least one marker to search for cut-point combinations.' in text
     assert 'Select at least one covariate for the Cox model.' in text
     assert 'Select at least one variable for the cohort table.' in text
-    assert '!endpointReady || !hasMarkers || isScopeBusy("km")' in text
+    assert '!endpointReady || !hasMarkers || isScopeBusy("signature")' in text
     # The marker evaluation also runs on an attached marker file with no column ticked.
     assert '!endpointReady || !hasEvaluationMarkers || isScopeBusy("markers")' in text
     assert 'const matrixAttached = typeof markerMatrixAttached === "function" && markerMatrixAttached();' in text
@@ -826,7 +827,8 @@ def test_cohort_table_variable_picker_supports_search_and_bulk_actions() -> None
     assert 'refs.cohortVariableSearchInput?.addEventListener("input", () => {' in text
     assert 'applyChecklistSearch(refs.cohortVariableChecklist);' in text
     assert 'refs.selectAllCohortVariablesButton?.addEventListener("click", () => {' in text
-    assert 'allCheckboxValues(refs.cohortVariableChecklist, { visibleOnly: true })' in text
+    # Select all adds the shown items to the selection (tests/test_frontend_review2.py drives it).
+    assert 'addVisibleCheckboxesToSelection(refs.cohortVariableChecklist);' in text
     assert 'refs.clearCohortVariablesButton?.addEventListener("click", () => {' in text
     assert 'showToast("Selected all visible cohort table variables.", "success", 2200);' in text
     assert 'showToast("Cleared the cohort table variable list.", "success", 2200);' in text
@@ -1123,7 +1125,8 @@ def test_tab_activation_moves_focus_only_when_asked() -> None:
 
     assert 'function activateTab(tabName, { historyMode = "replace", focusTabButton = false, syncHistory = true } = {}) {' in text
     assert "if (isActive && focusTabButton) {" in text
-    assert 'activateTab(tabs[next].dataset.tab, { historyMode: "push", focusTabButton: true });' in text
+    # Arrow keys replace the history entry like a click (tests/test_frontend_review2.py drives them).
+    assert 'activateTab(tabs[next].dataset.tab, { historyMode: "replace", focusTabButton: true });' in text
 
 
 def test_reparenting_preserves_focus_scroll_and_schedules_extra_plot_resize() -> None:
@@ -1132,9 +1135,10 @@ def test_reparenting_preserves_focus_scroll_and_schedules_extra_plot_resize() ->
 
     assert "function captureReparentUiState() {" in text
     assert "function restoreReparentUiState(snapshot) {" in text
-    assert "const preservedUiState = captureReparentUiState();" in text
+    # Focus and scroll are read (a forced layout) only when a card moves; see test_frontend_workspace_review2.py.
+    assert "const preservedUiState = didMove ? captureReparentUiState() : null;" in text
     assert "restoreReparentUiState(preservedUiState);" in text
-    assert "if (didMove) scheduleVisiblePlotResize(40);" in text
+    assert "scheduleVisiblePlotResize(40);" in text
     assert "window.setTimeout(resizeVisiblePlotsNow, 260);" in text
 
 
@@ -1144,7 +1148,8 @@ def test_ml_dl_result_reveal_is_conditional_on_current_view() -> None:
 
     assert "function shouldRevealCompletedResult(goal) {" in text
     assert "function revealCompletedResultIfCurrent(goal" in text
-    assert 'if (activeTabName() === "benchmark" && ["ml", "dl"].includes(goal)) return true;' in text
+    # Only while the Prediction tab shows that family (tests/test_frontend_review2.py drives it).
+    assert 'if (goal === "ml" || goal === "dl") return activeTabName() === "benchmark" && predictiveFamilyGoal() === goal;' in text
     assert "return activeTabName() === goal;" in text
     assert 'revealCompletedResultIfCurrent("ml", {' in text
     assert 'revealCompletedResultIfCurrent("dl", {' in text
@@ -2235,18 +2240,19 @@ def test_app_store_purges_ml_artifacts_on_eviction() -> None:
 
 
 def test_dataset_lease_blocks_ttl_expiry_and_lru_eviction_until_released() -> None:
-    from datetime import datetime, timedelta, timezone
-
     from survival_toolkit.store import DatasetStore
 
     local_store = DatasetStore(max_datasets=2, ttl_seconds=60)
+    # Idle time runs on the store's monotonic clock; a fake clock ages the dataset by two hours.
+    now = [1_000.0]
+    local_store._clock = lambda: now[0]
     evicted: list[str] = []
     local_store.add_eviction_listener(evicted.append)
     frame = make_example_dataset(seed=4, n_patients=20)
     running = local_store.create(frame, filename="running.csv")
 
     with local_store.lease(running.dataset_id):
-        local_store._datasets[running.dataset_id].last_accessed = datetime.now(timezone.utc) - timedelta(hours=2)
+        now[0] += 2 * 3600
         other = local_store.create(frame, filename="other.csv")
         local_store.create(frame, filename="third.csv")  # must evict `other`, not the leased dataset
         assert local_store.contains(running.dataset_id)
@@ -2743,9 +2749,14 @@ def test_missing_dataset_returns_404() -> None:
     assert "Unknown dataset id" in response.json()["detail"]
 
 
-def test_fail_bad_request_reraises_server_errors() -> None:
-    with pytest.raises(RuntimeError, match="boom"):
-        fail_bad_request(RuntimeError("boom"))
+def test_fail_bad_request_reports_unknown_server_errors_as_logged_generic_500(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("ERROR", logger="survival_toolkit.app"):
+        with pytest.raises(HTTPException) as excinfo:
+            fail_bad_request(RuntimeError("boom"))
+
+    assert excinfo.value.status_code == 500
+    assert "unexpected internal error" in excinfo.value.detail and "boom" not in excinfo.value.detail
+    assert any(record.exc_info and "boom" in str(record.exc_info[1]) for record in caplog.records)
 
 
 def test_fail_bad_request_wraps_memory_errors_with_guidance() -> None:
@@ -2773,8 +2784,10 @@ def test_fail_bad_request_maps_linalg_errors_to_400() -> None:
 
 
 def test_fail_bad_request_maps_dependency_errors_to_503() -> None:
+    from survival_toolkit.errors import DependencyError
+
     with pytest.raises(HTTPException) as excinfo:
-        fail_bad_request(ImportError("scikit-survival is required"))
+        fail_bad_request(DependencyError("scikit-survival is required"))
 
     assert excinfo.value.status_code == 503
     assert "scikit-survival" in excinfo.value.detail
@@ -2963,9 +2976,12 @@ def test_ml_model_endpoint_handles_categorical_dummy_name_collision() -> None:
     assert "tgrade_III" in importance_features
 
 
-def test_fail_bad_request_reraises_raw_key_errors() -> None:
-    with pytest.raises(KeyError, match="internal_missing_key"):
+def test_fail_bad_request_reports_raw_key_errors_as_generic_500() -> None:
+    with pytest.raises(HTTPException) as excinfo:
         fail_bad_request(KeyError("internal_missing_key"))
+
+    assert excinfo.value.status_code == 500
+    assert "internal_missing_key" not in excinfo.value.detail
 
 
 def test_fail_bad_request_sanitizes_nonlocal_value_errors() -> None:
@@ -3026,9 +3042,10 @@ def test_cors_rejects_null_origin_but_allows_localhost() -> None:
 
 def test_ml_model_endpoint_reports_missing_dependency(monkeypatch) -> None:
     import survival_toolkit.ml_models as ml_models
+    from survival_toolkit.errors import DependencyError
 
     def _raise_missing_dependency(*args, **kwargs):
-        raise ImportError("scikit-survival is required for Random Survival Forest.")
+        raise DependencyError("scikit-survival is required for Random Survival Forest.")
 
     monkeypatch.setattr(ml_models, "train_random_survival_forest", _raise_missing_dependency)
 
@@ -3055,9 +3072,10 @@ def test_ml_model_endpoint_reports_missing_dependency(monkeypatch) -> None:
 
 def test_deep_model_endpoint_reports_missing_torch_dependency(monkeypatch) -> None:
     import survival_toolkit.deep_models as deep_models
+    from survival_toolkit.errors import DependencyError
 
     def _raise_missing_dependency(*args, **kwargs):
-        raise ImportError("PyTorch is required for deep learning models.")
+        raise DependencyError("PyTorch is required for deep learning models.")
 
     monkeypatch.setattr(deep_models, "evaluate_single_deep_survival_model", _raise_missing_dependency)
 
@@ -4865,16 +4883,9 @@ def test_benchmark_board_warns_about_cross_family_tie_methods_and_ibs_asymmetry(
     assert "Cox PH and LASSO-Cox use Efron" in benchmark_js
     assert "DeepSurv, Survival Transformer, and Survival VAE use Breslow" in benchmark_js
     assert "ML comparison rows may include IBS / Brier Skill Score, but DL comparison rows currently report C-index only" in benchmark_js
-    assert "ΔC vs Cox PH is paired: every draw scores all models on the same resampled patients" in benchmark_js
+    # Named after the intervals' reference model, Cox PH when the board has it (tests/test_frontend_review2.py).
+    assert "ΔC vs ${referenceName} is paired: every draw scores all models on the same resampled patients" in benchmark_js
     assert "/api/model-comparison-intervals" in benchmark_js
-
-
-def test_predictive_current_result_requires_both_current_compare_payloads() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-
-    assert 'const currentMl = currentCompareGoalPayload("ml");' in app_js
-    assert 'const currentDl = currentCompareGoalPayload("dl");' in app_js
-    assert "return currentMl && currentDl ? { ml: currentMl, dl: currentDl } : null;" in app_js
 
 
 def test_cox_analysis_reuses_one_model_stats_definition() -> None:
@@ -4913,17 +4924,6 @@ def test_guided_chrome_rerenders_benchmark_starter_visibility() -> None:
     assert "renderUnifiedBenchmarkSummary(board);" in app_js
     assert "renderUnifiedBenchmarkTable(board);" in app_js
     assert "syncBenchmarkBoardChrome();" in app_js
-
-
-def test_predictive_leaderboard_is_current_only_for_a_complete_board() -> None:
-    app_js = _AppJsSource().read_text(encoding="utf-8")
-
-    assert "function predictiveLeaderboardIsCurrent() {" in app_js
-    assert "&& !board?.hasMixedEvaluation" in app_js
-    assert "&& !board?.visibleHasMixedRunGroups" in app_js
-    assert '&& (board?.visibleRows?.length || 0) > 0,' in app_js
-    assert "if (predictiveLeaderboardIsCurrent()) {" in app_js
-    assert "unified: null," in app_js
 
 
 def test_frontend_download_helpers_accept_fallback_mime_type() -> None:
@@ -5085,8 +5085,10 @@ def test_frontend_exports_require_current_results_and_signature_scope_guard() ->
     assert 'if (!requireCurrentResultForExport("tables", { payload })) return;' in app_js
     assert 'if (!requireCurrentResultForExport("ml", { payload })) return;' in app_js
     assert 'if (!requireCurrentResultForExport("dl", { payload })) return;' in app_js
-    assert 'if (!payload || isScopeBusy("km")) {' in app_js
-    assert 'refs.runSignatureSearchButton, runSignatureSearch, "km"' in app_js
+    # The cut-point search has its own busy scope, and its CSV waits for a running search with the right reason
+    # (tests/test_frontend_review2.py drives both).
+    assert 'if (isScopeBusy("signature")) {' in app_js
+    assert 'refs.runSignatureSearchButton, runSignatureSearch, "signature"' in app_js
     assert "function syncDownloadButtonAvailability()" in app_js
 
 
@@ -6648,7 +6650,9 @@ def test_optional_extras_include_format_ml_dl_and_export_dependencies() -> None:
 def test_cutpoint_scan_stays_hidden_until_it_has_a_plot() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert 'refs.cutpointPlot.classList.toggle("hidden", refs.cutpointPlot.innerHTML.trim().length === 0);' in app_js
+    # Checked without serialising the drawn figure; the behaviour is tested in test_frontend_workspace_review2.py.
+    assert "const empty = !refs.cutpointPlot.children.length && !refs.cutpointPlot.textContent.trim();" in app_js
+    assert 'refs.cutpointPlot.classList.toggle("hidden", empty);' in app_js
 
 
 def test_cohort_table_run_uses_its_button_as_loading_target() -> None:
@@ -6703,7 +6707,7 @@ def test_benchmark_frontend_normalizes_missing_family_labels_before_rendering() 
 def test_runs_use_scope_override_for_loading_locks() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
-    assert "async function withLoading(button, action, scopeOverride = null, { swallowErrors = true } = {}) {" in app_js
+    assert "async function withLoading(button, action, scopeOverride = null) {" in app_js
     assert "const scope = scopeOverride || runScopeForButton(button);" in app_js
     assert 'withLoading(refs.runPredictiveCompareAllButton, runUnifiedPredictiveComparison, "predictive");' in app_js
     assert "const scopeButtons = buttonsForScope(scope);" in app_js
@@ -6716,7 +6720,7 @@ def test_loading_helpers_publish_busy_state_and_repeat_cv_blocked_ml_run_does_no
 
     assert 'button.setAttribute("aria-busy", loading ? "true" : "false");' in app_js
     assert 'button.setAttribute("aria-busy", "false");' in app_js
-    assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || isScopeBusy("ml");' in app_js
+    assert 'const mlSingleDisabled = !endpointReady || !hasSharedFeatures || mlRepeatedCv || familyBusy("ml");' in app_js
 
 
 def test_compare_all_actions_surface_pending_feedback() -> None:
@@ -6724,8 +6728,9 @@ def test_compare_all_actions_surface_pending_feedback() -> None:
 
     assert "function mlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
     assert "function dlComparePendingBannerText({ rowCount, evaluationStrategy, cvFolds, cvRepeats }) {" in app_js
-    assert 'setRuntimeBanner("Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info");' in app_js
-    assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info");' in app_js
+    # Run banners are held by their run (tests/test_frontend_review2.py drives them through withLoading).
+    assert 'setRuntimeBanner("Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path. This can take a little while on larger cohorts.", "info", { held: true });' in app_js
+    assert 'setRuntimeBanner("Comparing all deep-learning models. This can take noticeably longer than a single run.", "info", { held: true });' in app_js
     assert "refs.mlMetaBanner.textContent = mlComparePendingBannerText({" in app_js
     assert "refs.dlMetaBanner.textContent = dlComparePendingBannerText({" in app_js
 
@@ -7221,7 +7226,7 @@ def test_marker_frontend_runs_the_evaluation_and_validates_the_locked_model() ->
     assert 'if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];' in text
     assert 'if (goal === "markers") {' in text
     assert "markers: state.markers," in text
-    assert "refreshMarkerSelections();" in text
+    assert "refreshMarkerSelections({ useDefaults });" in text
     assert "syncMarkerDownloadButtons();" in text
     assert "clearMarkerOutputs();" in text
     assert 'invalidateRequestTokens(["markers", "markerValidation"]);' in text

@@ -51,12 +51,12 @@ from survival_toolkit.analysis import (
     compute_cohort_table,
     compute_cox_analysis,
     compute_km_analysis,
+    detect_duplicate_identifier_columns,
     discover_feature_signature,
     derive_group_column,
     ensure_model_feature_candidate_limit,
     find_event_equivalent_columns,
     load_dataframe_from_path,
-    make_unique_columns,
     preview_rows,
     preview_cox_analysis_inputs,
     profile_dataframe,
@@ -66,15 +66,19 @@ from survival_toolkit import __version__ as SURVSTUDIO_VERSION
 from survival_toolkit.concurrency import cancellation_scope, raise_if_cancelled
 from survival_toolkit.design_audit import audit_design, design_from_dict
 from survival_toolkit.errors import (
+    DependencyError,
     InternalAnalysisError,
     JobCancelledError,
     NotFoundError,
     UserInputError,
+    _raised_by_survstudio,
+    is_programming_error,
     must_propagate,
     user_input_boundary,
 )
 from survival_toolkit.evaluation import c_index_intervals, merge_prediction_blocks
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
+from survival_toolkit.marker_screen import _PAIRWISE_LIMIT as _C_INDEX_PAIRWISE_LIMIT
 from survival_toolkit.marker_matrix import (
     MATRIX_SUFFIXES,
     MAX_DECOMPRESSED_BYTES,
@@ -235,6 +239,8 @@ def _configured_request_hosts(bind_host: str, allowed_hosts: str) -> tuple[froze
     bind = _normalize_hostname(bind_host)
     if bind in _WILDCARD_BIND_HOSTS:
         hosts.update(_local_interface_hostnames())
+        # A page opened as http://0.0.0.0:<port> (or [::]) reaches this server and sends that literal as its Host.
+        hosts.update(_WILDCARD_BIND_HOSTS)
     elif bind:
         hosts.add(bind)
     return frozenset(hosts), allow_any
@@ -330,27 +336,43 @@ _UPLOAD_PATHS = frozenset({"/api/upload", "/api/marker-matrix"})
 _UPLOAD_TOO_LARGE_DETAIL = "Upload exceeds the 200 MB limit."
 # Allowance for multipart boundaries and part headers on top of the file-size limit.
 _UPLOAD_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+# Largest body of any other request (all JSON). The largest legitimate one, the test-set predictions
+# of four comparisons of 10 models on 100,000 patients sent to the interval endpoint, is about 100 MB.
+_MAX_JSON_BODY_BYTES = 128 * 1024 * 1024
+_JSON_BODY_TOO_LARGE_DETAIL = "Request body exceeds the 128 MB limit."
 
 
 def _max_upload_request_bytes() -> int:
     return int(_MAX_UPLOAD_BYTES) + _UPLOAD_MULTIPART_OVERHEAD_BYTES
 
 
-class UploadSizeLimitMiddleware:
-    """Reject oversized uploads from Content-Length before the multipart body is read.
+def _request_body_limit(scope: Scope) -> tuple[int, str] | None:
+    """Byte limit and message for a request's body; None for methods whose bodies no route reads."""
 
-    Chunked requests without Content-Length are cut off as soon as the streamed body passes the
-    limit, instead of being spooled to disk in full by the multipart parser first.
+    if str(scope.get("method", "GET")).upper() not in _STATE_CHANGING_METHODS:
+        return None
+    if scope.get("path") in _UPLOAD_PATHS:
+        return _max_upload_request_bytes(), _UPLOAD_TOO_LARGE_DETAIL
+    return int(_MAX_JSON_BODY_BYTES), _JSON_BODY_TOO_LARGE_DETAIL
+
+
+class UploadSizeLimitMiddleware:
+    """Reject oversized request bodies from Content-Length before they are read.
+
+    Uploads get the upload limit and every other state-changing request (JSON) the smaller body
+    limit. Chunked requests without Content-Length are cut off as soon as the streamed body
+    passes the limit, instead of being spooled to disk (multipart) or memory (JSON) in full first.
     """
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope.get("path") not in _UPLOAD_PATHS or scope.get("method") != "POST":
+        body_limit = _request_body_limit(scope) if scope["type"] == "http" else None
+        if body_limit is None:
             await self.app(scope, receive, send)
             return
-        limit = _max_upload_request_bytes()
+        limit, too_large_detail = body_limit
         content_length = Headers(scope=scope).get("content-length")
         if content_length is not None:
             try:
@@ -362,7 +384,7 @@ class UploadSizeLimitMiddleware:
                 await response(scope, receive, send)
                 return
             if declared_bytes > limit:
-                response = JSONResponse({"detail": _UPLOAD_TOO_LARGE_DETAIL}, status_code=413)
+                response = JSONResponse({"detail": too_large_detail}, status_code=413)
                 await response(scope, receive, send)
                 return
 
@@ -375,15 +397,29 @@ class UploadSizeLimitMiddleware:
                 received_bytes += len(message.get("body", b""))
                 if received_bytes > limit:
                     # FastAPI re-raises HTTPExceptions raised while reading the body.
-                    raise HTTPException(status_code=413, detail=_UPLOAD_TOO_LARGE_DETAIL)
+                    raise HTTPException(status_code=413, detail=too_large_detail)
             return message
 
         await self.app(scope, limited_receive, send)
 
 
+class _SurrogateSafeJSONResponse(JSONResponse):
+    """A JSON response that writes an unpaired UTF-16 surrogate as a ``\\u`` escape instead of failing.
+
+    JSON text may carry such a surrogate (a valid "\\ud800" escape), and results echo request
+    text that no field check sees (model names of prediction blocks, recipe entries), so UTF-8
+    encoding would otherwise turn a finished analysis into a bare server error.
+    """
+
+    def render(self, content: Any) -> bytes:
+        text = json.dumps(content, ensure_ascii=False, allow_nan=False, indent=None, separators=(",", ":"))
+        return text.encode("utf-8", "backslashreplace")
+
+
 app = FastAPI(
     title="SurvStudio",
     description="Local survival analysis dashboard for exploratory and validation-oriented cohort work.",
+    default_response_class=_SurrogateSafeJSONResponse,
 )
 app.add_middleware(UploadSizeLimitMiddleware)
 app.add_middleware(
@@ -492,6 +528,18 @@ _LATEX_ESCAPE_TABLE = str.maketrans(
 )
 
 
+# A lone UTF-16 surrogate (a valid JSON escape such as "\ud800") cannot be written as UTF-8.
+_SURROGATE_PATTERN = re.compile("[\ud800-\udfff]")
+# Largest magnitude up to which every integer has an exact float value (and so can match a data value).
+_MAX_EXACT_FLOAT_INT = 2**53
+
+
+def _json_safe_text(text: str) -> str:
+    """``text`` with unpaired UTF-16 surrogates written as ``\\udxxx`` escapes, which a UTF-8 response can carry."""
+
+    return text.encode("utf-8", "backslashreplace").decode("utf-8") if _SURROGATE_PATTERN.search(text) else text
+
+
 def _normalize_optional_text_field(
     value: Any,
     *,
@@ -507,7 +555,24 @@ def _normalize_optional_text_field(
         raise ValueError(f"{field_name} must not be empty.")
     if _CONTROL_CHAR_PATTERN.search(text):
         raise ValueError(f"{field_name} must not contain control characters.")
+    if _SURROGATE_PATTERN.search(text):
+        raise ValueError(f"{field_name} must be valid Unicode text (it holds an unpaired surrogate).")
     return text
+
+
+def _normalize_column_name(value: Any, *, field_name: str, optional: bool = False) -> str | None:
+    """A column name from a request: text, trimmed, without control characters or unpaired surrogates.
+
+    An optional field reads null or blank text as "no column"; a required one refuses them.
+    """
+
+    if value is None or (optional and isinstance(value, str) and not value.strip()):
+        if optional:
+            return None
+        raise ValueError(f"{field_name} must name a column.")
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a column name (text).")
+    return _normalize_optional_text_field(value, field_name=field_name)
 
 
 def _normalize_event_positive_value(value: Any) -> Any:
@@ -517,6 +582,9 @@ def _normalize_event_positive_value(value: Any) -> Any:
         if isinstance(value, str):
             text = _normalize_optional_text_field(value, field_name="event_positive_value")
             return text
+        if not isinstance(value, bool) and abs(value) > _MAX_EXACT_FLOAT_INT:
+            # A numeric column holds floats, so a larger code could never match its values exactly.
+            raise ValueError("event_positive_value must be a number of at most 2^53 in magnitude.")
         return value
     if isinstance(value, float):
         if not np.isfinite(value):
@@ -528,17 +596,15 @@ def _normalize_event_positive_value(value: Any) -> Any:
 def _normalize_unique_name_list(value: Any, *, field_name: str) -> list[str]:
     if value is None:
         return []
-    if isinstance(value, (str, bytes)):
+    if not isinstance(value, (list, tuple)):
         raise ValueError(f"{field_name} must be a list of column names.")
-    try:
-        raw_values = list(value)
-    except TypeError as exc:  # pragma: no cover - defensive branch
-        raise ValueError(f"{field_name} must be a list of column names.") from exc
 
     normalized: list[str] = []
     seen: set[str] = set()
-    for raw_value in raw_values:
-        text = _normalize_optional_text_field(raw_value, field_name=field_name)
+    for raw_value in value:
+        if not isinstance(raw_value, str):
+            raise ValueError(f"{field_name} must list column names as text.")
+        text = _normalize_column_name(raw_value, field_name=field_name)
         if text is None or text in seen:
             continue
         seen.add(text)
@@ -561,6 +627,18 @@ def _validate_subset_names(
         )
 
 
+# Request fields that name one dataset column; every model normalises them the same way.
+_COLUMN_NAME_FIELDS = (
+    "time_column",
+    "event_column",
+    "group_column",
+    "source_column",
+    "variable",
+    "target_feature",
+    "marker_matrix_id_column",
+)
+
+
 class _DatasetRequestModel(BaseModel):
     # NaN/Infinity (accepted by Python's JSON parser) are never valid analysis settings.
     model_config = ConfigDict(allow_inf_nan=False)
@@ -574,6 +652,14 @@ class _DatasetRequestModel(BaseModel):
         if len(text) > 64:
             raise ValueError("dataset_id must be 64 characters or fewer.")
         return text
+
+    @field_validator(*_COLUMN_NAME_FIELDS, mode="before", check_fields=False)
+    @classmethod
+    def validate_column_name(cls, value: Any, info: Any) -> str | None:
+        # A field with a default (a grouping column, an optional outcome) reads blank as no column.
+        field = cls.model_fields.get(info.field_name)
+        optional = field is not None and not field.is_required()
+        return _normalize_column_name(value, field_name=info.field_name, optional=optional)
 
 
 class _EventPositiveValueRequestModel(_DatasetRequestModel):
@@ -912,13 +998,10 @@ class DeriveGroupRequest(_EventPositiveValueRequestModel):
 
     @field_validator("lower_label", "upper_label", mode="before")
     @classmethod
-    def validate_group_label(cls, value: Any) -> str:
-        text = str(value).strip()
-        if not text:
-            raise ValueError("Group labels must not be empty.")
-        if _CONTROL_CHAR_PATTERN.search(text):
-            raise ValueError("Group labels must not contain control characters.")
-        return text
+    def validate_group_label(cls, value: Any) -> str | None:
+        if not isinstance(value, str):
+            raise ValueError("Group labels must be text.")
+        return _normalize_optional_text_field(value, field_name="Group labels")
 
 
 class KaplanMeierRequest(_EventPositiveValueRequestModel):
@@ -980,10 +1063,10 @@ class CohortTableRequest(_EventPositiveValueRequestModel):
     event_column: str | None = None
     event_positive_value: Any = 1
 
-    @field_validator("time_column", "event_column", mode="before")
+    @field_validator("variables", mode="before")
     @classmethod
-    def validate_outcome_column(cls, value: Any, info: Any) -> str | None:
-        return _normalize_optional_text_field(value, field_name=info.field_name, allow_empty_as_none=True)
+    def validate_variables(cls, value: Any) -> list[str]:
+        return _normalize_unique_name_list(value, field_name="variables")
 
     @model_validator(mode="after")
     def validate_outcome_pair(self) -> "CohortTableRequest":
@@ -1010,6 +1093,11 @@ class SignatureSearchRequest(_EventPositiveValueRequestModel):
     combination_operator: Literal["and", "or", "mixed"] = "mixed"
     random_seed: int = Field(default=20260311, ge=0, le=2**32 - 1)
     new_column_name: str | None = Field(default=None, max_length=200)
+
+    @field_validator("candidate_columns", mode="before")
+    @classmethod
+    def validate_candidate_columns(cls, value: Any) -> list[str]:
+        return _normalize_unique_name_list(value, field_name="candidate_columns")
 
     @field_validator("new_column_name", mode="before")
     @classmethod
@@ -1182,12 +1270,35 @@ class MarkerValidationRequest(_EventPositiveValueRequestModel):
     # "within_cohort" rescales each marker to its development distribution (a cohort from another platform).
     marker_scaling: Literal["as_measured", "within_cohort"] = "as_measured"
 
+    @field_validator("column_mapping", mode="before")
+    @classmethod
+    def validate_column_mapping(cls, value: Any) -> dict[str, str]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("column_mapping must map recipe column names to dataset column names.")
+        return {
+            _normalize_column_name(key, field_name="column_mapping"): _normalize_column_name(target, field_name="column_mapping")
+            for key, target in value.items()
+        }
+
 
 _MAX_INTERVAL_MODELS_PER_BLOCK = 50
 
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_finite_number(value: Any) -> bool:
+    """A JSON number with a finite float value; an integer too large for a float is not one."""
+
+    if not _is_number(value):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _check_prediction_block(block: dict[str, Any], index: int) -> None:
@@ -1207,7 +1318,7 @@ def _check_prediction_block(block: dict[str, Any], index: int) -> None:
     time_values = block.get("time")
     if not isinstance(time_values, list) or len(time_values) != n_rows:
         raise ValueError(f"{where}: time must be a list with one value per patient.")
-    if not all(_is_number(value) and math.isfinite(value) and value >= 0 for value in time_values):
+    if not all(_is_finite_number(value) and value >= 0 for value in time_values):
         raise ValueError(f"{where}: every time must be a finite, non-negative number.")
     event_values = block.get("event")
     if not isinstance(event_values, list) or len(event_values) != n_rows:
@@ -1222,7 +1333,7 @@ def _check_prediction_block(block: dict[str, Any], index: int) -> None:
     for name, values in risk.items():
         if not isinstance(values, list) or len(values) != n_rows:
             raise ValueError(f"{where}: the risk scores of '{name}' must be a list with one value per patient.")
-        if not all(_is_number(value) and math.isfinite(value) for value in values):
+        if not all(_is_finite_number(value) for value in values):
             raise ValueError(f"{where}: every risk score of '{name}' must be a finite number.")
 
 
@@ -1243,12 +1354,31 @@ class ModelComparisonIntervalsRequest(BaseModel):
         return blocks
 
 
-# Work (events x patients x models) of all bootstrap draws of one request, so it stays within
-# tens of seconds. It is a hard cap: a large test set gets fewer draws (and a note), and one too
-# large for the minimum number of draws is refused.
-_INTERVAL_WORK_BUDGET = 3_000_000_000
+# Work units (see _c_index_draw_work; about 3 ns each on one laptop core) of all bootstrap draws of
+# one request, so it stays within about half a minute: 2,500 test patients scored by 10 models get
+# 1,000 draws. It is a hard cap: a larger test set gets fewer draws (and a note), and one too large
+# for the minimum number of draws is refused.
+_INTERVAL_WORK_BUDGET = 12_000_000_000
 # Fewest draws that still give a usable 95% percentile interval (the request minimum).
 _INTERVAL_MIN_DRAWS = 100
+
+
+def _c_index_draw_work(n_patients: int, n_events: int, n_models: int) -> int:
+    """Work units of one bootstrap draw of Harrell's C for ``n_models`` risk columns.
+
+    Mirrors ``marker_screen.harrell_c_many``: when events x patients is at most its pairwise
+    limit it compares every event with every patient, and otherwise it counts pairs from sorted
+    blocks, about (patients + 2 x events) x log2(patients)^2 operations per column. One column
+    more stands for the per-draw work that does not depend on the number of models.
+    """
+
+    n = max(int(n_patients), 1)
+    events = min(max(int(n_events), 1), n)
+    columns = max(int(n_models), 1) + 1
+    if events * n <= _C_INDEX_PAIRWISE_LIMIT:
+        return columns * events * n
+    log_n = math.log2(n)
+    return int(columns * (n + 2 * events) * log_n * log_n)
 
 
 class DesignAuditCohort(BaseModel):
@@ -1365,13 +1495,13 @@ class TableExportRequest(BaseModel):
     @field_validator("columns")
     @classmethod
     def validate_columns(cls, value: list[str]) -> list[str]:
+        # Names keep their spelling, so they still match the row keys; the writers turn control
+        # characters (a line break in a group value that became a column) into spaces.
         cleaned: list[str] = []
         for column in value:
             text = str(column)
             if len(text) > 4000:
                 raise ValueError("Each export column name must be 4000 characters or fewer.")
-            if _CONTROL_CHAR_PATTERN.search(text):
-                raise ValueError("Export column names must not contain control characters.")
             cleaned.append(text)
         return cleaned
 
@@ -1492,6 +1622,12 @@ def _extend_profile_template_for_appended_columns(
         suggested_time_columns=suggestions.get("time_columns", []),
         binary_candidate_columns=binary_candidate_columns,
     )
+    # Repeated-identifier findings are per column and listed in column order, so the appended
+    # columns' findings follow the earlier ones.
+    duplicate_identifier_columns = [
+        *list(next_template.get("duplicate_identifier_columns") or []),
+        *detect_duplicate_identifier_columns(dataframe[current_column_names[len(previous_column_names) :]]),
+    ]
     next_template.update(
         {
             "n_rows": int(dataframe.shape[0]),
@@ -1503,6 +1639,7 @@ def _extend_profile_template_for_appended_columns(
             "binary_candidate_columns": binary_candidate_columns,
             "model_feature_candidate_count": len(model_feature_candidates),
             "suggestions": suggestions,
+            "duplicate_identifier_columns": duplicate_identifier_columns,
         }
     )
     return next_template
@@ -1803,6 +1940,19 @@ def _raw_feature_encoded_widths(feature_encoder: dict[str, Any], requested_featu
     return widths
 
 
+def _must_propagate_through_boundary(exc: BaseException) -> bool:
+    """``must_propagate``, also for a coding error that ``user_input_boundary`` wrapped.
+
+    The public analysis functions turn a TypeError raised by SurvStudio code into an
+    InternalAnalysisError; that is still a coding error, not a failure to report as a result.
+    """
+
+    if must_propagate(exc):
+        return True
+    cause = exc.__cause__
+    return isinstance(exc, InternalAnalysisError) and cause is not None and must_propagate(cause)
+
+
 def _coerce_score(value: Any) -> float | None:
     try:
         score = float(value)
@@ -1910,25 +2060,74 @@ def _text_too_large(text_size: int) -> HTTPException:
 def _parquet_text_bytes(path: Path, limit: int) -> int:
     """Decoded size of the text and binary columns of a Parquet file, counted until it passes ``limit``.
 
-    Columns are read with their dictionaries kept, so a value stored once and used by many rows
-    is measured, not materialised, once per row.
+    Every column that does not hold numbers, dates, times or booleans decodes to a text or bytes
+    value per cell, whatever its Arrow type: plain, large or view strings and binaries, fixed-size
+    binaries, or dictionaries of them. Text columns are read with their dictionaries kept, so a
+    value stored once and used by many rows is measured, not materialised, once per row; a
+    fixed-size binary column is measured from its width, without reading it. Other text-holding
+    types (extension types such as JSON) cannot be read that way and are refused.
     """
 
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
 
-    def _is_text(data_type: Any) -> bool:
-        if pa.types.is_dictionary(data_type):
+    def _is_extension(data_type: Any) -> bool:
+        while pa.types.is_dictionary(data_type):
             data_type = data_type.value_type
-        return any(
-            check(data_type)
-            for check in (pa.types.is_string, pa.types.is_large_string, pa.types.is_binary, pa.types.is_large_binary)
+        return isinstance(data_type, pa.BaseExtensionType)
+
+    def _value_type(data_type: Any) -> Any:
+        # A dictionary column holds its value type; an extension type (UUID, ...) its storage type.
+        while True:
+            if pa.types.is_dictionary(data_type):
+                data_type = data_type.value_type
+            elif isinstance(data_type, pa.BaseExtensionType):
+                data_type = data_type.storage_type
+            else:
+                return data_type
+
+    def _holds_text(data_type: Any) -> bool:
+        value_type = _value_type(data_type)
+        return not any(
+            check(value_type)
+            for check in (
+                pa.types.is_integer,
+                pa.types.is_floating,
+                pa.types.is_decimal,
+                pa.types.is_boolean,
+                pa.types.is_temporal,
+                pa.types.is_null,
+            )
         )
+
+    def _read_as_dictionary(data_type: Any) -> bool:
+        # Byte-array columns of these types come back as dictionaries when read with read_dictionary;
+        # an extension type comes back as itself, with every value materialised.
+        return not _is_extension(data_type) and any(
+            check(_value_type(data_type))
+            for check in (
+                pa.types.is_string,
+                pa.types.is_large_string,
+                pa.types.is_binary,
+                pa.types.is_large_binary,
+                pa.types.is_string_view,
+                pa.types.is_binary_view,
+            )
+        )
+
+    def _value_lengths(array: Any) -> Any:
+        if pa.types.is_dictionary(array.type):
+            return pc.take(_value_lengths(array.dictionary), array.indices)
+        if pa.types.is_string_view(array.type) or pa.types.is_binary_view(array.type):
+            # The length kernel does not read the view layouts; plain binary holds the same bytes.
+            array = array.cast(pa.large_binary())
+        return pc.binary_length(array)
 
     parquet_file = pq.ParquetFile(path)
     try:
         schema = parquet_file.schema_arrow
+        n_rows = int(parquet_file.metadata.num_rows)
     finally:
         parquet_file.close()
     nested = [field.name for field in schema if pa.types.is_nested(field.type)]
@@ -1938,22 +2137,27 @@ def _parquet_text_bytes(path: Path, limit: int) -> int:
             + ", ".join(str(name) for name in nested[:5])
             + ". Flatten them or export the table as CSV."
         )
-    text_columns = [field.name for field in schema if _is_text(field.type)]
-    if not text_columns:
-        return 0
+    text_fields = [field for field in schema if _holds_text(field.type)]
+    fixed_width = [field for field in text_fields if pa.types.is_fixed_size_binary(_value_type(field.type))]
+    text_columns = [field.name for field in text_fields if _read_as_dictionary(field.type)]
+    unsupported = [field for field in text_fields if field not in fixed_width and field.name not in text_columns]
+    if unsupported:
+        raise UserInputError(
+            "Parquet columns of these types are not supported: "
+            + ", ".join(f"{field.name} ({field.type})" for field in unsupported[:5])
+            + ". Store them as plain text columns or export the table as CSV."
+        )
+    # Each cell of a fixed-size binary column decodes to its full width.
+    total = sum(n_rows * int(_value_type(field.type).byte_width) for field in fixed_width)
+    if total > limit or not text_columns:
+        return total
     reader = pq.ParquetFile(path, read_dictionary=text_columns)
-    total = 0
     try:
         for row_group in range(reader.metadata.num_row_groups):
             table = reader.read_row_group(row_group, columns=text_columns)
             for column in table.columns:
                 for chunk in column.chunks:
-                    if pa.types.is_dictionary(chunk.type):
-                        lengths = pc.binary_length(chunk.dictionary)
-                        size = pc.sum(pc.take(lengths, chunk.indices)).as_py()
-                    else:
-                        size = pc.sum(pc.binary_length(chunk)).as_py()
-                    total += int(size or 0)
+                    total += int(pc.sum(_value_lengths(chunk)).as_py() or 0)
                     if total > limit:
                         return total
     finally:
@@ -1992,7 +2196,66 @@ def _dataframe_text_chars(dataframe: pd.DataFrame, limit: int) -> int:
     return total
 
 
-_XML_PROLOG_BYTES = 4096
+# Most members an .xlsx container may hold: a workbook has a few dozen parts, one with many sheets
+# or images a few thousand.
+_MAX_XLSX_MEMBERS = 10_000
+_XML_READ_CHUNK_BYTES = 64 * 1024
+# How an XML part can start in the encodings XML parsers detect: a UTF-8 or UTF-16 byte order
+# mark, UTF-16 text without one, or (after optional whitespace) "<".
+_XML_PART_SIGNATURES = (b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff", b"\x00<")
+
+
+class _XmlRootReached(Exception):
+    """Ends the prolog scan of an XML part at its root element."""
+
+
+def _is_xml_part(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
+    """True when a workbook member starts like an XML document, whatever its name.
+
+    openpyxl finds the shared strings through the content types and the sheets through the
+    workbook relationships, which may give parts any extension, so parts are recognised by their
+    content. Images and other binary members never start like XML.
+    """
+
+    with archive.open(info) as handle:
+        head = handle.read(1024)
+    if not head:
+        return False
+    stripped = head.lstrip(b" \t\r\n")
+    return not stripped or stripped.startswith(b"<") or head.startswith(_XML_PART_SIGNATURES)
+
+
+def _xml_part_declares_document_type(handle: Any) -> bool:
+    """True when an XML part declares a document type or an entity before its root element.
+
+    The part is parsed up to its root element in whatever encoding it declares, so a declaration
+    after a long comment or in UTF-16 text is found too; a part that cannot be parsed that far
+    raises the parser's error.
+    """
+
+    from xml.parsers import expat
+
+    parser = expat.ParserCreate()
+    declared = False
+
+    def _declaration(*_args: Any) -> None:
+        nonlocal declared
+        declared = True
+        raise _XmlRootReached
+
+    def _root(*_args: Any) -> None:
+        raise _XmlRootReached
+
+    parser.StartDoctypeDeclHandler = _declaration
+    parser.EntityDeclHandler = _declaration
+    parser.StartElementHandler = _root
+    try:
+        while chunk := handle.read(_XML_READ_CHUNK_BYTES):
+            parser.Parse(chunk, False)
+        parser.Parse(b"", True)
+    except _XmlRootReached:
+        pass
+    return declared
 
 
 def _iter_xml_elements(handle: Any, wanted: frozenset[str]) -> Any:
@@ -2024,19 +2287,28 @@ def _xlsx_text_chars(path: Path, limit: int) -> int:
     """Characters that the shared-string cells of a workbook decode to, counted until the count passes ``limit``.
 
     A shared string is stored once but every cell that uses it becomes its own text value
-    when the sheet is read, so the declared part sizes do not bound the parsed text.
+    when the sheet is read, so the declared part sizes do not bound the parsed text. Parts are
+    recognised by their content, not their names: every XML part is checked for document type
+    declarations and scanned for shared-string cells. The declared sizes of all parts are
+    capped before this runs, and the zip reader never inflates a part past its declared size.
     """
 
+    import xml.etree.ElementTree as ElementTree
     from array import array
 
     shared_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
     with zipfile.ZipFile(path) as archive:
-        names = [info.filename for info in archive.infolist() if info.filename.lower().endswith(".xml")]
+        members = [info for info in archive.infolist() if not info.is_dir()]
+        if len(members) > _MAX_XLSX_MEMBERS:
+            raise UserInputError(
+                f"Failed to read Excel file: the workbook holds {len(members):,} parts; SurvStudio reads workbooks "
+                f"with at most {_MAX_XLSX_MEMBERS:,}. Export the sheet as CSV instead."
+            )
+        names = [info.filename for info in members if _is_xml_part(archive, info)]
         for name in names:
             with archive.open(name) as handle:
-                prolog = handle.read(_XML_PROLOG_BYTES).upper()
-            if b"<!DOCTYPE" in prolog or b"<!ENTITY" in prolog:
-                raise UserInputError("Failed to read Excel file: the workbook contains XML declarations that are not allowed.")
+                if _xml_part_declares_document_type(handle):
+                    raise UserInputError("Failed to read Excel file: the workbook contains XML declarations that are not allowed.")
         shared_parts: list[str] = []
         if "[Content_Types].xml" in names:
             # openpyxl locates the shared strings through the content types.
@@ -2060,18 +2332,23 @@ def _xlsx_text_chars(path: Path, limit: int) -> int:
             if name in (shared_name, "[Content_Types].xml"):
                 continue
             with archive.open(name) as handle:
-                for cell in _iter_xml_elements(handle, frozenset({"c"})):
-                    if cell.get("t") != "s":
-                        continue
-                    value = next((child.text for child in cell if child.tag.rpartition("}")[2] == "v"), None)
-                    try:
-                        index = int(str(value).strip())
-                    except ValueError:
-                        continue
-                    if 0 <= index < len(lengths):
-                        total += lengths[index]
-                        if total > limit:
-                            return total
+                try:
+                    for cell in _iter_xml_elements(handle, frozenset({"c"})):
+                        if cell.get("t") != "s":
+                            continue
+                        value = next((child.text for child in cell if child.tag.rpartition("}")[2] == "v"), None)
+                        try:
+                            index = int(str(value).strip())
+                        except ValueError:
+                            continue
+                        if 0 <= index < len(lengths):
+                            total += lengths[index]
+                            if total > limit:
+                                return total
+                except ElementTree.ParseError:
+                    # A part that is not well-formed (legacy VML drawings can be) is read no further by
+                    # the workbook reader either, so the cells before the error are all it can decode.
+                    continue
     return total
 
 
@@ -2102,12 +2379,28 @@ def _clean_column_labels(dataframe: pd.DataFrame) -> pd.DataFrame:
 
     Excel headers often carry a line break (Alt+Enter). Request fields refuse control
     characters in column names, so such a column would load but could not be analysed.
+    Names that need no cleaning keep their spelling (the loader has made them unique); a
+    cleaned name that would repeat one of them, or an earlier cleaned name, gets a suffix,
+    so a column never takes over the name of another.
     """
 
     names = [str(column) for column in dataframe.columns]
     if not any(_CONTROL_CHAR_PATTERN.search(name) for name in names):
         return dataframe
-    dataframe.columns = make_unique_columns(_HEADER_CONTROL_RUN_PATTERN.sub(" ", name).strip() for name in names)
+    taken = {name for name in names if not _CONTROL_CHAR_PATTERN.search(name)}
+    cleaned_names: list[str] = []
+    for name in names:
+        if not _CONTROL_CHAR_PATTERN.search(name):
+            cleaned_names.append(name)
+            continue
+        base = _HEADER_CONTROL_RUN_PATTERN.sub(" ", name).strip() or "unnamed"
+        candidate, counter = base, 1
+        while candidate in taken:
+            counter += 1
+            candidate = f"{base}_{counter}"
+        taken.add(candidate)
+        cleaned_names.append(candidate)
+    dataframe.columns = cleaned_names
     return dataframe
 
 
@@ -2137,7 +2430,9 @@ def _guard_compressed_upload(path: Path, filename: str) -> None:
 
     suffix = Path(filename).suffix.lower()
     container = _excel_container(path) if suffix in {".xlsx", ".xls"} else None
-    if suffix == ".xls" and container == "xls":
+    # The reader picks its engine from the content, so the checks follow the content as well: a
+    # legacy workbook named .xlsx is read as .xls, and a zip workbook named .xls as .xlsx.
+    if container == "xls":
         try:
             text_chars = _xls_text_chars(path, _MAX_UPLOAD_TEXT_CHARS)
         except MemoryError:
@@ -2148,7 +2443,6 @@ def _guard_compressed_upload(path: Path, filename: str) -> None:
         if text_chars > _MAX_UPLOAD_TEXT_CHARS:
             raise _text_too_large(text_chars)
         return
-    # A workbook named .xls that is really a zip is read as .xlsx, so it gets the same checks.
     if suffix == ".xlsx" or container == "zip":
         try:
             with zipfile.ZipFile(path) as archive:
@@ -2256,6 +2550,69 @@ def _ingest_uploaded_file(path: Path, filename: str) -> dict[str, Any]:
     return _store_loaded_dataframe(dataframe, filename=filename, source="upload", copy_dataframe=False)
 
 
+# Longest table note an export accepts (TableExportRequest.notes). The replay and provenance notes
+# the server writes itself stay within it, so an export never refuses the server's own notes.
+_MAX_EXPORT_NOTE_CHARS = 4000
+# Room kept after the listed names for the count of those left out.
+_NAME_LIST_COUNT_ROOM = 64
+# Items of each list a JSON replay note keeps, tried in turn until the note fits the limit.
+_REPLAY_JSON_LIST_ITEMS = (50, 20, 5, 0)
+
+
+def _capped_note(text: str) -> str:
+    """``text`` cut to the export note limit and marked where it was cut."""
+
+    if len(text) <= _MAX_EXPORT_NOTE_CHARS:
+        return text
+    marker = " ... (truncated)"
+    return text[: _MAX_EXPORT_NOTE_CHARS - len(marker)] + marker
+
+
+def _name_list_note(label: str, names: Sequence[str]) -> str:
+    """``"<label>: a, b, c."``; when that passes the note limit, the first names that fit and a count of the rest."""
+
+    full = f"{label}: " + ", ".join(names) + "."
+    if len(full) <= _MAX_EXPORT_NOTE_CHARS:
+        return full
+    budget = _MAX_EXPORT_NOTE_CHARS - len(label) - _NAME_LIST_COUNT_ROOM
+    shown: list[str] = []
+    used = 0
+    for name in names:
+        used += len(name) + 2
+        if used > budget:
+            break
+        shown.append(name)
+    listed = ", ".join(shown) + ", and " if shown else ""
+    return _capped_note(f"{label}: {listed}{len(names) - len(shown):,} more ({len(names):,} in total).")
+
+
+def _shortened_lists(value: Any, keep: int) -> Any:
+    """``value`` with every list longer than ``keep`` items cut to its first items and a count of the rest."""
+
+    if isinstance(value, dict):
+        return {key: _shortened_lists(item, keep) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        items = [_shortened_lists(item, keep) for item in value[:keep]]
+        if len(value) > keep:
+            items.append(f"... and {len(value) - keep:,} more ({len(value):,} in total)")
+        return items
+    return value
+
+
+def _replay_json_note(label: str, payload: dict[str, Any]) -> str:
+    """``"<label>: <payload as JSON>"``; long lists (such as wide feature sets) are summarised to fit the note limit."""
+
+    def _note(value: Any) -> str:
+        return f"{label}: " + json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+
+    text = _note(payload)
+    for keep in _REPLAY_JSON_LIST_ITEMS:
+        if len(text) <= _MAX_EXPORT_NOTE_CHARS:
+            break
+        text = _note(_shortened_lists(payload, keep))
+    return _capped_note(text)
+
+
 def _replay_dataset_note(request_config: dict[str, Any], *, dataset_filename: str) -> str:
     return (
         "Replay dataset: "
@@ -2269,9 +2626,9 @@ def _replay_feature_notes(request_config: dict[str, Any]) -> list[str]:
     features = [str(value) for value in request_config.get("features") or []]
     categorical = [str(value) for value in request_config.get("categorical_features") or []]
     if features:
-        notes.append("Replay features: " + ", ".join(features) + ".")
+        notes.append(_name_list_note("Replay features", features))
     if categorical:
-        notes.append("Replay categorical features: " + ", ".join(categorical) + ".")
+        notes.append(_name_list_note("Replay categorical features", categorical))
     return notes
 
 
@@ -2296,11 +2653,12 @@ def _ml_replay_notes(request_config: dict[str, Any], *, dataset_filename: str) -
         if request_config.get("locked_test_fraction"):
             settings.append(f"locked_test_fraction={request_config.get('locked_test_fraction')}")
 
-    return [
+    notes = [
         _replay_dataset_note(request_config, dataset_filename=dataset_filename),
         "Replay settings: " + "; ".join(settings) + ".",
         *_replay_feature_notes(request_config),
     ]
+    return [_capped_note(note) for note in notes]
 
 
 def _dl_replay_notes(
@@ -2354,7 +2712,7 @@ def _dl_replay_notes(
         if actual_note:
             notes.append("Reported evaluation note: " + actual_note)
     notes.extend(_replay_feature_notes(request_config))
-    return notes
+    return [_capped_note(note) for note in notes]
 
 
 def _attach_manuscript_notes(
@@ -2376,50 +2734,55 @@ def _export_provenance_notes(provenance: dict[str, Any] | None) -> list[str]:
 
     Results changed between releases (for example the 0.2.0 statistical fixes), so every
     analysis export records which version produced it and, when known, which stored
-    dataset. Plain table exports without provenance stay data-only.
+    dataset. Plain table exports without provenance stay data-only. Each note stays within
+    the export note limit: long lists in the replayed settings (a wide feature set) are
+    summarised by their first items and a count.
     """
     if not provenance:
         return []
     notes: list[str] = [f"Generated with SurvStudio {SURVSTUDIO_VERSION}."]
     dataset_hash = str(provenance.get("dataset_hash") or "").strip()
     if dataset_hash:
-        notes.append(f"Dataset fingerprint: {dataset_hash}.")
+        notes.append(_capped_note(f"Dataset fingerprint: {dataset_hash}."))
     request_config = provenance.get("request_config")
     if isinstance(request_config, dict) and request_config:
-        notes.append(
-            "Replay request_config: "
-            + json.dumps(request_config, sort_keys=True, default=str, ensure_ascii=False)
-        )
+        notes.append(_replay_json_note("Replay request_config", request_config))
 
     analysis_meta = provenance.get("analysis")
     if isinstance(analysis_meta, dict) and analysis_meta:
-        notes.append(
-            "Replay analysis metadata: "
-            + json.dumps(analysis_meta, sort_keys=True, default=str, ensure_ascii=False)
-        )
+        notes.append(_replay_json_note("Replay analysis metadata", analysis_meta))
 
     return notes
 
 
+# Memory exhaustion reported by PyTorch ("CUDA out of memory", "DefaultCPUAllocator: can't allocate memory").
+_OUT_OF_MEMORY_MESSAGE = re.compile(r"\bout of memory\b|\bcan(?:'|no)t allocate memory\b", re.IGNORECASE)
+# Non-finite values named in a library message, as whole words ("infer" or "information" do not count).
+_NON_FINITE_MESSAGE = re.compile(r"\b(?:nan|inf|infinity|non-finite|overflow|underflow)\b|too large for dtype", re.IGNORECASE)
+_UNPROCESSABLE_REQUEST_DETAIL = "The request could not be processed with the selected dataset and settings."
+
+
 def _classify_runtime_request_error(exc: Exception) -> tuple[int, str] | None:
+    """The 4xx status and guidance for a numerical failure that the request's data or settings cause.
+
+    Only specific exception types count, and messages only by whole words: a message that merely
+    contains "shape", "alloc" or "inf" (as in "Could not infer dtype") is a server fault and is
+    reported as one.
+    """
+
     if isinstance(exc, np.linalg.LinAlgError):
         return (
             400,
             "The analysis hit a linear-algebra stability problem (for example, a singular or redundant design matrix). "
             "Reduce overlapping variables, sparse categories, or feature count and try again.",
         )
-
-    raw_message = str(exc).strip()
-    lowered = raw_message.lower()
     if type(exc).__name__ == "ConvergenceError":
         return (
             400,
             "The model did not converge. Reduce overlapping variables, sparse categories, or feature count and try again.",
         )
     if isinstance(exc, InternalAnalysisError):
-        cause_message = str(exc.__cause__ or "").lower()
-        if any(token in cause_message for token in ("nan", "infinity", "inf ", "non-finite", "too large for dtype")):
-            logger.warning("Analysis rejected non-finite internal values", exc_info=exc)
+        if _NON_FINITE_MESSAGE.search(str(exc.__cause__ or "")):
             return (
                 400,
                 "The analysis encountered missing, infinite, or out-of-range values in the selected columns. "
@@ -2432,72 +2795,100 @@ def _classify_runtime_request_error(exc: Exception) -> tuple[int, str] | None:
             "The analysis hit a numerical stability problem. Reduce sparse levels, simplify the model, or narrow the feature set and try again.",
         )
     if isinstance(exc, RuntimeError):
-        if any(token in lowered for token in ("out of memory", "cuda", "cudnn", "cublas", "allocator", "alloc")):
+        message = str(exc)
+        if type(exc).__name__ == "OutOfMemoryError" or _OUT_OF_MEMORY_MESSAGE.search(message):
             return (
                 400,
-                "The run ran out of memory or hit a CUDA runtime limit. Reduce batch size, model width, or feature count and try again.",
+                "The run ran out of memory. Reduce batch size, model width, or feature count and try again.",
             )
-        if any(token in lowered for token in ("nan", "inf", "non-finite", "numerical", "overflow", "underflow")):
+        if _NON_FINITE_MESSAGE.search(message):
             return (
                 400,
                 "The run became numerically unstable. Check for invalid values, simplify the model, or reduce the learning rate and try again.",
             )
-        if any(token in lowered for token in ("size mismatch", "shape", "dimension")):
-            return (
-                400,
-                "The run failed because the model inputs were incompatible with the requested configuration. Review the selected features and model settings.",
-            )
     return None
 
 
+def _dependency_error_detail(exc: ImportError) -> str:
+    """What a 503 says about a package that could not be imported.
+
+    SurvStudio's own install hints (a DependencyError, or an ImportError that SurvStudio code
+    raised with a message) are shown as written. A library's import failure can name server
+    paths, so it is summarised by the module that is missing.
+    """
+
+    if isinstance(exc, DependencyError) or (exc.name is None and exc.path is None and _raised_by_survstudio(exc)):
+        message = str(exc).strip()
+        if message:
+            return message
+    module = str(exc.name or "").split(".", 1)[0]
+    subject = f'The package "{module}"' if module else "A package"
+    return (
+        f"{subject} that this analysis needs is not installed or could not be loaded. Install SurvStudio's optional "
+        'dependencies (for example pip install -e ".[all]") and restart it; the server log has the details.'
+    )
+
+
 def fail_bad_request(exc: Exception) -> NoReturn:
+    """Raise the HTTP error for an exception from a request handler.
+
+    User input errors keep their message (404 for a missing dataset or column, else 400).
+    Numerical failures caused by the data map to a 400 with guidance, and an untyped
+    ValueError to a generic 400. TypeErrors, the coding errors `is_programming_error` names and
+    every other failure are 500s with a generic message. Every path but a user input error is
+    logged with its traceback.
+    """
+
     if isinstance(exc, HTTPException):
         raise exc
     if isinstance(exc, JobCancelledError):
         # 499 (client closed request): the page abandoned this request, nobody reads the body.
-        raise HTTPException(status_code=499, detail=str(exc)) from exc
+        logger.info("Request cancelled by its client: %s", exc)
+        raise HTTPException(status_code=499, detail=_json_safe_text(str(exc))) from exc
+    if isinstance(exc, UserInputError):
+        # Messages can quote request text (a column name), which may hold an unpaired surrogate.
+        status_code = 404 if isinstance(exc, NotFoundError) else 400
+        raise HTTPException(status_code=status_code, detail=_json_safe_text(str(exc))) from exc
+    exc_info = (type(exc), exc, exc.__traceback__)
     if isinstance(exc, MemoryError):
+        logger.error("Request ran out of memory", exc_info=exc_info)
         raise HTTPException(
             status_code=500,
             detail="The analysis ran out of memory. Reduce the cohort size, feature count, or model complexity and try again.",
         ) from exc
     if isinstance(exc, csv.Error):
         # Raised by the csv module for an over-long field or broken quoting in an uploaded file.
+        logger.warning("Rejected an unreadable delimited upload", exc_info=exc_info)
         raise HTTPException(
             status_code=400,
             detail="The file could not be read as delimited text: a field is too long or its quoting is malformed.",
         ) from exc
     if isinstance(exc, UnicodeDecodeError):
+        logger.warning("Rejected an upload that is not UTF-8 text", exc_info=exc_info)
         raise HTTPException(
             status_code=400,
             detail="The file is not valid UTF-8 text. Save it as UTF-8 (for example \"CSV UTF-8\" in Excel) and try again.",
         ) from exc
+    # Coding errors come first, so an error that errors.py counts as one is never reported as a data problem.
+    if isinstance(exc, TypeError) or is_programming_error(exc):
+        logger.error("SurvStudio coding error while handling a request", exc_info=exc_info)
+        raise HTTPException(status_code=500, detail=InternalAnalysisError.default_message) from exc
     runtime_classification = _classify_runtime_request_error(exc)
     if runtime_classification is not None:
+        logger.warning("Request failed on its data or settings (%s)", type(exc).__name__, exc_info=exc_info)
         status_code, detail = runtime_classification
         raise HTTPException(status_code=status_code, detail=detail) from exc
     if isinstance(exc, ImportError):
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if isinstance(exc, NotFoundError):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if isinstance(exc, UserInputError):
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.error("A package the request needs could not be imported", exc_info=exc_info)
+        raise HTTPException(status_code=503, detail=_json_safe_text(_dependency_error_detail(exc))) from exc
     if isinstance(exc, InternalAnalysisError):
-        logger.error(
-            "Unexpected internal analysis error",
-            exc_info=(type(exc), exc, exc.__traceback__),
-        )
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    if isinstance(exc, (ValueError, TypeError)):
-        raise HTTPException(
-            status_code=400,
-            detail="The request could not be processed with the selected dataset and settings.",
-        ) from exc
-    logger.exception(
-        "Unhandled SurvStudio request error",
-        exc_info=(type(exc), exc, exc.__traceback__),
-    )
-    raise exc
+        logger.error("Unexpected internal analysis error", exc_info=exc_info)
+        raise HTTPException(status_code=500, detail=_json_safe_text(str(exc)) or InternalAnalysisError.default_message) from exc
+    if isinstance(exc, ValueError):
+        logger.warning("Request failed with an untyped ValueError", exc_info=exc_info)
+        raise HTTPException(status_code=400, detail=_UNPROCESSABLE_REQUEST_DETAIL) from exc
+    logger.error("Unhandled SurvStudio request error", exc_info=exc_info)
+    raise HTTPException(status_code=500, detail=InternalAnalysisError.default_message) from exc
 
 
 _P_VALUE_LABEL_TOKENS = frozenset({"p", "pvalue", "pvalues", "pval", "qvalue", "qvalues"})
@@ -2523,7 +2914,59 @@ def _format_journal_p_value(value: float) -> str:
         # Never let rounding move a p-value across the conventional 0.05 threshold (0.0496 -> "0.050").
         if (float(text) < _JOURNAL_SIGNIFICANCE_THRESHOLD) == below_threshold:
             return text
-    return f"{value:.3g}" if below_threshold else f"{value:.3f}"
+    # Only a p-value within 5e-9 below the threshold gets here; the shortest exact text keeps it below.
+    return repr(float(value)) if below_threshold else f"{value:.3f}"
+
+
+# Words of a column label that mark whole-number counts ("Events, n", "Rank", "Number at risk"),
+# which journal style keeps as integers.
+_COUNT_LABEL_TOKENS = frozenset(
+    {
+        "n",
+        "number",
+        "count",
+        "counts",
+        "total",
+        "rank",
+        "events",
+        "patients",
+        "subjects",
+        "samples",
+        "cases",
+        "rows",
+        "folds",
+        "repeats",
+        "evaluations",
+        "failures",
+        "seed",
+        "seeds",
+        "epochs",
+        "iterations",
+    }
+)
+
+
+def _is_count_column(column: Any) -> bool:
+    tokens = re.sub(r"[\s_\-.,;:()/%]+", " ", str(column or "").lower()).split()
+    return any(token in _COUNT_LABEL_TOKENS for token in tokens)
+
+
+def _journal_number_value(value: Any, column: Any) -> Any:
+    """A whole number in a measurement column as a float, so journal style formats it like its neighbours.
+
+    Browsers serialise 1.0 as 1, so a C-index or a P value of exactly 1 (or 0) arrives as an
+    integer. Counts and ranks keep their integers.
+    """
+
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and column is not None
+        and abs(value) <= _MAX_EXACT_FLOAT_INT
+        and not _is_count_column(column)
+    ):
+        return float(value)
+    return value
 
 
 def _format_journal_number(value: float) -> str:
@@ -2540,6 +2983,8 @@ def _format_export_value(value: Any, style: str, column: Any = None) -> str:
         return ""
     if isinstance(value, bool):
         return "Yes" if value else "No"
+    if style == "journal":
+        value = _journal_number_value(value, column)
     if isinstance(value, (int, float)):
         if isinstance(value, float):
             if not math.isfinite(value):
@@ -2640,6 +3085,13 @@ def _clean_export_characters(text: str) -> str:
     return _EXPORT_ILLEGAL_CHAR_PATTERN.sub(" ", text)
 
 
+def _export_header_text(column: Any) -> str:
+    """A column name as the exports write it: a run of control characters (a line break in a group
+    value that became a column) becomes one space."""
+
+    return _clean_export_characters(_HEADER_CONTROL_RUN_PATTERN.sub(" ", str(column))).strip()
+
+
 def _is_number_like_cell(text: str) -> bool:
     """True for signed numeric summaries like "-0.42 ± 1.00" or "-1.2 (-2.0 to -0.4)".
 
@@ -2676,8 +3128,17 @@ def _sanitize_csv_cell(value: Any) -> str:
     return text
 
 
+def _markdown_literal(text: str) -> str:
+    """Text that Markdown shows as written, escaped as reporting.checklist_markdown does: characters
+    that open raw HTML become entities and backslashes are doubled."""
+
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\\", "\\\\")
+
+
 def _sanitize_markdown_cell(value: Any, style: str, column: Any = None) -> str:
-    return _normalize_export_text(value, style, column).replace("|", "\\|")
+    # GFM removes one backslash before a pipe inside a table cell, so backslashes are doubled first and
+    # a pipe then becomes \| : "a\|b" stays one cell reading a\|b, and "a|b" one cell reading a|b.
+    return _markdown_literal(_normalize_export_text(value, style, column)).replace("|", "\\|")
 
 
 def _clean_export_note(note: Any) -> str:
@@ -2710,7 +3171,7 @@ def _export_rows_to_csv(
         writer.writerow([_sanitize_csv_cell(f"# {_export_template_profile(template)['notes_heading']}:")])
         for note in clean_notes:
             writer.writerow([_sanitize_csv_cell(f"# - {note}")])
-    writer.writerow([_sanitize_csv_cell(column) for column in resolved_columns])
+    writer.writerow([_sanitize_csv_cell(_export_header_text(column)) for column in resolved_columns])
     for row in rows:
         writer.writerow(
             [
@@ -2731,6 +3192,8 @@ def _xlsx_cell(value: Any, style: str, column: Any) -> tuple[Any, str | None]:
 
     if value is None or isinstance(value, bool):
         return _xlsx_text_cell(_format_export_value(value, style, column))
+    if style == "journal":
+        value = _journal_number_value(value, column)
     if isinstance(value, int):
         return value, None
     if isinstance(value, float):
@@ -2795,7 +3258,7 @@ def _export_rows_to_xlsx(
         _write_row([_xlsx_text_cell(resolved_caption)])
         current_row += 1
 
-    _write_row([_xlsx_text_cell(column) for column in resolved_columns])
+    _write_row([_xlsx_text_cell(_export_header_text(column)) for column in resolved_columns])
     for row in rows:
         _write_row([_xlsx_cell(row.get(column), style, column) for column in resolved_columns])
 
@@ -2824,9 +3287,9 @@ def _export_rows_to_markdown(
         raise UserInputError("No rows available for export.")
     resolved_columns = _export_columns(rows, columns)
     template_profile = _export_template_profile(template)
-    resolved_caption = _resolve_export_caption(caption, template)
-    clean_notes = [clean_note for note in notes if (clean_note := _clean_export_note(note))]
-    header = f"| {' | '.join(_sanitize_markdown_cell(column, 'plain') for column in resolved_columns)} |"
+    resolved_caption = _markdown_literal(_clean_export_note(_resolve_export_caption(caption, template)))
+    clean_notes = [_markdown_literal(clean_note) for note in notes if (clean_note := _clean_export_note(note))]
+    header = f"| {' | '.join(_sanitize_markdown_cell(_export_header_text(column), 'plain') for column in resolved_columns)} |"
     divider = f"| {' | '.join(['---'] * len(resolved_columns))} |"
     body = [
         "| "
@@ -2865,8 +3328,11 @@ def _export_rows_to_latex(
     template_profile = _export_template_profile(template)
     resolved_caption = _resolve_export_caption(caption, template)
     column_spec = "l" * len(resolved_columns)
+    # Every row opens with an empty group: "\\" and "\midrule" read a "[" (or "*") that follows them,
+    # even on the next line, as their own argument, which a cell such as "[0.61, 0.74]" would supply.
     body = [
-        " & ".join(_latex_escape(_normalize_export_text(row.get(column), style, column)) for column in resolved_columns)
+        "{}"
+        + " & ".join(_latex_escape(_normalize_export_text(row.get(column), style, column)) for column in resolved_columns)
         + r" \\"
         for row in rows
     ]
@@ -2877,7 +3343,7 @@ def _export_rows_to_latex(
         f"\\caption{{{_latex_escape(resolved_caption)}}}",
         f"\\begin{{tabular}}{{{column_spec}}}",
         "\\toprule",
-        " & ".join(_latex_escape(column) for column in resolved_columns) + r" \\",
+        "{}" + " & ".join(_latex_escape(_export_header_text(column)) for column in resolved_columns) + r" \\",
         "\\midrule",
         *body,
         "\\bottomrule",
@@ -2957,7 +3423,10 @@ def _docx_table(
     )
     header_row = (
         "<w:tr>"
-        + "".join(_docx_cell(column, width=width, bold=True) for column, width in zip(resolved_columns, column_widths))
+        + "".join(
+            _docx_cell(_export_header_text(column), width=width, bold=True)
+            for column, width in zip(resolved_columns, column_widths)
+        )
         + "</w:tr>"
     )
     body_rows = [
@@ -3054,14 +3523,19 @@ def _docx_package(body_parts: list[str]) -> bytes:
 
 
 def _json_safe_error_payload(value: Any) -> Any:
-    """Replace non-finite floats (e.g. an echoed NaN input) so the 422 body can be serialized."""
+    """Replace non-finite floats (e.g. an echoed NaN input) and escape unpaired surrogates, so the 422 body can be serialized."""
 
     if isinstance(value, float) and not math.isfinite(value):
         if value != value:
             return "NaN"
         return "Infinity" if value > 0 else "-Infinity"
+    if isinstance(value, str):
+        return _json_safe_text(value)
     if isinstance(value, dict):
-        return {key: _json_safe_error_payload(item) for key, item in value.items()}
+        return {
+            (_json_safe_text(key) if isinstance(key, str) else key): _json_safe_error_payload(item)
+            for key, item in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return [_json_safe_error_payload(item) for item in value]
     return value
@@ -3269,19 +3743,29 @@ def _reject_overlong_matrix_text(path: Path, *, compressed: bool) -> None:
 
     Either layout puts a header and then one line per marker or per patient, so no accepted
     matrix has more lines than the larger of the two limits (plus the header). Counting runs
-    over the unpacked stream in fixed-size chunks and stops at the limit.
+    over the unpacked stream in fixed-size chunks and stops at the limit. UTF-16 text (as the
+    readers detect it) is decoded first, because its code units can hold a newline byte inside
+    another character.
     """
 
+    import codecs
     import gzip
     import zlib
+
+    from survival_toolkit.analysis import _text_encoding_candidates
 
     limit = max(MAX_MATRIX_MARKERS, MAX_MATRIX_SAMPLES) + 1
     lines = 0
     unpacked = 0
+    chunk_bytes = 1 << 20
     try:
         with (gzip.open(path, "rb") if compressed else path.open("rb")) as handle:
-            while chunk := handle.read(1 << 20):
-                lines += chunk.count(b"\n")
+            chunk = handle.read(chunk_bytes)
+            encoding = _text_encoding_candidates(chunk, complete=len(chunk) < chunk_bytes)[0] if chunk else "utf-8"
+            decoder = codecs.getincrementaldecoder(encoding)(errors="replace") if encoding.startswith("utf-16") else None
+            while chunk:
+                raise_if_cancelled()
+                lines += decoder.decode(chunk).count("\n") if decoder is not None else chunk.count(b"\n")
                 unpacked += len(chunk)
                 if lines > limit:
                     raise UserInputError(
@@ -3290,12 +3774,14 @@ def _reject_overlong_matrix_text(path: Path, *, compressed: bool) -> None:
                     )
                 if unpacked > MAX_DECOMPRESSED_BYTES:
                     return  # the reader reports the size limit itself
+                chunk = handle.read(chunk_bytes)
     except (OSError, EOFError, zlib.error):
         return  # a damaged file is reported by the reader with its own message
 
 
 @app.post("/api/marker-matrix")
 async def upload_marker_matrix(
+    request: Request,
     file: UploadFile = File(...),
     dataset_id: str = Form(..., max_length=128),
     id_column: str = Form(..., max_length=512),
@@ -3351,7 +3837,9 @@ async def upload_marker_matrix(
                 **summary,
             }
 
-        return await _run_job(_ingest)
+        # Parsing a matrix of up to 200 MB is heavy work: it queues with the other heavy jobs, holds the
+        # dataset, and never starts (or stops at the reader's checkpoints) once the page has gone away.
+        return await _run_dataset_job(dataset_id, _ingest, request=request, heavy=True)
     except HTTPException:
         raise
     except Exception as exc:
@@ -3512,6 +4000,13 @@ async def derive_group(request_model: DeriveGroupRequest, request: Request) -> d
                 permutation_iterations=request_model.permutation_iterations,
                 random_seed=request_model.random_seed,
             )
+            # Groups cut from an outcome-informed column (an optimal cutpoint or a signature) carry the
+            # outcome information on, whatever the method of the new cut.
+            if not summary.get("outcome_informed") and str(request_model.source_column) in _outcome_informed_columns(stored):
+                summary["outcome_informed"] = True
+                summary["outcome_informed_source"] = str(request_model.source_column)
+                if isinstance(summary.get("recipe"), dict):
+                    summary["recipe"]["outcome_informed"] = True
             provenance = dict(stored.metadata.get("derived_column_provenance", {}))
             provenance[column_name] = {
                 "outcome_informed": bool(summary.get("outcome_informed")),
@@ -3546,6 +4041,19 @@ async def kaplan_meier(request_model: KaplanMeierRequest, request: Request) -> d
         def _run() -> dict[str, Any]:
             from survival_toolkit.plots import build_km_figure
 
+            group_column = request_model.group_column
+            if group_column and group_column not in (request_model.time_column, request_model.event_column):
+                # Curves split by the outcome itself (a copy of the event, another endpoint's event) show
+                # nothing but the split. The time and event columns get their own message from the analysis.
+                # Input checks scan every column, so they run in the worker thread too.
+                _reject_survival_outcome_feature_columns(
+                    stored,
+                    [group_column],
+                    time_column=request_model.time_column,
+                    event_column=request_model.event_column,
+                    event_positive_value=request_model.event_positive_value,
+                    context="Kaplan-Meier grouping",
+                )
             analysis = compute_km_analysis(
                 stored.dataframe,
                 time_column=request_model.time_column,
@@ -3731,8 +4239,9 @@ async def cohort_table(request_model: CohortTableRequest, request: Request) -> d
             cohort_note: str | None = None
             analysis_cohort: dict[str, Any] | None = None
             if request_model.time_column and request_model.event_column:
-                # Same row rule as KM/Cox: valid time and event values and non-negative follow-up time.
-                survival_frame = _cohort_frame(
+                # Same row rule as KM/Cox: valid time and event values and non-negative follow-up time. The
+                # boundary keeps the rule's own messages ("No events were found ...") for the user.
+                survival_frame = user_input_boundary(_cohort_frame)(
                     dataframe,
                     time_column=request_model.time_column,
                     event_column=request_model.event_column,
@@ -3862,8 +4371,19 @@ async def optimal_cutpoint(request_model: OptimalCutpointRequest, request: Reque
         from survival_toolkit.plots import build_cutpoint_scan_figure
 
         stored = _get_stored_dataset(request_model.dataset_id)
+        request_config = request_model.model_dump()
 
         def _run() -> dict[str, Any]:
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_survival_outcome_feature_columns(
+                stored,
+                [request_model.variable],
+                time_column=request_model.time_column,
+                event_column=request_model.event_column,
+                event_positive_value=request_model.event_positive_value,
+                context="optimal cutpoint searches",
+            )
+            _reject_outcome_informed_columns(stored, [request_model.variable], context="optimal cutpoint searches")
             result = find_optimal_cutpoint(
                 stored.dataframe,
                 time_column=request_model.time_column,
@@ -3874,7 +4394,7 @@ async def optimal_cutpoint(request_model: OptimalCutpointRequest, request: Reque
                 permutation_iterations=request_model.permutation_iterations,
             )
             figure = build_cutpoint_scan_figure(result, variable_name=request_model.variable)
-            return {"result": result, "figure": figure}
+            return _attach_dataset_hash({"result": result, "figure": figure, "request_config": request_config}, stored)
 
         return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:
@@ -4028,8 +4548,9 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                     raise
                 except Exception as exc:
                     # A cancelled request or a coding error is not a SHAP failure to report next to the model.
-                    if must_propagate(exc):
+                    if _must_propagate_through_boundary(exc):
                         raise
+                    logger.warning("SHAP explanation failed; the model is reported without it", exc_info=exc)
                     shap_error = f"{type(exc).__name__}: {exc}"
                     if request_model.shap_safe_mode and "high-dimensional inputs" in str(exc).lower():
                         subset = _select_shap_safe_mode_subset(result, request_model.features)
@@ -4080,8 +4601,9 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                             except (MemoryError, KeyboardInterrupt):
                                 raise
                             except Exception as safe_mode_exc:
-                                if must_propagate(safe_mode_exc):
+                                if _must_propagate_through_boundary(safe_mode_exc):
                                     raise
+                                logger.warning("SHAP safe mode failed as well", exc_info=safe_mode_exc)
                                 shap_error = (
                                     f"{type(exc).__name__}: {exc} "
                                     f"SHAP safe mode also failed: {type(safe_mode_exc).__name__}: {safe_mode_exc}"
@@ -4283,14 +4805,6 @@ class CounterfactualRequest(_FeatureSelectionRequestModel):
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = Field(default=42, ge=0, le=2**32 - 1)
 
-    @field_validator("target_feature", mode="before")
-    @classmethod
-    def validate_target_feature(cls, value: Any) -> str:
-        text = _normalize_optional_text_field(value, field_name="target_feature")
-        if text is None:
-            raise ValueError("target_feature must not be empty or null.")
-        return text
-
     @field_validator("original_value", "counterfactual_value", mode="before")
     @classmethod
     def validate_feature_value(cls, value: Any, info: Any) -> Any:
@@ -4331,14 +4845,6 @@ class PDPRequest(_FeatureSelectionRequestModel):
     max_depth: int | None = Field(default=None, ge=1, le=64)
     learning_rate: float = Field(default=0.1, gt=0.001, le=1.0)
     random_state: int = Field(default=42, ge=0, le=2**32 - 1)
-
-    @field_validator("target_feature", mode="before")
-    @classmethod
-    def validate_target_feature(cls, value: Any) -> str:
-        text = _normalize_optional_text_field(value, field_name="target_feature")
-        if text is None:
-            raise ValueError("target_feature must not be empty or null.")
-        return text
 
     @model_validator(mode="after")
     def validate_target_feature_membership(self) -> "PDPRequest":
@@ -4595,7 +5101,8 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
             "Selection frequency": stats["selection_frequency"],
             "Direction consistency": stats["direction_consistency"],
             "Median rank": stats["median_rank"],
-            "Rank 95% interval": None if low is None or high is None else f"{low:.0f}-{high:.0f}",
+            # "1 to 3", not "1-3", which a spreadsheet opens as a date.
+            "Rank 95% interval": None if low is None or high is None else f"{low:.0f} to {high:.0f}",
         }
         if primary == "added_value":
             display["LR test P"] = exact.get("lr_p")
@@ -4604,6 +5111,26 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
             display["Unadjusted P"] = row["marginal"]["p_value"]
         rows.append(display)
     return rows
+
+
+def _reject_repeated_column_roles(roles: Sequence[tuple[str, Sequence[str]]], *, analysis: str) -> None:
+    """Each column may have one role in ``analysis``: time, event, marker, clinical covariate, stratum or patient ID."""
+
+    first_role: dict[str, str] = {}
+    clashes: list[str] = []
+    for role, columns in roles:
+        for column in columns:
+            name = str(column)
+            earlier = first_role.setdefault(name, role)
+            if earlier != role:
+                clashes.append(f"'{name}' ({earlier} and {role})")
+    if clashes:
+        raise UserInputError(
+            f"Each column can have only one role in {analysis}; these were given more than one: "
+            + ", ".join(clashes[:5])
+            + (" ..." if len(clashes) > 5 else "")
+            + "."
+        )
 
 
 def _reject_repeated_marker_roles(request_model: MarkerEvaluationRequest) -> None:
@@ -4618,21 +5145,59 @@ def _reject_repeated_marker_roles(request_model: MarkerEvaluationRequest) -> Non
     ]
     if request_model.marker_matrix_id and request_model.marker_matrix_id_column:
         roles.append(("patient ID", [request_model.marker_matrix_id_column]))
-    first_role: dict[str, str] = {}
-    clashes: list[str] = []
-    for role, columns in roles:
-        for column in columns:
-            name = str(column)
-            earlier = first_role.setdefault(name, role)
-            if earlier != role:
-                clashes.append(f"'{name}' ({earlier} and {role})")
-    if clashes:
-        raise UserInputError(
-            "Each column can have only one role in a marker evaluation; these were given more than one: "
-            + ", ".join(clashes[:5])
-            + (" ..." if len(clashes) > 5 else "")
-            + "."
-        )
+    _reject_repeated_column_roles(roles, analysis="a marker evaluation")
+
+
+def _reject_leaky_validation_columns(
+    stored: Any,
+    recipe: dict[str, Any],
+    column_mapping: dict[str, str],
+    event_positive_value: Any,
+) -> None:
+    """Apply the marker-evaluation role and outcome rules to the external columns a locked recipe will read.
+
+    ``column_mapping`` can point a locked marker or covariate at any external column, including
+    the outcome, a copy of it, or an outcome-informed derived column; those would validate the
+    model on the outcome itself. A recipe without the fields read here is left to the validation,
+    which reports what is missing.
+    """
+
+    outcome = recipe.get("outcome")
+    clinical = recipe.get("clinical")
+    markers = recipe.get("markers")
+    strata = recipe.get("strata_columns") or []
+    if not (isinstance(outcome, dict) and isinstance(clinical, dict) and isinstance(markers, list) and isinstance(strata, list)):
+        return
+    clinical_columns = clinical.get("columns") or []
+    names = [outcome.get("time_column"), outcome.get("event_column"), *markers, *clinical_columns, *strata]
+    if not isinstance(clinical_columns, list) or not all(isinstance(name, str) for name in names):
+        return
+
+    def external(name: str) -> str:
+        return str(column_mapping.get(name, name))
+
+    time_column = external(outcome["time_column"])
+    event_column = external(outcome["event_column"])
+    # One role per recipe column, so two locked columns mapped onto one external column clash too.
+    inputs: list[tuple[str, list[str]]] = [
+        *[(f"marker {name}", [external(name)]) for name in markers],
+        *[(f"clinical covariate {name}", [external(name)]) for name in clinical_columns],
+        *[(f"stratum {name}", [external(name)]) for name in strata],
+    ]
+    _reject_repeated_column_roles(
+        [("outcome time", [time_column]), ("outcome event", [event_column]), *inputs],
+        analysis="a marker validation",
+    )
+    external_inputs = [column for _role, columns in inputs for column in columns]
+    _reject_survival_outcome_feature_columns(
+        stored,
+        external_inputs,
+        time_column=time_column,
+        event_column=event_column,
+        event_positive_value=outcome.get("event_positive_value") if event_positive_value is None else event_positive_value,
+        context="marker validation",
+    )
+    _reject_outcome_informed_columns(stored, external_inputs, context="marker validation")
 
 
 def _reject_missing_marker_columns(stored: Any, columns: Sequence[str]) -> None:
@@ -4750,24 +5315,42 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
         request_config = request_model.model_dump(exclude={"recipe"})
 
         def _run() -> dict[str, Any]:
+            recipe = request_model.recipe
+            # Input checks scan every column, so they run in the worker thread too.
+            _reject_leaky_validation_columns(stored, recipe, request_model.column_mapping, request_model.event_positive_value)
+            # A stratified recipe is scored without bootstrap draws; the others share the interval work budget.
+            if recipe.get("strata_columns"):
+                n_bootstrap, bootstrap_note = int(request_model.n_bootstrap), None
+            else:
+                n_bootstrap, bootstrap_note = _validation_bootstrap_draws(
+                    int(stored.dataframe.shape[0]),
+                    2 if recipe.get("clinical_only_model") else 1,
+                    request_model.n_bootstrap,
+                )
             try:
                 validation = validate_locked_recipe(
                     stored.dataframe,
-                    request_model.recipe,
+                    recipe,
                     column_mapping=request_model.column_mapping,
                     event_positive_value=request_model.event_positive_value,
                     horizon=request_model.horizon,
                     alpha=request_model.alpha,
-                    n_bootstrap=request_model.n_bootstrap,
+                    n_bootstrap=n_bootstrap,
                     random_seed=request_model.random_seed,
                     marker_scaling=request_model.marker_scaling,
                 )
-            except KeyError as exc:
-                raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
-            except (AttributeError, IndexError, TypeError) as exc:
-                # The recipe is client JSON guarded only by a content hash, which a client can recompute.
-                logger.warning("Rejected a malformed marker recipe", exc_info=exc)
+            except (KeyError, AttributeError, IndexError) as exc:
+                # The recipe is client JSON guarded only by a content hash, which a client can recompute, so a
+                # missing or mistyped field surfaces as a lookup error in SurvStudio's own code. The same errors
+                # raised inside a library are coding errors and reach the error handler (a logged 500).
+                if not _raised_by_survstudio(exc):
+                    raise
+                logger.warning("Rejected an incomplete or malformed marker recipe", exc_info=exc)
+                if isinstance(exc, KeyError):
+                    raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
                 raise UserInputError("The recipe is malformed; export it again from a marker evaluation.") from exc
+            if bootstrap_note and isinstance(validation.get("notes"), list):
+                validation["notes"].append(bootstrap_note)
             return _attach_dataset_hash(
                 {
                     "validation": validation,
@@ -4858,8 +5441,7 @@ async def checklist_export(request_model: ChecklistExportRequest) -> Response:
 def _interval_draws(n_patients: int, n_events: int, n_models: int, requested: int) -> tuple[int, str | None]:
     """Bootstrap draws that fit the work budget, and a note when that is fewer than requested."""
 
-    work_per_draw = max(n_events, 1) * max(n_patients, 1) * max(n_models, 1)
-    affordable = _INTERVAL_WORK_BUDGET // work_per_draw
+    affordable = _INTERVAL_WORK_BUDGET // _c_index_draw_work(n_patients, n_events, n_models)
     if affordable < _INTERVAL_MIN_DRAWS:
         raise UserInputError(
             f"The shared test set ({n_patients:,} patients, {n_events:,} events, {n_models} models) is too large for "
@@ -4872,6 +5454,31 @@ def _interval_draws(n_patients: int, n_events: int, n_models: int, requested: in
     return draws, (
         f"Bootstrap draws were limited to {draws} of the {requested} requested, so the intervals for "
         f"{n_patients:,} test patients ({n_events:,} events, {n_models} models) stay within the work budget."
+    )
+
+
+def _validation_bootstrap_draws(n_rows: int, n_models: int, requested: int) -> tuple[int, str | None]:
+    """Bootstrap draws of a locked-model validation that fit the interval work budget, and a note when fewer run.
+
+    The analysable rows and events of the external cohort are known only once the recipe is
+    applied, so every row counts as a patient with an event (an upper bound on the work). When not
+    even the minimum number of draws fits, the validation runs without intervals.
+    """
+
+    requested = int(requested)
+    if requested <= 0:
+        return 0, None
+    affordable = int(_INTERVAL_WORK_BUDGET // _c_index_draw_work(n_rows, n_rows, n_models))
+    if affordable >= requested:
+        return requested, None
+    if affordable < _INTERVAL_MIN_DRAWS:
+        return 0, (
+            f"The bootstrap intervals were not computed: {n_rows:,} patients need more work than the budget allows for "
+            f"{_INTERVAL_MIN_DRAWS} draws. The point estimates are reported."
+        )
+    return affordable, (
+        f"Bootstrap draws were limited to {affordable} of the {requested} requested, so the intervals for "
+        f"{n_rows:,} patients stay within the work budget."
     )
 
 
@@ -4894,6 +5501,12 @@ async def model_comparison_intervals(request_model: ModelComparisonIntervalsRequ
             payload = {**result, "n_shared": len(rows), "n_bootstrap_requested": int(request_model.n_bootstrap)}
             if note:
                 payload["bootstrap_note"] = note
+            if request_model.reference is not None and result.get("reference") is None:
+                compared = [str(row.get("model")) for row in result.get("rows", [])]
+                payload["reference_note"] = (
+                    f'No paired differences were computed: the reference model "{request_model.reference}" is not among '
+                    f"the compared models ({', '.join(compared[:10])}{', ...' if len(compared) > 10 else ''})."
+                )
             return payload
 
         return await _run_job(_run, request=request, heavy=True)
