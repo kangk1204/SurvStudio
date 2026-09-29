@@ -198,6 +198,7 @@ effect and the hazard ratio per unit, from a Cox model with the clinical covaria
 clinical part) so that it can be applied unchanged elsewhere. You need a table of a second cohort with the same
 column names, one row per patient: here `os_months`, `os_event`, `age`, `sex`, `stage_group` and one column per
 gene (genes it lacks are held at their typical value, and the report says how much of the model that leaves out).
+The file used here is in the repository: [examples/gse68465_validation_example.csv](examples/gse68465_validation_example.csv).
 Under **Validate in another cohort**, choose that file. For data measured on another platform (here microarrays
 against RNA sequencing), choose **Another platform (rescale within cohort)**, then click **Validate**. The
 screenshot shows 429 patients of the GEO cohort GSE68465: the locked model reached a C-index of 0.699 against 0.698

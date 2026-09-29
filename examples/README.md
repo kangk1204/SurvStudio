@@ -8,6 +8,7 @@ Files included:
 - `tcga_luad_rnaseq_top100_upload.csv`
 - `tcga_luad_rnaseq_top500_upload.csv`
 - `gbsg2_jco1994_upload_ready.csv`
+- `gse68465_validation_example.csv`
 
 ## Dataset 1: TCGA LUAD
 
@@ -168,3 +169,18 @@ Recommended first settings:
 4. Then run Cox PH with:
    - covariates: `age`, `horTh`, `menostat`, `pnodes`, `tgrade`, `tsize`
    - categorical covariates: `horTh`, `menostat`, `tgrade`
+
+## Dataset 5: GSE68465, a validation cohort for the Markers tab
+
+- File: `gse68465_validation_example.csv`
+- Rows: `433` (one row per patient; `429` have every column)
+- Columns: `patient_id` (GEO sample accession), `os_months`, `os_event`, `age`, `sex`, `stage_group`, and six genes: `DKK1`, `NTSR1`, `TLE1`, `FAM117A`, `MYLIP`, `IRX5`
+- Use: the external cohort of step 7 of the README's Markers walkthrough. Run the walkthrough on the TCGA-LUAD sample with `HiSeqV2.gz` attached, then validate the locked model on this file with **Another platform (rescale within cohort)**: the lung adenocarcinoma microarrays of GSE68465 measure six of the model's ten genes.
+
+Source:
+
+- GEO series GSE68465 (Director's Challenge Consortium; Affymetrix HG-U133A), as prepared for the SurvStudio software paper (`paper/` folder): gene-level expression, quality-control exclusions applied, overall survival in months (years × 12), stage grouped as I to IV. The same patients and values are case study II's GSE68465 cohort.
+
+Study citation:
+
+- Director's Challenge Consortium for the Molecular Classification of Lung Adenocarcinoma; Shedden K, Taylor JM, Enkemann SA, et al. *Gene expression-based survival prediction in lung adenocarcinoma: a multi-site, blinded validation study*. Nature Medicine. 2008;14(8):822-827.
