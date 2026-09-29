@@ -433,7 +433,7 @@ function markerLeftOutComparison(signature, addedValue) {
   } else if (markerModelIsClinicalOnly(signature)) {
     subject = "the whole selection procedure (it selected no marker in the full cohort, so the final model is the clinical-only model)";
   }
-  const comparison = `In the patients left out of ${where}, ${subject} reached C ${formatValue(model)} against ${formatValue(clinical)} for the clinical covariates alone`;
+  const comparison = `In the patients left out of ${where}, ${subject} reached C ${formatCIndexValue(model)} against ${formatCIndexValue(clinical)} for the clinical covariates alone`;
   const signedGain = `${gain >= 0 ? "+" : ""}${gain.toFixed(3)}`;
   const interval = markerGainInterval(signature);
   if (!interval) {
@@ -469,9 +469,9 @@ function markerMetaBanner(payload) {
   ];
   if (signature.apparent_c != null) {
     const model = markerModelIsClinicalOnly(signature) ? "clinical-only model (no marker selected)" : "model";
-    parts.push(`${model} C apparent=${formatValue(signature.apparent_c)}, corrected=${formatValue(signature.optimism_corrected_c)}`);
+    parts.push(`${model} C apparent=${formatCIndexValue(signature.apparent_c)}, corrected=${formatCIndexValue(signature.optimism_corrected_c)}`);
   }
-  if (analysis.primary_lens === "added_value" && signature.clinical_c_left_out != null) parts.push(`clinical-only C (left out)=${formatValue(signature.clinical_c_left_out)}`);
+  if (analysis.primary_lens === "added_value" && signature.clinical_c_left_out != null) parts.push(`clinical-only C (left out)=${formatCIndexValue(signature.clinical_c_left_out)}`);
   return parts.join(", ");
 }
 

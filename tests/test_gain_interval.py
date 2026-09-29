@@ -198,7 +198,7 @@ def test_the_verdict_follows_the_interval_of_the_gain(tmp_path: Path) -> None:
       };
     """)
 
-    comparison = "In the patients left out of each of 40 subsamples, the selected-marker model reached C 0.68 against 0.66 for the clinical covariates alone"
+    comparison = "In the patients left out of each of 40 subsamples, the selected-marker model reached C 0.680 against 0.660 for the clinical covariates alone"
     # The whole interval below 0.02: little discrimination, a caution, even when the interval lies above 0.
     assert f"{comparison}, a gain of +0.002 (95% CI -0.011 to 0.015). The selected markers add little discrimination beyond the clinical covariates." in result["little"]["cautions"]
     assert "a gain of +0.010 (95% CI 0.004 to 0.016). The selected markers add little discrimination" in result["smallButReal"]["cautions"]
@@ -212,7 +212,7 @@ def test_the_verdict_follows_the_interval_of_the_gain(tmp_path: Path) -> None:
     ) in result["uncertain"]["cautions"]
     assert "add little" not in result["uncertain"]["cautions"] and "a gain of" not in result["uncertain"]["strengths"]
     # Without a full-cohort model the gain and its interval belong to the whole procedure, with no verdict on selected markers.
-    assert "the whole selection procedure reached C 0.68 against 0.66 for the clinical covariates alone, a gain of +0.012 (95% CI -0.009 to 0.033)." in result["procedure"]["cautions"]
+    assert "the whole selection procedure reached C 0.680 against 0.660 for the clinical covariates alone, a gain of +0.012 (95% CI -0.009 to 0.033)." in result["procedure"]["cautions"]
     assert "selected markers" not in result["procedure"]["cautions"] and "uncertain" not in result["procedure"]["cautions"]
 
 
@@ -240,7 +240,7 @@ def test_a_result_without_the_interval_keeps_the_verdict_on_the_mean_gain(tmp_pa
       };
     """)
 
-    comparison = "the selected-marker model reached C 0.68 against 0.66 for the clinical covariates alone"
+    comparison = "the selected-marker model reached C 0.680 against 0.660 for the clinical covariates alone"
     assert f"{comparison} (+0.004). The selected markers add little discrimination beyond the clinical covariates." in result["small"]["cautions"]
     assert f"{comparison} (+0.035)." in result["large"]["strengths"] and "add discrimination" not in result["large"]["strengths"]
     assert "In the patients left out of the one subsample that could be scored" in result["single"]["cautions"]
