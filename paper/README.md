@@ -28,8 +28,8 @@ paper used; `run_all.sh` runs the analyses and draws the figures.
   from CRAN, where `remotes::install_version("data.table", "1.18.4")` gets that version.
 - About 4.5 GB of disk for the data: 1.7 GB of breast cohorts, 0.9 GB of LUAD cohorts, 0.55 GB of GEO downloads and
   the 1.3 GB ExperimentHub cache (in `~/.cache/R`), and network access for the downloads.
-- About 1.5 hours on 24 cores for `run_all.sh`, of which the simulation (script 06) takes about 44 minutes; the data
-  preparation adds the downloads.
+- About 1.5 hours on 24 cores for `run_all.sh`, of which the simulation (script 06) takes about 44 minutes (set
+  `SIM_WORKERS` to the number of cores; the default is 8); the data preparation adds the downloads.
 
 ## Running it
 
@@ -136,8 +136,9 @@ not part of this folder.
 
 ## Results and stamps
 
-`results/` is regenerated and not committed; `figures/` holds the figures as submitted, and `run_all.sh` redraws them in
-place (the PDFs record the time they were drawn, so they always differ from the committed ones in their bytes).
+`results/` is regenerated and not committed; `figures/` holds the figures as submitted, drawn from a run at SurvStudio
+commit 9930bf3, and `run_all.sh` redraws them in place (the PDFs record the time they were drawn, so they always differ
+from the committed ones in their bytes).
 
 Every file a script writes to `results/` gets a stamp in `results/stamps/` (`common.stamp_result`): the file's
 SHA-256, the SurvStudio version and commit, a hash of the analysis code (`common.py`, the numbered scripts,
