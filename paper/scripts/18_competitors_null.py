@@ -350,20 +350,28 @@ def null_summary(table: pd.DataFrame, splits_table: pd.DataFrame) -> dict:
         summary["P1"] = {}
         for design, part in splits_table.groupby("design"):
             part = part.dropna(subset=["winner"])
+
+            def by_replicate(flags: pd.Series) -> dict:
+                """A rate over every split of every replicate, with its Monte Carlo SE from the replicates' own rates
+                (the splits of one replicate share its data)."""
+                means = flags.astype(float).groupby(part["replicate"]).mean()
+                return {"n": int(len(flags)), "replicates": int(len(means)), "rate": float(means.mean()),
+                        "mcse": float(means.std(ddof=1) / np.sqrt(len(means))) if len(means) > 1 else None}
+
             entry = {
                 "replicates": int(part["replicate"].nunique()), "cases": int(len(part)),
-                "reported_c": describe(part["reported_c"]), "reported_c_at_least_claim": rate(part["reported_c"] >= CLAIM_C),
+                "reported_c": describe(part["reported_c"]), "reported_c_at_least_claim": by_replicate(part["reported_c"] >= CLAIM_C),
                 "training_c": describe(part["training_c"]), "truth_honest_c": describe(part["truth_honest_c"]),
                 "truth_gain": describe(part["truth_gain"]),
-                "selection_km_p05_any": rate(part["selection_km_p05_any"]),
-                "selection_km_p05_claimed_direction": rate(part["selection_km_p05_claimed_direction"]),
+                "selection_km_p05_any": by_replicate(part["selection_km_p05_any"]),
+                "selection_km_p05_claimed_direction": by_replicate(part["selection_km_p05_claimed_direction"]),
                 "winners": part["winner"].value_counts().head(10).to_dict(),
             }
             if "sealed_honest_mean" in part and part["sealed_honest_mean"].notna().any():
                 entry["sealed_honest_mean"] = describe(part["sealed_honest_mean"])
                 entry["sealed_reported_mean"] = describe(part["sealed_reported_mean"])
                 entry["optimism_vs_sealed"] = describe(part["reported_c"] - part["sealed_honest_mean"])
-                entry["claim_not_holding"] = rate((part["reported_c"] >= CLAIM_C) & (part["sealed_honest_mean"] < CLAIM_C))
+                entry["claim_not_holding"] = by_replicate((part["reported_c"] >= CLAIM_C) & (part["sealed_honest_mean"] < CLAIM_C))
                 # Mime's C above the honest C in the sealed cohorts: each cohort's own Cox fit sets the score's direction.
                 entry["reported_minus_honest_sealed"] = describe(part["sealed_reported_mean"] - part["sealed_honest_mean"])
                 entry["sealed_honest_mean_all_models"] = describe(part["sealed_honest_mean_all_models"])
