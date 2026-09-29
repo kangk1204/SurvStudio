@@ -1,0 +1,3 @@
+# The R environment and the git clones setup_r_env.sh creates.
+renv/
+src/
