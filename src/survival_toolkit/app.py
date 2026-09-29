@@ -1763,6 +1763,8 @@ def _reject_survival_outcome_feature_columns(
 
 # Values of the matrix block examined at once by the 0/1 scan below (float32, so about 16 MB).
 _MATRIX_BINARY_SCAN_CELLS = 4_000_000
+# A marker name written like a human gene symbol: upper-case letters and digits, parts joined by hyphens.
+_GENE_SYMBOL_NAME = re.compile(r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*")
 
 
 def _matrix_outcome_markers(
@@ -1778,11 +1780,17 @@ def _matrix_outcome_markers(
     outcome-like names, and columns that code the same events as the event column. Matrix
     values are numbers, so only a marker whose values are all 0 or 1 can code the events; the
     event comparison runs on those markers alone instead of on every marker of a wide matrix.
+
+    A marker named like a gene symbol is judged by its values only. EFS and TTR are genes as well as
+    endpoint abbreviations, and the name rules read antisense genes such as DIO3OS as DIO3 and OS, so
+    by name every genome-wide expression matrix would be refused. Outcome columns named the way
+    clinical tables name them (os_months, OS.time, time) are still refused by their names.
     """
 
     marker_names = [str(marker) for marker in markers]
     marker_set = set(marker_names)
-    flagged = {str(column) for column in _survival_outcome_like_columns(frame)} & marker_set
+    named_like_genes = {name for name in marker_names if _GENE_SYMBOL_NAME.fullmatch(name)}
+    flagged = ({str(column) for column in _survival_outcome_like_columns(frame)} & marker_set) - named_like_genes
     zero_one: list[str] = []
     step = max(1, _MATRIX_BINARY_SCAN_CELLS // max(int(frame.shape[0]), 1))
     for start in range(0, len(marker_names), step):
