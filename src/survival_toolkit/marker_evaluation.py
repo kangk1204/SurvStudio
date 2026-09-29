@@ -14,7 +14,9 @@ a reader should check a published marker claim:
 3. The whole procedure rerun on subsamples: how often each marker is selected, its
    rank interval, and whether its direction holds.
 4. Tiers from pre-declared rules, and an optimism report for a signature built from
-   the selected markers ("winner's curse" of picking the strongest marker).
+   the selected markers ("winner's curse" of picking the strongest marker), with 95%
+   intervals for its left-out C-index and its gain over the clinical covariates that
+   allow for the overlap of the subsamples (corrected resampled t).
 5. A screen for patients whose marker profiles are identical or near-identical
    (``survival_toolkit.duplicates``): a patient in the data twice can sit on both sides
    of a subsample split and flatter the internal estimates.
@@ -731,7 +733,8 @@ def resample_procedure(
     it on the rows left out, next to the clinical-only model on the same rows (the
     signature itself when no marker was selected), and records the strongest marker's
     log hazard ratio in and out of the subsample (the winner's curse of picking the
-    strongest marker).
+    strongest marker). The subsample and left-out sizes of each scored replicate give
+    the intervals of the left-out means (see ``_optimism_summary``).
     """
     n = cohort.time.shape[0]
     n_markers = len(cohort.marker_names)
@@ -744,6 +747,8 @@ def resample_procedure(
     c_in: list[float] = []
     c_out: list[float] = []
     clinical_c_out: list[float] = []
+    # Subsample and left-out sizes of each replicate in c_out, for the intervals of the left-out means.
+    sizes: list[tuple[int, int]] = []
     beta_in: list[float] = []
     beta_out: list[float] = []
     n_failed = 0
@@ -772,6 +777,7 @@ def resample_procedure(
             strata_out = None if cohort.strata is None else cohort.strata[left_out]
             c_in.append(_pooled_c_index(cohort.time[rows], cohort.event[rows], _signature_risk(cohort, rows, signature), strata_in))
             c_out.append(_pooled_c_index(cohort.time[left_out], cohort.event[left_out], _signature_risk(cohort, left_out, signature), strata_out))
+            sizes.append((int(rows.size), int(left_out.size)))
             if cohort.clinical is not None:
                 # Paired with every signature C: without a selected marker the signature is the clinical-only model.
                 if signature.columns.size:
@@ -812,7 +818,7 @@ def resample_procedure(
             rank_high[lens] = np.quantile(matrix, 0.975, axis=0)
         else:
             median_rank[lens] = rank_low[lens] = rank_high[lens] = np.full(n_markers, np.nan)
-    optimism = _optimism_summary(c_in, c_out, clinical_c_out, beta_in, beta_out)
+    optimism = _optimism_summary(c_in, c_out, clinical_c_out, beta_in, beta_out, sizes)
     return ResamplingSummary(
         n_valid=n_valid,
         n_failed=n_failed,
@@ -844,14 +850,42 @@ def _mean_or_none(values: Sequence[float]) -> float | None:
     return float(np.mean(values)) if len(values) else None
 
 
+def _corrected_resampled_t_interval(values: Sequence[float], left_out_shares: Sequence[float]) -> list[float] | None:
+    """95% interval of a mean over J overlapping subsamples: the corrected resampled t of Nadeau and Bengio.
+
+    Subsamples share most of their patients, so their J values are correlated and s²/J understates the
+    variance of their mean. Nadeau and Bengio (Machine Learning 2003;52:239–281) inflate it to (1/J + ρ) s²,
+    with s² the sample variance of the values (ddof 1) and ρ the ratio of left-out to subsample size, here the
+    mean of ``left_out_shares`` (n_left_out / n_subsample of each value). The interval is
+    mean ± t(0.975, J − 1) · sqrt((1/J + ρ) s²); None with fewer than two values, without a share for every
+    value, or when s² is not finite.
+    """
+    if len(values) < 2 or len(left_out_shares) != len(values):
+        return None
+    variance = float(np.var(values, ddof=1))
+    if not math.isfinite(variance):
+        return None
+    mean = float(np.mean(values))
+    rho = float(np.mean(left_out_shares))
+    half_width = float(stats.t.ppf(0.975, len(values) - 1)) * math.sqrt((1.0 / len(values) + rho) * variance)
+    return [mean - half_width, mean + half_width]
+
+
 def _optimism_summary(
     c_in: Sequence[float],
     c_out: Sequence[float],
     clinical_c_out: Sequence[float],
     beta_in: Sequence[float],
     beta_out: Sequence[float],
+    sizes: Sequence[tuple[int, int]] = (),
 ) -> dict[str, Any]:
-    """Means over the replicates; ``clinical_c_out`` is empty or holds one value per ``c_out`` (paired)."""
+    """Means over the replicates; ``clinical_c_out`` is empty or holds one value per ``c_out`` (paired).
+
+    ``sizes`` holds the subsample and left-out sizes of each replicate in ``c_out``. With them, the left-out
+    C-index and the paired gain over the clinical covariates get 95% corrected resampled t intervals
+    (``_corrected_resampled_t_interval``); without them the intervals are None. The gain's SD is over the
+    paired replicates.
+    """
     pairs = [(inside, outside) for inside, outside in zip(c_in, c_out) if np.isfinite(inside) and np.isfinite(outside)]
     # The clinical-only C over the same replicates as the signature's left-out C.
     paired = [
@@ -859,6 +893,15 @@ def _optimism_summary(
         for inside, outside, clinical in zip(c_in, c_out, clinical_c_out)
         if np.isfinite(inside) and np.isfinite(outside) and np.isfinite(clinical)
     ]
+    # n_left_out / n_subsample of the replicates in pairs and in paired.
+    shares = [left_out / subsample for subsample, left_out in sizes] if len(sizes) == len(c_out) else []
+    pair_shares = [share for inside, outside, share in zip(c_in, c_out, shares) if np.isfinite(inside) and np.isfinite(outside)]
+    paired_shares = [
+        share
+        for inside, outside, clinical, share in zip(c_in, c_out, clinical_c_out, shares)
+        if np.isfinite(inside) and np.isfinite(outside) and np.isfinite(clinical)
+    ]
+    gains = [outside - clinical for outside, clinical in paired]
     shrinkage = None
     if beta_in:
         magnitude = float(np.mean(np.abs(beta_in)))
@@ -867,9 +910,12 @@ def _optimism_summary(
     return {
         "signature_c_in_subsample": _mean_or_none([inside for inside, _ in pairs]),
         "signature_c_left_out": _mean_or_none([outside for _, outside in pairs]),
+        "signature_c_left_out_ci": _corrected_resampled_t_interval([outside for _, outside in pairs], pair_shares),
         "signature_optimism": _mean_or_none([inside - outside for inside, outside in pairs]),
         "clinical_c_left_out": _mean_or_none([clinical for _, clinical in paired]),
-        "signature_gain_left_out": _mean_or_none([outside - clinical for outside, clinical in paired]),
+        "signature_gain_left_out": _mean_or_none(gains),
+        "signature_gain_left_out_sd": float(np.std(gains, ddof=1)) if len(gains) > 1 else None,
+        "signature_gain_left_out_ci": _corrected_resampled_t_interval(gains, paired_shares),
         "n_signature_replicates": len(pairs),
         "n_clinical_replicates": len(paired),
         "top_marker_log_hr_in_subsample": _mean_or_none([abs(value) for value in beta_in]),
