@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -16,6 +18,9 @@ import pytest
 
 import survival_toolkit.marker_evaluation as marker_evaluation
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers
+from test_frontend_review import _run_page, example_dataset, marker_payloads  # noqa: F401 (pytest fixtures used by name)
+
+_needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed for the front-end tests")
 
 
 # t(0.975, df) for df = 2, 3, 5 and 24.
@@ -154,3 +159,92 @@ def test_a_marker_evaluation_without_clinical_covariates_has_no_gain_interval() 
     assert signature["n_clinical_replicates"] == 0
     assert signature["signature_gain_left_out"] is None and signature["signature_gain_left_out_ci"] is None
     assert signature["signature_gain_left_out_sd"] is None
+
+
+# ── The Markers tab ──────────────────────────────────────────────
+
+
+_SUMMARIZE = r"""
+  const analysis = {
+    primary_lens: "added_value",
+    tier_counts: { robust: 1, suggestive: 0 },
+    cohort: { n: 300, events: 120, n_markers_evaluated: 12 },
+    settings: { alpha: 0.05, robust_frequency: 0.5, robust_direction: 0.9 },
+    resampling: { n_valid: 40, fraction: 0.632, stability_assessed: true },
+    null: { n_permutations: 199, lens2_null: "smith" },
+  };
+  const selected = { markers: ["GENE_A"], clinical_only: false, apparent_c: 0.71, optimism_corrected_c: 0.69, signature_optimism: 0.01,
+    signature_c_left_out: 0.68, clinical_c_left_out: 0.66, n_clinical_replicates: 40 };
+  const summarize = (changes) => {
+    page.context.__payload = { analysis: { ...analysis, signature: { ...selected, ...changes } } };
+    const summary = page.run("markerSummary(__payload)");
+    return { strengths: summary.strengths.join(" | "), cautions: summary.cautions.join(" | ") };
+  };
+"""
+
+
+@_needs_node
+def test_the_verdict_follows_the_interval_of_the_gain(tmp_path: Path) -> None:
+    result = _run_page(tmp_path, _SUMMARIZE + r"""
+      return {
+        little: summarize({ signature_gain_left_out: 0.002, signature_gain_left_out_ci: [-0.011, 0.015] }),
+        smallButReal: summarize({ signature_gain_left_out: 0.01, signature_gain_left_out_ci: [0.004, 0.016] }),
+        adds: summarize({ signature_gain_left_out: 0.021, signature_gain_left_out_ci: [0.006, 0.036] }),
+        uncertain: summarize({ signature_gain_left_out: 0.012, signature_gain_left_out_ci: [-0.009, 0.033] }),
+        procedure: summarize({ markers: [], apparent_c: null, optimism_corrected_c: null,
+          signature_gain_left_out: 0.012, signature_gain_left_out_ci: [-0.009, 0.033] }),
+      };
+    """)
+
+    comparison = "In the patients left out of each of 40 subsamples, the selected-marker model reached C 0.68 against 0.66 for the clinical covariates alone"
+    # The whole interval below 0.02: little discrimination, a caution, even when the interval lies above 0.
+    assert f"{comparison}, a gain of +0.002 (95% CI -0.011 to 0.015). The selected markers add little discrimination beyond the clinical covariates." in result["little"]["cautions"]
+    assert "a gain of +0.010 (95% CI 0.004 to 0.016). The selected markers add little discrimination" in result["smallButReal"]["cautions"]
+    assert "a gain of" not in result["little"]["strengths"] + result["smallButReal"]["strengths"]
+    # The whole interval above 0 (and reaching 0.02): the markers add discrimination, a strength.
+    assert f"{comparison}, a gain of +0.021 (95% CI 0.006 to 0.036). The selected markers add discrimination beyond the clinical covariates." in result["adds"]["strengths"]
+    assert "a gain of" not in result["adds"]["cautions"]
+    # Neither: an uncertain gain, a caution that gives the interval.
+    assert (
+        f"{comparison}, a gain of +0.012 (95% CI -0.009 to 0.033). The gain is uncertain: its interval includes both no gain and a gain of 0.02 or more."
+    ) in result["uncertain"]["cautions"]
+    assert "add little" not in result["uncertain"]["cautions"] and "a gain of" not in result["uncertain"]["strengths"]
+    # Without a full-cohort model the gain and its interval belong to the whole procedure, with no verdict on selected markers.
+    assert "the whole selection procedure reached C 0.68 against 0.66 for the clinical covariates alone, a gain of +0.012 (95% CI -0.009 to 0.033)." in result["procedure"]["cautions"]
+    assert "selected markers" not in result["procedure"]["cautions"] and "uncertain" not in result["procedure"]["cautions"]
+
+
+@_needs_node
+def test_a_result_without_the_interval_keeps_the_verdict_on_the_mean_gain(tmp_path: Path) -> None:
+    """Results saved before the interval existed, or with a single paired subsample, are judged by the mean gain against 0.02."""
+    result = _run_page(tmp_path, _SUMMARIZE + r"""
+      return {
+        small: summarize({ signature_gain_left_out: 0.004 }),
+        large: summarize({ signature_gain_left_out: 0.035 }),
+        single: summarize({ signature_gain_left_out: 0.004, signature_gain_left_out_ci: null, n_clinical_replicates: 1 }),
+        partial: summarize({ signature_gain_left_out: 0.035, signature_gain_left_out_ci: [null, null] }),
+      };
+    """)
+
+    comparison = "the selected-marker model reached C 0.68 against 0.66 for the clinical covariates alone"
+    assert f"{comparison} (+0.004). The selected markers add little discrimination beyond the clinical covariates." in result["small"]["cautions"]
+    assert f"{comparison} (+0.035)." in result["large"]["strengths"] and "add discrimination" not in result["large"]["strengths"]
+    assert "In the patients left out of the one subsample that could be scored" in result["single"]["cautions"]
+    assert "(+0.004). The selected markers add little" in result["single"]["cautions"]
+    assert f"{comparison} (+0.035)." in result["partial"]["strengths"]
+    assert "95% CI" not in " ".join(value for case in result.values() for value in case.values())
+
+
+@_needs_node
+def test_the_markers_tab_shows_the_interval_the_server_computed(tmp_path: Path, marker_payloads: dict) -> None:
+    signature = marker_payloads["added"]["analysis"]["signature"]
+    low, high = signature["signature_gain_left_out_ci"]
+    gain = signature["signature_gain_left_out"]
+
+    result = _run_page(tmp_path, r"""
+      page.context.__payload = fixtures.markers.added;
+      const summary = page.run("markerSummary(__payload)");
+      return [...summary.strengths, ...summary.cautions].join(" | ");
+    """, markers=marker_payloads)
+
+    assert f"a gain of {gain:+.3f} (95% CI {low:.3f} to {high:.3f})." in result
