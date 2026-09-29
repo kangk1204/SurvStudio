@@ -7,8 +7,8 @@
 # plan=all runs mode "all" (every one of Mime's models). plan=feasible runs mode "all" without the models whose first
 # algorithm is StepCox, for the sensitivity run with 500 candidates, where StepCox cannot fit the full Cox model (more
 # genes than deaths): Mime's own source of the pinned commit (mime_source=, checked against the installed function)
-# with its section "3.StepCox" cut out. (Mime's single and double modes cannot stand in: double mode with Enet fits
-# alpha 0.1 whatever alpha it is given.)
+# with its section "3.StepCox" cut out. (Mime's single and double modes, separate copies of the code, cannot stand in:
+# in double mode, RSF + Enet fits alpha 0.1 whatever alpha it is given.)
 # Writes to out/: unicox.csv, candidates.txt, cindex.csv (model, cohort, Mime's C), risk.csv.gz (model, cohort, ID,
 # OS.time, OS, RS), genes.csv (model, genes the fitted model uses) and run.json.
 here <- dirname(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)[1]))

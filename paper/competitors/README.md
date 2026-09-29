@@ -37,8 +37,8 @@ come from `results/` (case studies I and II, scripts 06 and 15), so run `run_all
   within the gene-set sizes Mime's documentation recommends (more than 50) and uses (42). A sensitivity run gives it the
   500 smallest p-values and runs every model whose first algorithm is not StepCox (63 models): Mime's own source of the
   pinned commit, checked to be identical to the installed function, with its section "3.StepCox" cut out
-  (`run_mime.R plan=feasible`). Mime's single and double modes could not stand in: in double mode, Enet always fits
-  alpha 0.1 whatever alpha it is given.
+  (`run_mime.R plan=feasible`). Mime's single and double modes, separate copies of the code, could not stand in: in
+  double mode, RSF + Enet fits alpha 0.1 whatever alpha it is given.
 - **Two C-indices for Mime.** Mime reports `summary(coxph(Surv ~ RS))$concordance` in each cohort, so each cohort's own
   Cox fit sets the direction of the risk score (a score that runs backwards in a cohort still gets C > 0.5). This
   "reported C" drives the selection, as it does in papers. The "honest C" is Harrell's C of the risk score with its
