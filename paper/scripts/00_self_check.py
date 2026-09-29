@@ -8,12 +8,15 @@ matching, tumours without a record left out and counted, 10-year censoring, the 
 used when a download differs or fails), the external-cohort screens of case studies IV (overall survival) and V
 (recurrence: relapse-free survival from cBioPortal in development), padded gene symbols whose extra probes carry
 make.unique suffixes (the most variable probe is kept), the METABRIC sites of script 14, and the LUAD data manifest
-(.gz files compared by their decompressed content). Then random-effects pooling, the validation rows (the hazard
-ratio of the lens a marker was tested on), script 15's cohort test, sign and pooling, the simulation's resume filter
-and summary check on stamps that look like numbers after a CSV round trip, the stamps figures.py checks, a locked
-model made by SurvStudio (the marker-weight rule, the clinical-only interval and the paired left-out gain the scripts
-read), the breast data against breast_data_manifest.csv, the LUAD data against luad_data_manifest.csv, and the files
-of data_snapshot/ against their SHA-256.
+(.gz files compared by their decompressed content). Then random-effects pooling (the Hartung-Knapp-Sidik-Jonkman and
+prediction intervals against worked examples computed with R's metafor), the validation rows (the hazard ratio of the
+lens a marker was tested on) and their pooling, script 15's cohort test, sign and pooling, the simulation's resume
+filter and summary check on stamps that look like numbers after a CSV round trip, the stamps figures.py checks, a
+locked model made by SurvStudio (the marker-weight rule, the clinical-only interval and the paired left-out gain the
+scripts read; the locked linear predictor recomputed for the clinical-only calibration slope, the gene component and
+Uno's C, as SurvStudio scores it), Uno's C against the estimator written out, the breast data against
+breast_data_manifest.csv, the LUAD data against luad_data_manifest.csv, and the files of data_snapshot/ against their
+SHA-256.
 """
 
 from __future__ import annotations
@@ -330,7 +333,24 @@ def check_luad(root: Path) -> None:
         common.LUAD, common.XENA_EXPRESSION = saved
 
 
+# Worked examples of random_effects, computed with R 4.5.2 and metafor 5.0.1: rma(yi, sei = sei, method = "DL") for the
+# estimate, tau2 and Q; test = "adhoc" for the HKSJ interval with the ad hoc correction and test = "knha" without it;
+# predict(rma(yi, sei = sei, method = "DL"), pi.type = "Riley") for the prediction interval (t with k - 2 df).
+METAFOR = [
+    {"yi": [0.10, 0.30, 0.35, -0.05], "sei": [0.10, 0.12, 0.15, 0.08], "estimate": 0.151070476076309, "tau2": 0.023433736759435,
+     "q": 9.064584636230977, "adhoc": (-0.150139119694713, 0.452280071847331), "knha": (-0.144101495749406, 0.446242447902024),
+     "pi": (-0.623309327852450, 0.925450280005069)},
+    {"yi": [0.20, 0.21, 0.19], "sei": [0.10, 0.10, 0.10], "estimate": 0.2, "tau2": 0.0, "q": 0.02,
+     "adhoc": (-0.048413771175033, 0.448413771175033), "knha": (0.175158622882497, 0.224841377117503),
+     "pi": (-0.533593072480896, 0.933593072480896)},
+    {"yi": [0.1, 0.3], "sei": [0.1, 0.1], "estimate": 0.2, "tau2": 0.01, "q": 2.0,
+     "adhoc": (-1.070620473617471, 1.470620473617471), "knha": (-1.070620473617471, 1.470620473617471), "pi": (None, None)},
+]
+
+
 def check_pooling() -> None:
+    from scipy import stats
+
     pooled = common.random_effects(np.array([0.1, 0.3]), np.array([0.1, 0.1]))
     assert np.isclose(pooled["tau2"], 0.01) and np.isclose(pooled["estimate"], 0.2) and np.isclose(pooled["ci_upper"] - 0.2, 0.196)
     assert common.random_effects(np.array([0.2, 0.2, 0.2]), np.array([0.1, 0.2, 0.3]))["tau2"] == 0.0
@@ -341,6 +361,56 @@ def check_pooling() -> None:
         except ValueError:
             continue
         raise AssertionError(f"random_effects accepted {estimates} with {errors}")
+    # The HKSJ interval (with and without the ad hoc correction) and the prediction interval against metafor.
+    for example in METAFOR:
+        pooled = common.random_effects(np.array(example["yi"]), np.array(example["sei"]))
+        k = len(example["yi"])
+        assert pooled["k"] == k and all(np.isclose(pooled[key], example[key], rtol=0, atol=1e-12) for key in ("estimate", "tau2", "q")), (example, pooled)
+        assert np.allclose([pooled["hksj_ci_lower"], pooled["hksj_ci_upper"]], example["adhoc"], rtol=0, atol=1e-12), (example["adhoc"], pooled)
+        se = (pooled["ci_upper"] - pooled["ci_lower"]) / 3.92
+        unmodified = stats.t.ppf(0.975, k - 1) * se * np.sqrt(pooled["hksj_scale"])
+        assert np.allclose([pooled["estimate"] - unmodified, pooled["estimate"] + unmodified], example["knha"], rtol=0, atol=1e-12), (example["knha"], pooled)
+        assert pooled["hksj_ci_upper"] - pooled["hksj_ci_lower"] >= pooled["ci_upper"] - pooled["ci_lower"], "never narrower than DerSimonian-Laird"
+        if example["pi"][0] is None:
+            assert pooled["pi_lower"] is None and pooled["pi_upper"] is None, "no prediction interval with two cohorts"
+        else:
+            assert np.allclose([pooled["pi_lower"], pooled["pi_upper"]], example["pi"], rtol=0, atol=1e-12), (example["pi"], pooled)
+    ratio = common.exponentiated(common.random_effects(np.array([0.1, 0.3]), np.array([0.1, 0.1])))
+    assert np.isclose(ratio["estimate"], np.exp(0.2)) and ratio["pi_lower"] is None and ratio["hksj_ci_lower"] < ratio["ci_lower"]
+
+
+def uno_by_hand(time: np.ndarray, event: np.ndarray, risk: np.ndarray, horizon: float) -> float:
+    """Uno's C written out for distinct times: pairs whose earlier time is an event before the horizon, weighted by
+    1 / G(t)^2 with G the Kaplan-Meier estimate of the censoring distribution, tied risks counting one half."""
+    order = np.argsort(time)
+    at_risk = time.size - np.arange(time.size)
+    censoring = np.cumprod(np.where(event[order] == 0, 1.0 - 1.0 / at_risk, 1.0))
+    survival = dict(zip(time[order], censoring))
+    numerator = denominator = 0.0
+    for i in np.flatnonzero((event == 1) & (time < horizon)):
+        weight = 1.0 / survival[time[i]] ** 2
+        later = time > time[i]
+        denominator += weight * later.sum()
+        numerator += weight * (np.sum(later & (risk[i] > risk)) + 0.5 * np.sum(later & (risk[i] == risk)))
+    return numerator / denominator
+
+
+def check_uno() -> None:
+    """Uno's C of common.uno_c (scikit-survival) against uno_by_hand, with censoring before and after the horizon and
+    risks pointing either way; without censoring and without truncation it is Harrell's C."""
+    from survival_toolkit.marker_evaluation import _pooled_c_index
+
+    draw = np.random.default_rng(11)  # its own stream: the checks after it see the same random data as before
+    n = 80
+    risk = draw.normal(size=n)
+    times, censor = draw.exponential(30.0 / np.exp(risk)), draw.uniform(5, 90, n)
+    time, event = np.minimum(times, censor), (times <= censor).astype(int)
+    for horizon in (np.quantile(time, 0.6), np.inf):
+        for score in (risk, -risk, draw.normal(size=n)):
+            assert np.isclose(common.uno_c(time, event, score, horizon), uno_by_hand(time, event, score, horizon), rtol=0, atol=1e-10), horizon
+    everyone = np.ones(n, dtype=int)
+    assert np.isclose(common.uno_c(times, everyone, risk, np.inf), _pooled_c_index(times, everyone, risk, None), rtol=0, atol=1e-12)
+    assert np.isnan(common.uno_c(time, event, risk, float(time.min()) / 2)), "no event before the horizon gives no value"
 
 
 def check_validation_rows() -> None:
@@ -354,12 +424,20 @@ def check_validation_rows() -> None:
     rows = pd.DataFrame([common.validation_row(report(c, clinical, width)) for c, clinical, width in ((0.70, 0.66, 0.02), (0.64, 0.61, 0.08), (0.68, 0.60, 0.04))])
     assert rows.loc[1, "clinical_lower"] == 0.61 - 0.08 and rows.loc[1, "clinical_upper"] == 0.61 + 0.08
     assert rows.loc[1, "calibration_lower"] == 10 * (0.64 - 0.61) - 5 * 0.08, "the calibration slope keeps its own interval"
+    # component_row's columns: the clinical-only calibration slope with its interval, the gene log hazard ratio with its SE.
+    rows = rows.assign(clinical_calibration_slope=[0.9, 1.1, 1.0], clinical_calibration_lower=[0.5, 0.4, 0.8],
+                       clinical_calibration_upper=[1.3, 1.8, 1.2], gene_log_hr=[0.2, 0.05, 0.3], gene_log_hr_se=[0.1, 0.12, 0.08])
     pooled = common.pooled_validation(rows)
     expected = common.random_effects(rows["clinical_c"].to_numpy(), (rows["clinical_upper"] - rows["clinical_lower"]).to_numpy() / 3.92)
     assert pooled["clinical_c"] == expected, "the clinical-only C is pooled with its own intervals"
     slope = common.random_effects(rows["calibration_slope"].to_numpy(), (rows["calibration_upper"] - rows["calibration_lower"]).to_numpy() / 3.92)
     assert pooled["calibration_slope"] == slope, "the calibration slope is pooled with its own intervals"
     assert pooled["model_c"] != common.random_effects(rows["c"].to_numpy(), (rows["clinical_upper"] - rows["clinical_lower"]).to_numpy() / 3.92)
+    assert pooled["clinical_calibration_slope"] == common.random_effects(
+        rows["clinical_calibration_slope"].to_numpy(), (rows["clinical_calibration_upper"] - rows["clinical_calibration_lower"]).to_numpy() / 3.92)
+    gene = common.random_effects(np.array([0.2, 0.05, 0.3]), np.array([0.1, 0.12, 0.08]))
+    assert pooled["gene_log_hr"] == gene and pooled["gene_hazard_ratio"] == common.exponentiated(gene), "the gene component is pooled with its SE"
+    assert all(key in pooled["delta_c"] for key in ("hksj_ci_lower", "hksj_ci_upper", "pi_lower", "pi_upper", "k"))
 
     # The hazard ratio shown is the one of the lens SurvStudio tested the marker on.
     fit = lambda ratio: {"hazard_ratio": ratio, "ci_lower": ratio / 2, "ci_upper": ratio * 2}  # noqa: E731
@@ -452,6 +530,29 @@ def check_resume(root: Path) -> None:
             raise AssertionError(f"stamps {stamp} read as numbers still passed; the check is not testing the round trip")
 
 
+def check_gain_verdicts() -> None:
+    """The simulation summary's reading of the paired left-out gain: the old rule (gain below 0.02), and from the gain's
+    interval the coverage of the true gain (0 under the null) and one verdict per replicate, "adds little" (upper
+    limit below 0.02), else "adds" (lower limit above 0), else "uncertain"; without intervals, only the old rule."""
+    summary = importlib.import_module("06_simulation_summary")
+    scored = pd.DataFrame({"left_out_gain": [0.01, 0.03, 0.05, -0.01, 0.01], "left_out_gain_lower": [-0.01, 0.005, 0.01, -0.03, 0.004],
+                           "left_out_gain_upper": [0.015, 0.05, 0.08, 0.01, 0.019], "new_patients_c": 0.7, "new_patients_clinical_c": 0.68,
+                           "apparent_c": 0.75, "corrected_c": 0.69, "left_out_c": 0.7, "clinical_left_out_c": 0.69})
+    zero = summary.gain_verdicts(scored, pd.Series(0.0, index=scored.index))
+    assert zero["gain_interval_replicates"] == 5 and np.isclose(zero["gain_coverage"], 0.4) and np.isclose(zero["old_rule_adds_little"], 0.6)
+    assert np.isclose(zero["verdict_adds_little"], 0.6) and np.isclose(zero["verdict_adds"], 0.4) and zero["verdict_uncertain"] == 0.0, zero
+    uncertain = summary.gain_verdicts(scored.assign(left_out_gain_upper=0.04), pd.Series([0.02, 0.0, 0.05, -0.05, 0.03], index=scored.index))
+    assert np.isclose(uncertain["verdict_uncertain"], 0.4) and np.isclose(uncertain["verdict_adds"], 0.6), uncertain
+    assert np.isclose(uncertain["gain_coverage"], 0.4), "each replicate's interval against its own true gain"
+    bare = summary.gain_verdicts(scored.drop(columns=["left_out_gain_lower", "left_out_gain_upper"]), pd.Series(0.0, index=scored.index))
+    assert bare["gain_interval_replicates"] == 0 and bare["gain_coverage"] is None and np.isclose(bare["old_rule_adds_little"], 0.6)
+    # A null scenario with subsamples is scored against a true gain of 0; an alternative against its gain in new patients.
+    replicates = scored.assign(scenario="n", replicate=range(5), beta=0.0, max_mode_fraction=0.9, events=40, tested=100, fwer_false=0, error=np.nan)
+    settings = {"scenarios": {"n": {"beta": 0.0, "max_mode_fraction": 0.9, "subsamples": 100, "replicates": 5, "true_genes": 0}}}
+    row = summary.summarise(replicates, settings)[0]
+    assert row["gain_target"] == "zero" and np.isclose(row["gain_coverage"], 0.4) and np.isclose(row["true_gain_mean"], 0.02)
+
+
 def check_stamps(root: Path) -> None:
     """The stamps figures.py checks: a file changed after its run, a result computed from an older input, and files
     of different runs are each refused."""
@@ -490,8 +591,10 @@ def check_stamps(root: Path) -> None:
 
 def check_survstudio() -> None:
     """Against SurvStudio itself, with a locked model it makes here: the marker-weight rule of the external screens, the
-    clinical-only interval and paired left-out gain the scripts read, and the validation rows."""
+    clinical-only interval and paired left-out gain the scripts read, the validation rows, and the locked linear
+    predictor behind the clinical-only calibration slope, the gene component and Uno's C."""
     from survival_toolkit.marker_evaluation import MIN_MARKER_WEIGHT_AVAILABLE, MarkerSettings, evaluate_markers, validate_locked_recipe
+    from survival_toolkit.marker_screen import fit_cox
 
     assert common.MIN_MARKER_WEIGHT == MIN_MARKER_WEIGHT_AVAILABLE
 
@@ -529,6 +632,32 @@ def check_survstudio() -> None:
             assert not rows[marker]["measured"] and rows[marker]["hazard_ratio"] is None
         else:
             assert fits[marker]["tested"] == "added_value" and rows[marker]["hazard_ratio"] == fits[marker]["adjusted"]["hazard_ratio"]
+
+    # The linear predictor the extra per-cohort quantities come from is SurvStudio's own, rescaled and as measured
+    # (locked_parts stops otherwise, and does stop on a report it does not reproduce); it is the sum of its two parts.
+    for scaling in ("within_cohort", "as_measured"):
+        scored = report if scaling == "within_cohort" else validate_locked_recipe(external, recipe, marker_scaling=scaling, n_bootstrap=0)
+        parts = common.locked_parts(external, recipe, scored, scaling)
+        assert np.allclose(parts["clinical"] + parts["marker"], parts["linear_predictor"], rtol=0, atol=1e-10), scaling
+    tampered = {**report, "metrics": {**report["metrics"], "c_index": report["metrics"]["c_index"] + 0.01}}
+    try:
+        common.locked_parts(external, recipe, tampered, "within_cohort")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("locked_parts accepted a C-index it does not reproduce")
+    parts = common.locked_parts(external, recipe, report, "within_cohort")
+    component = common.component_row(parts)
+    clinical_fit = fit_cox(parts["time"], parts["event"], parts["clinical_only"][:, None])
+    assert np.isclose(component["clinical_calibration_slope"], clinical_fit.beta[0])
+    assert component["clinical_calibration_lower"] < clinical_fit.beta[0] < component["clinical_calibration_upper"]
+    assert np.isclose(component["lp_sd"], np.std(parts["linear_predictor"], ddof=1)) and component["clinical_lp_sd"] > 0
+    assert component["gene_hr_lower"] > 1.0, "the markers carry the simulated risk beyond the clinical part"
+    assert np.isclose(np.log(component["gene_hr"]), component["gene_log_hr"]) and component["gene_log_hr_se"] > 0
+    uno = common.uno_row(parts, horizon=float(np.quantile(parts["time"], 0.7)), draws=40)
+    assert uno["n"] == 200 and uno["draws_used"] >= 20 and uno["uno_lower"] <= uno["uno_upper"], uno
+    assert np.isclose(uno["uno_delta"], uno["uno_c"] - uno["clinical_uno_c"]) and uno["uno_delta_lower"] <= uno["uno_delta_upper"]
+
     heaviest = max(weight, key=weight.get)
     lacking = patients(200, markers).drop(columns=[marker for marker in recipe["markers"] if marker != heaviest] if len(recipe["markers"]) > 2
                                           else [heaviest])
@@ -559,7 +688,9 @@ def main() -> None:
     check_pooling()
     check_validation_rows()
     check_tier_replication()
+    check_gain_verdicts()
     check_survstudio()
+    check_uno()
     files = common.check_breast_manifest()
     print(f"breast data: {files} files match {common.BREAST_MANIFEST.name}")
     files = common.check_luad_manifest()

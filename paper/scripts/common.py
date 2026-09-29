@@ -87,6 +87,23 @@ MIN_VALIDATION_EVENTS = 30
 MIN_MARKER_WEIGHT = 0.5
 # Cohorts sampled on the outcome are left out: EMC2 holds patients selected for metastatic relapse.
 OUTCOME_SELECTED = {"EMC2": "patients selected for relapse"}
+# Bootstrap resamples behind every interval of the external validations (validate_locked_recipe's n_bootstrap) and
+# of Uno's C, drawn from validate_locked_recipe's default seed, so Uno's C is resampled on the same patients.
+BOOTSTRAP_DRAWS = 2000
+BOOTSTRAP_SEED = 20260926
+# Case study II, sensitivity: Uno's C truncated at 5 years.
+UNO_HORIZON_MONTHS = 60.0
+
+# The development runs of case studies I, IV and V (scripts 01, 07 and 09; 16 reruns them with other seeds): the
+# endpoint's columns and the clinical covariates the markers are judged against.
+DEVELOPMENT = {
+    "I": {"label": "TCGA-LUAD, overall survival", "time": "os_months", "event": "os_event", "covariates": COVARIATES,
+          "categorical": CATEGORICAL},
+    "IV": {"label": "METABRIC, overall survival", "time": "os_months", "event": "os_event", "covariates": BREAST_COVARIATES,
+           "categorical": BREAST_CATEGORICAL},
+    "V": {"label": "METABRIC ER-positive, recurrence", "time": "recurrence_months", "event": "recurrence_event",
+          "covariates": BREAST_ER_COVARIATES, "categorical": BREAST_ER_CATEGORICAL},
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -460,6 +477,64 @@ def _with_expression(frame: pd.DataFrame, folder: Path, genes: list[str] | None,
     return frame, sorted(collapsed.columns.tolist())
 
 
+def tcga_development() -> tuple[pd.DataFrame, list[str], Any]:
+    """Case study I's development data as script 01 evaluates it: SurvStudio's bundled TCGA-LUAD clinical table and the
+    Xena HiSeqV2.gz matrix read for its patients (read_marker_matrix) and joined to them (matrix_frame), with overall
+    survival, age, sex and stage. Returns the frame, the genes of the matrix and the matrix itself (for its id_note)."""
+    from survival_toolkit.marker_matrix import matrix_frame, read_marker_matrix
+    from survival_toolkit.sample_data import load_tcga_luad_upload_ready_dataset
+
+    clinical = load_tcga_luad_upload_ready_dataset()
+    matrix = read_marker_matrix(XENA_EXPRESSION, XENA_EXPRESSION.name, patient_ids=clinical["patient_id"].tolist())
+    frame = matrix_frame(clinical, matrix, id_column="patient_id", columns=["os_months", "os_event", *COVARIATES])
+    return frame, list(matrix.marker_names), matrix
+
+
+def development_data(case: str) -> tuple[pd.DataFrame, list[str]]:
+    """The development data of case study I (tcga_development), IV (METABRIC, overall survival) or V (METABRIC's
+    ER-positive tumours, recurrence) as scripts 01, 07 and 09 evaluate them: the frame and its genes."""
+    if case == "I":
+        frame, genes, _ = tcga_development()
+        return frame, genes
+    if case == "IV":
+        return load_breast_cohort("METABRIC")
+    if case == "V":
+        return load_breast_cohort("METABRIC", endpoint="recurrence", er_positive=True)
+    raise ValueError(f"No development data for case study {case!r}.")
+
+
+def evaluate_development(case: str, frame: pd.DataFrame, genes: list[str], settings: Any = None) -> dict[str, Any]:
+    """SurvStudio's marker evaluation of a case study's development data as scripts 01, 07 and 09 run it: the added
+    value of each gene over the case study's clinical covariates (DEVELOPMENT), with SurvStudio's defaults unless
+    ``settings`` (a MarkerSettings) says otherwise."""
+    from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers
+
+    spec = DEVELOPMENT[case]
+    return evaluate_markers(
+        frame, time_column=spec["time"], event_column=spec["event"], marker_columns=genes, clinical_columns=spec["covariates"],
+        categorical_clinical=spec["categorical"], event_positive_value=1, settings=settings or MarkerSettings(),
+    )
+
+
+def geo_cohort(cohort: str, genes: Iterable[str] = ()) -> pd.DataFrame:
+    """A GEO cohort of case study II as script 03 scores it: the patients of the harmonized clinical table the QC kept
+    (overall survival in months, age, sex and stage) joined to their expression of ``genes`` (those the cohort
+    measures); a patient without expression is left out."""
+    truth = pd.read_csv(LUAD / "harmonized_clinical.csv")  # written by data_prep/harmonize_luad.py
+    table = truth[(truth["cohort"] == cohort) & truth["exclusion"].isna()]
+    path = LUAD / cohort / "expression_genes.csv.gz"
+    header = pd.read_csv(path, nrows=0).columns.tolist()
+    expression = pd.read_csv(path, usecols=["sample_id", *[gene for gene in genes if gene in header]])
+    return pd.DataFrame({
+        "patient_id": table["sample_id"],
+        "os_months": table["os_time"] * 12.0,
+        "os_event": table["os_event"],
+        "age": table["age"],
+        "sex": table["sex"].map({"M": "Male", "F": "Female"}),
+        "stage_group": table["stage_group"].map(lambda value: f"Stage {value}" if isinstance(value, str) else np.nan),
+    }).merge(expression.rename(columns={"sample_id": "patient_id"}), on="patient_id")
+
+
 def marker_weight_measured(recipe: dict[str, Any], columns: Iterable[str]) -> tuple[float, list[str]]:
     """The share of a locked model's marker weight (|coefficient| x development SD) that a cohort measures, and the
     markers it lacks, computed as SurvStudio's validate_locked_recipe computes them."""
@@ -595,17 +670,196 @@ def validation_marker_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def pooled_validation(cohorts: pd.DataFrame) -> dict[str, dict[str, float]]:
-    """Random-effects pooled C of the locked model, of the clinical-only model and of their difference, and the pooled
-    calibration slope, each cohort's estimate weighted by its own 95% interval (standard error = interval width /
-    3.92; bootstrap intervals for the C-indices, the Wald interval for the slope)."""
-    def pool(estimate: str, lower: str, upper: str) -> dict[str, float]:
-        errors = (cohorts[upper] - cohorts[lower]).to_numpy(dtype=float) / 3.92
-        return random_effects(cohorts[estimate].to_numpy(dtype=float), errors)
+def pool_interval(cohorts: pd.DataFrame, estimate: str, lower: str, upper: str) -> dict[str, Any]:
+    """random_effects of one quantity over cohorts, each cohort's estimate weighted by its own 95% interval (standard
+    error = interval width / 3.92)."""
+    errors = (cohorts[upper] - cohorts[lower]).to_numpy(dtype=float) / 3.92
+    return random_effects(cohorts[estimate].to_numpy(dtype=float), errors)
 
-    return {"model_c": pool("c", "c_lower", "c_upper"), "clinical_c": pool("clinical_c", "clinical_lower", "clinical_upper"),
-            "delta_c": pool("delta_c", "delta_lower", "delta_upper"),
-            "calibration_slope": pool("calibration_slope", "calibration_lower", "calibration_upper")}
+
+def exponentiated(pooled: dict[str, Any]) -> dict[str, float | None]:
+    """A pooled log hazard ratio (random_effects) as a hazard ratio: its estimate and every interval bound exponentiated."""
+    keys = ("estimate", "ci_lower", "ci_upper", "hksj_ci_lower", "hksj_ci_upper", "pi_lower", "pi_upper")
+    return {key: None if pooled.get(key) is None else float(np.exp(pooled[key])) for key in keys}
+
+
+def pooled_validation(cohorts: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    """Random-effects pooling (random_effects: the DerSimonian-Laird estimate with its CI, the HKSJ interval and the
+    prediction interval) of the locked model's C, the clinical-only model's C, their difference (the gain) and the two
+    calibration slopes, each cohort's estimate weighted by its own 95% interval (pool_interval: bootstrap intervals for
+    the C-indices, Wald intervals for the slopes); and of the gene component's log hazard ratio per SD (component_row),
+    weighted by its standard error, with the pooled hazard ratio."""
+    gene = random_effects(cohorts["gene_log_hr"].to_numpy(dtype=float), cohorts["gene_log_hr_se"].to_numpy(dtype=float))
+    return {
+        "model_c": pool_interval(cohorts, "c", "c_lower", "c_upper"),
+        "clinical_c": pool_interval(cohorts, "clinical_c", "clinical_lower", "clinical_upper"),
+        "delta_c": pool_interval(cohorts, "delta_c", "delta_lower", "delta_upper"),
+        "calibration_slope": pool_interval(cohorts, "calibration_slope", "calibration_lower", "calibration_upper"),
+        "clinical_calibration_slope": pool_interval(cohorts, "clinical_calibration_slope", "clinical_calibration_lower", "clinical_calibration_upper"),
+        "gene_log_hr": gene,
+        "gene_hazard_ratio": exponentiated(gene),
+    }
+
+
+def _same_number(found: float | None, reported: float | None) -> bool:
+    if found is None or reported is None:
+        return found is None and reported is None
+    return bool(np.isfinite(found)) and abs(float(found) - float(reported)) <= 1e-10 * max(1.0, abs(float(reported)))
+
+
+def locked_parts(external: pd.DataFrame, recipe: dict[str, Any], report: dict[str, Any], marker_scaling: str) -> dict[str, Any]:
+    """The locked model's linear predictor in an external cohort, computed as SurvStudio's validate_locked_recipe
+    computes it: its rows (outcome and the clinical columns the model uses recorded, times positive), the locked
+    clinical encoder, each marker as measured or rescaled within the cohort (``marker_scaling``), held at its
+    development median where the cohort lacks it or it does not vary, and a missing value at that median. Returned with
+    its clinical part (the locked model's clinical terms) and its marker part (the gene component), the clinical-only
+    model's linear predictor, the times, events and the tie method. Stops unless the linear predictor gives the
+    report's C-index and calibration slope and the clinical-only predictor the report's clinical-only C, so whatever
+    is computed from the parts is computed from SurvStudio's own scores."""
+    from survival_toolkit.analysis import _cohort_frame
+    from survival_toolkit.encoding import transform_feature_encoder
+    from survival_toolkit.marker_evaluation import _clinical_columns_behind, _external_cox, _pooled_c_index, _unique_rows
+
+    if recipe.get("strata_columns"):
+        raise ValueError("locked_parts handles locked models without strata only.")
+    external = _unique_rows(external)
+    outcome, model, encoder = recipe["outcome"], recipe["model"], recipe["clinical"]["encoder"]
+    markers = list(recipe["markers"])
+    clinical_columns = list(recipe["clinical"]["columns"])
+    clinical_model = recipe.get("clinical_only_model") or {}
+    used = _clinical_columns_behind(encoder, clinical_columns, {*model["terms"], *(clinical_model.get("terms") or [])})
+    frame = _cohort_frame(external, time_column=outcome["time_column"], event_column=outcome["event_column"],
+                          event_positive_value=outcome["event_positive_value"], extra_columns=used)
+    time = frame[outcome["time_column"]].to_numpy(dtype=float)
+    event = frame[outcome["event_column"]].to_numpy(dtype=int)
+    rows = list(frame.attrs["source_row_index"])
+    columns: dict[str, np.ndarray] = {}
+    if clinical_columns:
+        unused = {column: np.nan for column in clinical_columns if column not in used}
+        design = transform_feature_encoder(frame.assign(**unused) if unused else frame, encoder, output="dataframe")
+        columns.update({str(name): design[name].to_numpy(dtype=float) for name in design.columns})
+    scale = recipe.get("marker_scale") or {}
+    for name in markers:
+        median = float(recipe["marker_medians"][name])
+        values = None
+        if name in external.columns:
+            values = pd.to_numeric(external.loc[rows, name], errors="coerce").to_numpy(dtype=float, copy=True, na_value=np.nan)
+        if values is not None and marker_scaling == "within_cohort":
+            observed = values[~np.isnan(values)]
+            spread = float(np.std(observed, ddof=1)) if observed.size > 1 else 0.0
+            values = None if spread <= 0 else float(scale[name]["mean"]) + float(scale[name]["sd"]) * (values - float(np.mean(observed))) / spread
+        columns[name] = np.full(time.shape[0], median) if values is None else np.where(np.isnan(values), median, values)
+    terms = list(model["terms"])
+    coefficients = np.asarray(model["coefficients"], dtype=float)
+    matrix = np.column_stack([columns[term] for term in terms])
+    linear_predictor = matrix @ coefficients
+    is_marker = np.array([term in set(markers) for term in terms], dtype=bool)
+    clinical_only = None
+    if clinical_model:
+        clinical_only = np.column_stack([columns[term] for term in clinical_model["terms"]]) @ np.asarray(clinical_model["coefficients"], dtype=float)
+    ties = str(model.get("ties", "efron"))
+    metrics = report["metrics"]
+    slope = _external_cox(time, event, linear_predictor[:, None], None, ties)
+    checks = {"c_index": (_pooled_c_index(time, event, linear_predictor, None), metrics["c_index"]),
+              "calibration_slope": (None if slope is None else slope["log_hr"], metrics["calibration_slope"])}
+    if clinical_only is not None:
+        checks["clinical_only_c_index"] = (_pooled_c_index(time, event, clinical_only, None), metrics.get("clinical_only_c_index"))
+    differ = {key: pair for key, pair in checks.items() if not _same_number(*pair)}
+    if differ or time.shape[0] != int(report["cohort"]["n"]):
+        raise RuntimeError(f"The locked model's linear predictor recomputed here differs from validate_locked_recipe's "
+                           f"({time.shape[0]} patients, SurvStudio {report['cohort']['n']}; recomputed and reported: {differ}).")
+    return {"time": time, "event": event, "linear_predictor": linear_predictor, "clinical": matrix[:, ~is_marker] @ coefficients[~is_marker],
+            "marker": matrix[:, is_marker] @ coefficients[is_marker], "clinical_only": clinical_only, "ties": ties}
+
+
+def _log_or_none(value: float | None) -> float | None:
+    return None if value is None or value <= 0 else float(np.log(value))
+
+
+def component_row(parts: dict[str, Any]) -> dict[str, Any]:
+    """Per external cohort (``parts`` from locked_parts), beyond validate_locked_recipe's report: the clinical-only
+    model's calibration slope, the Cox coefficient of its linear predictor with a Wald 95% interval, computed as
+    SurvStudio computes the locked model's; the SD of the locked linear predictor and of its clinical and marker parts;
+    and the gene component's hazard ratio: in a Cox model of the outcome on both parts, the hazard ratio per SD (in the
+    cohort) of the marker part, with its Wald 95% interval and the log hazard ratio and standard error the pooling uses.
+    The fits are SurvStudio's (marker_screen.fit_cox with the locked tie method); a fit that does not converge, or whose
+    coefficient runs to infinity, gives no value."""
+    from scipy import stats
+    from survival_toolkit.marker_evaluation import _external_cox, _marker_fit_usable
+    from survival_toolkit.marker_screen import fit_cox
+
+    time, event, ties = parts["time"], parts["event"], parts["ties"]
+    row: dict[str, Any] = dict.fromkeys(("clinical_calibration_slope", "clinical_calibration_lower", "clinical_calibration_upper"))
+    if parts["clinical_only"] is not None:
+        slope = _external_cox(time, event, parts["clinical_only"][:, None], None, ties)
+        if slope is not None:
+            row.update(clinical_calibration_slope=slope["log_hr"], clinical_calibration_lower=_log_or_none(slope["ci_lower"]),
+                       clinical_calibration_upper=_log_or_none(slope["ci_upper"]))
+    spread = {key: float(np.std(parts[part], ddof=1)) for key, part in (("lp_sd", "linear_predictor"), ("clinical_lp_sd", "clinical"),
+                                                                        ("gene_lp_sd", "marker"))}
+    row.update(spread)
+    row.update(dict.fromkeys(("gene_log_hr", "gene_log_hr_se", "gene_hr", "gene_hr_lower", "gene_hr_upper")))
+    if spread["gene_lp_sd"] > 0:
+        fit = fit_cox(time, event, np.column_stack([parts["clinical"], parts["marker"] / spread["gene_lp_sd"]]), None, ties)
+        variance = float(fit.covariance[-1, -1])
+        if _marker_fit_usable(fit) and np.isfinite(variance) and variance > 0:
+            beta, se, z = float(fit.beta[-1]), float(np.sqrt(variance)), float(stats.norm.ppf(0.975))
+            row.update(gene_log_hr=beta, gene_log_hr_se=se, gene_hr=float(np.exp(beta)), gene_hr_lower=float(np.exp(beta - z * se)),
+                       gene_hr_upper=float(np.exp(beta + z * se)))
+    return row
+
+
+def uno_c(time: np.ndarray, event: np.ndarray, risk: np.ndarray, horizon: float) -> float:
+    """Uno's C (Uno et al., Stat Med 2011) of a risk score, truncated at ``horizon``: the pairs whose earlier time is an
+    event before the horizon, each weighted by the inverse square of the censoring distribution (the cohort's own
+    Kaplan-Meier estimate) at that time; scikit-survival's concordance_index_ipcw. NaN without an event before the
+    horizon."""
+    from sksurv.metrics import concordance_index_ipcw
+    from sksurv.util import Surv
+
+    time = np.asarray(time, dtype=float)
+    event = np.asarray(event).astype(bool)
+    if not (event & (time < horizon)).any():
+        return float("nan")
+    outcome = Surv.from_arrays(event=event, time=time)
+    return float(concordance_index_ipcw(outcome, outcome, np.asarray(risk, dtype=float), tau=horizon)[0])
+
+
+def uno_row(parts: dict[str, Any], horizon: float = UNO_HORIZON_MONTHS, draws: int = BOOTSTRAP_DRAWS, seed: int = BOOTSTRAP_SEED) -> dict[str, Any]:
+    """Uno's C truncated at ``horizon`` of the locked model and of the clinical-only model (``parts`` from locked_parts)
+    and their paired difference, each with a percentile 95% interval from ``draws`` bootstrap resamples of the patients:
+    the same resamples for the three, and the ones validate_locked_recipe draws from the same seed. A resample without
+    an event before the horizon, or one scikit-survival refuses (a censoring distribution of zero before an event), is
+    skipped; an interval needs 20 resamples, as validate_locked_recipe's."""
+    time, event = parts["time"], parts["event"].astype(bool)
+    model, clinical = parts["linear_predictor"], parts["clinical_only"]
+    n = time.shape[0]
+    rng = np.random.default_rng(int(seed))
+    sampled = []
+    for _ in range(int(draws)):
+        rows = rng.integers(0, n, size=n)
+        if not event[rows].any():
+            continue
+        try:
+            pair = (uno_c(time[rows], event[rows], model[rows], horizon), uno_c(time[rows], event[rows], clinical[rows], horizon))
+        except ValueError:
+            continue
+        if np.isfinite(pair).all():
+            sampled.append(pair)
+    sampled = np.asarray(sampled, dtype=float).reshape(-1, 2)
+
+    def interval(values: np.ndarray) -> tuple[float | None, float | None]:
+        if values.size < 20:
+            return None, None
+        return float(np.quantile(values, 0.025)), float(np.quantile(values, 0.975))
+
+    model_c, clinical_c = uno_c(time, event, model, horizon), uno_c(time, event, clinical, horizon)
+    (model_lower, model_upper), (clinical_lower, clinical_upper) = interval(sampled[:, 0]), interval(sampled[:, 1])
+    delta_lower, delta_upper = interval(sampled[:, 0] - sampled[:, 1])
+    return {"n": int(n), "events": int(event.sum()), "events_before_horizon": int((event & (time < horizon)).sum()),
+            "uno_c": model_c, "uno_lower": model_lower, "uno_upper": model_upper,
+            "clinical_uno_c": clinical_c, "clinical_uno_lower": clinical_lower, "clinical_uno_upper": clinical_upper,
+            "uno_delta": model_c - clinical_c, "uno_delta_lower": delta_lower, "uno_delta_upper": delta_upper, "draws_used": int(len(sampled))}
 
 
 def git_commit(source: Path) -> str:
@@ -672,10 +926,10 @@ def write_json(path: Path, value: Any) -> None:
 
 # ── Provenance of results/: which run wrote each file, and from which results files ──────────────────────────────
 def analysis_files() -> list[Path]:
-    """What a result depends on besides SurvStudio and the data: common.py, every numbered analysis script (not the
-    self-check) and the committed tables they read (the breast duplicate pairs and the breast and LUAD data
+    """What a result depends on besides SurvStudio and the data: common.py, every numbered analysis script (15b too;
+    not the self-check) and the committed tables they read (the breast duplicate pairs and the breast and LUAD data
     manifests)."""
-    scripts = [path for path in SCRIPTS.glob("[0-9][0-9]_*.py") if path.name != "00_self_check.py"]
+    scripts = [path for path in SCRIPTS.glob("[0-9][0-9]*_*.py") if path.name != "00_self_check.py"]
     tables = [SCRIPTS.parent / name for name in ("breast_duplicate_pairs.csv", "breast_data_manifest.csv", "luad_data_manifest.csv")]
     return sorted([SCRIPTS / "common.py", *scripts, *(path for path in tables if path.exists())], key=lambda path: path.name)
 
@@ -879,9 +1133,25 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"Not JSON serialisable: {type(value)}")
 
 
-def random_effects(estimates: np.ndarray, errors: np.ndarray) -> dict[str, float]:
-    """DerSimonian-Laird pooled estimate with a 95% CI and the between-cohort variance. Needs at least two estimates,
-    each finite and with a finite, positive standard error; anything else raises."""
+def random_effects(estimates: np.ndarray, errors: np.ndarray) -> dict[str, Any]:
+    """Random-effects pooling of one estimate per cohort. Needs at least two estimates, each finite and with a finite,
+    positive standard error; anything else raises. Returns:
+
+    - ``estimate``, ``ci_lower``, ``ci_upper``, ``tau2``, ``q``: the DerSimonian-Laird estimate with its 95% CI
+      (estimate +/- 1.96 SE, SE = 1 / sqrt(sum(w)) with the random-effects weights w = 1 / (se^2 + tau2)), the
+      DerSimonian-Laird between-cohort variance and Cochran's Q; ``k``, the number of cohorts.
+    - ``hksj_ci_lower``, ``hksj_ci_upper``: the Hartung-Knapp-Sidik-Jonkman 95% interval around the same estimate:
+      estimate +/- t(0.975, k - 1) SE_HK, with SE_HK^2 = sum(w (y - estimate)^2) / ((k - 1) sum(w)) and the same weights
+      (the DerSimonian-Laird tau2). With the usual modification, SE_HK is never taken below the DerSimonian-Laird SE
+      (Knapp and Hartung's ad hoc variance correction, metafor's rma(test = "adhoc")), so the interval is never narrower
+      than the DerSimonian-Laird one; ``hksj_scale`` is SE_HK^2 / SE^2 before that floor (the correction applied when it
+      is below 1).
+    - ``pi_lower``, ``pi_upper``: the 95% prediction interval for the value in a new cohort (Higgins, Thompson and
+      Spiegelhalter 2009): estimate +/- t(0.975, k - 2) sqrt(tau2 + SE^2); None with fewer than three cohorts.
+    00_self_check.py checks the intervals against R's metafor.
+    """
+    from scipy import stats
+
     estimates = np.asarray(estimates, dtype=float)
     errors = np.asarray(errors, dtype=float)
     if estimates.ndim != 1 or estimates.shape != errors.shape:
@@ -890,10 +1160,11 @@ def random_effects(estimates: np.ndarray, errors: np.ndarray) -> dict[str, float
         raise ValueError(f"random_effects needs at least two estimates, got {estimates.size}.")
     if not (np.isfinite(estimates).all() and np.isfinite(errors).all() and (errors > 0).all()):
         raise ValueError(f"random_effects needs finite estimates with finite positive standard errors: {estimates.tolist()}, {errors.tolist()}.")
+    k = int(estimates.size)
     weights = 1.0 / errors**2
     fixed = np.sum(weights * estimates) / np.sum(weights)
     q = float(np.sum(weights * (estimates - fixed) ** 2))
-    tau2 = (q - (estimates.size - 1)) / (np.sum(weights) - np.sum(weights**2) / np.sum(weights))
+    tau2 = (q - (k - 1)) / (np.sum(weights) - np.sum(weights**2) / np.sum(weights))
     if not np.isfinite(tau2):
         raise ValueError(f"random_effects: the between-cohort variance is not finite (Q {q}); check the standard errors {errors.tolist()}.")
     tau2 = max(0.0, float(tau2))
@@ -902,4 +1173,11 @@ def random_effects(estimates: np.ndarray, errors: np.ndarray) -> dict[str, float
     se = float(np.sqrt(1.0 / np.sum(weights)))
     if not (np.isfinite(pooled) and np.isfinite(se)):
         raise ValueError(f"random_effects: the pooled estimate is not finite ({pooled} with SE {se}).")
-    return {"estimate": pooled, "ci_lower": pooled - 1.96 * se, "ci_upper": pooled + 1.96 * se, "tau2": tau2, "q": q}
+    scale = float(np.sum(weights * (estimates - pooled) ** 2) / (k - 1))
+    hksj = float(stats.t.ppf(0.975, k - 1)) * se * float(np.sqrt(max(1.0, scale)))
+    result = {"estimate": pooled, "ci_lower": pooled - 1.96 * se, "ci_upper": pooled + 1.96 * se, "tau2": tau2, "q": q, "k": k,
+              "hksj_ci_lower": pooled - hksj, "hksj_ci_upper": pooled + hksj, "hksj_scale": scale, "pi_lower": None, "pi_upper": None}
+    if k >= 3:
+        spread = float(stats.t.ppf(0.975, k - 2)) * float(np.sqrt(tau2 + se**2))
+        result.update(pi_lower=pooled - spread, pi_upper=pooled + spread)
+    return result

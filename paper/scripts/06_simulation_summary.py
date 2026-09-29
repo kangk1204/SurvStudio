@@ -3,15 +3,21 @@ estimates SurvStudio reports.
 
 Per scenario: the family-wise error rate (any false marker with family-wise p <= 0.05) with its Monte Carlo
 standard error. A false marker is one unlinked to the true markers (06_simulation.LINKED_R); under the null
-every gene is. Under the alternative: the share of the five true markers found (family-wise and robust tier),
-linked and false markers per replicate, and each C-index estimate minus the locked model's C in 3,000 new
-patients from the same design, and SurvStudio's paired left-out gain (signature_gain_left_out) minus the model's
-gain over the clinical model in the new patients. Writes simulation_summary.csv and simulation_summary.json.
+every gene is. Under the alternative: the share of the true genes found (family-wise and robust tier), linked and
+false markers per replicate. For every scenario with subsamples (the replicates scored in 3,000 new patients from the
+same design): each C-index estimate minus the locked model's C in the new patients, and SurvStudio's paired left-out
+gain (signature_gain_left_out) against the true gain, which is 0 under the null (the genes add nothing) and otherwise
+the locked model's gain over the clinical model in the new patients: its mean and bias, how often the gain's interval
+(signature_gain_left_out_ci, where SurvStudio reports one) covers the true gain, and how often the verdict read from
+that interval would say "adds little" (upper limit below 0.02), else "adds" (lower limit above 0), else "uncertain";
+and how often the old rule, a gain below 0.02, says "adds little". Writes simulation_summary.csv and
+simulation_summary.json.
 
 Stops, rather than summarising, when the replicates do not all come from one SurvStudio commit, one design and one
 version of the simulation's code (the ones in simulation_settings.json), when a scenario lacks replicates, or when a
-value the summary uses is missing: under the null the event and discovery counts, under the alternative also the
-linked-gene counts, and for every replicate scored in new patients all six C-indices and the paired gain.
+value the summary uses is missing: the event and discovery counts, under the alternative also the linked-gene counts,
+and for every replicate scored in new patients all six C-indices and the paired gain (its interval may be missing: it
+is SurvStudio's newer output).
 """
 
 from __future__ import annotations
@@ -21,7 +27,9 @@ import pandas as pd
 
 from common import RESULTS, STAMP_DTYPES, read_result, write_csv_atomic, write_json
 
-TRUE_MARKERS = 5
+TRUE_MARKERS = 5  # true genes of the scenarios whose settings predate the true_genes entry
+# A gain in C below this "adds little": the old rule applies it to the gain, the verdict to the gain's upper limit.
+LITTLE = 0.02
 ESTIMATES = {"apparent_c": "apparent", "corrected_c": "optimism-corrected", "left_out_c": "left-out patients"}
 NEEDED = ["beta", "max_mode_fraction", "events", "tested", "fwer_false"]
 NEEDED_ALTERNATIVE = ["fwer_true", "robust_true", "linked_genes", "fwer_linked", "fwer_unlinked", "robust_linked", "robust_unlinked"]
@@ -49,7 +57,7 @@ def checked(replicates: pd.DataFrame, settings: dict) -> pd.DataFrame:
     problems += [f"{name}: not in the design" for name in counts.index if name not in design]
     fine = replicates[replicates["error"].isna()]
     alternative = fine["beta"] > 0
-    scored = alternative & fine["new_patients_c"].notna()
+    scored = fine["new_patients_c"].notna()
     for columns, rows in ((NEEDED, fine.index), (NEEDED_ALTERNATIVE, fine.index[alternative]), (NEEDED_SCORED, fine.index[scored])):
         if len(rows) == 0:
             continue
@@ -61,22 +69,42 @@ def checked(replicates: pd.DataFrame, settings: dict) -> pd.DataFrame:
     return replicates
 
 
+def gain_verdicts(scored: pd.DataFrame, target: pd.Series) -> dict:
+    """For the scored replicates of a scenario: how often the old rule (a paired left-out gain below LITTLE) says
+    "adds little"; and, over the replicates whose gain has an interval, how often it covers the true gain ``target``
+    and how often the verdict it gives is "adds little" (upper limit below LITTLE), else "adds" (lower limit above 0),
+    else "uncertain" (one verdict per replicate, in that order)."""
+    lower = scored.get("left_out_gain_lower", pd.Series(np.nan, index=scored.index)).astype(float)
+    upper = scored.get("left_out_gain_upper", pd.Series(np.nan, index=scored.index)).astype(float)
+    with_interval = lower.notna() & upper.notna()
+    result = {"old_rule_adds_little": float((scored["left_out_gain"] < LITTLE).mean()), "gain_interval_replicates": int(with_interval.sum())}
+    if not with_interval.any():
+        return {**result, **dict.fromkeys(("gain_coverage", "gain_coverage_mcse", "verdict_adds_little", "verdict_adds", "verdict_uncertain"))}
+    lower, upper, target = lower[with_interval], upper[with_interval], target[with_interval]
+    little = upper < LITTLE
+    adds = ~little & (lower > 0)
+    coverage = float(((lower <= target) & (target <= upper)).mean())
+    return {**result, "gain_coverage": coverage, "gain_coverage_mcse": float(np.sqrt(coverage * (1 - coverage) / int(with_interval.sum()))),
+            "verdict_adds_little": float(little.mean()), "verdict_adds": float(adds.mean()), "verdict_uncertain": float((~little & ~adds).mean())}
+
+
 def summarise(replicates: pd.DataFrame, settings: dict) -> list[dict]:
     rows = []
-    for scenario in settings["scenarios"]:
+    for scenario, spec in settings["scenarios"].items():
         everything = replicates[replicates["scenario"] == scenario]
         # A replicate whose evaluation failed is reported as such and left out of the rates.
         failed = int(everything["error"].notna().sum())
         part = everything[everything["error"].isna()]
         count = len(part)
-        beta = float(settings["scenarios"][scenario]["beta"])
+        beta = float(spec["beta"])
+        true_genes = int(spec.get("true_genes", TRUE_MARKERS if beta > 0 else 0))
         # Under the null every discovery is false; under the alternative only the unlinked ones are.
         false = part["fwer_false"] if beta == 0 else part["fwer_unlinked"]
         fwer = float((false > 0).mean())
         row = {
-            "scenario": scenario, "beta": beta, "filter": bool(settings["scenarios"][scenario]["max_mode_fraction"] < 1.0),
-            "replicates": count, "failed": failed, "events_mean": float(part["events"].mean()), "tested_mean": float(part["tested"].mean()),
-            "fwer": fwer, "fwer_mcse": float(np.sqrt(fwer * (1 - fwer) / count)),
+            "scenario": scenario, "beta": beta, "filter": bool(spec["max_mode_fraction"] < 1.0), "subsamples": int(spec.get("subsamples", 0)),
+            "true_genes": true_genes, "replicates": count, "failed": failed, "events_mean": float(part["events"].mean()),
+            "tested_mean": float(part["tested"].mean()), "fwer": fwer, "fwer_mcse": float(np.sqrt(fwer * (1 - fwer) / count)),
             "false_per_replicate": float(false.mean()),
         }
         if beta > 0:
@@ -84,15 +112,16 @@ def summarise(replicates: pd.DataFrame, settings: dict) -> list[dict]:
             row.update({
                 "linked_genes_mean": float(part["linked_genes"].mean()),
                 "linked_found_per_replicate": float(part["fwer_linked"].mean()),
-                "power_fwer": float(part["fwer_true"].mean() / TRUE_MARKERS),
-                "power_robust": float(part["robust_true"].mean() / TRUE_MARKERS),
+                "power_fwer": float(part["fwer_true"].mean() / true_genes),
+                "power_robust": float(part["robust_true"].mean() / true_genes),
                 "robust_linked_per_replicate": float(part["robust_linked"].mean()),
                 "robust_false_per_replicate": float(part["robust_unlinked"].mean()),
                 "robust_fwer": float((part["robust_unlinked"] > 0).mean()),
                 "any_true_found": float((part["fwer_true"] > 0).mean()),
                 "false_discovery_proportion": float(np.where(found > 0, part["fwer_unlinked"] / found.where(found > 0, 1), 0).mean()),
             })
-            scored = part.dropna(subset=["new_patients_c"])
+        scored = part.dropna(subset=["new_patients_c"])
+        if len(scored):
             row["replicates_scored"] = len(scored)
             row["new_patients_c_mean"] = float(scored["new_patients_c"].mean())
             row["new_patients_clinical_c_mean"] = float(scored["new_patients_clinical_c"].mean())
@@ -100,10 +129,14 @@ def summarise(replicates: pd.DataFrame, settings: dict) -> list[dict]:
                 error = scored[column] - scored["new_patients_c"]
                 row[f"{column}_bias"] = float(error.mean())
                 row[f"{column}_rmse"] = float(np.sqrt((error**2).mean()))
-            # Both gains are paired: SurvStudio's on the same left-out patients, the true one on the same new patients.
+            # Both gains are paired: SurvStudio's on the same left-out patients, the new patients' on the same new patients.
             gain = scored["new_patients_c"] - scored["new_patients_clinical_c"]
             row["true_gain_mean"] = float(gain.mean())
+            row["left_out_gain_mean"] = float(scored["left_out_gain"].mean())
             row["left_out_gain_bias"] = float((scored["left_out_gain"] - gain).mean())
+            # The true gain is 0 under the null, where the genes add nothing, and the gain in new patients otherwise.
+            row["gain_target"] = "zero" if beta == 0 else "new patients"
+            row.update(gain_verdicts(scored, pd.Series(0.0, index=scored.index) if beta == 0 else gain))
         rows.append(row)
     return rows
 
@@ -116,7 +149,10 @@ def main() -> None:
     write_csv_atomic(summary, RESULTS / "simulation_summary.csv")
     write_json(RESULTS / "simulation_summary.json", {"scenarios": rows, "total_replicates": int(len(replicates)),
                                                       "survstudio": settings["survstudio"], "design_hash": settings["design_hash"],
-                                                      "code_hash": settings["code_hash"]})
+                                                      "code_hash": settings["code_hash"],
+                                                      "verdict_rules": {"adds little": f"gain interval's upper limit < {LITTLE}",
+                                                                        "adds": "else the interval's lower limit > 0", "uncertain": "else",
+                                                                        "old rule, adds little": f"paired left-out gain < {LITTLE}"}})
     with pd.option_context("display.width", 250, "display.max_columns", 50):
         print(summary.round(4).to_string(index=False))
 

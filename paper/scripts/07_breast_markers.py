@@ -5,7 +5,7 @@ relapse-free survival; MetaGxBreast's METABRIC follow-up is an older one, see co
 clinical covariates and expression from MetaGxBreast; added value over age, tumour size, node status, grade and ER
 status; one expression column per gene (the most variable probe); 1,000 permutations and 200 subsamples (seed
 20260926). Tumours without a cBioPortal record, or whose record lacks overall survival, are left out and counted in
-the summary.
+the summary. The data and the evaluation are common.development_data and common.evaluate_development ("IV").
 Writes the marker table, the locked model and a summary to paper/results/.
 """
 
@@ -15,22 +15,12 @@ import time
 
 import pandas as pd
 
-from common import BREAST, BREAST_CATEGORICAL, BREAST_COVARIATES, RESULTS, load_breast_cohort, sha256_file, survstudio_version, write_csv_atomic, write_json
-from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers
+from common import BREAST, RESULTS, development_data, evaluate_development, sha256_file, survstudio_version, write_csv_atomic, write_json
 
 began = time.time()
-frame, genes = load_breast_cohort("METABRIC")
+frame, genes = development_data("IV")
 loaded = time.time() - began
-result = evaluate_markers(
-    frame,
-    time_column="os_months",
-    event_column="os_event",
-    marker_columns=genes,
-    clinical_columns=BREAST_COVARIATES,
-    categorical_clinical=BREAST_CATEGORICAL,
-    event_positive_value=1,
-    settings=MarkerSettings(),
-)
+result = evaluate_development("IV", frame, genes)
 seconds = time.time() - began - loaded
 
 rows = []

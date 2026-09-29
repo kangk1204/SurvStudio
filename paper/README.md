@@ -6,7 +6,7 @@ paper used; `run_all.sh` runs the analyses and draws the figures.
 
 ## Requirements
 
-- Linux on x86-64. The numbers were computed there; the simulation (script 06) and script 14 use the fork start
+- Linux on x86-64. The numbers were computed there; the simulation (script 06) and scripts 14 and 16 use the fork start
   method, and `requirements-lock.txt` pins the CPU build of PyTorch for Linux.
 - A git clone of this repository, not a zip download: every result records `git describe` of the checkout.
 - Python 3.12 with the exact package versions of `requirements-lock.txt`, installed with [uv](https://docs.astral.sh/uv/)
@@ -28,8 +28,11 @@ paper used; `run_all.sh` runs the analyses and draws the figures.
   from CRAN, where `remotes::install_version("data.table", "1.18.4")` gets that version.
 - About 4.5 GB of disk for the data: 1.7 GB of breast cohorts, 0.9 GB of LUAD cohorts, 0.55 GB of GEO downloads and
   the 1.3 GB ExperimentHub cache (in `~/.cache/R`), and network access for the downloads.
-- About 1.5 hours on 24 cores for `run_all.sh`, of which the simulation (script 06) takes about 44 minutes (set
-  `SIM_WORKERS` to the number of cores; the default is 8); the data preparation adds the downloads.
+- About 4 to 5 hours on 24 cores for `run_all.sh`: the simulation (script 06, 2,300 replicates of about 20 to 30 CPU
+  seconds each) takes about 45 minutes with `SIM_WORKERS` set to the number of cores (the default is 8, about 2
+  hours); the seed variability (script 16, 60 development evaluations; the cores are shared out among `SEED_WORKERS`
+  processes, default 4, and a METABRIC one needs a few GB of memory) about 2 to 3 hours; the other steps about an
+  hour together. The data preparation adds the downloads.
 
 ## Running it
 
@@ -41,6 +44,7 @@ bash paper/prepare_data.sh                         # the data, into paper/data, 
 bash paper/run_all.sh                              # all steps, then all figures
 bash paper/run_all.sh 03 04                        # selected steps, then only the figures drawn from their results
 bash paper/run_step.sh 06_simulation.py 24         # one script with arguments (here 24 workers)
+bash paper/run_step.sh 16_seed_variability.py 6 --seeds 2 --cases I   # a quick look: 2 seeds of case study I
 ```
 
 The scripts read these environment variables:
@@ -52,6 +56,7 @@ The scripts read these environment variables:
 | `FIGURE_PYTHON` | `ANALYSIS_PYTHON` | an environment with matplotlib for `figures.py`; `run_all.sh` stops before any analysis when it cannot import it |
 | `SURVSTUDIO_DATA` | `paper/data` | the data folder |
 | `SIM_WORKERS` | 8 | processes for the simulation (06) in `run_all.sh` |
+| `SEED_WORKERS` | 4 | processes for the seed variability (16) in `run_all.sh`; the cores are shared out among them |
 | `RSCRIPT` | `Rscript` | R for `prepare_data.sh` |
 
 `run_all.sh` leaves out the duplicate audits (scripts 11 and 12); run them with `run_step.sh` when checking the committed
@@ -60,27 +65,30 @@ The scripts read these environment variables:
 | Script | What it computes |
 | --- | --- |
 | `prepare_data.sh`, `data_prep/` | The data chain (see Data): downloads, harmonization, QC and the breast export, then the checks against the manifests |
-| `scripts/00_self_check.py` | Checks of the shared helpers, in seconds, each of which must run: on synthetic data a cohort without complete cases, duplicate chains and shared patient IDs, the follow-up and tumour-size conventions, METABRIC's cBioPortal endpoints (with the snapshot copy used when a download differs), the external-cohort screens of case studies IV and V, probe collapsing, the METABRIC sites of script 14, the LUAD data manifest, random-effects pooling, script 15's test and pooling, the simulation's resume filter and summary check with stamps that look like numbers, and the result stamps; SurvStudio's marker-weight rule on a model it locks; the breast data against `breast_data_manifest.csv`, the LUAD data against `luad_data_manifest.csv` and the snapshot files against their SHA-256 |
+| `scripts/00_self_check.py` | Checks of the shared helpers, in seconds, each of which must run: on synthetic data a cohort without complete cases, duplicate chains and shared patient IDs, the follow-up and tumour-size conventions, METABRIC's cBioPortal endpoints (with the snapshot copy used when a download differs), the external-cohort screens of case studies IV and V, probe collapsing, the METABRIC sites of script 14, the LUAD data manifest, random-effects pooling (the Hartung-Knapp-Sidik-Jonkman and prediction intervals against worked examples computed with R 4.5.2 and metafor 5.0.1), the pooling of the validation rows, script 15's test and pooling, the simulation summary's gain verdicts, its resume filter and summary check with stamps that look like numbers, and the result stamps; SurvStudio's marker-weight rule on a model it locks, and that model's linear predictor recomputed for the extra per-cohort quantities as SurvStudio scores it; Uno's C against the estimator written out; the breast data against `breast_data_manifest.csv`, the LUAD data against `luad_data_manifest.csv` and the snapshot files against their SHA-256 |
 | `scripts/01_markers_tcga.py` | Genome-wide marker evaluation in TCGA-LUAD (Xena `HiSeqV2.gz`, bundled clinical table; age, sex, stage), the locked model and the gene funnel |
 | `scripts/02_permutation_maximum.py` | The permutation maximum with and without near-constant genes (300 permutations of each marker's residuals on the clinical covariates) |
-| `scripts/03_external_geo.py` | The locked model in seven GEO cohorts, as measured and rescaled within each cohort; random-effects pooling of the model's C, the clinical-only C, the gain and the calibration slope, each with its own interval |
+| `scripts/03_external_geo.py` | The locked model in seven GEO cohorts, as measured and rescaled within each cohort, with bootstrap intervals from 2,000 resamples. Per cohort (`external_validation.csv`): the model's C, the clinical-only C and the gain, the calibration slopes of the model and of the clinical-only model, the SD of the linear predictor and of its clinical and gene parts, and the gene component's hazard ratio per SD beyond the clinical part. Pooled (`external_pooled.json`): each of these by random effects, the DerSimonian-Laird estimate with its CI, the Hartung-Knapp-Sidik-Jonkman (HKSJ) interval and the 95% prediction interval. Sensitivity (`external_uno.csv`, `external_uno_pooled.json`): Uno's C truncated at 5 years for the model and the clinical-only model and their paired difference, pooled in the same way |
 | `scripts/04_models_tcga.py` | All prediction models through SurvStudio's API with the interface's Compare All settings, and the paired intervals |
 | `scripts/05_agreement.py` | Largest difference from R survival per analysis, from SurvStudio's agreement report (`docs/validation/numerical_agreement.json` of this repository), with the report's date, SHA-256 and commit |
-| `scripts/06_simulation.py` | Plasmode simulation on the TCGA-LUAD RNA-seq (1,000 replicates): error control, power, and each reported C-index against the C in new patients. Resumable: each replicate is stamped with the SurvStudio commit, a hash of the design and a hash of the simulation's code (`06_simulation.py` and `common.py`), and a rerun keeps only matching, error-free replicates (none when SurvStudio has uncommitted changes); a worker that dies stops the run with an error |
-| `scripts/06_simulation_summary.py` | Per-scenario family-wise error with Monte Carlo SE, power, false markers, bias and RMSE of each C-index estimate, and the bias of SurvStudio's paired left-out gain; stops unless the replicates are one complete run of the design and code in `simulation_settings.json` with every value it uses |
+| `scripts/06_simulation.py` | Plasmode simulation on the TCGA-LUAD RNA-seq (2,300 replicates): error control, power, and each reported C-index against the C in new patients; the null with 100 subsamples (1,000 replicates) and a diffuse signal (150 true genes, log hazard ratios of 0.05 to 0.10 per SD, 300 replicates) were added after the first six scenarios, whose seeds and results they leave as they were; every replicate with subsamples records SurvStudio's paired left-out gain with its interval where SurvStudio reports one. Resumable: each replicate is stamped with the SurvStudio commit, a hash of the design and a hash of the simulation's code (`06_simulation.py` and `common.py`), and a rerun keeps only matching, error-free replicates (none when SurvStudio has uncommitted changes); a worker that dies stops the run with an error |
+| `scripts/06_simulation_summary.py` | Per-scenario family-wise error with Monte Carlo SE, power, false markers, bias and RMSE of each C-index estimate, the bias of SurvStudio's paired left-out gain against the true gain (0 under the null, the gain in new patients otherwise), the coverage of the gain's interval, and how often the verdict read from it says "adds little" (upper limit below 0.02), "adds" (lower limit above 0) or "uncertain", next to the old rule (gain below 0.02); stops unless the replicates are one complete run of the design and code in `simulation_settings.json` with every value it uses |
 | `scripts/07_breast_markers.py` | Case study IV: genome-wide marker evaluation in METABRIC (overall survival from cBioPortal to 10 years; age, tumour size, nodes, grade, ER and expression from MetaGxBreast) and the locked model |
-| `scripts/08_breast_external.py` | The locked METABRIC model in the MetaGxBreast cohorts with overall survival, every covariate, at least 30 deaths and at least half of the marker weight measured (see Breast cohorts); random-effects pooling as in script 03 |
+| `scripts/08_breast_external.py` | The locked METABRIC model in the MetaGxBreast cohorts with overall survival, every covariate, at least 30 deaths and at least half of the marker weight measured (see Breast cohorts); per-cohort quantities and random-effects pooling as in script 03 |
 | `scripts/09_breast_er_markers.py` | Case study V, a positive control: METABRIC ER-positive tumours, relapse-free survival from cBioPortal (10 years), added value over age, size, nodes and grade |
-| `scripts/10_breast_er_external.py` | The locked ER-positive recurrence model in the MetaGxBreast cohorts with relapse-free (else distant metastasis-free) survival, EMC2 left out (patients selected for relapse), rules fixed before the run (see Breast cohorts); random-effects pooling as in script 03 |
+| `scripts/10_breast_er_external.py` | The locked ER-positive recurrence model in the MetaGxBreast cohorts with relapse-free (else distant metastasis-free) survival, EMC2 left out (patients selected for relapse), rules fixed before the run (see Breast cohorts); per-cohort quantities and random-effects pooling as in script 03 |
 | `scripts/11_duplicate_audit.py` | Breast duplicates within and across cohorts (curator annotations, shared Uppsala/Karolinska sample codes, expression mutual best matches, clinical identity); writes `breast_duplicate_pairs.csv` |
 | `scripts/12_luad_duplicate_audit.py` | LUAD duplicates between TCGA-LUAD and the GEO cohorts and among the GEO cohorts, with the QC's known technical duplicates as a positive control; a flagged pair counts as one patient only when the clinical records (age within 1 year, sex, stage) do not contradict it |
 | `scripts/13_duplicate_screen_check.py` | SurvStudio's own repeated-patient screen on each case-study cohort, every tumour included, against the duplicates the audits confirmed (every flagged pair counted) |
-| `scripts/14_breast_er_sensitivity.py` | Positive control, sensitivity: each METABRIC site with at least 30 relapses held out in turn (whole evaluation on the other sites, locked model on the held-out one; internal gain = SurvStudio's paired left-out gain), and the external cohorts pooled by endpoint |
+| `scripts/14_breast_er_sensitivity.py` | Positive control, sensitivity: each METABRIC site with at least 30 relapses held out in turn (whole evaluation on the other sites, locked model on the held-out one, bootstrap intervals from 2,000 resamples; internal gain = SurvStudio's paired left-out gain), and the external cohorts pooled by endpoint; pooled gains with their DerSimonian-Laird, HKSJ and prediction intervals |
 | `scripts/15_tier_replication.py` | Evidence tiers against replication: for every gene of case studies I, IV and V, the clinically adjusted association in the validation cohorts, pooled by random effects, and the share replicated per SurvStudio tier (rules fixed before the run) |
+| `scripts/15b_tier_replication_checks.py` | Checks of script 15's tiers, after it (`tier_replication_checks.json`, `.csv`): the replication rate of the robust genes, and of the robust and suggestive ones, against that of the same number of genes with the smallest development p-values; a logistic regression of replication on development \|z\|, the number of cohorts measuring the gene, its mean development expression and the tiers, with a likelihood-ratio test of the tiers; and, per tier, the share of genes whose pooled estimate excludes zero in the direction opposite to development |
+| `scripts/16_seed_variability.py` | Monte Carlo variability of the development runs of case studies I, IV and V, rerun as scripts 01, 07 and 09 with 20 seeds (`seed_variability.csv`, `.json`): per seed the apparent, corrected and left-out C, the clinical-only left-out C, the paired gain (with its interval where SurvStudio reports one), the family-wise significant, robust and suggestive counts and the locked genes; their mean, SD and range, how often each gene was locked, and whether the default seed reproduces the development run. Arguments: workers, `--seeds N`, `--cases` |
+| `scripts/17_cohort_table.py` | The cohort table (`cohort_table.csv`): the development cohorts and every cohort screened for case studies II, IV and V, with platform, source, endpoint, role, patients and events screened and used, median follow-up (reverse Kaplan-Meier), and why a cohort was left out; the counts are checked against the analyses' results. The breast platforms are the ones the MetaGxBreast datasets' probe identifiers and source series identify |
 | `breast_duplicate_pairs.csv` | The confirmed breast duplicate pairs (output of script 11, committed); with the curators' annotations they define the patients (see Breast cohorts) |
 | `breast_data_manifest.csv`, `luad_data_manifest.csv`, `scripts/breast_manifest.py`, `scripts/luad_manifest.py` | Every breast and LUAD data file the analyses read, with its size and SHA-256 (see Data), and the scripts that write the manifests |
-| `scripts/figures.py` | Figures 1 to 6 and Supplementary Figures S1 to S3 (PNG and PDF) from `results/`, each only from results of one run (see Results and stamps); `figures.py breast simulation` draws a subset |
-| `scripts/simulation_smoke.py` | One null and one alternative replicate of the simulation, with timings |
+| `scripts/figures.py` | Figures 1 to 4 and Supplementary Figures S1 to S6 (PNG and PDF, see Figures) from `results/`, each only from results of one run (see Results and stamps); `figures.py estimates simulation` draws a subset |
+| `scripts/simulation_smoke.py` | A few replicates of the simulation with timings, and the summary over them: `simulation_smoke.py 2 null_filter_subsamples diffuse_filter` runs two of each named scenario (by default one null and one alternative replicate) |
 
 ## Data
 
@@ -136,9 +144,12 @@ not part of this folder.
 
 ## Results and stamps
 
-`results/` is regenerated and not committed; `figures/` holds the figures as submitted, drawn from a run at SurvStudio
-commit 9930bf3, and `run_all.sh` redraws them in place (the PDFs record the time they were drawn, so they always differ
-from the committed ones in their bytes).
+`results/` is regenerated and not committed; `figures/` holds the figures drawn from a run at SurvStudio commit 9930bf3,
+and `run_all.sh` redraws them in place (the PDFs record the time they were drawn, so they always differ from the
+committed ones in their bytes). Figures 1, 2 and 4 and Supplementary Figures S1 and S3 there are redrawn at print size
+from that run's results; Figure 3 and Supplementary Figures S4 to S6, which replace that run's Figures 3, 5 and 6, and
+the redrawn Supplementary Figure S2 need the results of the extended scripts 03, 08, 10 and 14 (their HKSJ intervals),
+so the next full run draws them (`figS2_positive_control_sensitivity` is still that run's drawing until then).
 
 Every file a script writes to `results/` gets a stamp in `results/stamps/` (`common.stamp_result`): the file's
 SHA-256, the SurvStudio version and commit, a hash of the analysis code (`common.py`, the numbered scripts,
@@ -146,8 +157,26 @@ SHA-256, the SurvStudio version and commit, a hash of the analysis code (`common
 SHA-256. The commit is `git describe --always` of `SURVSTUDIO_SRC` with a `-dirty` suffix when a tracked file other than
 `paper/figures/` has uncommitted changes; both run scripts warn about it, and the simulation reuses no replicate of such
 a run. `figures.py` draws a figure only when every file it reads is stamped, unchanged since, computed from the results
-files that are there now, and from one SurvStudio commit and one version of the analysis code. After a partial rerun
-(after changing a script, say), it names the files that fail; rerun the steps that write them, or everything.
+files that are there now, and from one SurvStudio commit and one version of the analysis code, and holds every value
+the figure draws (results of an earlier version of the scripts may lack one). After a partial rerun (after changing a
+script, say), it names the files that fail; rerun the steps that write them, or everything.
+
+## Figures
+
+`figures.py` draws each figure at its print size, at most 170 mm wide (BMC's largest figure) with no text below 7 pt,
+and refuses to save one that is not. A pooled estimate is drawn with its Hartung-Knapp-Sidik-Jonkman 95% interval and,
+from three cohorts on, its 95% prediction interval.
+
+| File (`.png`, `.pdf`) | Figure | Drawn from |
+| --- | --- | --- |
+| `fig1_workflow` | Figure 1: what SurvStudio checks by default | nothing |
+| `fig2_markers` | Figure 2: genome-wide markers in TCGA-LUAD | 01, 02 |
+| `fig3_estimates` | Figure 3: internal and external estimates in three settings (lung adenocarcinoma, breast cancer survival, the ER-positive positive control): a, the C-index from apparent to optimism-corrected, left-out and external, for the model and the clinical-only model; b, the gain over the clinical covariates in left-out patients, held-out METABRIC sites (positive control) and the external cohorts | 01, 03, 07 to 10, 14 |
+| `fig4_models` | Figure 4: prediction models on the same test patients | 04 |
+| `figS1_simulation` | Supplementary Figure S1: error control, power and the accuracy of the C-index estimates in the simulation | 06 |
+| `figS2_positive_control_sensitivity` | Supplementary Figure S2: the positive control's gain in held-out METABRIC sites and by endpoint | 10, 14 |
+| `figS3_tier_replication` | Supplementary Figure S3: evidence tiers against external replication | 15 |
+| `figS4_luad_external`, `figS5_breast_external`, `figS6_breast_er_external` | Supplementary Figures S4 to S6: each external cohort's gain and each locked gene's replication in case studies II, IV and V | 01 and 03, 07 and 08, 09 and 10 |
 
 ## Breast cohorts (case studies IV and V)
 
