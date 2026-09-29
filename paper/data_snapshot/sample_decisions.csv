@@ -1,0 +1,224 @@
+sample_id,cohort,qc_exclusion,qc_sensitivity
+GSM333695,GSE13213,,array outlier
+GSM333747,GSE13213,,array outlier
+GSM333753,GSE13213,,array outlier
+GSM333756,GSE13213,annotated sex contradicts expression,
+GSM333762,GSE13213,annotated sex contradicts expression,
+GSM748078,GSE30219,annotated sex contradicts expression,
+GSM748240,GSE30219,annotated sex contradicts expression,
+GSM748267,GSE30219,,array outlier
+GSM748270,GSE30219,,array outlier
+GSM748347,GSE30219,annotated sex contradicts expression,
+GSM748354,GSE30219,annotated sex contradicts expression,
+GSM1465996,GSE30219,annotated sex contradicts expression,
+GSM773573,GSE31210,,array outlier
+GSM773598,GSE31210,,array outlier
+GSM773601,GSE31210,,array outlier
+GSM773616,GSE31210,,array outlier
+GSM773630,GSE31210,,array outlier
+GSM1012846,GSE41271,annotated sex contradicts expression,array outlier
+GSM1012851,GSE41271,annotated sex contradicts expression,
+GSM1012852,GSE41271,annotated sex contradicts expression,
+GSM1012888,GSE41271,annotated sex contradicts expression,
+GSM1012910,GSE41271,,array outlier
+GSM1012911,GSE41271,annotated sex contradicts expression,array outlier
+GSM1012933,GSE41271,annotated sex contradicts expression,
+GSM1012935,GSE41271,annotated sex contradicts expression,
+GSM1012972,GSE41271,,array outlier
+GSM1013067,GSE41271,annotated sex contradicts expression,
+GSM1013073,GSE41271,annotated sex contradicts expression,
+GSM1213702,GSE50081,annotated sex contradicts expression,
+GSM1213714,GSE50081,annotated sex contradicts expression,
+GSM1213718,GSE50081,annotated sex contradicts expression,
+GSM1213812,GSE50081,annotated sex contradicts expression,
+GSM1213815,GSE50081,annotated sex contradicts expression,
+GSM1213817,GSE50081,annotated sex contradicts expression,
+GSM1213821,GSE50081,annotated sex contradicts expression,
+GSM1213824,GSE50081,annotated sex contradicts expression,
+GSM1213829,GSE50081,annotated sex contradicts expression,
+GSM1213830,GSE50081,annotated sex contradicts expression,
+GSM1213831,GSE50081,annotated sex contradicts expression,
+GSM1213837,GSE50081,technical duplicate of another sample; annotated sex contradicts expression,
+GSM1213838,GSE50081,annotated sex contradicts expression,
+GSM1213840,GSE50081,annotated sex contradicts expression,
+GSM1213842,GSE50081,technical duplicate of another sample; annotated sex contradicts expression,
+GSM1213843,GSE50081,technical duplicate of another sample,
+GSM1213845,GSE50081,,array outlier
+GSM1213846,GSE50081,annotated sex contradicts expression,
+GSM1213847,GSE50081,annotated sex contradicts expression,
+GSM1213849,GSE50081,technical duplicate of another sample,
+GSM1672473,GSE68465,annotated sex contradicts expression,
+GSM1672474,GSE68465,annotated sex contradicts expression,
+GSM1672500,GSE68465,annotated sex contradicts expression,
+GSM1672524,GSE68465,annotated sex contradicts expression,
+GSM1672536,GSE68465,annotated sex contradicts expression,
+GSM1672541,GSE68465,,array outlier
+GSM1672550,GSE68465,,array outlier
+GSM1672552,GSE68465,annotated sex contradicts expression,
+GSM1672568,GSE68465,,array outlier
+GSM1672584,GSE68465,,array outlier
+GSM1672596,GSE68465,annotated sex contradicts expression,
+GSM1672598,GSE68465,annotated sex contradicts expression,
+GSM1672669,GSE68465,annotated sex contradicts expression,
+GSM1672675,GSE68465,annotated sex contradicts expression,
+GSM1854830,GSE72094,annotated sex contradicts expression,
+GSM1854883,GSE72094,,array outlier
+GSM1855017,GSE72094,,array outlier
+GSM1855104,GSE72094,,array outlier
+GSM1855148,GSE72094,annotated sex contradicts expression,
+GSM1855207,GSE72094,,array outlier
+GSM1855209,GSE72094,annotated sex contradicts expression,array outlier
+TCGA-05-4250-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-05-4382-01,TCGA-LUAD,,other malignancy
+TCGA-05-4384-01,TCGA-LUAD,,other malignancy
+TCGA-05-4396-01,TCGA-LUAD,,other malignancy
+TCGA-05-4397-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-05-4402-01,TCGA-LUAD,,other malignancy
+TCGA-05-4405-01,TCGA-LUAD,,other malignancy
+TCGA-05-4410-01,TCGA-LUAD,,other malignancy
+TCGA-05-4418-01,TCGA-LUAD,,other malignancy
+TCGA-05-4427-01,TCGA-LUAD,TCGA AWG pathology exclusion,other malignancy
+TCGA-05-4434-01,TCGA-LUAD,TCGA AWG pathology exclusion,other malignancy
+TCGA-05-5420-01,TCGA-LUAD,PanCanAtlas Do_not_use; unacceptable prior treatment for another malignancy,other malignancy
+TCGA-35-4122-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-35-4123-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-35-5375-01,TCGA-LUAD,TCGA AWG pathology exclusion,non-LUAD-like RNA cluster
+TCGA-38-4625-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-38-4629-01,TCGA-LUAD,PanCanAtlas Do_not_use; TCGA AWG pathology exclusion; unacceptable prior treatment for another malignancy,other malignancy
+TCGA-38-4630-01,TCGA-LUAD,PanCanAtlas Do_not_use; TCGA AWG pathology exclusion; unacceptable prior treatment for another malignancy,other malignancy; non-LUAD-like RNA cluster
+TCGA-38-4631-01,TCGA-LUAD,,other malignancy
+TCGA-38-6178-01,TCGA-LUAD,,other malignancy
+TCGA-38-7271-01,TCGA-LUAD,,other malignancy
+TCGA-44-2655-01,TCGA-LUAD,,other malignancy
+TCGA-44-2661-01,TCGA-LUAD,PanCanAtlas Do_not_use; unacceptable prior treatment for another malignancy,other malignancy
+TCGA-44-2662-01,TCGA-LUAD,,other malignancy
+TCGA-44-2668-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-44-3398-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-44-3918-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-44-5643-01,TCGA-LUAD,TCGA AWG pathology exclusion,non-LUAD-like RNA cluster
+TCGA-44-5644-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-44-6146-01,TCGA-LUAD,,other malignancy
+TCGA-44-6147-01,TCGA-LUAD,PanCanAtlas Do_not_use; unacceptable prior treatment for another malignancy,other malignancy
+TCGA-44-6776-01,TCGA-LUAD,,other malignancy
+TCGA-44-6778-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-44-7660-01,TCGA-LUAD,TCGA AWG pathology exclusion,non-LUAD-like RNA cluster
+TCGA-44-7661-01,TCGA-LUAD,TCGA AWG pathology exclusion,other malignancy
+TCGA-44-7667-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-44-7669-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-44-7670-01,TCGA-LUAD,,other malignancy
+TCGA-44-7671-01,TCGA-LUAD,,other malignancy
+TCGA-44-7672-01,TCGA-LUAD,,ABSOLUTE purity < 0.2
+TCGA-44-8119-01,TCGA-LUAD,,other malignancy
+TCGA-49-4501-01,TCGA-LUAD,,other malignancy
+TCGA-49-4505-01,TCGA-LUAD,annotated sex contradicts expression,
+TCGA-49-6742-01,TCGA-LUAD,,other malignancy
+TCGA-49-6743-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-49-6745-01,TCGA-LUAD,,other malignancy
+TCGA-49-6761-01,TCGA-LUAD,,other malignancy
+TCGA-49-AAR0-01,TCGA-LUAD,,other malignancy
+TCGA-49-AARN-01,TCGA-LUAD,,other malignancy
+TCGA-50-5066-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-50-5931-01,TCGA-LUAD,,non-LUAD-like RNA cluster
+TCGA-50-5932-01,TCGA-LUAD,,other malignancy
+TCGA-50-5935-01,TCGA-LUAD,,other malignancy
+TCGA-50-6590-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-50-6591-01,TCGA-LUAD,TCGA AWG pathology exclusion,non-LUAD-like RNA cluster
+TCGA-50-6592-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-50-6594-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-50-6595-01,TCGA-LUAD,,non-LUAD-like RNA cluster
+TCGA-53-7624-01,TCGA-LUAD,TCGA AWG pathology exclusion,non-LUAD-like RNA cluster
+TCGA-55-1592-01,TCGA-LUAD,,other malignancy
+TCGA-55-1595-01,TCGA-LUAD,,other malignancy
+TCGA-55-5899-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-55-6968-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-55-6969-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-55-6978-01,TCGA-LUAD,,other malignancy
+TCGA-55-6979-01,TCGA-LUAD,,other malignancy; ABSOLUTE purity < 0.2
+TCGA-55-6987-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-55-7284-01,TCGA-LUAD,,other malignancy
+TCGA-55-7570-01,TCGA-LUAD,TCGA AWG pathology exclusion,non-LUAD-like RNA cluster
+TCGA-55-7573-01,TCGA-LUAD,,other malignancy
+TCGA-55-7574-01,TCGA-LUAD,,ABSOLUTE purity < 0.2
+TCGA-55-7724-01,TCGA-LUAD,,other malignancy; non-LUAD-like RNA cluster
+TCGA-55-7725-01,TCGA-LUAD,,other malignancy
+TCGA-55-7726-01,TCGA-LUAD,,other malignancy; non-LUAD-like RNA cluster
+TCGA-55-7910-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-55-7914-01,TCGA-LUAD,,other malignancy
+TCGA-55-7994-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-55-7995-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-55-8090-01,TCGA-LUAD,,other malignancy
+TCGA-55-8091-01,TCGA-LUAD,,other malignancy
+TCGA-55-8203-01,TCGA-LUAD,,other malignancy
+TCGA-55-8204-01,TCGA-LUAD,,other malignancy; non-LUAD-like RNA cluster
+TCGA-55-8205-01,TCGA-LUAD,,other malignancy
+TCGA-55-8207-01,TCGA-LUAD,,other malignancy
+TCGA-55-8511-01,TCGA-LUAD,,other malignancy
+TCGA-55-8619-01,TCGA-LUAD,,other malignancy
+TCGA-55-8621-01,TCGA-LUAD,,other malignancy
+TCGA-55-A48X-01,TCGA-LUAD,,other malignancy
+TCGA-55-A491-01,TCGA-LUAD,,other malignancy
+TCGA-55-A492-01,TCGA-LUAD,,other malignancy
+TCGA-55-A4DF-01,TCGA-LUAD,,other malignancy
+TCGA-64-1677-01,TCGA-LUAD,,other malignancy
+TCGA-64-5775-01,TCGA-LUAD,,non-LUAD-like RNA cluster
+TCGA-64-5779-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-64-5815-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-67-6217-01,TCGA-LUAD,,other malignancy
+TCGA-69-7973-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-69-7974-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-69-7978-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-69-7979-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-69-8255-01,TCGA-LUAD,,non-LUAD-like RNA cluster
+TCGA-73-4658-01,TCGA-LUAD,,other malignancy
+TCGA-73-7498-01,TCGA-LUAD,,other malignancy
+TCGA-75-5122-01,TCGA-LUAD,,ABSOLUTE purity < 0.2
+TCGA-75-5125-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-75-6214-01,TCGA-LUAD,,non-LUAD-like RNA cluster
+TCGA-75-7030-01,TCGA-LUAD,,ABSOLUTE purity < 0.2
+TCGA-78-7146-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-78-7155-01,TCGA-LUAD,,array outlier; non-LUAD-like RNA cluster
+TCGA-78-7160-01,TCGA-LUAD,,ABSOLUTE purity < 0.2
+TCGA-78-7166-01,TCGA-LUAD,,other malignancy
+TCGA-78-7220-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-78-7542-01,TCGA-LUAD,,non-LUAD-like RNA cluster
+TCGA-78-7633-01,TCGA-LUAD,,other malignancy
+TCGA-78-8660-01,TCGA-LUAD,,other malignancy
+TCGA-80-5607-01,TCGA-LUAD,,other malignancy
+TCGA-80-5611-01,TCGA-LUAD,TCGA AWG pathology exclusion,other malignancy
+TCGA-86-7701-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-86-7711-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-86-7953-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-86-7954-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-86-7955-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-91-6830-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-91-6831-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-91-6836-01,TCGA-LUAD,TCGA AWG pathology exclusion,other malignancy
+TCGA-91-6847-01,TCGA-LUAD,,non-LUAD-like RNA cluster
+TCGA-91-6848-01,TCGA-LUAD,TCGA AWG pathology exclusion,non-LUAD-like RNA cluster
+TCGA-91-7771-01,TCGA-LUAD,,other malignancy
+TCGA-91-A4BC-01,TCGA-LUAD,,other malignancy
+TCGA-93-8067-01,TCGA-LUAD,,other malignancy
+TCGA-93-A4JQ-01,TCGA-LUAD,,other malignancy
+TCGA-95-7043-01,TCGA-LUAD,,other malignancy
+TCGA-95-7562-01,TCGA-LUAD,,other malignancy
+TCGA-95-7944-01,TCGA-LUAD,TCGA AWG pathology exclusion,
+TCGA-95-7947-01,TCGA-LUAD,,other malignancy
+TCGA-95-7948-01,TCGA-LUAD,,other malignancy
+TCGA-95-A4VK-01,TCGA-LUAD,,other malignancy
+TCGA-95-A4VN-01,TCGA-LUAD,,other malignancy
+TCGA-97-7552-01,TCGA-LUAD,,ABSOLUTE purity < 0.2
+TCGA-97-8172-01,TCGA-LUAD,,other malignancy
+TCGA-97-A4LX-01,TCGA-LUAD,,other malignancy
+TCGA-97-A4M2-01,TCGA-LUAD,,other malignancy
+TCGA-97-A4M3-01,TCGA-LUAD,,other malignancy
+TCGA-97-A4M7-01,TCGA-LUAD,,other malignancy
+TCGA-J2-8192-01,TCGA-LUAD,,other malignancy
+TCGA-J2-8194-01,TCGA-LUAD,,other malignancy
+TCGA-L9-A443-01,TCGA-LUAD,,other malignancy
+TCGA-L9-A444-01,TCGA-LUAD,,other malignancy
+TCGA-L9-A743-01,TCGA-LUAD,,other malignancy
+TCGA-MN-A4N1-01,TCGA-LUAD,,other malignancy
+TCGA-MP-A4T8-01,TCGA-LUAD,,other malignancy
+TCGA-MP-A4TA-01,TCGA-LUAD,,other malignancy
+TCGA-MP-A4TC-01,TCGA-LUAD,,other malignancy
+TCGA-MP-A4TD-01,TCGA-LUAD,,other malignancy
