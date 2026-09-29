@@ -1632,7 +1632,8 @@ def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
 
 def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
     """The evaluation at a glance: how many markers clear each bar, and how the selected-marker
-    model's C-index falls from its apparent value to the value in patients it did not see."""
+    model's C-index falls from its apparent value to the value in patients it did not see, with
+    its left-out gain over the clinical covariates and the gain's 95% interval underneath."""
     added_value = result.get("primary_lens") == "added_value"
     signature = result.get("signature") or {}
     # The model the right panel is about: with no marker selected it holds the clinical covariates only; it can also
@@ -1727,6 +1728,7 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
     if added_value:
         ladder.append(("Clinical only<br>(left-out)", signature.get("clinical_c_left_out"), "rgba(100,116,139,0.9)"))
     ladder = [(label, float(value), color) for label, value, color in ladder if isinstance(value, (int, float)) and np.isfinite(float(value))]
+    gain_note = _left_out_gain_note(signature) if added_value else None
     if ladder:
         for label, value, color in ladder:
             fig.add_trace(
@@ -1754,6 +1756,21 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
         fig.add_vline(x=0.5, line_dash="dot", line_color=INK, line_width=1, opacity=0.45, row=1, col=2)
         fig.update_xaxes(title="Harrell's C (0.5 = chance)", range=[low - 0.02, high + 0.045 + 0.1 * (high - low)], row=1, col=2, **_COMMON_AXES)
         fig.update_yaxes(autorange="reversed", row=1, col=2, **_COMMON_AXES)
+        if gain_note:
+            # Under the ladder's axis title, where the bottom margin grows to hold it.
+            fig.add_annotation(
+                text=gain_note,
+                xref="x2 domain",
+                yref="y2 domain",
+                x=1.0,
+                y=0.0,
+                xanchor="right",
+                yanchor="top",
+                yshift=-56,
+                showarrow=False,
+                align="right",
+                font={"size": 12, "color": INK},
+            )
     else:
         fig.add_annotation(
             text=empty_note,
@@ -1766,13 +1783,31 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
         )
         fig.update_xaxes(visible=False, row=1, col=2)
         fig.update_yaxes(visible=False, row=1, col=2)
-    _marker_layout(fig, "Marker Evaluation at a Glance", height=400, left=150)
+    noted = bool(ladder and gain_note)
+    _marker_layout(fig, "Marker Evaluation at a Glance", height=440 if noted else 400, left=150)
     fig.update_layout(bargap=0.3)
+    if noted:
+        fig.update_layout(margin={"b": 110})
     return figure_to_json(fig)
 
 
 def _finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and bool(np.isfinite(float(value)))
+
+
+def _left_out_gain_note(signature: dict[str, Any]) -> str | None:
+    """The mean paired gain over the clinical covariates in the patients left out, with its 95% interval when the
+    result has one; None without both left-out C-indices."""
+    model, clinical = signature.get("signature_c_left_out"), signature.get("clinical_c_left_out")
+    if not (_finite_number(model) and _finite_number(clinical)):
+        return None
+    paired = signature.get("signature_gain_left_out")
+    gain = float(paired) if _finite_number(paired) else float(model) - float(clinical)
+    interval = signature.get("signature_gain_left_out_ci")
+    span = ""
+    if _finite_number(paired) and isinstance(interval, (list, tuple)) and len(interval) == 2 and all(_finite_number(value) for value in interval):
+        span = f" (95% CI {float(interval[0]):.3f} to {float(interval[1]):.3f})"
+    return f"Left-out gain over the clinical covariates:<br><b>{gain:+.3f}</b>{span}"
 
 
 def _drawable_interval(estimate: Any, keys: tuple[str, ...]) -> bool:

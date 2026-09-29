@@ -87,13 +87,15 @@ def test_remark_checklist_fills_in_what_the_run_knows() -> None:
     robust = result["tier_counts"]["robust"]
     assert report["results"].startswith(f"Of {len(_MARKERS)} markers, {robust} {'was' if robust == 1 else 'were'} robust")
     # The selected-marker model is set against the clinical covariates alone in the patients left out, by the mean
-    # paired difference evaluate_markers reports.
+    # paired difference evaluate_markers reports and its 95% interval.
     signature = result["signature"]
     assert signature["signature_gain_left_out"] is not None
+    low, high = signature["signature_gain_left_out_ci"]
     assert (
         f"against {signature['clinical_c_left_out']:.3f} for the clinical covariates alone "
-        f"(mean difference {signature['signature_gain_left_out']:+.3f})"
+        f"(mean difference {signature['signature_gain_left_out']:+.3f}, 95% CI {low:.3f} to {high:.3f})"
     ) in report["results"]
+    assert "(Nadeau and Bengio 2003)" in report["methods"]
     assert re.search(r"In the patients left out of each of \d+ subsamples, it reached a mean C-index", report["results"])
     assert "the selected-marker model reached a mean C-index" in items["18"]["text"]
     assert "more than 90% of patients at one value were excluded" in report["methods"]
