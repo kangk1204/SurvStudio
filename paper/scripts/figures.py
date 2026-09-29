@@ -1,10 +1,13 @@
-"""Figures 1 to 4 and Supplementary Figures S1 to S6 of the software paper, drawn from the files the analysis scripts
+"""Figures 1 to 5 and Supplementary Figures S1 to S6 of the software paper, drawn from the files the analysis scripts
 write to results/, at print size: BMC prints a figure at most 170 mm wide, so every figure is drawn at its final size,
-at most 170 mm wide with no text below 7 pt, and save() refuses one that is not.
+at most 170 mm wide with no text below 7 pt, and save() refuses one that is not. Figure 1b is a screenshot of the
+Markers tab after case study I (INTERFACE), which Figure 1 places under the workflow diagram (fig1_workflow).
 
-Needs matplotlib, numpy and pandas (no SurvStudio). Writes PNG (300 dpi) and PDF to paper/figures/.
-Usage: python figures.py [name ...] draws the named figures only (workflow, markers, estimates, models, simulation,
-breast_er_sensitivity, tiers, luad_external, breast_external, breast_er_external); without names, all of them.
+Needs matplotlib, numpy and pandas (no SurvStudio). Writes PNG (300 dpi; Figure 1, with its screenshot, 600 dpi) and
+PDF to paper/figures/.
+Usage: python figures.py [name ...] draws the named figures only (workflow, interface, markers, estimates, models,
+comparison, simulation, luad_external, breast_external, breast_er_external, breast_er_sensitivity, tiers); without
+names, all of them, the comparison once run_competitors.sh has written its results.
 
 A figure is drawn only from results of one run of the analysis: every file it reads must carry the stamp its
 script wrote (results/stamps/), unchanged since, from the same SurvStudio commit and the same analysis code, and
@@ -38,6 +41,9 @@ PAPER = Path(__file__).resolve().parents[1]
 RESULTS = PAPER / "results"
 FIGURES = PAPER / "figures"
 FIGURES.mkdir(exist_ok=True)
+# Figure 1b: the Markers tab after case study I (TCGA-LUAD and the Xena HiSeqV2.gz file, age, sex and stage, the
+# defaults), captured from the web interface in a 1,080-pixel-wide window at three device pixels per pixel.
+INTERFACE = PAPER / "interface" / "markers_tab_case_study_i.png"
 # BMC's largest print width, 170 mm, and its smallest legible type, 7 pt: save() checks both at the final size.
 PRINT_WIDTH = 170 / 25.4
 MIN_POINTS = 7.0
@@ -98,7 +104,7 @@ def print_size(fig) -> tuple[float, float, list[str]]:
     return width, height, problems
 
 
-def save(fig, name: str) -> None:
+def save(fig, name: str, dpi: int = 300) -> None:
     problems = result_problems(LOADED)
     if problems:
         plt.close(fig)
@@ -108,7 +114,7 @@ def save(fig, name: str) -> None:
         plt.close(fig)
         raise NotPrintable(problems)
     for suffix in ("png", "pdf"):
-        fig.savefig(FIGURES / f"{name}.{suffix}", dpi=300, bbox_inches="tight", pad_inches=PAD)
+        fig.savefig(FIGURES / f"{name}.{suffix}", dpi=dpi, bbox_inches="tight", pad_inches=PAD)
     plt.close(fig)
     print(f"wrote {name} ({width * 25.4:.0f} x {height * 25.4:.0f} mm)")
 
@@ -169,24 +175,26 @@ def gain_limits(values: list[float], step: float = 0.05) -> tuple[float, float]:
     return float(np.floor(min(0.0, *finite) / step) * step), float(np.ceil(max(0.0, *finite) / step) * step)
 
 
-# ── Figure 1: what SurvStudio checks by default ────────────────────────────────
-def figure_workflow() -> None:
-    fig = plt.figure(figsize=(WIDE, 3.3))
-    ax = fig.add_axes([0, 0, 1, 1])
+# ── Figure 1: what SurvStudio checks by default, and the Markers tab ───────────
+WORKFLOW_HEIGHT = 3.3  # inches, at the full width: the diagram's 60 units of height with its 7-pt text
+
+
+def draw_workflow(ax) -> None:
+    """The workflow diagram on ``ax``, which should be WIDE by WORKFLOW_HEIGHT inches (the text is sized for that)."""
     ax.set_xlim(-1.0, 102.0)
     ax.set_ylim(0, 60)
     ax.axis("off")
     # Column: (left edge, width, fill, edge colour, title, boxes); boxes: (title, text, body lines), top to bottom.
     columns = {
         "inputs": (0, 25.5, "#dbe7fb", ML, "Inputs", [
-            ("Clinical table", "CSV, Excel or Parquet", 1),
+            ("Clinical table", "CSV, TSV, Excel or Parquet", 1),
             ("Omics matrix", "CSV, TSV, Parquet, or .gz\nfiles as GEO and Xena\nserve them; TCGA\nbarcodes matched", 4),
             ("External cohort", "same or another platform", 1),
         ]),
         "checks": (29.5, 42.5, "#dcefe4", ROBUST, "Checks run by default", [
-            ("Survival curves and Cox regression", "Kaplan-Meier with numbers at risk, log-rank,\nEfron Cox model, proportional-hazards tests", 2),
-            ("Marker evaluation", "score tests for added value over clinical data\n→ family-wise error by permutation\n    (Westfall-Young; marker residuals permuted)\n"
-                                  "→ whole screen repeated on subsamples: tiers\n→ corrected C against clinical-only C", 5),
+            ("Survival curves and Cox regression", "Kaplan–Meier with numbers at risk, log-rank,\nEfron Cox model, proportional-hazards tests", 2),
+            ("Marker evaluation", "score tests for added value over clinical data\n→ family-wise error by permutation\n    (Westfall–Young; marker residuals permuted)\n"
+                                  "→ whole screen repeated on subsamples: tiers\n→ gain over clinical-only C, with 95% interval", 5),
             ("Prediction models", "machine and deep learning on the same splits\n(holdout, repeated CV, locked test); paired\nintervals for the difference from Cox", 3),
         ]),
         "outputs": (76.0, 25.0, "#fbe7d4", DL, "Outputs", [
@@ -222,7 +230,28 @@ def figure_workflow() -> None:
     ax.annotate("", xy=(x_l + w_l / 2, y_l - 0.3), xytext=(x_l + w_l / 2, 2.2),
                 arrowprops=dict(arrowstyle="-|>", color=DL, lw=1.1, mutation_scale=10, shrinkA=0, shrinkB=0))
     ax.text(50.8, 2.9, "external validation, without refitting", ha="center", va="bottom", fontsize=7, color=DL)
+
+
+def figure_workflow() -> None:
+    fig = plt.figure(figsize=(WIDE, WORKFLOW_HEIGHT))
+    draw_workflow(fig.add_axes([0, 0, 1, 1]))
     save(fig, "fig1_workflow")
+
+
+def figure_interface() -> None:
+    """Figure 1: a, the workflow; b, the Markers tab after case study I (INTERFACE), 146 mm wide under it."""
+    shot = plt.imread(INTERFACE)
+    gap, shot_width = 0.15, 5.76
+    shot_height = shot_width * shot.shape[0] / shot.shape[1]
+    height = WORKFLOW_HEIGHT + gap + shot_height
+    fig = plt.figure(figsize=(WIDE, height))
+    draw_workflow(fig.add_axes([0, 1 - WORKFLOW_HEIGHT / height, 1, WORKFLOW_HEIGHT / height]))
+    ax = fig.add_axes([(WIDE - shot_width) / 2 / WIDE, 0, shot_width / WIDE, shot_height / height])
+    ax.imshow(shot, interpolation="lanczos")
+    ax.axis("off")
+    for letter, top in (("a", 1.0), ("b", shot_height / height)):
+        fig.text(0.0, top, letter, fontsize=9, fontweight="bold", va="top", ha="left")
+    save(fig, "fig1", dpi=600)
 
 
 # ── Figure 2: genome-wide markers in TCGA-LUAD ─────────────────────────────────
@@ -240,7 +269,7 @@ def figure_markers() -> None:
         ("Genes in the\nXena file", funnel["genes_in_file"]),
         ("Tested (varying in\n≥10% of patients)", funnel["tested"]),
         ("p < 0.05 beyond\nage, sex, stage", funnel["adjusted_p_below_0_05"]),
-        ("Benjamini-Hochberg\nq ≤ 0.05", funnel["bh_q_below_0_05"]),
+        ("Benjamini–Hochberg\nq ≤ 0.05", funnel["bh_q_below_0_05"]),
         ("Family-wise p ≤ 0.05\nand stable", funnel["robust"]),
     ]
     positions = np.arange(len(stages))[::-1]
@@ -536,7 +565,7 @@ def figure_simulation() -> None:
     save(fig, "figS1_simulation")
 
 
-# ── Supplementary Figure S2: where the positive control's gain went ───────────
+# ── Supplementary Figure S5: where the positive control's gain went ───────────
 def figure_breast_er_sensitivity() -> None:
     folds = load("breast_er_sensitivity.csv").sort_values("held_out_site")
     summary = load("breast_er_sensitivity.json")
@@ -588,10 +617,10 @@ def figure_breast_er_sensitivity() -> None:
     ax.set_xlabel("Gain in C over the clinical covariates")
     ax.text(0.0, 1.02, "Pooled: diamond 95% HKSJ interval,\nline 95% prediction interval", transform=ax.transAxes, ha="left", va="bottom", color=MUTED)
     panel_label(ax, "b", x=-0.62, y=1.2)
-    save(fig, "figS2_positive_control_sensitivity")
+    save(fig, "figS5_positive_control_sensitivity")
 
 
-# ── Supplementary Figure S3: evidence tiers against external replication ─────
+# ── Supplementary Figure S6: evidence tiers against external replication ─────
 def figure_tier_replication() -> None:
     summary = load("tier_replication.json")
     names = {"robust": "Robust", "suggestive": "Suggestive", "marginal only": "Marginal only",
@@ -623,17 +652,17 @@ def figure_tier_replication() -> None:
                      loc="left", color=INK, linespacing=1.15)
         ax.set_xlabel("Genes replicated (%)")
         panel_label(ax, letter, x=-0.04, y=1.3)
-    save(fig, "figS3_tier_replication")
+    save(fig, "figS6_tier_replication")
 
 
-# ── Supplementary Figures S4 to S6: each cohort's gain and each gene's replication ──
+# ── Supplementary Figures S2 to S4: each cohort's gain and each gene's replication ──
 def figure_luad_external() -> None:
     cohorts = load("external_validation.csv")
     markers = load("external_markers.csv")
     external_figure(
         cohorts[cohorts["scaling"] == "within_cohort"].reset_index(drop=True), load("external_pooled.json")["within_cohort"],
         markers[markers["scaling"] == "within_cohort"], load("tcga_markers_summary.json"), load("tcga_locked_model.json"),
-        gain_label="Gain in C over age, sex and stage", robust_note="* robust in TCGA-LUAD", name="figS4_luad_external",
+        gain_label="Gain in C over age, sex and stage", robust_note="* robust in TCGA-LUAD", name="figS2_luad_external",
     )
 
 
@@ -641,7 +670,7 @@ def figure_breast_external() -> None:
     external_figure(
         load("breast_external_validation.csv"), load("breast_external_pooled.json"), load("breast_external_markers.csv"),
         load("breast_markers_summary.json"), load("breast_locked_model.json"),
-        gain_label="Gain in C over age, size, nodes, grade, ER", robust_note="* robust in METABRIC", name="figS5_breast_external",
+        gain_label="Gain in C over age, size, nodes, grade, ER", robust_note="* robust in METABRIC", name="figS3_breast_external",
     )
 
 
@@ -649,7 +678,7 @@ def figure_breast_er_external() -> None:
     external_figure(
         load("breast_er_external_validation.csv"), load("breast_er_external_pooled.json"), load("breast_er_external_markers.csv"),
         load("breast_er_markers_summary.json"), load("breast_er_locked_model.json"),
-        gain_label="Gain in C over age, size, nodes, grade", robust_note="* robust in METABRIC ER+", name="figS6_breast_er_external",
+        gain_label="Gain in C over age, size, nodes, grade", robust_note="* robust in METABRIC ER+", name="figS4_breast_er_external",
         events="relapses or metastases",
     )
 
@@ -859,10 +888,11 @@ def main(wanted: set[str]) -> None:
     if not wanted and not (RESULTS / "competitors_table.json").exists():
         # The comparison's results come from run_competitors.sh, which runs after run_all.sh; draw it once they exist.
         print("not drawn yet: comparison (run run_competitors.sh first)")
-    for name, draw in (("workflow", figure_workflow), ("markers", figure_markers), ("estimates", figure_estimates), ("models", figure_models),
-                       ("simulation", figure_simulation), ("breast_er_sensitivity", figure_breast_er_sensitivity), ("tiers", figure_tier_replication),
-                       ("luad_external", figure_luad_external), ("breast_external", figure_breast_external),
-                       ("breast_er_external", figure_breast_er_external), ("comparison", figure_comparison)):
+    for name, draw in (("workflow", figure_workflow), ("interface", figure_interface), ("markers", figure_markers),
+                       ("estimates", figure_estimates), ("models", figure_models), ("comparison", figure_comparison),
+                       ("simulation", figure_simulation), ("luad_external", figure_luad_external),
+                       ("breast_external", figure_breast_external), ("breast_er_external", figure_breast_er_external),
+                       ("breast_er_sensitivity", figure_breast_er_sensitivity), ("tiers", figure_tier_replication)):
         if wanted and name not in wanted:
             continue
         if name == "comparison" and not wanted and not (RESULTS / "competitors_table.json").exists():

@@ -91,7 +91,7 @@ The scripts read these environment variables:
 | `breast_duplicate_pairs.csv` | The confirmed breast duplicate pairs (output of script 11, committed); with the curators' annotations they define the patients (see Breast cohorts) |
 | `breast_data_manifest.csv`, `luad_data_manifest.csv`, `scripts/breast_manifest.py`, `scripts/luad_manifest.py` | Every breast and LUAD data file the analyses read, with its size and SHA-256 (see Data), and the scripts that write the manifests |
 | `run_competitors.sh`, `competitors/`, `scripts/competitors.py`, `scripts/18_competitors_*.py` | Comparison with the pipelines commonly used to publish prognostic signatures (Mime, univariate Cox → LASSO → Cox, KM Plotter's best cut-off): TCGA-LUAD → the seven GEO cohorts, and the claims each makes under script 06's null; needs `competitors/setup_r_env.sh` and `run_all.sh`'s results; see `competitors/README.md` |
-| `scripts/figures.py` | Figures 1 to 4 and Supplementary Figures S1 to S6 (PNG and PDF, see Figures) from `results/`, each only from results of one run (see Results and stamps); `figures.py estimates simulation` draws a subset |
+| `scripts/figures.py` | Figures 1 to 5 and Supplementary Figures S1 to S6 (PNG and PDF, see Figures) from `results/`, each only from results of one run (see Results and stamps); `figures.py estimates simulation` draws a subset |
 | `scripts/simulation_smoke.py` | A few replicates of the simulation with timings, and the summary over them: `simulation_smoke.py 2 null_filter_subsamples diffuse_filter` runs two of each named scenario (by default one null and one alternative replicate) |
 
 ## Data
@@ -173,15 +173,16 @@ from three cohorts on, its 95% prediction interval.
 
 | File (`.png`, `.pdf`) | Figure | Drawn from |
 | --- | --- | --- |
-| `fig1_workflow` | Figure 1: what SurvStudio checks by default | nothing |
+| `fig1` | Figure 1: a, what SurvStudio checks by default (`fig1_workflow`); b, the Markers tab after case study I (`interface/markers_tab_case_study_i.png`, a screenshot of the web interface) | nothing |
+| `fig1_workflow` | Figure 1a alone | nothing |
 | `fig2_markers` | Figure 2: genome-wide markers in TCGA-LUAD | 01, 02 |
 | `fig3_estimates` | Figure 3: internal and external estimates in three settings (lung adenocarcinoma, breast cancer survival, the ER-positive positive control): a, the C-index from apparent to optimism-corrected, left-out and external, for the model and the clinical-only model; b, the gain over the clinical covariates in left-out patients, held-out METABRIC sites (positive control) and the external cohorts | 01, 03, 07 to 10, 14 |
 | `fig4_models` | Figure 4: prediction models on the same test patients | 04 |
 | `fig5_comparison` | Figure 5: the pipelines commonly used to publish signatures against SurvStudio, under the null and from TCGA-LUAD to the seven GEO cohorts | `run_competitors.sh` (18) |
 | `figS1_simulation` | Supplementary Figure S1: error control, power and the accuracy of the C-index estimates in the simulation | 06 |
-| `figS2_positive_control_sensitivity` | Supplementary Figure S2: the positive control's gain in held-out METABRIC sites and by endpoint | 10, 14 |
-| `figS3_tier_replication` | Supplementary Figure S3: evidence tiers against external replication | 15 |
-| `figS4_luad_external`, `figS5_breast_external`, `figS6_breast_er_external` | Supplementary Figures S4 to S6: each external cohort's gain and each locked gene's replication in case studies II, IV and V | 01 and 03, 07 and 08, 09 and 10 |
+| `figS2_luad_external`, `figS3_breast_external`, `figS4_breast_er_external` | Supplementary Figures S2 to S4: each external cohort's gain and each locked gene's replication in case studies II, IV and V | 01 and 03, 07 and 08, 09 and 10 |
+| `figS5_positive_control_sensitivity` | Supplementary Figure S5: the positive control's gain in held-out METABRIC sites and by endpoint | 10, 14 |
+| `figS6_tier_replication` | Supplementary Figure S6: evidence tiers against external replication | 15 |
 
 ## Breast cohorts (case studies IV and V)
 
