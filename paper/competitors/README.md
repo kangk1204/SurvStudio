@@ -94,7 +94,7 @@ Rates over the 35 splits of the P1 replicates get their Monte Carlo SE from the 
 ```bash
 bash paper/competitors/setup_r_env.sh          # the R environment (conda, about 30 minutes; see below)
 bash paper/run_all.sh                          # SurvStudio's results, which the comparison reads
-RSCRIPT=paper/competitors/renv/bin/Rscript WORKERS=20 bash paper/run_competitors.sh
+RSCRIPT=paper/competitors/renv/bin/Rscript WORKERS=8 bash paper/run_competitors.sh   # WORKERS by free memory: ~4 GB each
 bash paper/run_competitors.sh real table       # selected steps: checks data real sensitivity null table
 ```
 
