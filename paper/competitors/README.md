@@ -95,7 +95,13 @@ snapshot of 2026-09-28, randomForestSRC 3.3.3 from the CRAN archive, and CoxBoos
 commits (`COMPETITORS_SRC`, default `paper/competitors/src`), then records the versions in `versions.txt` and the
 conda packages in `renv-conda-explicit.txt`. It needs `mamba` (or `MAMBA=.../conda`) and network access.
 
-Runtime on a Ryzen 9 7950X (RUNTIME_PLACEHOLDER).
+Runtime and memory on a Ryzen 9 7950X (16 cores, 32 threads, 123 GB): the data step 30 s; P2 on the real data 2.5
+minutes; Mime on the real data 2 hours with 6 cores (`MIME_CORES`), and the 500-candidate sensitivity run
+SENSITIVITY_RUNTIME; the real-data analysis 1 minute; per null replicate, P2 1 to 2 minutes and P3 20 to 40 seconds
+on one core, Mime MIME_NULL_RUNTIME on one core. Mime keeps every fitted model: a null replicate grows to about 4 GB,
+and with `MIME_CORES=6` GBM's cross-validation starts 6 R workers of up to 3 GB each. Choose `WORKERS` by the free
+memory, not only the cores: a run of 10 null Mime replicates beside the real-data run filled this server's memory
+(part of it is a RAM disk) and stalled it for an hour; `null_replicate.sh` now caps each run's address space at 12 GB.
 
 ## Outputs (results/)
 
