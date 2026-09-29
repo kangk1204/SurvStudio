@@ -8,7 +8,11 @@ relapse); ER-positive complete cases for age, tumour size, node status and grade
 and at least half of the model's marker weight (|coefficient| x development SD, SurvStudio's rule) measured, checked
 before the cohort is scored. The reason a cohort was left out is recorded. Patients who are, through any chain of
 listed duplicates, a METABRIC development patient or a patient of a cohort used before are removed first; markers
-are rescaled within each cohort.
+are rescaled within each cohort, and the bootstrap intervals come from 2,000 resamples. Beyond SurvStudio's report,
+each cohort's row holds the clinical-only model's calibration slope, the SD of the linear predictor and of its
+clinical and gene parts, and the gene component's hazard ratio per SD beyond the clinical part
+(common.component_row). Every quantity is pooled by random effects (the DerSimonian-Laird estimate with its CI, the
+Hartung-Knapp-Sidik-Jonkman interval and the prediction interval; common.pooled_validation).
 
 Conventions of the export (common.py): DFHCC and MAINZ (distant metastasis-free survival) and UNC4 (relapse-free
 survival) store follow-up in multiples of 30 days, converted with 30 days a month (the others with 365.25 / 12);
@@ -25,8 +29,11 @@ import json
 import pandas as pd
 
 from common import (
+    BOOTSTRAP_DRAWS,
     RESULTS,
     check_marker_weight,
+    component_row,
+    locked_parts,
     pooled_validation,
     read_result,
     screen_validation_cohorts,
@@ -46,9 +53,10 @@ def main() -> None:
     entries = {entry["cohort"]: entry for entry in screened}
     cohort_rows, marker_rows = [], []
     for cohort, external in used.items():
-        report = validate_locked_recipe(external, recipe, marker_scaling="within_cohort")
+        report = validate_locked_recipe(external, recipe, marker_scaling="within_cohort", n_bootstrap=BOOTSTRAP_DRAWS)
         check_marker_weight(entries[cohort], report)
-        cohort_rows.append({"cohort": cohort, "endpoint": entries[cohort]["endpoint"], **validation_row(report)})
+        parts = locked_parts(external, recipe, report, "within_cohort")
+        cohort_rows.append({"cohort": cohort, "endpoint": entries[cohort]["endpoint"], **validation_row(report), **component_row(parts)})
         marker_rows.extend({"cohort": cohort, **row} for row in validation_marker_rows(report))
     cohorts = pd.DataFrame(cohort_rows)
     write_csv_atomic(cohorts, RESULTS / "breast_er_external_validation.csv")
@@ -57,11 +65,12 @@ def main() -> None:
 
     pooled = {
         "survstudio": survstudio_version(),
+        "bootstrap_draws": BOOTSTRAP_DRAWS,
         "screened": screened,
         "tumour_size_t_category_cm": {f"T{int(category)}": size for category, size in t_category_cm().items()},
         "patients": int(cohorts["n"].sum()),
         "events": int(cohorts["events"].sum()),
-        # Each C is pooled with its own interval: the model's, the clinical-only model's and the difference's.
+        # Each quantity is pooled with its own interval: the model's C, the clinical-only model's, the difference's, ...
         **pooled_validation(cohorts),
         "markers_replicated_somewhere": sorted(markers.loc[markers["replicated"], "marker"].unique().tolist()),
         "same_direction_share": float(markers.loc[markers["measured"], "same_direction"].mean()) if len(markers) else None,

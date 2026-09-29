@@ -14,6 +14,9 @@ Fixed before the run:
    (signature_gain_left_out).
 2. Endpoint (secondary): the five external cohorts of case study V pooled separately for relapse-free survival
    (NKI, TRANSBIG, UPP; the development endpoint) and distant metastasis-free survival (GSE58644, VDX).
+The held-out gains have bootstrap intervals from 2,000 resamples, as the external validations; every pooled gain is
+the DerSimonian-Laird estimate with its CI, the Hartung-Knapp-Sidik-Jonkman interval and the prediction interval
+(common.random_effects).
 Writes breast_er_sensitivity.csv and breast_er_sensitivity.json. A worker that dies (killed for memory, say) stops
 the run with an error instead of leaving it waiting.
 Usage: python 14_breast_er_sensitivity.py [workers]
@@ -34,12 +37,13 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from common import (  # noqa: E402
+    BOOTSTRAP_DRAWS,
     BREAST_ER_CATEGORICAL,
     BREAST_ER_COVARIATES,
     RESULTS,
     load_breast_cohort,
     metabric_sites,
-    random_effects,
+    pool_interval,
     read_result,
     survstudio_version,
     write_csv_atomic,
@@ -74,7 +78,7 @@ def fold(site: float) -> dict:
         "repeated_patients_flagged": int(result["duplicates"].get("n_pairs", 0)),
     }
     for scaling in ("as_measured", "within_cohort"):
-        metrics = validate_locked_recipe(held_out, result["locked_recipe"], marker_scaling=scaling)["metrics"]
+        metrics = validate_locked_recipe(held_out, result["locked_recipe"], marker_scaling=scaling, n_bootstrap=BOOTSTRAP_DRAWS)["metrics"]
         prefix = "held_out" if scaling == "as_measured" else "rescaled"
         row.update({
             f"{prefix}_n": int(len(held_out)), f"{prefix}_events": int(held_out["recurrence_event"].sum()),
@@ -84,11 +88,6 @@ def fold(site: float) -> dict:
         })
     print({key: row[key] for key in ("held_out_site", "robust", "internal_gain", "held_out_gain", "held_out_gain_lower", "held_out_gain_upper")}, flush=True)
     return row
-
-
-def pooled(part: pd.DataFrame, estimate: str, lower: str, upper: str) -> dict:
-    se = (part[upper] - part[lower]).to_numpy(dtype=float) / 3.92
-    return random_effects(part[estimate].to_numpy(dtype=float), se)
 
 
 def main() -> None:
@@ -105,12 +104,13 @@ def main() -> None:
         "survstudio": survstudio_version(),
         "sites_held_out": [int(site) for site in sites],
         "development_without_site": int(pd.isna(SITE).sum()),
+        "bootstrap_draws": BOOTSTRAP_DRAWS,
         "internal_gain_mean": float(folds["internal_gain"].mean()),
-        "held_out_gain_pooled": pooled(folds, "held_out_gain", "held_out_gain_lower", "held_out_gain_upper"),
-        "rescaled_gain_pooled": pooled(folds, "rescaled_gain", "rescaled_gain_lower", "rescaled_gain_upper"),
+        "held_out_gain_pooled": pool_interval(folds, "held_out_gain", "held_out_gain_lower", "held_out_gain_upper"),
+        "rescaled_gain_pooled": pool_interval(folds, "rescaled_gain", "rescaled_gain_lower", "rescaled_gain_upper"),
         "external_by_endpoint": {
             endpoint: {"cohorts": part["cohort"].tolist(), "patients": int(part["n"].sum()), "events": int(part["events"].sum()),
-                       "gain": pooled(part, "delta_c", "delta_lower", "delta_upper")}
+                       "gain": pool_interval(part, "delta_c", "delta_lower", "delta_upper")}
             for endpoint, part in external.groupby("endpoint")
         },
     }
