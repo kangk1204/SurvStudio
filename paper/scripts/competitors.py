@@ -191,27 +191,58 @@ def pooled(estimates: Sequence[float], lower: Sequence[float], upper: Sequence[f
     return random_effects(estimates, errors)
 
 
+class RiskSets:
+    """A cohort's death times and, for its patients in time order, where each risk set starts, so that two-group
+    log-rank tests of many groupings cost a cumulative sum each (``test``)."""
+
+    def __init__(self, time: np.ndarray, event: np.ndarray) -> None:
+        time = np.asarray(time, dtype=float)
+        event = np.asarray(event).astype(bool)
+        self.order = np.argsort(time, kind="mergesort")
+        sorted_time, sorted_event = time[self.order], event[self.order]
+        self.death_times = np.unique(sorted_time[sorted_event])
+        # The risk set of death time t: every patient with time >= t, from this position on.
+        self.first = np.searchsorted(sorted_time, self.death_times, side="left")
+        self.n_all = (time.size - self.first).astype(float)
+        self.death_positions = np.flatnonzero(sorted_event)
+        group = np.searchsorted(self.death_times, sorted_time[self.death_positions])
+        self.d_all = np.bincount(group, minlength=self.death_times.size).astype(float)
+        self.group_starts = np.searchsorted(group, np.arange(self.death_times.size), side="left")
+
+    def test(self, groups: np.ndarray, *, ordered: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Log-rank chi-square (1 df), p-value and hazard ratio (group 1 against group 0, from the observed/expected
+        ratios) of each row of the 0/1 matrix ``groups`` (columns: patients, in the cohort's order, or already in time
+        order with ``ordered``), as R's survdiff computes them (hypergeometric variance with tied deaths)."""
+        block = np.atleast_2d(np.asarray(groups, dtype=float))
+        if not ordered:
+            block = block[:, self.order]
+        at_risk_one = np.cumsum(block[:, ::-1], axis=1)[:, ::-1][:, self.first]
+        deaths_one = np.add.reduceat(block[:, self.death_positions], self.group_starts, axis=1)
+        n_all, d_all = self.n_all, self.d_all
+        with np.errstate(divide="ignore", invalid="ignore"):
+            expected = (d_all * at_risk_one / n_all).sum(axis=1)
+            weight = np.where(n_all > 1, d_all * (n_all - d_all) / (n_all**2 * np.where(n_all > 1, n_all - 1.0, 1.0)), 0.0)
+            variance = (weight * at_risk_one * (n_all - at_risk_one)).sum(axis=1)
+            observed = deaths_one.sum(axis=1)
+            chi2 = np.where(variance > 0, (observed - expected) ** 2 / variance, np.nan)
+            hazard_ratio = (observed / expected) / ((d_all.sum() - observed) / (d_all.sum() - expected))
+        return chi2, stats.chi2.sf(chi2, 1), hazard_ratio
+
+
+def pooled_c_gain(cohorts: pd.DataFrame) -> dict[str, dict[str, float]]:
+    """Random-effects pooled C of the model, of the clinical-only model and of their difference over the cohorts of
+    ``cohorts`` (common.validation_row's fields), as script 03 pools them: common.pooled_validation without the
+    calibration slope, whose interval results written before it was pooled do not hold."""
+    return {"model_c": pooled(cohorts["c"], cohorts["c_lower"], cohorts["c_upper"]),
+            "clinical_c": pooled(cohorts["clinical_c"], cohorts["clinical_lower"], cohorts["clinical_upper"]),
+            "delta_c": pooled(cohorts["delta_c"], cohorts["delta_lower"], cohorts["delta_upper"])}
+
+
 def logrank(time: np.ndarray, event: np.ndarray, groups: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Two-group log-rank test of each row of the 0/1 matrix ``groups`` (rows: groupings, columns: patients), as R's
-    survdiff computes it (hypergeometric variance with tied deaths). Returns the chi-square (1 df), its p-value and
-    the hazard ratio of group 1 against group 0 as survdiff's observed/expected ratios give it (Mime's rs_sur)."""
-    time = np.asarray(time, dtype=float)
-    event = np.asarray(event).astype(bool)
-    groups = np.atleast_2d(np.asarray(groups, dtype=float))
-    death_times = np.unique(time[event])
-    at_risk = (time[:, None] >= death_times[None, :]).astype(float)
-    dies = ((time[:, None] == death_times[None, :]) & event[:, None]).astype(float)
-    n_all, d_all = at_risk.sum(axis=0), dies.sum(axis=0)
-    n_one, d_one = groups @ at_risk, groups @ dies
-    expected_one = d_all * n_one / n_all
-    denominator = n_all**2 * (n_all - 1.0)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        variance = np.where(n_all > 1, d_all * (n_all - d_all) * n_one * (n_all - n_one) / np.where(denominator > 0, denominator, 1.0), 0.0)
-        observed, expected, var = d_one.sum(axis=1), expected_one.sum(axis=1), variance.sum(axis=1)
-        chi2 = np.where(var > 0, (observed - expected) ** 2 / var, np.nan)
-        other_observed, other_expected = d_all.sum() - observed, d_all.sum() - expected
-        hazard_ratio = (observed / expected) / (other_observed / other_expected)
-    return chi2, stats.chi2.sf(chi2, 1), hazard_ratio
+    survdiff computes it. Returns the chi-square (1 df), its p-value and the hazard ratio of group 1 against group 0 as
+    survdiff's observed/expected ratios give it (as Mime's rs_sur reports it)."""
+    return RiskSets(time, event).test(groups)
 
 
 def median_split(time: np.ndarray, event: np.ndarray, risk: np.ndarray) -> tuple[float, float]:
@@ -228,14 +259,12 @@ def best_cutoff_scan(time: np.ndarray, event: np.ndarray, expression: np.ndarray
     (numpy's default quantiles, R's type 7) as the cut-off, high expression above it, and the smallest log-rank p.
     Returns per column the minimum p, its cut-off, the hazard ratio (high against low) there, the number of cut-offs
     tried, and the log-rank p of the median cut for comparison."""
-    time = np.asarray(time, dtype=float)
-    event = np.asarray(event).astype(bool)
-    values = np.asarray(expression, dtype=float)
-    n, genes = values.shape
-    death_times = np.unique(time[event])
-    at_risk = (time[:, None] >= death_times[None, :]).astype(float)
-    dies = ((time[:, None] == death_times[None, :]) & event[:, None]).astype(float)
+    sets = RiskSets(time, event)
+    values = np.asarray(expression, dtype=float)[sets.order]
+    genes = values.shape[1]
     best_p, best_cut, best_hr, tried, median_p = (np.full(genes, np.nan) for _ in range(5))
+    medians = np.quantile(values, 0.5, axis=0)
+    _, median_p[:], _ = sets.test((values > medians).T.astype(float), ordered=True)
     for start in range(0, genes, batch):
         rows, owner, cuts = [], [], []
         for column in range(start, min(start + batch, genes)):
@@ -243,33 +272,25 @@ def best_cutoff_scan(time: np.ndarray, event: np.ndarray, expression: np.ndarray
             low, high = np.quantile(x, [0.25, 0.75])
             candidates = np.unique(x[(x >= low) & (x <= high)])
             # A cut-off must leave patients on both sides.
-            candidates = candidates[(candidates < x.max()) & (candidates >= x.min())]
+            candidates = candidates[candidates < x.max()]
             if candidates.size == 0:
                 continue
             rows.append((x[None, :] > candidates[:, None]).astype(float))
             owner.append(np.full(candidates.size, column))
             cuts.append(candidates)
-            _, p_median, _ = logrank(time, event, (x > np.quantile(x, 0.5)).astype(float)[None, :])
-            median_p[column] = p_median[0]
         if not rows:
             continue
         block, owner, cuts = np.vstack(rows), np.concatenate(owner), np.concatenate(cuts)
-        n_one, d_one = block @ at_risk, block @ dies
-        n_all, d_all = at_risk.sum(axis=0), dies.sum(axis=0)
-        expected = (d_all * n_one / n_all).sum(axis=1)
-        denominator = n_all**2 * (n_all - 1.0)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            variance = np.where(n_all > 1, d_all * (n_all - d_all) * n_one * (n_all - n_one) / np.where(denominator > 0, denominator, 1.0), 0.0).sum(axis=1)
-            observed = d_one.sum(axis=1)
-            chi2 = np.where(variance > 0, (observed - expected) ** 2 / variance, np.nan)
-            hazard_ratio = (observed / expected) / ((d_all.sum() - observed) / (d_all.sum() - expected))
-        p_values = stats.chi2.sf(chi2, 1)
-        for column in np.unique(owner):
-            mine = np.flatnonzero(owner == column)
-            finite = mine[np.isfinite(p_values[mine])]
-            tried[column] = mine.size
-            if finite.size:
-                pick = finite[np.argmin(p_values[finite])]
+        _, p_values, hazard_ratio = sets.test(block, ordered=True)
+        # The smallest p of each column (the first such cut-off, from low to high, on ties).
+        p_sort = np.where(np.isfinite(p_values), p_values, np.inf)
+        order = np.lexsort((p_sort, owner))
+        first = order[np.r_[True, owner[order][1:] != owner[order][:-1]]]
+        counts = np.bincount(owner - start, minlength=min(batch, genes - start))
+        for pick in first:
+            column = owner[pick]
+            tried[column] = counts[column - start]
+            if np.isfinite(p_values[pick]):
                 best_p[column], best_cut[column], best_hr[column] = p_values[pick], cuts[pick], hazard_ratio[pick]
     return pd.DataFrame({"best_p": best_p, "cutoff": best_cut, "hazard_ratio": best_hr, "cutoffs_tried": tried, "median_p": median_p})
 
@@ -399,6 +420,16 @@ def external_gain(recipe: dict[str, Any], patients: pd.DataFrame, risk: np.ndarr
     return validation_row(validate_locked_recipe(frame, recipe, marker_scaling=scaling))
 
 
+def external_gain_point(recipe: dict[str, Any], patients: pd.DataFrame, risk: np.ndarray) -> float:
+    """The paired gain of external_gain without its bootstrap (for the null's 3,000 truth patients)."""
+    from survival_toolkit.marker_evaluation import validate_locked_recipe
+
+    frame = patients[["patient_id", "os_months", "os_event", *COVARIATES]].copy()
+    frame["risk_score"] = np.asarray(risk, dtype=float)
+    delta = validate_locked_recipe(frame, recipe, n_bootstrap=0)["metrics"].get("delta_c_index")
+    return float("nan") if delta is None else float(delta)
+
+
 # ── Provenance ──────────────────────────────────────────────────────────────────────────────────────────────────────
 def code_files() -> list[Path]:
     """The comparison's own code: this module, the 17_competitors scripts and the R scripts."""
@@ -426,6 +457,21 @@ def finite_or_none(value: Any) -> Any:
     if isinstance(value, (float, np.floating)):
         return float(value) if math.isfinite(float(value)) else None
     return value
+
+
+def clean(value: Any) -> Any:
+    """A result ready for strict JSON: every non-finite number as null, numpy scalars as Python ones."""
+    if isinstance(value, dict):
+        return {str(key): clean(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [clean(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [clean(item) for item in value.tolist()]
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    return finite_or_none(value)
 
 
 def records(frame: pd.DataFrame) -> list[dict[str, Any]]:
