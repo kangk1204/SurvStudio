@@ -2,8 +2,8 @@
 # OS.time in days, OS, then the genes z-scored within the cohort), the univariate Cox screen, and output helpers.
 #
 # Two sources of cohorts:
-#   real  <input folder>: the files 17_competitors_data.py writes, TCGA.csv (development) and one CSV per GEO cohort;
-#   null  <replicate file>: a null replicate of 17_competitors_null.py, whose rows index the TCGA expression matrix
+#   real  <input folder>: the files 18_competitors_data.py writes, TCGA.csv (development) and one CSV per GEO cohort;
+#   null  <replicate file>: a null replicate of 18_competitors_null.py, whose rows index the TCGA expression matrix
 #         (null/tcga_expression.csv next to the replicate folders); each cohort is z-scored here, within itself.
 suppressPackageStartupMessages({
   library(survival)
@@ -25,7 +25,7 @@ real_cohorts <- function(folder, names) {
 }
 
 # The cohorts of a null replicate: rows of the TCGA expression matrix (1-based) with new outcomes, each cohort's
-# genes z-scored within it (R's scale: mean 0, SD with n - 1), as 17_competitors_null.py describes.
+# genes z-scored within it (R's scale: mean 0, SD with n - 1), as 18_competitors_null.py describes.
 null_cohorts <- function(replicate_file, expression) {
   design <- read_table(replicate_file)
   genes <- setdiff(colnames(expression), "patient_id")

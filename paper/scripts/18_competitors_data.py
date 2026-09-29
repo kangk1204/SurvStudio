@@ -5,7 +5,7 @@ GEO cohorts with the QC exclusions applied), and the genes of case study I that 
 (script 15's rule: at most 20% missing, the rest at the cohort median, and varying), each z-scored within its cohort.
 Writes, for the R pipelines, results/competitors/input/<cohort>.csv in Mime's layout (ID, OS.time in days, OS, the
 genes) and <cohort>_clinical.csv (patient_id, os_months, os_event, age, sex, stage_group); for the null simulation
-(17_competitors_null.py) results/competitors/null/tcga_expression.csv, TCGA's expression of the same genes as
+(18_competitors_null.py) results/competitors/null/tcga_expression.csv, TCGA's expression of the same genes as
 measured; and the gene count and cohort sizes in results/competitors_data.json.
 """
 

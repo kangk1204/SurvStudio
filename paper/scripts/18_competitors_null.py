@@ -13,9 +13,9 @@ that all seven GEO cohorts measure), z-scored within each cohort; the R pipeline
 (paper/competitors/common.R), P3 needs no scaling (its cut-offs are ranks) and script 15's test standardises within
 the cohort.
 
-  python 17_competitors_null.py generate [replicates]   the replicate designs, results/competitors/null/rep_NNNN/design.csv
-  python 17_competitors_null.py p3 [workers]            P3 on every replicate (rep_NNNN/p3.json)
-  python 17_competitors_null.py summarise              P1 and P2 from the R runs (rep_NNNN/mime, rep_NNNN/p2) and P3:
+  python 18_competitors_null.py generate [replicates]   the replicate designs, results/competitors/null/rep_NNNN/design.csv
+  python 18_competitors_null.py p3 [workers]            P3 on every replicate (rep_NNNN/p3.json)
+  python 18_competitors_null.py summarise              P1 and P2 from the R runs (rep_NNNN/mime, rep_NNNN/p2) and P3:
                                                         competitors_null_replicates.csv, competitors_null_splits.csv and
                                                         competitors_null.json in results/
 """
@@ -78,7 +78,7 @@ def generator():
 
 
 def tcga_patients() -> pd.DataFrame:
-    """The development patients in the order of null/tcga_expression.csv (17_competitors_data.py)."""
+    """The development patients in the order of null/tcga_expression.csv (18_competitors_data.py)."""
     return pd.read_csv(NULL / "tcga_clinical.csv", dtype={"patient_id": str})
 
 
@@ -87,7 +87,7 @@ def generate(replicates: int) -> None:
     patients = tcga_patients()
     position = {patient: index for index, patient in enumerate(sim.frame["patient_id"].astype(str))}
     if sorted(position) != sorted(patients["patient_id"]):
-        raise SystemExit("Script 06's patients differ from the development patients of 17_competitors_data.py.")
+        raise SystemExit("Script 06's patients differ from the development patients of 18_competitors_data.py.")
     # Script 06's clinical linear predictor, in this comparison's patient order.
     eta = sim.ETA_CLINICAL[[position[patient] for patient in patients["patient_id"]]]
     settings = {"null_seed": NULL_SEED, "replicates": replicates, "truth_patients": TRUTH_PATIENTS, "sizes": SIZES,

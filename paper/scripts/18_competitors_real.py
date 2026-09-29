@@ -1,6 +1,6 @@
 """Comparison with the pipelines commonly used to publish prognostic signatures, experiment 1: developed on TCGA-LUAD,
 validated in the seven GEO cohorts of case study II, with the patients, outcomes, covariates and genes of
-17_competitors_data.py and the R runs of paper/competitors/ (run_competitors.sh runs them in order).
+18_competitors_data.py and the R runs of paper/competitors/ (run_competitors.sh runs them in order).
 
 P1 Mime: every model's C as Mime reports it (summary(coxph(Surv ~ RS))$concordance, whose direction the cohort's own
 fit sets) and its honest C (Harrell's C of the risk score oriented once, on TCGA, with SurvStudio's conventions and

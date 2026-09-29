@@ -12,7 +12,7 @@
    SurvStudio's own Cox fit (needs RSCRIPT, the competitors' R);
 6. SurvStudio's pooled numbers of case study II recomputed from external_validation.csv equal the paper's (0.665 vs
    0.661, gain 0.000 (-0.032 to 0.032)), when results/ holds them.
-Usage: python 17_competitors_checks.py   (writes results/competitors_checks.json)
+Usage: python 18_competitors_checks.py   (writes results/competitors_checks.json)
 """
 
 from __future__ import annotations

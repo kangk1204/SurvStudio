@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One R pipeline on one null replicate of 17_competitors_null.py (run_competitors.sh runs many in parallel):
+# One R pipeline on one null replicate of 18_competitors_null.py (run_competitors.sh runs many in parallel):
 #   null_replicate.sh p2|mime <replicate number>
 # A replicate whose run.json exists is finished and skipped; a failed run leaves no run.json and is reported. A run
 # is stopped after REPLICATE_TIMEOUT (default 8h): Mime retries a failing superpc cross-validation without end.

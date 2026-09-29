@@ -1,5 +1,5 @@
 """Shared code of the comparison with the pipelines commonly used to publish prognostic signatures
-(scripts 17_competitors_*.py and the R scripts of paper/competitors/).
+(scripts 18_competitors_*.py and the R scripts of paper/competitors/).
 
 The pipelines, each developed on TCGA-LUAD and applied to the seven GEO cohorts of case study II:
 - P1 Mime (ML.Dev.Prog.Sig, mode "all": 10 algorithms and their combinations, 117 models in the pinned version), its
@@ -432,8 +432,8 @@ def external_gain_point(recipe: dict[str, Any], patients: pd.DataFrame, risk: np
 
 # ── Provenance ──────────────────────────────────────────────────────────────────────────────────────────────────────
 def code_files() -> list[Path]:
-    """The comparison's own code: this module, the 17_competitors scripts and the R scripts."""
-    return sorted([SCRIPTS / "competitors.py", *SCRIPTS.glob("17_competitors_*.py"), *R_SCRIPTS.glob("*.R"), *R_SCRIPTS.glob("*.sh")],
+    """The comparison's own code: this module, the 18_competitors scripts and the R scripts."""
+    return sorted([SCRIPTS / "competitors.py", *SCRIPTS.glob("18_competitors_*.py"), *R_SCRIPTS.glob("*.R"), *R_SCRIPTS.glob("*.sh")],
                   key=lambda path: path.name)
 
 

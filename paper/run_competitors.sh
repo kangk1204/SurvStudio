@@ -38,25 +38,25 @@ r_real() {  # r_real <script> <output folder name> [arguments...]
 for step in "${steps[@]}"; do
   echo "== $step $(date -Is)"
   case "$step" in
-    checks) python_step 17_competitors_checks.py ;;
-    data) python_step 17_competitors_data.py ;;
+    checks) python_step 18_competitors_checks.py ;;
+    data) python_step 18_competitors_data.py ;;
     real)
       r_real run_p2.R p2
       r_real run_mime.R "mime_cap$MIME_CAP" cap="$MIME_CAP" cores="$MIME_CORES"
-      python_step 17_competitors_real.py ;;
+      python_step 18_competitors_real.py ;;
     sensitivity)
       # 500 candidates: every model whose first algorithm is not StepCox (Mime's source of the pinned commit, which
       # setup_r_env.sh clones, with its StepCox section cut out; see competitors/run_mime.R).
       r_real run_mime.R "mime_cap$SENSITIVITY_CAP" cap="$SENSITIVITY_CAP" plan=feasible cores="$MIME_CORES" \
         mime_source="${COMPETITORS_SRC:-$here/competitors/src}/Mime/R/ML.Dev.Prog.Sig.R"
-      python_step 17_competitors_real.py ;;
+      python_step 18_competitors_real.py ;;
     null)
-      python_step 17_competitors_null.py generate "$NULL_REPLICATES"
+      python_step 18_competitors_null.py generate "$NULL_REPLICATES"
       seq 0 $((NULL_REPLICATES - 1)) | xargs -P "$WORKERS" -I{} bash "$here/competitors/null_replicate.sh" p2 {}
       seq 0 $((MIME_REPLICATES - 1)) | xargs -P "$WORKERS" -I{} bash "$here/competitors/null_replicate.sh" mime {}
-      python_step 17_competitors_null.py p3 "$WORKERS"
-      python_step 17_competitors_null.py summarise ;;
-    table) python_step 17_competitors_table.py ;;
+      python_step 18_competitors_null.py p3 "$WORKERS"
+      python_step 18_competitors_null.py summarise ;;
+    table) python_step 18_competitors_table.py ;;
     *) echo "unknown step $step (checks data real sensitivity null table)" >&2; exit 1 ;;
   esac
 done

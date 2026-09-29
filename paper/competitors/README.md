@@ -102,7 +102,7 @@ Runtime on a Ryzen 9 7950X (RUNTIME_PLACEHOLDER).
 | File | Content |
 | --- | --- |
 | `competitors_data.json` | Gene count, cohort sizes |
-| `competitors_checks.json` | The checks of `17_competitors_checks.py` |
+| `competitors_checks.json` | The checks of `18_competitors_checks.py` |
 | `competitors_mime_models.csv` | Every Mime model: orientation, genes, training C, reported and honest C per cohort, pooled honest C |
 | `competitors_mime_replay.csv` | Every split (and all seven): winner, reported C, training C, sealed means, pooled sealed honest C, gain over the clinical covariates, median-split p-values |
 | `competitors_p2_cohorts.csv` | P2 per cohort: C with interval, median-split p and hazard ratio, SurvStudio's external validation of clinical + P2 |
