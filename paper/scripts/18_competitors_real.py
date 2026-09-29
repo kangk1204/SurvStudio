@@ -109,7 +109,7 @@ def survstudio_section(patients: dict[str, pd.DataFrame]) -> dict:
 
 
 def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: str, with_gains: bool = True,
-                 tests: pd.DataFrame | None = None) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
+                 tests: pd.DataFrame | None = None, gains_file: str | None = None) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     info = read_json(folder / "run.json")
     cindex = pd.read_csv(folder / "cindex.csv")
     models = list(dict.fromkeys(cindex["model"]))
@@ -188,6 +188,9 @@ def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: 
             recipe = risk_score_recipe(development, oriented["TCGA"], f"Mime {winner}")
             rows.append(gain_rows(winner, recipe, patients, oriented))
         gains = pd.concat(rows, ignore_index=True)
+        if gains_file:
+            # Each winner's SurvStudio validation in each cohort (clinical + its risk score against clinical alone).
+            write_csv_atomic(gains, RESULTS / gains_file)
         pooled_rows = []
         for winner, sealed in zip(replay_table["winner"], replay_table["sealed"]):
             cohorts = sealed.split(";") if isinstance(sealed, str) and sealed else GEO_COHORTS
@@ -351,7 +354,8 @@ def main() -> None:
     print("P3 done", flush=True)
     primary = REAL / f"mime_cap{CANDIDATE_CAP}"
     if (primary / "run.json").exists():
-        result["P1"], models, replay_table = mime_section(primary, patients, development, f"Mime, {CANDIDATE_CAP} candidates", tests=tests)
+        result["P1"], models, replay_table = mime_section(primary, patients, development, f"Mime, {CANDIDATE_CAP} candidates", tests=tests,
+                                                          gains_file="competitors_mime_gains.csv")
         write_csv_atomic(models, RESULTS / "competitors_mime_models.csv")
         write_csv_atomic(replay_table, RESULTS / "competitors_mime_replay.csv")
     else:
@@ -359,7 +363,7 @@ def main() -> None:
     sensitivity = REAL / f"mime_cap{SENSITIVITY_CAP}"
     if (sensitivity / "run.json").exists():
         result["P1_sensitivity"], models_500, replay_500 = mime_section(sensitivity, patients, development, f"Mime, {SENSITIVITY_CAP} candidates, StepCox-first models left out",
-                                                                        tests=tests)
+                                                                        tests=tests, gains_file="competitors_mime_gains_500.csv")
         write_csv_atomic(models_500, RESULTS / "competitors_mime_models_500.csv")
         write_csv_atomic(replay_500, RESULTS / "competitors_mime_replay_500.csv")
     print("P1 done", flush=True)

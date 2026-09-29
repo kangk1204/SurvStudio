@@ -116,6 +116,8 @@ memory, not only the cores: a run of 10 null Mime replicates beside the real-dat
 | `competitors_checks.json` | The checks of `18_competitors_checks.py` |
 | `competitors_mime_models.csv` | Every Mime model: orientation, genes, training C, reported and honest C per cohort, pooled honest C |
 | `competitors_mime_replay.csv` | Every split (and all seven): winner, reported C, training C, sealed means, pooled sealed honest C, gain over the clinical covariates, median-split p-values |
+| `competitors_mime_gains.csv` | Each winner's SurvStudio validation in each cohort: the C of clinical + its risk score, the clinical-only C and their paired gain, with intervals |
+| `competitors_mime_*_500.csv` | The same for the 500-candidate sensitivity run |
 | `competitors_p2_cohorts.csv` | P2 per cohort: C with interval, median-split p and hazard ratio, SurvStudio's external validation of clinical + P2 |
 | `competitors_p3_genes.csv` | P3 per gene: best p, cut-off, hazard ratio, cut-offs tried, median-cut p, replication |
 | `competitors_real.json` | Experiment 1, with SurvStudio's numbers and their checks |
