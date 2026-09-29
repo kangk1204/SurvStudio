@@ -19,6 +19,13 @@ def interval(entry: dict | None) -> tuple:
     return entry.get("estimate"), entry.get("ci_lower"), entry.get("ci_upper")
 
 
+def hksj(prefix: str, entry: dict | None) -> dict:
+    """The Hartung-Knapp-Sidik-Jonkman interval of a pooled estimate as ``<prefix>_hksj_lower`` and ``_upper`` (None
+    when the pooled result has none)."""
+    entry = entry or {}
+    return {f"{prefix}_hksj_lower": entry.get("hksj_ci_lower"), f"{prefix}_hksj_upper": entry.get("hksj_ci_upper")}
+
+
 def experiment_1(real: dict) -> list[dict]:
     rows = []
     survstudio = real["SurvStudio"]
@@ -31,9 +38,12 @@ def experiment_1(real: dict) -> list[dict]:
         "genes_claimed": len(survstudio["robust_genes"]), "training_c": survstudio["apparent_c"],
         "reported_c": survstudio["optimism_corrected_c"], "reported_c_meaning": "optimism-corrected C (apparent 0.749)",
         "reported_gain": survstudio["left_out_gain"], "reported_gain_meaning": "paired left-out gain over the clinical model in subsamples",
+        "reported_gain_lower": (survstudio.get("left_out_gain_ci") or [None, None])[0],
+        "reported_gain_upper": (survstudio.get("left_out_gain_ci") or [None, None])[1],
         "external_c": external["model_c"]["estimate"], "external_c_lower": external["model_c"]["ci_lower"], "external_c_upper": external["model_c"]["ci_upper"],
         "external_clinical_c": external["clinical_c"]["estimate"],
         "gain": external["delta_c"]["estimate"], "gain_lower": external["delta_c"]["ci_lower"], "gain_upper": external["delta_c"]["ci_upper"],
+        **hksj("external_c", external["model_c"]), **hksj("gain", external["delta_c"]),
         "genes_replicated": robust.get("replicated"), "genes_evaluable": robust.get("evaluable"),
         "replicated_share": robust.get("rate"),
         "warns_about_optimism": "yes: reports the optimism-corrected C, the paired left-out gain over the clinical model and evidence tiers",
@@ -49,9 +59,12 @@ def experiment_1(real: dict) -> list[dict]:
             "genes_claimed": len(same["robust_genes"]), "training_c": same["apparent_c"],
             "reported_c": same["optimism_corrected_c"], "reported_c_meaning": "optimism-corrected C",
             "reported_gain": same["left_out_gain"], "reported_gain_meaning": "paired left-out gain over the clinical model in subsamples",
+            "reported_gain_lower": (same.get("left_out_gain_ci") or [None, None])[0],
+            "reported_gain_upper": (same.get("left_out_gain_ci") or [None, None])[1],
             "external_c": external["model_c"]["estimate"], "external_c_lower": external["model_c"]["ci_lower"],
             "external_c_upper": external["model_c"]["ci_upper"], "external_clinical_c": external["clinical_c"]["estimate"],
             "gain": external["delta_c"]["estimate"], "gain_lower": external["delta_c"]["ci_lower"], "gain_upper": external["delta_c"]["ci_upper"],
+            **hksj("external_c", external["model_c"]), **hksj("gain", external["delta_c"]),
             "warns_about_optimism": "yes",
             "notes": f"a sensitivity run of SurvStudio's own analysis; markers rescaled within each cohort; tiers {same['tier_counts']}",
         })
@@ -69,6 +82,8 @@ def experiment_1(real: dict) -> list[dict]:
             "external_c_upper": mime["all_seven_pooled_honest_c"]["ci_upper"],
             "external_clinical_c": usual.get("clinical_c"),
             "gain": usual.get("gain"), "gain_lower": usual.get("gain_lower"), "gain_upper": usual.get("gain_upper"),
+            **hksj("external_c", mime["all_seven_pooled_honest_c"]),
+            "gain_hksj_lower": usual.get("gain_hksj_lower"), "gain_hksj_upper": usual.get("gain_hksj_upper"),
             "median_split_significant": f"{usual.get('selection_km_p05_count')} of 7 cohorts",
             "genes_replicated": (mime.get("all_seven_genes") or {}).get("replicated"),
             "genes_evaluable": (mime.get("all_seven_genes") or {}).get("evaluable"),
@@ -89,7 +104,8 @@ def experiment_1(real: dict) -> list[dict]:
             "optimism": splits["optimism_vs_sealed_pooled"]["median"],
             "warns_about_optimism": "no",
             "notes": ("external C: median (min to max over splits) of the random-effects pooled honest C in the 4 sealed cohorts; gain: median (min to max) of the "
-                      f"pooled gain there, its interval excluding zero in {splits.get('gain_interval_excludes_zero', float('nan')):.0%} of splits; "
+                      f"pooled gain there, its interval excluding zero in {splits.get('gain_interval_excludes_zero', float('nan')):.0%} of splits "
+                      f"(its HKSJ interval above zero in {splits.get('gain_hksj_interval_above_zero', float('nan')):.0%}); "
                       f"selection-cohort KM p < 0.05 in {splits['selection_km_p05_any']:.0%} of splits"),
         })
     p2 = real["P2"]
@@ -103,6 +119,7 @@ def experiment_1(real: dict) -> list[dict]:
         "external_c": external["estimate"], "external_c_lower": external["ci_lower"], "external_c_upper": external["ci_upper"],
         "external_clinical_c": p2["gain"]["clinical_c"]["estimate"],
         "gain": gain["estimate"], "gain_lower": gain["ci_lower"], "gain_upper": gain["ci_upper"],
+        **hksj("external_c", external), **hksj("gain", gain),
         "genes_replicated": p2["genes_replicated"], "genes_evaluable": p2["genes_evaluable"],
         "replicated_share": p2["genes_replicated"] / p2["genes_evaluable"] if p2["genes_evaluable"] else None,
         "warns_about_optimism": "no",

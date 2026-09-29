@@ -62,7 +62,7 @@ for step in "${steps[@]}"; do
       done
       python_step 18_competitors_null.py p3 "$WORKERS"
       python_step 18_competitors_null.py summarise ;;
-    table) python_step 18_competitors_table.py ;;
+    table) python_step 18_competitors_table.py; python_step figures.py comparison ;;
     *) echo "unknown step $step (checks data real sensitivity null table)" >&2; exit 1 ;;
   esac
 done

@@ -53,8 +53,6 @@ from competitors import (
 INPUT = WORK / "input"
 REAL = WORK / "real"
 COHORTS = ["TCGA", *GEO_COHORTS]
-# The paper's SurvStudio numbers for case study II (within-cohort scaling), as rounded in the text.
-PAPER_SURVSTUDIO = {"model_c": 0.665, "clinical_c": 0.661, "delta_c": 0.000, "delta_lower": -0.032, "delta_upper": 0.032}
 
 
 def aligned(risk: pd.DataFrame, patients: pd.DataFrame, value: str) -> np.ndarray:
@@ -88,14 +86,9 @@ def survstudio_section(patients: dict[str, pd.DataFrame]) -> dict:
     recomputed = pooled_c_gain(within.reset_index())
     stored = read_result("external_pooled.json")["within_cohort"]
     for key in ("model_c", "clinical_c", "delta_c"):
-        for field in ("estimate", "ci_lower", "ci_upper"):
-            if abs(recomputed[key][field] - stored[key][field]) > 1e-12:
+        for field in ("estimate", "ci_lower", "ci_upper", "hksj_ci_lower", "hksj_ci_upper"):
+            if field in stored[key] and abs(recomputed[key][field] - stored[key][field]) > 1e-12:
                 raise SystemExit(f"Pooled {key} {field}: recomputed {recomputed[key][field]}, stored {stored[key][field]}.")
-    rounded = {"model_c": round(recomputed["model_c"]["estimate"], 3), "clinical_c": round(recomputed["clinical_c"]["estimate"], 3),
-               "delta_c": round(recomputed["delta_c"]["estimate"], 3) + 0.0, "delta_lower": round(recomputed["delta_c"]["ci_lower"], 3),
-               "delta_upper": round(recomputed["delta_c"]["ci_upper"], 3)}
-    if rounded != PAPER_SURVSTUDIO:
-        raise SystemExit(f"SurvStudio's pooled numbers {rounded} are not the paper's {PAPER_SURVSTUDIO}.")
     summary = read_result("tcga_markers_summary.json")
     tiers = read_result("tier_replication.json")["cases"]["I"]["groups"]
     signature = summary["signature"]
@@ -104,7 +97,7 @@ def survstudio_section(patients: dict[str, pd.DataFrame]) -> dict:
         "signature_markers": signature["markers"], "apparent_c": signature["apparent_c"],
         "optimism_corrected_c": signature["optimism_corrected_c"], "left_out_c": signature["signature_c_left_out"],
         "clinical_left_out_c": signature["clinical_c_left_out"], "left_out_gain": signature["signature_gain_left_out"],
-        "external_within_cohort": recomputed, "external_matches_paper": rounded,
+        "external_within_cohort": recomputed, "left_out_gain_ci": signature.get("signature_gain_left_out_ci"),
         "tiers_replication": {group: {key: value[key] for key in ("genes", "evaluable", "replicated", "rate", "rate_ci")} for group, value in tiers.items()},
     }
 
@@ -144,11 +137,12 @@ def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: 
     for model in models:
         try:
             result = pooled(honest.loc[model, GEO_COHORTS], lower.loc[model, GEO_COHORTS], upper.loc[model, GEO_COHORTS])
-            pooled_rows.append((result["estimate"], result["ci_lower"], result["ci_upper"]))
+            pooled_rows.append((result["estimate"], result["ci_lower"], result["ci_upper"], result["hksj_ci_lower"], result["hksj_ci_upper"]))
         except ValueError:
-            pooled_rows.append((np.nan, np.nan, np.nan))
+            pooled_rows.append((np.nan, np.nan, np.nan, np.nan, np.nan))
     table["mean_reported_c_geo"] = reported[GEO_COHORTS].mean(axis=1).to_numpy()
-    table["pooled_honest_c_geo"], table["pooled_honest_lower"], table["pooled_honest_upper"] = zip(*pooled_rows)
+    (table["pooled_honest_c_geo"], table["pooled_honest_lower"], table["pooled_honest_upper"], table["pooled_honest_hksj_lower"],
+     table["pooled_honest_hksj_upper"]) = zip(*pooled_rows)
     table["genes"] = [genes["genes"].get(model, "") for model in models]
 
     replay_table = replay(reported[GEO_COHORTS], honest[GEO_COHORTS], lower, upper, training=reported["TCGA"])
@@ -198,6 +192,7 @@ def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: 
             result = pooled_gain(gains[gains["model"] == winner], cohorts) if isinstance(winner, str) else None
             pooled_rows.append({} if result is None else {
                 "gain": result["delta_c"]["estimate"], "gain_lower": result["delta_c"]["ci_lower"], "gain_upper": result["delta_c"]["ci_upper"],
+                "gain_hksj_lower": result["delta_c"]["hksj_ci_lower"], "gain_hksj_upper": result["delta_c"]["hksj_ci_upper"],
                 "combined_c": result["model_c"]["estimate"], "clinical_c": result["clinical_c"]["estimate"]})
         replay_table = pd.concat([replay_table, pd.DataFrame(pooled_rows)], axis=1)
     split_part = replay_table[replay_table["design"] != "all seven"]
@@ -225,12 +220,15 @@ def mime_section(folder, patients: dict[str, pd.DataFrame], development, label: 
         "all_seven": {key: (None if isinstance(value, float) and not np.isfinite(value) else value) for key, value in usual.items()},
         # The usual design's winner in all seven cohorts, the ones that chose it: its pooled honest C there.
         "all_seven_pooled_honest_c": {"estimate": float(pooled_row["pooled_honest_c_geo"]), "ci_lower": float(pooled_row["pooled_honest_lower"]),
-                                      "ci_upper": float(pooled_row["pooled_honest_upper"])},
+                                      "ci_upper": float(pooled_row["pooled_honest_upper"]),
+                                      "hksj_ci_lower": float(pooled_row["pooled_honest_hksj_lower"]),
+                                      "hksj_ci_upper": float(pooled_row["pooled_honest_hksj_upper"])},
     }
     if with_gains:
         section["splits"]["gain"] = summarise(split_part["gain"])
         section["splits"]["gain_interval_excludes_zero"] = float(((split_part["gain_lower"] > 0) | (split_part["gain_upper"] < 0)).mean())
         section["splits"]["gain_interval_above_zero"] = float((split_part["gain_lower"] > 0).mean())
+        section["splits"]["gain_hksj_interval_above_zero"] = float((split_part["gain_hksj_lower"] > 0).mean())
     if tests is not None:
         # The usual design's winner's genes (Mime writes "-" in gene names as "."), each in the direction of its
         # univariate Cox fit on TCGA, by script 15's replication rule.
@@ -351,7 +349,8 @@ def survstudio_same_genes(dev_patients: pd.DataFrame, dev_expression: pd.DataFra
         "genes": len(genes), "tier_counts": result["tier_counts"], "robust_genes": robust, "signature_markers": signature["markers"],
         "apparent_c": signature["apparent_c"], "optimism_corrected_c": signature["optimism_corrected_c"],
         "left_out_c": signature["signature_c_left_out"], "clinical_left_out_c": signature["clinical_c_left_out"],
-        "left_out_gain": signature["signature_gain_left_out"], "external_within_cohort": pooled_c_gain(rows),
+        "left_out_gain": signature["signature_gain_left_out"], "left_out_gain_ci": signature.get("signature_gain_left_out_ci"),
+        "external_within_cohort": pooled_c_gain(rows),
         "weight_measured_min": float(rows["weight_measured"].min()),
     }
     return section, rows

@@ -177,6 +177,7 @@ from three cohorts on, its 95% prediction interval.
 | `fig2_markers` | Figure 2: genome-wide markers in TCGA-LUAD | 01, 02 |
 | `fig3_estimates` | Figure 3: internal and external estimates in three settings (lung adenocarcinoma, breast cancer survival, the ER-positive positive control): a, the C-index from apparent to optimism-corrected, left-out and external, for the model and the clinical-only model; b, the gain over the clinical covariates in left-out patients, held-out METABRIC sites (positive control) and the external cohorts | 01, 03, 07 to 10, 14 |
 | `fig4_models` | Figure 4: prediction models on the same test patients | 04 |
+| `fig5_comparison` | Figure 5: the pipelines commonly used to publish signatures against SurvStudio, under the null and from TCGA-LUAD to the seven GEO cohorts | `run_competitors.sh` (18) |
 | `figS1_simulation` | Supplementary Figure S1: error control, power and the accuracy of the C-index estimates in the simulation | 06 |
 | `figS2_positive_control_sensitivity` | Supplementary Figure S2: the positive control's gain in held-out METABRIC sites and by endpoint | 10, 14 |
 | `figS3_tier_replication` | Supplementary Figure S3: evidence tiers against external replication | 15 |

@@ -732,13 +732,140 @@ def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: st
     save(fig, name)
 
 
+# ── Figure 5: the pipelines commonly used to publish signatures, against SurvStudio ─
+OTHER = "#8a94a3"
+
+
+def comparison_null_rows(rows: list[dict]) -> list[tuple[str, dict, bool]]:
+    """The claims under the null, as (label, row, is SurvStudio), in the figure's order."""
+    wanted = [
+        ("SurvStudio: a marker declared", lambda row: row["approach"] == "SurvStudio" and row["claim"].startswith("at least one marker"), True),
+        ("SurvStudio: gain verdict 'adds'", lambda row: row["approach"] == "SurvStudio" and "gain verdict" in row["claim"], True),
+        ("Mime, 3 selection cohorts: C ≥ 0.55", lambda row: row["approach"] == "P1 Mime" and str(row.get("design", "")).startswith("3 selection"), False),
+        ("Mime, 7 selection cohorts: C ≥ 0.55", lambda row: row["approach"] == "P1 Mime" and row.get("design") == "all seven", False),
+        ("Cox → LASSO: training p < 0.05", lambda row: row["approach"].startswith("P2"), False),
+        ("Best cut-off: a gene with p < 0.05", lambda row: row["approach"].startswith("P3"), False),
+    ]
+    found = []
+    for label, match, ours in wanted:
+        hits = [row for row in rows if match(row)]
+        if len(hits) != 1:
+            raise KeyError(f"one null row for {label!r} (found {len(hits)})")
+        found.append((label, hits[0], ours))
+    return found
+
+
+def comparison_real_rows(rows: list[dict]) -> list[tuple[str, dict, bool]]:
+    """The TCGA-LUAD to GEO rows, as (label, row, is SurvStudio), in the figure's order."""
+    wanted = [
+        ("SurvStudio", lambda row: row["approach"] == "SurvStudio", True),
+        ("SurvStudio, genes all cohorts measure", lambda row: row["approach"].startswith("SurvStudio ("), True),
+        ("Mime, 7 selection cohorts", lambda row: row["approach"] == "P1 Mime" and str(row.get("design", "")).startswith("all seven"), False),
+        ("Mime, 3 selection + 4 sealed", lambda row: row["approach"] == "P1 Mime" and str(row.get("design", "")).startswith("3 selection"), False),
+        ("Cox → LASSO", lambda row: row["approach"].startswith("P2"), False),
+    ]
+    found = []
+    for label, match, ours in wanted:
+        hits = [row for row in rows if match(row)]
+        if len(hits) != 1:
+            raise KeyError(f"one real-data row for {label!r} (found {len(hits)})")
+        found.append((label, hits[0], ours))
+    return found
+
+
+def figure_comparison() -> None:
+    table = load("competitors_table.json")
+    null = comparison_null_rows(table["experiment_2"])
+    real = comparison_real_rows(table["experiment_1"])
+    fig = plt.figure(figsize=(WIDE, 4.5))
+    grid = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.05], width_ratios=[1.0, 1.0], hspace=0.62, wspace=0.12,
+                            left=0.3, right=0.985, top=0.93, bottom=0.1)
+
+    # a: how often each approach makes its claim when no marker adds anything (script 06's null).
+    ax = fig.add_subplot(grid[0, :])
+    y = np.arange(len(null))[::-1]
+    for position, (label, row, ours) in zip(y, null):
+        rate, mcse = 100 * float(row["claim_rate"]), 100 * float(row.get("claim_rate_mcse") or 0.0)
+        ax.barh(position, rate, height=0.62, color=ROBUST if ours else OTHER)
+        if mcse > 0:
+            ax.plot([max(rate - 1.96 * mcse, 0), min(rate + 1.96 * mcse, 100)], [position, position], color=INK, lw=0.8)
+        ax.text(min(rate + 1.96 * mcse, 100) + 1.5, position, f"{rate:.1f}%" if rate < 10 else f"{rate:.0f}%", va="center", fontsize=7)
+    ax.set_yticks(y, [label for label, _, _ in null])
+    ax.tick_params(axis="y", length=0)
+    ax.set_xlim(0, 108)
+    ax.set_xticks([0, 25, 50, 75, 100])
+    ax.set_xlabel("Null datasets in which the claim is made (%)")
+    ax.set_title("No marker adds to the clinical covariates (simulated on TCGA-LUAD)", loc="left", fontsize=7.5)
+    panel_label(ax, "a", x=-0.4)
+
+    # b: the C-index each approach would report, against its C-index in the external cohorts.
+    ax = fig.add_subplot(grid[1, 0])
+    y = np.arange(len(real))[::-1]
+    for position, (label, row, ours) in zip(y, real):
+        colour = ROBUST if ours else OTHER
+        reported, external = float(row["reported_c"]), float(row["external_c"])
+        ax.annotate("", xy=(external, position), xytext=(reported, position),
+                    arrowprops={"arrowstyle": "-|>", "color": colour, "lw": 1.0, "shrinkA": 2, "shrinkB": 2, "mutation_scale": 7})
+        ax.scatter([reported], [position], s=18, facecolor="white", edgecolor=colour, linewidth=1.0, zorder=3)
+        ax.scatter([external], [position], s=18, color=colour, edgecolor=INK, linewidth=0.4, zorder=3)
+    clinical = [float(row["external_clinical_c"]) for _, row, _ in real if row.get("external_clinical_c") is not None]
+    if clinical:
+        ax.axvline(float(np.median(clinical)), color=MUTED, lw=0.8, ls="--")
+    ax.set_yticks(y, [label for label, _, _ in real])
+    ax.tick_params(axis="y", length=0)
+    ax.set_xlim(0.55, 0.8)
+    ax.set_xticks([0.55, 0.6, 0.65, 0.7, 0.75])
+    if clinical:
+        ax.text(float(np.median(clinical)) + 0.003, 0.5, "clinical only", fontsize=7, color=MUTED, va="center")
+    ax.set_xlabel("C-index: reported (open) → external (filled)")
+    ax.set_title("TCGA-LUAD → seven GEO cohorts", loc="left", fontsize=7.5)
+    panel_label(ax, "b", x=-0.72)
+
+    # c: the gain over the clinical covariates in the external cohorts, with SurvStudio's internal estimate above it.
+    ax = fig.add_subplot(grid[1, 1], sharey=ax)
+    values = []
+    for _, row, _ in real:
+        values += [row.get("gain_hksj_lower") if row.get("gain_hksj_lower") is not None else row.get("gain_lower"),
+                   row.get("gain_hksj_upper") if row.get("gain_hksj_upper") is not None else row.get("gain_upper"),
+                   row.get("reported_gain_lower"), row.get("reported_gain_upper")]
+    ax.set_xlim(*gain_limits([value for value in values if value is not None]))
+    for position, (label, row, ours) in zip(y, real):
+        colour = ROBUST if ours else OTHER
+        low = row.get("gain_hksj_lower") if row.get("gain_hksj_lower") is not None else row.get("gain_lower")
+        high = row.get("gain_hksj_upper") if row.get("gain_hksj_upper") is not None else row.get("gain_upper")
+        # The split design gives the median gain and its range over the 35 splits, drawn dashed.
+        split = str(row.get("design", "")).startswith("3 selection")
+        if low is not None and high is not None:
+            left, right = ax.get_xlim()
+            ax.plot([max(low, left), min(high, right)], [position - 0.12, position - 0.12], color=colour, lw=1.2, ls="--" if split else "-")
+        ax.scatter([row["gain"]], [position - 0.12], s=18, color=colour, edgecolor=INK, linewidth=0.4, zorder=3)
+        if row.get("reported_gain_lower") is not None:
+            span(ax, row["reported_gain_lower"], row["reported_gain_upper"], position + 0.2, colour, 0.8)
+            ax.scatter([row["reported_gain"]], [position + 0.2], s=16, marker="D", facecolor="white", edgecolor=colour, linewidth=1.0, zorder=3)
+    ax.axvline(0, color=MUTED, lw=0.8)
+    gain_ticks(ax)
+    plt.setp(ax.get_yticklabels(), visible=False)
+    ax.tick_params(axis="y", length=0)
+    ax.set_xlabel("Gain in C over age, sex and stage")
+    ax.legend(handles=[Line2D([], [], marker="D", color=ROBUST, markerfacecolor="white", lw=0.8, ms=4, label="internal (left out)"),
+                       Line2D([], [], marker="o", color=OTHER, lw=1.2, ms=4, label="external (pooled)")],
+              loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=2, fontsize=7, handlelength=1.4, columnspacing=1.0, borderaxespad=0.2)
+    panel_label(ax, "c", x=-0.05)
+    save(fig, "fig5_comparison")
+
+
 def main(wanted: set[str]) -> None:
     refused = {}
+    if not wanted and not (RESULTS / "competitors_table.json").exists():
+        # The comparison's results come from run_competitors.sh, which runs after run_all.sh; draw it once they exist.
+        print("not drawn yet: comparison (run run_competitors.sh first)")
     for name, draw in (("workflow", figure_workflow), ("markers", figure_markers), ("estimates", figure_estimates), ("models", figure_models),
                        ("simulation", figure_simulation), ("breast_er_sensitivity", figure_breast_er_sensitivity), ("tiers", figure_tier_replication),
                        ("luad_external", figure_luad_external), ("breast_external", figure_breast_external),
-                       ("breast_er_external", figure_breast_er_external)):
+                       ("breast_er_external", figure_breast_er_external), ("comparison", figure_comparison)):
         if wanted and name not in wanted:
+            continue
+        if name == "comparison" and not wanted and not (RESULTS / "competitors_table.json").exists():
             continue
         LOADED.clear()
         try:
