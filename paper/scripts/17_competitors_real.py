@@ -315,9 +315,13 @@ def main() -> None:
     result["P3"], p3_genes = p3_section(patients, expression, tests)
     write_csv_atomic(p3_genes, RESULTS / "competitors_p3_genes.csv")
     print("P3 done", flush=True)
-    result["P1"], models, replay_table = mime_section(REAL / f"mime_cap{CANDIDATE_CAP}", patients, development, f"Mime, {CANDIDATE_CAP} candidates")
-    write_csv_atomic(models, RESULTS / "competitors_mime_models.csv")
-    write_csv_atomic(replay_table, RESULTS / "competitors_mime_replay.csv")
+    primary = REAL / f"mime_cap{CANDIDATE_CAP}"
+    if (primary / "run.json").exists():
+        result["P1"], models, replay_table = mime_section(primary, patients, development, f"Mime, {CANDIDATE_CAP} candidates")
+        write_csv_atomic(models, RESULTS / "competitors_mime_models.csv")
+        write_csv_atomic(replay_table, RESULTS / "competitors_mime_replay.csv")
+    else:
+        print(f"no Mime run in {primary}: P1 left out", flush=True)
     sensitivity = REAL / f"mime_cap{SENSITIVITY_CAP}"
     if (sensitivity / "run.json").exists():
         result["P1_sensitivity"], models_500, replay_500 = mime_section(sensitivity, patients, development, f"Mime, {SENSITIVITY_CAP} candidates, StepCox-first models left out")

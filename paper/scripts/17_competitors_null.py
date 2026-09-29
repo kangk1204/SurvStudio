@@ -189,8 +189,16 @@ def run_p3(workers: int) -> None:
 
 # ── P1 and P2 from the R runs ────────────────────────────────────────────────────────────────────────────────────
 def risk_table(path: Path, value: str) -> pd.DataFrame:
-    table = pd.read_csv(path)
+    table = pd.read_csv(path, dtype={"ID": str})
     return table.rename(columns={value: "risk"})
+
+
+def aligned(risk: pd.DataFrame, patients: pd.DataFrame, value: str) -> np.ndarray:
+    """A cohort's risk scores in the order of its patients (by ID)."""
+    scores = risk.set_index(risk["ID"].astype(str))[value]
+    if scores.index.duplicated().any() or not set(patients["patient_id"]).issubset(scores.index):
+        raise RuntimeError("The risk scores do not name each patient of the cohort once.")
+    return scores.loc[patients["patient_id"]].to_numpy(dtype=float)
 
 
 def p2_replicate(replicate: int, frames: dict[str, pd.DataFrame]) -> dict:
@@ -200,7 +208,7 @@ def p2_replicate(replicate: int, frames: dict[str, pd.DataFrame]) -> dict:
     if not info["selected"]:
         return record
     risk = risk_table(folder / "risk.csv", "risk")
-    scores = {cohort: part["risk"].to_numpy(dtype=float) for cohort, part in risk.groupby("cohort", sort=False)}
+    scores = {cohort: aligned(part, frames[cohort], "risk") for cohort, part in risk.groupby("cohort", sort=False)}
     development = frames["DEV"]
     record["p2_training_c"] = float(harrell_c(development["os_months"], development["os_event"], scores["DEV"])[0])
     record["p2_training_p"], record["p2_training_hr"] = median_split(development["os_months"], development["os_event"], scores["DEV"])
@@ -236,11 +244,11 @@ def p1_replicate(replicate: int, frames: dict[str, pd.DataFrame]) -> list[dict]:
     reported = cindex.pivot_table(index="model", columns="cohort", values="cindex", sort=False)
     models = list(dict.fromkeys(cindex["model"]))
     reported = reported.reindex(models)
-    risk = pd.read_csv(folder / "risk.csv.gz")
+    risk = pd.read_csv(folder / "risk.csv.gz", dtype={"ID": str})
     development = frames["DEV"]
     scores: dict[str, dict[str, np.ndarray]] = {}
     for (model, cohort), part in risk.groupby(["model", "cohort"], sort=False):
-        scores.setdefault(model, {})[cohort] = part["RS"].to_numpy(dtype=float)
+        scores.setdefault(model, {})[cohort] = aligned(part, frames[cohort], "RS")
     orientation = {}
     honest = pd.DataFrame(index=models, columns=[*PSEUDO, "truth"], dtype=float)
     for model in models:

@@ -45,8 +45,10 @@ for step in "${steps[@]}"; do
       r_real run_mime.R "mime_cap$MIME_CAP" cap="$MIME_CAP" cores="$MIME_CORES"
       python_step 17_competitors_real.py ;;
     sensitivity)
-      # 500 candidates: every model whose first algorithm is not StepCox, through Mime's single and double modes.
-      r_real run_mime.R "mime_cap$SENSITIVITY_CAP" cap="$SENSITIVITY_CAP" plan=feasible cores="$MIME_CORES"
+      # 500 candidates: every model whose first algorithm is not StepCox (Mime's source of the pinned commit, which
+      # setup_r_env.sh clones, with its StepCox section cut out; see competitors/run_mime.R).
+      r_real run_mime.R "mime_cap$SENSITIVITY_CAP" cap="$SENSITIVITY_CAP" plan=feasible cores="$MIME_CORES" \
+        mime_source="${COMPETITORS_SRC:-$here/competitors/src}/Mime/R/ML.Dev.Prog.Sig.R"
       python_step 17_competitors_real.py ;;
     null)
       python_step 17_competitors_null.py generate "$NULL_REPLICATES"

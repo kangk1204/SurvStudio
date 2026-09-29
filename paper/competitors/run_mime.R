@@ -4,15 +4,18 @@
 # Every other setting is Mime's documented default (nodesize 5, the example seed 5201314).
 #   Rscript run_mime.R source=real input=<folder> cohorts=TCGA,GSE13213,... cap=100 out=<folder> cores=6
 #   Rscript run_mime.R source=null input=<replicate file> expression=<tcga_expression.csv> cap=100 out=<folder> cores=1
-# plan=all runs mode "all" (every one of Mime's models); plan=feasible runs, through Mime's single and double modes,
-# every model whose first algorithm is not StepCox (the sensitivity run with 500 candidates, where StepCox cannot fit
-# the full Cox model: more genes than deaths).
+# plan=all runs mode "all" (every one of Mime's models). plan=feasible runs mode "all" without the models whose first
+# algorithm is StepCox, for the sensitivity run with 500 candidates, where StepCox cannot fit the full Cox model (more
+# genes than deaths): Mime's own source of the pinned commit (mime_source=, checked against the installed function)
+# with its section "3.StepCox" cut out. (Mime's single and double modes cannot stand in: double mode with Enet fits
+# alpha 0.1 whatever alpha it is given.)
 # Writes to out/: unicox.csv, candidates.txt, cindex.csv (model, cohort, Mime's C), risk.csv.gz (model, cohort, ID,
 # OS.time, OS, RS), genes.csv (model, genes the fitted model uses) and run.json.
 here <- dirname(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)[1]))
 source(file.path(here, "common.R"))
 args <- arguments(list(source = "real", input = "", cohorts = "", expression = "", out = "", cap = "100", seed = "5201314",
-                       cores = "6", nodesize = "5", plan = "all", p = "0.05"))
+                       cores = "6", nodesize = "5", plan = "all", p = "0.05",
+                       mime_source = file.path(here, "src", "Mime", "R", "ML.Dev.Prog.Sig.R")))
 cores <- as.integer(args$cores)
 seed <- as.integer(args$seed)
 options(rf.cores = cores, mc.cores = cores)
@@ -36,54 +39,30 @@ passing <- passing[order(passing$p), ]
 candidates <- head(passing$gene, as.integer(args$cap))
 writeLines(candidates, file.path(args$out, "candidates.txt"))
 
-run <- function(...) {
-  ML.Dev.Prog.Sig(train_data = train, list_train_vali_Data = cohorts, candidate_genes = candidates,
-                  unicox.filter.for.candi = TRUE, unicox_p_cutoff = as.numeric(args$p),
-                  nodesize = as.integer(args$nodesize), seed = seed, cores_for_parallel = cores, ...)
+# Mode "all" without the models whose first algorithm is StepCox: Mime's source with its section "3.StepCox" (from its
+# heading to the heading of section 4, CoxBoost) cut out, after checking that the source is the installed function.
+without_stepcox_first <- function(path) {
+  lines <- readLines(path, encoding = "UTF-8")
+  original <- new.env()
+  eval(parse(text = lines, encoding = "UTF-8"), envir = original)
+  if (!identical(deparse(body(original$ML.Dev.Prog.Sig)), deparse(body(Mime1::ML.Dev.Prog.Sig)))) {
+    stop(path, " is not the source of the installed Mime1::ML.Dev.Prog.Sig")
+  }
+  first <- grep("^[[:space:]]*# 3[.]StepCox -+", lines)
+  last <- grep("^[[:space:]]*# # 4[.]CoxBoost -+", lines)
+  if (length(first) != 1 || length(last) != 1 || last <= first) stop("cannot find Mime's section 3.StepCox in ", path)
+  cut <- new.env()
+  eval(parse(text = lines[-(first:(last - 1))], encoding = "UTF-8"), envir = cut)
+  cut$ML.Dev.Prog.Sig
 }
 
-# The models of mode "all" whose first algorithm is not StepCox, as single and double calls.
-feasible_calls <- function() {
-  alphas <- seq(0.1, 0.9, 0.1)
-  directions <- c("both", "backward", "forward")
-  calls <- list(list(mode = "single", single_ml = "RSF"))
-  for (alpha in alphas) calls[[length(calls) + 1]] <- list(mode = "single", single_ml = "Enet", alpha_for_Enet = alpha)
-  for (ml in c("CoxBoost", "plsRcox", "superpc", "GBM", "survivalsvm", "Ridge", "Lasso")) calls[[length(calls) + 1]] <- list(mode = "single", single_ml = ml)
-  second <- list(RSF = c("CoxBoost", "Enet", "GBM", "Lasso", "plsRcox", "Ridge", "StepCox", "superpc", "survivalsvm"),
-                 CoxBoost = c("Enet", "GBM", "Lasso", "plsRcox", "Ridge", "StepCox", "superpc", "survivalsvm"),
-                 Lasso = c("CoxBoost", "GBM", "plsRcox", "RSF", "StepCox", "superpc", "survivalsvm"))
-  for (first in names(second)) for (ml in second[[first]]) {
-    if (ml == "Enet") {
-      for (alpha in alphas) calls[[length(calls) + 1]] <- list(mode = "double", double_ml1 = first, double_ml2 = ml, alpha_for_Enet = alpha)
-    } else if (ml == "StepCox") {
-      for (direction in directions) calls[[length(calls) + 1]] <- list(mode = "double", double_ml1 = first, double_ml2 = ml, direction_for_stepcox = direction)
-    } else {
-      calls[[length(calls) + 1]] <- list(mode = "double", double_ml1 = first, double_ml2 = ml)
-    }
-  }
-  calls
-}
-
-if (args$plan == "all") {
-  res <- run(mode = "all")
-  cindex <- res$Cindex.res
-  riskscore <- res$riskscore
-  fits <- res$ml.res
-} else {
-  cindex <- data.frame()
-  riskscore <- list()
-  fits <- list()
-  for (call in feasible_calls()) {
-    part <- tryCatch(do.call(run, call), error = function(e) {
-      message("failed: ", paste(unlist(call), collapse = " "), ": ", conditionMessage(e))
-      NULL
-    })
-    if (is.null(part) || !is.list(part) || is.null(part$Cindex.res)) next
-    cindex <- rbind(cindex, part$Cindex.res)
-    riskscore <- c(riskscore, part$riskscore)
-    fits <- c(fits, part$ml.res)
-  }
-}
+prog_sig <- if (args$plan == "all") Mime1::ML.Dev.Prog.Sig else without_stepcox_first(args$mime_source)
+res <- prog_sig(train_data = train, list_train_vali_Data = cohorts, candidate_genes = candidates,
+                unicox.filter.for.candi = TRUE, unicox_p_cutoff = as.numeric(args$p), mode = "all",
+                nodesize = as.integer(args$nodesize), seed = seed, cores_for_parallel = cores)
+cindex <- res$Cindex.res
+riskscore <- res$riskscore
+fits <- res$ml.res
 
 # The genes a fitted model uses: non-zero coefficients where the model has them, else every input gene.
 model_genes <- function(fit) {
