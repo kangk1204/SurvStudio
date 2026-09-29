@@ -19,3 +19,7 @@ manuscript/
 survival_xai_survey.md
 *.pdf
 *:Zone.Identifier
+# The paper's reproduction: its data and results are regenerated; its figures are committed.
+paper/results/
+paper/data/
+!paper/figures/*.pdf
