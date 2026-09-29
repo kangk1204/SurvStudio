@@ -3659,7 +3659,7 @@ async def shutdown_server(request: Request) -> dict[str, str]:
     _schedule_process_shutdown()
     return {
         "status": "shutting_down",
-        "detail": "SurvStudio is stopping. You can close this tab or restart the server with `python -m survival_toolkit`.",
+        "detail": "SurvStudio is stopping. You can close this tab or restart the server with `survstudio`.",
     }
 
 
