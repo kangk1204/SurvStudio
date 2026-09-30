@@ -149,12 +149,9 @@ not part of this folder.
 
 ## Results and stamps
 
-`results/` is regenerated and not committed; `figures/` holds the figures drawn from a run at SurvStudio commit 9930bf3,
-and `run_all.sh` redraws them in place (the PDFs record the time they were drawn, so they always differ from the
-committed ones in their bytes). Figures 1, 2 and 4 and Supplementary Figures S1 and S3 there are redrawn at print size
-from that run's results; Figure 3 and Supplementary Figures S4 to S6, which replace that run's Figures 3, 5 and 6, and
-the redrawn Supplementary Figure S2 need the results of the extended scripts 03, 08, 10 and 14 (their HKSJ intervals),
-so the next full run draws them (`figS2_positive_control_sensitivity` is still that run's drawing until then).
+`results/` is regenerated and not committed; `figures/` holds the figures drawn from the results of one fresh-environment
+run of `run_all.sh` and `run_competitors.sh` at SurvStudio commit fc0e1af, and `run_all.sh` redraws them in place (the
+PDFs record the time they were drawn, so they always differ from the committed ones in their bytes).
 
 Every file a script writes to `results/` gets a stamp in `results/stamps/` (`common.stamp_result`): the file's
 SHA-256, the SurvStudio version and commit, a hash of the analysis code (`common.py`, the numbered scripts,
