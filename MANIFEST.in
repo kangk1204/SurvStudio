@@ -1,0 +1,5 @@
+include LICENSE README.md RELEASE_NOTES.md Dockerfile .dockerignore
+recursive-include docs *.md *.json
+recursive-include validation *.py *.R
+recursive-include tests *.py
+recursive-include .github/workflows *.yml
