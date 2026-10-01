@@ -1,1228 +1,318 @@
 # SurvStudio
 
-SurvStudio is a local-first survival analysis workbench for single-event right-censored tabular data.
-The interface is one workspace: set the outcome once, then use the tabs for survival curves, Cox models, marker evaluation, prediction models and Table 1. Results appear only after a run, each tab says whether its result still matches the settings, and exports sit in one menu per tab.
+SurvStudio does survival analysis of your own data in your web browser, without programming; your data never
+leave your computer.
 
-It supports:
-- Kaplan-Meier curves and weighted log-rank tests
-- Cox proportional hazards models with a preview of usable patients and events per parameter
-- honest marker evaluation: family-wise error control, stability across subsamples, added value over clinical covariates, and validation of the locked model in another cohort
-- a design check for studies that fit many models and keep the best, with no data needed
-- optional machine-learning and deep-learning survival models, compared on the same patient splits (the Transformer and VAE are experimental)
-- omics marker matrices (up to 60,000 markers) attached to the clinical table for marker evaluation
-- REMARK and TRIPOD+AI checklists with the methods and results paragraphs of the run, as Word or Markdown
-- manuscript-oriented table export
-- numerical agreement with R `survival`, lifelines and scikit-survival documented in [docs/validation](./docs/validation/numerical_agreement.md)
+![SurvStudio with the lung cancer sample open: Kaplan-Meier survival curves by tumour stage](github_images/hero.png)
 
-## Interface Preview
+## What you can do
 
-These screenshots show the main manuscript-facing workflows.
-
-<table>
-  <tr>
-    <td width="50%">
-      <img src="github_images/01_survstudio_main.png" alt="SurvStudio start screen" />
-      <br />
-      <strong>Start</strong><br />
-      Upload a cohort or open a sample; sample cohorts open with recommended settings.
-    </td>
-    <td width="50%">
-      <img src="github_images/02_analysis.png" alt="SurvStudio marker evaluation screenshot" />
-      <br />
-      <strong>Marker evaluation</strong><br />
-      Which candidate markers hold up after error control, resampling and adjustment for clinical covariates.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <img src="github_images/03_KM_plot.png" alt="Kaplan-Meier analysis screenshot" />
-      <br />
-      <strong>Survival curves</strong><br />
-      Kaplan-Meier curves, weighted log-rank testing, and manuscript-ready figure export.
-    </td>
-    <td width="50%">
-      <img src="github_images/04_Cox_PH.png" alt="Cox proportional hazards forest plot screenshot" />
-      <br />
-      <strong>Cox model</strong><br />
-      Hazard-ratio forest plots, proportional-hazards diagnostics, and stratified Cox support.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <img src="github_images/05_cohort_table.png" alt="Table 1 screenshot" />
-      <br />
-      <strong>Table 1</strong><br />
-      Baseline characteristics of the analysed patients, overall or by group.
-    </td>
-    <td width="50%">
-      <img src="github_images/06_MLDL_cindex.png" alt="Unified ML and DL model comparison screenshot" />
-      <br />
-      <strong>Prediction models</strong><br />
-      One board compares classical ML and deep-learning survival models on the same patient splits.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <img src="github_images/07_importance.png" alt="Model feature importance screenshot" />
-      <br />
-      <strong>Feature importance</strong><br />
-      Permutation importance of a trained model, shown in the model workbench.
-    </td>
-    <td width="50%">
-      <img src="github_images/08_SHAP.png" alt="SHAP explanation screenshot" />
-      <br />
-      <strong>SHAP explanations</strong><br />
-      Companion-model SHAP support is available for screened tree models when the encoded feature matrix allows it.
-    </td>
-  </tr>
-</table>
-
-## Who This Is For
-
-This project is for users who have cohort data in a spreadsheet-like table and want to:
-- upload the cohort into a local browser dashboard
-- run standard survival analyses without writing much code
-- compare classical, ML, and DL survival models
-- export figures and tables for reports or manuscripts
-- check which candidate markers hold up before claiming a signature
-
-This project is **not** a general survival-analysis platform for every survival setting.
-The current scope is:
-- single-event survival analysis
-- right-censored data
-- tabular cohorts
-- no left-truncated entry-time handling
-- no competing-risks analysis
-- external validation in the interface covers locked marker models; other models are validated by rerunning them on the external cohort
-
-## What The Built-In Example Data Is
-
-The start screen offers three sample cohorts; each opens with its recommended outcome, grouping and variable selections:
-
-1. `Lung cancer (TCGA-LUAD)`
-- a compact TCGA LUAD overall-survival table (489 patients) with clinical covariates
-- useful for a realistic demo with a real public dataset
-
-2. `Breast cancer (GBSG2)`
-- a real public breast-cancer recurrence dataset (686 patients)
-- useful for a fast end-to-end Kaplan-Meier, Cox, and ML smoke test with no missing values
-
-3. `Synthetic demo`
-- a synthetic cohort generated inside the package (360 patients)
-- includes `os_months`, `os_event`, `pfs_months`, `pfs_event`, demographic, treatment and stage variables, and two biomarkers for the Markers tab
-
-The fuller UCSC Xena TCGA LUAD table is still available from the API (`POST /api/load-tcga-example`).
-
-Real-data provenance:
-- the bundled TCGA LUAD tables are curated from UCSC Xena / TCGA for survival-workflow demonstration; the lung-cancer sample and the RNA top-100/top-500 upload files are compact derivatives of that public dataset
-- the breast-cancer sample is the public GBSG2 recurrence cohort aligned to the classic GBSG2 study workflow
-- study citations and file-level provenance notes are listed in [examples/README.md](examples/README.md)
-- users remain responsible for following the original data-source citation and reuse terms when redistributing derived outputs
-
-If you want a file that you can upload manually instead of clicking a built-in loader, use:
-- [examples/tcga_luad_nature2014_upload_ready.csv](examples/tcga_luad_nature2014_upload_ready.csv)
-- [examples/tcga_luad_rnaseq_top100_upload.csv](examples/tcga_luad_rnaseq_top100_upload.csv)
-- [examples/tcga_luad_rnaseq_top500_upload.csv](examples/tcga_luad_rnaseq_top500_upload.csv)
-- [examples/gbsg2_jco1994_upload_ready.csv](examples/gbsg2_jco1994_upload_ready.csv)
-- dataset notes: [examples/README.md](examples/README.md)
-
-## Requirements
-
-- Python `3.11` or newer
-- internet access during the first install so `pip` can download dependencies
-- if `python --version` or `python3 --version` prints `3.10` or older, do **not** use the standard `venv` path yet; use the `Project-local Conda fallback` section below first
-- if you are using WSL, keep the repo on the Linux filesystem for the first install (for example `~/projects/SurvStudio`), not under `/mnt/c/...`; editable `pip install -e .` can stall on mounted Windows paths
-
-## 1-Minute Quick Start
-
-**Recommended: install everything up front.**
-`pip install -e ".[all]"` is the right default for manuscript work.
-It unlocks Excel/Parquet import, ML and DL survival models, and figure export (`kaleido`). To run the test suite as well, use `pip install -e ".[dev]"`.
-A minimal `pip install -e .` works for KM + Cox only — use it only if disk space or install time is a concern.
-
-Use the first block that matches your machine.
-
-### If You Already Have Python 3.11+ (Recommended)
-
-On macOS or Linux:
-
-```bash
-git clone https://github.com/kangk1204/SurvStudio.git
-cd SurvStudio
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[all]"
-python -m survival_toolkit
-```
-
-On Windows 11 PowerShell:
-
-```powershell
-git clone https://github.com/kangk1204/SurvStudio.git
-cd SurvStudio
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[all]"
-.\.venv\Scripts\python.exe -m survival_toolkit
-```
-
-### If Your Machine Only Has Python 3.10 But You Have Conda Or Micromamba
-
-```bash
-git clone https://github.com/kangk1204/SurvStudio.git
-cd SurvStudio
-conda create -y -p .conda python=3.11 pip
-./.conda/bin/python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[all]"
-python -m survival_toolkit
-```
-
-Then open:
-
-```text
-http://127.0.0.1:8000
-```
-
-Click `Synthetic demo` first.
-
-Use the `pip` bundled with the fresh virtual environment for the first install. If you upgraded `pip` separately and the editable install failed, recreate `.venv` and retry without the `pip` upgrade step.
-
-The full `.[all]` install includes:
-- Excel / Parquet readers and `.xlsx` export
-- optional ML and DL survival model workflows
-- figure-export runtime (`kaleido`) for PNG / SVG saves
-- pytest and browser-test extras for local QA
-
-If you need only a subset, the available extras are:
-
-| Extra | What it adds |
-|---|---|
-| `.[all]` | Everything — **recommended** |
-| `.[ml]` | scikit-survival ML models only |
-| `.[formats]` | Excel / Parquet I/O only |
-| `.[dl]` | torch-based deep-learning models only |
-| `.[dev]` | local test stack plus format / ML / DL extras |
-| `.[e2e]` | Playwright browser tests only |
-
-There is currently no standalone `.[kaleido]` extra. If you need local PNG / SVG figure export, use `.[dev]` or `.[all]`.
+- **Survival curves.** Draw Kaplan-Meier curves for groups of patients (for example by stage or treatment), test
+  whether the groups differ, and read the median survival and the numbers at risk.
+- **Cox model.** See how each factor (age, sex, stage, a marker) changes the risk of the event, as hazard ratios
+  with confidence intervals, with checks of the model's assumptions.
+- **Table 1.** Describe your patients, overall or by group, in a table ready for a paper.
+- **Candidate markers.** Check up to 60,000 candidate markers (for example gene expression) against clinical
+  factors such as age and stage: the false positives are controlled across all markers, stability is checked on
+  resampled patients, and the model is locked and validated in another cohort.
+- **Prediction models.** Compare Cox, penalized Cox, random survival forests, gradient boosting and deep-learning
+  models fairly: all are trained and tested on the same patients, and the differences come with intervals.
+- **Exports.** Save figures (PNG, SVG), tables (CSV, Excel, Word), and REMARK and TRIPOD+AI reporting checklists
+  already filled in with your run.
 
 ## Install
 
-### Easiest Path For A New Mac
+The first install takes a few minutes and needs an internet connection. You do not need Python or git: a small
+installer called [uv](https://docs.astral.sh/uv/) fetches everything SurvStudio needs and keeps it apart from the
+rest of your computer.
 
-Tested path target:
-- macOS on Apple Silicon
-- Homebrew available
+**Windows**
 
-Before you start:
-- if another virtual environment is active, run `deactivate`
-- if Conda is active, run `conda deactivate`
-- the commands below create a project-local `.venv` and do not overwrite your system Python
-- this install path is for running the app itself
-- optional format readers, ML, DL, pytest, and Playwright can be added later only if you need them
+1. Open PowerShell: press the Windows key, type `PowerShell` and press Enter.
+2. Install uv. Copy this line, paste it into PowerShell (Ctrl+V or right-click) and press Enter:
 
-```bash
-brew install python@3.11
-git clone https://github.com/kangk1204/SurvStudio.git
-cd SurvStudio
-python3.11 -m venv .venv
-source .venv/bin/activate
-which python
-python --version
-pip install -e .
-python -m survival_toolkit
-```
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
 
-Then open:
+   If you prefer winget: `winget install --id=astral-sh.uv -e`.
+3. Close PowerShell and open it again, so that it finds `uv`.
+4. Install SurvStudio:
 
-```text
-http://127.0.0.1:8000
-```
+   ```powershell
+   uv tool install --python 3.12 "survstudio[all] @ https://github.com/kangk1204/SurvStudio/archive/refs/heads/main.zip"
+   ```
 
-Click `Synthetic demo` first.
+**macOS**
 
-### Easiest Path For A New Ubuntu Machine
+1. Open Terminal (Finder, Applications, Utilities, Terminal).
+2. On a Mac with Apple silicon (M1 or later), install Apple's free command-line tools, which one small part of
+   SurvStudio needs. Run the line below and click Install; if it says the tools are already installed, go on.
 
-Test target for CI:
-- `ubuntu-latest`
-- recommended for users: Ubuntu `24.04` or newer
+   ```bash
+   xcode-select --install
+   ```
 
-Before you start:
-- if another virtual environment is active, run `deactivate`
-- if Conda is active, run `conda deactivate`
-- the commands below create a project-local `.venv` and do not overwrite your system Python
-- this install path is for running the app itself
-- optional format readers, ML, DL, pytest, and Playwright can be added later only if you need them
-- on Ubuntu `22.04`, `python3` is often still `3.10`; if you cannot install `python3.11` system-wide, use the `Project-local Conda fallback` section below
+3. Install uv (or use `brew install uv`):
 
-```bash
-sudo apt update
-sudo apt install -y python3.11 python3.11-venv python3-pip build-essential git
-git clone https://github.com/kangk1204/SurvStudio.git
-cd SurvStudio
-python3.11 -m venv .venv
-source .venv/bin/activate
-which python
-python --version
-pip install -e .
-python -m survival_toolkit
-```
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
 
-Then open:
+4. Close Terminal and open it again.
+5. Install SurvStudio:
 
-```text
-http://127.0.0.1:8000
-```
+   ```bash
+   uv tool install --python 3.12 "survstudio[all] @ https://github.com/kangk1204/SurvStudio/archive/refs/heads/main.zip"
+   ```
 
-### Standard install
+**Linux**
 
-This is the easiest path once Python `3.11+` is already available. It installs the dashboard and the classical analysis stack first. Format readers, ML, DL, and development tools can be added later.
+1. Install uv with `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `brew install uv`).
+2. Open a new terminal.
+3. Run the same `uv tool install` command as for macOS. On an ARM computer, install a compiler first
+   (`sudo apt install build-essential` on Ubuntu).
 
-Before you start:
-- if another virtual environment is active, run `deactivate`
-- if Conda is active, run `conda deactivate`
-- if `python3 --version` prints `3.10` or older, stop here and use the `Project-local Conda fallback` section below
-- after activation, confirm that `which python` points to `.venv/bin/python`
+**Start SurvStudio.** In the terminal, type:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-which python
-python --version
-pip install -e .
+survstudio
 ```
 
-This path is for running the app. It does **not** install the optional format readers for Excel or Parquet, the ML stack, the DL stack, pytest extras, or Playwright.
+Then open <http://127.0.0.1:8000> in your web browser. Keep the terminal window open while you work: SurvStudio
+runs there. To stop it, press Ctrl+C in the terminal or click **Shutdown** at the top right of the page. To start
+again, type `survstudio`.
 
-If you want cohort-table Excel `.xlsx` export, install the format extras instead:
+**What `[all]` installs.** Everything: Excel and Parquet files, the machine-learning models (scikit-survival) and
+the deep-learning models (PyTorch). The download is about 300 MB on Windows and macOS and about 3 GB on Linux, where
+PyTorch comes with NVIDIA's GPU libraries; plan for 1 GB of disk space (6 GB on Linux). If you do not need deep
+learning, the lighter install downloads about 200 MB and has everything else:
 
 ```bash
-pip install -e ".[formats]"
+uv tool install --python 3.12 "survstudio[formats,ml] @ https://github.com/kangk1204/SurvStudio/archive/refs/heads/main.zip"
 ```
 
-If you want `.xlsx` export plus the optional ML and DL workflows, use:
+`--python 3.12` makes uv use Python 3.12, for which almost every part of SurvStudio comes ready-made (newer Python
+versions would need a compiler). uv downloads it if needed and leaves any other Python on your computer alone.
 
-```bash
-pip install -e ".[all]"
-```
+**Update or remove.**
 
-### Easiest Path For A New Windows 11 Machine
+| To | Run |
+|---|---|
+| Update to the latest version | `uv tool upgrade survstudio` |
+| Remove SurvStudio | `uv tool uninstall survstudio` |
+| Also delete the downloaded files | `uv cache clean` |
 
-Tested path target:
-- Windows `11`
-- PowerShell
-- Python `3.11` or newer installed
-- Git for Windows installed
+**Other ways.** With [Docker](https://www.docker.com/): `docker build -t survstudio https://github.com/kangk1204/SurvStudio.git`,
+then `docker run --rm -p 127.0.0.1:8000:8000 survstudio`. To work on the code, see the
+[developer install](docs/reference.md#14-developer-install).
 
-Before you start:
-- open a new PowerShell window after installing Python so the `py` launcher is available
-- confirm `py -3.11 --version` works before continuing
-- the commands below avoid PowerShell activation-policy issues by calling the venv Python directly
-- this install path is for running the app itself
-- optional format readers, ML, DL, pytest, and Playwright can be added later only if you need them
+## Your first analysis in 10 minutes
 
-```powershell
-git clone https://github.com/kangk1204/SurvStudio.git
-cd SurvStudio
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .
-.\.venv\Scripts\python.exe -m survival_toolkit
-```
+This walkthrough uses a sample that comes with SurvStudio: 489 patients with lung adenocarcinoma from The Cancer
+Genome Atlas (TCGA-LUAD), followed for overall survival.
 
-Then open:
+**1. Open the sample.** On the start screen, click **Lung cancer (TCGA-LUAD)**. (For your own data, drop your file
+on the left instead; see [Prepare your own data](#prepare-your-own-data).)
 
-```text
-http://127.0.0.1:8000
-```
+![Start screen with the upload area and the three sample cohorts](github_images/start_screen.png)
 
-If you prefer to activate the environment first in PowerShell, use:
+**2. Check the outcome.** The bar at the top says which columns hold the outcome. **Time** is `os_months`, the
+months from diagnosis to death or last contact. **Event** is `os_event`, and **Event value** `1` means the patient
+died; `0` means the patient was alive at last contact (censored). **Group by** is `stage_group`.
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-python --version
-python -m survival_toolkit
-```
+![The outcome bar: time os_months, event os_event, event value 1, grouped by stage_group](github_images/outcome_bar.png)
 
-### Project-local Conda fallback
+**3. Survival curves by stage.** On the **Survival curves** tab, click **Run Analysis**. Each line shows the share
+of patients still alive over time; the shaded bands are 95% confidence intervals and the table under the plot
+gives the numbers at risk. The log-rank test (p < 0.001) says the stages differ. The **KM Summary** table below
+gives the median survival: 76 months in stage I, 38 in stage II, 27 in stages III and IV.
 
-Use this when your machine has Conda or Micromamba available but the system Python is only `3.10` or older.
+![Kaplan-Meier curves by stage with numbers at risk and the summary card](github_images/survival_curves.png)
 
-This is the safest fallback on:
-- Ubuntu `22.04`
-- shared servers where you cannot use `sudo`
-- WSL setups where the OS Python is older than the project requirement
+**4. Cox model.** Open the **Cox model** tab. Age, sex, stage and smoking status are ticked; click **Run Analysis**.
+Each dot is a hazard ratio with its 95% interval: stage III patients died at about 3.3 times the rate of stage I
+patients (95% CI 2.2 to 4.9) at the same age, sex and smoking status. The badge says **Caution** because one
+smoking category has only 4 patients, so its estimate is unstable, and one term may break the model's
+proportional-hazards assumption; the notes say which. Untick `smoking_status` and run again to see the difference.
 
-WSL note:
-- if the repo is inside `/mnt/c/...` or another mounted Windows path, clone or move it to the Linux filesystem first before running the commands below
-- the editable install was verified on WSL2 from the Linux filesystem; on mounted Windows paths it can hang in 9p filesystem I/O during `pip install -e .`
+![Cox model forest plot of hazard ratios and the Caution card](github_images/cox_model.png)
 
-It bootstraps a project-local Python `3.11`, then creates the normal `.venv` from that interpreter.
+**5. Table 1.** Open **Table 1** and click **Build Table**. The table describes the patients overall and for each
+stage. It is wide: scroll it sideways, or choose **Export → Table (Excel)** to open it in Excel.
 
-```bash
-git clone https://github.com/kangk1204/SurvStudio.git
-cd SurvStudio
-conda create -y -p .conda python=3.11 pip
-./.conda/bin/python -m venv .venv
-source .venv/bin/activate
-which python
-python --version
-pip install -e .
-python -m survival_toolkit
-```
+![Table 1 with the variables on the left and the output on the right](github_images/table1.png)
 
-If you prefer to run directly from the Conda environment without creating `.venv`, this also works:
+Every tab has an **Export** menu for its figures and tables, and a status next to **Run Analysis** tells you
+whether the result still matches the settings.
 
-```bash
-conda create -y -p .conda python=3.11 pip
-conda run -p ./.conda python -m pip install -e .
-conda run -p ./.conda python -m survival_toolkit
-```
+## Check candidate markers
 
-### Optional ML, DL, and development installs
+The **Markers** tab answers: which of my candidate markers predict survival beyond the clinical factors I already
+know, and would they hold up in new patients? Here we test the 20,530 genes measured by RNA sequencing in the
+TCGA-LUAD patients, adjusted for age, sex and stage.
 
-Start with the app-only install above, then add extras only if you need them:
+**1. Get the gene expression file.** Download
+[HiSeqV2.gz](https://tcga-xena-hub.s3.us-east-1.amazonaws.com/download/TCGA.LUAD.sampleMap%2FHiSeqV2.gz)
+(31 MB) from the [UCSC Xena](https://xenabrowser.net/datapages/?dataset=TCGA.LUAD.sampleMap%2FHiSeqV2&host=https%3A%2F%2Ftcga.xenahubs.net)
+TCGA hub. Keep it as downloaded; do not unzip it.
 
-- Add Excel and Parquet import support:
+**2. Attach it.** With the lung cancer sample open, go to the **Markers** tab and open **Markers in a separate
+file (omics)**. Leave **Patient ID column** at `patient_id`, choose `HiSeqV2.gz` and click **Attach**. SurvStudio
+reports 20,530 markers and 484 of 489 patients matched: it matches the TCGA sample codes to the patients and
+leaves normal tissue out.
 
-```bash
-pip install -e ".[formats]"
-```
-
-- Add ML models:
-
-```bash
-pip install -e ".[ml]"
-```
-
-- Add deep learning models:
-
-```bash
-pip install -e ".[dl]"
-```
-
-- Full local development stack:
-
-```bash
-pip install -e ".[dev]"
-```
-
-- Everything:
-
-```bash
-pip install -e ".[all]"
-```
-
-Notes:
-- `.[formats]` adds `openpyxl`, `pyarrow`, and `xlrd` for `.xlsx`, `.xls`, and `.parquet` input support
-- `.[ml]` adds `scikit-survival` and `shap`
-- `.[dl]` adds `torch`
-- `.[dev]` includes pytest, httpx, `kaleido`, the format readers, and the ML and DL extras
-- `.[all]` includes every runtime feature: the format readers, ML, DL, and `kaleido` figure export (test tools live in `.[dev]` and `.[e2e]`)
-- on Linux, `.[dl]`, `.[dev]`, and `.[all]` can download a large PyTorch wheel and, depending on platform resolution, additional CUDA runtime packages
-- on Linux, PyTorch may print a CUDA initialization warning if the installed NVIDIA driver is older than the wheel expects; SurvStudio can still run on CPU, so this warning is only a blocker if you specifically need GPU acceleration
-- if you only want to run the dashboard or classical survival workflows with CSV or TSV input, stay with `pip install -e .`
-
-### Optional Browser E2E Test Install
-
-Only use this if you want to run the headless browser download test.
-
-```bash
-pip install -e ".[dev,e2e]"
-python -m playwright install chromium
-```
-
-On Ubuntu CI or a fresh Linux machine, if Chromium system dependencies are missing, use:
-
-```bash
-python -m playwright install --with-deps chromium
-```
-
-### Docker
-
-To run SurvStudio without installing Python, build the container image from the repository:
-
-```bash
-docker build -t survstudio .
-docker run --rm -p 127.0.0.1:8000:8000 survstudio
-```
-
-Then open `http://localhost:8000`. Publish the port on `127.0.0.1` as shown: inside the container the server listens on every interface and it has no login, so `-p 8000:8000` would expose it to your network. The image includes the table formats and the classical ML models; build with `--build-arg EXTRAS=all` to add deep learning (PyTorch, about 1 GB more). Uploaded data stay in the container's memory and are gone when it stops. The in-app `Shutdown` button does not work through Docker's port forwarding; stop the container with `docker stop` or Ctrl+C.
-
-## Run
-
-Start the local app:
-
-```bash
-python -m survival_toolkit
-```
-
-The installed `survstudio` command does the same (`survstudio serve --port 8001` picks another port; the older `survival-toolkit` name still works).
-
-Then open:
-
-```text
-http://127.0.0.1:8000
-```
-
-The app opens on the start screen; after loading a cohort, set the outcome in the bar at the top and pick a tab. For predictive modeling, the `Prediction models` tab compares ML and DL models together or trains one selected model at a time. The design check for multi-algorithm signature studies is at `http://127.0.0.1:8000/design-check` and needs no data.
-
-Local-only request guard:
-- the server answers only requests addressed to `localhost`, `127.x.x.x`, `[::1]`, or the `--host` bind address, and refuses state-changing requests (uploads, analyses, shutdown) sent from other websites
-- to reach it through another name (a LAN hostname or a reverse proxy), allow that name explicitly: `python -m survival_toolkit serve --host 0.0.0.0 --allowed-host my-workstation.local`, or set `SURVSTUDIO_ALLOWED_HOSTS=my-workstation.local` (comma-separated; `*` disables the Host check) when launching `uvicorn` directly
-
-Security and runtime behavior:
-- SurvStudio has **no login**. Keep the default `127.0.0.1` bind address unless every machine that can reach the server is trusted; `serve --host 0.0.0.0` prints a warning because anyone who can reach the address can upload data, run analyses, and open datasets whose IDs they know.
-- The in-app `Shutdown` works only when the page was opened through a loopback address; through a LAN name or a reverse proxy it returns `403`.
-- Uploaded datasets live in memory only: at most 10 at a time (the least recently used is dropped first), and each expires after 1 hour without use. `DELETE /api/dataset/{dataset_id}` frees one immediately, together with any cached models fitted on it.
-- Heavy jobs (model training and comparison, signature search, optimal cutpoints, time-dependent importance, counterfactual and partial-dependence runs) run at most 2 at a time; later ones wait for a free slot. Set `SURVSTUDIO_MAX_HEAVY_JOBS` to change the limit.
-- When the page abandons a request (you start a newer run of the same kind, or close the tab), the server stops that job at its next checkpoint instead of finishing work nobody will read.
-
-If `python -m survival_toolkit` does not start the server, check:
-- the virtual environment is activated
-- installation finished without errors
-- you are inside the project directory
-
-## Installation Notes
-
-- The fastest first run is `pip install -e .`.
-- Add `.[formats]` when you need Excel (`.xlsx`, `.xls`) or Parquet input support.
-- Add `.[ml]` only when you need the optional machine-learning models.
-- Add `.[dl]` only when you need the optional deep-learning models.
-- Add `.[dev]` when you want the full local development stack, normal pytest suite, and the optional format readers.
-- On Linux, `.[dl]` and `.[dev]` may be large because PyTorch can pull platform-specific runtime packages.
-- On Linux, an older NVIDIA driver can trigger a PyTorch CUDA initialization warning even when CPU execution still works; this matters only if you expect GPU acceleration.
-- If your machine only has Python `3.10`, bootstrap Python `3.11` first with the `Project-local Conda fallback` section.
-- Browser E2E testing is optional and uses the separate `e2e` extra.
-- The app itself does not need Playwright.
-- SurvStudio is written for pandas copy-on-write, the only mode in pandas 3. With pandas 2.x, `import survival_toolkit` switches copy-on-write on for the whole Python session, so chained assignment (`df["a"][0] = 1`) in your own code no longer changes `df`; use pandas 3, or a separate session, if your code relies on it.
-
-## First 5 Minutes
-
-If this is your first time:
-
-1. Click `Synthetic demo` or `Lung cancer (TCGA-LUAD)`; the outcome and a sensible grouping are filled in
-2. Check the outcome bar at the top:
-   - time: for example `os_months`
-   - event: for example `os_event`, with event value `1`
-3. Start with the tabs:
-   - Survival curves
-   - Table 1
-   - Cox model
-4. If needed, make groups from a numeric variable (Groups, Make groups) using:
-   - median split
-   - tertile split
-   - quartile split
-   - percentile split
-   - extreme split
-   - optimal cutpoint
-5. Use the Markers tab to see which candidate markers hold up, and the Prediction models tab only after the classical analysis makes sense
-6. If you want to validate a file before opening the UI, run:
-
-```bash
-survival-toolkit inspect path/to/data.csv
-```
-
-## Recommended Real-Data Workflows
-
-### TCGA LUAD Workflow
-
-Best starting dataset choice:
-- `Lung cancer (TCGA-LUAD)`
-
-Recommended study columns:
-- time column: `os_months`
-- event column: `os_event`
-- event-positive value: `1`
-- group column: `stage_group`
-
-Recommended first figures and tables:
-1. Survival curves by `stage_group`
-2. Table 1 grouped by `stage_group`
-3. Cox model with:
-   - covariates: `age`, `sex`, `stage_group`, `smoking_status`
-   - categorical covariates: `sex`, `stage_group`, `smoking_status`
-4. Prediction models comparison with:
-   - features: `age`, `sex`, `stage_group`, `smoking_status`
-   - categorical features: `sex`, `stage_group`, `smoking_status`
-5. DL smoke or comparison with the same feature set
-
-Recommended manuscript outputs:
-- Kaplan-Meier plot by stage
-- Cox hazard-ratio forest plot
-- cohort summary table stratified by stage
-- ML comparison table or repeated-CV manuscript table
-
-### GBSG2 Workflow
-
-Best starting dataset choice:
-- `Breast cancer (GBSG2)`
-
-Recommended study columns:
-- time column: `rfs_days`
-- event column: `rfs_event`
-- event-positive value: `1`
-- group column: `horTh`
-
-Recommended first figures and tables:
-1. Survival curves by `horTh`
-2. Survival curves by `menostat`
-3. Table 1 grouped by `horTh`
-4. Cox model with:
-   - covariates: `age`, `horTh`, `menostat`, `pnodes`, `tgrade`, `tsize`
-   - categorical covariates: `horTh`, `menostat`, `tgrade`
-5. Prediction models comparison with:
-   - features: `age`, `horTh`, `menostat`, `pnodes`, `tgrade`, `tsize`
-   - categorical features: `horTh`, `menostat`, `tgrade`
-
-Recommended manuscript outputs:
-- Kaplan-Meier plot for hormonal therapy groups
-- Cox forest plot for recurrence-free survival
-- Table 1 grouped by hormonal therapy
-- ML comparison table for recurrence discrimination
-
-### Synthetic Example Workflow
-
-Best starting dataset choice:
-- `Synthetic demo`
-
-Recommended study columns:
-- time column: `os_months`
-- event column: `os_event`
-- event-positive value: `1`
-- group column: `stage` or `treatment`
-
-Recommended first figures and tables:
-1. Survival curves by `stage`
-2. Survival curves by `treatment`
-3. Table 1 grouped by `stage`
-4. Cox model with:
-   - covariates: `age`, `sex`, `stage`, `treatment`, `biomarker_score`, `immune_index`
-   - categorical covariates: `sex`, `stage`, `treatment`
-5. Markers tab: `biomarker_score` and `immune_index` as markers, adjusted for `age`, `sex`, `stage` and `treatment`
-6. Prediction models comparison with:
-   - features: `age`, `sex`, `stage`, `treatment`, `biomarker_score`, `immune_index`
-   - categorical features: `sex`, `stage`, `treatment`
-
-This synthetic dataset does **not** use `stage_group` or `treatment_group`.
-The actual column names are `stage` and `treatment`.
-
-## Input Data Format
-
-Supported file types:
-- included in the base `pip install -e .`: `csv`, `tsv`, `txt`
-- requires `pip install -e ".[formats]"`: `xlsx`, `xls`, `parquet`
-
-If you are choosing a spreadsheet format, prefer `.xlsx` over legacy `.xls`.
-
-Upload limits and text encodings:
-- at most 200 MB per file, 100,000 rows, 5,000 columns, and 5,000,000 cells; `.xlsx` workbooks may expand to at most 256 MB when decompressed
-- text and Excel files over a limit are refused from their header and a bounded read, before the whole file is parsed
-- other file extensions are refused before anything is written to disk
-- text files may be UTF-8 (with or without BOM), UTF-16, Korean CP949/EUC-KR (what Korean Excel saves as "CSV"), Windows-1252, or Latin-1; the encoding is detected automatically, and the upload banner and `survival-toolkit inspect` profile (`text_encoding`) show which one was used
-
-Expected structure:
-- one row per patient or subject
-- one column for follow-up time
-- one column for event status
-- remaining columns as covariates
-
-### Minimum Required Columns
-
-At minimum, your file needs:
-
-1. a time column
-- numeric
-- zero or positive values (time 0 is kept; negative times are dropped)
-- examples: `os_months`, `followup_months`, `time_to_event`
-
-2. an event column
-- indicates whether the event happened during follow-up
-- examples: `os_event`, `status`, `death`
-
-3. optional feature columns
-- age
-- sex
-- stage
-- treatment
-- biomarkers
-
-### Simple Example
-
-```csv
-patient_id,os_months,os_event,age,stage,treatment,biomarker_score
-PT-001,12.4,1,67,III,Standard,0.82
-PT-002,18.0,0,59,II,Combination,-0.15
-PT-003,7.2,1,72,IV,Standard,1.31
-```
-
-Meaning:
-- `os_months`: follow-up time
-- `os_event = 1`: event happened
-- `os_event = 0`: censored
-
-### Event Coding
-
-The app can handle common event codings.
-
-- default is `1 = event`, `0 = censored`
-- if your event column uses another coding, select the event-positive value in the app
-- by default, the `Event column` selector shows only binary columns whose names look like real event indicators
-- if your true event indicator uses a non-standard name, turn on `Show all columns for Event`
-
-Examples:
-- `1 / 0`
-- `yes / no`
-- `death / alive`
-- `R / N`
-
-Important:
-- this platform expects a **binary event indicator**
-- if your status column has more than two states, recode it first
-- baseline characteristics such as `egfr_status`, `kras_status`, `sex`, `stage`, or treatment labels are usually **not** event columns
-- those fields should usually be used as `Group by` variables or model features, not as the survival event indicator
-
-Examples that need recoding before analysis:
-- `0 = censored`, `1 = cancer death`, `2 = non-cancer death`
-- `0 = no event`, `1 = relapse`, `2 = death`
-
-Those are not single-event binary outcomes.
-
-### What Counts As "Time"
-
-The time column should be:
-- numeric
-- measured in one consistent unit
-- zero or positive for all analyzable rows (negative times are dropped)
-
-Good examples:
-- months from diagnosis to death
-- days from surgery to recurrence
-- weeks from enrollment to progression
-
-Avoid mixing units like:
-- some rows in days
-- some rows in months
-
-### Missing Data
-
-The app will drop rows that become unusable after required columns are checked.
-
-For example, rows may be removed if they have:
-- missing survival time
-- missing event status
-- missing values in selected model covariates
-- non-numeric values in a numeric time column
-
-So before analysis, it is better if your file has:
-- clean time values
-- clean event values
-- as little missingness as possible in the variables you plan to model
-
-Text and numeric features:
-- text columns (for example `stage` or `smoking_status`) are used as categorical variables by Cox PH, the ML models, and the deep models, even if you do not mark them categorical
-- a column that is numeric except for a few stray text values (for example `unknown` in an `age` column) is refused as a model feature in every module; recode those cells as blank so the column stays numeric (a blank is handled as missing)
-- a text column with more than 50 distinct values is refused as a feature unless you mark it categorical: it is usually numbers stored as text (values such as `<0.1`, or decimal commas) or a patient ID, and would otherwise add one column per value
-- a column you mark categorical is used as categorical even when its values look numeric
-- numeric category codes are the same levels whether a column was read as whole numbers or as decimals (`1` and `1.0`; one blank cell makes pandas read a code column as decimals), so a model locked on one cohort scores another cohort's codes correctly
-- the reference (baseline) level of a categorical variable follows the clinical ordering (stage I before II, never smoker before current smoker) or numeric order for numeric-looking codes (`2` before `10`)
-
-### One Row Per Patient
-
-The current workflow assumes:
-- one patient per row
-- one survival endpoint at a time
-
-Do not upload long-format repeated-measures tables like:
-- multiple rows per patient across visits
-- one row per timepoint
-- one row per lesion
-
-### Recommended Beginner Template
-
-If you are preparing a first file, use columns like:
-- `patient_id`
-- `os_months`
-- `os_event`
-- `age`
-- `sex`
-- `stage`
-- `treatment`
-- one or more biomarker columns
-
-### Common Mistakes
-
-- event column contains more than two outcome states
-- time column contains text like `12 months`
-- one patient appears in multiple rows
-- uploaded file uses mixed date/time formats instead of a numeric follow-up duration
-- choosing a categorical text field as the survival time column
-
-## Input Validation And Error Handling
-
-The app does not silently guess around invalid survival inputs.
-It performs explicit checks and returns errors when the input does not fit the supported workflow.
-
-### What The App Validates
-
-On upload and analysis, the app checks things like:
-- supported file extension
-- readable file encoding for text files
-- file is not empty
-- uploaded dataset stays within the 1000-feature model-input cap
-- required columns exist
-- survival time can be interpreted as numeric
-- survival time is zero or positive
-- event coding can be interpreted as a binary event indicator
-- selected model covariates remain analyzable after missing values are handled
-
-### Typical Error Cases
-
-You should expect an error if:
-- the file extension is unsupported
-- the event column cannot be interpreted as binary
-- the event-positive value you selected is not present
-- the event column has more than two states
-- you pick a baseline status field as the event column after enabling `Show all columns for Event`
-- the selected time column has no positive values
-- all usable rows disappear after missing-value filtering
-- a model has too few analyzable samples or too few events
-
-### Examples Of Helpful Error Messages
-
-Examples of messages the app may return:
-- `Unsupported input file extension`
-- `Could not infer event coding`
-- `The numeric event column has more than two distinct states`
-- `No analyzable rows remain after removing missing values`
-- `No events were found after preprocessing the event column`
-- `Partial dependence for categorical feature ... is not supported`
-
-### Practical Advice For Beginners
-
-If upload or analysis fails:
-
-1. check that the time column is numeric
-2. check that the event column is truly binary
-3. check that you selected the correct event-positive value
-4. check that one patient appears only once
-5. check missing values in the variables you selected for modeling
-6. use `Synthetic demo` first to confirm the app itself is working
-7. use `survival-toolkit inspect path/to/file.csv` to inspect your file before opening the UI
-
-## Main Analyses
-
-### Kaplan-Meier
-
-Use this when you want:
-- survival curves by group
-- median survival
-- RMST with delta-method confidence intervals at the display horizon
-- weighted log-rank tests
-- risk tables
-
-### Cox PH
-
-Use this when you want:
-- hazard ratios
-- confidence intervals
-- p-values
-- multivariable adjustment
-- simple proportional hazards diagnostics
-
-### Machine Learning
-
-Implemented ML paths:
-- LASSO-Cox (penalized Cox)
-- Random Survival Forest
-- Gradient Boosted Survival
-- model comparison against Cox PH
-
-Comparison supports:
-- deterministic holdout (stratified 70/30, shared with the deep-learning models)
-- repeated stratified CV
-- repeated stratified CV on a development set plus a **locked independent test set** (`locked_test_fraction`)
-- manuscript-oriented result tables
-
-Single-model ML training also supports:
-- `Fast mode (skip SHAP)` for faster turnaround
-- feature-importance output for trained models
-
-LASSO-Cox note:
-- use this when the feature set is too wide for stable unpenalized Cox PH
-- it is a predictive penalized Cox path, not an inferential hazard-ratio workflow
-- SHAP, partial dependence, and counterfactual analysis remain tree-model features only
-
-Practical note:
-- `Compare All Models` is usually faster than training one model (`Train one model`)
-- `Compare All Models` focuses on cross-model scoring
-- training one model may do extra post-fit work such as feature importance and optional SHAP computation
-- ML result payloads now include IPCW `IBS`, a Kaplan-Meier null-model `IBS`, and `Brier Skill Score = 1 - IBS_model / IBS_null` so raw error can be interpreted relative to a no-covariate reference
-- the IPCW weights follow Graf et al. (1999) with the Gerds & Schumacher (2006) convention used by `pec` and `riskRegression`: an event at `t_i` is weighted by `1 / G(t_i-)`, a patient still at risk at `t` by `1 / G(t)`, and the reverse Kaplan-Meier estimate `G` counts events before censorings at tied times. scikit-survival's `brier_score` uses `G(t_i)` instead, so the two differ slightly when censoring times coincide with event times
-- Random Survival Forest and Gradient Boosted Survival feature importance is permutation importance on the evaluation rows (up to 300): the mean drop in Harrell's C when a raw feature is shuffled, with all one-hot columns of a categorical feature shuffled together
-- for quick RSF checks on larger cohorts, leave `Fast mode` enabled
-- if `TreeExplainer` is unsupported, SHAP falls back to a tightly capped `KernelExplainer` approximation using a small background/evaluation sample, so treat the ranking as approximate rather than publication-grade
-- if SHAP safe mode is triggered because the encoded matrix is too wide, SurvStudio explains a reduced companion tree model for interpretability only; describe that companion-model caveat explicitly if you cite SHAP outputs in a manuscript
-
-### Deep Learning
-
-Implemented DL paths:
-- DeepSurv
-- DeepHit
-- Neural MTLR
-- Survival Transformer
-- Survival VAE
-
-Deep comparison supports:
-- deterministic holdout (the same stratified 70/30 split as the ML comparison for the same seed)
-- repeated CV, optionally with a locked independent test set
-- early stopping on a monitor subset held out from gradient updates
-- parallel fold execution
-
-Single-model and comparison DL runs expose:
-- epochs
-- learning rate
-- dropout
-- batch size
-- random seed
-- shared ML/DL feature selection
-
-Model-specific advanced controls are shown only when relevant:
-- DeepHit / Neural MTLR:
-  - `time bins`
-  - `batch size`
-- Survival Transformer:
-  - `transformer width`
-  - `attention heads`
-  - `transformer layers`
-- Survival VAE:
-  - `latent dim`
-  - `clusters`
-  - `batch size` is ignored because the current VAE path uses full-batch optimization
-
-Architecture note:
-- `Hidden Layers` uses the full comma-separated stack for DeepSurv, DeepHit, Neural MTLR, and Survival VAE
-- `Dropout` is applied to all current deep model paths, including Neural MTLR
-- `Batch Size` currently affects DeepHit and Neural MTLR only. DeepSurv, Survival Transformer, and Survival VAE use full-batch optimization in the current implementation, and the run metadata reports the effective full-batch size for those paths.
-- Adam-based DL optimizers use light L2 regularization (`weight_decay=1e-4`) and gradient clipping for stability on wider feature sets.
-- DeepHit ranks the predicted cumulative incidence at each event time (Lee et al., 2018), including subjects censored in the same time bin, with a stabilized ranking-loss scale (`sigma=1.0`).
-- `Neural MTLR` uses a neuralized right-cumulative MTLR parameterization for workflow comparison; its censored likelihood is evaluated in log space for numerical stability. It matches the canonical MTLR probability construction, while the surrounding network/training path is a practical SurvStudio implementation rather than a line-by-line clone of one reference codebase.
-- `Survival VAE` should be interpreted as a VAE-inspired latent representation model for clustering and risk screening. SurvStudio does not claim validated generative simulation or uncertainty estimation from this path.
-- Early stopping monitors a stratified 20% subset of the training partition that is **held out from gradient updates** (the model never trains on it). `DeepSurv`, `Survival Transformer`, and `Survival VAE` monitor C-index; `DeepHit` and `Neural MTLR` monitor the discrete-time loss. The monitor subset never overlaps the holdout, CV fold, or locked test set, and its curve is not a validation metric.
-- After early stopping picks the best epoch, the model is refit from scratch on the **whole** training partition (monitor rows included) for that many epochs, so the reported model uses every training row. The run metadata reports `refit_epochs` (also `epochs_trained`, the epochs behind the reported model), the length of the early-stopping run (`early_stopping_epochs`), the rows used for early stopping (`early_stopping_fit_samples`, `monitor_samples`), and the final `fit_samples`. Every deep fit runs on one torch thread, so a seed gives the same numbers whether cross-validation folds run in parallel or one after another.
-- Deep-model summaries currently report discrimination (`C-index`) only. SurvStudio does not yet compute IBS for deep-model outputs, so calibration/error comparisons are not directly symmetric with the ML module.
-- Cox-style DL paths (`DeepSurv`, `Survival Transformer`) optimize a Breslow-ties partial-likelihood objective, while the classical Cox PH workflow reports Efron-ties estimates; this difference is intentional and should be documented in manuscript Methods if you compare those paths directly.
-
-### Prognostic Marker Evaluation
-
-Use this when you screen many candidate markers (for example gene-expression columns) for association with survival and want the claim checked the way a careful reviewer would check it. It runs in the Markers tab and from Python.
-
-Markers can be columns of the uploaded table or, for omics data, a separate marker matrix. In the Markers tab, open `Markers in a separate file (omics)`, choose the dataset's patient ID column and attach a CSV, TSV, TXT or Parquet file with one row per marker and one column per patient (as GEO and TCGA distribute expression) or one row per patient; the layout is detected from the IDs. Text files may be gzip-compressed, so a UCSC Xena download such as `HiSeqV2.gz` attaches as it is. The matrix can hold up to 60,000 markers and 30 million values, and its patient IDs must be written exactly as in the ID column, except that TCGA sample barcodes (`TCGA-05-4244-01`) are matched to patient barcodes (`TCGA-05-4244`), one tumour sample per patient with normal tissue left out; patients without matrix values are left out of the evaluation. The clinical table stays small, so the other tabs are unaffected.
-
-Markers with more than 90% of patients at one value are left out before testing (`max_mode_fraction`). A gene expressed in a handful of patients has a heavy-tailed test statistic; in the TCGA-LUAD RNA-seq data such genes made the permutation maximum (its 95% point was chi-square 239 instead of about 25), so no gene could pass family-wise control. The filter does not look at the outcome, so the error control holds.
-
-For every marker it reports:
-- two Cox score-test lenses: marginal association, and added value over the clinical covariates you name (the primary lens whenever clinical covariates are given)
-- Westfall–Young step-down permutation p-values (family-wise error over all markers) and permutation FDR q-values. The added-value null permutes the residuals of each marker after regression on the clinical covariates (the Smith method; Winkler et al., NeuroImage 2014;92:381–397), so a marker that merely tracks a clinical factor is not called prognostic
-- the whole procedure rerun on event-stratified 63.2% subsamples: selection frequency, rank interval, and direction consistency
-- a tier from pre-declared rules:
-  - `robust`: Westfall–Young p ≤ 0.05, selected in at least 50% of subsamples, same direction in at least 90%
-  - `suggestive`: Westfall–Young p ≤ 0.05 or permutation q ≤ 0.10, but not stable enough to be robust
-  - `marginal only`: associated on its own but not beyond the clinical covariates
-  - `not supported`
-
-It also screens the patients for repeated samples. Public expression cohorts often hold the same tumour twice, and a patient in the data twice can sit on both sides of a subsample split and flatter the internal estimates. On panels of at least 200 markers, two patients are flagged when their profiles over the 5,000 most variable markers are each other's best match, correlate at least 0.7, and stand 0.2 above either one's next-best match. Patients with identical values on every marker are flagged too, on panels of at least 20 markers that take many distinct values (on binary panels such as mutation calls, patients share profiles by chance). Flagged pairs lead the cautions, named by the patient ID column, and the verdict stays at review until one sample per patient is kept. On 17 public breast and lung cancer cohorts (5,955 patients), the screen found 15 of 21 confirmed repeated tumours and flagged no pair of different patients.
-
-For a signature built from the selected markers it reports the apparent C-index, an optimism-corrected C-index, the C-index on left-out rows next to that of the clinical covariates alone, and how much the top marker's effect shrinks outside the rows that selected it (the "winner's curse" of picking the strongest marker). The signature is then locked into a recipe (encoders, coefficients, baseline survival, and a SHA-256 hash) that can be applied unchanged to an external cohort:
-
-```python
-import pandas as pd
-from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
-
-development = pd.read_csv("development.csv")
-genes = [column for column in development.columns if column.startswith("gene_")]
-result = evaluate_markers(
-    development,
-    time_column="os_months",
-    event_column="os_event",
-    marker_columns=genes,
-    clinical_columns=["age", "stage"],
-    categorical_clinical=["stage"],
-    settings=MarkerSettings(n_permutations=1000, n_resamples=200),
-)
-robust = [row["marker"] for row in result["marker_table"] if row["tier"] == "robust"]
-
-external = pd.read_csv("external.csv")
-report = validate_locked_recipe(external, result["locked_recipe"], horizon=60)
-print(report["metrics"]["c_index"])
-```
-
-The Markers tab opens its results with one summary figure: the number of markers that clear each bar (tested, p < 0.05, FDR q ≤ 0.05, family-wise p ≤ 0.05, robust) and the signature's C-index from apparent to optimism-corrected to the left-out rows, beside the clinical covariates alone. `survival_toolkit.plots.build_marker_summary_figure(result)` draws it from Python.
-
-In the Markers tab, `Export` also gives a REMARK checklist (Word or Markdown): the methods and results paragraphs of the run and the 20 REMARK items, each marked as filled in by SurvStudio, partly filled in, or for the authors to complete (study design, specimens, assay, interpretation). From Python, `survival_toolkit.reporting.remark_checklist(result)` returns the same checklist.
-
-External validation reports Harrell's C with a bootstrap CI, the C-index gain over the locked clinical-only model, the calibration slope, observed/expected risk, the Brier score and Brier skill at the horizon, and each marker's external hazard ratio with a Holm-adjusted one-sided replication test. A recipe that was edited after it was locked is rejected.
-
-For a cohort measured on another platform (for example microarrays against an RNA-seq development set), choose `Another platform (rescale within cohort)` in the interface or pass `marker_scaling="within_cohort"`: each marker is mapped onto its development mean and SD by its z-score within the external cohort, so the model's relative weights hold; discrimination is then comparable, absolute risks only roughly. Locked markers the external dataset does not measure are held at their development median, and the report gives the share of the model's marker weight (|coefficient| x development SD) that was measured; below half, validation stops.
-
-In the TCGA-LUAD case study, the ten-gene model locked on RNA-seq (apparent C 0.749, optimism-corrected 0.652) reached a pooled C of 0.665 in seven GEO microarray cohorts (1,509 patients, 576 deaths), against 0.660 for age, sex and stage alone: the corrected estimate, not the apparent one, anticipated the external result.
-
-Notes:
-- every threshold used for a tier is a field of `MarkerSettings`; fix them before looking at results, not after
-- the robust-tier thresholds (50% selection, 90% direction) come from a simulation pilot in which stricter values (80% / 95%) found only 6% of true markers instead of 21%, with the robust tier's family-wise error at or below 1% either way
-- `nonlinear_lens="gbs"` or `"rsf"` adds a descriptive tree-model permutation-importance check, shown as `N+` / `N·` in each marker's evidence pattern; it does not change the tiers
-- the Cox score screen reproduces R `survival::coxph` score tests (Efron and Breslow ties, with and without strata) to a relative tolerance of 1e-6 or better
-
-## How To Read Results
-
-### Kaplan-Meier
-
-- Curves farther apart usually suggest different survival experiences between groups.
-- The log-rank p-value tests whether the group curves differ.
-- A statistically small p-value does **not** automatically mean the effect is clinically important.
-
-### Cox PH
-
-- Hazard ratio `> 1`: higher hazard
-- Hazard ratio `< 1`: lower hazard
-- Confidence intervals crossing `1` mean the estimate is compatible with no effect
-- The current Cox discrimination summary is an `Apparent C-index` on the analyzable cohort, not an externally validated performance estimate.
-- PH diagnostics use the Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time: one 1-df test per model term plus a global test (the classic `cox.zph` statistic of R `survival` < 3.0, also used by lifelines' `proportional_hazard_test` with a log transform).
-- Schoenfeld and martingale residuals are computed with the Efron tie correction within each stratum, as R's `residuals.coxph` does, so the PH test and residual plots stay correct when event times are tied, in stratified and unstratified models alike. The test suite checks them against R `survival` 3.8 reference values.
-- Continuous covariates also expose Martingale residual trend plots as a visual linearity screen; strong curvature suggests splines, transforms, or recoding before locking the Cox specification.
-- AIC and BIC are reported for the fitted model; BIC uses the number of events as the sample size, as R's `BIC(coxph)` does.
-- A Cox `C-index = 0.65` means the fitted model ranks about `65%` of comparable patient pairs in the observed risk order; it is not "65% accuracy."
-
-### Model C-index
-
-The app explicitly distinguishes different evaluation modes:
-
-- `Holdout C-index`
-  - discrimination measured on a deterministic stratified 70/30 holdout split
-  - this is one split only, so no CI or SD is shown
-- `Repeated-CV mean C-index`
-  - average of all fold-level C-indices across repeated stratified CV; the reported SD is the SD across those fold-level estimates (folds share training data, so it is descriptive, not a confidence interval)
-- `Locked-test C-index`
-  - with a locked test set, models are ranked by repeated CV on the development set, refit once on the whole development set, and scored once on the untouched test set
-  - report the locked-test C-index of the CV-selected (rank 1) model as the independent test performance
-- `Apparent C-index`
-  - measured on the training/analyzable cohort
-  - optimistic
-  - should not be treated as external validation
-
-Rough interpretation:
-- `0.50` is chance-level ranking
-- values above about `0.70` can be useful for screening
-- the evaluation design still matters more than the threshold itself
-
-### Cutpoints
-
-Optimal cutpoints are exploratory by nature.
-If you use them in a manuscript:
-- report how the cutpoint was selected
-- prefer selection-adjusted p-values when available
-- validate the cutpoint on separate data
-
-The chosen cutpoint is a fixed rule on the marker, so the derived column labels every row with a usable marker value, including rows whose survival outcome is missing (they did not help choose the cutpoint). The summary reports how many rows were scanned and how many were labelled without an outcome. On very large cohorts the scan may use a quantile grid of candidate cutpoints instead of every observed value; the result then carries a `candidate_grid` note.
-
-Current derive-group options also include:
-- `Percentile split`
-  - `25` means `at/above the 75th-percentile threshold vs Rest`
-  - `25,25` means `at/below the 25th-percentile threshold / between thresholds / at/above the 75th-percentile threshold`
-  - ties at the percentile threshold can make the realized groups slightly larger than the nominal percentages
-- `Extreme split`
-  - `25` means `at/below the 25th-percentile threshold vs at/above the 75th-percentile threshold`
-  - the middle `50%` is excluded from grouped analyses for that derived split
-  - ties at either threshold can make the kept tails slightly larger than the nominal percentages
-
-If you derive a `High/Low` grouping from the same cohort with optimal cutpointing or signature discovery and then send that new column back into Kaplan-Meier or grouped summaries on the same cohort:
-- treat the follow-up KM/table output as descriptive
-- do not treat the repeated group-separation p-value as an independent confirmatory test
-- use external validation if you want inferential claims for the derived grouping
-- signature stability scores are heuristic composite rankings, not independently validated statistical tests
-- describe the top-ranked signature as hypothesis-generating rather than confirmatory until it has external validation
-
-### Calibration and Time-Dependent Importance
-
-These outputs are useful, but should be interpreted carefully:
-- calibration outputs are partly descriptive; a bin whose patients were not followed up to the evaluation time is reported as not estimable instead of carrying its last Kaplan-Meier value forward
-- time-dependent importance refits the selected Random Survival Forest or Gradient Boosted Survival model and reports, for each raw feature and time point, how much the IPCW Brier score on the evaluation rows increases when that feature is shuffled; it is a permutation-based check, not a formal SurvSHAP(t) implementation
-- partial dependence and counterfactual outputs are model-based local utilities, not causal intervention estimates
-
-## Export
-
-You can save results directly from the dashboard.
-
-Available exports (each tab's `Export` menu):
-- Survival curves:
-  - summary table as `CSV`
-  - pairwise table as `CSV`
-  - curve as `PNG`
-  - curve as `SVG`
-- Cox model:
-  - results table as `CSV`
-  - diagnostics table as `CSV`
-  - forest plot as `PNG`
-  - forest plot as `SVG`
-- Table 1:
-  - table as `CSV`
-  - table as `XLSX`
-- Markers:
-  - marker table as `CSV`
-  - locked model as `JSON` (for `validate_locked_recipe` or the in-app validation)
-  - REMARK checklist as `DOCX` or `Markdown`
-  - summary figure, stability and rank plots as `PNG`
-- Prediction models leaderboard:
-  - TRIPOD+AI checklist as `DOCX` or `Markdown`, covering the latest ML and DL comparisons: data preparation, missing data, the evaluation design and shared splits, performance, and the winner's-curse caution when the best of several models is chosen on the same data
-- ML and DL comparison:
-  - comparison table as `CSV`
-  - comparison plot as `PNG`
-  - comparison plot as `SVG`
-  - manuscript table as `CSV`
-  - manuscript table as `Markdown`
-  - manuscript table as `LaTeX`
-  - manuscript table as `DOCX`
-
-When Group by is active in Table 1:
-- `Overall` refers to the grouped non-missing subset used in that table
-- it is not a separate all-rows summary outside the grouped analysis frame
-
-You can export comparison tables and manuscript tables as:
-- CSV
-- Markdown
-- LaTeX
-- DOCX
-
-ML and DL manuscript-table export supports these formatting helpers:
-- `default`
-- `NEJM`
-- `Lancet`
-- `JCO`
-
-These apply to manuscript table export only.
-They are formatting helpers, not official publisher-certified house styles.
-
-Analysis exports end with provenance notes: the SurvStudio version that produced them (results changed in 0.2.0, see the release notes), the dataset fingerprint, and the request settings needed to replay the run.
-
-## Evaluation Contract
-
-- Training one ML model (`Train one model`) uses the deterministic holdout path.
-- `Compare All Models` is the screening path for shared-model comparison, including repeated cross-validation when selected.
-- DL single-model runs can use holdout or repeated-CV according to the visible evaluation controls.
-- Every classical ML and deep model is trained and scored on identical row partitions for the same seed: one stratified 70/30 holdout helper and identical `StratifiedKFold` folds are shared by both families.
-- Each comparison result carries an `evaluation_split_fingerprint` (a hash of which source rows were trained and scored in each split). The unified ML+DL leaderboard ranks the two families together only when the fingerprints match.
-- Holdout and locked-test comparisons also return each model's test-set risk scores (`test_predictions`, `locked_test_predictions`). The leaderboard sends them to `POST /api/model-comparison-intervals`, which gives every model's C-index a 95% bootstrap interval and its difference from Cox PH a paired 95% interval (every draw scores all models on the same resampled patients). A model whose difference interval contains 0 is not distinguishable from Cox PH on that split; on small test sets this is the usual outcome, so do not report the top-ranked model as better on its point estimate alone.
-- For manuscript benchmarks, use repeated CV with a locked test set: the development set is used for all fitting, preprocessing, tuning, early stopping, and model selection; the locked test set is used once. Describe the training-set composition, the CV procedure, and the locked test set in the Methods or Supplement.
-- Datasets with repeated subject identifiers (for example several tumour samples per patient) are flagged: row-level splits would place one subject in both training and test data. Keep one row per subject before benchmarking.
-- Journals often require a supplementary section on how the training data, cross-validation sets, and independent test set were built. [docs/reporting/training_dataset_composition.md](docs/reporting/training_dataset_composition.md) is a fill-in template that maps each required item to the SurvStudio setting or result field that records it.
-
-### Download File Names
-
-Downloaded files now use dataset-aware names.
-
-Typical pattern:
-- `{dataset}_{time}_{event}_{analysis}.{ext}`
-
-Examples:
-- `gbsg2_upload_ready_rfs_days_rfs_event_cox_results.csv`
-- `tcga_luad_upload_ready_os_months_os_event_stage_group_km_curve.png`
-- `gbsg2_upload_ready_rfs_days_rfs_event_ml_manuscript_table_jco.docx`
-
-This makes it easier to keep multiple cohorts and endpoints organized in the same download folder.
-
-### Practical Save Check
-
-If you want to verify saving on your machine:
-1. load `Breast cancer (GBSG2)` or `Lung cancer (TCGA-LUAD)`
-2. run Survival curves once
-3. open `Export` and choose `Plot (PNG)` or `Plot (SVG)`
-4. run the Cox model once
-5. open `Export` and choose `Hazard ratios (CSV)`
-6. in Prediction models, run `Compare All Models`
-7. open a model's `Export` menu and choose one of the manuscript tables
-
-If the browser download dialog is blocked, allow downloads for `http://127.0.0.1:8000`.
-
-## CLI
-
-You can inspect a dataset without opening the UI:
-
-```bash
-survival-toolkit inspect path/to/data.csv
-```
-
-This prints a file-level profile so you can quickly check:
-- column names
-- missingness
-- likely time columns
-- likely event columns
-- basic variable types
-
-This is the fastest way to catch file-format problems before uploading a cohort in the browser.
-
-## DL Runtime Note
-
-Deep learning comparison can take substantial time on CPU-only machines, especially with:
-- `Compare All Models`
-- `Repeated Stratified CV`
-- large `Epochs`
-- larger shared ML/DL feature sets
-
-`Compare All Models` is the slowest path because it trains every deep model in sequence. For example, a 100+ feature input set can take noticeably longer than the same cohort with a compact feature set.
-
-For larger cohorts, note that the current `DeepSurv` and `Survival Transformer` paths use a full-batch Cox-style objective. That is statistically fine, but it can hit memory limits sooner than mini-batch tree workflows on 10k+ rows.
-
-If you are running on a laptop without GPU acceleration, start with:
-- `Epochs = 100`
-- `Holdout`
-- a compact feature set
-- `Train one model` before `Compare All Models`
-
-Then increase epochs or switch to repeated CV only after the single-run workflow looks correct.
-
-## Practical Notes
-
-- The toolkit is exploratory by default.
-- It is useful for analysis, figure generation, and workflow standardization.
-- Strong manuscript claims still require:
-  - external validation
-  - sensitivity checks
-  - disciplined model selection
-  - careful interpretation of calibration and cutpointing
-
-## Current Limitations
-
-- Cox PH currently reports an apparent C-index only. If you need bootstrap optimism correction or cross-validated Cox discrimination, run that validation outside the current dashboard workflow.
-- Uploaded tables are limited to 1,000 candidate model features (5,000 columns). Wider omics data go into the Markers tab as a separate marker matrix; the ML and DL panels keep the 1,000-feature limit.
-- Standard unpenalized Cox PH is not the right tool for very wide `p >> n` settings. Use the ML-panel `LASSO-Cox` path for penalized predictive screening instead of forcing a classical Cox PH fit.
-- External-cohort validation in the web interface covers the locked marker model (Markers tab, Validate in another cohort; the file needs the same column names). For Cox and prediction models, load the separate cohort, reproduce the endpoint and covariate specification, and rerun the analysis. From Python, `validate_locked_recipe` validates a locked marker model (see Prognostic Marker Evaluation).
-- Left truncation and competing risks are outside the current scope. In manuscript Methods, state explicitly that these workflows assume standard cause-specific survival with independent censoring and do not estimate cumulative incidence under competing events.
-- Martingale residual plots are available as a visual screening aid for continuous covariates, but SurvStudio does not yet implement richer Cox linearity tooling such as spline recommendation or automated term selection.
-
-## Development and Testing
-
-After installing `pip install -e ".[dev]"` or `pip install -e ".[all]"`, run the test suite with:
-
-```bash
-pytest -q
-```
-
-Recent regression coverage includes:
-- upload and parsing, including legacy text encodings and upload limits
-- Kaplan-Meier / Cox / cohort-table workflows, with Kaplan-Meier, log-rank, RMST, proportional-hazards, and residual values checked against R `survival` 3.8 reference numbers
-- the marker score screen against R `coxph` score tests, and the marker evaluation's family-wise error under a global null (`SURVSTUDIO_SLOW_TESTS=1 pytest tests/test_marker_evaluation.py`)
-- derive-group options
-- signature-search operator combinations
-- ML and DL single-model and compare flows
-- XAI endpoints
-- export formats
-- server behavior: request cancellation, the heavy-job limit, and the model-cache memory budget
-
-Numerical agreement with R `survival`, lifelines and scikit-survival on the bundled GBSG2 and TCGA-LUAD cohorts (Kaplan-Meier estimates and intervals, medians, RMST, log-rank, Cox coefficients, standard errors, likelihoods, concordance, proportional-hazards statistics, and the marker engine's score tests and Cox fits) is reported in [docs/validation/numerical_agreement.md](./docs/validation/numerical_agreement.md); regenerate it with `pip install -e ".[validation]"` and `python validation/agreement/run_agreement.py` (needs `Rscript` with the `survival` and `jsonlite` packages). The protocol for the planned usability study is in [docs/usability_study_protocol.md](./docs/usability_study_protocol.md).
-
-CI runs the suite on Linux with Python 3.11, 3.12, and 3.13 and on macOS and Windows with Python 3.11, checks the front-end scripts' syntax, builds the wheel and serves the page from a clean install, and runs the browser E2E test.
-
-The front end is split into classic scripts (`static/app_core.js` … `static/app.js`) that `templates/index.html` loads in order and that share one global scope; only `app.js`, loaded last, runs startup code.
-
-## Release Notes
-
-Detailed change history lives in [RELEASE_NOTES.md](./RELEASE_NOTES.md).
+**3. Choose the clinical covariates and run.** Under **Adjust for**, keep `age`, `sex` and `stage_group` ticked and
+untick `smoking_status`. The line below the lists should read "20,530 markers from HiSeqV2.gz, judged on added
+value over 3 clinical covariates". Keep the default settings (1,000 permutations and 200 subsamples, under
+**More options**) and click **Run Analysis**. The run takes a few minutes (about 4 on an 8-core laptop).
+
+![Markers tab with HiSeqV2.gz attached and age, sex and stage ticked under Adjust for](github_images/markers_setup.png)
+
+**4. Read the summary figure.** The left panel counts the markers that clear each bar, from the 20,530 supplied
+and the 19,112 tested (genes expressed in very few patients are left out) down to those that pass every check.
+3,404 genes have p < 0.05 and 306 pass the false discovery rate, but only 5 pass the family-wise test, which
+keeps the chance of even one false positive among all 19,112 at 5%, and all 5 are stable enough to be robust.
+The right panel shows the C-index of a model with the clinical covariates and the selected genes:
+
+- **Apparent** (0.749): measured on the same patients the genes were chosen in. Always too optimistic.
+- **Optimism-corrected** (0.650): the expected value in new patients.
+- **Left-out patients** (0.658) against **Clinical only** (0.656): both measured in patients left out of each
+  subsample. The note under the panel gives their difference, the gain, with its 95% interval: +0.002 (-0.042 to
+  0.046). The genes add almost nothing beyond age, sex and stage, and at most about 0.05.
+
+![Summary figure: markers clearing each bar, and the C-index from apparent to left-out beside clinical only](github_images/markers_summary.png)
+
+**5. Read the verdict.** The card below the figure gives the verdict and the cautions that matter most. Here it says
+**Robust**: 5 of 19,112 genes (DKK1, NTSR1, TLE1, CTCFL and FAM117A) hold up beyond the clinical covariates. The
+cautions add that the apparent C-index is optimistic by 0.099 and that the gain over the clinical covariates is
+uncertain: its interval includes both no gain and a gain of 0.02 or more. SurvStudio calls the gain little only
+when the whole interval lies below 0.02, and real when it lies above 0. **More detail** lists what was checked and
+the next steps.
+
+![Verdict card: 5 of 19,112 markers are robust beyond the clinical covariates, with two cautions](github_images/markers_verdict.png)
+
+**6. See each marker.** The marker table lists the markers strongest first, with their tier, the direction of the
+effect and the hazard ratio per unit, from a Cox model with the clinical covariates. Export it for all markers.
+
+![Marker table with the five robust genes first](github_images/markers_table.png)
+
+**7. Validate the locked model in another cohort.** SurvStudio locks the model (the genes, their weights and the
+clinical part) so that it can be applied unchanged elsewhere. You need a table of a second cohort with the same
+column names, one row per patient: here `os_months`, `os_event`, `age`, `sex`, `stage_group` and one column per
+gene (genes it lacks are held at their typical value, and the report says how much of the model that leaves out).
+The file used here is in the repository: [examples/gse68465_validation_example.csv](examples/gse68465_validation_example.csv).
+Under **Validate in another cohort**, choose that file. For data measured on another platform (here microarrays
+against RNA sequencing), choose **Another platform (rescale within cohort)**, then click **Validate**. The
+screenshot shows 429 patients of the GEO cohort GSE68465: the locked model reached a C-index of 0.699 against 0.698
+for the clinical covariates alone, so no added value, as step 4 predicted. Two of the six genes measured there
+replicated (TLE1 and FAM117A).
+
+![Validation of the locked model in GSE68465: C-index beside the clinical covariates, and each gene's hazard ratio](github_images/markers_validation.png)
+
+**8. Export for your paper.** The **Export** menu gives the marker table, the locked model (to validate later), the
+figures, and the REMARK checklist as Word or Markdown. The checklist already holds the methods and results
+paragraphs of your run and marks each of the 20 REMARK items as filled in by SurvStudio, partly filled in, or for
+you to complete (for example how the specimens were stored).
+
+![Export menu of the Markers tab](github_images/markers_export.png)
+
+## Prepare your own data
+
+SurvStudio reads one table: CSV, TSV, TXT, Excel (`.xlsx`, `.xls`) or Parquet. Make it like this:
+
+- **One row per patient.** If a patient has several samples, keep one.
+- **A follow-up time column.** Numbers only, in one unit for everybody (for example months), from the start point
+  (diagnosis, surgery, randomisation) to the event or the last contact. If you have dates, compute it in Excel:
+  `=(C2-B2)/30.44` gives months between the dates in B2 and C2.
+- **An event column.** `1` if the event (for example death or relapse) happened, `0` if the patient was event-free
+  at last contact. `yes`/`no` or `dead`/`alive` also work: choose the event value in the outcome bar.
+- **Covariates.** Any other columns: numbers (age) or words (sex, stage, treatment). Leave unknown values empty.
+- **One header row** with short column names, and no merged cells, notes or totals below the table.
+
+| patient_id | os_months | os_event | age | sex | stage | treatment | marker_x |
+|---|---|---|---|---|---|---|---|
+| PT-001 | 12.4 | 1 | 67 | Female | III | Standard | 0.82 |
+| PT-002 | 18.0 | 0 | 59 | Male | II | Combination | -0.15 |
+| PT-003 | 7.2 | 1 | 72 | Female | IV | Standard | 1.31 |
+
+In Excel, save with **File → Save As → CSV UTF-8**, or upload the `.xlsx` file itself.
+
+**Many markers (omics).** Keep them in a separate file and attach it in the Markers tab: one row per marker
+(first column: the marker names) and one column per patient (first row: the patient IDs, written exactly as in
+your table's ID column), as GEO and UCSC Xena provide expression data. One row per patient with an ID column works
+too. `.gz` files can be attached as downloaded.
+
+**Common mistakes.**
+
+- Text in the time column (`12 months`) or dates instead of a duration.
+- An event column with three codes (`0` alive, `1` cancer death, `2` other death): recode it to one event first.
+- The same patient in two rows, or the same tumour twice in a marker file (the Markers tab warns about this).
+- A few words in a number column (`unknown` in `age`): leave those cells empty instead.
+- A status that describes the patient at the start (`kras_status`, `egfr_status`) chosen as the event.
+
+## How to read the results
+
+- **Kaplan-Meier curve.** The share of patients still event-free over time. A step down is an event; a tick mark is
+  a patient censored at that time. The **log-rank p-value** tests whether the curves differ; a small p-value does
+  not by itself mean the difference matters clinically.
+- **Hazard ratio (HR).** How much faster events happen in one group than in the reference group (or per unit of a
+  number such as age), with the other covariates held equal. HR 2 means twice the rate, HR 0.5 half. If the 95%
+  confidence interval (CI) includes 1, the data are compatible with no effect.
+- **C-index.** How well a model ranks patients: for two patients, the chance that the one with the higher
+  predicted risk has the event first. 0.5 is a coin toss and 1 is perfect. An apparent C-index, measured on the
+  patients the model was built on, is too high; report the optimism-corrected or externally validated value.
+- **Marker tiers.**
+  - *Robust*: passes the family-wise test (p ≤ 0.05 after allowing for all markers tested), is selected in at least
+    half of 200 random subsamples of the patients, and has the same direction in at least 90% of them.
+  - *Suggestive*: some evidence (family-wise p ≤ 0.05 or false discovery rate ≤ 10%), but not stable across
+    subsamples. A hypothesis for another cohort.
+  - *Marginal only*: linked to survival on its own, but not beyond the clinical covariates; it mostly tracks them.
+  - *Not supported*: no evidence after the error control. Small real effects can still hide here.
+- **Added value over clinical covariates.** Whether a marker tells you something about survival that age, sex and
+  stage do not already tell you. This is the test that matters for a prognostic claim. SurvStudio measures it as
+  the gain in C-index over the clinical covariates in patients left out of the subsamples, with a 95% interval:
+  little added value when the interval lies below 0.02, added value when it lies above 0, uncertain otherwise.
+- **Cautions and "Needs review".** Cautions list what weakens the result (optimism, little added value, missing
+  data, repeated patients). The verdict reads **Needs review** when no marker is robust or when two samples look
+  like the same patient; then treat the markers as hypotheses, or keep one sample per patient and run again.
+
+Sentences that report these results without overclaiming:
+
+> Overall survival differed by stage (log-rank p < 0.001); median survival was 76 months in stage I and 38 months
+> in stage II.
+
+> After adjustment for age, sex and smoking status, stage III was associated with a higher hazard of death than
+> stage I (HR 3.30, 95% CI 2.21 to 4.92).
+
+> Of 19,112 genes, five passed family-wise error control and were stable across 200 subsamples. A model with the
+> selected genes had an optimism-corrected C-index of 0.650; in patients left out of the subsamples it reached
+> 0.658, against 0.656 for age, sex and stage alone (gain 0.002, 95% CI -0.042 to 0.046), so the genes added no
+> clear prognostic information beyond these factors.
+
+## Troubleshooting
+
+- **`uv` or `survstudio` is not recognized / command not found.** Open a new terminal window. If it is still not
+  found, run `uv tool update-shell` (for `survstudio`) and open a new window again.
+- **Port 8000 is busy** ("address already in use"). SurvStudio may already be running in another window; use that
+  one, or start a second copy on another port with `survstudio serve --port 8001` and open
+  <http://127.0.0.1:8001>.
+- **The page does not load.** SurvStudio runs only while its terminal window is open; start it again with
+  `survstudio`.
+- **The file is refused.** The message says why. Check the columns: one header row, a numeric time column and an
+  event column with two values. `survstudio inspect yourfile.csv` prints what SurvStudio sees in a file.
+- **A message says a package is missing** (for example PyTorch). Install again with `[all]` in the command.
+- **Deep-learning models are slow.** They run on the processor. Start with **Train one model**, the holdout
+  evaluation and 100 epochs before **Compare All Models**, which trains every model in turn.
+- **Where do my data go?** Nowhere. SurvStudio reads your file on your computer and keeps it in memory while it
+  runs; the page talks only to the SurvStudio program in your terminal (127.0.0.1 means this computer). Stopping
+  SurvStudio discards the data.
+
+## Learn more
+
+- [Reference manual](docs/reference.md): all install options, input limits, every analysis in detail, exports,
+  the command line and the tests.
+- [Numerical agreement](docs/validation/numerical_agreement.md) with R `survival`, lifelines and scikit-survival.
+- How to cite: see [CITATION.cff](CITATION.cff), or **Cite this repository** on the GitHub page.
+- Licence: [MIT](LICENSE).
+- Changes: [RELEASE_NOTES.md](RELEASE_NOTES.md).

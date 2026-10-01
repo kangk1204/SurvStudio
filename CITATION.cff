@@ -13,8 +13,8 @@ authors:
 repository-code: "https://github.com/kangk1204/SurvStudio"
 url: "https://github.com/kangk1204/SurvStudio"
 license: MIT
-version: "0.2.0"
-date-released: "2026-09-26"
+version: "0.3.0"
+date-released: "2026-09-30"
 keywords:
   - survival analysis
   - Kaplan-Meier

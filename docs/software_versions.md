@@ -1,6 +1,6 @@
 # SurvStudio Software Version Snapshot
 
-This file records the package versions of the environment used to test SurvStudio 0.2.0 on 2026-09-28
+This file records the package versions of the environment used to test SurvStudio 0.3.0 on 2026-09-30
 (Ubuntu 26.04 on aarch64 under WSL, CPU only).
 Use it as a manuscript supplement seed, not as a substitute for pinning your own deployment environment.
 

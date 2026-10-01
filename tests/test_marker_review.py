@@ -362,9 +362,9 @@ def test_left_out_log_hazard_ratios_leave_out_fits_that_run_to_infinity(monkeypa
     captured: dict = {}
     original = marker_evaluation._optimism_summary
 
-    def spy(c_in, c_out, clinical_c_out, beta_in, beta_out):
+    def spy(c_in, c_out, clinical_c_out, beta_in, beta_out, *sizes):
         captured.update(beta_out=list(beta_out))
-        return original(c_in, c_out, clinical_c_out, beta_in, beta_out)
+        return original(c_in, c_out, clinical_c_out, beta_in, beta_out, *sizes)
 
     monkeypatch.setattr(marker_evaluation, "_optimism_summary", spy)
     rng = np.random.default_rng(102)
@@ -508,9 +508,9 @@ def test_the_left_out_clinical_c_is_paired_with_every_signature_replicate(monkey
     lengths: dict = {}
     original = marker_evaluation._optimism_summary
 
-    def spy(c_in, c_out, clinical_c_out, beta_in, beta_out):
+    def spy(c_in, c_out, clinical_c_out, beta_in, beta_out, *sizes):
         lengths.update(signature=len(c_out), clinical=len(clinical_c_out))
-        return original(c_in, c_out, clinical_c_out, beta_in, beta_out)
+        return original(c_in, c_out, clinical_c_out, beta_in, beta_out, *sizes)
 
     monkeypatch.setattr(marker_evaluation, "_optimism_summary", spy)
     rng = np.random.default_rng(3)

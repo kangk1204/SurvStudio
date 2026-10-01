@@ -1,0 +1,24 @@
+R: R version 4.4.3 (2025-02-28) 
+platform: x86_64-conda-linux-gnu 
+BLAS: renv/lib/libopenblasp-r0.3.34.so 
+LAPACK: renv/lib/libopenblasp-r0.3.34.so 
+Mime1: 0.0.0.9000
+CoxBoost: 1.5.2.9000
+glmnet: 5.0
+survival: 3.8.12
+randomForestSRC: 3.3.3
+gbm: 2.3.1
+plsRcox: 1.8.2
+plsRglm: 1.7.1
+superpc: 1.12
+survivalsvm: 0.0.6
+mixOmics: 6.30.0
+compareC: 1.3.3
+snowfall: 1.84.6.3
+Matrix: 1.7.6
+data.table: 1.18.6.1
+dplyr: 1.2.1
+BiocManager: 1.30.27
+Mime commit: 9a9f6ac89851bf631f9df3868b2fa624bed49df2 (github.com/l-magnificence/Mime)
+CoxBoost commit: 50d5fff7d7eebc4a1174dfa32adcfb4b4a69ad13 (github.com/binderh/CoxBoost)
+CRAN snapshot: https://packagemanager.posit.co/cran/2026-09-28 

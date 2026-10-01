@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "survstudio"
 dynamic = ["version"]
-description = "Local survival analysis workbench: Kaplan-Meier, Cox, honest prognostic marker evaluation, and ML/DL model comparison"
+description = "Local survival analysis workbench: Kaplan-Meier, Cox, prognostic marker evaluation against clinical factors, and ML/DL model comparison"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

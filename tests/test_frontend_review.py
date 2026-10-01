@@ -1619,7 +1619,7 @@ def test_marker_summary_names_the_smith_null_and_a_clinical_only_model(tmp_path:
     assert "Smith method" in result["smithText"]
     assert "Smith method" in result["oldNameText"]
     assert "Smith method" not in result["rawText"]
-    assert "In the patients left out of each of 18 subsamples, the selected-marker model reached C 0.7 against 0.66" in result["smithText"]
+    assert "In the patients left out of each of 18 subsamples, the selected-marker model reached C 0.700 against 0.660" in result["smithText"]
     assert "(+0.035)" in result["smithText"]
     assert "selected-marker" not in result["clinicalText"]
     assert "the final model is the clinical-only model" in result["clinicalText"]
@@ -1627,7 +1627,7 @@ def test_marker_summary_names_the_smith_null_and_a_clinical_only_model(tmp_path:
     assert "In the patients left out of the one subsample that could be scored, the whole selection procedure" in result["clinicalText"]
     assert "The selected markers add little" not in result["clinicalText"]
     assert "Clinical-only model C (corrected)" in result["clinicalMetric"]
-    assert "clinical-only model (no marker selected) C apparent=0.66" in result["banner"]
+    assert "clinical-only model (no marker selected) C apparent=0.660" in result["banner"]
 
 
 def test_validation_rows_follow_the_tested_fit_and_flag_what_is_not_estimable(tmp_path: Path) -> None:
