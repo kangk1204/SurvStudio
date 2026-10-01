@@ -278,11 +278,14 @@ function markerSummary(payload) {
     cautions.push(String(resampling.note || "No subsample was evaluated, so the stability of the selection was not assessed and no marker can be robust."));
   }
   if (!addedValue) cautions.push("No clinical covariates were given, so markers are judged on marginal association only. Add clinical covariates to test added value.");
+  if (permutationsRun && addedValue && markerResidualNull(analysis)) {
+    cautions.push("Residual permutation assumes exchangeable residuals after linear adjustment. Nonlinear marker-covariate relations can inflate false positives; a robust tier is internal evidence and needs independent validation.");
+  }
   const clinicalOnly = markerModelIsClinicalOnly(signature);
   if (clinicalOnly) cautions.push("No marker was selected, so the final model is the clinical-only model (the clinical covariates alone).");
   // Without an apparent C-index there is no fitted full-cohort model, so nothing to call optimistic.
   if (signature.apparent_c != null && signature.signature_optimism != null && Number(signature.signature_optimism) > 0.02) {
-    cautions.push(`The ${clinicalOnly ? "clinical-only" : "selected-marker"} model's apparent C-index is optimistic by about ${Number(signature.signature_optimism).toFixed(3)}; report the corrected value.`);
+    cautions.push(`The ${clinicalOnly ? "clinical-only" : "selected-marker"} model's mean subsample-to-left-out C-index gap is ${Number(signature.signature_optimism).toFixed(3)}; the gap adjustment is a heuristic that includes training-size effects.`);
   }
   // A gain the markers add is a strength; a little or uncertain one is a caution.
   const leftOut = markerLeftOutComparison(signature, addedValue);
@@ -297,7 +300,7 @@ function markerSummary(payload) {
     if (text) cautions.push(text);
   });
   if (Number(counts["marginal only"] || 0) > 0) {
-    cautions.push(`${formatCount(counts["marginal only"])} marker(s) are associated with survival but add nothing beyond the clinical covariates.`);
+    cautions.push(`${formatCount(counts["marginal only"])} marker(s) show marginal association, but insufficient evidence of added value at these thresholds.`);
   }
   const duplicateScreen = analysis.duplicates || {};
   return {
@@ -309,13 +312,13 @@ function markerSummary(payload) {
       { label: "Markers", value: formatCount(evaluated) },
       { label: "Robust", value: robust },
       { label: "Suggestive", value: suggestive },
-      { label: clinicalOnly ? "Clinical-only model C (corrected)" : "Model C (corrected)", value: formatCIndexValue(signature.optimism_corrected_c) },
+      { label: clinicalOnly ? "Clinical-only C (gap-adjusted)" : "Model C (gap-adjusted)", value: formatCIndexValue(signature.optimism_corrected_c) },
       ...(leftOut ? [{ label: "Clinical-only C (left out)", value: formatCIndexValue(signature.clinical_c_left_out) }] : []),
     ],
     strengths: [
       ...(leftOut?.verdict === "adds" ? [leftOut.text] : []),
       ...(permutationsRun
-        ? [`Family-wise p-values (Westfall-Young) from ${formatValue(nPermutations)} permutations${addedValue && markerResidualNull(analysis) ? ", permuting each marker's residuals after regression on the clinical covariates (Smith method), which keeps each marker's link to the covariates" : ""}.`]
+        ? [`Family-wise p-values (Westfall-Young) from ${formatValue(nPermutations)} permutations${addedValue && markerResidualNull(analysis) ? ", permuting each marker's residuals after regression on the clinical covariates (Smith method), approximating a conditional null" : ""}.`]
         : []),
       ...(stabilityAssessed
         ? [`The whole screen was repeated on ${formatValue(resampling.n_valid)} subsamples of ${Math.round(100 * Number(resampling.fraction || 0.632))}% of the patients.`]
@@ -332,7 +335,7 @@ function markerSummary(payload) {
       ...(permutationsRun
         ? [robust ? "Validate the locked model in an independent cohort below before claiming the markers." : "Treat suggestive markers as hypotheses for an independent cohort."]
         : []),
-      ...(signature.optimism_corrected_c != null ? ["Report the optimism-corrected C-index rather than the apparent one."] : []),
+      ...(signature.optimism_corrected_c != null ? ["Report the subsample gap-adjusted C-index as a heuristic internal summary, and use locked external validation for final performance claims."] : []),
     ],
   };
 }
@@ -469,7 +472,7 @@ function markerMetaBanner(payload) {
   ];
   if (signature.apparent_c != null) {
     const model = markerModelIsClinicalOnly(signature) ? "clinical-only model (no marker selected)" : "model";
-    parts.push(`${model} C apparent=${formatCIndexValue(signature.apparent_c)}, corrected=${formatCIndexValue(signature.optimism_corrected_c)}`);
+    parts.push(`${model} C apparent=${formatCIndexValue(signature.apparent_c)}, subsample gap-adjusted=${formatCIndexValue(signature.optimism_corrected_c)}`);
   }
   if (analysis.primary_lens === "added_value" && signature.clinical_c_left_out != null) parts.push(`clinical-only C (left out)=${formatCIndexValue(signature.clinical_c_left_out)}`);
   return parts.join(", ");

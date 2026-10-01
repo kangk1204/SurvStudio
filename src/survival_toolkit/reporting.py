@@ -167,16 +167,18 @@ def _permutation_sentence(result: dict[str, Any], added_value: bool) -> str:
     if added_value and scheme in {"smith", "freedman_lane"}:
         clause = (
             "; for added value, the residuals of each marker after regression on the clinical covariates were permuted "
-            "(Smith method; Winkler et al. 2014), which keeps each marker's relation to the covariates"
+            "(Smith method; Winkler et al. 2014), approximating a conditional null under exchangeable residuals after linear adjustment"
         )
     elif added_value and scheme == "raw":
         clause = "; for added value the marker values themselves were permuted"
     else:
         clause = ""
     return (
-        f"Family-wise error was controlled with Westfall-Young step-down max-T p-values from {_count(n_permutations, 'permutation')}"
+        f"Multiplicity was assessed with Westfall-Young step-down max-T p-values from {_count(n_permutations, 'permutation')}"
         + clause
-        + ", and the false discovery rate was estimated from the same permutations."
+        + ", and the false discovery rate was estimated from the same permutations. "
+        "Permutation inference requires exchangeability under the chosen null; strong family-wise error control also requires subset pivotality. "
+        "Nonlinear marker-covariate relations can invalidate the residual-permutation calibration."
     )
 
 
@@ -209,7 +211,7 @@ def _tier_sentence(result: dict[str, Any], added_value: bool) -> str:
             + (", suggestive or marginal only." if added_value else " or suggestive.")
         )
     marginal = (
-        f", and markers without added value but with a marginal family-wise p-value at most {alpha} were called marginal only."
+        f", and markers without sufficient evidence of added value but with a marginal family-wise p-value at most {alpha} were called marginal only."
         if added_value
         else "."
     )
@@ -301,8 +303,8 @@ def _signature_methods_sentence(result: dict[str, Any], added_value: bool) -> st
     if signature.get("apparent_c") is None:
         return ""
     correction = (
-        "its apparent C-index was corrected for optimism by subtracting the mean difference between the C-index of the whole "
-        "procedure{scope} in each subsample and in the patients left out of it"
+        "its apparent C-index was adjusted for the subsampling gap by subtracting the mean difference between the C-index of the whole "
+        "procedure{scope} in each subsample and in the patients left out of it; this heuristic includes training-size effects"
     )
     n_valid, n_failed = _resample_counts(result)
     if n_valid > 0:
@@ -316,14 +318,14 @@ def _signature_methods_sentence(result: dict[str, Any], added_value: bool) -> st
         text = "No marker was selected, so the final Cox model held the clinical covariates only"
         if corrected:
             return text + "; " + correction.format(scope=" (which could select markers)") + "."
-        return text + f"; its apparent C-index could not be corrected for optimism {missing_reason}."
+        return text + f"; its apparent C-index could not be adjusted for the subsampling gap {missing_reason}."
     text = (
         ("A Cox model with the clinical covariates and " if added_value else "A Cox model with ")
         + f"the selected markers (at most the {settings.get('max_signature_markers')} strongest) was fitted"
     )
     if corrected:
         return text + ", and " + correction.format(scope="") + "."
-    return text + f"; its apparent C-index could not be corrected for optimism {missing_reason}."
+    return text + f"; its apparent C-index could not be adjusted for the subsampling gap {missing_reason}."
 
 
 def _gain_interval(signature: dict[str, Any]) -> tuple[float, float] | None:
@@ -436,12 +438,12 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
     if apparent is not None:
         if clinical_only:
             text += f" No marker was selected, so the final model held the clinical covariates only; its apparent C-index was {_number(apparent)}"
-            text += f" and its optimism-corrected C-index {_number(corrected)}." if corrected is not None else " (not corrected for optimism)."
+            text += f" and its subsample gap-adjusted C-index {_number(corrected)}." if corrected is not None else " (not adjusted for the subsampling gap)."
         else:
             text += f" The selected-marker model ({_names(signature.get('markers') or [])}) had an apparent C-index of {_number(apparent)}"
-            text += f" and an optimism-corrected C-index of {_number(corrected)}." if corrected is not None else " (not corrected for optimism)."
+            text += f" and a subsample gap-adjusted C-index of {_number(corrected)}." if corrected is not None else " (not adjusted for the subsampling gap)."
     elif signature_fit_failed(result):
-        text += " The final model could not be fitted in the full cohort, so it has no apparent or optimism-corrected C-index."
+        text += " The final model could not be fitted in the full cohort, so it has no apparent or subsample gap-adjusted C-index."
     # "It" only follows a sentence about the selected-marker model; otherwise the left-out C-index is the procedure's.
     text += _left_out_comparison(
         signature, added_value, subject="it" if apparent is not None and not clinical_only else "the whole procedure"
@@ -484,7 +486,7 @@ def _internal_validation_text(result: dict[str, Any], added_value: bool) -> str:
     if apparent is not None and corrected is not None:
         text += f", and {model} C-index was corrected from {_number(apparent)} to {_number(corrected)}"
     elif apparent is not None:
-        text += f"; {model} apparent C-index ({_number(apparent)}) could not be corrected for optimism"
+        text += f"; {model} apparent C-index ({_number(apparent)}) could not be adjusted for the subsampling gap"
     elif signature_fit_failed(result):
         text += "; the final model could not be fitted in the full cohort"
     shrinkage = _finite(signature.get("top_marker_shrinkage"))

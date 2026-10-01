@@ -1722,7 +1722,7 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
     # in the usual case, else plainly the whole procedure's (it could select markers in a subsample).
     ladder = [
         ("Apparent", signature.get("apparent_c"), ACCENT),
-        ("Optimism-corrected", signature.get("optimism_corrected_c"), SLATE),
+        ("Subsample gap-adjusted", signature.get("optimism_corrected_c"), SLATE),
         ("Left-out patients" if selected_model else "Whole procedure<br>(left-out)", signature.get("signature_c_left_out"), SAGE),
     ]
     if added_value:

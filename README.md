@@ -13,7 +13,7 @@ leave your computer.
   with confidence intervals, with checks of the model's assumptions.
 - **Table 1.** Describe your patients, overall or by group, in a table ready for a paper.
 - **Candidate markers.** Check up to 60,000 candidate markers (for example gene expression) against clinical
-  factors such as age and stage: the false positives are controlled across all markers, stability is checked on
+  factors such as age and stage: multiplicity-adjusted tests are reported across all markers, stability is checked on
   resampled patients, and the model is locked and validated in another cohort.
 - **Prediction models.** Compare Cox, penalized Cox, random survival forests, gradient boosting and deep-learning
   models fairly: all are trained and tested on the same patients, and the differences come with intervals.
@@ -176,10 +176,10 @@ keeps the chance of even one false positive among all 19,112 at 5%, and all 5 ar
 The right panel shows the C-index of a model with the clinical covariates and the selected genes:
 
 - **Apparent** (0.749): measured on the same patients the genes were chosen in. Always too optimistic.
-- **Optimism-corrected** (0.650): the expected value in new patients.
+- **Subsample gap-adjusted** (0.650): apparent C minus the mean training-to-left-out gap. This heuristic includes training-size effects and is not a Harrell bootstrap correction or a guarantee of performance in new patients.
 - **Left-out patients** (0.658) against **Clinical only** (0.656): both measured in patients left out of each
   subsample. The note under the panel gives their difference, the gain, with its 95% interval: +0.002 (-0.042 to
-  0.046). The genes add almost nothing beyond age, sex and stage, and at most about 0.05.
+  0.046). The interval is compatible with no gain and with a gain up to about 0.05; these data do not establish equivalence.
 
 ![Summary figure: markers clearing each bar, and the C-index from apparent to left-out beside clinical only](github_images/markers_summary.png)
 
@@ -261,7 +261,7 @@ too. `.gz` files can be attached as downloaded.
   confidence interval (CI) includes 1, the data are compatible with no effect.
 - **C-index.** How well a model ranks patients: for two patients, the chance that the one with the higher
   predicted risk has the event first. 0.5 is a coin toss and 1 is perfect. An apparent C-index, measured on the
-  patients the model was built on, is too high; report the optimism-corrected or externally validated value.
+  patients the model was built on, is too high; report honest internal estimates and externally validated values with their limitations.
 - **Marker tiers.**
   - *Robust*: passes the family-wise test (p ≤ 0.05 after allowing for all markers tested), is selected in at least
     half of 200 random subsamples of the patients, and has the same direction in at least 90% of them.
@@ -286,7 +286,7 @@ Sentences that report these results without overclaiming:
 > stage I (HR 3.30, 95% CI 2.21 to 4.92).
 
 > Of 19,112 genes, five passed family-wise error control and were stable across 200 subsamples. A model with the
-> selected genes had an optimism-corrected C-index of 0.650; in patients left out of the subsamples it reached
+> selected genes had a subsample gap-adjusted C-index of 0.650; in patients left out of the subsamples it reached
 > 0.658, against 0.656 for age, sex and stage alone (gain 0.002, 95% CI -0.042 to 0.046), so the genes added no
 > clear prognostic information beyond these factors.
 
@@ -316,3 +316,5 @@ Sentences that report these results without overclaiming:
 - How to cite: see [CITATION.cff](CITATION.cff), or **Cite this repository** on the GitHub page.
 - Licence: [MIT](LICENSE).
 - Changes: [RELEASE_NOTES.md](RELEASE_NOTES.md).
+
+The marker residual permutation assumes exchangeable residuals after linear adjustment for the clinical covariates. Nonlinear or heteroscedastic relations and censoring assumptions require sensitivity checks; a family-wise adjusted p-value does not establish universal error control. The internal gain interval is the approximate corrected resampled t interval, whose survival-specific coverage is assessed by the paper's simulation.

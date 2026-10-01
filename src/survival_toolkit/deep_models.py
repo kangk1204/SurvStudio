@@ -1314,7 +1314,8 @@ def _compute_c_index_torch(
 
     if _SKSURV_METRICS_AVAILABLE:
         try:
-            result = _sksurv_concordance(event_bool, time_np, risk_np)
+            # Match the shared exact-tie convention regardless of optional extras.
+            result = _sksurv_concordance(event_bool, time_np, risk_np, tied_tol=0.0)
             return float(result[0])
         except (ImportError, RuntimeError, TypeError, ValueError, ZeroDivisionError) as exc:
             warnings.warn(

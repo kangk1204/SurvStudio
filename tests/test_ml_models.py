@@ -358,6 +358,8 @@ def test_select_lasso_alpha_uses_inner_cv_max_mean_c_index() -> None:
     result = ml_models._select_lasso_alpha(
         frame.reset_index(drop=True),
         encoded.reset_index(drop=True),
+        features=features,
+        categorical_features=["horTh", "menostat", "tgrade"],
         time_column="rfs_days",
         event_column="rfs_event",
         random_state=11,

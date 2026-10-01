@@ -68,8 +68,8 @@ def test_remark_text_without_subsamples_says_stability_and_optimism_were_not_ass
     assert "was not repeated on subsamples, so the stability of the selection was not assessed" in methods
     assert "Without subsamples the stability rule could not be applied" in methods
     assert "repeated on 0" not in methods and "0 event-stratified" not in methods
-    assert "could not be corrected for optimism because no subsample was available" in methods
-    assert "Stability over subsamples was not assessed" in results and "not corrected for optimism" in results
+    assert "could not be adjusted for the subsampling gap because no subsample was available" in methods
+    assert "Stability over subsamples was not assessed" in results and "not adjusted for the subsampling gap" in results
     assert items["10"]["status"] == "partly"
     assert items["18"]["text"].startswith("No internal validation was done: no subsamples were drawn")
 
@@ -113,9 +113,9 @@ def test_remark_text_when_every_subsample_failed_or_the_optimism_is_missing() ->
     assert "repeated on 180 event-stratified subsamples of 63.2% of the patients (20 more failed and were left out)" in partial["methods"]
 
     uncorrected = remark_checklist(_hand_built_result(signature={"optimism_corrected_c": None}), request=_REQUEST)
-    assert "could not be corrected for optimism because no subsample gave a model" in uncorrected["methods"]
-    assert "(not corrected for optimism)" in uncorrected["results"]
-    assert "apparent C-index (0.740) could not be corrected for optimism" in _items(uncorrected)["18"]["text"]
+    assert "could not be adjusted for the subsampling gap because no subsample gave a model" in uncorrected["methods"]
+    assert "(not adjusted for the subsampling gap)" in uncorrected["results"]
+    assert "apparent C-index (0.740) could not be adjusted for the subsampling gap" in _items(uncorrected)["18"]["text"]
     assert _items(uncorrected)["10"]["status"] == "partly"
 
 
@@ -123,6 +123,9 @@ def test_remark_text_names_the_permutation_scheme_by_its_setting() -> None:
     for scheme in ("smith", "freedman_lane"):
         methods = remark_checklist(_hand_built_result(null={"lens2_null": scheme}), request=_REQUEST)["methods"]
         assert "the residuals of each marker after regression on the clinical covariates were permuted (Smith method; Winkler et al. 2014)" in methods
+        assert "exchangeable residuals after linear adjustment" in methods
+        assert "Nonlinear marker-covariate relations can invalidate" in methods
+        assert "Family-wise error was controlled" not in methods
     raw = remark_checklist(_hand_built_result(null={"lens2_null": "raw"}), request=_REQUEST)["methods"]
     assert "the marker values themselves were permuted" in raw and "Smith" not in raw
 

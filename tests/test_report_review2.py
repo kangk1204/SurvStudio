@@ -191,7 +191,7 @@ def test_a_full_cohort_model_that_could_not_be_fitted_is_named_in_the_text_and_t
     items = {entry["item"]: entry for entry in remark_checklist(result, request=_REQUEST)["items"]}
 
     assert "it reached" not in text
-    assert "The final model could not be fitted in the full cohort, so it has no apparent or optimism-corrected C-index." in text
+    assert "The final model could not be fitted in the full cohort, so it has no apparent or subsample gap-adjusted C-index." in text
     assert "In the patients left out of each of 150 subsamples, the whole procedure reached a mean C-index of 0.650 against 0.620" in text
     assert "the whole procedure reached a mean C-index" in items["18"]["text"]
     titles = [annotation["text"] for annotation in figure["layout"]["annotations"]]
@@ -211,8 +211,8 @@ def test_the_left_out_rung_of_a_clinical_only_model_is_the_whole_procedure() -> 
     clinical_only = build_marker_summary_figure(_added_value_result(signature=signature))
     selected = build_marker_summary_figure(_added_value_result(signature={**signature, "markers": ["m1"], "clinical_only": False}))
 
-    assert _ladder(clinical_only) == ["Apparent", "Optimism-corrected", "Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
-    assert _ladder(selected) == ["Apparent", "Optimism-corrected", "Left-out patients", "Clinical only<br>(left-out)"]
+    assert _ladder(clinical_only) == ["Apparent", "Subsample gap-adjusted", "Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
+    assert _ladder(selected) == ["Apparent", "Subsample gap-adjusted", "Left-out patients", "Clinical only<br>(left-out)"]
 
 
 def test_a_screen_without_clinical_covariates_says_whether_it_selected_a_marker_or_failed_to_fit_one() -> None:
@@ -329,7 +329,7 @@ def test_remark_gives_the_reason_the_optimism_could_not_be_corrected_when_every_
 
     methods = remark_checklist(failed, request=_REQUEST)["methods"]
 
-    assert "could not be corrected for optimism because every subsample failed." in methods
+    assert "could not be adjusted for the subsampling gap because every subsample failed." in methods
     assert "no subsample was available" not in methods
 
 

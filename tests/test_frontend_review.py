@@ -1623,10 +1623,13 @@ def test_marker_summary_names_the_smith_null_and_a_clinical_only_model(tmp_path:
     assert "(+0.035)" in result["smithText"]
     assert "selected-marker" not in result["clinicalText"]
     assert "the final model is the clinical-only model" in result["clinicalText"]
-    assert "The clinical-only model's apparent C-index is optimistic by about 0.030" in result["clinicalText"]
+    assert "The clinical-only model's mean subsample-to-left-out C-index gap is 0.030" in result["clinicalText"]
+    assert "the gap adjustment is a heuristic that includes training-size effects" in result["clinicalText"]
+    assert "Nonlinear marker-covariate relations can inflate false positives" in result["smithText"]
+    assert "Residual permutation assumes" not in result["rawText"]
     assert "In the patients left out of the one subsample that could be scored, the whole selection procedure" in result["clinicalText"]
     assert "The selected markers add little" not in result["clinicalText"]
-    assert "Clinical-only model C (corrected)" in result["clinicalMetric"]
+    assert "Clinical-only C (gap-adjusted)" in result["clinicalMetric"]
     assert "clinical-only model (no marker selected) C apparent=0.660" in result["banner"]
 
 

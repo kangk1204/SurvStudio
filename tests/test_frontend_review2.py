@@ -949,7 +949,8 @@ def test_the_left_out_c_index_of_an_unfitted_model_is_the_whole_procedures(tmp_p
     assert "apparent C-index is optimistic" not in result["unfitted"]
     assert "In the patients left out of each of 5 subsamples, the selected-marker model reached C 0.645" in result["fitted"]
     assert "The selected markers add little discrimination beyond the clinical covariates." in result["fitted"]
-    assert "The selected-marker model's apparent C-index is optimistic by about 0.030" in result["fitted"]
+    assert "The selected-marker model's mean subsample-to-left-out C-index gap is 0.030" in result["fitted"]
+    assert "heuristic that includes training-size effects" in result["fitted"]
 
 
 def test_dropped_markers_are_grouped_by_their_reason_and_cohort_notes_are_shown(tmp_path: Path) -> None:
