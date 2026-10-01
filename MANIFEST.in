@@ -1,7 +1,7 @@
 include LICENSE README.md RELEASE_NOTES.md CITATION.cff Dockerfile .dockerignore
 recursive-include docs *.md *.json
 recursive-include validation *.py *.R
-recursive-include tests *.py
+recursive-include tests *.py *.R
 recursive-include .github/workflows *.yml
 recursive-include examples *.csv *.md
 recursive-include github_images *.png
