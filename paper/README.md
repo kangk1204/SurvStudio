@@ -180,6 +180,15 @@ Exports include PNG, an embedded-TrueType PDF, SVG with outlined fonts, and `*.p
 timestamps are suppressed and SVG IDs use a fixed salt, so the same inputs in the pinned rendering environment can
 be compared byte for byte. Scientific interpretation still requires inspecting the plots and their source tables.
 
+The rejection rates in Figure S1 and binary claim rates in Figure 5 have pointwise 95% Wilson Monte Carlo intervals,
+which retain uncertainty when zero or every replicate makes a discovery. For Mime's 3-selection/4-sealed design,
+Figure 5 uses a conservative Hoeffding interval over independent replicate means: the 35 overlapping splits of
+one dataset are dependent and are not 35 independent trials. These intervals condition on completed fits and are
+separate from the thick worst-case bounds for failed or missing outcomes. The derived endpoints, methods and
+independent replicate counts are recorded in each figure's provenance. Wilson implementation reference:
+[statsmodels documentation](https://www.statsmodels.org/stable/generated/statsmodels.stats.proportion.proportion_confint.html);
+bounded-mean result: [Hoeffding (1963)](https://doi.org/10.1080/01621459.1963.10500830).
+
 | File (`.png`, `.pdf`, `.svg`, `.provenance.json`) | Figure | Drawn from |
 | --- | --- | --- |
 | `fig1` | Figure 1: a, analyses and checks (`fig1_workflow`); b, the native Markers summary after case study I (`interface/marker_summary_case_study_i.png` with capture provenance); the wider full-tab capture is retained separately | screenshot and capture record |

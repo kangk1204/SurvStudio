@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -112,7 +113,7 @@ def print_size(fig) -> tuple[float, float, list[str]]:
     return width, height, problems
 
 
-def save(fig, name: str, dpi: int = 300) -> None:
+def save(fig, name: str, dpi: int = 300, *, derived_values: dict | None = None) -> None:
     problems = result_problems(LOADED)
     if problems:
         plt.close(fig)
@@ -149,6 +150,8 @@ def save(fig, name: str, dpi: int = 300) -> None:
                   "outputs": {suffix: sha256_file(FIGURES / f"{name}.{suffix}") for suffix in metadata}}
     if name == "fig1":
         provenance["interface"] = {"png_sha256": sha256_file(INTERFACE), "provenance_sha256": sha256_file(INTERFACE_PROVENANCE)}
+    if derived_values is not None:
+        provenance["derived_values"] = derived_values
     (FIGURES / f"{name}.provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     plt.close(fig)
     print(f"wrote {name} ({width * 25.4:.0f} x {height * 25.4:.0f} mm)")
@@ -548,9 +551,9 @@ def figure_simulation() -> None:
     ax = fig.add_subplot(grid[0, 0])
     y = np.arange(len(summary))[::-1]
     colours = [MUTED if scenario.startswith("null") else ML for scenario in summary.index]
-    # The Monte Carlo interval of a rate, cut at zero; the axis always holds the whole interval.
-    lower = np.maximum(summary["fwer"] - 1.96 * summary["fwer_mcse"], 0.0)
-    upper = summary["fwer"] + 1.96 * summary["fwer_mcse"]
+    # Binary replicate outcomes have Wilson intervals, including at 0/n and n/n.
+    intervals = np.array([binary_rate_interval(row.fwer, row.replicates) for row in summary.itertuples()])
+    lower, upper = intervals.T
     ax.errorbar(summary["fwer"], y, xerr=[summary["fwer"] - lower, upper - summary["fwer"]], fmt="none", ecolor=colours, lw=1)
     ax.scatter(summary["fwer"], y, c=colours, s=14, zorder=3, edgecolor=INK, linewidth=0.4)
     ax.axvline(0.05, color=OPPOSITE, lw=0.8, ls="--")
@@ -560,7 +563,7 @@ def figure_simulation() -> None:
     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(0.1))
     ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(0.05))
     ax.set_ylim(-0.6, len(summary) - 0.4)
-    ax.set_xlabel("Any unlinked discoveries\n(95% Monte Carlo interval)")
+    ax.set_xlabel("Any unlinked discoveries\n(95% Wilson Monte Carlo interval)")
     panel_label(ax, "a", x=-1.25, y=1.02)
 
     ax = fig.add_subplot(grid[0, 1])
@@ -604,7 +607,10 @@ def figure_simulation() -> None:
     ax.set_xlabel("C-index estimate minus\nC in new patients")
     ax.set_title("β 0.30 and 0.45, filter on", fontsize=7, color=MUTED, pad=4)
     panel_label(ax, "c", x=-0.62, y=1.02)
-    save(fig, "figS1_simulation")
+    save(fig, "figS1_simulation", derived_values={"rejection_rate_intervals": [
+        {"scenario": scenario, "rate": float(row.fwer), "independent_replicates": int(row.replicates),
+         "lower": float(bounds[0]), "upper": float(bounds[1]), "method": "pointwise 95% Wilson Monte Carlo interval"}
+        for (scenario, row), bounds in zip(summary.iterrows(), intervals)]})
 
 
 # ── Supplementary Figure S5: ER-positive recurrence sensitivity ───────────────
@@ -808,6 +814,46 @@ def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: st
 OTHER = "#8a94a3"
 
 
+def binary_rate_interval(rate: float, replicates: int) -> tuple[float, float]:
+    """Pointwise 95% Wilson Monte Carlo interval for independent binary replicate outcomes.
+
+    A zero estimated standard error at 0/n or n/n does not imply certainty.
+    Refuse a fractional success count rather than treating dependent splits as trials.
+    """
+    if not np.isfinite(rate) or not 0 <= rate <= 1 or replicates <= 0 or int(replicates) != replicates:
+        raise ValueError("A binary Monte Carlo rate needs a finite probability and a positive integer denominator")
+    successes = round(rate * replicates)
+    if not math.isclose(rate * replicates, successes, abs_tol=1e-8, rel_tol=0):
+        raise ValueError("A binary Monte Carlo rate must correspond to an integer success count")
+    z = 1.959963984540054
+    denominator = 1 + z*z / replicates
+    centre = (rate + z*z / (2*replicates)) / denominator
+    radius = z * math.sqrt(rate*(1-rate)/replicates + z*z/(4*replicates*replicates)) / denominator
+    return max(0.0, centre-radius), min(1.0, centre+radius)
+
+
+def comparison_rate_interval(row: dict) -> dict:
+    """Keep the Monte Carlo unit at the independent simulated replicate.
+
+    The 35 overlapping 3+4 splits form a bounded mean within each replicate.
+    Hoeffding's pointwise interval is conservative and requires independent
+    replicate means; it remains nondegenerate when all observed means agree.
+    Completed-fit intervals and bounds for missing fits are distinct quantities.
+    """
+    rate, n = float(row["claim_rate"]), row["replicates"]
+    if not np.isfinite(rate) or not 0 <= rate <= 1 or n <= 0 or int(n) != n:
+        raise ValueError("Invalid completed-replicate Monte Carlo rate")
+    if row["approach"] == "P1 Mime" and str(row.get("design", "")).startswith("3 selection"):
+        radius = math.sqrt(math.log(2 / 0.05) / (2*n))
+        bounds = max(0.0, rate-radius), min(1.0, rate+radius)
+        method = "Hoeffding bound over independent replicate means; dependent splits stay within each replicate"
+    else:
+        bounds = binary_rate_interval(rate, n)
+        method = "Wilson score interval over independent binary replicate outcomes"
+    return {"lower": bounds[0], "upper": bounds[1], "method": method, "independent_replicates": int(n),
+            "coverage": "pointwise 95% Monte Carlo; conditions on completed fits"}
+
+
 def comparison_null_rows(rows: list[dict]) -> list[tuple[str, dict, bool]]:
     """The claims under the null, as (label, row, is SurvStudio), in the figure's order."""
     wanted = [
@@ -856,22 +902,24 @@ def figure_comparison() -> None:
     # a: how often each approach makes its claim when no marker adds anything (script 06's null).
     ax = fig.add_subplot(grid[0, :])
     y = np.arange(len(null))[::-1]
+    intervals = []
     for position, (label, row, ours) in zip(y, null):
-        rate, mcse = 100 * float(row["claim_rate"]), 100 * float(row.get("claim_rate_mcse") or 0.0)
+        rate = 100 * float(row["claim_rate"])
+        interval = comparison_rate_interval(row)
+        intervals.append({"label": label, "rate": row["claim_rate"], **interval})
         ax.barh(position, rate, height=0.62, color=ROBUST if ours else OTHER)
-        if mcse > 0:
-            ax.plot([max(rate - 1.96 * mcse, 0), min(rate + 1.96 * mcse, 100)], [position, position], color=INK, lw=0.8)
+        ax.plot([100*interval["lower"], 100*interval["upper"]], [position, position], color=INK, lw=0.8)
         bounds = row.get("claim_rate_failure_bounds")
         if bounds and bounds[1] > bounds[0]:
             ax.plot([100 * bounds[0], 100 * bounds[1]], [position - 0.22, position - 0.22], color=MUTED, lw=3)
-        ax.text(min(rate + 1.96 * mcse, 100) + 1.5, position, f"{rate:.1f}%" if rate < 10 else f"{rate:.0f}%", va="center", fontsize=7)
+        ax.text(100*interval["upper"] + 1.5, position, f"{rate:.1f}%" if rate < 10 else f"{rate:.0f}%", va="center", fontsize=7)
     labels = [label + (f"\n{row['replicates']}/{row['planned_replicates']} completed" if row.get("planned_replicates") else "")
               for label, row, _ in null]
     ax.set_yticks(y, labels)
     ax.tick_params(axis="y", length=0)
     ax.set_xlim(0, 108)
     ax.set_xticks([0, 25, 50, 75, 100])
-    ax.set_xlabel("Claim rate among completed fits (%)\nThin: 95% Monte Carlo; thick: bounds including failures")
+    ax.set_xlabel("Claim rate among completed fits (%)\nThin: 95% MC (Wilson / Hoeffding); thick: bounds including failures")
     ax.set_title("Different claims under a conditional marker null (TCGA-LUAD plasmode)", loc="left", fontsize=7.5)
     panel_label(ax, "a", x=-0.4)
 
@@ -928,7 +976,7 @@ def figure_comparison() -> None:
                        Line2D([], [], marker="o", color=OTHER, lw=1.2, ms=4, label="external (pooled)")],
               loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=2, fontsize=7, handlelength=1.4, columnspacing=1.0, borderaxespad=0.2)
     panel_label(ax, "c", x=-0.05)
-    save(fig, "fig5_comparison")
+    save(fig, "fig5_comparison", derived_values={"claim_rate_intervals": intervals})
 
 
 def main(wanted: set[str], *, available_only: bool = False) -> None:

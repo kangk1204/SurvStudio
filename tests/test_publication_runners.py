@@ -171,3 +171,38 @@ def test_figures_require_a_known_clean_source_and_analysis_hash(monkeypatch, tmp
     (tmp_path / "stamps/result.json.json").write_text(json.dumps(stamp))
     problems = module.result_problems([result.name])
     assert (not problems) == valid
+
+
+@pytest.mark.parametrize("successes,total", [(0, 200), (200, 200), (11, 400), (35, 50)])
+def test_binary_monte_carlo_intervals_match_independent_wilson_reference(monkeypatch, successes, total):
+    pytest.importorskip("matplotlib")
+    proportion = pytest.importorskip("statsmodels.stats.proportion")
+    module = load_script(monkeypatch, "figures")
+    bounds = module.binary_rate_interval(successes/total, total)
+    reference = proportion.proportion_confint(successes, total, method="wilson")
+    assert bounds == pytest.approx(reference, abs=1e-14)
+    assert bounds[1] > bounds[0]  # 0/200 and 200/200 must not look certain
+
+
+def test_split_claim_interval_counts_replicates_and_keeps_boundary_uncertainty(monkeypatch):
+    pytest.importorskip("matplotlib")
+    import math
+    module = load_script(monkeypatch, "figures")
+    row = {"approach": "P1 Mime", "design": "3 selection + 4 sealed", "claim_rate": 1.0,
+           "replicates": 50, "cases": 1750, "claim_rate_mcse": 0.0}
+    interval = module.comparison_rate_interval(row)
+    assert interval["independent_replicates"] == 50
+    assert interval["lower"] < 0.85 and interval["upper"] == 1.0
+    # Evaluate the two-sided probability bound independently of the interval formula.
+    radius = 1-interval["lower"]
+    assert 2*math.exp(-2*50*radius*radius) == pytest.approx(0.05)
+    binary = module.comparison_rate_interval({**row, "design": "all seven", "cases": 50})
+    assert binary["lower"] > interval["lower"]  # different units warrant different methods
+
+
+@pytest.mark.parametrize("rate,total", [(0.125, 3), (1.1, 200), (float("nan"), 200), (0.5, 0), (0.5, 2.5)])
+def test_binary_monte_carlo_intervals_refuse_invalid_denominators(monkeypatch, rate, total):
+    pytest.importorskip("matplotlib")
+    module = load_script(monkeypatch, "figures")
+    with pytest.raises(ValueError):
+        module.binary_rate_interval(rate, total)
