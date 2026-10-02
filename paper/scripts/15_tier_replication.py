@@ -15,8 +15,8 @@ Rules fixed before the run (later changes moved the choice of the breast cohorts
 4. Replication (primary): over the cohorts measuring the gene (at least two), the random-effects pooled log hazard
    ratio has the development direction and its 95% CI excludes zero. Secondary: the share of cohort tests in the
    development direction, and the pooled log hazard ratio signed by the development direction.
-5. Reported per case study and group, with Wilson 95% intervals; nothing else is tested. (The Wilson intervals treat
-   genes as independent, which co-expressed genes are not, so they are too narrow.)
+5. Reported per case study and group, with Wilson 95% intervals; nothing else is tested. The intervals assume
+   independent genes. Gene dependence can invalidate their nominal coverage, so they are descriptive intervals.
 Writes tier_replication_genes.csv and tier_replication.json.
 """
 

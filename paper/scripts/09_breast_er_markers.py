@@ -1,5 +1,5 @@
-"""Case study V (development), a positive control: genome-wide marker evaluation for recurrence in ER-positive
-breast cancer, the setting in which gene expression is known to add to the clinical factors.
+"""Case study V (development): genome-wide marker evaluation for recurrence in ER-positive breast cancer.
+This real-data application is not a known-truth positive control for the selected signature's incremental value.
 
 METABRIC ER-positive tumours; relapse-free survival (cBioPortal) censored at 10 years; added value over age,
 tumour size, node status and grade; one expression column per gene (the most variable probe); SurvStudio's

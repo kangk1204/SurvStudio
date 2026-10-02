@@ -607,7 +607,7 @@ def figure_simulation() -> None:
     save(fig, "figS1_simulation")
 
 
-# ── Supplementary Figure S5: where the positive control's gain went ───────────
+# ── Supplementary Figure S5: ER-positive recurrence sensitivity ───────────────
 def figure_breast_er_sensitivity() -> None:
     folds = load("breast_er_sensitivity.csv").sort_values("held_out_site")
     summary = load("breast_er_sensitivity.json")
