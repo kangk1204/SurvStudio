@@ -8,7 +8,8 @@ bootstrap), then the selection replayed for every split of the seven cohorts int
 cohorts (the winner has the highest mean reported C over the selection cohorts) and for all seven used for selection.
 For each winner, SurvStudio's external gain: a Cox model of age, sex, stage and the winner's risk score fitted on TCGA,
 validated with validate_locked_recipe as script 03 validates SurvStudio's locked model, and pooled by random effects.
-P2 univariate Cox -> LASSO -> Cox and P3 KM Plotter's best cut-off (with script 15's replication rule) likewise.
+P2 univariate Cox -> LASSO -> Cox and P3's stylised uncorrected best-cutoff screen (with script 15's replication rule)
+likewise. P3 does not reproduce the current KM Plotter service, which documents multiple-testing correction.
 SurvStudio's own numbers come from case studies I and II and script 15 (results/), checked against the paper's.
 
 Writes competitors_mime_models.csv, competitors_mime_replay.csv, competitors_p2_cohorts.csv, competitors_p3_genes.csv

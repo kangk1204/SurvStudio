@@ -1719,7 +1719,7 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
     # Every left-out estimate repeats selection and fitting in the smaller training subsample.
     ladder = [
         ("Apparent", signature.get("apparent_c"), ACCENT),
-        ("Subsample gap-adjusted", signature.get("optimism_corrected_c"), SLATE),
+        ("Subsample<br>gap-adjusted", signature.get("optimism_corrected_c"), SLATE),
         ("Whole procedure<br>(left-out)", signature.get("signature_c_left_out"), SAGE),
     ]
     if added_value:

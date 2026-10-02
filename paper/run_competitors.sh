@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The comparison with the pipelines commonly used to publish prognostic signatures (see competitors/README.md): P1 Mime,
-# P2 univariate Cox -> LASSO -> Cox and P3 KM Plotter's best cut-off, developed on TCGA-LUAD and validated in the seven
+# P2 univariate Cox -> LASSO -> Cox and P3's uncorrected best-cutoff screen, developed on TCGA-LUAD and validated in the seven
 # GEO cohorts of case study II (experiment 1), and their claims under script 06's plasmode null (experiment 2).
 #   bash run_competitors.sh                      every step: checks data real sensitivity null table
 #   bash run_competitors.sh real table           selected steps

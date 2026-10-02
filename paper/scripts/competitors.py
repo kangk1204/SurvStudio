@@ -6,7 +6,8 @@ The pipelines, each developed on TCGA-LUAD and applied to the seven GEO cohorts 
   univariate-Cox candidate filter at p < 0.05, the candidates capped at the CANDIDATE_CAP smallest p-values;
 - P2 univariate Cox (p < 0.05) -> LASSO-Cox (glmnet, 10-fold CV, lambda.min) -> multivariable Cox of the selected
   genes, whose linear predictor is the risk score;
-- P3 KM Plotter's best-cutoff screen: for every gene, the minimum log-rank p over the cut-offs between its quartiles.
+- P3 uncorrected best-cutoff screen: for every gene, the minimum log-rank p over the cut-offs between its quartiles.
+  This is a stylised pipeline, not a reproduction of the current KM Plotter service, which documents FDR correction.
 
 Patients, outcomes and clinical covariates are those of case studies I and II (development_data, validation_data);
 the genes are case study I's, restricted to those every GEO cohort measures (gene_set), each z-scored within its
@@ -255,7 +256,7 @@ def median_split(time: np.ndarray, event: np.ndarray, risk: np.ndarray) -> tuple
 
 
 def best_cutoff_scan(time: np.ndarray, event: np.ndarray, expression: np.ndarray, batch: int = 64) -> pd.DataFrame:
-    """KM Plotter's "auto select best cutoff" for every column: each value between the lower and upper quartiles
+    """Uncorrected best-cutoff screen for every column: each value between the lower and upper quartiles
     (numpy's default quantiles, R's type 7) as the cut-off, high expression above it, and the smallest log-rank p.
     Returns per column the minimum p, its cut-off, the hazard ratio (high against low) there, the number of cut-offs
     tried, and the log-rank p of the median cut for comparison."""

@@ -126,15 +126,17 @@ def experiment_1(real: dict) -> list[dict]:
         "notes": "gene replication by script 15's rule in the direction of each gene's multivariable coefficient",
     })
     p3 = real["P3"]
-    for key, label, rule in (("claimed_p05", "P3 best cut-off (p < 0.05)", "uncorrected, KM Plotter's default"),
-                             ("claimed_bonferroni", "P3 best cut-off (Bonferroni)", f"p < 0.05 / {p3['genes_scanned']}")):
+    for key, label, rule in (("claimed_p05", "P3 best cut-off (uncorrected)", "uncorrected minimum p"),
+                             ("claimed_bonferroni", "P3 best cut-off (gene-only Bonferroni)", f"minimum p < 0.05 / {p3['genes_scanned']}")):
         share = p3[key]
         rows.append({
             "approach": label, "design": f"minimum log-rank p over the cut-offs between the quartiles of each of {p3['genes_scanned']} genes on TCGA",
             "claim": f"{share['claimed']} prognostic genes ({rule})", "genes_claimed": share["claimed"],
             "genes_replicated": share["replicated"], "genes_evaluable": share["evaluable"], "replicated_share": share["rate"],
             "warns_about_optimism": "no",
-            "notes": "replication: script 15's rule (clinically adjusted, pooled over the seven cohorts, the cut-off's direction)",
+            "notes": "stylised screen, not the current KM Plotter service; the gene-only threshold does not correct "
+                     "cut-off searching. Replication: script 15's rule (clinically adjusted, pooled over the seven "
+                     "cohorts, the cut-off's direction)",
         })
     return rows
 

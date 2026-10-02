@@ -1,6 +1,6 @@
 # Comparison with the pipelines commonly used to publish prognostic signatures
 
-Reviewers asked how SurvStudio compares with the pipelines researchers use to publish prognostic gene signatures.
+This experiment compares SurvStudio with specified pipelines used to develop prognostic gene signatures.
 `run_competitors.sh` (one folder up) develops three such pipelines on TCGA-LUAD, applies them to the seven GEO cohorts
 of case study II, and sets what each would publish against what the independent cohorts show (experiment 1). It then
 counts how often each makes its usual claim under script 06's plasmode null (experiment 2). SurvStudio's own numbers
@@ -12,7 +12,14 @@ come from `results/` (case studies I and II, scripts 06 and 15), so run `run_all
 | --- | --- | --- |
 | P1 | Mime (`Mime1::ML.Dev.Prog.Sig`, mode `"all"`) | Univariate-Cox candidate filter at p < 0.05 on TCGA; 10 algorithms (RSF, Enet at alpha 0.1 to 0.9, StepCox in three directions, CoxBoost, plsRcox, superpc, GBM, survival-SVM, Ridge, Lasso) and their combinations, 117 models in the pinned version; nodesize 5, seed 5201314 (the documentation's). Every model is trained on TCGA and scored in every cohort. |
 | P2 | Univariate Cox -> LASSO -> Cox | Univariate Cox p < 0.05 on TCGA (Wald test, Efron ties); LASSO-Cox with 10-fold CV (`glmnet::cv.glmnet`, `lambda.min`, seed 5201314); a multivariable Cox model of the genes LASSO keeps, whose linear predictor is the risk score. |
-| P3 | KM Plotter's "auto select best cutoff" | For every gene on TCGA, each value between its lower and upper quartiles as the cut-off (high expression above it), the log-rank test, and the smallest p; genes with p < 0.05 (the default, uncorrected) and with p < 0.05 / genes (Bonferroni). |
+| P3 | Stylised uncorrected best-cutoff screen | For every gene on TCGA, each value between its lower and upper quartiles as the cut-off (high expression above it), the log-rank test, and the smallest p; claims at p < 0.05 and at minimum p < 0.05 / genes. The latter corrects the gene count only, not cut-off searching. |
+
+P3 is an explicitly uncorrected comparison procedure, not a reproduction of the current KM Plotter service or
+its defaults. [KM Plotter's official description](https://kmplot.com/analysis/) documents Benjamini-Hochberg FDR
+for cut-off selection, and its [update history](https://kmplot.com/analysis/index.php?p=updates) records FDR since
+2018 and optional percentile/all-value searches since 2025. We have not reproduced those service procedures or
+their tie rules. P3's results cannot establish that the current service ignores multiplicity or has the reported
+error rate. Accessed 2026-10-02.
 
 ## Same patients, outcomes, covariates and genes
 
@@ -75,7 +82,9 @@ survival is simulated from age, sex and stage alone. Each replicate has a develo
 with new outcomes, seven pseudo-cohorts of the GEO cohorts' sizes (115, 81, 204, 171, 118, 429, 391) drawn with
 replacement from the TCGA patients with new outcomes, and 3,000 patients drawn the same way standing for new patients
 ("truth"). No gene carries information beyond the clinical covariates, but genes that go with stage are prognostic on
-their own, as in real data, so a marginal C above 0.5 is real while the gain over the clinical covariates is zero.
+their own, as in real data, so a marginal C above 0.5 can be real. The conditional data-generating hazard has no
+gene contribution; this does not force the predictive gain of each finite-sample fitted model to be exactly zero.
+The independent 3,000-patient sample estimates that fitted model's performance with its own Monte Carlo error.
 Every replicate uses all 9,938 genes (no gene sampling was needed). P2 and P3 run on 200 replicates, P1 on 50
 (`MIME_REPLICATES`). The audit uses the fixed first 50 designs and retains failed fits without replacement. It reports
 completed-fit rates together with bounds over all planned designs, assigning every missing outcome zero or one.
@@ -87,7 +96,8 @@ Claims counted per replicate: P1, the winner's reported selection-cohort C (and 
 sealed honest C is below 0.55), and a median-split log-rank p < 0.05 in at least one selection cohort; P2, at least one
 gene selected with a training median-split p < 0.05, and an external median-split p < 0.05 in at least one of the seven
 cohorts; P3, at least one gene with best-cutoff p < 0.05 and the number of such genes. SurvStudio: script 06's null
-family-wise error (0.055 over 400 replicates) and, from a run of script 06 that has it (`results/`, else the
+family-wise error from the new script 06 run (the historical release reported 0.055 over 400 replicates) and, from
+a run of script 06 that has it (`results/`, else the
 `simulation_summary.json` that `SUBSAMPLES_SUMMARY` names), the verdicts on the gain in its null with subsamples.
 Rates over the 35 splits of the P1 replicates get their Monte Carlo SE from the replicates' own rates.
 
