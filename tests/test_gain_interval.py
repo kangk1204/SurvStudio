@@ -268,7 +268,7 @@ def test_the_markers_tab_preserves_but_withholds_an_unqualified_gain_interval(tm
     result = _run_page(tmp_path, r"""
       page.context.__payload = fixtures.markers.added;
       const summary = page.run("markerSummary(__payload)");
-      return [...summary.strengths, ...summary.cautions].join(" | ");
+      return [summary.headline, ...summary.strengths, ...summary.cautions].join(" | ");
     """, markers=marker_payloads)
 
     assert f"a gain of {gain:+.3f} (95% CI {low:.3f} to {high:.3f})." not in result
