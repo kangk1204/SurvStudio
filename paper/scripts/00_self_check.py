@@ -532,7 +532,7 @@ def check_resume(root: Path) -> None:
 
 def check_gain_verdicts() -> None:
     """The simulation summary's reading of the paired left-out gain: the old rule (gain below 0.02), and from the gain's
-    interval the coverage of the true gain (0 under the null) and one verdict per replicate, "adds little" (upper
+    interval the coverage of a specified target and one verdict per replicate, "adds little" (upper
     limit below 0.02), else "adds" (lower limit above 0), else "uncertain"; without intervals, only the old rule."""
     summary = importlib.import_module("06_simulation_summary")
     scored = pd.DataFrame({"left_out_gain": [0.01, 0.03, 0.05, -0.01, 0.01], "left_out_gain_lower": [-0.01, 0.005, 0.01, -0.03, 0.004],
@@ -546,11 +546,26 @@ def check_gain_verdicts() -> None:
     assert np.isclose(uncertain["gain_coverage"], 0.4), "each replicate's interval against its own true gain"
     bare = summary.gain_verdicts(scored.drop(columns=["left_out_gain_lower", "left_out_gain_upper"]), pd.Series(0.0, index=scored.index))
     assert bare["gain_interval_replicates"] == 0 and bare["gain_coverage"] is None and np.isclose(bare["old_rule_adds_little"], 0.6)
-    # A null scenario with subsamples is scored against a true gain of 0; an alternative against its gain in new patients.
+    # Under the conditional null, a fitted model still need not have the clinical-only model's predictive performance.
     replicates = scored.assign(scenario="n", replicate=range(5), beta=0.0, max_mode_fraction=0.9, events=40, tested=100, fwer_false=0, error=np.nan)
     settings = {"scenarios": {"n": {"beta": 0.0, "max_mode_fraction": 0.9, "subsamples": 100, "replicates": 5, "true_genes": 0}}}
     row = summary.summarise(replicates, settings)[0]
-    assert row["gain_target"] == "zero" and np.isclose(row["gain_coverage"], 0.4) and np.isclose(row["true_gain_mean"], 0.02)
+    assert row["gain_target"] == "fitted-model gain in new patients" and np.isclose(row["gain_coverage"], 0.4) and np.isclose(row["true_gain_mean"], 0.02)
+    negative = replicates.assign(new_patients_c=0.66)
+    negative_row = summary.summarise(negative, settings)[0]
+    assert np.isclose(negative_row["gain_coverage"], 0.2) and np.isclose(negative_row["null_zero_coverage"], 0.4), "coverage targets must not silently become zero under a conditional null"
+    failed = replicates.copy()
+    failed.loc[0, "error"] = "fit failed"
+    failed.loc[1, "fwer_false"] = 1
+    failure_row = summary.summarise(failed, settings)[0]
+    assert failure_row["replicates"] == 4 and failure_row["planned_replicates"] == 5
+    assert np.allclose(failure_row["fwer_failure_bounds"], [0.2, 0.4]), "failed draws must remain in the uncertainty bounds"
+    try:
+        summary.summarise(replicates.assign(error="fit failed"), settings)
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("all-failed scenarios cannot estimate FWER")
 
 
 def check_stamps(root: Path) -> None:

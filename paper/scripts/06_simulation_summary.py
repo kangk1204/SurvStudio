@@ -6,7 +6,9 @@ standard error. A false marker is one unlinked to the true markers (06_simulatio
 every gene is. Under the alternative: the share of the true genes found (family-wise and robust tier), linked and
 false markers per replicate. For every scenario with subsamples (the replicates scored in 3,000 new patients from the
 same design): each C-index estimate minus the locked model's C in the new patients, and SurvStudio's paired left-out
-gain (signature_gain_left_out) against the true gain, which is 0 under the null (the genes add nothing) and otherwise
+gain (signature_gain_left_out) against the fitted model's gain in independently generated new patients, including
+under the null (finite-sample selected noise predictors can hurt the fitted model). A separate null-zero coverage is
+reported as a hypothesis check, not substituted for predictive performance. The target is
 the locked model's gain over the clinical model in the new patients: its mean and bias, how often the gain's interval
 (signature_gain_left_out_ci, where SurvStudio reports one) covers the true gain, and how often the verdict read from
 that interval would say "adds little" (upper limit below 0.02), else "adds" (lower limit above 0), else "uncertain";
@@ -30,7 +32,7 @@ from common import RESULTS, STAMP_DTYPES, read_result, write_csv_atomic, write_j
 TRUE_MARKERS = 5  # true genes of the scenarios whose settings predate the true_genes entry
 # A gain in C below this "adds little": the old rule applies it to the gain, the verdict to the gain's upper limit.
 LITTLE = 0.02
-ESTIMATES = {"apparent_c": "apparent", "corrected_c": "optimism-corrected", "left_out_c": "left-out patients"}
+ESTIMATES = {"apparent_c": "apparent", "corrected_c": "subsample gap-adjusted", "left_out_c": "left-out patients"}
 NEEDED = ["beta", "max_mode_fraction", "events", "tested", "fwer_false"]
 NEEDED_ALTERNATIVE = ["fwer_true", "robust_true", "linked_genes", "fwer_linked", "fwer_unlinked", "robust_linked", "robust_unlinked"]
 NEEDED_SCORED = ["new_patients_c", "new_patients_clinical_c", "apparent_c", "corrected_c", "left_out_c", "clinical_left_out_c", "left_out_gain"]
@@ -96,16 +98,23 @@ def summarise(replicates: pd.DataFrame, settings: dict) -> list[dict]:
         failed = int(everything["error"].notna().sum())
         part = everything[everything["error"].isna()]
         count = len(part)
+        if not count:
+            raise SystemExit(f"{scenario}: every planned replicate failed; preserved records cannot estimate a rejection rate.")
         beta = float(spec["beta"])
         true_genes = int(spec.get("true_genes", TRUE_MARKERS if beta > 0 else 0))
         # Under the null every discovery is false; under the alternative only the unlinked ones are.
         false = part["fwer_false"] if beta == 0 else part["fwer_unlinked"]
         fwer = float((false > 0).mean())
+        rejection_count = int((false > 0).sum())
         row = {
             "scenario": scenario, "beta": beta, "filter": bool(spec["max_mode_fraction"] < 1.0), "subsamples": int(spec.get("subsamples", 0)),
             "true_genes": true_genes, "replicates": count, "failed": failed, "events_mean": float(part["events"].mean()),
             "tested_mean": float(part["tested"].mean()), "fwer": fwer, "fwer_mcse": float(np.sqrt(fwer * (1 - fwer) / count)),
             "false_per_replicate": float(false.mean()),
+            "planned_replicates": len(everything),
+            "fwer_failure_bounds": [rejection_count / len(everything), (rejection_count + failed) / len(everything)],
+            "false_discovery_definition": ("Exact conditional global null: every gene is null." if beta == 0 else
+                                           "Descriptive unlinked-gene threshold |partial correlation| < 0.1; not exact conditional null hypotheses or proof of strong FWER control."),
         }
         if beta > 0:
             found = part["fwer_true"] + part["fwer_false"]
@@ -134,9 +143,12 @@ def summarise(replicates: pd.DataFrame, settings: dict) -> list[dict]:
             row["true_gain_mean"] = float(gain.mean())
             row["left_out_gain_mean"] = float(scored["left_out_gain"].mean())
             row["left_out_gain_bias"] = float((scored["left_out_gain"] - gain).mean())
-            # The true gain is 0 under the null, where the genes add nothing, and the gain in new patients otherwise.
-            row["gain_target"] = "zero" if beta == 0 else "new patients"
-            row.update(gain_verdicts(scored, pd.Series(0.0, index=scored.index) if beta == 0 else gain))
+            # A conditional null is about information, not the realized performance of a fitted noisy signature.
+            row["gain_target"] = "fitted-model gain in new patients"
+            row.update(gain_verdicts(scored, gain))
+            if beta == 0:
+                zero = gain_verdicts(scored, pd.Series(0.0, index=scored.index))
+                row["null_zero_coverage"] = zero["gain_coverage"]
         rows.append(row)
     return rows
 
