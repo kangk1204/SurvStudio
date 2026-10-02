@@ -174,7 +174,7 @@ from three cohorts on, its 95% prediction interval.
 | `fig1` | Figure 1: a, what SurvStudio checks by default (`fig1_workflow`); b, the Markers tab after case study I (`interface/markers_tab_case_study_i.png`, a screenshot of the web interface) | nothing |
 | `fig1_workflow` | Figure 1a alone | nothing |
 | `fig2_markers` | Figure 2: genome-wide markers in TCGA-LUAD | 01, 02 |
-| `fig3_estimates` | Figure 3: internal and external estimates in three settings (lung adenocarcinoma, breast cancer survival, the ER-positive positive control): a, the C-index from apparent to optimism-corrected, left-out and external, for the model and the clinical-only model; b, the gain over the clinical covariates in left-out patients, held-out METABRIC sites (positive control) and the external cohorts | 01, 03, 07 to 10, 14 |
+| `fig3_estimates` | Figure 3: internal and external estimates in three settings (lung adenocarcinoma, breast cancer survival, the ER-positive positive control): a, the C-index from apparent to subsample gap-adjusted, left-out and external, for the model and the clinical-only model; b, the gain over the clinical covariates in left-out patients, held-out METABRIC sites (positive control) and the external cohorts | 01, 03, 07 to 10, 14 |
 | `fig4_models` | Figure 4: prediction models on the same test patients | 04 |
 | `fig5_comparison` | Figure 5: the pipelines commonly used to publish signatures against SurvStudio, under the null and from TCGA-LUAD to the seven GEO cohorts | `run_competitors.sh` (18) |
 | `figS1_simulation` | Supplementary Figure S1: error control, power and the accuracy of the C-index estimates in the simulation | 06 |
@@ -238,3 +238,7 @@ chooses the external cohorts; scripts 08, 10 and 15 share both.
   decisions the paper applied.
 - A warning that SurvStudio is at `unknown` or `-dirty`: run from a git clone, and commit or stash changes outside
   `paper/figures/` before a run whose results should name a commit.
+
+## Review on 2026-10-02
+
+The original release candidate remains available at f7d8baa. The audit branch incorporates fold-specific LASSO preprocessing and labels the existing gap adjustment explicitly. Recomputed results must use their recorded source commit; the committed release figures are preserved in the reference worktree and are not evidence for a changed analysis. `validation/publication/expanded_protocol.json` fixes additional conditional-null stress tests before their execution. The partial-null plasmode of script 06 classifies genes with partial correlation below 0.1 as unlinked; this is a descriptive threshold, not an exact conditional null, so its alternative-scenario false-discovery counts do not prove strong FWER control.

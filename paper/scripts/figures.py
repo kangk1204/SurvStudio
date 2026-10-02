@@ -193,7 +193,7 @@ def draw_workflow(ax) -> None:
         ]),
         "checks": (29.5, 42.5, "#dcefe4", ROBUST, "Checks run by default", [
             ("Survival curves and Cox regression", "Kaplan–Meier with numbers at risk, log-rank,\nEfron Cox model, proportional-hazards tests", 2),
-            ("Marker evaluation", "score tests for added value over clinical data\n→ family-wise error by permutation\n    (Westfall–Young; marker residuals permuted)\n"
+            ("Marker evaluation", "score tests for added value over clinical data\n→ multiplicity-adjusted permutation tests\n    (Westfall–Young; marker residuals permuted)\n"
                                   "→ whole screen repeated on subsamples: tiers\n→ gain over clinical-only C, with 95% interval", 5),
             ("Prediction models", "machine and deep learning on the same splits\n(holdout, repeated CV, locked test); paired\nintervals for the difference from Cox", 3),
         ]),
@@ -362,7 +362,7 @@ def figure_estimates() -> None:
     below = fig.add_gridspec(1, 1, left=0.27, right=0.69, top=0.445, bottom=0.14)
 
     # a: the C-index ladder of each setting, internal (development) rows above the external (pooled) ones.
-    rows = ["Apparent", "Optimism-corrected", "Left-out patients,\nmodel", "Left-out patients,\nclinical only", "External cohorts,\nmodel",
+    rows = ["Apparent", "Subsample gap-\nadjusted", "Left-out patients,\nmodel", "Left-out patients,\nclinical only", "External cohorts,\nmodel",
             "External cohorts,\nclinical only"]
     colours = [OPPOSITE, ROBUST, ML, MUTED, ML, MUTED]
     positions = np.arange(len(rows))[::-1].astype(float)
@@ -541,7 +541,7 @@ def figure_simulation() -> None:
 
     ax = fig.add_subplot(grid[0, 2])
     scored = replicates[replicates["scenario"].isin(["alt_0.30_filter", "alt_0.45_filter"])].dropna(subset=["new_patients_c"])
-    estimates = [("apparent_c", "Apparent", OPPOSITE), ("corrected_c", "Corrected", ROBUST), ("left_out_c", "Left-out", ML)]
+    estimates = [("apparent_c", "Apparent", OPPOSITE), ("corrected_c", "Gap-adjusted", ROBUST), ("left_out_c", "Left-out", ML)]
     errors = [scored[column] - scored["new_patients_c"] for column, _, _ in estimates]
     positions = np.arange(len(estimates), 0, -1)
     parts = ax.boxplot(errors, positions=positions, orientation="horizontal", widths=0.55, patch_artist=True, showfliers=False,
