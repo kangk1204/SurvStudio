@@ -554,7 +554,7 @@ def check_gain_verdicts() -> None:
     negative = replicates.assign(new_patients_c=0.66)
     negative_row = summary.summarise(negative, settings)[0]
     assert np.isclose(negative_row["gain_coverage"], 0.2) and np.isclose(negative_row["null_zero_coverage"], 0.4), "coverage targets must not silently become zero under a conditional null"
-    failed = replicates.copy()
+    failed = replicates.assign(error=replicates["error"].astype(object))
     failed.loc[0, "error"] = "fit failed"
     failed.loc[1, "fwer_false"] = 1
     failure_row = summary.summarise(failed, settings)[0]
