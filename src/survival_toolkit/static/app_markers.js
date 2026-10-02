@@ -283,9 +283,9 @@ function markerSummary(payload) {
   }
   const clinicalOnly = markerModelIsClinicalOnly(signature);
   if (clinicalOnly) cautions.push("No marker was selected, so the final model is the clinical-only model (the clinical covariates alone).");
-  // Without an apparent C-index there is no fitted full-cohort model, so nothing to call optimistic.
+  // The gap comes from repeated selection and refitting, even when a full-cohort model was fitted.
   if (signature.apparent_c != null && signature.signature_optimism != null && Number(signature.signature_optimism) > 0.02) {
-    cautions.push(`The ${clinicalOnly ? "clinical-only" : "selected-marker"} model's mean subsample-to-left-out C-index gap is ${Number(signature.signature_optimism).toFixed(3)}; the gap adjustment is a heuristic that includes training-size effects.`);
+    cautions.push(`The selection procedure's mean subsample-to-left-out C-index gap is ${Number(signature.signature_optimism).toFixed(3)}; the gap adjustment is a heuristic that includes training-size effects.`);
   }
   // A gain the markers add is a strength; a little or uncertain one is a caution.
   const leftOut = markerLeftOutComparison(signature, addedValue);
@@ -377,7 +377,7 @@ function markerDuplicateCaution(duplicates) {
   ].slice(0, 3);
   return `Possible repeated patients (${formatCount(total)}): ${examples.join("; ")}${total > examples.length ? "; ..." : ""}. `
     + "Their marker profiles are identical or near-identical, as for one tumour entered twice. A patient in the data twice can sit on both sides "
-    + "of a subsample split and flatter the corrected C-index; keep one sample per patient and run again.";
+    + "of a subsample split and flatter the internal C-index estimates; keep one sample per patient and run again.";
 }
 
 // The added-value lens permutes each marker's residuals after regression on the clinical covariates ("smith";
@@ -393,12 +393,6 @@ function markerModelIsClinicalOnly(signature) {
   return signature?.apparent_c != null && Array.isArray(signature?.markers) && !signature.markers.length;
 }
 
-// True when a selected-marker model was fitted in the full cohort (it has an apparent C-index and holds markers),
-// as the server's report reads it; otherwise left-out results describe the whole selection procedure.
-function markerModelIsSelectedMarkers(signature) {
-  return signature?.apparent_c != null && !markerModelIsClinicalOnly(signature);
-}
-
 // The 95% interval of the left-out gain (corrected resampled t over the subsamples), or null for a result without
 // one: saved before the interval existed, or with fewer than two paired subsamples.
 function markerGainInterval(signature) {
@@ -409,16 +403,16 @@ function markerGainInterval(signature) {
 }
 
 const MARKER_GAIN_VERDICTS = {
-  little: "The selected markers add little discrimination beyond the clinical covariates.",
-  adds: "The selected markers add discrimination beyond the clinical covariates.",
+  little: "The procedure's internal gain is below the display threshold of 0.02 across this interval.",
+  adds: "Internal resampling suggests that the selection procedure adds discrimination beyond the clinical covariates.",
   uncertain: "The gain is uncertain: its interval includes both no gain and a gain of 0.02 or more.",
 };
 
 // The model of the whole procedure against the clinical covariates alone, both in the patients left out of each
 // subsample; with paired subsamples the mean paired gain and their number. The verdict follows the gain's interval:
 // "little" when all of it lies below 0.02, "adds" when all of it lies above 0, "uncertain" otherwise. A result without
-// the interval is judged by its mean gain against 0.02 ("little" or "adds"). Only a selected-marker model's text states
-// the verdict.
+// the interval has no verdict on added discrimination. Every left-out estimate assesses selection and refitting,
+// regardless of which markers were selected when fitting the final model in the full cohort.
 function markerLeftOutComparison(signature, addedValue) {
   const model = signature?.signature_c_left_out;
   const clinical = signature?.clinical_c_left_out;
@@ -429,22 +423,19 @@ function markerLeftOutComparison(signature, addedValue) {
   const where = Number.isInteger(replicates) && replicates > 0
     ? (replicates === 1 ? "the one subsample that could be scored" : `each of ${formatCount(replicates)} subsamples`)
     : "each subsample";
-  const selected = markerModelIsSelectedMarkers(signature);
   let subject = "the whole selection procedure";
-  if (selected) {
-    subject = "the selected-marker model";
-  } else if (markerModelIsClinicalOnly(signature)) {
+  if (markerModelIsClinicalOnly(signature)) {
     subject = "the whole selection procedure (it selected no marker in the full cohort, so the final model is the clinical-only model)";
   }
   const comparison = `In the patients left out of ${where}, ${subject} reached C ${formatCIndexValue(model)} against ${formatCIndexValue(clinical)} for the clinical covariates alone`;
   const signedGain = `${gain >= 0 ? "+" : ""}${gain.toFixed(3)}`;
   const interval = markerGainInterval(signature);
+  const scope = "Markers were selected and models refitted in each subsample; validate the locked final model independently.";
   if (!interval) {
-    const verdict = gain < 0.02 ? "little" : "adds";
     return {
       gain,
-      verdict,
-      text: `${comparison} (${signedGain}).${verdict === "little" && selected ? ` ${MARKER_GAIN_VERDICTS.little}` : ""}`,
+      verdict: "uncertain",
+      text: `${comparison} (${signedGain}). No interval was available to assess the gain's uncertainty. ${scope}`,
     };
   }
   const [low, high] = interval;
@@ -454,7 +445,7 @@ function markerLeftOutComparison(signature, addedValue) {
   return {
     gain,
     verdict,
-    text: `${comparison}, a gain of ${signedGain} (95% CI ${low.toFixed(3)} to ${high.toFixed(3)}).${selected ? ` ${MARKER_GAIN_VERDICTS[verdict]}` : ""}`,
+    text: `${comparison}, a gain of ${signedGain} (95% CI ${low.toFixed(3)} to ${high.toFixed(3)}). ${MARKER_GAIN_VERDICTS[verdict]} ${scope}`,
   };
 }
 

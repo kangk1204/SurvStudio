@@ -198,22 +198,24 @@ def test_the_verdict_follows_the_interval_of_the_gain(tmp_path: Path) -> None:
       };
     """)
 
-    comparison = "In the patients left out of each of 40 subsamples, the selected-marker model reached C 0.680 against 0.660 for the clinical covariates alone"
+    comparison = "In the patients left out of each of 40 subsamples, the whole selection procedure reached C 0.680 against 0.660 for the clinical covariates alone"
     # The whole interval below 0.02: little discrimination, a caution, even when the interval lies above 0.
-    assert f"{comparison}, a gain of +0.002 (95% CI -0.011 to 0.015). The selected markers add little discrimination beyond the clinical covariates." in result["little"]["cautions"]
-    assert "a gain of +0.010 (95% CI 0.004 to 0.016). The selected markers add little discrimination" in result["smallButReal"]["cautions"]
+    assert f"{comparison}, a gain of +0.002 (95% CI -0.011 to 0.015). The procedure's internal gain is below the display threshold of 0.02 across this interval." in result["little"]["cautions"]
+    assert "a gain of +0.010 (95% CI 0.004 to 0.016). The procedure's internal gain is below" in result["smallButReal"]["cautions"]
     assert "a gain of" not in result["little"]["strengths"] + result["smallButReal"]["strengths"]
     # The whole interval above 0 (and reaching 0.02): the markers add discrimination, a strength.
-    assert f"{comparison}, a gain of +0.021 (95% CI 0.006 to 0.036). The selected markers add discrimination beyond the clinical covariates." in result["adds"]["strengths"]
+    assert f"{comparison}, a gain of +0.021 (95% CI 0.006 to 0.036). Internal resampling suggests that the selection procedure adds discrimination beyond the clinical covariates." in result["adds"]["strengths"]
+    assert "validate the locked final model independently" in result["adds"]["strengths"]
     assert "a gain of" not in result["adds"]["cautions"]
     # Neither: an uncertain gain, a caution that gives the interval.
     assert (
         f"{comparison}, a gain of +0.012 (95% CI -0.009 to 0.033). The gain is uncertain: its interval includes both no gain and a gain of 0.02 or more."
     ) in result["uncertain"]["cautions"]
     assert "add little" not in result["uncertain"]["cautions"] and "a gain of" not in result["uncertain"]["strengths"]
-    # Without a full-cohort model the gain and its interval belong to the whole procedure, with no verdict on selected markers.
+    # The estimate and its uncertainty describe the procedure whether or not the full-cohort model was fitted.
     assert "the whole selection procedure reached C 0.680 against 0.660 for the clinical covariates alone, a gain of +0.012 (95% CI -0.009 to 0.033)." in result["procedure"]["cautions"]
-    assert "selected markers" not in result["procedure"]["cautions"] and "uncertain" not in result["procedure"]["cautions"]
+    assert "selected markers" not in result["procedure"]["cautions"] and "uncertain" in result["procedure"]["cautions"]
+    assert "the selected-marker model reached" not in str(result)
 
 
 @_needs_node
@@ -229,8 +231,8 @@ def test_the_key_numbers_keep_the_third_decimal_of_the_c_index(tmp_path: Path) -
     assert result["Clinical-only C (left out)"] == "0.600"
 
 @_needs_node
-def test_a_result_without_the_interval_keeps_the_verdict_on_the_mean_gain(tmp_path: Path) -> None:
-    """Results saved before the interval existed, or with a single paired subsample, are judged by the mean gain against 0.02."""
+def test_a_result_without_the_interval_does_not_claim_added_discrimination(tmp_path: Path) -> None:
+    """A mean alone cannot assess uncertainty, including for legacy results and single paired subsamples."""
     result = _run_page(tmp_path, _SUMMARIZE + r"""
       return {
         small: summarize({ signature_gain_left_out: 0.004 }),
@@ -240,12 +242,15 @@ def test_a_result_without_the_interval_keeps_the_verdict_on_the_mean_gain(tmp_pa
       };
     """)
 
-    comparison = "the selected-marker model reached C 0.680 against 0.660 for the clinical covariates alone"
-    assert f"{comparison} (+0.004). The selected markers add little discrimination beyond the clinical covariates." in result["small"]["cautions"]
-    assert f"{comparison} (+0.035)." in result["large"]["strengths"] and "add discrimination" not in result["large"]["strengths"]
+    comparison = "the whole selection procedure reached C 0.680 against 0.660 for the clinical covariates alone"
+    assert f"{comparison} (+0.004). No interval was available" in result["small"]["cautions"]
+    assert f"{comparison} (+0.035). No interval was available" in result["large"]["cautions"]
     assert "In the patients left out of the one subsample that could be scored" in result["single"]["cautions"]
-    assert "(+0.004). The selected markers add little" in result["single"]["cautions"]
-    assert f"{comparison} (+0.035)." in result["partial"]["strengths"]
+    assert "(+0.004). No interval was available" in result["single"]["cautions"]
+    assert f"{comparison} (+0.035). No interval was available" in result["partial"]["cautions"]
+    for case in result.values():
+        assert "reached C" not in case["strengths"]
+        assert "validate the locked final model independently" in case["cautions"]
     assert "95% CI" not in " ".join(value for case in result.values() for value in case.values())
 
 
@@ -271,7 +276,7 @@ _REQUEST = {"time_column": "os_time", "event_column": "os_event", "event_positiv
 
 
 def _added_value_result(**signature) -> dict:
-    """An added-value evaluation whose selected-marker model was scored in the patients left out of 40 subsamples."""
+    """An added-value evaluation with selection and refitting in each of 40 subsamples."""
     return {
         "primary_lens": "added_value",
         "marker_table": [],
@@ -294,13 +299,15 @@ def test_the_remark_text_reports_the_interval_where_it_reports_the_gain() -> Non
 
     items = {entry["item"]: entry for entry in report["items"]}
     gain = "against 0.660 for the clinical covariates alone (mean difference +0.012, 95% CI -0.009 to 0.033)."
-    assert f"In the patients left out of each of 40 subsamples, it reached a mean C-index of 0.680 {gain}" in report["results"]
+    assert f"In the patients left out of each of 40 subsamples, the whole selection procedure reached a mean C-index of 0.680 {gain}" in report["results"]
+    assert "validate the locked final model independently" in report["results"]
     assert gain in items["18"]["text"] and gain in items["19"]["text"]
     # The methods name the interval's method.
     assert items["10"]["text"] == report["methods"]
     assert report["methods"].endswith(
-        "the 95% confidence interval of the mean difference used the corrected resampled t statistic (Nadeau and Bengio 2003), "
-        "which allows for the overlap between subsamples."
+        "the 95% confidence interval of the mean difference used the approximate corrected resampled t statistic (Nadeau and Bengio 2003), "
+        "which accounts for overlap between subsamples under its covariance assumptions. Coverage for this survival selection "
+        "procedure has not been established."
     )
 
 

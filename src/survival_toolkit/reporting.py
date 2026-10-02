@@ -341,8 +341,9 @@ def _gain_interval_sentence(result: dict[str, Any], added_value: bool) -> str:
     return (
         "In the patients left out of each subsample, the C-index of the model fitted in that subsample was compared with that "
         "of a Cox model of the clinical covariates alone fitted in the same subsample; the 95% confidence interval of the mean "
-        "difference used the corrected resampled t statistic (Nadeau and Bengio 2003), which allows for the overlap between "
-        "subsamples."
+        "difference used the approximate corrected resampled t statistic (Nadeau and Bengio 2003), which accounts for "
+        "overlap between subsamples under its covariance assumptions. Coverage for this survival selection procedure "
+        "has not been established."
     )
 
 
@@ -386,8 +387,8 @@ _PAIRED_COUNT_KEYS = ("n_clinical_replicates", "n_paired_replicates", "n_left_ou
 _PAIRED_DIFFERENCE_KEYS = ("signature_gain_left_out", "delta_c_left_out", "c_left_out_difference", "left_out_c_difference")
 
 
-def _left_out_comparison(signature: dict[str, Any], added_value: bool, *, subject: str = "it") -> str:
-    """The selected-marker model against the clinical covariates alone, in the patients left out."""
+def _left_out_comparison(signature: dict[str, Any], added_value: bool) -> str:
+    """Selection and refitting against the clinical covariates alone, in the patients left out."""
     model_c, clinical_c = _finite(signature.get("signature_c_left_out")), _finite(signature.get("clinical_c_left_out"))
     if not added_value or model_c is None or clinical_c is None:
         return ""
@@ -408,8 +409,9 @@ def _left_out_comparison(signature: dict[str, Any], added_value: bool, *, subjec
     interval = _gain_interval(signature)
     spread = f", 95% CI {interval[0]:.3f} to {interval[1]:.3f}" if interval else ""
     return (
-        f" In the patients left out of {where}, {subject} reached a mean C-index of {_number(model_c)} against {_number(clinical_c)} "
+        f" In the patients left out of {where}, the whole selection procedure reached a mean C-index of {_number(model_c)} against {_number(clinical_c)} "
         f"for the clinical covariates alone (mean difference {difference:+.3f}{spread})."
+        " Markers were selected and models refitted in each subsample; validate the locked final model independently."
     )
 
 
@@ -444,10 +446,7 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
             text += f" and a subsample gap-adjusted C-index of {_number(corrected)}." if corrected is not None else " (not adjusted for the subsampling gap)."
     elif signature_fit_failed(result):
         text += " The final model could not be fitted in the full cohort, so it has no apparent or subsample gap-adjusted C-index."
-    # "It" only follows a sentence about the selected-marker model; otherwise the left-out C-index is the procedure's.
-    text += _left_out_comparison(
-        signature, added_value, subject="it" if apparent is not None and not clinical_only else "the whole procedure"
-    )
+    text += _left_out_comparison(signature, added_value)
     duplicates = result.get("duplicates") or {}
     n_pairs, n_identical = int(duplicates.get("n_pairs") or 0), int(duplicates.get("n_identical") or 0)
     if n_pairs or n_identical:
@@ -484,7 +483,10 @@ def _internal_validation_text(result: dict[str, Any], added_value: bool) -> str:
         text += f" ({n_failed} more failed)"
     apparent, corrected = signature.get("apparent_c"), signature.get("optimism_corrected_c")
     if apparent is not None and corrected is not None:
-        text += f", and {model} C-index was corrected from {_number(apparent)} to {_number(corrected)}"
+        text += (
+            f"; {model} apparent C-index was {_number(apparent)} and its heuristic subsample gap-adjusted "
+            f"C-index was {_number(corrected)}"
+        )
     elif apparent is not None:
         text += f"; {model} apparent C-index ({_number(apparent)}) could not be adjusted for the subsampling gap"
     elif signature_fit_failed(result):
@@ -496,10 +498,7 @@ def _internal_validation_text(result: dict[str, Any], added_value: bool) -> str:
             "; in the patients left out, the log hazard ratio of each subsample's strongest marker (the one with the largest "
             f"score statistic, whether or not it was selected) was on average {_percent(shrinkage)} of its value in the subsample"
         )
-    selected_model = apparent is not None and not clinical_only
-    text += "." + _left_out_comparison(
-        signature, added_value, subject="the selected-marker model" if selected_model else "the whole procedure"
-    )
+    text += "." + _left_out_comparison(signature, added_value)
     return text + closing
 
 

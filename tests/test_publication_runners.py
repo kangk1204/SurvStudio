@@ -46,3 +46,21 @@ def test_failed_competitor_draws_remain_in_rate_bounds(monkeypatch, tmp_path):
     summary = module.null_summary(failed, pd.DataFrame())
     assert summary["failure_reporting"]["P1"] == {"planned": 2, "completed": 0, "failed_or_missing_ids": [0, 1]}
     assert "P1" not in summary  # no success-conditioned rate is fabricated when every fit fails
+
+
+@pytest.mark.parametrize("commit,code,valid", [
+    ("3e0c4af1", "0123456789abcdef", True),
+    ("unknown", "0123456789abcdef", False),
+    ("3e0c4af1-dirty", "0123456789abcdef", False),
+    ("3e0c4af1", None, False),
+])
+def test_figures_require_a_known_clean_source_and_analysis_hash(monkeypatch, tmp_path, commit, code, valid):
+    module = load_script(monkeypatch, "common")
+    monkeypatch.setattr(module, "RESULTS", tmp_path)
+    result = tmp_path / "result.json"
+    result.write_text('{"value": 0.65}\n')
+    (tmp_path / "stamps").mkdir()
+    stamp = {"sha256": module.sha256_file(result), "survstudio": {"commit": commit}, "analysis_code": code}
+    (tmp_path / "stamps/result.json.json").write_text(json.dumps(stamp))
+    problems = module.result_problems([result.name])
+    assert (not problems) == valid

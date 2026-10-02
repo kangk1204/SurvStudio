@@ -34,10 +34,10 @@ def experiment_1(real: dict) -> list[dict]:
     suggestive = survstudio["tiers_replication"].get("suggestive", {})
     rows.append({
         "approach": "SurvStudio", "design": "case studies I-II: marker evaluation on TCGA, locked model applied unchanged to the seven cohorts",
-        "claim": "robust markers (FWER <= 0.05 beyond age, sex and stage, stable over 200 subsamples); locked 10-marker model with its optimism-corrected C and left-out gain over the clinical model",
+        "claim": "markers meeting internal adjusted-p and stability criteria beyond age, sex and stage; locked 10-marker model with a heuristic subsample gap-adjusted C and the selection procedure's left-out gain",
         "genes_claimed": len(survstudio["robust_genes"]), "training_c": survstudio["apparent_c"],
-        "reported_c": survstudio["optimism_corrected_c"], "reported_c_meaning": "optimism-corrected C (apparent 0.749)",
-        "reported_gain": survstudio["left_out_gain"], "reported_gain_meaning": "paired left-out gain over the clinical model in subsamples",
+        "reported_c": survstudio["optimism_corrected_c"], "reported_c_meaning": "heuristic subsample gap-adjusted C (apparent 0.749)",
+        "reported_gain": survstudio["left_out_gain"], "reported_gain_meaning": "paired left-out gain of repeated selection and refitting over the clinical model",
         "reported_gain_lower": (survstudio.get("left_out_gain_ci") or [None, None])[0],
         "reported_gain_upper": (survstudio.get("left_out_gain_ci") or [None, None])[1],
         "external_c": external["model_c"]["estimate"], "external_c_lower": external["model_c"]["ci_lower"], "external_c_upper": external["model_c"]["ci_upper"],
@@ -46,7 +46,7 @@ def experiment_1(real: dict) -> list[dict]:
         **hksj("external_c", external["model_c"]), **hksj("gain", external["delta_c"]),
         "genes_replicated": robust.get("replicated"), "genes_evaluable": robust.get("evaluable"),
         "replicated_share": robust.get("rate"),
-        "warns_about_optimism": "yes: reports the optimism-corrected C, the paired left-out gain over the clinical model and evidence tiers",
+        "warns_about_optimism": "yes: reports the heuristic subsample gap-adjusted C, the selection procedure's paired left-out gain and internal evidence tiers",
         "notes": f"suggestive tier: {suggestive.get('replicated')}/{suggestive.get('evaluable')} replicated; external C with markers rescaled within each cohort",
     })
     same = real.get("SurvStudio_same_genes")
@@ -57,8 +57,8 @@ def experiment_1(real: dict) -> list[dict]:
             "design": f"as case studies I-II, on the {same['genes']} genes every cohort measures (the other approaches' genes)",
             "claim": f"{len(same['robust_genes'])} robust markers; locked {len(same['signature_markers'])}-marker model",
             "genes_claimed": len(same["robust_genes"]), "training_c": same["apparent_c"],
-            "reported_c": same["optimism_corrected_c"], "reported_c_meaning": "optimism-corrected C",
-            "reported_gain": same["left_out_gain"], "reported_gain_meaning": "paired left-out gain over the clinical model in subsamples",
+            "reported_c": same["optimism_corrected_c"], "reported_c_meaning": "heuristic subsample gap-adjusted C",
+            "reported_gain": same["left_out_gain"], "reported_gain_meaning": "paired left-out gain of repeated selection and refitting over the clinical model",
             "reported_gain_lower": (same.get("left_out_gain_ci") or [None, None])[0],
             "reported_gain_upper": (same.get("left_out_gain_ci") or [None, None])[1],
             "external_c": external["model_c"]["estimate"], "external_c_lower": external["model_c"]["ci_lower"],

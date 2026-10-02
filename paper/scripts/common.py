@@ -996,7 +996,12 @@ def result_problems(names: Iterable[str]) -> list[str]:
         for upstream, digest in (stamp.get("inputs") or {}).items():
             if not (RESULTS / upstream).exists() or sha256_file(RESULTS / upstream) != digest:
                 problems.append(f"{name} was computed from an earlier {upstream}; rerun {stamp.get('script')}")
-        runs[name] = ((stamp.get("survstudio") or {}).get("commit", "unknown"), str(stamp.get("analysis_code")))
+        commit = (stamp.get("survstudio") or {}).get("commit", "unknown")
+        if not commit_is_clean(commit):
+            problems.append(f"{name} has an unknown or uncommitted source ({commit})")
+        if not stamp.get("analysis_code"):
+            problems.append(f"{name} has no analysis code hash")
+        runs[name] = (commit, str(stamp.get("analysis_code")))
     if len(set(runs.values())) > 1:
         problems.append("the files come from different runs: " + "; ".join(
             f"{name} (SurvStudio {commit}, analysis code {code})" for name, (commit, code) in runs.items()))

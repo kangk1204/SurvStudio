@@ -140,7 +140,8 @@ def test_remark_text_for_a_model_without_markers_calls_it_the_clinical_model() -
     assert "(none)" not in report["results"] and "selected-marker model" not in report["results"]
     assert "No marker was selected, so the final model held the clinical covariates only; its apparent C-index was" in report["results"]
     assert "No marker was selected, so the final Cox model held the clinical covariates only" in report["methods"]
-    assert "the clinical model's C-index was corrected from" in _items(report)["18"]["text"]
+    assert "the clinical model's apparent C-index was" in _items(report)["18"]["text"]
+    assert "heuristic subsample gap-adjusted C-index" in _items(report)["18"]["text"]
 
 
 def test_remark_patient_flow_separates_patients_without_marker_values_from_exclusions() -> None:
@@ -166,7 +167,7 @@ def test_remark_left_out_comparison_gives_the_number_of_subsamples() -> None:
         request=_REQUEST,
     )
 
-    assert "In the patients left out of each of 40 subsamples, it reached a mean C-index of 0.700 against 0.660" in unpaired["results"]
+    assert "In the patients left out of each of 40 subsamples, the whole selection procedure reached a mean C-index of 0.700 against 0.660" in unpaired["results"]
     assert "(mean difference +0.040)" in unpaired["results"]
     assert "each of 18 subsamples" in paired["results"] and "(mean difference +0.050)" in paired["results"]
 
