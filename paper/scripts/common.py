@@ -868,6 +868,9 @@ def git_commit(source: Path) -> str:
     run_step.sh compute the same."""
     git = ["git", "-c", "safe.directory=*", "--no-optional-locks", "-C", str(source)]
     try:
+        root = subprocess.run([*git, "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
+        if Path(root).resolve() != source.resolve():
+            return "unknown"
         commit = subprocess.run([*git, "describe", "--always"], capture_output=True, text=True, check=True).stdout.strip()
         changed = subprocess.run([*git, "status", "--porcelain", "--untracked-files=no", "--", ".", ":(exclude)paper/figures"],
                                  capture_output=True, text=True, check=True).stdout.strip()

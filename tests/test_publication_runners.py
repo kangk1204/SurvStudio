@@ -132,6 +132,35 @@ def test_rendering_archive_does_not_inherit_an_unrelated_parent_commit(monkeypat
     assert module.rendering_source(plain)["rendering_git_head"] == "unknown"
 
 
+def test_numerical_and_shell_sources_reject_an_unrelated_parent_checkout(monkeypatch, tmp_path):
+    import os
+    import shutil
+    import subprocess
+    import sys
+    module = load_script(monkeypatch, "common")
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    subprocess.run(["git", "init", str(parent)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(parent), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "--allow-empty", "-m", "Unrelated source"], check=True, capture_output=True)
+    archive = parent / "archive"
+    scripts = archive / "paper/scripts"
+    scripts.mkdir(parents=True)
+    assert module.git_commit(archive) == "unknown"
+    assert module.git_commit(parent) != "unknown"
+    if not shutil.which("bash"):
+        pytest.skip("bash is unavailable; numerical source checks already completed")
+    directory = Path(__file__).resolve().parents[1] / "paper"
+    for name in ("run_step.sh", "run_all.sh"):
+        shutil.copy2(directory / name, archive / "paper" / name)
+    (scripts / "zz_probe.py").write_text("import os\nprint('SOURCE=' + os.environ['SURVSTUDIO_COMMIT'])\n")
+    environment = {**os.environ, "SURVSTUDIO_SRC": str(archive), "ANALYSIS_PYTHON": sys.executable}
+    for name, arguments in (("run_step.sh", ["zz_probe.py"]), ("run_all.sh", ["zz"])):
+        run = subprocess.run(["bash", str(archive / "paper" / name), *arguments], env=environment,
+                             capture_output=True, text=True, check=True)
+        assert "SOURCE=unknown" in run.stdout and "cannot be tied to a commit" in run.stderr
+
+
 def _tier_logistic_data():
     import numpy as np
     rng = np.random.default_rng(731)

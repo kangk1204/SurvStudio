@@ -48,7 +48,8 @@ fi
 # The SurvStudio commit the results are stamped with. The figures are left out of the "-dirty" check: this script
 # redraws them, and a rerun after it must not count its own figures as changes to the code.
 git=(git -c safe.directory='*' --no-optional-locks -C "$SURVSTUDIO_SRC")
-if SURVSTUDIO_COMMIT="$("${git[@]}" describe --always 2>/dev/null)"; then
+if [ "$("${git[@]}" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$SURVSTUDIO_SRC" && pwd -P)" ] &&
+   SURVSTUDIO_COMMIT="$("${git[@]}" describe --always 2>/dev/null)"; then
   [ -z "$("${git[@]}" status --porcelain --untracked-files=no -- . ':(exclude)paper/figures' 2>/dev/null)" ] || SURVSTUDIO_COMMIT="$SURVSTUDIO_COMMIT-dirty"
 else
   SURVSTUDIO_COMMIT=unknown
