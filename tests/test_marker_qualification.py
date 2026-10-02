@@ -5,11 +5,14 @@ from survival_toolkit.marker_evaluation import validate_locked_recipe
 import survival_toolkit.marker_qualification as policy
 
 
-def test_failed_release_profile_masks_inference_without_altering_fixed_prediction():
+@pytest.mark.parametrize('method,status', [('marker-inference/1','failed_exploratory_only'), ('marker-inference/2','not_evaluated')])
+def test_failed_or_unevaluated_profile_masks_inference_without_altering_fixed_prediction(method,status):
     raw=evaluate(cohort())
+    raw['method_version']=method
+    raw['inference']['method_version']=method
     prediction=copy.deepcopy(raw['locked_recipe']['model'])
     result=policy.qualify_marker_result(raw)
-    assert result['inference']['engineering_qualification']['status']=='failed_exploratory_only'
+    assert result['inference']['engineering_qualification']['status']==status
     assert result['inference']['status']=='withheld' and not result['inference']['allowed']
     assert result['locked_recipe']['model']==prediction
     assert result['signature']['optimism_corrected_c'] is None

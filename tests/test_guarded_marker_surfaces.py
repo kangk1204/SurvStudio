@@ -20,7 +20,8 @@ def test_api_returns_consistent_withheld_display_report_and_figures():
         assert payload["analysis"]["inference"]["status"]=="withheld"
         assert all(row["P value"] is None and row["Family-wise P"] is None and row["Inference status"]=="withheld"
                    for row in payload["display_table"])
-        assert all(row['Engineering qualification']=='failed_exploratory_only' and row['Exploratory raw family-wise P'] is not None
+        assert payload['analysis']['method_version']=='marker-inference/2'
+        assert all(row['Engineering qualification']=='not_evaluated' and row['Exploratory raw family-wise P'] is not None
                    for row in payload['display_table'])
         assert "withheld" in payload["report"]["results"]
         for name in ("summary_figure","stability_figure","rank_figure"):

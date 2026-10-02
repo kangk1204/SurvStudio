@@ -117,6 +117,7 @@ jobs:
           curl -fsS -X POST http://127.0.0.1:8765/api/load-tcga-example -o tcga.json
           grep -q '"dataset_id"' tcga.json
           "$RUNNER_TEMP/wheel-env/bin/python" -c "from survival_toolkit.marker_qualification import qualification; assert qualification('linear', 'marker-inference/1')['status'] == 'failed_exploratory_only'"
+          "$RUNNER_TEMP/wheel-env/bin/python" -c "from survival_toolkit.marker_diagnostics import METHOD_VERSION; from survival_toolkit.marker_qualification import qualification; assert METHOD_VERSION == 'marker-inference/2'; assert qualification('linear', METHOD_VERSION)['status'] == 'not_evaluated'"
 
   numerical-agreement:
     name: Numerical agreement with R survival
@@ -147,6 +148,12 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
         run: python validation/guarded_inference/run_independent_reference.py --output "${{ runner.temp }}/guarded-reference"
+      - name: Check finite coefficient cancellation and genuine separation with R
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: python validation/diagnostic_followup/verify_reference.py --output "${{ runner.temp }}/diagnostic-followup-reference"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -157,6 +164,11 @@ jobs:
         with:
           name: guarded-reference
           path: ${{ runner.temp }}/guarded-reference
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diagnostic-followup-reference
+          path: ${{ runner.temp }}/diagnostic-followup-reference
 
   browser-e2e:
     name: ubuntu-latest / Python 3.11 / browser-e2e

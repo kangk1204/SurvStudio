@@ -17,9 +17,13 @@ def qualification(basis,method_version):
         profile=registry['profiles'][basis]
         evaluated=registry.get('study_complete') is True and registry.get('method_version')==method_version
         return {'policy_version':registry['policy_version'],'status':profile['status'] if evaluated else 'not_evaluated',
+                'requested_method_version':method_version,'evaluated_method_version':registry.get('method_version'),
                 'clinical_basis':basis,'registry_sha256':hashlib.sha256(raw).hexdigest(),
                 'study_git_revision':registry['study_git_revision'],'summary_sha256':registry['summary_sha256'],
-                'failed_conditions':profile.get('failed_conditions',[])}
+                'failed_conditions':profile.get('failed_conditions',[]) if evaluated else [],
+                'previous_method_evidence':None if evaluated else {
+                    'method_version':registry.get('method_version'),'status':profile['status'],
+                    'failed_conditions':profile.get('failed_conditions',[])}}
     except (OSError,ValueError,KeyError,TypeError):
         return {'policy_version':'marker-qualification/1','status':'not_evaluated','clinical_basis':basis,
                 'failed_conditions':[]}

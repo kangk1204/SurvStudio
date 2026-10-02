@@ -14,7 +14,8 @@ from survival_toolkit.analysis import _cox_grambsch_therneau_test, _efron_schoen
 from survival_toolkit.clinical_basis import fit_clinical_encoder, transform_clinical_encoder
 from survival_toolkit.marker_screen import fit_cox, residualize
 
-METHOD_VERSION = "marker-inference/1"
+METHOD_VERSION = "marker-inference/2"
+SUPPORTED_METHOD_VERSIONS = frozenset({"marker-inference/1", METHOD_VERSION})
 WITHHOLD_ALPHA = 0.01
 
 
@@ -54,6 +55,7 @@ def hc3_wald(y: np.ndarray, design: np.ndarray, test_start: int) -> dict[str, An
         if not np.isfinite(statistic) or statistic < 0:
             raise ValueError("non-finite HC3 Wald statistic")
         return {"status": "calculated", "statistic": statistic, "df": q,
+                "n_observations": n, "n_parameters": p, "df_residual": n - p,
                 "p_value": float(stats.chi2.sf(statistic, q)), "method": "OLS HC3 Wald chi-square"}
     except (ValueError, np.linalg.LinAlgError, FloatingPointError) as exc:
         return {"status": "failed", "p_value": None, "reason": str(exc), "method": "OLS HC3 Wald chi-square"}
@@ -101,7 +103,8 @@ def diagnose_markers(cohort: Any, block: np.ndarray, *, ties: str = "efron",
     fit = fit_cox(cohort.time, cohort.event, design, cohort.strata, ties)
     result["clinical_fit"] = {"converged": bool(fit.converged), "separated": bool(np.any(fit.separated)),
                               "finite": bool(np.isfinite(fit.beta).all() and np.isfinite(fit.covariance).all()),
-                              "loglik": float(fit.loglik), "iterations": int(fit.iterations)}
+                              "loglik": float(fit.loglik), "iterations": int(fit.iterations),
+                              "separation_method": "pending Newton step per SD; coefficient magnitude alone is not separation"}
     if not _usable(fit):
         reasons.append("clinical_fit_failed: nonconvergence, separation, aliasing or non-finite fit")
         result.update(status="withheld", allowed=False, clinical_status="failed")

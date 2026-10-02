@@ -1,0 +1,21 @@
+{
+  "protocol_version": "diagnostic-followup/development/1",
+  "purpose": "New development after failure of v1 confirmation; not confirmation or qualification",
+  "development_seed": 2026100311,
+  "n": 180,
+  "p": 30,
+  "datasets_per_condition": 500,
+  "permutations": 999,
+  "withhold_alpha": 0.01,
+  "conditions": ["independent", "linear", "nonlinear_marker", "heteroskedastic", "correlated", "z_dependent_censoring", "nonph_linear", "nonph_nonlinear", "nonph_heteroskedastic", "nonlinear_clinical_risk", "partial_weak", "partial_strong"],
+  "methods": ["legacy_linear", "v1_guarded_linear", "v2_guarded_linear", "candidate_F_linear", "v1_guarded_spline", "v2_guarded_spline", "candidate_F_spline"],
+  "variants": {
+    "v1": "Original magnitude-or-pending-step separation flag; HC3 chi-square; reconstructed using unchanged fit and score calculations",
+    "v2": "Pending-step separation flag only; all fit coefficients, covariance, likelihood, score, PH, HC3 chi-square, Holm families and 1% threshold unchanged",
+    "candidate_F": "Offline sensitivity analysis of v2 HC3 W/q against F(q,n-k); this is an approximation, not an exact robust finite-sample reference, and is not enabled in the product"
+  },
+  "dgp": "Unchanged dataset() from guarded-inference-study/1 with a new seed; true first-five signals and conditionally null remaining markers preserved",
+  "shared_stream": "Same dataset and same 999 permutation row draws within each clinical basis across all diagnostic variants",
+  "failure_policy": "Append once per owned index; retain failures and trace-local array metadata; no replacement",
+  "qualification": "No variant can qualify from this development study. A new confirmation protocol, unused seeds and sealed sources are required."
+}

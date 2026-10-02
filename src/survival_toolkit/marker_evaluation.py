@@ -50,7 +50,7 @@ from survival_toolkit.clinical_basis import (
     CLINICAL_BASES, ClinicalBasisError, check_clinical_encoder,
     fit_clinical_encoder, transform_clinical_encoder,
 )
-from survival_toolkit.marker_diagnostics import METHOD_VERSION, diagnose_markers
+from survival_toolkit.marker_diagnostics import METHOD_VERSION, SUPPORTED_METHOD_VERSIONS, diagnose_markers
 from survival_toolkit.errors import user_input_boundary
 from survival_toolkit.marker_screen import (
     TIES_METHODS,
@@ -1867,7 +1867,7 @@ def _check_recipe(recipe: Any) -> int:
             fail("the clinical-only terms " + ", ".join(unknown[:5]) + " are not encoded clinical covariates.")
     if version >= 3:
         inference = recipe.get("inference")
-        if not isinstance(inference, dict) or inference.get("status") not in {"withheld", "assumption_dependent"} or inference.get("method_version") != METHOD_VERSION:
+        if not isinstance(inference, dict) or inference.get("status") not in {"withheld", "assumption_dependent"} or inference.get("method_version") not in SUPPORTED_METHOD_VERSIONS:
             fail("v3 must preserve its versioned inference status.")
         if not isinstance(inference.get("allowed"), bool) or inference["allowed"] != (inference["status"] == "assumption_dependent"):
             fail("v3 inference status and permission disagree.")

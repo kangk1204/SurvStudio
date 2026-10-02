@@ -30,9 +30,6 @@ _COLUMN_BLOCK = 512
 # R's coxph warns that a coefficient "may be infinite" when the Newton step still pending at
 # convergence exceeds toler.inf = sqrt(eps) times the coefficient (eps = 1e-9).
 _TOLER_INF = float(np.sqrt(1e-9))
-# A log hazard ratio beyond 10 per SD of the covariate (a hazard ratio above 20,000 per SD) is
-# the monotone-likelihood signature itself, whatever the pending step.
-_MAX_LOG_HR_PER_SD = 10.0
 # A column whose information left after the columns before it is below this share of its variance
 # (times the number of events) cannot be estimated; the score screen flags collinear markers alike.
 _ALIASED_INFORMATION = 1e-10
@@ -470,8 +467,9 @@ def _runaway_coefficients(design: np.ndarray, beta: np.ndarray, score: np.ndarra
     exp(-beta), so that step stays of order one however far beta has run. Here the step and the
     coefficient are both measured per SD of the covariate, and the coefficient is floored at 1:
     a weak marker (beta near 0) is then never flagged for a pending step of rounding size, which
-    a fit stopped by the relative log-likelihood rule can leave. A coefficient above 10 per SD is
-    flagged whatever the step.
+    a fit stopped by the relative log-likelihood rule can leave. Coefficient magnitude alone
+    is not evidence of separation: correlated spline columns can have large coefficients
+    that cancel while the likelihood has a finite, well-converged maximum.
     """
     flags = np.zeros(beta.shape[0], dtype=bool)
     if beta.size == 0 or not (np.all(np.isfinite(score)) and np.all(np.isfinite(information))):
@@ -484,7 +482,7 @@ def _runaway_coefficients(design: np.ndarray, beta: np.ndarray, score: np.ndarra
     with np.errstate(invalid="ignore", over="ignore"):
         size = np.abs(beta) * scale
         step = np.abs(pending) * scale
-        flags = (size > _MAX_LOG_HR_PER_SD) | (step > _TOLER_INF * np.maximum(size, 1.0))
+        flags = step > _TOLER_INF * np.maximum(size, 1.0)
     return flags & (scale > 0)
 
 

@@ -1,0 +1,6 @@
+"name","loglik","separation_warning","nonconvergence_warning","warnings"
+"finite_cancellation",-1852.53522013764,FALSE,FALSE,""
+"v1_failed_spline_27",-407.969444151112,FALSE,FALSE,""
+"v1_failed_spline_371",-427.509447336708,FALSE,FALSE,""
+"v1_failed_spline_1099",-432.834754181546,FALSE,FALSE,""
+"genuine_separation",-30.2088251592142,TRUE,FALSE,"Loglik converged before variable  1 ; coefficient may be infinite. "
