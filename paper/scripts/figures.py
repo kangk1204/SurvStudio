@@ -4,8 +4,8 @@ at most 170 mm wide, reserving 25 mm of BMC's 225-mm combined height for a legen
 floor of 7 pt. save() refuses one that is not. Figure 1b is a native screenshot of the Markers summary after
 case study I (INTERFACE), which Figure 1 places under the workflow diagram (fig1_workflow).
 
-Needs matplotlib, numpy and pandas (no SurvStudio). Writes PNG (300 dpi; Figure 1, with its screenshot, 600 dpi) and
-PDF to paper/figures/.
+Needs matplotlib, numpy and pandas (no SurvStudio). Writes PNG (300 dpi; Figure 1, with its screenshot, 600 dpi),
+PDF, SVG and a per-figure provenance record to paper/figures/.
 Usage: python figures.py [name ...] draws the named figures only (workflow, interface, markers, estimates, models,
 comparison, simulation, luad_external, breast_external, breast_er_external, breast_er_sensitivity, tiers); without
 names, all of them, the comparison once run_competitors.sh has written its results.
@@ -23,6 +23,8 @@ cohorts, the 95% prediction interval (common.random_effects).
 from __future__ import annotations
 
 import json
+import hashlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -66,6 +68,7 @@ plt.rcParams.update({
     "xtick.color": INK, "ytick.color": INK, "text.color": INK, "axes.labelcolor": INK, "xtick.major.width": 0.6,
     "ytick.major.width": 0.6, "xtick.major.size": 2.5, "ytick.major.size": 2.5,
     "axes.spines.top": False, "axes.spines.right": False, "legend.frameon": False, "legend.fontsize": 7,
+    "pdf.fonttype": 42, "ps.fonttype": 42, "svg.fonttype": "path", "svg.hashsalt": "survstudio-paper",
 })
 
 
@@ -78,7 +81,7 @@ class MixedResults(Exception):
 
 
 class NotPrintable(Exception):
-    """A figure wider than BMC's 170 mm or with text below 7 pt at that size."""
+    """A figure beyond the print dimensions or below the project's 7-pt text floor."""
 
 
 def load(name: str, **options):
@@ -118,8 +121,27 @@ def save(fig, name: str, dpi: int = 300) -> None:
     if problems:
         plt.close(fig)
         raise NotPrintable(problems)
-    for suffix in ("png", "pdf"):
-        fig.savefig(FIGURES / f"{name}.{suffix}", dpi=dpi, bbox_inches="tight", pad_inches=PAD)
+    metadata = {"png": {"Software": "SurvStudio publication figures"},
+                "pdf": {"Creator": "SurvStudio publication figures", "Title": name, "CreationDate": None, "ModDate": None},
+                "svg": {"Creator": "SurvStudio publication figures", "Title": name, "Date": None}}
+    for suffix in ("png", "pdf", "svg"):
+        fig.savefig(FIGURES / f"{name}.{suffix}", dpi=dpi, bbox_inches="tight", pad_inches=PAD, metadata=metadata[suffix])
+    from common import git_commit, sha256_file
+    try:
+        head = subprocess.run(["git", "-C", str(PAPER.parent), "rev-parse", "HEAD"], capture_output=True, text=True)
+        git_head = head.stdout.strip() if head.returncode == 0 else "unknown"
+    except OSError:
+        git_head = "unknown"
+    provenance = {"schema": "SurvStudio paper figure provenance 1", "figure": name,
+                  "rendering_commit": git_commit(PAPER.parent), "rendering_git_head": git_head,
+                  "rendering_script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                  "dimensions_mm": [width * 25.4, height * 25.4], "png_dpi": dpi,
+                  "inputs": {input_name: json.loads((RESULTS / "stamps" / f"{input_name}.json").read_text())
+                             for input_name in dict.fromkeys(LOADED)},
+                  "outputs": {suffix: sha256_file(FIGURES / f"{name}.{suffix}") for suffix in metadata}}
+    if name == "fig1":
+        provenance["interface"] = {"png_sha256": sha256_file(INTERFACE), "provenance_sha256": sha256_file(INTERFACE_PROVENANCE)}
+    (FIGURES / f"{name}.provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     plt.close(fig)
     print(f"wrote {name} ({width * 25.4:.0f} x {height * 25.4:.0f} mm)")
 
@@ -196,10 +218,10 @@ def draw_workflow(ax) -> None:
             ("Omics matrix", "CSV, TSV, Parquet, or .gz\nfiles as GEO and Xena\nserve them; TCGA\nbarcodes matched", 4),
             ("External cohort", "same or another platform", 1),
         ]),
-        "checks": (29.5, 42.5, "#dcefe4", ROBUST, "Checks run by default", [
+        "checks": (29.5, 42.5, "#dcefe4", ROBUST, "Analyses and checks", [
             ("Survival curves and Cox regression", "Kaplan–Meier with numbers at risk, log-rank,\nEfron Cox model, proportional-hazards tests", 2),
             ("Marker evaluation", "score tests for added value over clinical data\n→ multiplicity-adjusted permutation tests\n    (Westfall–Young; marker residuals permuted)\n"
-                                  "→ whole screen repeated on subsamples: tiers\n→ gain over clinical-only C, with 95% interval", 5),
+                                  "→ whole screen repeated on subsamples: tiers\n→ clinical-only C gain; approx. 95% interval", 5),
             ("Prediction models", "machine and deep learning on the same splits\n(holdout, repeated CV, locked test); paired\nintervals for the difference from Cox", 3),
         ]),
         "outputs": (76.0, 25.0, "#fbe7d4", DL, "Outputs", [

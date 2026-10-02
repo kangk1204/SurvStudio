@@ -91,7 +91,7 @@ The scripts read these environment variables:
 | `breast_duplicate_pairs.csv` | The committed breast duplicate pairs; compare script 11's independently regenerated identities and decisions before reviewing any input update. With the curators' annotations they define the patients (see Breast cohorts) |
 | `breast_data_manifest.csv`, `luad_data_manifest.csv`, `scripts/breast_manifest.py`, `scripts/luad_manifest.py` | Every breast and LUAD data file the analyses read, with its size and SHA-256 (see Data), and the scripts that write the manifests |
 | `run_competitors.sh`, `competitors/`, `scripts/competitors.py`, `scripts/18_competitors_*.py` | Comparison with the pipelines commonly used to publish prognostic signatures (Mime, univariate Cox → LASSO → Cox, KM Plotter's best cut-off): TCGA-LUAD → the seven GEO cohorts, and the claims each makes under script 06's null; needs `competitors/setup_r_env.sh` and `run_all.sh`'s results; see `competitors/README.md` |
-| `scripts/figures.py` | Figures 1 to 5 and Supplementary Figures S1 to S6 (PNG and PDF, see Figures) from `results/`, each only from results of one run (see Results and stamps); `figures.py estimates simulation` draws a subset |
+| `scripts/figures.py` | Figures 1 to 5 and Supplementary Figures S1 to S6 (PNG, PDF, SVG and provenance, see Figures) from `results/`, each only from results of one run (see Results and stamps); `figures.py estimates simulation` draws a subset |
 | `interface/markers_tab_case_study_i.png` | Figure 1b: the Markers tab after case study I, captured from the web interface (TCGA-LUAD with the Xena `HiSeqV2.gz` file, age, sex and stage, the defaults) |
 | `scripts/simulation_smoke.py` | A few replicates of the simulation with timings, and the summary over them: `simulation_smoke.py 2 null_filter_subsamples diffuse_filter` runs two of each named scenario (by default one null and one alternative replicate) |
 
@@ -149,9 +149,10 @@ not part of this folder.
 
 ## Results and stamps
 
-`results/` is regenerated and not committed; `figures/` holds the figures drawn from the results of one fresh-environment
-run of `run_all.sh` and `run_competitors.sh` at SurvStudio commit fc0e1af, and `run_all.sh` redraws them in place (the
-PDFs record the time they were drawn, so they always differ from the committed ones in their bytes).
+`results/` is regenerated and not committed; `run_all.sh` redraws figures in `figures/`. Each new figure's provenance
+records its numerical input stamps and hashes separately from the rendering commit and script hash. Original
+release figures are preserved in the audit's reference checkout. A previously committed figure alone is not proof
+that changed analysis code has been recomputed.
 
 Every file a script writes to `results/` gets a stamp in `results/stamps/` (`common.stamp_result`): the file's
 SHA-256, the SurvStudio version and commit, a hash of the analysis code (`common.py`, the numbered scripts,
@@ -175,9 +176,13 @@ one that is not. The native summary screenshot's fonts are checked using its cap
 images still needs visual inspection. A pooled estimate is drawn with its Hartung-Knapp-Sidik-Jonkman 95% interval and,
 from three cohorts on, its 95% prediction interval.
 
-| File (`.png`, `.pdf`) | Figure | Drawn from |
+Exports include PNG, an embedded-TrueType PDF, SVG with outlined fonts, and `*.provenance.json`. Volatile export
+timestamps are suppressed and SVG IDs use a fixed salt, so the same inputs in the pinned rendering environment can
+be compared byte for byte. Scientific interpretation still requires inspecting the plots and their source tables.
+
+| File (`.png`, `.pdf`, `.svg`, `.provenance.json`) | Figure | Drawn from |
 | --- | --- | --- |
-| `fig1` | Figure 1: a, what SurvStudio checks by default (`fig1_workflow`); b, the native Markers summary after case study I (`interface/marker_summary_case_study_i.png` with capture provenance); the wider full-tab capture is retained separately | screenshot and capture record |
+| `fig1` | Figure 1: a, analyses and checks (`fig1_workflow`); b, the native Markers summary after case study I (`interface/marker_summary_case_study_i.png` with capture provenance); the wider full-tab capture is retained separately | screenshot and capture record |
 | `fig1_workflow` | Figure 1a alone | nothing |
 | `fig2_markers` | Figure 2: genome-wide markers in TCGA-LUAD | 01, 02 |
 | `fig3_estimates` | Figure 3: internal and external estimates in three settings (lung adenocarcinoma, breast cancer survival, the ER-positive positive control): a, the C-index from apparent to subsample gap-adjusted, left-out and external, for the model and the clinical-only model; b, the gain over the clinical covariates in left-out patients, held-out METABRIC sites (positive control) and the external cohorts | 01, 03, 07 to 10, 14 |
