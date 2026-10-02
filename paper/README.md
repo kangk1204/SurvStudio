@@ -170,6 +170,10 @@ input; `figures.py --available names...` applies the same partial-input rule whe
 
 ## Figures
 
+Case V external cohorts use RFS and DMFS endpoints. Figure S4 labels each cohort's endpoint, and the combined
+external gain in Figure 3 is labelled RFS/DMFS. The combined estimate is a mixed-endpoint summary; Figure S5
+also reports endpoint-specific sensitivity results. These estimates do not establish clinical benefit.
+
 `figures.py` draws each figure at its print size, at most 170 mm wide and 200 mm high (reserving 25 mm of BMC's
 225-mm combined figure/legend height for a legend), with a project readability floor of 7 pt. It refuses to save
 one that is not. The native summary screenshot's fonts are checked using its capture record; raster text in other

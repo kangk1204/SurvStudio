@@ -392,7 +392,7 @@ SETTINGS = [
     {"case": "IV", "title": "Breast cancer, survival\nMETABRIC; {k} cohorts", "summary": "breast_markers_summary.json",
      "pooled": "breast_external_pooled.json", "part": None, "cohorts": "cohorts"},
     {"case": "V", "title": "ER+ breast, recurrence\nMETABRIC; {k} cohorts", "summary": "breast_er_markers_summary.json",
-     "pooled": "breast_er_external_pooled.json", "part": None, "cohorts": "cohorts"},
+     "pooled": "breast_er_external_pooled.json", "part": None, "cohorts": "RFS/DMFS cohorts"},
 ]
 
 
@@ -728,14 +728,14 @@ def figure_breast_er_external() -> None:
         load("breast_er_external_validation.csv"), load("breast_er_external_pooled.json"), load("breast_er_external_markers.csv"),
         load("breast_er_markers_summary.json"), load("breast_er_locked_model.json"),
         gain_label="Gain in C over age, size, nodes, grade", robust_note="* robust in METABRIC ER+", name="figS4_breast_er_external",
-        events="relapses or metastases",
+        events="endpoint events", endpoint_labels=True,
     )
 
 
-def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: str, robust_note: str, name: str, events: str = "deaths") -> None:
+def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: str, robust_note: str, name: str, events: str = "deaths", endpoint_labels: bool = False) -> None:
     genes = list(recipe["markers"])
     rows = len(cohorts)
-    forest, heat = 0.2 * rows + 0.95, 0.19 * rows + 1.75
+    forest, heat = (0.28 if endpoint_labels else 0.2) * rows + 0.95, 0.19 * rows + 1.75
     height = forest + heat + 0.15
     fig = plt.figure(figsize=(WIDE, height))
     upper = fig.add_gridspec(1, 1, left=0.22, right=0.69, top=1 - 0.42 / height, bottom=1 - (forest - 0.05) / height)
@@ -745,7 +745,8 @@ def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: st
     ax = fig.add_subplot(upper[0, 0])
     delta = pooled["delta_c"]
     ax.set_xlim(*gain_limits([*cohorts["delta_lower"], *cohorts["delta_upper"], delta["hksj_ci_lower"], delta["hksj_ci_upper"]]))
-    labels = [f"{row.cohort} ({row.n}, {row.events})" for row in cohorts.itertuples()]
+    labels = [f"{row.cohort}\n{row.endpoint.upper()} ({row.n}, {row.events})" if endpoint_labels
+              else f"{row.cohort} ({row.n}, {row.events})" for row in cohorts.itertuples()]
     y = np.arange(rows)[::-1] + 1.5
     ax.errorbar(cohorts["delta_c"], y, xerr=[cohorts["delta_c"] - cohorts["delta_lower"], cohorts["delta_upper"] - cohorts["delta_c"]],
                 fmt="s", color=ML, ms=3.2, lw=0.9, capsize=0)
@@ -786,7 +787,8 @@ def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: st
     ax.imshow(matrix, cmap=colours, vmin=-0.5, vmax=3.5, aspect="auto")
     robust = set(summary["robust"])
     ax.set_xticks(range(len(genes)), [f"{gene}{'*' if gene in robust else ''}" for gene in genes], rotation=40, ha="right", rotation_mode="anchor")
-    ax.set_yticks(range(rows), list(cohorts["cohort"]))
+    ax.set_yticks(range(rows), [f"{row.cohort} ({row.endpoint.upper()})" if endpoint_labels else row.cohort
+                              for row in cohorts.itertuples()])
     ax.tick_params(length=0)
     for spine in ax.spines.values():
         spine.set_visible(False)
