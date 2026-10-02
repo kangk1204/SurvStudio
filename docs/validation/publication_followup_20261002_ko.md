@@ -9,7 +9,7 @@
 별도의 참조 checkout에 보존했다. 새 계산의 기준은 `3e0c4af142e7afc005f3a9bfb28e23c99c203ff7`이며,
 확대 검정 연구는 사전 고정한 `adfc187a` checkout과 독립 분석 환경에서 실행했다.
 원 수치 checkout은 그대로 보존했다. 교정한 경쟁 절차 구간과 tier 추론은 별도 `c1b8908a` checkout에서
-후처리했다. 전체 그림 12세트는 `de53a1f645883b33fc3f251d745bbe4c2154adba`에서 생성했고, 원 수치와 렌더러의
+후처리했다. 전체 그림 12세트는 `de53a1f6`에서 처음 생성한 뒤 provenance 수정 `483b737198ad457d77ea9206626601dd07bc9150`에서 다시 확인했고, 원 수치와 렌더러의
 provenance를 구분했다. `46a3a04`는 임상 기준모형의 적절성 경고를 추가하며 검정 알고리즘과 기본값을 바꾸지 않는다.
 
 ## 완료 상태와 주요 판정
@@ -394,6 +394,14 @@ V의 첫 보조 R 호출은 필수 case 인자를 빠뜨려 빈 case JSON을 만
 
 후속 endpoint 라벨과 전체 renderer `de53a1f6`의 [CI 실행 36993286190](https://github.com/kangk1204/SurvStudio/actions/runs/36993286190)도 9개 작업 모두 성공했다.
 Mime 500 sensitivity의 63모델×8코호트 C 504개도 독립 R에서 최대 5.6e-16 차이로 일치했다. 이 scoring 대조는 원 학습 63개를 다시 실행하거나 원 warnings를 해소한 것은 아니다.
+
+## 압축 패키지의 Git provenance 추가 수정
+
+Git 이력이 없는 패키지가 다른 Git 저장소 내부에 놓이면 기존 renderer가 상위 저장소의 commit을 잘못 기록할 수 있었다.
+`483b7371`에서 렌더러 경로가 실제 Git root와 같은 경우에만 해당 commit을 기록하고, 압축본·중첩 폴더에는
+`unknown`을 기록하도록 고쳤다. 원 archive의 검증된 source ID는 package manifest에서 따로 유지한다.
+정상 checkout·중첩 archive·독립 archive 회귀를 포함한 24개 서버 검사가 통과했다. 원 de53 그림·패키지·압축본은
+별도 이름으로 보존하고 새 provenance의 완전한 출력으로 최종 패키지를 생성했다. 이 수정은 수치 입력·그래픽 내용에 영향을 주지 않는다.
 
 ## 실행·보존상 실패와 완료 판정
 

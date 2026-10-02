@@ -4,7 +4,7 @@
   "scope": "Completed fixed computations and independent numerical checks; not a claim of clinical utility or human usability.",
   "numerical_source": "3e0c4af142e7afc005f3a9bfb28e23c99c203ff7",
   "repaired_postprocessor_source": "c1b8908a618f7593944b3960ee29f101b8e6f5d8",
-  "rendering_source": "de53a1f645883b33fc3f251d745bbe4c2154adba",
+  "rendering_source": "483b737198ad457d77ea9206626601dd07bc9150",
   "calibration_source": "adfc187a00bca7db4721430cb5ac4341c0cadda1",
   "completed": {
     "expanded_datasets": 16000,

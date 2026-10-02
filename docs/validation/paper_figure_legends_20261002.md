@@ -1,7 +1,7 @@
 # Legends for the reproduced paper figures
 
 These legends describe saved numerical results from `3e0c4af1`, repaired competitor and tier postprocessing
-from `c1b8908a`, and rendering from `de53a1f6`. They accompany the local evidence package; they do not certify
+from `c1b8908a`, and rendering from `483b7371` (identical graphical bytes to `de53a1f6`). They accompany the local evidence package; they do not certify
 a submission-ready manuscript or clinical utility. The additional calibration studies have their own protocols.
 
 ## Figure 1. Local survival-analysis workflow and marker summary
