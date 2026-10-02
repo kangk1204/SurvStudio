@@ -200,9 +200,11 @@ def test_locked_marker_model_scores_an_external_cohort_whose_codes_read_as_decim
     external = development.assign(grade=development["grade"].astype(float))
     external.loc[0, "grade"] = np.nan
     as_decimals = validate_locked_recipe(external, recipe, n_bootstrap=0)
-    as_whole_numbers = validate_locked_recipe(development.drop(index=0), recipe, n_bootstrap=0)
+    filled = development.copy()
+    filled.loc[0, "grade"] = int(recipe["clinical"]["encoder"]["categorical_mappings"]["grade"]["baseline_level"])
+    as_whole_numbers = validate_locked_recipe(filled, recipe, n_bootstrap=0)
 
-    assert as_decimals["cohort"]["n"] == as_whole_numbers["cohort"]["n"] == n - 1
+    assert as_decimals["cohort"]["n"] == as_whole_numbers["cohort"]["n"] == n
     assert as_decimals["metrics"]["c_index"] == pytest.approx(as_whole_numbers["metrics"]["c_index"], abs=1e-12)
     assert as_decimals["metrics"]["clinical_only_c_index"] == pytest.approx(
         as_whole_numbers["metrics"]["clinical_only_c_index"], abs=1e-12

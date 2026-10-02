@@ -1017,6 +1017,11 @@
                 <h3>Adjust for <button class="help-dot" type="button" data-tooltip="Clinical covariates. Markers are then judged on what they add beyond them.">?</button></h3>
               </div>
               <input class="selection-search" id="markerClinicalSearchInput" type="search" placeholder="Search clinical covariates" aria-label="Search clinical covariates" />
+              <label><span>Clinical model</span><select id="markerClinicalBasis">
+                <option value="linear" selected>Linear (default)</option>
+                <option value="restricted_cubic_spline">Restricted cubic spline (fixed five knots)</option>
+              </select></label>
+              <p class="marker-matrix-hint">Choose the model before inspecting results. Failed or unsuitable diagnostics withhold added-value inference.</p>
               <div class="checklist" id="markerClinicalChecklist"></div>
             </div>
           </div>
@@ -1040,6 +1045,9 @@
           <!-- At a glance first (figure, key numbers, verdict), then the per-marker detail. -->
           <div class="plot-shell" id="markersSummaryPlot"></div>
           <div class="analysis-banner" id="markersMetaBanner"></div>
+          <details id="markersDiagnostics"><summary>Model and residual diagnostics</summary>
+            <p id="markersInferenceNote"></p><div class="table-shell" id="markersDiagnosticsTable"></div>
+          </details>
           <div class="insight-board" id="markersInsightBoard"><div class="empty-state">Run the evaluation to see which markers hold up.</div></div>
           <div class="plot-shell" id="markersStabilityPlot">
             <div class="empty-state plot-empty"><span>Choose markers and click <strong>Run Analysis</strong>.</span></div>

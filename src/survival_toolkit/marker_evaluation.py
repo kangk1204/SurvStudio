@@ -46,6 +46,11 @@ from survival_toolkit.analysis import (
 from survival_toolkit.concurrency import raise_if_cancelled
 from survival_toolkit.duplicates import possible_duplicates
 from survival_toolkit.encoding import fit_feature_encoder, transform_feature_encoder
+from survival_toolkit.clinical_basis import (
+    CLINICAL_BASES, ClinicalBasisError, check_clinical_encoder,
+    fit_clinical_encoder, transform_clinical_encoder,
+)
+from survival_toolkit.marker_diagnostics import METHOD_VERSION, diagnose_markers
 from survival_toolkit.errors import user_input_boundary
 from survival_toolkit.marker_screen import (
     TIES_METHODS,
@@ -63,7 +68,7 @@ from survival_toolkit.marker_screen import (
 )
 
 LENSES = ("marginal", "added_value")
-TIER_ORDER = ("robust", "suggestive", "marginal only", "not supported")
+TIER_ORDER = ("robust", "suggestive", "marginal only", "not supported", "inference withheld")
 _PERMUTATION_BATCH = 16
 # Null schemes for the added-value lens: "smith" permutes each marker's residual after regression on the
 # clinical covariates; "raw" permutes the markers themselves. "freedman_lane", the earlier (wrong) name
@@ -112,6 +117,7 @@ class MarkerSettings(NamedTuple):
     nonlinear_replicates: int = 30
     nonlinear_top_markers: int = 100
     random_seed: int = 20260926
+    clinical_basis: str = "linear"
 
 
 class MarkerCohort(NamedTuple):
@@ -132,6 +138,10 @@ class MarkerCohort(NamedTuple):
     dropped_clinical: tuple[dict[str, str], ...] = ()
     # Notes on what preparing the cohort left out, for the result's cohort notes.
     notes: tuple[str, ...] = ()
+    clinical_frame: pd.DataFrame | None = None
+    categorical_clinical: tuple[str, ...] = ()
+    clinical_basis: str = "linear"
+    clinical_error: str | None = None
 
 
 class LensStats(NamedTuple):
@@ -158,9 +168,12 @@ class ResamplingSummary(NamedTuple):
     rank_low: dict[str, np.ndarray]
     rank_high: dict[str, np.ndarray]
     optimism: dict[str, Any]
+    n_withheld: int = 0
 
 
 def _validated_settings(settings: MarkerSettings) -> MarkerSettings:
+    if settings.clinical_basis not in CLINICAL_BASES:
+        raise ValueError(f"clinical_basis must be one of {CLINICAL_BASES}.")
     if settings.ties not in TIES_METHODS:
         raise ValueError(f"ties must be one of {TIES_METHODS}.")
     if not 0.0 < settings.alpha < 0.5 or not 0.0 < settings.fdr_level < 0.5:
@@ -199,11 +212,12 @@ def prepare_marker_cohort(
     event_positive_value: Any = None,
     max_missing_fraction: float = 0.2,
     max_mode_fraction: float = 0.9,
+    clinical_basis: str = "linear",
 ) -> MarkerCohort:
     """Align the outcome, clinical design, strata and numeric marker block row by row.
 
-    Rows missing the outcome, a clinical covariate or a stratum are dropped (as in the
-    Cox workflow). A missing marker value never drops a row: markers with more missing
+    Rows missing the outcome or a stratum are dropped. Clinical imputation and encoding
+    are learned in training rows and frozen for prediction. A missing marker value never drops a row: markers with more missing
     values than ``max_missing_fraction`` are left out, and the rest are imputed inside
     each fit of the procedure. Markers with more than ``max_mode_fraction`` of their
     values equal to one value, counting missing values at the median they are imputed
@@ -245,9 +259,11 @@ def prepare_marker_cohort(
         time_column=time_column,
         event_column=event_column,
         event_positive_value=event_positive_value,
-        extra_columns=[*clinical, *strata],
+        extra_columns=strata,
     )
     source_rows = list(frame.attrs["source_row_index"])
+    for column in clinical:
+        frame[column] = df.loc[source_rows, column].reset_index(drop=True)
     raw_markers = df.loc[source_rows, markers]
     non_numeric: list[str] = []
     values = np.empty((len(source_rows), len(markers)), dtype=float)
@@ -326,9 +342,18 @@ def prepare_marker_cohort(
     clinical_names: list[str] = []
     encoder = None
     dropped_clinical: list[dict[str, str]] = []
+    clinical_error = None
     strata_codes = _build_cox_strata_payload(frame, strata)["codes"] if strata else None
     if clinical:
-        encoder = fit_feature_encoder(frame, clinical, list(categorical_clinical))
+        try:
+            encoder = fit_clinical_encoder(frame, clinical, categorical_clinical, basis=clinical_basis)
+        except ClinicalBasisError as exc:
+            clinical_error = str(exc)
+            # Preserve the requested basis and raw input; do not fit a replacement model.
+            encoder = None
+        if encoder is None:
+            clinical_design = np.zeros((len(frame), 0))
+    if clinical and encoder is not None:
         # A model term names each column; a marker called like a level indicator ("grade_2") would give the
         # locked model two terms of one name, which no validation could tell apart.
         encoded_names = set(encoder["feature_names"])
@@ -338,7 +363,7 @@ def prepare_marker_cohort(
                 "Markers cannot have the name of an encoded clinical covariate: " + ", ".join(clash[:5])
                 + ". A categorical covariate is encoded as one column per level, named like grade_2; rename the marker column."
             )
-        clinical_design = np.asarray(transform_feature_encoder(frame, encoder, output="numpy"), dtype=float)
+        clinical_design = np.asarray(transform_clinical_encoder(frame, encoder, output="numpy"), dtype=float)
         clinical_names = list(encoder["feature_names"])
         redundant = _redundant_clinical_columns(clinical_design, None if strata_codes is None else np.asarray(strata_codes))
         if redundant:
@@ -347,9 +372,8 @@ def prepare_marker_cohort(
             clinical_design = clinical_design[:, keep]
             clinical_names = [clinical_names[index] for index in keep]
         if not clinical_names:
-            # Nothing to adjust for: the evaluation is the one without clinical covariates (marginal lens only).
-            clinical_design = None
-            notes.append("No clinical covariate could be estimated, so the markers were evaluated without clinical adjustment.")
+            clinical_design = np.zeros((len(frame), 0))
+            clinical_error = "No requested clinical covariate could be estimated; added-value inference is withheld."
     return MarkerCohort(
         time=frame[time_column].to_numpy(dtype=float),
         event=frame[event_column].to_numpy(dtype=int),
@@ -366,6 +390,10 @@ def prepare_marker_cohort(
         clinical_encoder=encoder,
         dropped_clinical=tuple(dropped_clinical),
         notes=tuple(notes),
+        clinical_frame=frame[clinical].copy() if clinical else None,
+        categorical_clinical=tuple(categorical_clinical),
+        clinical_basis=clinical_basis,
+        clinical_error=clinical_error,
     )
 
 
@@ -465,15 +493,42 @@ def _clinical_null_model(
     """
     design = _estimable_clinical_design(clinical, strata)
     if not design.shape[1]:
-        return design, None
-    null = fit_cox_null(time, event, design, strata, ties)
-    if not null.converged:
-        raise ClinicalModelNotConvergedError("The clinical-only Cox model did not converge.")
-    estimable = ~np.isnan(null.beta)
-    if not estimable.all():
-        design = design[:, estimable]
-        null = null._replace(beta=null.beta[estimable], covariance=null.covariance[np.ix_(estimable, estimable)])
-    return design, null if design.shape[1] else None
+        raise ClinicalModelNotConvergedError("The requested clinical model has no estimable terms.")
+    fit = fit_cox(time, event, design, strata, ties)
+    if not fit.converged or not np.isfinite(fit.beta).all() or not np.isfinite(fit.covariance).all() or np.any(fit.separated):
+        raise ClinicalModelNotConvergedError("The clinical-only Cox model has nonconvergence, separation, aliasing or a non-finite fit.")
+    null = CoxNull(eta=design @ fit.beta, beta=fit.beta, covariance=fit.covariance,
+                   loglik=fit.loglik, converged=True)
+    return design, null
+
+
+def _training_clinical(cohort: MarkerCohort, rows: np.ndarray) -> tuple[np.ndarray, dict[str, Any] | None, list[str]]:
+    """Fit only in these training rows; the resulting encoder is frozen for prediction."""
+    if cohort.clinical_error:
+        raise ClinicalModelNotConvergedError(cohort.clinical_error)
+    if cohort.clinical_frame is None:
+        design = cohort.clinical[rows]
+        return design, cohort.clinical_encoder, cohort.clinical_names
+    try:
+        encoder = fit_clinical_encoder(cohort.clinical_frame.iloc[rows], cohort.clinical_columns,
+                                      cohort.categorical_clinical, basis=cohort.clinical_basis)
+        design = transform_clinical_encoder(cohort.clinical_frame.iloc[rows], encoder)
+        strata = None if cohort.strata is None else cohort.strata[rows]
+        redundant = _redundant_clinical_columns(design, strata)
+        if redundant and cohort.clinical_basis == "restricted_cubic_spline":
+            raise ClinicalBasisError("The requested spline basis is rank deficient in the training rows.")
+        keep = [i for i in range(design.shape[1]) if i not in redundant]
+        return design[:, keep], encoder, [encoder["feature_names"][i] for i in keep]
+    except ClinicalBasisError as exc:
+        raise ClinicalModelNotConvergedError(str(exc)) from exc
+
+
+def _frozen_clinical(cohort: MarkerCohort, rows: np.ndarray, encoder: dict[str, Any] | None,
+                     names: list[str]) -> np.ndarray:
+    if cohort.clinical_frame is None or encoder is None:
+        return cohort.clinical[rows]
+    frame = transform_clinical_encoder(cohort.clinical_frame.iloc[rows], encoder, output="dataframe")
+    return frame[names].to_numpy(float)
 
 
 def _descending_ranks(values: np.ndarray) -> np.ndarray:
@@ -504,14 +559,21 @@ def _lens_screens(
     marginal_null = fit_cox_null(time, event, None, strata, ties)
     screens["marginal"] = (CoxScoreScreen(time, event, null=marginal_null, strata=strata, ties=ties), None)
     if cohort.clinical is not None:
-        design, clinical_null = _clinical_null_model(time, event, cohort.clinical[rows], strata, ties)
+        try:
+            design, _, _ = _training_clinical(cohort, rows)
+            design, clinical_null = _clinical_null_model(time, event, design, strata, ties)
+        except ClinicalModelNotConvergedError:
+            if len(rows) != len(cohort.time):
+                raise
+            screens["added_value"] = (None, None)
+            return screens
         if clinical_null is not None:
             screens["added_value"] = (
                 CoxScoreScreen(time, event, null=clinical_null, Z=design, strata=strata, ties=ties),
                 design,
             )
         else:
-            screens["added_value"] = screens["marginal"]
+            screens["added_value"] = (None, None)
     return screens
 
 
@@ -522,7 +584,11 @@ def run_procedure(cohort: MarkerCohort, rows: np.ndarray, settings: MarkerSettin
     block = _impute(raw, medians)
     lenses: dict[str, LensStats] = {}
     for lens, (screen, _) in _lens_screens(cohort, rows, settings.ties).items():
-        lenses[lens] = _lens_stats(screen.statistics(block))
+        if screen is None:
+            empty = np.full(block.shape[1], np.nan)
+            lenses[lens] = LensStats(*(empty.copy() for _ in range(5)))
+        else:
+            lenses[lens] = _lens_stats(screen.statistics(block))
     selected = {lens: np.nan_to_num(values.q_bh, nan=1.0) <= settings.alpha for lens, values in lenses.items()}
     ranks = {lens: _descending_ranks(values.chi2) for lens, values in lenses.items()}
     return ProcedureFit(lenses=lenses, medians=medians, selected=selected, ranks=ranks)
@@ -542,6 +608,8 @@ def permutation_null(
     accumulators: dict[str, tuple[MaxTAccumulator, PermutationFdrAccumulator]] = {}
     lens2_null = _LENS2_NULL_ALIASES.get(settings.lens2_null, settings.lens2_null)
     for lens, (screen, design) in screens.items():
+        if screen is None:
+            continue
         if lens == "added_value" and design is not None and lens2_null == "smith":
             # Smith scheme: permute each marker's residual after regression on the clinical covariates.
             sources[lens] = residualize(block, design, cohort.strata)
@@ -555,6 +623,8 @@ def permutation_null(
         batch = min(_PERMUTATION_BATCH, remaining)
         permutations = [stratified_permutation(cohort.strata, rows.size, rng) for _ in range(batch)]
         for lens, (screen, _) in screens.items():
+            if screen is None:
+                continue
             permuted = screen.permuted_chi2(sources[lens], permutations)
             max_t, fdr = accumulators[lens]
             max_t.update(permuted)
@@ -571,6 +641,10 @@ def permutation_null(
                 "n_permutations": adjusted.n_permutations,
             }
         else:
+            empty = np.full(len(cohort.marker_names), np.nan)
+            result[lens] = {"p_fwer": empty, "p_fwer_single_step": empty, "q_perm": empty, "n_permutations": 0}
+    for lens in full.lenses:
+        if lens not in result:
             empty = np.full(len(cohort.marker_names), np.nan)
             result[lens] = {"p_fwer": empty, "p_fwer_single_step": empty, "q_perm": empty, "n_permutations": 0}
     return result
@@ -629,6 +703,8 @@ class _SignatureFit(NamedTuple):
     design_columns: np.ndarray
     # Clinical coefficients that run to infinity (a category without events); marker ones fail the fit.
     runaway_clinical: tuple[int, ...] = ()
+    clinical_encoder: dict[str, Any] | None = None
+    clinical_names: list[str] | None = None
 
 
 def _signature_columns(fit: ProcedureFit, primary: str, limit: int) -> np.ndarray:
@@ -659,9 +735,15 @@ def _fit_signature(
     parts = []
     design_columns = np.zeros(0, dtype=np.int64)
     strata = None if cohort.strata is None else cohort.strata[rows]
+    clinical_encoder, clinical_names = None, []
     if cohort.clinical is not None:
-        design_columns = _estimable_clinical_columns(cohort.clinical[rows], strata)
-        parts.append(cohort.clinical[rows][:, design_columns])
+        try:
+            training, clinical_encoder, clinical_names = _training_clinical(cohort, rows)
+            _clinical_null_model(cohort.time[rows], cohort.event[rows], training, strata, ties)
+        except ClinicalModelNotConvergedError:
+            return None
+        design_columns = _estimable_clinical_columns(training, strata)
+        parts.append(training[:, design_columns])
     if columns.size:
         parts.append(_impute(cohort.markers[rows][:, columns], fit.medians[columns]))
     if not parts or sum(part.shape[1] for part in parts) == 0:
@@ -687,13 +769,16 @@ def _fit_signature(
         medians=fit.medians,
         design_columns=design_columns,
         runaway_clinical=tuple(int(design_columns[index]) for index in np.flatnonzero(runaway[: design_columns.size])),
+        clinical_encoder=clinical_encoder,
+        clinical_names=clinical_names,
     )
 
 
 def _signature_risk(cohort: MarkerCohort, rows: np.ndarray, signature: _SignatureFit) -> np.ndarray:
     parts = []
     if cohort.clinical is not None:
-        parts.append(cohort.clinical[rows][:, signature.design_columns])
+        design = _frozen_clinical(cohort, rows, signature.clinical_encoder, signature.clinical_names or cohort.clinical_names)
+        parts.append(design[:, signature.design_columns])
     if signature.columns.size:
         parts.append(_impute(cohort.markers[rows][:, signature.columns], signature.medians[signature.columns]))
     return np.column_stack(parts) @ signature.params
@@ -717,7 +802,11 @@ def _single_marker_beta(
     exog = marker
     strata = None if cohort.strata is None else cohort.strata[rows]
     if adjusted and cohort.clinical is not None:
-        exog = np.column_stack([_estimable_clinical_design(cohort.clinical[rows], strata), marker])
+        try:
+            training, _, _ = _training_clinical(cohort, rows)
+        except ClinicalModelNotConvergedError:
+            return float("nan")
+        exog = np.column_stack([_estimable_clinical_design(training, strata), marker])
     fit = fit_cox(cohort.time[rows], cohort.event[rows], exog, strata, ties)
     # A coefficient that runs to infinity (for example on the few events of a left-out set) is no estimate.
     return float(fit.beta[-1]) if _marker_fit_usable(fit) else float("nan")
@@ -755,6 +844,7 @@ def resample_procedure(
     beta_in: list[float] = []
     beta_out: list[float] = []
     n_failed = 0
+    n_withheld = 0
     for _ in range(int(settings.n_resamples)):
         raise_if_cancelled()
         rows = _event_stratified_subsample(cohort.event, settings.resample_fraction, rng)
@@ -767,6 +857,22 @@ def resample_procedure(
             # from a check that a bug would trip, stops the analysis instead of being counted.
             n_failed += 1
             continue
+        if cohort.clinical is not None:
+            training, encoder, names = _training_clinical(cohort, rows)
+            training_cohort = cohort._replace(
+                time=cohort.time[rows], event=cohort.event[rows], markers=cohort.markers[rows],
+                clinical=training, clinical_names=names, clinical_encoder=encoder,
+                clinical_frame=cohort.clinical_frame.iloc[rows] if cohort.clinical_frame is not None else None,
+                strata=None if cohort.strata is None else cohort.strata[rows],
+                source_rows=[cohort.source_rows[int(i)] for i in rows],
+                row_mask_hash=hashlib.sha256(np.asarray(rows, dtype="<i8").tobytes()).hexdigest(),
+                dropped_clinical=(),
+            )
+            diagnostic = diagnose_markers(training_cohort, _impute(cohort.markers[rows], fit.medians), ties=settings.ties)
+            if not diagnostic["allowed"]:
+                n_withheld += 1
+                fit = fit._replace(selected={lens: (np.zeros_like(value) if lens == "added_value" else value)
+                                             for lens, value in fit.selected.items()})
         for lens in lenses:
             values = fit.lenses[lens]
             counts[lens] += fit.selected[lens]
@@ -789,6 +895,8 @@ def resample_procedure(
                         params=_clinical_params(cohort, rows, signature.design_columns, settings.ties),
                         medians=signature.medians,
                         design_columns=signature.design_columns,
+                        clinical_encoder=signature.clinical_encoder,
+                        clinical_names=signature.clinical_names,
                     )
                     clinical_c_out.append(
                         _pooled_c_index(cohort.time[left_out], cohort.event[left_out], _signature_risk(cohort, left_out, clinical_only), strata_out)
@@ -831,11 +939,13 @@ def resample_procedure(
         rank_low=rank_low,
         rank_high=rank_high,
         optimism=optimism,
+        n_withheld=n_withheld,
     )
 
 
 def _clinical_params(cohort: MarkerCohort, rows: np.ndarray, design_columns: np.ndarray, ties: str = "efron") -> np.ndarray:
-    design = cohort.clinical[rows][:, design_columns]
+    training, _, _ = _training_clinical(cohort, rows)
+    design = training[:, design_columns]
     strata = None if cohort.strata is None else cohort.strata[rows]
     beta = fit_cox(cohort.time[rows], cohort.event[rows], design, strata, ties).beta
     # The signature's clinical columns are estimable in these rows; a column that is not adds nothing.
@@ -977,10 +1087,15 @@ def nonlinear_lens(cohort: MarkerCohort, settings: MarkerSettings, rng: np.rando
         parts_in = [inside[:, keep]]
         parts_out = [outside[:, keep]]
         if cohort.clinical is not None:
-            varying = np.flatnonzero(np.ptp(cohort.clinical[rows], axis=0) > 0)
-            parts_in.insert(0, cohort.clinical[rows][:, varying])
-            parts_out.insert(0, cohort.clinical[left_out][:, varying])
-            names = [f"clinical::{cohort.clinical_names[int(index)]}" for index in varying] + names
+            try:
+                training, encoder, training_names = _training_clinical(cohort, rows)
+            except ClinicalModelNotConvergedError:
+                continue
+            varying = np.flatnonzero(np.ptp(training, axis=0) > 0)
+            outside_clinical = _frozen_clinical(cohort, left_out, encoder, training_names)
+            parts_in.insert(0, training[:, varying])
+            parts_out.insert(0, outside_clinical[:, varying])
+            names = [f"clinical::{training_names[int(index)]}" for index in varying] + names
         y_in = np.empty(rows.size, dtype=[("event", bool), ("time", float)])
         y_in["event"] = cohort.event[rows].astype(bool)
         y_in["time"] = cohort.time[rows]
@@ -1139,8 +1254,8 @@ def _finite_or_none(value: Any) -> float | None:
 
 # Version 2 hashes a canonical form (every number as a float) and stores the baseline hazard centred on
 # the development mean linear predictor; version-1 recipes are still validated.
-RECIPE_VERSION = 2
-RECIPE_VERSIONS = (1, 2)
+RECIPE_VERSION = 3
+RECIPE_VERSIONS = (1, 2, 3)
 MARKER_SCALINGS = ("as_measured", "within_cohort")
 # Below this share of the locked model's marker weight in an external dataset, validation stops.
 MIN_MARKER_WEIGHT_AVAILABLE = 0.5
@@ -1277,12 +1392,13 @@ def freeze_recipe(
     event_positive_value: Any,
     categorical_clinical: Sequence[str],
     ties: str = "efron",
+    inference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Everything needed to apply the selected signature, unchanged, to another cohort."""
     from survival_toolkit import __version__
 
     all_rows = np.arange(cohort.time.shape[0])
-    clinical_terms = [cohort.clinical_names[int(index)] for index in signature.design_columns] if cohort.clinical is not None else []
+    clinical_terms = [(signature.clinical_names or cohort.clinical_names)[int(index)] for index in signature.design_columns] if cohort.clinical is not None else []
     marker_terms = [cohort.marker_names[int(column)] for column in signature.columns]
     linear_predictor = _signature_risk(cohort, all_rows, signature)
     baseline = None
@@ -1299,6 +1415,7 @@ def freeze_recipe(
     primary_beta = full.lenses[primary].beta_one_step
     recipe: dict[str, Any] = {
         "recipe_version": RECIPE_VERSION,
+        "inference": inference or diagnose_markers(cohort, _impute(cohort.markers, full.medians), ties=ties),
         "created_with": f"SurvStudio {__version__}",
         "outcome": {
             "time_column": time_column,
@@ -1308,7 +1425,8 @@ def freeze_recipe(
         "clinical": {
             "columns": list(cohort.clinical_columns),
             "categorical": [str(column) for column in categorical_clinical],
-            "encoder": cohort.clinical_encoder,
+            "encoder": signature.clinical_encoder or cohort.clinical_encoder,
+            "basis": cohort.clinical_basis,
         },
         "strata_columns": list(cohort.strata_columns),
         "markers": marker_terms,
@@ -1390,6 +1508,7 @@ def evaluate_markers(
         event_positive_value=event_positive_value,
         max_missing_fraction=settings.max_missing_fraction,
         max_mode_fraction=settings.max_mode_fraction,
+        clinical_basis=settings.clinical_basis,
     )
     duplicates = possible_duplicates(cohort.markers, _patient_labels(df, cohort.source_rows, id_column))
     # One independent random stream per stage, so changing the number of permutations does not change which
@@ -1397,11 +1516,13 @@ def evaluate_markers(
     permutation_seed, resample_seed, nonlinear_seed = np.random.SeedSequence(int(settings.random_seed)).spawn(3)
     all_rows = np.arange(cohort.time.shape[0])
     full = run_procedure(cohort, all_rows, settings)
-    primary = "added_value" if "added_value" in full.lenses and cohort.clinical is not None else "marginal"
+    diagnostics = diagnose_markers(cohort, _impute(cohort.markers, full.medians), ties=settings.ties)
+    primary = "added_value" if cohort.clinical_columns else "marginal"
     adjusted = permutation_null(cohort, full, settings, np.random.default_rng(permutation_seed))
-    resampling = resample_procedure(cohort, full, settings, np.random.default_rng(resample_seed), primary)
+    resample_settings = settings if np.isfinite(full.lenses[primary].chi2).any() else settings._replace(n_resamples=0)
+    resampling = resample_procedure(cohort, full, resample_settings, np.random.default_rng(resample_seed), primary)
     tiers, patterns = assign_tiers(primary, adjusted, resampling, full.lenses, settings)
-    nonlinear = nonlinear_lens(cohort, settings, np.random.default_rng(nonlinear_seed))
+    nonlinear = nonlinear_lens(cohort, settings, np.random.default_rng(nonlinear_seed)) if not cohort.clinical_error else None
     nonlinear_ready = bool(nonlinear and nonlinear.get("available"))
     if nonlinear_ready:
         for index in range(len(patterns)):
@@ -1432,8 +1553,11 @@ def evaluate_markers(
             event_column=event_column,
             event_positive_value=event_positive_value,
             categorical_clinical=categorical_clinical,
+            inference=diagnostics,
             ties=settings.ties,
         )
+        recipe["inference"] = _json_ready(diagnostics)
+        recipe["recipe_hash"] = recipe_hash(recipe)
         if signature.columns.size == 0:
             signature_notes.append("No marker was selected, so the model holds the clinical covariates alone.")
         if signature.runaway_clinical:
@@ -1493,6 +1617,21 @@ def evaluate_markers(
             }
         row["exact"] = exact.get(index)
         rows.append(row)
+    if not diagnostics["allowed"]:
+        for row in rows:
+            target = row[primary]
+            row["exploratory"] = {primary: dict(target), "tier": row["tier"], "pattern": row["pattern"],
+                                  "exact": row.get("exact")}
+            row["tier"] = "inference withheld"
+            row["pattern"] = "Inference withheld"
+            row["inference_status"] = "withheld"
+            for key in ("p_value", "q_bh", "p_fwer", "q_perm"):
+                target[key] = None
+            if row.get("exact") and row["exact"].get("adjusted"):
+                row["exact"] = {**row["exact"], "adjusted": {**row["exact"]["adjusted"], "wald_p": None, "lr_p": None}}
+    else:
+        for row in rows:
+            row["inference_status"] = "assumption_dependent"
     tier_rank = {tier: position for position, tier in enumerate(TIER_ORDER)}
     rows.sort(
         key=lambda item: (
@@ -1502,6 +1641,9 @@ def evaluate_markers(
     )
 
     result = {
+        "method_version": METHOD_VERSION,
+        "inference": diagnostics,
+        "clinical_basis": settings.clinical_basis,
         "primary_lens": primary,
         "marker_table": rows,
         "tier_counts": {tier: sum(1 for item in rows if item["tier"] == tier) for tier in TIER_ORDER},
@@ -1522,7 +1664,7 @@ def evaluate_markers(
             "n_permutations": int(adjusted[primary]["n_permutations"]),
             "lens2_null": settings.lens2_null if primary == "added_value" else None,
             "assumption_note": (
-                "Added-value residual permutation approximates a conditional null and assumes exchangeable residuals after linear adjustment. Nonlinear marker-covariate relations can inflate false positives; family-wise error control also requires subset pivotality. Clinical Cox baseline misspecification, including non-proportional hazards, can invalidate conditional-null interpretation; multiplicity adjustment does not establish model adequacy."
+                "Added-value residual permutation approximates a conditional null and assumes exchangeable residuals after the declared clinical-basis adjustment. Nonlinear marker-covariate relations can inflate false positives; family-wise error control also requires subset pivotality. Clinical Cox baseline misspecification, including non-proportional hazards, can invalidate conditional-null interpretation; multiplicity adjustment does not establish model adequacy."
                 if primary == "added_value" and settings.lens2_null == "smith"
                 else "Permutation inference assumes exchangeability under the chosen null; strong family-wise error control also requires subset pivotality."
                 + (" Clinical Cox baseline misspecification can invalidate added-value interpretation; multiplicity adjustment does not establish model adequacy." if primary == "added_value" else "")
@@ -1533,6 +1675,8 @@ def evaluate_markers(
             "fraction": float(settings.resample_fraction),
             "n_valid": resampling.n_valid,
             "n_failed": resampling.n_failed,
+            "n_withheld": resampling.n_withheld,
+            "inference_policy": "Training diagnostics are refitted; withheld subsamples select no added-value markers and remain in the selection-frequency denominator.",
             "stability_assessed": stability_assessed,
             "note": None
             if stability_assessed
@@ -1639,6 +1783,8 @@ def _check_recipe(recipe: Any) -> int:
     if not isinstance(clinical, dict):
         fail("clinical must be an object.")
     columns = names(clinical.get("columns"), "clinical.columns")
+    if version >= 3 and clinical.get("basis") not in CLINICAL_BASES:
+        fail("clinical.basis is invalid.")
     names(clinical.get("categorical") or [], "clinical.categorical")
     feature_names: list[str] = []
     if columns:
@@ -1648,6 +1794,10 @@ def _check_recipe(recipe: Any) -> int:
         if list(encoder.get("features") or []) != columns:
             fail("clinical.encoder must encode the clinical columns.")
         feature_names = names(encoder.get("feature_names"), "clinical.encoder.feature_names")
+        if version >= 3:
+            check_clinical_encoder(encoder)
+            if clinical["basis"] != encoder["clinical_basis"]:
+                fail("clinical basis and frozen encoder disagree.")
         mappings = encoder.get("categorical_mappings")
         categorical = encoder.get("categorical_features") or []
         if not isinstance(categorical, list) or (categorical and not isinstance(mappings, dict)):
@@ -1715,6 +1865,16 @@ def _check_recipe(recipe: Any) -> int:
         unknown = [term for term in only_terms if term not in feature_names]
         if unknown:
             fail("the clinical-only terms " + ", ".join(unknown[:5]) + " are not encoded clinical covariates.")
+    if version >= 3:
+        inference = recipe.get("inference")
+        if not isinstance(inference, dict) or inference.get("status") not in {"withheld", "assumption_dependent"} or inference.get("method_version") != METHOD_VERSION:
+            fail("v3 must preserve its versioned inference status.")
+        if not isinstance(inference.get("allowed"), bool) or inference["allowed"] != (inference["status"] == "assumption_dependent"):
+            fail("v3 inference status and permission disagree.")
+        if inference.get("clinical_basis") != clinical["basis"]:
+            fail("diagnostic and prediction bases disagree.")
+        if inference.get("functional_form_encoder") is not None:
+            check_clinical_encoder(inference["functional_form_encoder"])
     return version
 
 
@@ -1724,6 +1884,7 @@ def _unseen_level_rows(frame: pd.DataFrame, encoder: dict[str, Any], column: str
     The locked encoder itself decides (with every level given its own indicator), so this agrees
     with how the rows are scored, however the encoder matches values to levels.
     """
+    encoder = encoder.get("base_encoder", encoder)
     mapping = encoder["categorical_mappings"][column]
     levels = [str(level) for level in mapping.get("all_levels") or []]
     observed = frame[column].notna().to_numpy()
@@ -1756,7 +1917,7 @@ def _clinical_columns_behind(encoder: dict[str, Any] | None, columns: Sequence[s
     categorical = set(encoder.get("categorical_features") or [])
     used = []
     for column in columns:
-        encoded = {column}
+        encoded = set((encoder.get("spline_specifications", {}).get(column) or {}).get("terms") or [column])
         if column in categorical:
             mapping = mappings.get(column) or {}
             level_columns = mapping.get("level_columns") or {}
@@ -1881,8 +2042,12 @@ def validate_locked_recipe(
         time_column=time_column,
         event_column=event_column,
         event_positive_value=positive,
-        extra_columns=[external(column) for column in [*used_clinical, *strata_columns]],
+        extra_columns=[external(column) for column in (strata_columns if version >= 3 else [*used_clinical, *strata_columns])],
     )
+    if version >= 3:
+        rows = list(frame.attrs["source_row_index"])
+        for column in used_clinical:
+            frame[external(column)] = df.loc[rows, external(column)].reset_index(drop=True)
     frame = frame.rename(columns={external(column): column for column in [*used_clinical, *strata_columns]})
     time = frame[time_column].to_numpy(dtype=float)
     event = frame[event_column].to_numpy(dtype=int)
@@ -1896,9 +2061,11 @@ def validate_locked_recipe(
         for column in used_clinical:
             if column in numeric_features:
                 _reject_text_in_numeric_covariate(frame[column], external(column))
+                if np.isinf(pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float, na_value=np.nan)).any():
+                    raise ValueError(f'Clinical covariate "{external(column)}" contains infinite external values.')
         # The columns the model does not use are given as missing: their encoded values are never read.
         unused = {column: np.nan for column in clinical_columns if column not in used_clinical}
-        design = transform_feature_encoder(frame.assign(**unused) if unused else frame, encoder, output="dataframe")
+        design = transform_clinical_encoder(frame.assign(**unused) if unused else frame, encoder, output="dataframe")
         for name in design.columns:
             columns[str(name)] = design[name].to_numpy(dtype=float)
         for column in encoder.get("categorical_features", []):
@@ -2059,9 +2226,11 @@ def validate_locked_recipe(
         clinical_terms = [term for term in model["terms"] if term not in markers]
         base_design = np.column_stack([columns[term] for term in clinical_terms]) if clinical_terms else np.zeros((time.shape[0], 0))
         base_design = _estimable_clinical_design(base_design, strata)
-    tested_lens = "added_value" if primary == "added_value" and base_design is not None and base_design.shape[1] else "marginal"
-    if primary == "added_value" and tested_lens == "marginal" and markers:
-        notes.append("No clinical covariate of the locked model varies in this cohort, so each marker's replication was tested without adjustment.")
+    tested_lens = primary
+    if primary == "added_value" and (base_design is None or not base_design.shape[1]):
+        tested_lens = "unavailable"
+    if primary == "added_value" and tested_lens == "unavailable" and markers:
+        notes.append("The requested added-value replication is unavailable: no clinical term is estimable in this external cohort.")
     marker_rows = []
     one_sided: list[float] = []
     for name in markers:
@@ -2071,7 +2240,7 @@ def validate_locked_recipe(
             continue
         marginal = _external_cox(time, event, columns[name][:, None], strata, ties)
         adjusted = None if base_design is None else _external_cox(time, event, np.column_stack([base_design, columns[name]]), strata, ties)
-        tested = adjusted if tested_lens == "added_value" else marginal
+        tested = adjusted if tested_lens == "added_value" else marginal if tested_lens == "marginal" else None
         if tested_lens == "added_value" and adjusted is None:
             # Testing the unadjusted association instead would answer another question than the locked claim.
             notes.append(
@@ -2103,9 +2272,50 @@ def validate_locked_recipe(
         row["replication_p_holm"] = _finite_or_none(adjusted_p) if estimable else None
         row["replicated"] = bool(estimable and row["same_direction"] and np.isfinite(adjusted_p) and adjusted_p <= alpha)
 
-    # JSON has no infinity or NaN (Starlette refuses them): every non-finite number is reported as None.
+    inference = recipe.get("inference") if version >= 3 else {
+        "status": "not_assessed", "allowed": False, "method_version": None,
+        "reasons": ["Legacy v1/v2 recipe: development diagnostics were not assessed."]}
+    development_inference = inference
+    external_inference = None
+    if version >= 3:
+        diagnostic_names = list(encoder["feature_names"]) if clinical_columns else []
+        diagnostic_frame = frame.assign(**{column: np.nan for column in clinical_columns if column not in frame})
+        diagnostic_cohort = MarkerCohort(
+            time=time, event=event,
+            markers=np.column_stack([columns[name] for name in markers]) if markers else np.zeros((len(time), 0)),
+            marker_names=markers,
+            clinical=np.column_stack([columns[name] for name in diagnostic_names]) if diagnostic_names else None,
+            clinical_names=diagnostic_names, clinical_columns=clinical_columns,
+            strata=None if strata is None else np.asarray(strata), strata_columns=strata_columns,
+            source_rows=source_rows, row_mask_hash=str(frame.attrs.get("row_mask_hash") or ""),
+            dropped_markers=[], clinical_encoder=encoder,
+            clinical_frame=diagnostic_frame[clinical_columns] if clinical_columns else None,
+            categorical_clinical=tuple(recipe["clinical"].get("categorical") or []),
+            clinical_basis=recipe["clinical"].get("basis", "linear"),
+        )
+        external_inference = diagnose_markers(
+            diagnostic_cohort, diagnostic_cohort.markers, ties=ties,
+            functional_form_encoder=development_inference.get("functional_form_encoder"), frozen_transform=True)
+        if not external_inference["allowed"]:
+            inference = {**development_inference, "status": "withheld", "allowed": False,
+                         "reasons": [*development_inference.get("reasons", []),
+                                     *("external: " + reason for reason in external_inference["reasons"])]}
+    if not inference["allowed"]:
+        for row in marker_rows:
+            row["exploratory"] = {"replication_p_holm": row.get("replication_p_holm"), "replicated": row.get("replicated"),
+                                  "marginal": row.get("marginal"), "adjusted": row.get("adjusted")}
+            row["replication_p_holm"] = None
+            row["replicated"] = False
+            row["inference_status"] = inference["status"]
+            for lens in ("marginal", "adjusted"):
+                if row.get(lens):
+                    row[lens] = {**row[lens], "wald_p": None}
+        notes.append("Development inference status: " + inference["status"] + ". Prediction metrics remain exploratory and do not reinstate the marker claim.")
     return _json_ready(
         {
+            "inference": inference,
+            "development_inference": development_inference,
+            "external_inference": external_inference,
             "recipe_hash": recipe["recipe_hash"],
             "recipe_version": version,
             "cohort": {"n": int(time.shape[0]), "events": int(event.sum()), "row_mask_hash": str(frame.attrs.get("row_mask_hash") or "")},

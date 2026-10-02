@@ -372,12 +372,18 @@ def marker_methods_paragraph(result: dict[str, Any], request: dict[str, Any] | N
         f"Markers with more than {_percent(settings.get('max_missing_fraction', 0.2))} missing values, a constant value or more than "
         f"{_percent(settings.get('max_mode_fraction', 0.9))} of patients at one value were excluded before testing (a filter blind to the outcome); "
         "other missing marker values were replaced by the marker's median among the patients in each fit, and patients with a missing "
-        "or invalid outcome, clinical covariate or stratum were excluded.",
+        "or invalid outcome or stratum were excluded; missing clinical values used training-only imputation.",
         "Markers were analysed as continuous variables without cut-points.",
         _duplicate_screen_sentence(result),
         _signature_methods_sentence(result, added_value),
         _gain_interval_sentence(result, added_value),
     ]
+    inference = result.get("inference")
+    if inference:
+        sentences.append(f"Clinical basis: {result.get('clinical_basis', 'linear')}; training-only imputation, encoding and fixed knots were refitted in each training subset. "
+                         "Clinical PH/functional-form diagnostics and all-marker residual HC3 mean/variance diagnostics formed separate Holm families, with withholding at 1%. "
+                         f"Method version {inference.get('method_version')}; inference status {inference.get('status')}. "
+                         + str(inference.get('interpretation', '')))
     return " ".join(sentence for sentence in sentences if sentence)
 
 
@@ -417,6 +423,13 @@ def _left_out_comparison(signature: dict[str, Any], added_value: bool) -> str:
 
 
 def marker_results_paragraph(result: dict[str, Any]) -> str:
+    inference = result.get("inference") or {}
+    if inference.get("status") == "withheld":
+        return ("Added-value inference and robust marker claims were withheld. "
+                + "Reasons: " + "; ".join(inference.get("reasons") or []) + ". "
+                + "Standard inferential p/q values are unavailable, rather than zero; raw computations are retained separately for exploration. "
+                + "Any fitted prediction model and its performance estimates are exploratory. "
+                + str(inference.get("interpretation", "")))
     counts = result.get("tier_counts") or {}
     cohort = result.get("cohort") or {}
     signature = result.get("signature") or {}
@@ -583,6 +596,8 @@ def remark_checklist(result: dict[str, Any], *, request: dict[str, Any] | None =
         marginal_text = (
             "No marker was marginal only (associated with survival on its own but adding nothing beyond the clinical covariates). "
         )
+    if (result.get("inference") or {}).get("status") == "withheld":
+        marginal_text = "Added-value inference was withheld; no absence-of-added-value claim is supported. "
     items = [
         _item("1", "Introduction", "Markers, objectives and pre-specified hypotheses", "partly",
               f"Markers evaluated: {marker_text}. State the objectives and the hypotheses fixed before the analysis."),

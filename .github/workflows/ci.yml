@@ -129,18 +129,29 @@ jobs:
       - name: Install validation dependencies
         run: |
           pip install -e ".[validation]"
-          Rscript -e 'install.packages(c("survival", "jsonlite"), repos="https://cloud.r-project.org")'
+          Rscript -e 'install.packages(c("survival", "jsonlite", "Hmisc"), repos="https://cloud.r-project.org")'
       - name: Check numerical agreement
         env:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
         run: python validation/agreement/run_agreement.py --output "${{ runner.temp }}/numerical-agreement" --check
+      - name: Check fixed spline transforms and guarded-inference numerical reference
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: python validation/guarded_inference/run_independent_reference.py --output "${{ runner.temp }}/guarded-reference"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: numerical-agreement
           path: ${{ runner.temp }}/numerical-agreement
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: guarded-reference
+          path: ${{ runner.temp }}/guarded-reference
 
   browser-e2e:
     name: ubuntu-latest / Python 3.11 / browser-e2e
@@ -165,4 +176,4 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Run browser E2E smoke test
-        run: pytest -q tests/test_browser_e2e.py
+        run: pytest -q tests/test_browser_e2e.py tests/test_guarded_marker_surfaces.py

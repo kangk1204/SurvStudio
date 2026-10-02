@@ -1216,6 +1216,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
     max_missing_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
     max_mode_fraction: float = Field(default=0.9, ge=0.5, le=1.0)
     max_signature_markers: int = Field(default=10, ge=1, le=50)
+    clinical_basis: Literal["linear", "restricted_cubic_spline"] = "linear"
     nonlinear_lens: Literal["off", "gbs", "rsf"] = "off"
     random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
 
@@ -1251,6 +1252,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
             max_missing_fraction=self.max_missing_fraction,
             max_mode_fraction=self.max_mode_fraction,
             max_signature_markers=self.max_signature_markers,
+            clinical_basis=self.clinical_basis,
             nonlinear_lens=self.nonlinear_lens,
             random_seed=self.random_seed,
         )
@@ -5122,6 +5124,12 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
         low, high = stats["rank_interval"]
         display = {
             "Marker": row["marker"],
+            "Inference status": row.get("inference_status", "not_assessed"),
+            "Withholding reasons": "; ".join(((result.get("inference") or {}).get("reasons") or [])[:3])
+                + (f"; see diagnostics for {len(result['inference']['reasons']) - 3} further findings"
+                   if len((result.get("inference") or {}).get("reasons") or []) > 3 else ""),
+            "Clinical basis": result.get("clinical_basis", "linear"),
+            "Method version": result.get("method_version"),
             "Tier": row["tier"],
             "Evidence": row["pattern"],
             "Direction": row["direction"],
