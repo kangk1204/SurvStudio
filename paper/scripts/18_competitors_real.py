@@ -8,7 +8,8 @@ bootstrap), then the selection replayed for every split of the seven cohorts int
 cohorts (the winner has the highest mean reported C over the selection cohorts) and for all seven used for selection.
 For each winner, SurvStudio's external gain: a Cox model of age, sex, stage and the winner's risk score fitted on TCGA,
 validated with validate_locked_recipe as script 03 validates SurvStudio's locked model, and pooled by random effects.
-P2 univariate Cox -> LASSO -> Cox and P3 KM Plotter's best cut-off (with script 15's replication rule) likewise.
+P2 univariate Cox -> LASSO -> Cox and P3's stylised uncorrected best-cutoff screen (with script 15's replication rule)
+likewise. P3 does not reproduce the current KM Plotter service, which documents multiple-testing correction.
 SurvStudio's own numbers come from case studies I and II and script 15 (results/), checked against the paper's.
 
 Writes competitors_mime_models.csv, competitors_mime_replay.csv, competitors_p2_cohorts.csv, competitors_p3_genes.csv
@@ -25,6 +26,8 @@ import pandas as pd
 from common import CATEGORICAL, COVARIATES, GEO_COHORTS, RESULTS, read_result, survstudio_version, write_csv_atomic, write_json
 from competitors import (
     CANDIDATE_CAP,
+    N_BOOTSTRAP,
+    BOOTSTRAP_SEED,
     SELECTION_COHORTS,
     SENSITIVITY_CAP,
     WORK,
@@ -340,7 +343,8 @@ def survstudio_same_genes(dev_patients: pd.DataFrame, dev_expression: pd.DataFra
     for cohort, (patients, expression) in validation_data().items():
         external = pd.concat([patients[["patient_id", "os_months", "os_event", *COVARIATES]].reset_index(drop=True),
                               expression[[marker for marker in recipe["markers"] if marker in expression.columns]].reset_index(drop=True)], axis=1)
-        rows.append({"cohort": cohort, **validation_row(validate_locked_recipe(external, recipe, marker_scaling="within_cohort"))})
+        rows.append({"cohort": cohort, **validation_row(validate_locked_recipe(external, recipe, marker_scaling="within_cohort",
+                                                                            n_bootstrap=N_BOOTSTRAP, random_seed=BOOTSTRAP_SEED))})
     rows = pd.DataFrame(rows)
     table = pd.DataFrame(result["marker_table"])
     robust = table.loc[table["tier"] == "robust", "marker"].tolist()
@@ -373,6 +377,7 @@ def main() -> None:
     # the cohort after median imputation, as script 15 standardises).
     tests = pd.concat([adjusted_statistics(patients[cohort], expression[cohort]).assign(cohort=cohort) for cohort in GEO_COHORTS], ignore_index=True)
     result = {"survstudio": survstudio_version(), "code_hash": code_hash(), "r": r_versions(), "genes": len(genes),
+              "external_bootstrap_draws": N_BOOTSTRAP, "external_bootstrap_seed": BOOTSTRAP_SEED,
               "candidate_cap": CANDIDATE_CAP, "cohorts": {cohort: {"n": len(patients[cohort]), "events": int(patients[cohort]["os_event"].sum())} for cohort in COHORTS}}
     result["SurvStudio"] = survstudio_section(patients)
     result["SurvStudio"]["tiers_on_comparison_genes"] = tier_check(tests, genes)

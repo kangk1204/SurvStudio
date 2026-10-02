@@ -449,7 +449,7 @@ def test_lasso_inner_cross_validation_stops_when_its_request_is_cancelled() -> N
     cancelled.set()
     with cancellation_scope(cancelled), pytest.raises(JobCancelledError):
         ml._select_lasso_alpha(df.reset_index(drop=True), encoded.reset_index(drop=True), time_column="os_months",
-                               event_column="os_event", random_state=11)
+                               event_column="os_event", random_state=11, features=["age", "biomarker_score", "immune_index"])
 
 
 # ── Summaries and descriptions ──────────────────────────────────────────────
@@ -504,7 +504,7 @@ def test_lasso_penalty_selection_reports_the_folds_split_and_the_folds_scored(mo
 
     monkeypatch.setattr(ml, "_drop_constant_train_columns", _second_inner_fold_fails)
     meta = ml._select_lasso_alpha(df.reset_index(drop=True), encoded.reset_index(drop=True), time_column="os_months",
-                                  event_column="os_event", random_state=11)
+                                  event_column="os_event", random_state=11, features=features)
     assert meta["selection_mode"] == "inner_cv"
     assert meta["inner_cv_folds"] == 5 and meta["inner_cv_scored_folds"] == 4
 

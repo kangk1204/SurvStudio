@@ -1,10 +1,11 @@
 """Figures 1 to 5 and Supplementary Figures S1 to S6 of the software paper, drawn from the files the analysis scripts
 write to results/, at print size: BMC prints a figure at most 170 mm wide, so every figure is drawn at its final size,
-at most 170 mm wide with no text below 7 pt, and save() refuses one that is not. Figure 1b is a screenshot of the
-Markers tab after case study I (INTERFACE), which Figure 1 places under the workflow diagram (fig1_workflow).
+at most 170 mm wide, reserving 25 mm of BMC's 225-mm combined height for a legend, with a project readability
+floor of 7 pt. save() refuses one that is not. Figure 1b is a native screenshot of the Markers summary after
+case study I (INTERFACE), which Figure 1 places under the workflow diagram (fig1_workflow).
 
-Needs matplotlib, numpy and pandas (no SurvStudio). Writes PNG (300 dpi; Figure 1, with its screenshot, 600 dpi) and
-PDF to paper/figures/.
+Needs matplotlib, numpy and pandas (no SurvStudio). Writes PNG (300 dpi; Figure 1, with its screenshot, 600 dpi),
+PDF, SVG and a per-figure provenance record to paper/figures/.
 Usage: python figures.py [name ...] draws the named figures only (workflow, interface, markers, estimates, models,
 comparison, simulation, luad_external, breast_external, breast_er_external, breast_er_sensitivity, tiers); without
 names, all of them, the comparison once run_competitors.sh has written its results.
@@ -22,6 +23,9 @@ cohorts, the 95% prediction interval (common.random_effects).
 from __future__ import annotations
 
 import json
+import hashlib
+import math
+import subprocess
 import sys
 from pathlib import Path
 
@@ -41,11 +45,13 @@ PAPER = Path(__file__).resolve().parents[1]
 RESULTS = PAPER / "results"
 FIGURES = PAPER / "figures"
 FIGURES.mkdir(exist_ok=True)
-# Figure 1b: the Markers tab after case study I (TCGA-LUAD and the Xena HiSeqV2.gz file, age, sex and stage, the
-# defaults), captured from the web interface in a 1,080-pixel-wide window at three device pixels per pixel.
-INTERFACE = PAPER / "interface" / "markers_tab_case_study_i.png"
-# BMC's largest print width, 170 mm, and its smallest legible type, 7 pt: save() checks both at the final size.
+# Figure 1b: the native summary panel after case study I (TCGA-LUAD, Xena HiSeqV2.gz, age, sex and stage,
+# defaults), captured in a 900-pixel-wide window at three device pixels per pixel; its provenance records fonts.
+INTERFACE = PAPER / "interface" / "marker_summary_case_study_i.png"
+INTERFACE_PROVENANCE = PAPER / "interface" / "marker_summary_case_study_i.provenance.json"
+# BMC's width and combined figure/legend height; 25 mm reserved for the legend and our own 7-pt readability floor.
 PRINT_WIDTH = 170 / 25.4
+PRINT_HEIGHT = 200 / 25.4
 MIN_POINTS = 7.0
 PAD = 0.02  # inches of white space kept around the drawing
 WIDE = PRINT_WIDTH - 0.06  # a full-width figure, its drawing and the white space around it within the print width
@@ -63,6 +69,7 @@ plt.rcParams.update({
     "xtick.color": INK, "ytick.color": INK, "text.color": INK, "axes.labelcolor": INK, "xtick.major.width": 0.6,
     "ytick.major.width": 0.6, "xtick.major.size": 2.5, "ytick.major.size": 2.5,
     "axes.spines.top": False, "axes.spines.right": False, "legend.frameon": False, "legend.fontsize": 7,
+    "pdf.fonttype": 42, "ps.fonttype": 42, "svg.fonttype": "path", "svg.hashsalt": "survstudio-paper",
 })
 
 
@@ -75,7 +82,7 @@ class MixedResults(Exception):
 
 
 class NotPrintable(Exception):
-    """A figure wider than BMC's 170 mm or with text below 7 pt at that size."""
+    """A figure beyond the print dimensions or below the project's 7-pt text floor."""
 
 
 def load(name: str, **options):
@@ -90,13 +97,15 @@ def panel_label(ax, letter: str, x: float = -0.12, y: float = 1.04) -> None:
 
 def print_size(fig) -> tuple[float, float, list[str]]:
     """The figure's width and height as saved (inches), and what keeps it from print: wider than 170 mm, or text
-    below 7 pt."""
+    below 7 pt or more than 200 mm high (leaving 25 mm for the legend)."""
     fig.canvas.draw()
     box = fig.get_tightbbox(fig.canvas.get_renderer())
     width, height = box.width + 2 * PAD, box.height + 2 * PAD
     problems = []
     if width > PRINT_WIDTH + 1e-6:
         problems.append(f"{width * 25.4:.1f} mm wide (at most {PRINT_WIDTH * 25.4:.0f} mm)")
+    if height > PRINT_HEIGHT + 1e-6:
+        problems.append(f"{height * 25.4:.1f} mm high (at most 200 mm, reserving 25 mm for the legend)")
     small = sorted({f"{text.get_text()!r} ({text.get_fontsize():g} pt)" for text in fig.findobj(Text)
                     if text.get_visible() and text.get_text().strip() and text.get_fontsize() < MIN_POINTS - 1e-9})
     if small:
@@ -104,7 +113,25 @@ def print_size(fig) -> tuple[float, float, list[str]]:
     return width, height, problems
 
 
-def save(fig, name: str, dpi: int = 300) -> None:
+def rendering_source(repository: Path) -> dict[str, str]:
+    """An archive nested in another checkout must not inherit that checkout's commit."""
+    from common import git_commit
+    unknown = {"rendering_commit": "unknown", "rendering_git_head": "unknown"}
+    try:
+        root = subprocess.run(["git", "-C", str(repository), "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True)
+        if root.returncode != 0 or Path(root.stdout.strip()).resolve() != repository.resolve():
+            return unknown
+        head = subprocess.run(["git", "-C", str(repository), "rev-parse", "HEAD"],
+                              capture_output=True, text=True)
+        if head.returncode != 0:
+            return unknown
+        return {"rendering_commit": git_commit(repository), "rendering_git_head": head.stdout.strip()}
+    except OSError:
+        return unknown
+
+
+def save(fig, name: str, dpi: int = 300, *, derived_values: dict | None = None) -> None:
     problems = result_problems(LOADED)
     if problems:
         plt.close(fig)
@@ -113,8 +140,32 @@ def save(fig, name: str, dpi: int = 300) -> None:
     if problems:
         plt.close(fig)
         raise NotPrintable(problems)
-    for suffix in ("png", "pdf"):
-        fig.savefig(FIGURES / f"{name}.{suffix}", dpi=dpi, bbox_inches="tight", pad_inches=PAD)
+    metadata = {"png": {"Software": "SurvStudio publication figures"},
+                "pdf": {"Creator": "SurvStudio publication figures", "Title": name, "CreationDate": None, "ModDate": None},
+                "svg": {"Creator": "SurvStudio publication figures", "Title": name, "Date": None}}
+    for suffix in ("png", "pdf", "svg"):
+        fig.savefig(FIGURES / f"{name}.{suffix}", dpi=dpi, bbox_inches="tight", pad_inches=PAD, metadata=metadata[suffix])
+    # Matplotlib's static SVG 1.1 DTD is unnecessary for a portable, inactive export.
+    svg = FIGURES / f"{name}.svg"
+    svg_text = svg.read_text(encoding="utf-8").replace(
+        '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"\n'
+        '  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n', "")
+    if "<!DOCTYPE" in svg_text or "<!ENTITY" in svg_text:
+        raise ValueError("SVG contains an unexpected DTD or entity declaration")
+    svg.write_text(svg_text, encoding="utf-8")
+    from common import sha256_file
+    provenance = {"schema": "SurvStudio paper figure provenance 1", "figure": name,
+                  **rendering_source(PAPER.parent),
+                  "rendering_script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                  "dimensions_mm": [width * 25.4, height * 25.4], "png_dpi": dpi,
+                  "inputs": {input_name: json.loads((RESULTS / "stamps" / f"{input_name}.json").read_text())
+                             for input_name in dict.fromkeys(LOADED)},
+                  "outputs": {suffix: sha256_file(FIGURES / f"{name}.{suffix}") for suffix in metadata}}
+    if name == "fig1":
+        provenance["interface"] = {"png_sha256": sha256_file(INTERFACE), "provenance_sha256": sha256_file(INTERFACE_PROVENANCE)}
+    if derived_values is not None:
+        provenance["derived_values"] = derived_values
+    (FIGURES / f"{name}.provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     plt.close(fig)
     print(f"wrote {name} ({width * 25.4:.0f} x {height * 25.4:.0f} mm)")
 
@@ -191,10 +242,10 @@ def draw_workflow(ax) -> None:
             ("Omics matrix", "CSV, TSV, Parquet, or .gz\nfiles as GEO and Xena\nserve them; TCGA\nbarcodes matched", 4),
             ("External cohort", "same or another platform", 1),
         ]),
-        "checks": (29.5, 42.5, "#dcefe4", ROBUST, "Checks run by default", [
+        "checks": (29.5, 42.5, "#dcefe4", ROBUST, "Analyses and checks", [
             ("Survival curves and Cox regression", "Kaplan–Meier with numbers at risk, log-rank,\nEfron Cox model, proportional-hazards tests", 2),
-            ("Marker evaluation", "score tests for added value over clinical data\n→ family-wise error by permutation\n    (Westfall–Young; marker residuals permuted)\n"
-                                  "→ whole screen repeated on subsamples: tiers\n→ gain over clinical-only C, with 95% interval", 5),
+            ("Marker evaluation", "score tests for added value over clinical data\n→ multiplicity-adjusted permutation tests\n    (Westfall–Young; marker residuals permuted)\n"
+                                  "→ whole screen repeated on subsamples: tiers\n→ clinical-only C gain; approx. 95% interval", 5),
             ("Prediction models", "machine and deep learning on the same splits\n(holdout, repeated CV, locked test); paired\nintervals for the difference from Cox", 3),
         ]),
         "outputs": (76.0, 25.0, "#fbe7d4", DL, "Outputs", [
@@ -239,9 +290,16 @@ def figure_workflow() -> None:
 
 
 def figure_interface() -> None:
-    """Figure 1: a, the workflow; b, the Markers tab after case study I (INTERFACE), 146 mm wide under it."""
+    """Figure 1: a, the workflow; b, the actual summary panel, with its recorded fonts checked at print size."""
     shot = plt.imread(INTERFACE)
-    gap, shot_width = 0.15, 5.76
+    provenance = json.loads(INTERFACE_PROVENANCE.read_text(encoding="utf-8"))
+    from common import sha256_file
+    if sha256_file(INTERFACE) != provenance["summary_png_sha256"]:
+        raise MixedResults(["interface screenshot changed since its capture record"])
+    gap, shot_width = 0.15, WIDE
+    effective_points = shot_width * 72 * provenance["summary_min_svg_font_px"] / provenance["summary_css_width"]
+    if effective_points < MIN_POINTS:
+        raise NotPrintable([f"interface text is only {effective_points:.2f} pt at print size"])
     shot_height = shot_width * shot.shape[0] / shot.shape[1]
     height = WORKFLOW_HEIGHT + gap + shot_height
     fig = plt.figure(figsize=(WIDE, height))
@@ -347,7 +405,7 @@ SETTINGS = [
     {"case": "IV", "title": "Breast cancer, survival\nMETABRIC; {k} cohorts", "summary": "breast_markers_summary.json",
      "pooled": "breast_external_pooled.json", "part": None, "cohorts": "cohorts"},
     {"case": "V", "title": "ER+ breast, recurrence\nMETABRIC; {k} cohorts", "summary": "breast_er_markers_summary.json",
-     "pooled": "breast_er_external_pooled.json", "part": None, "cohorts": "cohorts"},
+     "pooled": "breast_er_external_pooled.json", "part": None, "cohorts": "RFS/DMFS cohorts"},
 ]
 
 
@@ -362,7 +420,7 @@ def figure_estimates() -> None:
     below = fig.add_gridspec(1, 1, left=0.27, right=0.69, top=0.445, bottom=0.14)
 
     # a: the C-index ladder of each setting, internal (development) rows above the external (pooled) ones.
-    rows = ["Apparent", "Optimism-corrected", "Left-out patients,\nmodel", "Left-out patients,\nclinical only", "External cohorts,\nmodel",
+    rows = ["Apparent", "Subsample gap-\nadjusted", "Selection procedure,\nleft-out patients", "Left-out patients,\nclinical only", "External cohorts,\nmodel",
             "External cohorts,\nclinical only"]
     colours = [OPPOSITE, ROBUST, ML, MUTED, ML, MUTED]
     positions = np.arange(len(rows))[::-1].astype(float)
@@ -404,7 +462,7 @@ def figure_estimates() -> None:
     for setting in settings:
         signature, pooled = setting["signature"], setting["pooled"]
         headers.append((len(entries), setting["title"].split("\n")[0]))
-        entries.append(("Left-out patients", signature["signature_gain_left_out"], interval_bounds(signature.get("signature_gain_left_out_ci")),
+        entries.append(("Selection procedure (left-out)", signature["signature_gain_left_out"], interval_bounds(signature.get("signature_gain_left_out_ci")),
                         None, "o", ROBUST))
         if setting["case"] == "V":
             sites = held_out["held_out_gain_pooled"]
@@ -469,7 +527,7 @@ def figure_models() -> None:
     ax.scatter(table["c"][~reference], y[~reference], c=colours[~reference], s=16, zorder=3, edgecolor=INK, linewidth=0.4)
     ax.scatter(table["c"][reference], y[reference], marker="D", color=INK, s=14, zorder=3)
     ax.axvline(table.loc[reference, "c"].iloc[0], color=INK, lw=0.7, ls="--")
-    ax.set_yticks(y, table["model"])
+    ax.set_yticks(y, table["model"].replace({"DeepHit": "DeepHit variant"}))
     ax.tick_params(axis="y", length=0)
     ax.set_xlabel("C-index\n(95% bootstrap interval)")
     panel_label(ax, "a", x=-0.62, y=1.02)
@@ -506,9 +564,9 @@ def figure_simulation() -> None:
     ax = fig.add_subplot(grid[0, 0])
     y = np.arange(len(summary))[::-1]
     colours = [MUTED if scenario.startswith("null") else ML for scenario in summary.index]
-    # The Monte Carlo interval of a rate, cut at zero; the axis always holds the whole interval.
-    lower = np.maximum(summary["fwer"] - 1.96 * summary["fwer_mcse"], 0.0)
-    upper = summary["fwer"] + 1.96 * summary["fwer_mcse"]
+    # Binary replicate outcomes have Wilson intervals, including at 0/n and n/n.
+    intervals = np.array([binary_rate_interval(row.fwer, row.replicates) for row in summary.itertuples()])
+    lower, upper = intervals.T
     ax.errorbar(summary["fwer"], y, xerr=[summary["fwer"] - lower, upper - summary["fwer"]], fmt="none", ecolor=colours, lw=1)
     ax.scatter(summary["fwer"], y, c=colours, s=14, zorder=3, edgecolor=INK, linewidth=0.4)
     ax.axvline(0.05, color=OPPOSITE, lw=0.8, ls="--")
@@ -518,7 +576,7 @@ def figure_simulation() -> None:
     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(0.1))
     ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(0.05))
     ax.set_ylim(-0.6, len(summary) - 0.4)
-    ax.set_xlabel("Family-wise error rate\n(95% Monte Carlo interval)")
+    ax.set_xlabel("Any unlinked discoveries\n(95% Wilson Monte Carlo interval)")
     panel_label(ax, "a", x=-1.25, y=1.02)
 
     ax = fig.add_subplot(grid[0, 1])
@@ -541,7 +599,7 @@ def figure_simulation() -> None:
 
     ax = fig.add_subplot(grid[0, 2])
     scored = replicates[replicates["scenario"].isin(["alt_0.30_filter", "alt_0.45_filter"])].dropna(subset=["new_patients_c"])
-    estimates = [("apparent_c", "Apparent", OPPOSITE), ("corrected_c", "Corrected", ROBUST), ("left_out_c", "Left-out", ML)]
+    estimates = [("apparent_c", "Apparent", OPPOSITE), ("corrected_c", "Gap-adjusted", ROBUST), ("left_out_c", "Left-out", ML)]
     errors = [scored[column] - scored["new_patients_c"] for column, _, _ in estimates]
     positions = np.arange(len(estimates), 0, -1)
     parts = ax.boxplot(errors, positions=positions, orientation="horizontal", widths=0.55, patch_artist=True, showfliers=False,
@@ -562,10 +620,13 @@ def figure_simulation() -> None:
     ax.set_xlabel("C-index estimate minus\nC in new patients")
     ax.set_title("β 0.30 and 0.45, filter on", fontsize=7, color=MUTED, pad=4)
     panel_label(ax, "c", x=-0.62, y=1.02)
-    save(fig, "figS1_simulation")
+    save(fig, "figS1_simulation", derived_values={"rejection_rate_intervals": [
+        {"scenario": scenario, "rate": float(row.fwer), "independent_replicates": int(row.replicates),
+         "lower": float(bounds[0]), "upper": float(bounds[1]), "method": "pointwise 95% Wilson Monte Carlo interval"}
+        for (scenario, row), bounds in zip(summary.iterrows(), intervals)]})
 
 
-# ── Supplementary Figure S5: where the positive control's gain went ───────────
+# ── Supplementary Figure S5: ER-positive recurrence sensitivity ───────────────
 def figure_breast_er_sensitivity() -> None:
     folds = load("breast_er_sensitivity.csv").sort_values("held_out_site")
     summary = load("breast_er_sensitivity.json")
@@ -630,8 +691,8 @@ def figure_tier_replication() -> None:
     cases = list(summary["cases"].items())
     rows = [group for group in names if any(result["groups"].get(group, {}).get("evaluable") for _, result in cases)]
     position = dict(zip(rows, np.arange(len(rows))[::-1]))
-    fig, axes = plt.subplots(1, len(cases), figsize=(WIDE, 2.7), sharex=True, sharey=True,
-                             gridspec_kw={"wspace": 0.22, "left": 0.17, "right": 0.985, "top": 0.78, "bottom": 0.15})
+    fig, axes = plt.subplots(1, len(cases), figsize=(WIDE, 2.9), sharex=True, sharey=True,
+                             gridspec_kw={"wspace": 0.22, "left": 0.17, "right": 0.985, "top": 0.78, "bottom": 0.2})
     for ax, letter, (case, result) in zip(np.atleast_1d(axes), "abc", cases):
         for group, value in result["groups"].items():
             if not value["evaluable"]:
@@ -652,6 +713,7 @@ def figure_tier_replication() -> None:
                      loc="left", color=INK, linespacing=1.15)
         ax.set_xlabel("Genes replicated (%)")
         panel_label(ax, letter, x=-0.04, y=1.3)
+    fig.text(0.17, 0.025, "Binomial intervals are descriptive; genes can be correlated.", fontsize=7, color=MUTED)
     save(fig, "figS6_tier_replication")
 
 
@@ -679,14 +741,14 @@ def figure_breast_er_external() -> None:
         load("breast_er_external_validation.csv"), load("breast_er_external_pooled.json"), load("breast_er_external_markers.csv"),
         load("breast_er_markers_summary.json"), load("breast_er_locked_model.json"),
         gain_label="Gain in C over age, size, nodes, grade", robust_note="* robust in METABRIC ER+", name="figS4_breast_er_external",
-        events="relapses or metastases",
+        events="endpoint events", endpoint_labels=True,
     )
 
 
-def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: str, robust_note: str, name: str, events: str = "deaths") -> None:
+def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: str, robust_note: str, name: str, events: str = "deaths", endpoint_labels: bool = False) -> None:
     genes = list(recipe["markers"])
     rows = len(cohorts)
-    forest, heat = 0.2 * rows + 0.95, 0.19 * rows + 1.75
+    forest, heat = (0.28 if endpoint_labels else 0.2) * rows + 0.95, 0.19 * rows + 1.75
     height = forest + heat + 0.15
     fig = plt.figure(figsize=(WIDE, height))
     upper = fig.add_gridspec(1, 1, left=0.22, right=0.69, top=1 - 0.42 / height, bottom=1 - (forest - 0.05) / height)
@@ -696,7 +758,8 @@ def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: st
     ax = fig.add_subplot(upper[0, 0])
     delta = pooled["delta_c"]
     ax.set_xlim(*gain_limits([*cohorts["delta_lower"], *cohorts["delta_upper"], delta["hksj_ci_lower"], delta["hksj_ci_upper"]]))
-    labels = [f"{row.cohort} ({row.n}, {row.events})" for row in cohorts.itertuples()]
+    labels = [f"{row.cohort}\n{row.endpoint.upper()} ({row.n}, {row.events})" if endpoint_labels
+              else f"{row.cohort} ({row.n}, {row.events})" for row in cohorts.itertuples()]
     y = np.arange(rows)[::-1] + 1.5
     ax.errorbar(cohorts["delta_c"], y, xerr=[cohorts["delta_c"] - cohorts["delta_lower"], cohorts["delta_upper"] - cohorts["delta_c"]],
                 fmt="s", color=ML, ms=3.2, lw=0.9, capsize=0)
@@ -737,7 +800,8 @@ def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: st
     ax.imshow(matrix, cmap=colours, vmin=-0.5, vmax=3.5, aspect="auto")
     robust = set(summary["robust"])
     ax.set_xticks(range(len(genes)), [f"{gene}{'*' if gene in robust else ''}" for gene in genes], rotation=40, ha="right", rotation_mode="anchor")
-    ax.set_yticks(range(rows), list(cohorts["cohort"]))
+    ax.set_yticks(range(rows), [f"{row.cohort} ({row.endpoint.upper()})" if endpoint_labels else row.cohort
+                              for row in cohorts.itertuples()])
     ax.tick_params(length=0)
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -763,6 +827,46 @@ def external_figure(cohorts, pooled, markers, summary, recipe, *, gain_label: st
 
 # ── Figure 5: the pipelines commonly used to publish signatures, against SurvStudio ─
 OTHER = "#8a94a3"
+
+
+def binary_rate_interval(rate: float, replicates: int) -> tuple[float, float]:
+    """Pointwise 95% Wilson Monte Carlo interval for independent binary replicate outcomes.
+
+    A zero estimated standard error at 0/n or n/n does not imply certainty.
+    Refuse a fractional success count rather than treating dependent splits as trials.
+    """
+    if not np.isfinite(rate) or not 0 <= rate <= 1 or replicates <= 0 or int(replicates) != replicates:
+        raise ValueError("A binary Monte Carlo rate needs a finite probability and a positive integer denominator")
+    successes = round(rate * replicates)
+    if not math.isclose(rate * replicates, successes, abs_tol=1e-8, rel_tol=0):
+        raise ValueError("A binary Monte Carlo rate must correspond to an integer success count")
+    z = 1.959963984540054
+    denominator = 1 + z*z / replicates
+    centre = (rate + z*z / (2*replicates)) / denominator
+    radius = z * math.sqrt(rate*(1-rate)/replicates + z*z/(4*replicates*replicates)) / denominator
+    return max(0.0, centre-radius), min(1.0, centre+radius)
+
+
+def comparison_rate_interval(row: dict) -> dict:
+    """Keep the Monte Carlo unit at the independent simulated replicate.
+
+    The 35 overlapping 3+4 splits form a bounded mean within each replicate.
+    Hoeffding's pointwise interval is conservative and requires independent
+    replicate means; it remains nondegenerate when all observed means agree.
+    Completed-fit intervals and bounds for missing fits are distinct quantities.
+    """
+    rate, n = float(row["claim_rate"]), row["replicates"]
+    if not np.isfinite(rate) or not 0 <= rate <= 1 or n <= 0 or int(n) != n:
+        raise ValueError("Invalid completed-replicate Monte Carlo rate")
+    if row["approach"] == "P1 Mime" and str(row.get("design", "")).startswith("3 selection"):
+        radius = math.sqrt(math.log(2 / 0.05) / (2*n))
+        bounds = max(0.0, rate-radius), min(1.0, rate+radius)
+        method = "Hoeffding bound over independent replicate means; dependent splits stay within each replicate"
+    else:
+        bounds = binary_rate_interval(rate, n)
+        method = "Wilson score interval over independent binary replicate outcomes"
+    return {"lower": bounds[0], "upper": bounds[1], "method": method, "independent_replicates": int(n),
+            "coverage": "pointwise 95% Monte Carlo; conditions on completed fits"}
 
 
 def comparison_null_rows(rows: list[dict]) -> list[tuple[str, dict, bool]]:
@@ -806,25 +910,32 @@ def figure_comparison() -> None:
     table = load("competitors_table.json")
     null = comparison_null_rows(table["experiment_2"])
     real = comparison_real_rows(table["experiment_1"])
-    fig = plt.figure(figsize=(WIDE, 4.5))
-    grid = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.05], width_ratios=[1.0, 1.0], hspace=0.62, wspace=0.12,
+    fig = plt.figure(figsize=(WIDE, 5.1))
+    grid = fig.add_gridspec(2, 2, height_ratios=[1.25, 1.05], width_ratios=[1.0, 1.0], hspace=0.68, wspace=0.12,
                             left=0.3, right=0.985, top=0.93, bottom=0.1)
 
     # a: how often each approach makes its claim when no marker adds anything (script 06's null).
     ax = fig.add_subplot(grid[0, :])
     y = np.arange(len(null))[::-1]
+    intervals = []
     for position, (label, row, ours) in zip(y, null):
-        rate, mcse = 100 * float(row["claim_rate"]), 100 * float(row.get("claim_rate_mcse") or 0.0)
+        rate = 100 * float(row["claim_rate"])
+        interval = comparison_rate_interval(row)
+        intervals.append({"label": label, "rate": row["claim_rate"], **interval})
         ax.barh(position, rate, height=0.62, color=ROBUST if ours else OTHER)
-        if mcse > 0:
-            ax.plot([max(rate - 1.96 * mcse, 0), min(rate + 1.96 * mcse, 100)], [position, position], color=INK, lw=0.8)
-        ax.text(min(rate + 1.96 * mcse, 100) + 1.5, position, f"{rate:.1f}%" if rate < 10 else f"{rate:.0f}%", va="center", fontsize=7)
-    ax.set_yticks(y, [label for label, _, _ in null])
+        ax.plot([100*interval["lower"], 100*interval["upper"]], [position, position], color=INK, lw=0.8)
+        bounds = row.get("claim_rate_failure_bounds")
+        if bounds and bounds[1] > bounds[0]:
+            ax.plot([100 * bounds[0], 100 * bounds[1]], [position - 0.22, position - 0.22], color=MUTED, lw=3)
+        ax.text(100*interval["upper"] + 1.5, position, f"{rate:.1f}%" if rate < 10 else f"{rate:.0f}%", va="center", fontsize=7)
+    labels = [label + (f"\n{row['replicates']}/{row['planned_replicates']} completed" if row.get("planned_replicates") else "")
+              for label, row, _ in null]
+    ax.set_yticks(y, labels)
     ax.tick_params(axis="y", length=0)
     ax.set_xlim(0, 108)
     ax.set_xticks([0, 25, 50, 75, 100])
-    ax.set_xlabel("Null datasets in which the claim is made (%)")
-    ax.set_title("No marker adds to the clinical covariates (simulated on TCGA-LUAD)", loc="left", fontsize=7.5)
+    ax.set_xlabel("Claim rate among completed fits (%)\nThin: 95% MC (Wilson / Hoeffding); thick: bounds including failures")
+    ax.set_title("Different claims under a conditional marker null (TCGA-LUAD plasmode)", loc="left", fontsize=7.5)
     panel_label(ax, "a", x=-0.4)
 
     # b: the C-index each approach would report, against its C-index in the external cohorts.
@@ -880,10 +991,10 @@ def figure_comparison() -> None:
                        Line2D([], [], marker="o", color=OTHER, lw=1.2, ms=4, label="external (pooled)")],
               loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=2, fontsize=7, handlelength=1.4, columnspacing=1.0, borderaxespad=0.2)
     panel_label(ax, "c", x=-0.05)
-    save(fig, "fig5_comparison")
+    save(fig, "fig5_comparison", derived_values={"claim_rate_intervals": intervals})
 
 
-def main(wanted: set[str]) -> None:
+def main(wanted: set[str], *, available_only: bool = False) -> None:
     refused = {}
     if not wanted and not (RESULTS / "competitors_table.json").exists():
         # The comparison's results come from run_competitors.sh, which runs after run_all.sh; draw it once they exist.
@@ -900,6 +1011,13 @@ def main(wanted: set[str]) -> None:
         LOADED.clear()
         try:
             draw()
+        except FileNotFoundError as exc:
+            plt.close("all")
+            if not available_only:
+                raise
+            # Partial analyses can feed composite figures that also need another case study.
+            # Only an absent input is pending; stale or inconsistent existing results still fail.
+            print(f"pending: {name} (missing {exc.filename}; run the other contributing steps)")
         except (MixedResults, NotPrintable) as exc:
             refused[name] = exc.args[0]
         except KeyError as exc:
@@ -914,4 +1032,6 @@ def main(wanted: set[str]) -> None:
 
 
 if __name__ == "__main__":
-    main(set(sys.argv[1:]))
+    arguments = sys.argv[1:]
+    available_only = "--available" in arguments
+    main(set(arguments) - {"--available"}, available_only=available_only)

@@ -7,8 +7,11 @@ a reader should check a published marker claim:
    association (no covariates) and *added value* over the clinical baseline.
 2. Westfall–Young max-statistic permutation p-values over all markers (family-wise
    error) and permutation FDR q-values. The added-value null permutes the marker
-   residuals left after projecting on the clinical covariates, so it keeps each
-   marker's relationship with the clinical covariates. Permuting the residualised
+   residuals left after projecting on the clinical covariates. This approximates
+   a conditional null and requires exchangeable residuals; nonlinear relations
+   can invalidate calibration. A misspecified clinical Cox baseline, including
+   non-proportional hazards, can also invalidate conditional-null interpretation;
+   multiplicity adjustment does not establish model adequacy. Permuting the residualised
    regressor of interest is the Smith scheme (Winkler et al. 2014, NeuroImage
    92:381-397, Table 2), not Freedman–Lane, which permutes residuals of the outcome.
 3. The whole procedure rerun on subsamples: how often each marker is selected, its
@@ -94,8 +97,8 @@ class MarkerSettings(NamedTuple):
     # Markers with more than this share of patients at one value are left out before the screen. A gene
     # expressed in a few patients has a heavy-tailed score statistic, and the permutation maximum is then
     # made of such genes: in TCGA-LUAD RNA-seq its 95% point was chi-square 239 (about 25 without them)
-    # and no marker could pass. The filter never looks at the outcome, so error control is kept
-    # (independent filtering, Bourgon et al. 2010).
+    # and no marker could pass. The filter never looks at the outcome, but this alone
+    # does not establish error control: the permutation assumptions must also hold.
     max_mode_fraction: float = 0.9
     # In the benchmark pilot a 0.8 frequency kept 6% of true markers robust against 21% at
     # 0.5, with family-wise error at most 1% either way; direction 0.9 vs 0.95 made no difference.
@@ -1086,7 +1089,8 @@ def assign_tiers(
     * robust: step-down Westfall–Young p <= alpha on the primary lens, selected in at
       least ``robust_frequency`` of subsamples, and the same direction in at least
       ``robust_direction`` of them. Robust markers are a subset of the Westfall–Young
-      rejections, so they keep its family-wise error control.
+      rejections; family-wise error control requires a valid permutation null,
+      including exchangeability and the relevant subset-pivotality assumptions.
     * suggestive: primary-lens evidence (Westfall–Young p <= alpha or permutation FDR
       q <= ``fdr_level``) that is not stable enough to be robust; the selection
       frequency and direction consistency columns show why.
@@ -1517,6 +1521,12 @@ def evaluate_markers(
         "null": {
             "n_permutations": int(adjusted[primary]["n_permutations"]),
             "lens2_null": settings.lens2_null if primary == "added_value" else None,
+            "assumption_note": (
+                "Added-value residual permutation approximates a conditional null and assumes exchangeable residuals after linear adjustment. Nonlinear marker-covariate relations can inflate false positives; family-wise error control also requires subset pivotality. Clinical Cox baseline misspecification, including non-proportional hazards, can invalidate conditional-null interpretation; multiplicity adjustment does not establish model adequacy."
+                if primary == "added_value" and settings.lens2_null == "smith"
+                else "Permutation inference assumes exchangeability under the chosen null; strong family-wise error control also requires subset pivotality."
+                + (" Clinical Cox baseline misspecification can invalidate added-value interpretation; multiplicity adjustment does not establish model adequacy." if primary == "added_value" else "")
+            ),
         },
         "resampling": {
             "scheme": "event-stratified subsampling without replacement",
@@ -1533,8 +1543,11 @@ def evaluate_markers(
             # A model of the clinical covariates alone, because the procedure selected no marker.
             "clinical_only": signature is not None and signature.columns.size == 0,
             "apparent_c": apparent_c,
-            # Harrell-style correction: the full-cohort signature's apparent C minus the
-            # mean in-subsample vs left-out gap of the whole selection procedure.
+            # A heuristic subsampling gap adjustment: its train/left-out gap also
+            # reflects training size. This is not Harrell's bootstrap optimism estimate.
+            # Keep the original metric key for saved results and API clients.
+            "correction_method": "subsampling_train_vs_left_out_gap",
+            "correction_note": "The apparent C-index is adjusted by the mean train-versus-left-out gap of the whole selection procedure. This heuristic includes training-size effects; use locked external validation for final performance claims.",
             "optimism_corrected_c": None
             if apparent_c is None or resampling.optimism["signature_optimism"] is None
             else float(apparent_c - resampling.optimism["signature_optimism"]),

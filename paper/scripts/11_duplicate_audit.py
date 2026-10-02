@@ -18,8 +18,10 @@ Clinical identity alone with no expression signal (UPP_139B03 and UPP_84A44, r 0
 (development) and a validation cohort the bar is lower, because a shared patient there leaks into the validation:
 a gap of 0.15 with agreeing age and ER status suffices (two TRANSBIG samples from Guy's Hospital, which also
 supplied METABRIC, stand at 0.185 and 0.188; the next METABRIC match, with CAL, stands at 0.103). The confirmed pairs
-go to paper/breast_duplicate_pairs.csv, which the loader reads; every mutual best match goes to
-results/duplicate_audit.csv with its evidence.
+go to results/breast_duplicate_pairs_recomputed.csv; every mutual best match goes to
+results/duplicate_audit.csv with its evidence. The committed analysis input,
+paper/breast_duplicate_pairs.csv, is preserved. Compare identities and decisions before
+reviewing any deliberate input update; floating-point bytes can differ across environments.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ import re
 import numpy as np
 import pandas as pd
 
-from common import BREAST, DUPLICATE_GAP, PAPER, RESULTS, load_breast_cohort, matched_pairs, write_csv_atomic, write_json
+from common import BREAST, DUPLICATE_GAP, RESULTS, load_breast_cohort, matched_pairs, write_csv_atomic, write_json
 
 COHORTS = ["METABRIC", "CAL", "GSE58644", "NKI", "STNO2", "TRANSBIG", "UCSF", "UPP", "VDX"]
 DEVELOPMENT_GAP = 0.15
@@ -114,12 +116,13 @@ confirmed["key"] = [tuple(sorted((a, b))) for a, b in zip(confirmed["sample_a"],
 confirmed = confirmed.groupby("key", as_index=False).agg({
     "cohort_a": "first", "sample_a": "first", "cohort_b": "first", "sample_b": "first", "r": "max", "gap": "max",
     "annotated": "max", "by_gap": "max", "by_clinical_identity": "max", "by_sample_code": "max"}).drop(columns="key")
-confirmed.to_csv(PAPER / "breast_duplicate_pairs.csv", index=False)
+write_csv_atomic(confirmed, RESULTS / "breast_duplicate_pairs_recomputed.csv")
 write_csv_atomic(audit, RESULTS / "duplicate_audit.csv")
 
 by_cohorts = confirmed.groupby(["cohort_a", "cohort_b"]).size().rename("pairs").reset_index()
 write_json(RESULTS / "duplicate_audit_summary.json", {
     "gap": DUPLICATE_GAP, "cohorts": COHORTS, "size_kind": size_kind, "pairs": pairs,
+    "analysis_input_updated": False, "recomputed_pairs": "breast_duplicate_pairs_recomputed.csv",
     "confirmed": int(len(confirmed)),
     "confirmed_by": {column: int(confirmed[column].sum()) for column in ("annotated", "by_gap", "by_clinical_identity", "by_sample_code")},
     "confirmed_by_cohorts": by_cohorts.to_dict("records"),

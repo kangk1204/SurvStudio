@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The comparison with the pipelines commonly used to publish prognostic signatures (see competitors/README.md): P1 Mime,
-# P2 univariate Cox -> LASSO -> Cox and P3 KM Plotter's best cut-off, developed on TCGA-LUAD and validated in the seven
+# P2 univariate Cox -> LASSO -> Cox and P3's uncorrected best-cutoff screen, developed on TCGA-LUAD and validated in the seven
 # GEO cohorts of case study II (experiment 1), and their claims under script 06's plasmode null (experiment 2).
 #   bash run_competitors.sh                      every step: checks data real sensitivity null table
 #   bash run_competitors.sh real table           selected steps
@@ -23,7 +23,7 @@ MIME_REPLICATES="${MIME_REPLICATES:-50}"
 # The candidate caps of competitors.py (CANDIDATE_CAP, SENSITIVITY_CAP).
 MIME_CAP=100
 SENSITIVITY_CAP=500
-export RSCRIPT MIME_CAP OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+export RSCRIPT MIME_CAP MIME_REPLICATES OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 steps=("$@")
 [ ${#steps[@]} -eq 0 ] && steps=(checks data real sensitivity null table)
 work="$here/results/competitors"
@@ -54,12 +54,7 @@ for step in "${steps[@]}"; do
       python_step 18_competitors_null.py generate "$NULL_REPLICATES"
       seq 0 $((NULL_REPLICATES - 1)) | xargs -P "$WORKERS" -I{} bash "$here/competitors/null_replicate.sh" p2 {}
       seq 0 $((MIME_REPLICATES - 1)) | xargs -P "$WORKERS" -I{} bash "$here/competitors/null_replicate.sh" mime {}
-      # A replicate where Mime stopped with an error is left out; the next designs take its place.
-      next=$MIME_REPLICATES
-      while [ "$(ls "$work"/null/rep_*/mime/run.json 2>/dev/null | wc -l)" -lt "$MIME_REPLICATES" ] && [ "$next" -lt "$NULL_REPLICATES" ]; do
-        bash "$here/competitors/null_replicate.sh" mime "$next"
-        next=$((next + 1))
-      done
+      # Keep the fixed first MIME_REPLICATES designs, including failed fits; do not replace failures.
       python_step 18_competitors_null.py p3 "$WORKERS"
       python_step 18_competitors_null.py summarise ;;
     table) python_step 18_competitors_table.py; python_step figures.py comparison ;;

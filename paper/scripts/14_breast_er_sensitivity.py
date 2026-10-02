@@ -1,5 +1,6 @@
-"""Case study V, sensitivity: why did the positive control's gain shrink from 0.045 inside METABRIC to 0.009 in the
-external cohorts? Optimism of the internal estimate, or a shift between cohorts (platform, endpoint, treatment)?
+"""Case study V, sensitivity: compare internal procedure estimates with held-out sites and external cohorts.
+The comparisons diagnose differences; they do not identify optimism or platform, endpoint and treatment shifts
+as the cause of an internal-external gain difference.
 
 Fixed before the run:
 1. Leave one METABRIC site out (primary). METABRIC's ER-positive tumours come from five sites (cBioPortal COHORT).
@@ -8,10 +9,10 @@ Fixed before the run:
    model is applied to the held-out site. A patient without a site would never be held out and so would stay in
    every development set; the summary counts them (development_without_site). In the current data there are none:
    the 5 ER-positive tumours cBioPortal gives no site have no cBioPortal record at all, so no relapse-free survival.
-   Platform, endpoint and clinical definitions do not change, so a held-out gain close to the internal one points to
-   cohort shift, not optimism, for the external shrinkage. Markers are applied as measured (same platform); rescaled
-   within the site as a sensitivity. The internal gain is SurvStudio's paired left-out gain
-   (signature_gain_left_out).
+   Platform, endpoint and clinical definitions stay the same. Training size, fitted signatures and the held-out
+   population can still differ; similar gains do not establish the cause of any external performance change.
+   Markers are applied as measured (same platform); rescaled within the site as a sensitivity. The internal gain
+   is SurvStudio's paired left-out procedure gain (signature_gain_left_out).
 2. Endpoint (secondary): the five external cohorts of case study V pooled separately for relapse-free survival
    (NKI, TRANSBIG, UPP; the development endpoint) and distant metastasis-free survival (GSE58644, VDX).
 The held-out gains have bootstrap intervals from 2,000 resamples, as the external validations; every pooled gain is

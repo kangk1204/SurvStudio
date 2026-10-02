@@ -96,8 +96,8 @@ def test_remark_checklist_fills_in_what_the_run_knows() -> None:
         f"(mean difference {signature['signature_gain_left_out']:+.3f}, 95% CI {low:.3f} to {high:.3f})"
     ) in report["results"]
     assert "(Nadeau and Bengio 2003)" in report["methods"]
-    assert re.search(r"In the patients left out of each of \d+ subsamples, it reached a mean C-index", report["results"])
-    assert "the selected-marker model reached a mean C-index" in items["18"]["text"]
+    assert re.search(r"In the patients left out of each of \d+ subsamples, the whole selection procedure reached a mean C-index", report["results"])
+    assert "the whole selection procedure reached a mean C-index" in items["18"]["text"]
     assert "more than 90% of patients at one value were excluded" in report["methods"]
 
 

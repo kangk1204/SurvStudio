@@ -6,7 +6,8 @@ The pipelines, each developed on TCGA-LUAD and applied to the seven GEO cohorts 
   univariate-Cox candidate filter at p < 0.05, the candidates capped at the CANDIDATE_CAP smallest p-values;
 - P2 univariate Cox (p < 0.05) -> LASSO-Cox (glmnet, 10-fold CV, lambda.min) -> multivariable Cox of the selected
   genes, whose linear predictor is the risk score;
-- P3 KM Plotter's best-cutoff screen: for every gene, the minimum log-rank p over the cut-offs between its quartiles.
+- P3 uncorrected best-cutoff screen: for every gene, the minimum log-rank p over the cut-offs between its quartiles.
+  This is a stylised pipeline, not a reproduction of the current KM Plotter service, which documents FDR correction.
 
 Patients, outcomes and clinical covariates are those of case studies I and II (development_data, validation_data);
 the genes are case study I's, restricted to those every GEO cohort measures (gene_set), each z-scored within its
@@ -26,7 +27,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from common import CATEGORICAL, COVARIATES, GEO_COHORTS, LUAD, PAPER, RESULTS, SCRIPTS, XENA_EXPRESSION, random_effects
+from common import BOOTSTRAP_DRAWS, CATEGORICAL, COVARIATES, GEO_COHORTS, LUAD, PAPER, RESULTS, SCRIPTS, XENA_EXPRESSION, random_effects
 from survival_toolkit.marker_evaluation import (
     RECIPE_VERSION,
     _centred_baseline,
@@ -52,8 +53,8 @@ SENSITIVITY_CAP = 500
 # A gene is measured in a cohort when at most this share of the cohort's patients lack it (script 15's rule); the
 # rest take the cohort median.
 MAX_MISSING = 0.2
-# SurvStudio's bootstrap for external C-indices (validate_locked_recipe's defaults, used by script 03).
-N_BOOTSTRAP = 200
+# Match script 03's explicitly configured paper bootstrap, rather than the API's smaller default.
+N_BOOTSTRAP = BOOTSTRAP_DRAWS
 BOOTSTRAP_SEED = 20260926
 SELECTION_COHORTS = 3
 
@@ -255,7 +256,7 @@ def median_split(time: np.ndarray, event: np.ndarray, risk: np.ndarray) -> tuple
 
 
 def best_cutoff_scan(time: np.ndarray, event: np.ndarray, expression: np.ndarray, batch: int = 64) -> pd.DataFrame:
-    """KM Plotter's "auto select best cutoff" for every column: each value between the lower and upper quartiles
+    """Uncorrected best-cutoff screen for every column: each value between the lower and upper quartiles
     (numpy's default quantiles, R's type 7) as the cut-off, high expression above it, and the smallest log-rank p.
     Returns per column the minimum p, its cut-off, the hazard ratio (high against low) there, the number of cut-offs
     tried, and the log-rank p of the median cut for comparison."""
@@ -417,7 +418,8 @@ def external_gain(recipe: dict[str, Any], patients: pd.DataFrame, risk: np.ndarr
 
     frame = patients[["patient_id", "os_months", "os_event", *COVARIATES]].copy()
     frame["risk_score"] = np.asarray(risk, dtype=float)
-    return validation_row(validate_locked_recipe(frame, recipe, marker_scaling=scaling))
+    return validation_row(validate_locked_recipe(frame, recipe, marker_scaling=scaling,
+                                                 n_bootstrap=N_BOOTSTRAP, random_seed=BOOTSTRAP_SEED))
 
 
 def external_gain_point(recipe: dict[str, Any], patients: pd.DataFrame, risk: np.ndarray) -> float:

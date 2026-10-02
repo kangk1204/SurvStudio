@@ -517,8 +517,8 @@ cancer cohorts (5,955 patients), the screen found 15 of 21 confirmed repeated tu
 different patients.
 
 **Model and C-index.** A Cox model of the clinical covariates and the selected markers (at most the 10 strongest)
-is fitted. The evaluation reports its apparent C-index; an optimism-corrected C-index (the apparent value minus
-the mean difference between the whole procedure's C-index in each subsample and in the patients left out of it);
+is fitted. The evaluation reports its apparent C-index; a subsample gap-adjusted C-index (the apparent value minus
+the mean difference between the whole procedure's C-index in each subsample and in the patients left out of it; this heuristic includes training-size effects and is not Harrell's bootstrap optimism correction);
 the C-index in the left-out patients next to that of the clinical covariates alone, paired subsample by
 subsample, and their mean difference, the gain, with a 95% interval (the corrected resampled t interval of
 Nadeau and Bengio, which allows for the overlap between subsamples: `signature_gain_left_out_ci`, with
@@ -527,7 +527,7 @@ picking the strongest marker).
 
 **Summary figure and verdict.** The Markers tab opens its results with one figure: the number of markers that clear
 each bar (supplied, tested, p < 0.05, FDR q ≤ 0.05, family-wise p ≤ 0.05, robust; log scale for genome-wide
-panels) and the model's C-index from apparent to optimism-corrected to the left-out patients, beside the clinical
+panels) and the model's C-index from apparent to subsample gap-adjusted to the left-out patients, beside the clinical
 covariates alone, with the gain and its interval under the C-index ladder. The verdict card follows: Robust when
 at least one marker is robust and no repeated patients were flagged, otherwise Needs review. On added value it
 follows the gain's interval: little discrimination when the interval lies below 0.02, added discrimination when
@@ -578,11 +578,9 @@ measure are held at their development median, and the report gives the share of 
 
 **Case study.** In TCGA-LUAD (484 patients with RNA-seq, 177 deaths), adjusted for age, sex and stage, 5 of 19,112
 tested genes were robust (DKK1, NTSR1, TLE1, CTCFL, FAM117A). The ten-gene model had an apparent C-index of 0.749
-and an optimism-corrected C-index of 0.650; in the left-out patients it reached 0.658 against 0.656 for age, sex
+and a subsample gap-adjusted C-index of 0.650; in the left-out patients it reached 0.658 against 0.656 for age, sex
 and stage alone. Locked and applied to seven GEO microarray cohorts (1,509 patients, 573 deaths, rescaled within
-each cohort), it reached a pooled C-index of 0.665 against 0.661 for the clinical covariates alone. The corrected
-estimate, not the apparent one, anticipated the external result, and the left-out comparison anticipated that the
-genes add little beyond the clinical covariates.
+each cohort), it reached a pooled C-index of 0.665 against 0.661 for the clinical covariates alone. This historical development example is re-evaluated by the paper scripts; its gap-adjusted estimate does not establish general correction accuracy, and the gain and its uncertainty must be assessed per external cohort.
 
 **REMARK checklist.** `Export → REMARK checklist` (Word or Markdown) holds the methods and results paragraphs of
 the run and the 20 REMARK items, each marked as filled in by SurvStudio, partly filled in, or for the authors to
@@ -661,8 +659,7 @@ Architecture and training:
 - `Batch Size` affects DeepHit and Neural MTLR only. DeepSurv, the Transformer and the VAE use full-batch
   optimization, and the run metadata reports the effective full-batch size.
 - Adam optimizers use light L2 regularization (`weight_decay=1e-4`) and gradient clipping.
-- DeepHit ranks the predicted cumulative incidence at each event time (Lee et al., 2018), including subjects
-  censored in the same time bin, with a stabilized ranking-loss scale (`sigma=1.0`).
+- DeepHit is a modified single-event variant: it ranks cumulative incidence using a softplus pairwise ranking penalty with `sigma=1.0` and discrete-bin comparable pairs. These choices differ from the original exponential ranking loss (Lee et al., 2018). Label this implementation as a variant in comparisons with the canonical algorithm.
 - Neural MTLR uses a neuralized right-cumulative MTLR parameterization with its censored likelihood evaluated in
   log space; it matches the canonical MTLR probability construction, while the network and training path are a
   practical SurvStudio implementation rather than a clone of one reference code base.
@@ -812,8 +809,7 @@ events.
   Markers tab as a marker file; the ML and DL models keep the 1,000-feature limit.
 - Unpenalized Cox is not the right tool for very wide (p >> n) settings; use LASSO-Cox for penalized predictive
   screening.
-- External validation in the web interface covers the locked marker model. For Cox and prediction models, load the
-  other cohort, reproduce the endpoint and covariates, and rerun the analysis.
+- External validation in the web interface covers the locked marker model. Reloading another cohort and rerunning Cox or prediction models re-derives a model; it does not validate the locked development model. Portable frozen export is currently available only for the marker recipe.
 - Martingale residual plots are a visual screen; there is no spline recommendation or automated term selection.
 
 ## 13. Development and testing
@@ -852,3 +848,5 @@ loads in order and that share one global scope; only `app.js`, loaded last, runs
 - Changes: [RELEASE_NOTES.md](../RELEASE_NOTES.md)
 - How to cite: [CITATION.cff](../CITATION.cff)
 - Licence: MIT, see [LICENSE](../LICENSE)
+
+Residual permutation assumes exchangeable marker residuals after linear clinical adjustment and subset pivotality for strong family-wise control. Nonlinear marker-covariate relations can inflate false positives. The corrected resampled t interval is an approximation; survival-specific coverage must be checked rather than inferred from its formula.

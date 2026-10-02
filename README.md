@@ -13,7 +13,7 @@ leave your computer.
   with confidence intervals, with checks of the model's assumptions.
 - **Table 1.** Describe your patients, overall or by group, in a table ready for a paper.
 - **Candidate markers.** Check up to 60,000 candidate markers (for example gene expression) against clinical
-  factors such as age and stage: the false positives are controlled across all markers, stability is checked on
+  factors such as age and stage: multiplicity-adjusted tests are reported across all markers, stability is checked on
   resampled patients, and the model is locked and validated in another cohort.
 - **Prediction models.** Compare Cox, penalized Cox, random survival forests, gradient boosting and deep-learning
   models fairly: all are trained and tested on the same patients, and the differences come with intervals.
@@ -171,24 +171,28 @@ value over 3 clinical covariates". Keep the default settings (1,000 permutations
 
 **4. Read the summary figure.** The left panel counts the markers that clear each bar, from the 20,530 supplied
 and the 19,112 tested (genes expressed in very few patients are left out) down to those that pass every check.
-3,404 genes have p < 0.05 and 306 pass the false discovery rate, but only 5 pass the family-wise test, which
-keeps the chance of even one false positive among all 19,112 at 5%, and all 5 are stable enough to be robust.
-The right panel shows the C-index of a model with the clinical covariates and the selected genes:
+3,404 genes have p < 0.05 and 306 pass the false discovery rate, but only 5 pass the family-wise test at the
+nominal 5% threshold, and all 5 meet the internal stability criteria. Error control depends on the residual
+permutation assumptions; the robust tier still requires independent validation.
+The right panel distinguishes the full-cohort model from repeated selection and refitting:
 
-- **Apparent** (0.749): measured on the same patients the genes were chosen in. Always too optimistic.
-- **Optimism-corrected** (0.650): the expected value in new patients.
+- **Apparent** (0.749): measured on the same patients the genes were chosen in, which can overstate performance in new patients.
+- **Subsample gap-adjusted** (0.650): apparent C minus the mean training-to-left-out gap. This heuristic includes training-size effects and is not a Harrell bootstrap correction or a guarantee of performance in new patients.
 - **Left-out patients** (0.658) against **Clinical only** (0.656): both measured in patients left out of each
-  subsample. The note under the panel gives their difference, the gain, with its 95% interval: +0.002 (-0.042 to
-  0.046). The genes add almost nothing beyond age, sex and stage, and at most about 0.05.
+  subsample, after choosing genes and refitting in that subsample. These estimates assess the selection procedure.
+  The note gives the mean gain and its approximate 95% interval: +0.002 (-0.042 to 0.046). Coverage for the survival
+  selection procedure has not been established. The interval is compatible with no gain and with a gain up to about
+  0.05; these data do not establish equivalence. Validate the locked final model independently.
 
 ![Summary figure: markers clearing each bar, and the C-index from apparent to left-out beside clinical only](github_images/markers_summary.png)
 
 **5. Read the verdict.** The card below the figure gives the verdict and the cautions that matter most. Here it says
-**Robust**: 5 of 19,112 genes (DKK1, NTSR1, TLE1, CTCFL and FAM117A) hold up beyond the clinical covariates. The
-cautions add that the apparent C-index is optimistic by 0.099 and that the gain over the clinical covariates is
+**Robust**: 5 of 19,112 genes (DKK1, NTSR1, TLE1, CTCFL and FAM117A) meet the internal adjusted-test and stability
+criteria. The cautions give the procedure's mean training-to-left-out gap of 0.099 and say that its internal gain is
 uncertain: its interval includes both no gain and a gain of 0.02 or more. SurvStudio calls the gain little only
-when the whole interval lies below 0.02, and real when it lies above 0. **More detail** lists what was checked and
-the next steps.
+when the whole interval lies below the display threshold of 0.02; an interval above 0 suggests added discrimination
+internally. The threshold is a display convention, not a clinical utility threshold. Without an interval, the gain
+is reported without a claim of added discrimination. **More detail** lists what was checked and the next steps.
 
 ![Verdict card: 5 of 19,112 markers are robust beyond the clinical covariates, with two cautions](github_images/markers_verdict.png)
 
@@ -205,8 +209,10 @@ The file used here is in the repository: [examples/gse68465_validation_example.c
 Under **Validate in another cohort**, choose that file. For data measured on another platform (here microarrays
 against RNA sequencing), choose **Another platform (rescale within cohort)**, then click **Validate**. The
 screenshot shows 429 patients of the GEO cohort GSE68465: the locked model reached a C-index of 0.699 against 0.698
-for the clinical covariates alone, so no added value, as step 4 predicted. Two of the six genes measured there
-replicated (TLE1 and FAM117A).
+for the clinical covariates alone: a small observed gain in this cohort, which does not establish equivalence.
+The rescaling uses the external cohort's feature distribution, so this evaluation represents adaptation across
+platforms at cohort level. Deployment to individual new patients requires a prespecified preprocessing policy.
+Two of the six genes measured there replicated under the example's rule (TLE1 and FAM117A).
 
 ![Validation of the locked model in GSE68465: C-index beside the clinical covariates, and each gene's hazard ratio](github_images/markers_validation.png)
 
@@ -261,7 +267,7 @@ too. `.gz` files can be attached as downloaded.
   confidence interval (CI) includes 1, the data are compatible with no effect.
 - **C-index.** How well a model ranks patients: for two patients, the chance that the one with the higher
   predicted risk has the event first. 0.5 is a coin toss and 1 is perfect. An apparent C-index, measured on the
-  patients the model was built on, is too high; report the optimism-corrected or externally validated value.
+  patients the model was built on, can be optimistic; report internal estimates and externally validated values with their limitations.
 - **Marker tiers.**
   - *Robust*: passes the family-wise test (p ≤ 0.05 after allowing for all markers tested), is selected in at least
     half of 200 random subsamples of the patients, and has the same direction in at least 90% of them.
@@ -271,8 +277,10 @@ too. `.gz` files can be attached as downloaded.
   - *Not supported*: no evidence after the error control. Small real effects can still hide here.
 - **Added value over clinical covariates.** Whether a marker tells you something about survival that age, sex and
   stage do not already tell you. This is the test that matters for a prognostic claim. SurvStudio measures it as
-  the gain in C-index over the clinical covariates in patients left out of the subsamples, with a 95% interval:
-  little added value when the interval lies below 0.02, added value when it lies above 0, uncertain otherwise.
+  the gain in C-index over the clinical covariates in patients left out of subsamples after repeated selection and
+  refitting, with an approximate 95% interval. The display reports a small internal gain when the interval lies below
+  0.02, suggests internal added discrimination when it lies above 0, and otherwise reports uncertainty. Validate the
+  locked model independently before a final prognostic claim.
 - **Cautions and "Needs review".** Cautions list what weakens the result (optimism, little added value, missing
   data, repeated patients). The verdict reads **Needs review** when no marker is robust or when two samples look
   like the same patient; then treat the markers as hypotheses, or keep one sample per patient and run again.
@@ -286,9 +294,10 @@ Sentences that report these results without overclaiming:
 > stage I (HR 3.30, 95% CI 2.21 to 4.92).
 
 > Of 19,112 genes, five passed family-wise error control and were stable across 200 subsamples. A model with the
-> selected genes had an optimism-corrected C-index of 0.650; in patients left out of the subsamples it reached
-> 0.658, against 0.656 for age, sex and stage alone (gain 0.002, 95% CI -0.042 to 0.046), so the genes added no
-> clear prognostic information beyond these factors.
+> selected genes had a heuristic subsample gap-adjusted C-index of 0.650. Repeating selection and refitting in
+> each subsample gave a mean left-out C-index of 0.658, against 0.656 for age, sex and stage alone (gain 0.002,
+> approximate 95% CI -0.042 to 0.046). Internal evaluation did not demonstrate added discrimination; the locked
+> model requires independent validation.
 
 ## Troubleshooting
 
@@ -316,3 +325,5 @@ Sentences that report these results without overclaiming:
 - How to cite: see [CITATION.cff](CITATION.cff), or **Cite this repository** on the GitHub page.
 - Licence: [MIT](LICENSE).
 - Changes: [RELEASE_NOTES.md](RELEASE_NOTES.md).
+
+The marker residual permutation assumes exchangeable residuals after linear adjustment for the clinical covariates. Nonlinear or heteroscedastic relations and censoring assumptions require sensitivity checks; a family-wise adjusted p-value does not establish universal error control. The internal gain interval is the approximate corrected resampled t interval. The paper's diagnostic assesses coverage against the final fitted model's new-patient gain; it does not establish coverage for selection and refitting at the subsample training size.

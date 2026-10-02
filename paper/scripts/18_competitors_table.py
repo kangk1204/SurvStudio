@@ -34,10 +34,10 @@ def experiment_1(real: dict) -> list[dict]:
     suggestive = survstudio["tiers_replication"].get("suggestive", {})
     rows.append({
         "approach": "SurvStudio", "design": "case studies I-II: marker evaluation on TCGA, locked model applied unchanged to the seven cohorts",
-        "claim": "robust markers (FWER <= 0.05 beyond age, sex and stage, stable over 200 subsamples); locked 10-marker model with its optimism-corrected C and left-out gain over the clinical model",
+        "claim": "markers meeting internal adjusted-p and stability criteria beyond age, sex and stage; locked 10-marker model with a heuristic subsample gap-adjusted C and the selection procedure's left-out gain",
         "genes_claimed": len(survstudio["robust_genes"]), "training_c": survstudio["apparent_c"],
-        "reported_c": survstudio["optimism_corrected_c"], "reported_c_meaning": "optimism-corrected C (apparent 0.749)",
-        "reported_gain": survstudio["left_out_gain"], "reported_gain_meaning": "paired left-out gain over the clinical model in subsamples",
+        "reported_c": survstudio["optimism_corrected_c"], "reported_c_meaning": "heuristic subsample gap-adjusted C (apparent 0.749)",
+        "reported_gain": survstudio["left_out_gain"], "reported_gain_meaning": "paired left-out gain of repeated selection and refitting over the clinical model",
         "reported_gain_lower": (survstudio.get("left_out_gain_ci") or [None, None])[0],
         "reported_gain_upper": (survstudio.get("left_out_gain_ci") or [None, None])[1],
         "external_c": external["model_c"]["estimate"], "external_c_lower": external["model_c"]["ci_lower"], "external_c_upper": external["model_c"]["ci_upper"],
@@ -46,7 +46,7 @@ def experiment_1(real: dict) -> list[dict]:
         **hksj("external_c", external["model_c"]), **hksj("gain", external["delta_c"]),
         "genes_replicated": robust.get("replicated"), "genes_evaluable": robust.get("evaluable"),
         "replicated_share": robust.get("rate"),
-        "warns_about_optimism": "yes: reports the optimism-corrected C, the paired left-out gain over the clinical model and evidence tiers",
+        "warns_about_optimism": "yes: reports the heuristic subsample gap-adjusted C, the selection procedure's paired left-out gain and internal evidence tiers",
         "notes": f"suggestive tier: {suggestive.get('replicated')}/{suggestive.get('evaluable')} replicated; external C with markers rescaled within each cohort",
     })
     same = real.get("SurvStudio_same_genes")
@@ -57,8 +57,8 @@ def experiment_1(real: dict) -> list[dict]:
             "design": f"as case studies I-II, on the {same['genes']} genes every cohort measures (the other approaches' genes)",
             "claim": f"{len(same['robust_genes'])} robust markers; locked {len(same['signature_markers'])}-marker model",
             "genes_claimed": len(same["robust_genes"]), "training_c": same["apparent_c"],
-            "reported_c": same["optimism_corrected_c"], "reported_c_meaning": "optimism-corrected C",
-            "reported_gain": same["left_out_gain"], "reported_gain_meaning": "paired left-out gain over the clinical model in subsamples",
+            "reported_c": same["optimism_corrected_c"], "reported_c_meaning": "heuristic subsample gap-adjusted C",
+            "reported_gain": same["left_out_gain"], "reported_gain_meaning": "paired left-out gain of repeated selection and refitting over the clinical model",
             "reported_gain_lower": (same.get("left_out_gain_ci") or [None, None])[0],
             "reported_gain_upper": (same.get("left_out_gain_ci") or [None, None])[1],
             "external_c": external["model_c"]["estimate"], "external_c_lower": external["model_c"]["ci_lower"],
@@ -126,15 +126,17 @@ def experiment_1(real: dict) -> list[dict]:
         "notes": "gene replication by script 15's rule in the direction of each gene's multivariable coefficient",
     })
     p3 = real["P3"]
-    for key, label, rule in (("claimed_p05", "P3 best cut-off (p < 0.05)", "uncorrected, KM Plotter's default"),
-                             ("claimed_bonferroni", "P3 best cut-off (Bonferroni)", f"p < 0.05 / {p3['genes_scanned']}")):
+    for key, label, rule in (("claimed_p05", "P3 best cut-off (uncorrected)", "uncorrected minimum p"),
+                             ("claimed_bonferroni", "P3 best cut-off (gene-only Bonferroni)", f"minimum p < 0.05 / {p3['genes_scanned']}")):
         share = p3[key]
         rows.append({
             "approach": label, "design": f"minimum log-rank p over the cut-offs between the quartiles of each of {p3['genes_scanned']} genes on TCGA",
             "claim": f"{share['claimed']} prognostic genes ({rule})", "genes_claimed": share["claimed"],
             "genes_replicated": share["replicated"], "genes_evaluable": share["evaluable"], "replicated_share": share["rate"],
             "warns_about_optimism": "no",
-            "notes": "replication: script 15's rule (clinically adjusted, pooled over the seven cohorts, the cut-off's direction)",
+            "notes": "stylised screen, not the current KM Plotter service; the gene-only threshold does not correct "
+                     "cut-off searching. Replication: script 15's rule (clinically adjusted, pooled over the seven "
+                     "cohorts, the cut-off's direction)",
         })
     return rows
 
@@ -144,19 +146,31 @@ def experiment_2(null: dict) -> list[dict]:
     survstudio = null.get("SurvStudio", {})
     subsamples = survstudio.get("null_with_subsamples")
     rows.append({
-        "approach": "SurvStudio", "claim": "at least one marker declared (FWER <= 0.05 beyond the clinical covariates)",
+        "approach": "SurvStudio", "claim": "at least one marker declared (family-wise adjusted p <= 0.05 beyond the clinical covariates)",
         "claim_rate": survstudio.get("fwer"), "claim_rate_mcse": survstudio.get("fwer_mcse"), "replicates": survstudio.get("replicates"),
+        "planned_replicates": survstudio.get("planned_replicates"),
+        "claim_rate_failure_bounds": survstudio.get("fwer_failure_bounds"),
         "mean_claimed": survstudio.get("false_per_replicate"),
         "notes": "script 06 (null with the near-constant filter, 2,000 genes per replicate); the null with subsamples: "
                  + ("the next row" if subsamples else "not yet available"),
     })
     if subsamples:
+        completed = subsamples.get("gain_interval_replicates")
+        planned = subsamples.get("planned_replicates")
+        share = subsamples.get("verdict_adds")
+        bounds = None
+        if completed is not None and planned and share is not None:
+            successes = round(share * completed)
+            bounds = [successes / planned, (successes + planned - completed) / planned]
         rows.append({
             "approach": "SurvStudio", "design": "script 06's null with 100 subsamples per replicate (null_filter_subsamples)",
             "claim": "the gain verdict 'adds' (the paired left-out gain's interval above 0)",
-            "claim_rate": subsamples.get("verdict_adds"), "replicates": subsamples.get("replicates"),
+            "claim_rate": share, "replicates": completed,
+            "claim_rate_mcse": ((share * (1 - share) / completed) ** 0.5 if share is not None and completed else None),
+            "planned_replicates": planned, "claim_rate_failure_bounds": bounds,
             "notes": (f"verdicts: adds little {subsamples.get('verdict_adds_little')}, uncertain {subsamples.get('verdict_uncertain')}; "
-                      f"FWER {subsamples.get('fwer')}; gain interval coverage {subsamples.get('gain_coverage')}; SurvStudio "
+                      f"FWER {subsamples.get('fwer')}; coverage against fitted full-model gain {subsamples.get('gain_coverage')} "
+                      "is a diagnostic, not selection-procedure coverage; SurvStudio "
                       f"{(subsamples.get('survstudio') or {}).get('commit')}"),
         })
     if "P1" in null:
@@ -170,12 +184,17 @@ def experiment_2(null: dict) -> list[dict]:
                 "truth_c_mean": entry["truth_honest_c"]["mean"], "truth_gain_mean": entry["truth_gain"]["mean"],
                 "km_p05_in_a_selection_cohort": entry["selection_km_p05_any"]["rate"],
                 "claim_not_holding": (entry.get("claim_not_holding") or {}).get("rate"),
+                "claim_rate_failure_bounds": entry["reported_c_at_least_claim"].get("failure_bounds"),
+                "planned_replicates": entry["reported_c_at_least_claim"].get("planned_replicates"),
+                "notes": "Rates condition on completed fits; the bounds retain all planned designs, including failed or missing fits. These selection-cohort claims are not conditional-null FWER estimates.",
             })
     if "P2" in null:
         entry = null["P2"]
         rows.append({
             "approach": "P2 uni-Cox -> LASSO -> Cox", "claim": "at least one gene selected and training median-split log-rank p < 0.05",
             "claim_rate": entry["claim_training_p05"]["rate"], "claim_rate_mcse": entry["claim_training_p05"]["mcse"], "replicates": entry["replicates"],
+            "planned_replicates": entry["claim_training_p05"].get("planned_replicates"),
+            "claim_rate_failure_bounds": entry["claim_training_p05"].get("failure_bounds"),
             "mean_claimed": entry["selected_genes"]["mean"],
             "external_p05_any": (entry.get("external_p05_any") or {}).get("rate"),
             "external_p05_claimed_direction": (entry.get("external_p05_claimed_direction") or {}).get("rate"),
@@ -187,6 +206,8 @@ def experiment_2(null: dict) -> list[dict]:
         rows.append({
             "approach": "P3 best cut-off", "claim": "at least one gene with best-cutoff log-rank p < 0.05",
             "claim_rate": entry["any_gene_p05"]["rate"], "claim_rate_mcse": entry["any_gene_p05"]["mcse"], "replicates": entry["replicates"],
+            "planned_replicates": entry["any_gene_p05"].get("planned_replicates"),
+            "claim_rate_failure_bounds": entry["any_gene_p05"].get("failure_bounds"),
             "mean_claimed": entry["genes_p05"]["mean"],
             "notes": (f"of {entry['genes']} genes; Bonferroni: at least one gene in {entry['any_gene_bonferroni']['rate']:.0%} of replicates "
                       f"(mean {entry['genes_bonferroni']['mean']:.1f}); median cut instead: mean {entry['median_cut_genes_p05']['mean']:.0f} genes at p < 0.05; "

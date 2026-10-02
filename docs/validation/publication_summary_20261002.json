@@ -1,0 +1,837 @@
+{
+  "schema": "SurvStudio publication audit aggregate summary 1",
+  "date": "2026-10-02",
+  "scope": "Completed fixed computations and independent numerical checks; not a claim of clinical utility or human usability.",
+  "numerical_source": "3e0c4af142e7afc005f3a9bfb28e23c99c203ff7",
+  "repaired_postprocessor_source": "c1b8908a618f7593944b3960ee29f101b8e6f5d8",
+  "rendering_source": "83fa6458ee8e7afc9663e0aa8d0bc3f359a242f3",
+  "calibration_source": "adfc187a00bca7db4721430cb5ac4341c0cadda1",
+  "completed": {
+    "expanded_datasets": 16000,
+    "additional_nonph_datasets": 4000,
+    "plasmode_replicates": 2300,
+    "seed_tasks": 60,
+    "mime_null_designs": 50,
+    "P2_null_designs": 200,
+    "P3_null_designs": 200,
+    "human_participants": 0,
+    "print_export_sets": 12,
+    "png_pdf_svg_exports": 36
+  },
+  "external_gains": {
+    "I": {
+      "estimate": 0.0001181163370842546,
+      "ci_lower": -0.032178176222186106,
+      "ci_upper": 0.03241440889635462,
+      "tau2": 0.000699723851567896,
+      "q": 10.194769096037046,
+      "k": 7,
+      "hksj_ci_lower": -0.041323347272592084,
+      "hksj_ci_upper": 0.0415595799467606,
+      "hksj_scale": 1.0564290214914889,
+      "pi_lower": -0.07999329259859389,
+      "pi_upper": 0.08022952527276239
+    },
+    "IV": {
+      "estimate": 0.004436294810655297,
+      "ci_lower": -0.030800310130992933,
+      "ci_upper": 0.03967289975230352,
+      "tau2": 0.0,
+      "q": 0.03301021194106389,
+      "k": 3,
+      "hksj_ci_lower": -0.07291619214816417,
+      "hksj_ci_upper": 0.08178878176947477,
+      "hksj_scale": 0.016505105970531946,
+      "pi_lower": -0.2239940707996954,
+      "pi_upper": 0.232866660421006
+    },
+    "V": {
+      "estimate": 0.008240251453836864,
+      "ci_lower": -0.02558324962934531,
+      "ci_upper": 0.042063752537019036,
+      "tau2": 0.0003448858579984664,
+      "q": 5.205115928230494,
+      "k": 5,
+      "hksj_ci_lower": -0.03977879003457163,
+      "hksj_ci_upper": 0.056259292942245354,
+      "hksj_scale": 1.0044395731964981,
+      "pi_lower": -0.07243875145872783,
+      "pi_upper": 0.08891925436640155
+    }
+  },
+  "seed_summary": {
+    "I": {
+      "label": "TCGA-LUAD, overall survival",
+      "seeds": 20,
+      "patients": 484,
+      "events": 177,
+      "numbers": {
+        "apparent_c": {
+          "mean": 0.749295405387691,
+          "sd": 1.1390647892519134e-16,
+          "min": 0.7492954053876909,
+          "max": 0.7492954053876909,
+          "seeds": 20
+        },
+        "corrected_c": {
+          "mean": 0.653411993673833,
+          "sd": 0.004524264332542196,
+          "min": 0.6447957958496662,
+          "max": 0.6610456307088504,
+          "seeds": 20
+        },
+        "left_out_c": {
+          "mean": 0.6584667249457367,
+          "sd": 0.0028684397882854096,
+          "min": 0.6516764829923178,
+          "max": 0.6620213133266181,
+          "seeds": 20
+        },
+        "clinical_left_out_c": {
+          "mean": 0.6565220224179221,
+          "sd": 0.0030680854610603005,
+          "min": 0.6513606514930801,
+          "max": 0.6624938696950395,
+          "seeds": 20
+        },
+        "gain": {
+          "mean": 0.0019447025278146186,
+          "sd": 0.002525150841919133,
+          "min": -0.004667454019765725,
+          "max": 0.005685697392206284,
+          "seeds": 20
+        },
+        "gain_lower": {
+          "mean": -0.04371143262439208,
+          "sd": 0.0035951866206555202,
+          "min": -0.05274705822639594,
+          "max": -0.0390651283775199,
+          "seeds": 20
+        },
+        "gain_upper": {
+          "mean": 0.04760083768002133,
+          "sd": 0.0034725308889738257,
+          "min": 0.040291206854310604,
+          "max": 0.05229433386146583,
+          "seeds": 20
+        },
+        "fwer": {
+          "mean": 5.05,
+          "sd": 0.22360679774997894,
+          "min": 5.0,
+          "max": 6.0,
+          "seeds": 20
+        },
+        "robust": {
+          "mean": 5.05,
+          "sd": 0.22360679774997894,
+          "min": 5.0,
+          "max": 6.0,
+          "seeds": 20
+        },
+        "suggestive": {
+          "mean": 446.3,
+          "sd": 17.001857483661507,
+          "min": 417.0,
+          "max": 473.0,
+          "seeds": 20
+        }
+      },
+      "gain_interval_reported": true,
+      "locked_gene_seeds": {
+        "DKK1": 20,
+        "NTSR1": 20,
+        "TLE1": 20,
+        "CTCFL": 20,
+        "FAM117A": 20,
+        "MYLIP": 20,
+        "IRX5": 20,
+        "EPGN": 20,
+        "GNPNAT1": 20,
+        "LOC441869": 20
+      },
+      "distinct_locked_models": 1,
+      "default_seed": {
+        "compared": true,
+        "matches": true,
+        "differences": {
+          "apparent_c": 0.0,
+          "corrected_c": 0.0,
+          "left_out_c": 0.0,
+          "clinical_left_out_c": 0.0,
+          "gain": 0.0,
+          "fwer": 0.0,
+          "robust": 0.0,
+          "suggestive": 0.0
+        },
+        "same_locked_genes": true
+      }
+    },
+    "IV": {
+      "label": "METABRIC, overall survival",
+      "seeds": 20,
+      "patients": 1846,
+      "events": 714,
+      "numbers": {
+        "apparent_c": {
+          "mean": 0.7117931888039333,
+          "sd": 1.1390647892519134e-16,
+          "min": 0.7117931888039334,
+          "max": 0.7117931888039334,
+          "seeds": 20
+        },
+        "corrected_c": {
+          "mean": 0.6684322002925359,
+          "sd": 0.0009392882630124452,
+          "min": 0.6668003069629079,
+          "max": 0.6700430539328632,
+          "seeds": 20
+        },
+        "left_out_c": {
+          "mean": 0.6744806116109443,
+          "sd": 0.0008209434671965896,
+          "min": 0.6732682146326483,
+          "max": 0.6760011897781031,
+          "seeds": 20
+        },
+        "clinical_left_out_c": {
+          "mean": 0.6666357455021157,
+          "sd": 0.0007776515435134692,
+          "min": 0.6649008644755924,
+          "max": 0.667939921078206,
+          "seeds": 20
+        },
+        "gain": {
+          "mean": 0.00784486610882862,
+          "sd": 0.0009827310035327608,
+          "min": 0.005606989406023794,
+          "max": 0.009422530656948383,
+          "seeds": 20
+        },
+        "gain_lower": {
+          "mean": -0.00853634863280193,
+          "sd": 0.0013027255019318828,
+          "min": -0.011888976603976288,
+          "max": -0.006732203005001191,
+          "seeds": 20
+        },
+        "gain_upper": {
+          "mean": 0.02422608085045917,
+          "sd": 0.0011087316178836023,
+          "min": 0.021904166569943793,
+          "max": 0.02632385031471871,
+          "seeds": 20
+        },
+        "fwer": {
+          "mean": 20.1,
+          "sd": 0.5525062514530825,
+          "min": 19.0,
+          "max": 22.0,
+          "seeds": 20
+        },
+        "robust": {
+          "mean": 20.05,
+          "sd": 0.39403446282620613,
+          "min": 19.0,
+          "max": 21.0,
+          "seeds": 20
+        },
+        "suggestive": {
+          "mean": 669.6,
+          "sd": 15.729288805149123,
+          "min": 641.0,
+          "max": 709.0,
+          "seeds": 20
+        }
+      },
+      "gain_interval_reported": true,
+      "locked_gene_seeds": {
+        "ENC1": 20,
+        "CDCA5": 20,
+        "SUSD3": 20,
+        "CFL1": 20,
+        "ANGPT2": 20,
+        "TROAP": 20,
+        "PDLIM7": 20,
+        "DBN1": 20,
+        "PPIL3": 20,
+        "COL4A1": 20
+      },
+      "distinct_locked_models": 1,
+      "default_seed": {
+        "compared": true,
+        "matches": true,
+        "differences": {
+          "apparent_c": 0.0,
+          "corrected_c": 0.0,
+          "left_out_c": 0.0,
+          "clinical_left_out_c": 0.0,
+          "gain": 0.0,
+          "fwer": 0.0,
+          "robust": 0.0,
+          "suggestive": 0.0
+        },
+        "same_locked_genes": true
+      }
+    },
+    "V": {
+      "label": "METABRIC ER-positive, recurrence",
+      "seeds": 20,
+      "patients": 1423,
+      "events": 456,
+      "numbers": {
+        "apparent_c": {
+          "mean": 0.6827152106146592,
+          "sd": 1.1390647892519134e-16,
+          "min": 0.6827152106146591,
+          "max": 0.6827152106146591,
+          "seeds": 20
+        },
+        "corrected_c": {
+          "mean": 0.6578423295883198,
+          "sd": 0.0019234823587600015,
+          "min": 0.6540500576984802,
+          "max": 0.6611555728455334,
+          "seeds": 20
+        },
+        "left_out_c": {
+          "mean": 0.6639960848809293,
+          "sd": 0.001105998256223016,
+          "min": 0.6620381967044642,
+          "max": 0.6656514938511293,
+          "seeds": 20
+        },
+        "clinical_left_out_c": {
+          "mean": 0.6199599546093113,
+          "sd": 0.001281358295116575,
+          "min": 0.6180917645468058,
+          "max": 0.6222322065941853,
+          "seeds": 20
+        },
+        "gain": {
+          "mean": 0.04403613027161804,
+          "sd": 0.001035066440766446,
+          "min": 0.04216659286567863,
+          "max": 0.04574048225519355,
+          "seeds": 20
+        },
+        "gain_lower": {
+          "mean": 0.023858459344871408,
+          "sd": 0.0017390737475227367,
+          "min": 0.020303884131012594,
+          "max": 0.026304443245607788,
+          "seeds": 20
+        },
+        "gain_upper": {
+          "mean": 0.06421380119836469,
+          "sd": 0.0012368516138211705,
+          "min": 0.061115758397849676,
+          "max": 0.0657424006164319,
+          "seeds": 20
+        },
+        "fwer": {
+          "mean": 215.8,
+          "sd": 9.907997832692113,
+          "min": 198.0,
+          "max": 232.0,
+          "seeds": 20
+        },
+        "robust": {
+          "mean": 215.8,
+          "sd": 9.907997832692113,
+          "min": 198.0,
+          "max": 232.0,
+          "seeds": 20
+        },
+        "suggestive": {
+          "mean": 2801.9,
+          "sd": 29.237502953353733,
+          "min": 2751.0,
+          "max": 2861.0,
+          "seeds": 20
+        }
+      },
+      "gain_interval_reported": true,
+      "locked_gene_seeds": {
+        "KIF20A": 20,
+        "TROAP": 20,
+        "CDC20": 20,
+        "FOXM1": 20,
+        "CCNB2": 20,
+        "CKAP2L": 20,
+        "MKI67": 20,
+        "HJURP": 20,
+        "UBE2C": 20,
+        "CDCA5": 20
+      },
+      "distinct_locked_models": 1,
+      "default_seed": {
+        "compared": true,
+        "matches": true,
+        "differences": {
+          "apparent_c": 0.0,
+          "corrected_c": 0.0,
+          "left_out_c": 0.0,
+          "clinical_left_out_c": 0.0,
+          "gain": 0.0,
+          "fwer": 0.0,
+          "robust": 0.0,
+          "suggestive": 0.0
+        },
+        "same_locked_genes": true
+      }
+    }
+  },
+  "nonph_step_down": [
+    {
+      "scenario": "nonph_linear_null",
+      "method": "smith_linear",
+      "planned": 2000,
+      "completed": 2000,
+      "invalid": 0,
+      "mean_events": 115.311,
+      "step_down": {
+        "any_false_count": 94,
+        "fwer_valid": 0.047,
+        "fwer_mc95": [
+          0.038561402365168564,
+          0.05717544247164658
+        ],
+        "fwer_failure_bounds": [
+          0.047,
+          0.047
+        ],
+        "mean_fdp": 0.047,
+        "mean_power": null
+      },
+      "single_step": {
+        "any_false_count": 94,
+        "fwer_valid": 0.047,
+        "fwer_mc95": [
+          0.038561402365168564,
+          0.05717544247164658
+        ],
+        "fwer_failure_bounds": [
+          0.047,
+          0.047
+        ],
+        "mean_fdp": 0.047,
+        "mean_power": null
+      },
+      "permutation_q": {
+        "any_false_count": 95,
+        "fwer_valid": 0.0475,
+        "fwer_mc95": [
+          0.03901402059617837,
+          0.05772090719335553
+        ],
+        "fwer_failure_bounds": [
+          0.0475,
+          0.0475
+        ],
+        "mean_fdp": 0.0475,
+        "mean_power": null
+      },
+      "bh": {
+        "any_false_count": 194,
+        "fwer_valid": 0.097,
+        "fwer_mc95": [
+          0.08479131615107749,
+          0.11075382395761238
+        ],
+        "fwer_failure_bounds": [
+          0.097,
+          0.097
+        ],
+        "mean_fdp": 0.097,
+        "mean_power": null
+      }
+    },
+    {
+      "scenario": "nonph_linear_null",
+      "method": "raw_linear",
+      "planned": 2000,
+      "completed": 2000,
+      "invalid": 0,
+      "mean_events": 115.311,
+      "step_down": {
+        "any_false_count": 121,
+        "fwer_valid": 0.0605,
+        "fwer_mc95": [
+          0.05086998931063991,
+          0.0718150952495814
+        ],
+        "fwer_failure_bounds": [
+          0.0605,
+          0.0605
+        ],
+        "mean_fdp": 0.0605,
+        "mean_power": null
+      },
+      "single_step": {
+        "any_false_count": 121,
+        "fwer_valid": 0.0605,
+        "fwer_mc95": [
+          0.05086998931063991,
+          0.0718150952495814
+        ],
+        "fwer_failure_bounds": [
+          0.0605,
+          0.0605
+        ],
+        "mean_fdp": 0.0605,
+        "mean_power": null
+      },
+      "permutation_q": {
+        "any_false_count": 95,
+        "fwer_valid": 0.0475,
+        "fwer_mc95": [
+          0.03901402059617837,
+          0.05772090719335553
+        ],
+        "fwer_failure_bounds": [
+          0.0475,
+          0.0475
+        ],
+        "mean_fdp": 0.0475,
+        "mean_power": null
+      },
+      "bh": {
+        "any_false_count": 194,
+        "fwer_valid": 0.097,
+        "fwer_mc95": [
+          0.08479131615107749,
+          0.11075382395761238
+        ],
+        "fwer_failure_bounds": [
+          0.097,
+          0.097
+        ],
+        "mean_fdp": 0.097,
+        "mean_power": null
+      }
+    },
+    {
+      "scenario": "nonph_linear_null",
+      "method": "smith_quadratic",
+      "planned": 2000,
+      "completed": 2000,
+      "invalid": 0,
+      "mean_events": 115.311,
+      "step_down": {
+        "any_false_count": 103,
+        "fwer_valid": 0.0515,
+        "fwer_mc95": [
+          0.042644720050338814,
+          0.062074871360945055
+        ],
+        "fwer_failure_bounds": [
+          0.0515,
+          0.0515
+        ],
+        "mean_fdp": 0.0515,
+        "mean_power": null
+      },
+      "single_step": {
+        "any_false_count": 103,
+        "fwer_valid": 0.0515,
+        "fwer_mc95": [
+          0.042644720050338814,
+          0.062074871360945055
+        ],
+        "fwer_failure_bounds": [
+          0.0515,
+          0.0515
+        ],
+        "mean_fdp": 0.0515,
+        "mean_power": null
+      },
+      "permutation_q": {
+        "any_false_count": 104,
+        "fwer_valid": 0.052,
+        "fwer_mc95": [
+          0.043099720209557914,
+          0.06261795415444468
+        ],
+        "fwer_failure_bounds": [
+          0.052,
+          0.052
+        ],
+        "mean_fdp": 0.052,
+        "mean_power": null
+      },
+      "bh": {
+        "any_false_count": 209,
+        "fwer_valid": 0.1045,
+        "fwer_mc95": [
+          0.09184284051856186,
+          0.11867354388090919
+        ],
+        "fwer_failure_bounds": [
+          0.1045,
+          0.1045
+        ],
+        "mean_fdp": 0.1045,
+        "mean_power": null
+      }
+    },
+    {
+      "scenario": "nonph_nonlinear_null",
+      "method": "smith_linear",
+      "planned": 2000,
+      "completed": 2000,
+      "invalid": 0,
+      "mean_events": 114.981,
+      "step_down": {
+        "any_false_count": 1369,
+        "fwer_valid": 0.6845,
+        "fwer_mc95": [
+          0.6637961167698946,
+          0.7044964927833229
+        ],
+        "fwer_failure_bounds": [
+          0.6845,
+          0.6845
+        ],
+        "mean_fdp": 0.6845,
+        "mean_power": null
+      },
+      "single_step": {
+        "any_false_count": 1369,
+        "fwer_valid": 0.6845,
+        "fwer_mc95": [
+          0.6637961167698946,
+          0.7044964927833229
+        ],
+        "fwer_failure_bounds": [
+          0.6845,
+          0.6845
+        ],
+        "mean_fdp": 0.6845,
+        "mean_power": null
+      },
+      "permutation_q": {
+        "any_false_count": 1258,
+        "fwer_valid": 0.629,
+        "fwer_mc95": [
+          0.6076003631256541,
+          0.6499050386757825
+        ],
+        "fwer_failure_bounds": [
+          0.629,
+          0.629
+        ],
+        "mean_fdp": 0.629,
+        "mean_power": null
+      },
+      "bh": {
+        "any_false_count": 1440,
+        "fwer_valid": 0.72,
+        "fwer_mc95": [
+          0.69991471468443,
+          0.7392417845118187
+        ],
+        "fwer_failure_bounds": [
+          0.72,
+          0.72
+        ],
+        "mean_fdp": 0.72,
+        "mean_power": null
+      }
+    },
+    {
+      "scenario": "nonph_nonlinear_null",
+      "method": "raw_linear",
+      "planned": 2000,
+      "completed": 2000,
+      "invalid": 0,
+      "mean_events": 114.981,
+      "step_down": {
+        "any_false_count": 1372,
+        "fwer_valid": 0.686,
+        "fwer_mc95": [
+          0.6653193844482485,
+          0.7059674739631255
+        ],
+        "fwer_failure_bounds": [
+          0.686,
+          0.686
+        ],
+        "mean_fdp": 0.686,
+        "mean_power": null
+      },
+      "single_step": {
+        "any_false_count": 1372,
+        "fwer_valid": 0.686,
+        "fwer_mc95": [
+          0.6653193844482485,
+          0.7059674739631255
+        ],
+        "fwer_failure_bounds": [
+          0.686,
+          0.686
+        ],
+        "mean_fdp": 0.686,
+        "mean_power": null
+      },
+      "permutation_q": {
+        "any_false_count": 1257,
+        "fwer_valid": 0.6285,
+        "fwer_mc95": [
+          0.6070954992958749,
+          0.649411819552843
+        ],
+        "fwer_failure_bounds": [
+          0.6285,
+          0.6285
+        ],
+        "mean_fdp": 0.6285,
+        "mean_power": null
+      },
+      "bh": {
+        "any_false_count": 1440,
+        "fwer_valid": 0.72,
+        "fwer_mc95": [
+          0.69991471468443,
+          0.7392417845118187
+        ],
+        "fwer_failure_bounds": [
+          0.72,
+          0.72
+        ],
+        "mean_fdp": 0.72,
+        "mean_power": null
+      }
+    },
+    {
+      "scenario": "nonph_nonlinear_null",
+      "method": "smith_quadratic",
+      "planned": 2000,
+      "completed": 2000,
+      "invalid": 0,
+      "mean_events": 114.981,
+      "step_down": {
+        "any_false_count": 85,
+        "fwer_valid": 0.0425,
+        "fwer_mc95": [
+          0.03450117971009799,
+          0.05225291855224844
+        ],
+        "fwer_failure_bounds": [
+          0.0425,
+          0.0425
+        ],
+        "mean_fdp": 0.0425,
+        "mean_power": null
+      },
+      "single_step": {
+        "any_false_count": 85,
+        "fwer_valid": 0.0425,
+        "fwer_mc95": [
+          0.03450117971009799,
+          0.05225291855224844
+        ],
+        "fwer_failure_bounds": [
+          0.0425,
+          0.0425
+        ],
+        "mean_fdp": 0.0425,
+        "mean_power": null
+      },
+      "permutation_q": {
+        "any_false_count": 87,
+        "fwer_valid": 0.0435,
+        "fwer_mc95": [
+          0.03540128785854411,
+          0.0533489763092398
+        ],
+        "fwer_failure_bounds": [
+          0.0435,
+          0.0435
+        ],
+        "mean_fdp": 0.0435,
+        "mean_power": null
+      },
+      "bh": {
+        "any_false_count": 190,
+        "fwer_valid": 0.095,
+        "fwer_mc95": [
+          0.08291479680735943,
+          0.10863801149045545
+        ],
+        "fwer_failure_bounds": [
+          0.095,
+          0.095
+        ],
+        "mean_fdp": 0.095,
+        "mean_power": null
+      }
+    }
+  ],
+  "validation": {
+    "numerical_agreement": {
+      "passed": true,
+      "atol": 1e-06,
+      "rtol": 1e-07,
+      "reference_quantities": 189,
+      "failures": []
+    },
+    "complete_output_integrity": {
+      "schema": "complete fixed-design and output integrity audit 1",
+      "passed": true,
+      "finaliser_output_hashes_checked": 60,
+      "seed_tasks": 60,
+      "seed_gains": {
+        "I": {
+          "mean": 0.0019447025278146186,
+          "sd": 0.002525150841919133,
+          "min": -0.004667454019765725,
+          "max": 0.005685697392206284,
+          "seeds": 20
+        },
+        "IV": {
+          "mean": 0.00784486610882862,
+          "sd": 0.0009827310035327608,
+          "min": 0.005606989406023794,
+          "max": 0.009422530656948383,
+          "seeds": 20
+        },
+        "V": {
+          "mean": 0.04403613027161804,
+          "sd": 0.001035066440766446,
+          "min": 0.04216659286567863,
+          "max": 0.04574048225519355,
+          "seeds": 20
+        }
+      },
+      "null_fixed_indices": {
+        "P1": 50,
+        "P2": 200,
+        "P3": 200
+      },
+      "P1_aggregate_recounts": {
+        "3 selection + 4 sealed": {
+          "independent_replicates": 50,
+          "dependent_splits_per_replicate": 35,
+          "claim_rate": 0.8154285714285714
+        },
+        "all seven": {
+          "independent_replicates": 50,
+          "dependent_splits_per_replicate": 1,
+          "claim_rate": 0.72
+        }
+      },
+      "strict_tier_json": true,
+      "limitations": "Counts, hashes and aggregate summaries are checked independently. They do not prove coverage, clinical benefit or resolved R training warnings."
+    }
+  },
+  "limitations": [
+    "Conditional-null calibration depends on clinical-model adequacy and residual assumptions.",
+    "Actual METABRIC FWER is not estimated by the additional sensitivity experiment.",
+    "Internal selection procedure and final locked model have different estimands.",
+    "No established algorithm superiority or clinical utility.",
+    "Mixed RFS/DMFS external endpoints in case V.",
+    "Mime training warnings remain preserved.",
+    "Human usability and current-service task comparison remain unobserved."
+  ]
+}

@@ -1066,5 +1066,5 @@ def test_marker_summary_names_a_model_without_markers_as_the_clinical_model() ->
     with_markers = build_marker_summary_figure({**base, "signature": {"markers": ["m1"], "apparent_c": 0.75}})
 
     titles = [annotation["text"] for annotation in clinical_only["layout"]["annotations"]]
-    assert "C-index of the clinical-only model" in titles
-    assert "C-index of the selected-marker model" in [annotation["text"] for annotation in with_markers["layout"]["annotations"]]
+    assert "Clinical model and procedure C-index" in titles
+    assert "Model and procedure C-index" in [annotation["text"] for annotation in with_markers["layout"]["annotations"]]

@@ -354,7 +354,9 @@ def _sksurv_c_index(
 
     if SKSURV_AVAILABLE:
         try:
-            c_index, _, _, _, _ = concordance_index_censored(events, times, risk)
+            # Exact score ties match the shared estimator and R. sksurv's default
+            # 1e-8 tolerance otherwise changes the result when this extra is installed.
+            c_index, _, _, _, _ = concordance_index_censored(events, times, risk, tied_tol=0.0)
             return _safe_float(c_index)
         except (ValueError, ZeroDivisionError):
             # No comparable pairs or all censored; fall through to the shared estimator.
@@ -1479,6 +1481,8 @@ def _select_lasso_alpha(
     train_frame: pd.DataFrame,
     train_encoded: pd.DataFrame,
     *,
+    features: Sequence[str],
+    categorical_features: Sequence[str] | None = None,
     time_column: str,
     event_column: str,
     random_state: int,
@@ -1487,8 +1491,9 @@ def _select_lasso_alpha(
     """Choose an L1 penalty by inner stratified K-fold CV on the training split.
 
     The alpha grid comes from a Coxnet path fit on the training split; each
-    inner fold refits the path on its own training part (with fold-specific
-    standardization) and scores Harrell's C on its held-out part. The alpha
+    inner fold fits imputation, category encoding, constant-column filtering,
+    standardization and the path on its own training part, and scores Harrell's C
+    on its held-out part. The alpha
     with the highest mean inner C-index among non-empty models is selected
     (ties -> sparser model), analogous to glmnet's ``lambda.min``.
     """
@@ -1524,9 +1529,11 @@ def _select_lasso_alpha(
             # Each inner fold fits a whole Coxnet path, so a cancelled request stops between folds.
             raise_if_cancelled()
             try:
-                inner_train_encoded, inner_eval_encoded = _drop_constant_train_columns(
-                    train_encoded.iloc[inner_train_idx].reset_index(drop=True),
-                    train_encoded.iloc[inner_eval_idx].reset_index(drop=True),
+                inner_train_encoded, inner_eval_encoded, inner_train_frame, inner_eval_frame = _encoded_fold_matrices(
+                    train_frame.iloc[inner_train_idx].reset_index(drop=True),
+                    train_frame.iloc[inner_eval_idx].reset_index(drop=True),
+                    features=features,
+                    categorical_features=categorical_features,
                     model_label="LASSO-Cox",
                 )
                 inner_train_scaled, inner_eval_scaled, _, _ = _standardize_encoded_matrices(
@@ -1543,7 +1550,7 @@ def _select_lasso_alpha(
                 fold_model.fit(
                     inner_train_scaled.to_numpy(),
                     _prepare_sksurv_data(
-                        train_frame.iloc[inner_train_idx].reset_index(drop=True),
+                        inner_train_frame,
                         time_column,
                         event_column,
                     ),
@@ -1552,7 +1559,7 @@ def _select_lasso_alpha(
                 # Degenerate inner fold (for example a singular design or too few events).
                 continue
             y_inner_eval = _prepare_sksurv_data(
-                train_frame.iloc[inner_eval_idx].reset_index(drop=True),
+                inner_eval_frame,
                 time_column,
                 event_column,
             )
@@ -2469,6 +2476,8 @@ def train_lasso_cox(
     alpha_meta = _select_lasso_alpha(
         matrices["train_frame"],
         matrices["train_encoded"],
+        features=features,
+        categorical_features=matrices["categorical_features"],
         time_column=time_column,
         event_column=event_column,
         random_state=random_state,
@@ -3002,6 +3011,8 @@ def _fit_evaluate_lasso_cox_split(
     alpha_meta = _select_lasso_alpha(
         train_eval,
         train_encoded,
+        features=features,
+        categorical_features=categorical_features,
         time_column=time_column,
         event_column=event_column,
         random_state=random_state,
@@ -4365,6 +4376,35 @@ def _brier_scores_from_weights(weights: np.ndarray, alive: np.ndarray, survival:
     return np.mean(weights * (np.asarray(survival, dtype=float) - alive) ** 2, axis=0)
 
 
+def _metric_vector(values: Any, name: str) -> np.ndarray:
+    """A nonempty, finite vector for public prediction-metric helpers."""
+    numbers = np.asarray(values, dtype=float)
+    if numbers.ndim != 1 or not numbers.size:
+        raise ValueError(f"{name} must be a nonempty one-dimensional array.")
+    if not np.isfinite(numbers).all():
+        raise ValueError(f"{name} must contain only finite numbers.")
+    return numbers
+
+
+def _metric_outcomes(times: Any, events: Any, *, prefix: str = "") -> tuple[np.ndarray, np.ndarray]:
+    time = _metric_vector(times, prefix + "times")
+    event = _metric_vector(events, prefix + "events")
+    if time.size != event.size:
+        raise ValueError(f"{prefix}times and {prefix}events must have the same length.")
+    if (time < 0.0).any():
+        raise ValueError(f"{prefix}times must be nonnegative follow-up durations.")
+    if not np.isin(event, (0.0, 1.0)).all():
+        raise ValueError(f"{prefix}events must contain only 0 (censored) and 1 (event).")
+    return time, event
+
+
+def _check_survival_probabilities(probabilities: np.ndarray) -> None:
+    if not np.isfinite(probabilities).all():
+        raise ValueError("Predicted values contain non-finite survival probabilities.")
+    if ((probabilities < 0.0) | (probabilities > 1.0)).any():
+        raise ValueError("Predicted survival probabilities must be between 0 and 1.")
+
+
 @user_input_boundary
 def compute_integrated_brier_score(
     times: np.ndarray | Sequence[float],
@@ -4410,15 +4450,12 @@ def compute_integrated_brier_score(
         ``brier_scores`` / ``null_brier_scores`` (lists of per-time-point
         records), ``eval_times`` (list), and ``scientific_summary``.
     """
-    times_arr = np.asarray(times, dtype=float)
-    events_arr = np.asarray(events, dtype=float)
-    support_times_arr = np.asarray(support_times if support_times is not None else times_arr, dtype=float)
-    support_events_arr = np.asarray(support_events if support_events is not None else events_arr, dtype=float)
-
-    if len(times_arr) != len(events_arr):
-        raise ValueError("times and events must have the same length.")
-    if len(support_times_arr) != len(support_events_arr):
-        raise ValueError("support_times and support_events must have the same length.")
+    times_arr, events_arr = _metric_outcomes(times, events)
+    support_times_arr, support_events_arr = _metric_outcomes(
+        support_times if support_times is not None else times_arr,
+        support_events if support_events is not None else events_arr,
+        prefix="support_",
+    )
 
     n_samples = len(times_arr)
     support_event_times = support_times_arr[support_events_arr == 1]
@@ -4452,7 +4489,7 @@ def compute_integrated_brier_score(
         grid_lower = min(float(grid_lower), grid_upper)
         eval_times_arr = np.linspace(grid_lower, grid_upper, 100)
     else:
-        eval_times_arr = np.asarray(eval_times, dtype=float)
+        eval_times_arr = _metric_vector(eval_times, "eval_times")
 
     # Keep evaluation times within the IPCW support window and the evaluation
     # follow-up to avoid extrapolation beyond observed data.
@@ -4478,10 +4515,7 @@ def compute_integrated_brier_score(
             f"predicted_survival_fn must return shape ({n_samples}, {len(eval_times_arr)}), "
             f"got {surv_matrix.shape}."
         )
-    if not np.all(np.isfinite(surv_matrix)):
-        raise ValueError(
-            "predicted_survival_fn returned non-finite survival probabilities."
-        )
+    _check_survival_probabilities(surv_matrix)
 
     from statsmodels.duration.survfunc import SurvfuncRight
 
@@ -4689,9 +4723,16 @@ def compute_calibration_data(
     """
     from statsmodels.duration.survfunc import SurvfuncRight
 
-    times_arr = np.asarray(times, dtype=float)
-    events_arr = np.asarray(events, dtype=float)
-    pred_arr = np.asarray(predicted_survival_at_t, dtype=float)
+    times_arr, events_arr = _metric_outcomes(times, events)
+    pred_arr = _metric_vector(predicted_survival_at_t, "predicted_survival_at_t")
+    _check_survival_probabilities(pred_arr)
+
+    if isinstance(n_bins, (bool, np.bool_)) or not isinstance(n_bins, (int, np.integer)) or n_bins < 1:
+        raise ValueError("n_bins must be a positive integer.")
+    if t is not None:
+        t = float(t)
+        if not np.isfinite(t) or t < 0.0:
+            raise ValueError("t must be a finite, nonnegative follow-up time.")
 
     if not (len(times_arr) == len(events_arr) == len(pred_arr)):
         raise ValueError("times, events, and predicted_survival_at_t must have the same length.")
