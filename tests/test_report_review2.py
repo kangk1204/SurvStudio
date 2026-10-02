@@ -211,8 +211,8 @@ def test_the_left_out_rung_of_a_clinical_only_model_is_the_whole_procedure() -> 
     clinical_only = build_marker_summary_figure(_added_value_result(signature=signature))
     selected = build_marker_summary_figure(_added_value_result(signature={**signature, "markers": ["m1"], "clinical_only": False}))
 
-    assert _ladder(clinical_only) == ["Apparent", "Subsample gap-adjusted", "Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
-    assert _ladder(selected) == ["Apparent", "Subsample gap-adjusted", "Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
+    assert _ladder(clinical_only) == ["Apparent", "Subsample<br>gap-adjusted", "Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
+    assert _ladder(selected) == ["Apparent", "Subsample<br>gap-adjusted", "Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
 
 
 def test_a_screen_without_clinical_covariates_says_whether_it_selected_a_marker_or_failed_to_fit_one() -> None:
