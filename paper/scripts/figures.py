@@ -126,6 +126,14 @@ def save(fig, name: str, dpi: int = 300) -> None:
                 "svg": {"Creator": "SurvStudio publication figures", "Title": name, "Date": None}}
     for suffix in ("png", "pdf", "svg"):
         fig.savefig(FIGURES / f"{name}.{suffix}", dpi=dpi, bbox_inches="tight", pad_inches=PAD, metadata=metadata[suffix])
+    # Matplotlib's static SVG 1.1 DTD is unnecessary for a portable, inactive export.
+    svg = FIGURES / f"{name}.svg"
+    svg_text = svg.read_text(encoding="utf-8").replace(
+        '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"\n'
+        '  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n', "")
+    if "<!DOCTYPE" in svg_text or "<!ENTITY" in svg_text:
+        raise ValueError("SVG contains an unexpected DTD or entity declaration")
+    svg.write_text(svg_text, encoding="utf-8")
     from common import git_commit, sha256_file
     try:
         head = subprocess.run(["git", "-C", str(PAPER.parent), "rev-parse", "HEAD"], capture_output=True, text=True)

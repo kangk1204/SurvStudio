@@ -93,6 +93,26 @@ def test_comparator_external_intervals_match_the_paper_bootstrap(monkeypatch):
     assert result["seed"] == 20260926
 
 
+def test_saved_figure_exports_are_deterministic_and_svg_has_no_dtd(monkeypatch, tmp_path):
+    pytest.importorskip("matplotlib")
+    import hashlib
+    import xml.etree.ElementTree as ET
+    module = load_script(monkeypatch, "figures")
+    monkeypatch.setattr(module, "FIGURES", tmp_path)
+    hashes = []
+    for _ in range(2):
+        fig, ax = module.plt.subplots(figsize=(2, 1.2))
+        ax.plot([0, 1], [0.6, 0.7])
+        module.save(fig, "export_check")
+        hashes.append({extension: hashlib.sha256((tmp_path / f"export_check.{extension}").read_bytes()).hexdigest()
+                       for extension in ("png", "pdf", "svg")})
+    assert hashes[0] == hashes[1]
+    svg = (tmp_path / "export_check.svg").read_text()
+    assert "<!DOCTYPE" not in svg and "<!ENTITY" not in svg
+    assert ET.fromstring(svg).tag == "{http://www.w3.org/2000/svg}svg"
+    assert json.loads((tmp_path / "export_check.provenance.json").read_text())["outputs"] == hashes[-1]
+
+
 @pytest.mark.parametrize("commit,code,valid", [
     ("3e0c4af1", "0123456789abcdef", True),
     ("unknown", "0123456789abcdef", False),
