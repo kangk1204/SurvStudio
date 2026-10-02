@@ -113,6 +113,24 @@ def print_size(fig) -> tuple[float, float, list[str]]:
     return width, height, problems
 
 
+def rendering_source(repository: Path) -> dict[str, str]:
+    """An archive nested in another checkout must not inherit that checkout's commit."""
+    from common import git_commit
+    unknown = {"rendering_commit": "unknown", "rendering_git_head": "unknown"}
+    try:
+        root = subprocess.run(["git", "-C", str(repository), "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True)
+        if root.returncode != 0 or Path(root.stdout.strip()).resolve() != repository.resolve():
+            return unknown
+        head = subprocess.run(["git", "-C", str(repository), "rev-parse", "HEAD"],
+                              capture_output=True, text=True)
+        if head.returncode != 0:
+            return unknown
+        return {"rendering_commit": git_commit(repository), "rendering_git_head": head.stdout.strip()}
+    except OSError:
+        return unknown
+
+
 def save(fig, name: str, dpi: int = 300, *, derived_values: dict | None = None) -> None:
     problems = result_problems(LOADED)
     if problems:
@@ -135,14 +153,9 @@ def save(fig, name: str, dpi: int = 300, *, derived_values: dict | None = None) 
     if "<!DOCTYPE" in svg_text or "<!ENTITY" in svg_text:
         raise ValueError("SVG contains an unexpected DTD or entity declaration")
     svg.write_text(svg_text, encoding="utf-8")
-    from common import git_commit, sha256_file
-    try:
-        head = subprocess.run(["git", "-C", str(PAPER.parent), "rev-parse", "HEAD"], capture_output=True, text=True)
-        git_head = head.stdout.strip() if head.returncode == 0 else "unknown"
-    except OSError:
-        git_head = "unknown"
+    from common import sha256_file
     provenance = {"schema": "SurvStudio paper figure provenance 1", "figure": name,
-                  "rendering_commit": git_commit(PAPER.parent), "rendering_git_head": git_head,
+                  **rendering_source(PAPER.parent),
                   "rendering_script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                   "dimensions_mm": [width * 25.4, height * 25.4], "png_dpi": dpi,
                   "inputs": {input_name: json.loads((RESULTS / "stamps" / f"{input_name}.json").read_text())

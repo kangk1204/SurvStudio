@@ -113,6 +113,25 @@ def test_saved_figure_exports_are_deterministic_and_svg_has_no_dtd(monkeypatch, 
     assert json.loads((tmp_path / "export_check.provenance.json").read_text())["outputs"] == hashes[-1]
 
 
+def test_rendering_archive_does_not_inherit_an_unrelated_parent_commit(monkeypatch, tmp_path):
+    pytest.importorskip("matplotlib")
+    import subprocess
+    module = load_script(monkeypatch, "figures")
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    subprocess.run(["git", "init", str(parent)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(parent), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "--allow-empty", "-m", "Unrelated parent"], check=True, capture_output=True)
+    archive = parent / "extracted-package"
+    archive.mkdir()
+    assert module.rendering_source(archive) == {"rendering_commit": "unknown", "rendering_git_head": "unknown"}
+    parent_head = subprocess.check_output(["git", "-C", str(parent), "rev-parse", "HEAD"], text=True).strip()
+    assert module.rendering_source(parent)["rendering_git_head"] == parent_head
+    plain = tmp_path / "plain-archive"
+    plain.mkdir()
+    assert module.rendering_source(plain)["rendering_git_head"] == "unknown"
+
+
 def _tier_logistic_data():
     import numpy as np
     rng = np.random.default_rng(731)
