@@ -1,0 +1,105 @@
+{
+  "schema_version": "1.0",
+  "profile": "publication",
+  "figure_id": "Figure_S1",
+  "generated_at": "2026-10-02T17:21:49.234388+00:00",
+  "base_dir": "../../../../..",
+  "script": {
+    "path": "validation/guarded_inference/make_figures.py",
+    "bytes": 16850,
+    "sha256": "da8bf6c0449cb6d71ff0513df74bb61e398dec424017759442de7164b901e31e",
+    "media_type": "text/x-python"
+  },
+  "inputs": [
+    {
+      "path": "validation/guarded_inference/results/20261003/confirmation-summary.json",
+      "bytes": 268877,
+      "sha256": "5d05a9246d0a6047c39b54b3054e4c945b0e574c34c3f3a43d407b2ced4d3cd7",
+      "media_type": "application/json"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_S1_full_availability.png",
+      "bytes": 322213,
+      "sha256": "27208cadca9b622b616ba61890f5a7435c66fcd9d5e64f335a4913a8e5bf9827",
+      "media_type": "image/png",
+      "png_width": 2190,
+      "png_height": 1620
+    },
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_S1_full_availability.svg",
+      "bytes": 42471,
+      "sha256": "dfda8992087b4398a63558525b82697fb374ec188304ad4fbddaf1047e60cd65",
+      "media_type": "image/svg+xml",
+      "svg_check": "parsed_no_active_content"
+    },
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_S1_full_availability.pdf",
+      "bytes": 33780,
+      "sha256": "9e31cb6b66c5750ee1818f30e53474a16a0ca286df2baff64497824483eb1722",
+      "media_type": "application/pdf",
+      "pdf_check": "header_and_eof"
+    }
+  ],
+  "source_data": [
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_S1_source.csv",
+      "bytes": 50156,
+      "sha256": "5c9e370c49c0ca80b192a1133c8bc77ef45be7ccad31246e3f303d5bbb57bb7e",
+      "media_type": "text/csv",
+      "table": {
+        "rows": 117,
+        "columns": 30,
+        "header": [
+          "stage",
+          "condition",
+          "n",
+          "p",
+          "method",
+          "planned",
+          "completed",
+          "failures",
+          "diagnostic_exceptions",
+          "missing",
+          "allowed",
+          "allowed_fraction",
+          "fwer",
+          "fwer_raw_lower",
+          "fwer_raw_upper",
+          "raw_fwer_mc95",
+          "raw_fwer_worst_case_mc95",
+          "fwer_failure_bounds",
+          "fwer_mc95",
+          "fwer_worst_case_upper95",
+          "conditional_fwer",
+          "conditional_mc95",
+          "conditional_upper95",
+          "withhold_fraction",
+          "healthy_false_alarm_fraction",
+          "power",
+          "power_mc95",
+          "power_failure_bounds",
+          "freeze_hash",
+          "engineering_status"
+        ]
+      }
+    }
+  ],
+  "panel_claims": [
+    "Availability for the complete prespecified grid."
+  ],
+  "transformations": [
+    "Percentages; unprespecified cells are NA; positive values below 0.1% use two decimals."
+  ],
+  "known_limitations": [
+    "Both inference profiles failed the engineering gates. Numerical agreement and structural checks do not establish statistical or clinical validity."
+  ],
+  "validation": {
+    "status": "structural_pass",
+    "scientific_validation": "not_assessed",
+    "commands": [
+      "python3 validate_figure_package.py --manifest validation/guarded_inference/results/20261003/figures/Figure_S1_manifest.json --base /Users/keunsoo/Documents/projects/00_SurvStudio_remote/SurvStudio-next --profile publication --figure-id Figure_S1 --script validation/guarded_inference/make_figures.py --source-data validation/guarded_inference/results/20261003/figures/Figure_S1_source.csv --claim 'Availability for the complete prespecified grid.' --transformation 'Percentages; unprespecified cells are NA; positive values below 0.1% use two decimals.' --limitation 'Both inference profiles failed the engineering gates. Numerical agreement and structural checks do not establish statistical or clinical validity.' --write-manifest --input validation/guarded_inference/results/20261003/confirmation-summary.json --figure validation/guarded_inference/results/20261003/figures/Figure_S1_full_availability.png --figure validation/guarded_inference/results/20261003/figures/Figure_S1_full_availability.svg --figure validation/guarded_inference/results/20261003/figures/Figure_S1_full_availability.pdf"
+    ]
+  }
+}

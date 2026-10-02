@@ -83,7 +83,7 @@ def _through_javascript(value):
 
 def test_absolute_risks_do_not_depend_on_where_the_markers_are_centred() -> None:
     recipe_zero, recipe_log2 = _gene_recipe(0.0), _gene_recipe(10.0)
-    assert recipe_log2["recipe_version"] == 2
+    assert recipe_log2["recipe_version"] == 3
     baseline = recipe_log2["model"]["baseline"]
     coefficients = dict(zip(recipe_log2["model"]["terms"], recipe_log2["model"]["coefficients"]))
     # The centre is the development mean linear predictor, about -9 for these log2-like markers.
@@ -184,7 +184,7 @@ def test_malformed_recipes_are_refused_with_a_clear_message(edit, message) -> No
 def test_recipes_without_a_usable_version_or_with_non_finite_numbers_are_refused() -> None:
     frame = _clinical_cohort(6)
     recipe = evaluate_markers(frame, time_column="os_time", event_column="os_event", marker_columns=_markers(frame), settings=_QUICK)["locked_recipe"]
-    for version in (None, "2", 3, True):
+    for version in (None, "2", 4, True):
         bad = {**copy.deepcopy(recipe), "recipe_version": version}
         with pytest.raises(UserInputError, match="incompatible SurvStudio version"):
             validate_locked_recipe(_clinical_cohort(7), bad, n_bootstrap=0)
@@ -221,7 +221,11 @@ def test_numeric_coded_levels_that_do_not_match_stop_validation_loudly() -> None
     except UserInputError as exc:
         assert "level the locked model has not seen" in str(exc)
     else:
-        reference = validate_locked_recipe(external.iloc[1:], recipe, n_bootstrap=0)
+        baseline = recipe["clinical"]["encoder"]["categorical_mappings"]["grade"]["baseline_level"]
+        reference_frame = external.copy()
+        reference_frame.loc[0, "grade"] = int(baseline)
+        reference = validate_locked_recipe(reference_frame, recipe, n_bootstrap=0)
+        assert report["cohort"]["n"] == 300
         assert report["metrics"]["c_index"] == pytest.approx(reference["metrics"]["c_index"])
     # A few unseen rows are scored as the reference level, with a note.
     few = external.assign(grade=external["grade"].astype(object))
@@ -261,7 +265,10 @@ def test_clinical_columns_a_cox_model_cannot_estimate_are_left_out_and_noted() -
     assert result["cohort"]["clinical_design_columns"] == ["age"]
     assert any("centre_b was left out of the clinical model" in note for note in result["cohort"]["notes"])
     # Leaving them out is the same analysis as never including them.
-    assert result["marker_table"] == reference["marker_table"]
+    assert result["inference"]["status"] == "withheld"
+    assert all(row["added_value"]["p_value"] is None for row in result["marker_table"])
+    for row, expected in zip(result["marker_table"], reference["marker_table"]):
+        assert row["exploratory"]["added_value"]["chi2"] == pytest.approx(expected["added_value"]["chi2"])
     assert result["locked_recipe"]["model"]["terms"] == reference["locked_recipe"]["model"]["terms"]
 
 

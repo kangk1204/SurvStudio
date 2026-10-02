@@ -903,21 +903,29 @@ def test_marker_summary_does_not_claim_what_was_not_tested(tmp_path: Path, untes
     """, markers=untested_marker_payloads)
 
     no_subsamples = result["noSubsamples"]
-    # The fixture must hold suggestive markers, the evidence a missing stability check leaves unconfirmed.
-    assert untested_marker_payloads["noSubsamples"]["analysis"]["tier_counts"]["suggestive"] >= 1
+    analysis = untested_marker_payloads["noSubsamples"]["analysis"]
+    assert analysis["resampling"]["n_valid"] == 0
+    assert not analysis["resampling"]["stability_assessed"]
+    assert analysis["tier_counts"]["suggestive"] == 0
+    assert analysis["tier_counts"]["robust"] == 0
+    assert analysis["signature"]["optimism_corrected_c"] is None
+    assert analysis["inference"]["status"] == "withheld"
+    assert "withheld" in no_subsamples["headline"].lower()
     assert "does not hold up across subsamples" not in no_subsamples["headline"]
-    assert "stability was not assessed" in no_subsamples["headline"]
     assert "repeated on 0 subsamples" not in no_subsamples["strengths"]
-    assert "No subsample was evaluated, so the stability of the selection was not assessed and no marker can be robust." in no_subsamples["cautions"]
-    assert "Subsamples above 0" in no_subsamples["next"]
+    assert "exploratory" in no_subsamples["cautions"].lower()
     assert "optimism-corrected" not in no_subsamples["next"]
 
     no_permutations = result["noPermutations"]
+    analysis = untested_marker_payloads["noPermutations"]["analysis"]
+    assert analysis["null"]["n_permutations"] == 0
+    assert analysis["inference"]["status"] == "withheld"
+    assert all(row["added_value"]["p_fwer"] is None for row in analysis["marker_table"])
     assert "after family-wise error control" not in no_permutations["headline"]
-    assert no_permutations["headline"].startswith("No marker was tested")
+    assert "withheld" in no_permutations["headline"].lower()
     assert "0 permutations" not in no_permutations["strengths"]
     assert "Westfall-Young" not in no_permutations["strengths"]
-    assert "Permutations above 0" in no_permutations["next"]
+    assert "exploratory" in no_permutations["cautions"].lower()
 
 
 def test_the_left_out_c_index_of_an_unfitted_model_is_the_whole_procedures(tmp_path: Path) -> None:

@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0",
+  "profile": "publication",
+  "figure_id": "Figure_5",
+  "generated_at": "2026-10-02T17:21:49.191626+00:00",
+  "base_dir": "../../../../..",
+  "script": {
+    "path": "validation/guarded_inference/make_figures.py",
+    "bytes": 16850,
+    "sha256": "da8bf6c0449cb6d71ff0513df74bb61e398dec424017759442de7164b901e31e",
+    "media_type": "text/x-python"
+  },
+  "inputs": [
+    {
+      "path": "validation/guarded_inference/results/20261003/cases/pooled-case-results.csv",
+      "bytes": 16849,
+      "sha256": "3049f0b4edc41dfe5828e6de21f36b31c626cb58c2709b7b86bfde238394efaf",
+      "media_type": "text/csv",
+      "table": {
+        "rows": 64,
+        "columns": 23,
+        "header": [
+          "case",
+          "clinical_basis",
+          "endpoint",
+          "scaling",
+          "role",
+          "n",
+          "events",
+          "cohorts",
+          "metric",
+          "eligible_cohorts",
+          "unavailable_cohorts",
+          "inference_status",
+          "estimate",
+          "ci_lower",
+          "ci_upper",
+          "tau2",
+          "q",
+          "k",
+          "hksj_ci_lower",
+          "hksj_ci_upper",
+          "hksj_scale",
+          "pi_lower",
+          "pi_upper"
+        ]
+      }
+    },
+    {
+      "path": "validation/guarded_inference/results/20261003/cases/case-summary.json",
+      "bytes": 59623,
+      "sha256": "672055464d1bc83cd156db5d7613928e0ea1ccf4fd7d0efa80ddfe0e9d0ceb15",
+      "media_type": "application/json"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_5_external_reanalysis.png",
+      "bytes": 111338,
+      "sha256": "9750366509ae64876de594e1947c3946c1f8c34c03f70f1d8ca385ece16c4283",
+      "media_type": "image/png",
+      "png_width": 2280,
+      "png_height": 1275
+    },
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_5_external_reanalysis.svg",
+      "bytes": 24959,
+      "sha256": "bd038741abc200352bb79330b4317d7ddfb098f0621e50581f362ef5b962b97c",
+      "media_type": "image/svg+xml",
+      "svg_check": "parsed_no_active_content"
+    },
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_5_external_reanalysis.pdf",
+      "bytes": 29472,
+      "sha256": "3ba92ab6490eb90543fd8205a4d9695fbda6abf7129f6643f71420cfb61f8c96",
+      "media_type": "application/pdf",
+      "pdf_check": "header_and_eof"
+    }
+  ],
+  "source_data": [
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_5_source.csv",
+      "bytes": 4332,
+      "sha256": "d7c438595ee40ea3a50709f0135268324cfa4e3f3776bc9233716753c5b9165e",
+      "media_type": "text/csv",
+      "table": {
+        "rows": 16,
+        "columns": 23,
+        "header": [
+          "case",
+          "clinical_basis",
+          "endpoint",
+          "scaling",
+          "role",
+          "n",
+          "events",
+          "cohorts",
+          "metric",
+          "eligible_cohorts",
+          "unavailable_cohorts",
+          "inference_status",
+          "estimate",
+          "ci_lower",
+          "ci_upper",
+          "tau2",
+          "q",
+          "k",
+          "hksj_ci_lower",
+          "hksj_ci_upper",
+          "hksj_scale",
+          "pi_lower",
+          "pi_upper"
+        ]
+      }
+    }
+  ],
+  "panel_claims": [
+    "Existing external-cohort primary as-measured estimates, endpoints and prespecified bases separately."
+  ],
+  "transformations": [
+    "Endpoint-specific random-effects point estimates and 95% HKSJ intervals; no mixed endpoint pooling."
+  ],
+  "known_limitations": [
+    "Both inference profiles failed the engineering gates. Numerical agreement and structural checks do not establish statistical or clinical validity."
+  ],
+  "validation": {
+    "status": "structural_pass",
+    "scientific_validation": "not_assessed",
+    "commands": [
+      "python3 validate_figure_package.py --manifest validation/guarded_inference/results/20261003/figures/Figure_5_manifest.json --base /Users/keunsoo/Documents/projects/00_SurvStudio_remote/SurvStudio-next --profile publication --figure-id Figure_5 --script validation/guarded_inference/make_figures.py --source-data validation/guarded_inference/results/20261003/figures/Figure_5_source.csv --claim 'Existing external-cohort primary as-measured estimates, endpoints and prespecified bases separately.' --transformation 'Endpoint-specific random-effects point estimates and 95% HKSJ intervals; no mixed endpoint pooling.' --limitation 'Both inference profiles failed the engineering gates. Numerical agreement and structural checks do not establish statistical or clinical validity.' --write-manifest --input validation/guarded_inference/results/20261003/cases/pooled-case-results.csv --input validation/guarded_inference/results/20261003/cases/case-summary.json --figure validation/guarded_inference/results/20261003/figures/Figure_5_external_reanalysis.png --figure validation/guarded_inference/results/20261003/figures/Figure_5_external_reanalysis.svg --figure validation/guarded_inference/results/20261003/figures/Figure_5_external_reanalysis.pdf"
+    ]
+  }
+}

@@ -717,7 +717,7 @@ def locked_parts(external: pd.DataFrame, recipe: dict[str, Any], report: dict[st
     report's C-index and calibration slope and the clinical-only predictor the report's clinical-only C, so whatever
     is computed from the parts is computed from SurvStudio's own scores."""
     from survival_toolkit.analysis import _cohort_frame
-    from survival_toolkit.encoding import transform_feature_encoder
+    from survival_toolkit.clinical_basis import transform_clinical_encoder
     from survival_toolkit.marker_evaluation import _clinical_columns_behind, _external_cox, _pooled_c_index, _unique_rows
 
     if recipe.get("strata_columns"):
@@ -729,14 +729,19 @@ def locked_parts(external: pd.DataFrame, recipe: dict[str, Any], report: dict[st
     clinical_model = recipe.get("clinical_only_model") or {}
     used = _clinical_columns_behind(encoder, clinical_columns, {*model["terms"], *(clinical_model.get("terms") or [])})
     frame = _cohort_frame(external, time_column=outcome["time_column"], event_column=outcome["event_column"],
-                          event_positive_value=outcome["event_positive_value"], extra_columns=used)
+                          event_positive_value=outcome["event_positive_value"],
+                          extra_columns=[] if recipe.get("recipe_version",1)>=3 else used)
+    if recipe.get("recipe_version",1)>=3:
+        source_rows=list(frame.attrs["source_row_index"])
+        for column in used:
+            frame[column]=external.loc[source_rows,column].reset_index(drop=True)
     time = frame[outcome["time_column"]].to_numpy(dtype=float)
     event = frame[outcome["event_column"]].to_numpy(dtype=int)
     rows = list(frame.attrs["source_row_index"])
     columns: dict[str, np.ndarray] = {}
     if clinical_columns:
         unused = {column: np.nan for column in clinical_columns if column not in used}
-        design = transform_feature_encoder(frame.assign(**unused) if unused else frame, encoder, output="dataframe")
+        design = transform_clinical_encoder(frame.assign(**unused) if unused else frame, encoder, output="dataframe")
         columns.update({str(name): design[name].to_numpy(dtype=float) for name in design.columns})
     scale = recipe.get("marker_scale") or {}
     for name in markers:

@@ -255,18 +255,25 @@ def test_a_result_without_the_interval_does_not_claim_added_discrimination(tmp_p
 
 
 @_needs_node
-def test_the_markers_tab_shows_the_interval_the_server_computed(tmp_path: Path, marker_payloads: dict) -> None:
-    signature = marker_payloads["added"]["analysis"]["signature"]
+def test_the_markers_tab_preserves_but_withholds_an_unqualified_gain_interval(tmp_path: Path, marker_payloads: dict) -> None:
+    analysis = marker_payloads["added"]["analysis"]
+    signature = analysis["signature"]
     low, high = signature["signature_gain_left_out_ci"]
     gain = signature["signature_gain_left_out"]
+    assert analysis["inference"]["status"] == "withheld"
+    assert signature["optimism_corrected_c"] is None
+    assert analysis["exploratory_signature"]["signature_gain_left_out"] == gain
+    assert analysis["exploratory_signature"]["signature_gain_left_out_ci"] == [low, high]
 
     result = _run_page(tmp_path, r"""
       page.context.__payload = fixtures.markers.added;
       const summary = page.run("markerSummary(__payload)");
-      return [...summary.strengths, ...summary.cautions].join(" | ");
+      return [summary.headline, ...summary.strengths, ...summary.cautions].join(" | ");
     """, markers=marker_payloads)
 
-    assert f"a gain of {gain:+.3f} (95% CI {low:.3f} to {high:.3f})." in result
+    assert f"a gain of {gain:+.3f} (95% CI {low:.3f} to {high:.3f})." not in result
+    assert "exploratory" in result.lower()
+    assert "withheld" in result.lower()
 
 
 # ── REMARK text and the summary figure ───────────────────────────

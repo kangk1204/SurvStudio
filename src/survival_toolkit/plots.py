@@ -1412,6 +1412,7 @@ MARKER_TIER_COLORS = {
     "suggestive": GOLD,
     "marginal only": PLUM,
     "not supported": "rgba(148,163,184,0.75)",
+    "inference withheld": "#9a5545",
 }
 
 
@@ -1462,7 +1463,9 @@ def build_marker_stability_figure(result: dict[str, Any]) -> dict[str, Any]:
     fig.add_vline(x=frequency, line_dash="dash", line_color=INK, line_width=1, opacity=0.5)
     fig.add_hline(y=direction, line_dash="dash", line_color=INK, line_width=1, opacity=0.5)
     rule = f"Robust: family-wise p ≤ {float(settings.get('alpha', 0.05)):g}, selected in ≥ {frequency:.0%}, same direction in ≥ {direction:.0%}"
-    if not _family_wise_computed(result):
+    if (result.get("inference") or {}).get("status") == "withheld":
+        rule = "Inference withheld; stability estimates are exploratory."
+    elif not _family_wise_computed(result):
         rule += "<br>No permutations were run, so no marker could be robust."
     fig.add_annotation(
         text=rule,
@@ -1477,7 +1480,7 @@ def build_marker_stability_figure(result: dict[str, Any]) -> dict[str, Any]:
         bgcolor="rgba(255,255,255,0.85)",
         borderpad=4,
     )
-    _marker_layout(fig, "Marker Stability Across Subsamples", height=460)
+    _marker_layout(fig, ("Marker stability — inference withheld" if (result.get("inference") or {}).get("status") == "withheld" else "Marker Stability Across Subsamples"), height=460)
     fig.update_xaxes(title="Selection frequency", range=[-0.02, 1.02], tickformat=".0%", **_COMMON_AXES)
     fig.update_yaxes(title="Direction consistency", range=[-0.02, 1.02], tickformat=".0%", **_COMMON_AXES)
     return figure_to_json(fig)
@@ -1534,7 +1537,7 @@ def build_marker_rank_figure(result: dict[str, Any], *, top: int = 25) -> dict[s
             showarrow=False,
             font={"size": 14, "color": INK},
         )
-    _marker_layout(fig, "Rank Uncertainty of the Strongest Markers", height=max(420, axis_layout["height"]), left=axis_layout["l"])
+    _marker_layout(fig, ("Marker ranks — inference withheld" if (result.get("inference") or {}).get("status") == "withheld" else "Rank Uncertainty of the Strongest Markers"), height=max(420, axis_layout["height"]), left=axis_layout["l"])
     highest = max((row[primary]["rank_interval"][1] for row in rows), default=1.0)
     title = "Rank across subsamples (1 = strongest)"
     if highest > 200:
@@ -1627,6 +1630,10 @@ def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
             else {"label": "Robust", "count": None, "color": _FUNNEL_GREY, "note": robust_note}
         ),
     ]
+    if (result.get("inference") or {}).get("status") == "withheld":
+        for stage in stages:
+            if stage["label"] not in {"Supplied", "Tested"}:
+                stage.update(count=None, note="inference withheld")
     return stages
 
 
@@ -1782,7 +1789,7 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
         fig.update_xaxes(visible=False, row=1, col=2)
         fig.update_yaxes(visible=False, row=1, col=2)
     noted = bool(ladder and gain_note)
-    _marker_layout(fig, "Marker Evaluation at a Glance", height=440 if noted else 400, left=150)
+    _marker_layout(fig, ("Marker evaluation — inference withheld" if (result.get("inference") or {}).get("status") == "withheld" else "Marker Evaluation at a Glance"), height=440 if noted else 400, left=150)
     fig.update_layout(bargap=0.3)
     if noted:
         fig.update_layout(margin={"b": 110})
@@ -1983,7 +1990,7 @@ def build_marker_replication_figure(validation: dict[str, Any]) -> dict[str, Any
             align="left",
             font={"size": 12, "color": INK},
         )
-    _marker_layout(fig, "Locked Model in the External Cohort", height=area + 80 + bottom, left=axis_layout["l"])
+    _marker_layout(fig, "Locked Model in the External Cohort" + (" — inference " + validation["inference"]["status"] if validation.get("inference") and not validation["inference"].get("allowed") else ""), height=area + 80 + bottom, left=axis_layout["l"])
     fig.update_layout(margin={"b": bottom}, legend={"orientation": "h", "yanchor": "top", "y": -88 / area, "xanchor": "left", "x": 0.0})
     bounds = [tested[key] for _, tested in rows for key in ("ci_lower", "ci_upper")]
     fig.update_xaxes(title="Hazard ratio (log scale)", type="log", **_log_axis_ticks([1.0, *bounds]), row=2, col=1, **_COMMON_AXES)

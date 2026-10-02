@@ -1,0 +1,326 @@
+[
+  {
+    "cohort": "CAL",
+    "endpoint": "rfs",
+    "complete_cases": 68,
+    "events": 22,
+    "duplicates_within": 0,
+    "duplicates_removed": 0,
+    "patients_kept": 68,
+    "events_kept": 22,
+    "used": false,
+    "reason": "fewer than 30 events"
+  },
+  {
+    "cohort": "DFHCC",
+    "endpoint": "dmfs",
+    "complete_cases": 70,
+    "events": 4,
+    "duplicates_within": 0,
+    "days_per_month": 30,
+    "duplicates_removed": 0,
+    "patients_kept": 70,
+    "events_kept": 4,
+    "used": false,
+    "reason": "fewer than 30 events"
+  },
+  {
+    "cohort": "DFHCC2",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "DFHCC3",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "DUKE",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "DUKE2",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "EMC2",
+    "endpoint": "dmfs",
+    "used": false,
+    "reason": "patients selected for relapse"
+  },
+  {
+    "cohort": "EORTC10994",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "EXPO",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "FNCLCC",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "GSE25066",
+    "endpoint": "dmfs",
+    "complete_cases": 0,
+    "events": 0,
+    "duplicates_within": 0,
+    "used": false,
+    "reason": "no complete cases"
+  },
+  {
+    "cohort": "GSE32646",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "GSE48091",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "GSE58644",
+    "endpoint": "dmfs",
+    "complete_cases": 220,
+    "events": 43,
+    "duplicates_within": 5,
+    "duplicates_removed": 0,
+    "patients_kept": 220,
+    "events_kept": 43,
+    "marker_weight_measured": 1.0,
+    "used": true
+  },
+  {
+    "cohort": "HLP",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "IRB",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "KOO",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "LUND",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "LUND2",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "MAINZ",
+    "endpoint": "dmfs",
+    "complete_cases": 162,
+    "events": 29,
+    "duplicates_within": 0,
+    "days_per_month": 30,
+    "duplicates_removed": 0,
+    "patients_kept": 162,
+    "events_kept": 29,
+    "used": false,
+    "reason": "fewer than 30 events"
+  },
+  {
+    "cohort": "MAQC2",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "MCCC",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "MDA4",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "MSK",
+    "endpoint": "dmfs",
+    "complete_cases": 0,
+    "events": 0,
+    "duplicates_within": 0,
+    "used": false,
+    "reason": "no complete cases"
+  },
+  {
+    "cohort": "MUG",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "NCCS",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "NCI",
+    "endpoint": "rfs",
+    "complete_cases": 65,
+    "events": 25,
+    "duplicates_within": 0,
+    "duplicates_removed": 0,
+    "patients_kept": 65,
+    "events_kept": 25,
+    "used": false,
+    "reason": "fewer than 30 events"
+  },
+  {
+    "cohort": "NKI",
+    "endpoint": "rfs",
+    "complete_cases": 245,
+    "events": 72,
+    "duplicates_within": 0,
+    "duplicates_removed": 0,
+    "patients_kept": 245,
+    "events_kept": 72,
+    "marker_weight_measured": 0.8725226165349893,
+    "used": true
+  },
+  {
+    "cohort": "PNC",
+    "endpoint": "rfs",
+    "complete_cases": 39,
+    "events": 12,
+    "duplicates_within": 0,
+    "duplicates_removed": 0,
+    "patients_kept": 39,
+    "events_kept": 12,
+    "used": false,
+    "reason": "fewer than 30 events"
+  },
+  {
+    "cohort": "STK",
+    "endpoint": "rfs",
+    "complete_cases": 0,
+    "events": 0,
+    "duplicates_within": 0,
+    "used": false,
+    "reason": "no complete cases"
+  },
+  {
+    "cohort": "STNO2",
+    "endpoint": "rfs",
+    "complete_cases": 65,
+    "events": 24,
+    "duplicates_within": 0,
+    "tumour_size": "T category, mapped to cm",
+    "duplicates_removed": 0,
+    "patients_kept": 65,
+    "events_kept": 24,
+    "used": false,
+    "reason": "fewer than 30 events"
+  },
+  {
+    "cohort": "TCGA",
+    "endpoint": null,
+    "used": false,
+    "reason": "no relapse-free or distant metastasis-free survival recorded"
+  },
+  {
+    "cohort": "TRANSBIG",
+    "endpoint": "rfs",
+    "complete_cases": 132,
+    "events": 44,
+    "duplicates_within": 0,
+    "duplicates_removed": 1,
+    "patients_kept": 131,
+    "events_kept": 44,
+    "marker_weight_measured": 0.9445877210877716,
+    "used": true
+  },
+  {
+    "cohort": "UCSF",
+    "endpoint": "rfs",
+    "complete_cases": 82,
+    "events": 16,
+    "duplicates_within": 0,
+    "duplicates_removed": 0,
+    "patients_kept": 82,
+    "events_kept": 16,
+    "used": false,
+    "reason": "fewer than 30 events"
+  },
+  {
+    "cohort": "UNC4",
+    "endpoint": "rfs",
+    "complete_cases": 0,
+    "events": 0,
+    "duplicates_within": 0,
+    "tumour_size": "size classes (1, 3, 6), not centimetres: treated as not recorded",
+    "days_per_month": 30,
+    "used": false,
+    "reason": "no complete cases"
+  },
+  {
+    "cohort": "UNT",
+    "endpoint": "rfs",
+    "complete_cases": 72,
+    "events": 22,
+    "duplicates_within": 0,
+    "duplicates_removed": 0,
+    "patients_kept": 72,
+    "events_kept": 22,
+    "used": false,
+    "reason": "fewer than 30 events"
+  },
+  {
+    "cohort": "UPP",
+    "endpoint": "rfs",
+    "complete_cases": 192,
+    "events": 45,
+    "duplicates_within": 0,
+    "duplicates_removed": 16,
+    "patients_kept": 176,
+    "events_kept": 44,
+    "marker_weight_measured": 1.0,
+    "used": true
+  },
+  {
+    "cohort": "VDX",
+    "endpoint": "dmfs",
+    "complete_cases": 142,
+    "events": 52,
+    "duplicates_within": 0,
+    "tumour_size": "T category, mapped to cm",
+    "duplicates_removed": 0,
+    "patients_kept": 142,
+    "events_kept": 52,
+    "marker_weight_measured": 0.9445877210877716,
+    "used": true
+  }
+]

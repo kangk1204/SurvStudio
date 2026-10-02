@@ -1216,6 +1216,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
     max_missing_fraction: float = Field(default=0.2, ge=0.0, lt=1.0)
     max_mode_fraction: float = Field(default=0.9, ge=0.5, le=1.0)
     max_signature_markers: int = Field(default=10, ge=1, le=50)
+    clinical_basis: Literal["linear", "restricted_cubic_spline"] = "linear"
     nonlinear_lens: Literal["off", "gbs", "rsf"] = "off"
     random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
 
@@ -1251,6 +1252,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
             max_missing_fraction=self.max_missing_fraction,
             max_mode_fraction=self.max_mode_fraction,
             max_signature_markers=self.max_signature_markers,
+            clinical_basis=self.clinical_basis,
             nonlinear_lens=self.nonlinear_lens,
             random_seed=self.random_seed,
         )
@@ -5122,6 +5124,13 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
         low, high = stats["rank_interval"]
         display = {
             "Marker": row["marker"],
+            "Inference status": row.get("inference_status", "not_assessed"),
+            "Withholding reasons": "; ".join(((result.get("inference") or {}).get("reasons") or [])[:3])
+                + (f"; see diagnostics for {len(result['inference']['reasons']) - 3} further findings"
+                   if len((result.get("inference") or {}).get("reasons") or []) > 3 else ""),
+            "Clinical basis": result.get("clinical_basis", "linear"),
+            "Method version": result.get("method_version"),
+            "Engineering qualification": (result.get("inference") or {}).get("engineering_qualification", {}).get("status", "not_evaluated"),
             "Tier": row["tier"],
             "Evidence": row["pattern"],
             "Direction": row["direction"],
@@ -5138,6 +5147,10 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
             "Rank 95% interval": None if low is None or high is None else f"{low:.0f} to {high:.0f}",
         }
         if primary == "added_value":
+            exploratory = (row.get("exploratory") or {}).get("added_value") or {}
+            display["Exploratory raw P"] = exploratory.get("p_value")
+            display["Exploratory raw family-wise P"] = exploratory.get("p_fwer")
+            display["Exploratory raw permutation q"] = exploratory.get("q_perm")
             display["LR test P"] = exact.get("lr_p")
             display["Apparent C gain"] = exact.get("delta_c_apparent")
             display["Unadjusted HR"] = ((row.get("exact") or {}).get("marginal") or {}).get("hazard_ratio")
@@ -5320,6 +5333,8 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
                 settings=request_model.marker_settings(),
                 id_column=id_column,
             )
+            from survival_toolkit.marker_qualification import qualify_marker_result
+            result = qualify_marker_result(result)
             report_dataset = {**_report_dataset(stored), "marker_matrix": matrix_info} if matrix_info else _report_dataset(stored)
             payload = {
                 "analysis": _trim_marker_table(result),
@@ -5383,6 +5398,8 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
                 if isinstance(exc, KeyError):
                     raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
                 raise UserInputError("The recipe is malformed; export it again from a marker evaluation.") from exc
+            from survival_toolkit.marker_qualification import qualify_external_result
+            validation = qualify_external_result(validation, recipe)
             if bootstrap_note and isinstance(validation.get("notes"), list):
                 validation["notes"].append(bootstrap_note)
             return _attach_dataset_hash(

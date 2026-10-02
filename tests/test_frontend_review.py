@@ -1664,6 +1664,7 @@ def test_validation_rows_follow_the_tested_fit_and_flag_what_is_not_estimable(tm
     assert rows["B"]["Tested as"] == "marginal" and rows["B"]["HR per unit"] == 0.8
     assert rows["C"] == {
         "Marker": "C",
+        "Inference status": "not assessed",
         "Tested as": "not estimable",
         "HR per unit": None,
         "CI lower": None,
@@ -1677,6 +1678,7 @@ def test_validation_rows_follow_the_tested_fit_and_flag_what_is_not_estimable(tm
     # A result from before the "tested" field shows the adjusted fit and no extra column.
     assert result["oldRows"] == [{
         "Marker": "A",
+        "Inference status": "not assessed",
         "HR per unit": 1.5,
         "CI lower": None,
         "CI upper": None,
