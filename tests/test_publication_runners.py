@@ -148,8 +148,8 @@ def test_numerical_and_shell_sources_reject_an_unrelated_parent_checkout(monkeyp
     scripts.mkdir(parents=True)
     assert module.git_commit(archive) == "unknown"
     assert module.git_commit(parent) != "unknown"
-    if not shutil.which("bash"):
-        pytest.skip("bash is unavailable; numerical source checks already completed")
+    if os.name == "nt" or not shutil.which("bash"):
+        pytest.skip("POSIX shell checks require POSIX bash; numerical source checks already completed")
     directory = Path(__file__).resolve().parents[1] / "paper"
     for name in ("run_step.sh", "run_all.sh"):
         shutil.copy2(directory / name, archive / "paper" / name)
@@ -159,6 +159,11 @@ def test_numerical_and_shell_sources_reject_an_unrelated_parent_checkout(monkeyp
         run = subprocess.run(["bash", str(archive / "paper" / name), *arguments], env=environment,
                              capture_output=True, text=True, check=True)
         assert "SOURCE=unknown" in run.stdout and "cannot be tied to a commit" in run.stderr
+        valid = subprocess.run(["bash", str(archive / "paper" / name), *arguments],
+                               env={**environment, "SURVSTUDIO_SRC": str(parent)},
+                               capture_output=True, text=True, check=True)
+        assert "SOURCE=" + module.git_commit(parent) in valid.stdout
+        assert "cannot be tied to a commit" not in valid.stderr
 
 
 def _tier_logistic_data():
