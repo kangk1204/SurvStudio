@@ -257,12 +257,19 @@ function markerSummary(payload) {
   const resampling = analysis.resampling || {};
   const stabilityAssessed = resampling.stability_assessed ?? (resampling.n_valid == null || Number(resampling.n_valid) > 0);
   const lensText = addedValue ? "added value beyond the clinical covariates" : "an association";
+  const repeated = markerDuplicateCaution(analysis.duplicates);
   if (analysis.inference?.status === "withheld") {
+    const dataCautions = repeated ? [repeated] : [];
+    if ((cohort.dropped_markers || []).length) dataCautions.push(markerDroppedCaution(cohort.dropped_markers));
+    (Array.isArray(cohort.notes) ? cohort.notes : []).forEach((note) => {
+      const text = String(note ?? "").trim();
+      if (text) dataCautions.push(text);
+    });
     return {
       status: "review", headline: "Added-value inference is withheld; marker claims and robust tiers are unavailable.",
       metrics: [{ label: "Patients", value: cohort.n }, { label: "Markers", value: evaluated },
                 { label: "Inference", value: "Withheld" }],
-      strengths: [], cautions: [...(analysis.inference.reasons || []), analysis.inference.interpretation],
+      strengths: [], cautions: [...dataCautions, ...(analysis.inference.reasons || []), analysis.inference.interpretation],
       next_steps: ["Review the model and residual diagnostics. Exported estimates and the locked model remain exploratory."]
     };
   }
@@ -279,7 +286,6 @@ function markerSummary(payload) {
     headline = `No marker shows ${lensText} after family-wise error control.`;
   }
   const cautions = [];
-  const repeated = markerDuplicateCaution(analysis.duplicates);
   if (repeated) cautions.push(repeated);
   if (!permutationsRun) {
     cautions.push("No permutations were run, so there are no family-wise p-values (Westfall-Young) and every marker is left untested.");
