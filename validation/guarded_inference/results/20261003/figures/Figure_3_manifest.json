@@ -2,12 +2,12 @@
   "schema_version": "1.0",
   "profile": "publication",
   "figure_id": "Figure_3",
-  "generated_at": "2026-10-02T16:57:14.540619+00:00",
+  "generated_at": "2026-10-02T17:21:49.106989+00:00",
   "base_dir": "../../../../..",
   "script": {
     "path": "validation/guarded_inference/make_figures.py",
-    "bytes": 16769,
-    "sha256": "19076ede60da895e28fff7fb69f5551e3c3aef1351fbc9f85237187eb39d6c3c",
+    "bytes": 16850,
+    "sha256": "da8bf6c0449cb6d71ff0513df74bb61e398dec424017759442de7164b901e31e",
     "media_type": "text/x-python"
   },
   "inputs": [
@@ -21,23 +21,23 @@
   "outputs": [
     {
       "path": "validation/guarded_inference/results/20261003/figures/Figure_3_power_and_dimension.png",
-      "bytes": 233137,
-      "sha256": "8d2308a38b2a7d1affa8b58c1699085ce50472de9f2b4aae60eee65d60993e30",
+      "bytes": 232675,
+      "sha256": "d61a621d695678c248d7a6b43f99c84445a6d625792f227c98998dce320a6068",
       "media_type": "image/png",
       "png_width": 2220,
       "png_height": 1740
     },
     {
       "path": "validation/guarded_inference/results/20261003/figures/Figure_3_power_and_dimension.svg",
-      "bytes": 33000,
-      "sha256": "445b932d2bc388cadefc2b705e6573c35614341f94e20dad480b5c7444a3ea71",
+      "bytes": 32827,
+      "sha256": "a1c009fa47b069cc0671e5c56a18a85d01877cd215687fdae217721427c41bf3",
       "media_type": "image/svg+xml",
       "svg_check": "parsed_no_active_content"
     },
     {
       "path": "validation/guarded_inference/results/20261003/figures/Figure_3_power_and_dimension.pdf",
-      "bytes": 36288,
-      "sha256": "6483b6f20301b5970c9b8bd9d944308d85d0365d780b645aa8463027f66f672a",
+      "bytes": 36277,
+      "sha256": "15bd749936f09b3336647c72b9af2c5d836997701ecb3d03790fa121ec2a8cb4",
       "media_type": "application/pdf",
       "pdf_check": "header_and_eof"
     }

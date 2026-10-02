@@ -25,9 +25,9 @@ Main-study values below are percentages. Conditional FWER uses only datasets all
 |Correlated markers|5.22|4.68 / 90.10|4.20 / 81.72|
 |Z-dependent censoring|4.74|4.08 / 89.06|3.82 / 79.24|
 |Nonlinear marker relation|5.30|0.00 / 0.00|1.24 / 27.02|
-|Heteroskedastic markers|5.06|0.00 / 0.28|0.00 / 0.00|
-|Time reversal with linear markers|5.34|0.62 / 9.64|2.12 / 50.86|
-|Time reversal with nonlinear markers|69.64|0.00 / 0.00|0.90 / 17.28|
+|Heteroskedastic markers|5.06|0.00 / 0.30|0.00 / 0.00|
+|Time reversal with linear markers|5.34|0.62 / 9.64|2.12 / 50.88|
+|Time reversal with nonlinear markers|69.64|0.00 / 0.00|0.90 / 17.26|
 |Time reversal with heteroskedastic markers|24.90|0.00 / 0.02|0.00 / 0.00|
 |Nonlinear clinical risk|99.14|0.00 / 0.00|1.10 / 25.54|
 

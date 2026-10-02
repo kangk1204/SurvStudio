@@ -10,4 +10,4 @@ This package contains synthetic fixtures and aggregate outcomes only. Neither ne
 
 `aggregate-manifest.json` hashes fixed inputs and outputs, excluding derived aggregate-audit files to prevent a hash cycle. `aggregate-audit.json` records the exact manifest hash and audit source hashes. The original confirmation summary is retained byte-for-byte; completion is determined by its complete and missing-index fields.
 
-See ../../../README.md and ../../../../docs/guarded_inference_validation.md for reproduction and interpretation. Preserve this study if any method is revised; use a new method version and seeds for a new confirmation study.
+See [the validation workflow](../../README.md) and [the results and interpretation](../../../../docs/guarded_inference_validation.md). Preserve this study if any method is revised; use a new method version and seeds for a new confirmation study.

@@ -25,7 +25,8 @@ def save(fig,out,name):
     fig.savefig(out/(name+'.svg'),facecolor='white',metadata={'Date':None})
     svg=out/(name+'.svg')
     # Matplotlib adds an external SVG DTD declaration; standalone exports need no DTD.
-    svg.write_text(re.sub(r'<!DOCTYPE[^>]*>\s*','',svg.read_text()))
+    standalone=re.sub(r'<!DOCTYPE[^>]*>\s*','',svg.read_text())
+    svg.write_text('\n'.join(line.rstrip() for line in standalone.splitlines())+'\n')
     fig.savefig(out/(name+'.pdf'),facecolor='white',metadata={'CreationDate':None,'ModDate':None})
     plt.close(fig)
 
@@ -123,7 +124,7 @@ def run(root):
                    for m,ls in [('legacy_linear',''),('guarded_linear','-'),('guarded_spline','--')]]
     fig.legend(handles=power_handles,ncol=3,loc='lower center',bbox_to_anchor=(.5,.005),frameon=False)
     fig.text(.5,.075,'Research prototype before method qualification; both profiles failed the engineering gates.',ha='center',fontsize=7.5)
-    fig.subplots_adjust(left=.1,right=.98,top=.95,bottom=.15,wspace=.36,hspace=.48);save(fig,out,'Figure_3_power_and_dimension')
+    fig.subplots_adjust(left=.1,right=.98,top=.95,bottom=.20,wspace=.36,hspace=.48);save(fig,out,'Figure_3_power_and_dimension')
     pd.DataFrame([r for r in data if r['condition'].startswith('partial_') or (r['n']==180 and r['condition'] in shapes)]).drop(columns=['source_hashes']).to_csv(out/'Figure_3_source.csv',index=False)
 
     reference=json.loads((root/'independent_R/verification.json').read_text())

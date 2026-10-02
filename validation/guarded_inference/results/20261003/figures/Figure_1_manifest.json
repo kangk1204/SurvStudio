@@ -2,12 +2,12 @@
   "schema_version": "1.0",
   "profile": "publication",
   "figure_id": "Figure_1",
-  "generated_at": "2026-10-02T16:57:14.455030+00:00",
+  "generated_at": "2026-10-02T17:21:49.018687+00:00",
   "base_dir": "../../../../..",
   "script": {
     "path": "validation/guarded_inference/make_figures.py",
-    "bytes": 16769,
-    "sha256": "19076ede60da895e28fff7fb69f5551e3c3aef1351fbc9f85237187eb39d6c3c",
+    "bytes": 16850,
+    "sha256": "da8bf6c0449cb6d71ff0513df74bb61e398dec424017759442de7164b901e31e",
     "media_type": "text/x-python"
   },
   "inputs": [
@@ -35,8 +35,8 @@
     },
     {
       "path": "validation/guarded_inference/results/20261003/figures/Figure_1_workflow.svg",
-      "bytes": 10601,
-      "sha256": "aa3127cd045583be05749d2c2fc5bbdb58044fd6ff482e84e7ebf0aeefe4748f",
+      "bytes": 10485,
+      "sha256": "fbf64377e01ed0c69b090ec63f511ade59839151dcf39f7dcc84b4cd24a4b45d",
       "media_type": "image/svg+xml",
       "svg_check": "parsed_no_active_content"
     },
