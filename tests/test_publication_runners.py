@@ -113,6 +113,48 @@ def test_saved_figure_exports_are_deterministic_and_svg_has_no_dtd(monkeypatch, 
     assert json.loads((tmp_path / "export_check.provenance.json").read_text())["outputs"] == hashes[-1]
 
 
+def _tier_logistic_data():
+    import numpy as np
+    rng = np.random.default_rng(731)
+    return pd.DataFrame({"abs_z": rng.normal(2, 0.6, 128), "cohorts": rng.integers(2, 8, 128),
+                         "mean_expression": rng.normal(4, 0.8, 128),
+                         "tier": ["robust"] * 8 + ["not supported"] * 120,
+                         "replicated": [True] * 8 + list(rng.random(120) < 0.35)})
+
+
+def test_quasi_separated_tier_regression_has_no_inferential_verdict(monkeypatch):
+    pytest.importorskip("statsmodels")
+    module = load_script(monkeypatch, "15b_tier_replication_checks")
+    result = module.logistic(_tier_logistic_data())
+    assert not result["inference_available"]
+    assert result["coefficients"] == {} and result["likelihood_ratio_p"] is None
+    assert result["tiers_add_nothing_beyond_z"] is None
+    assert "No logistic tier inference" in result["statement"]
+    json.dumps(result, allow_nan=False)
+
+
+def test_estimable_tier_regression_keeps_descriptive_dependence_limits(monkeypatch):
+    pytest.importorskip("statsmodels")
+    module = load_script(monkeypatch, "15b_tier_replication_checks")
+    table = _tier_logistic_data()
+    table.loc[:7, "replicated"] = [True, False] * 4
+    result = module.logistic(table)
+    assert result["converged"] and result["inference_available"] and result["descriptive_only"]
+    assert "gene dependence" in result["statement"].lower()
+    assert "assume independent genes" in result["inference_note"]
+    json.dumps(result, allow_nan=False)
+
+
+def test_constant_replication_outcome_is_reported_without_a_fit(monkeypatch):
+    pytest.importorskip("statsmodels")
+    module = load_script(monkeypatch, "15b_tier_replication_checks")
+    table = _tier_logistic_data()
+    table["replicated"] = True
+    result = module.logistic(table)
+    assert not result["inference_available"] and result["status"] == "replication outcome lacks variation"
+    json.dumps(result, allow_nan=False)
+
+
 @pytest.mark.parametrize("commit,code,valid", [
     ("3e0c4af1", "0123456789abcdef", True),
     ("unknown", "0123456789abcdef", False),
