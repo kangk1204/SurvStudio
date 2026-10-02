@@ -93,7 +93,9 @@ def generate(replicates: int) -> None:
         raise SystemExit("Script 06's patients differ from the development patients of 18_competitors_data.py.")
     # Script 06's clinical linear predictor, in this comparison's patient order.
     eta = sim.ETA_CLINICAL[[position[patient] for patient in patients["patient_id"]]]
-    settings = {"null_seed": NULL_SEED, "replicates": replicates, "truth_patients": TRUTH_PATIENTS, "sizes": SIZES,
+    settings = {"null_seed": NULL_SEED, "replicates": replicates,
+                "mime_replicates": min(replicates, int(os.environ.get("MIME_REPLICATES", MIME_REPLICATES))),
+                "truth_patients": TRUTH_PATIENTS, "sizes": SIZES,
                 "censoring_rate": float(sim.CENSOR_RATE), "weibull_shape": float(sim.SHAPE), "median_months": float(sim.MEDIAN_MONTHS),
                 "administrative_months": float(sim.ADMIN_MONTHS), "clinical_log_hr": dict(zip(sim.DESIGN.columns, map(float, sim.CLINICAL_FIT.beta)))}
     for replicate in range(replicates):
@@ -302,11 +304,13 @@ def summarise() -> None:
             record.update({f"p3_{key}": value for key, value in json.loads((folder / "p3.json").read_text(encoding="utf-8")).items() if key != "replicate"})
         if (folder / "p2" / "run.json").exists():
             record.update(p2_replicate(replicate, frames))
+        elif (folder / "p2.log").exists():
+            record["p2_failed"] = True
         if (folder / "mime" / "run.json").exists():
             split_rows.extend(p1_replicate(replicate, frames))
             record["p1_done"] = True
         elif (folder / "mime.log").exists():
-            # Mime ran and stopped with an error (its mode "all" catches none): the replicate is left out of P1.
+            # Record a missing outcome; it is retained in the planned-denominator bounds.
             record["p1_failed"] = True
         per_replicate.append(record)
         print(f"replicate {replicate} summarised", flush=True)
@@ -317,24 +321,42 @@ def summarise() -> None:
     write_json(RESULTS / "competitors_null.json", clean(null_summary(table, splits_table)))
 
 
-def rate(values: pd.Series) -> dict:
+def rate(values: pd.Series, planned: int | None = None) -> dict:
     values = values.dropna().astype(bool)
     n = int(values.size)
     share = float(values.mean()) if n else None
-    return {"n": n, "rate": share, "mcse": float(np.sqrt(share * (1 - share) / n)) if n else None}
+    result = {"n": n, "rate": share, "mcse": float(np.sqrt(share * (1 - share) / n)) if n else None}
+    if planned is not None:
+        if planned <= 0 or n > planned:
+            raise ValueError("Invalid planned denominator")
+        successes = int(values.sum())
+        result.update(planned_replicates=planned, failure_bounds=[successes / planned, (successes + planned - n) / planned])
+    return result
 
 
 def null_summary(table: pd.DataFrame, splits_table: pd.DataFrame) -> dict:
     summary: dict = {"survstudio": survstudio_version(), "code_hash": code_hash(), "r": r_versions(),
                      "design": json.loads((NULL / "settings.json").read_text(encoding="utf-8")), "claim_c": CLAIM_C,
                      "candidate_cap": CANDIDATE_CAP}
+    planned = int(summary["design"]["replicates"])
+    planned_mime = int(summary["design"].get("mime_replicates", MIME_REPLICATES))
+    if planned <= 0 or not 0 < planned_mime <= planned:
+        raise ValueError("Invalid planned replicate counts")
+    mime_table = table[table["replicate"] < planned_mime]
+    summary["failure_reporting"] = {
+        "P1": {"planned": planned_mime, "completed": int(mime_table.get("p1_done", pd.Series(False, index=mime_table.index)).fillna(False).sum()),
+               "failed_or_missing_ids": [i for i in range(planned_mime) if i not in set(mime_table.loc[mime_table.get("p1_done", pd.Series(False, index=mime_table.index)).fillna(False).astype(bool), "replicate"])]},
+        "P2": {"planned": planned, "completed": int(table.get("p2_selected", pd.Series(index=table.index, dtype=float)).notna().sum())},
+        "P3": {"planned": planned, "completed": int(table.get("p3_best_cutoff_p05", pd.Series(index=table.index, dtype=float)).notna().sum())},
+        "interpretation": "Reported rates condition on completed fits; failure_bounds include every planned design with missing outcomes assigned zero or one. Failed fits are not replaced.",
+    }
     if "p3_best_cutoff_p05" in table:
         p3 = table.dropna(subset=["p3_best_cutoff_p05"])
         summary["P3"] = {
             "replicates": int(len(p3)), "genes": int(p3["p3_genes"].iat[0]),
-            "any_gene_p05": rate(p3["p3_best_cutoff_p05"] > 0),
+            "any_gene_p05": rate(p3["p3_best_cutoff_p05"] > 0, planned),
             "genes_p05": describe(p3["p3_best_cutoff_p05"]),
-            "any_gene_bonferroni": rate(p3["p3_best_cutoff_bonferroni"] > 0),
+            "any_gene_bonferroni": rate(p3["p3_best_cutoff_bonferroni"] > 0, planned),
             "genes_bonferroni": describe(p3["p3_best_cutoff_bonferroni"]),
             "median_cut_genes_p05": describe(p3["p3_median_cut_p05"]),
             "median_cut_any_bonferroni": rate(p3["p3_median_cut_bonferroni"] > 0),
@@ -344,9 +366,9 @@ def null_summary(table: pd.DataFrame, splits_table: pd.DataFrame) -> dict:
         p2 = table.dropna(subset=["p2_selected"])
         with_genes = p2[p2["p2_selected"] > 0]
         summary["P2"] = {
-            "replicates": int(len(p2)), "any_gene_selected": rate(p2["p2_selected"] > 0),
+            "replicates": int(len(p2)), "any_gene_selected": rate(p2["p2_selected"] > 0, planned),
             "selected_genes": describe(p2["p2_selected"]),
-            "claim_training_p05": rate(p2["p2_selected"].gt(0) & p2.get("p2_training_p", pd.Series(np.nan, index=p2.index)).lt(0.05)),
+            "claim_training_p05": rate(p2["p2_selected"].gt(0) & p2.get("p2_training_p", pd.Series(np.nan, index=p2.index)).lt(0.05), planned),
             "external_p05_any": rate(with_genes["p2_external_p05_any"]) if len(with_genes) else None,
             "external_p05_claimed_direction": rate(with_genes["p2_external_p05_claimed_direction"]) if len(with_genes) else None,
             "training_c": describe(with_genes.get("p2_training_c", [])), "external_mean_c": describe(with_genes.get("p2_external_mean_c", [])),
@@ -356,14 +378,24 @@ def null_summary(table: pd.DataFrame, splits_table: pd.DataFrame) -> dict:
         summary["P1"] = {}
         failed = table.loc[table.get("p1_failed", pd.Series(False, index=table.index)).fillna(False).astype(bool), "replicate"]
         summary["P1_failed_replicates"] = [int(value) for value in failed]
-        for design, part in splits_table.groupby("design"):
+        for design, part in splits_table[splits_table["replicate"] < planned_mime].groupby("design"):
+            splits_per_design = 35 if str(design).startswith("3 selection") else 1
             part = part.dropna(subset=["winner"])
+            if not len(part):
+                continue
 
             def by_replicate(flags: pd.Series) -> dict:
                 """A rate over every split of every replicate, with its Monte Carlo SE from the replicates' own rates
                 (the splits of one replicate share its data)."""
                 means = flags.astype(float).groupby(part["replicate"]).mean()
+                denominator = planned_mime * splits_per_design
+                if len(flags) > denominator:
+                    raise ValueError("More split outcomes than planned")
+                successes = int(flags.astype(bool).sum())
                 return {"n": int(len(flags)), "replicates": int(len(means)), "rate": float(means.mean()),
+                        "planned_replicates": planned_mime,
+                        "failure_bounds": [successes / denominator, (successes + denominator - len(flags)) / denominator],
+                        "rate_conditions_on_completed_fits": True,
                         "mcse": float(means.std(ddof=1) / np.sqrt(len(means))) if len(means) > 1 else None}
 
             entry = {

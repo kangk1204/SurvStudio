@@ -225,7 +225,7 @@ def test_the_key_numbers_keep_the_third_decimal_of_the_c_index(tmp_path: Path) -
       return Object.fromEntries(summary.metrics.map((metric) => [metric.label, metric.value]));
     """)
 
-    assert result["Model C (corrected)"] == "0.650"
+    assert result["Model C (gap-adjusted)"] == "0.650"
     assert result["Clinical-only C (left out)"] == "0.600"
 
 @_needs_node

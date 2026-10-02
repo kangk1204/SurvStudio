@@ -163,6 +163,10 @@ files that are there now, and from one SurvStudio commit and one version of the 
 the figure draws (results of an earlier version of the scripts may lack one). After a partial rerun (after changing a
 script, say), it names the files that fail; rerun the steps that write them, or everything.
 
+For selected steps, `run_all.sh` draws available figures and reports a composite figure as pending when another
+case study's input is absent. Existing mixed or stale results still cause an error. A full run requires every
+input; `figures.py --available names...` applies the same partial-input rule when drawing figures directly.
+
 ## Figures
 
 `figures.py` draws each figure at its print size, at most 170 mm wide (BMC's largest figure) with no text below 7 pt,

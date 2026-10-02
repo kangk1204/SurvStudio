@@ -883,7 +883,7 @@ def figure_comparison() -> None:
     save(fig, "fig5_comparison")
 
 
-def main(wanted: set[str]) -> None:
+def main(wanted: set[str], *, available_only: bool = False) -> None:
     refused = {}
     if not wanted and not (RESULTS / "competitors_table.json").exists():
         # The comparison's results come from run_competitors.sh, which runs after run_all.sh; draw it once they exist.
@@ -900,6 +900,13 @@ def main(wanted: set[str]) -> None:
         LOADED.clear()
         try:
             draw()
+        except FileNotFoundError as exc:
+            plt.close("all")
+            if not available_only:
+                raise
+            # Partial analyses can feed composite figures that also need another case study.
+            # Only an absent input is pending; stale or inconsistent existing results still fail.
+            print(f"pending: {name} (missing {exc.filename}; run the other contributing steps)")
         except (MixedResults, NotPrintable) as exc:
             refused[name] = exc.args[0]
         except KeyError as exc:
@@ -914,4 +921,6 @@ def main(wanted: set[str]) -> None:
 
 
 if __name__ == "__main__":
-    main(set(sys.argv[1:]))
+    arguments = sys.argv[1:]
+    available_only = "--available" in arguments
+    main(set(arguments) - {"--available"}, available_only=available_only)

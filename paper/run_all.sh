@@ -75,5 +75,5 @@ done
 if [ $# -eq 0 ]; then
   "$FIGURE_PYTHON" figures.py
 elif [ ${#figures[@]} -gt 0 ]; then
-  "$FIGURE_PYTHON" figures.py $(printf '%s\n' "${figures[@]}" | sort -u)
+  "$FIGURE_PYTHON" figures.py --available $(printf '%s\n' "${figures[@]}" | sort -u)
 fi

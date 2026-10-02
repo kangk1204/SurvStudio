@@ -77,9 +77,11 @@ replacement from the TCGA patients with new outcomes, and 3,000 patients drawn t
 ("truth"). No gene carries information beyond the clinical covariates, but genes that go with stage are prognostic on
 their own, as in real data, so a marginal C above 0.5 is real while the gain over the clinical covariates is zero.
 Every replicate uses all 9,938 genes (no gene sampling was needed). P2 and P3 run on 200 replicates, P1 on 50
-(`MIME_REPLICATES`). Mime's mode "all" catches no error: where one of its fits stops (in the comparison's run, the
-quadratic program of survival-SVM after RSF found no solution in replicate 35), the replicate is left out of P1 and
-recorded (`P1_failed_replicates`), and the next design takes its place (replicate 50).
+(`MIME_REPLICATES`). The audit uses the fixed first 50 designs and retains failed fits without replacement. It reports
+completed-fit rates together with bounds over all planned designs, assigning every missing outcome zero or one.
+The historical release run replaced failed replicate 35 with replicate 50; its success-conditioned results must
+not be interpreted as unconditional error rates. P1–P3 count different claims from SurvStudio's conditional-null
+marker hypothesis, so their claim rates are not estimates of the same FWER.
 
 Claims counted per replicate: P1, the winner's reported selection-cohort C (and whether it is at least 0.55 while its
 sealed honest C is below 0.55), and a median-split log-rank p < 0.05 in at least one selection cohort; P2, at least one

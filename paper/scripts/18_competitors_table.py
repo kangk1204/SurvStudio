@@ -170,6 +170,9 @@ def experiment_2(null: dict) -> list[dict]:
                 "truth_c_mean": entry["truth_honest_c"]["mean"], "truth_gain_mean": entry["truth_gain"]["mean"],
                 "km_p05_in_a_selection_cohort": entry["selection_km_p05_any"]["rate"],
                 "claim_not_holding": (entry.get("claim_not_holding") or {}).get("rate"),
+                "claim_rate_failure_bounds": entry["reported_c_at_least_claim"].get("failure_bounds"),
+                "planned_replicates": entry["reported_c_at_least_claim"].get("planned_replicates"),
+                "notes": "Rates condition on completed fits; the bounds retain all planned designs, including failed or missing fits. These selection-cohort claims are not conditional-null FWER estimates.",
             })
     if "P2" in null:
         entry = null["P2"]
