@@ -659,7 +659,7 @@ Architecture and training:
 - `Batch Size` affects DeepHit and Neural MTLR only. DeepSurv, the Transformer and the VAE use full-batch
   optimization, and the run metadata reports the effective full-batch size.
 - Adam optimizers use light L2 regularization (`weight_decay=1e-4`) and gradient clipping.
-- DeepHit is a modified single-event variant: it ranks cumulative incidence using softplus rather than the original exponential ranking loss, with sigma=1.0 and discrete-bin comparable pairs. Label this implementation as a variant in comparisons with the canonical algorithm.
+- DeepHit is a modified single-event variant: it ranks cumulative incidence using a softplus pairwise ranking penalty with `sigma=1.0` and discrete-bin comparable pairs. These choices differ from the original exponential ranking loss (Lee et al., 2018). Label this implementation as a variant in comparisons with the canonical algorithm.
 - Neural MTLR uses a neuralized right-cumulative MTLR parameterization with its censored likelihood evaluated in
   log space; it matches the canonical MTLR probability construction, while the network and training path are a
   practical SurvStudio implementation rather than a clone of one reference code base.
