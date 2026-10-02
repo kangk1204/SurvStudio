@@ -9,7 +9,9 @@ a reader should check a published marker claim:
    error) and permutation FDR q-values. The added-value null permutes the marker
    residuals left after projecting on the clinical covariates. This approximates
    a conditional null and requires exchangeable residuals; nonlinear relations
-   can invalidate calibration. Permuting the residualised
+   can invalidate calibration. A misspecified clinical Cox baseline, including
+   non-proportional hazards, can also invalidate conditional-null interpretation;
+   multiplicity adjustment does not establish model adequacy. Permuting the residualised
    regressor of interest is the Smith scheme (Winkler et al. 2014, NeuroImage
    92:381-397, Table 2), not Freedman–Lane, which permutes residuals of the outcome.
 3. The whole procedure rerun on subsamples: how often each marker is selected, its
@@ -1520,9 +1522,10 @@ def evaluate_markers(
             "n_permutations": int(adjusted[primary]["n_permutations"]),
             "lens2_null": settings.lens2_null if primary == "added_value" else None,
             "assumption_note": (
-                "Added-value residual permutation approximates a conditional null and assumes exchangeable residuals after linear adjustment. Nonlinear marker-covariate relations can inflate false positives; family-wise error control also requires subset pivotality."
+                "Added-value residual permutation approximates a conditional null and assumes exchangeable residuals after linear adjustment. Nonlinear marker-covariate relations can inflate false positives; family-wise error control also requires subset pivotality. Clinical Cox baseline misspecification, including non-proportional hazards, can invalidate conditional-null interpretation; multiplicity adjustment does not establish model adequacy."
                 if primary == "added_value" and settings.lens2_null == "smith"
                 else "Permutation inference assumes exchangeability under the chosen null; strong family-wise error control also requires subset pivotality."
+                + (" Clinical Cox baseline misspecification can invalidate added-value interpretation; multiplicity adjustment does not establish model adequacy." if primary == "added_value" else "")
             ),
         },
         "resampling": {

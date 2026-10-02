@@ -281,6 +281,9 @@ function markerSummary(payload) {
   if (permutationsRun && addedValue && markerResidualNull(analysis)) {
     cautions.push("Residual permutation assumes exchangeable residuals after linear adjustment. Nonlinear marker-covariate relations can inflate false positives; a robust tier is internal evidence and needs independent validation.");
   }
+  if (permutationsRun && addedValue) {
+    cautions.push("Added-value testing uses a fitted clinical Cox model. Check its functional form and proportional-hazards assumptions; multiple-testing correction does not resolve an unsuitable clinical baseline.");
+  }
   const clinicalOnly = markerModelIsClinicalOnly(signature);
   if (clinicalOnly) cautions.push("No marker was selected, so the final model is the clinical-only model (the clinical covariates alone).");
   // Keep uncertainty about added discrimination ahead of the separate training-to-left-out gap.

@@ -125,9 +125,12 @@ def test_remark_text_names_the_permutation_scheme_by_its_setting() -> None:
         assert "the residuals of each marker after regression on the clinical covariates were permuted (Smith method; Winkler et al. 2014)" in methods
         assert "exchangeable residuals after linear adjustment" in methods
         assert "Nonlinear marker-covariate relations can invalidate" in methods
+        assert "proportional-hazards assumptions need checking" in methods
+        assert "Multiplicity adjustment does not establish model adequacy" in methods
         assert "Family-wise error was controlled" not in methods
     raw = remark_checklist(_hand_built_result(null={"lens2_null": "raw"}), request=_REQUEST)["methods"]
     assert "the marker values themselves were permuted" in raw and "Smith" not in raw
+    assert "proportional-hazards assumptions need checking" in raw
 
 
 def test_remark_text_for_a_model_without_markers_calls_it_the_clinical_model() -> None:

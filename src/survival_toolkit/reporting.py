@@ -179,6 +179,7 @@ def _permutation_sentence(result: dict[str, Any], added_value: bool) -> str:
         + ", and the false discovery rate was estimated from the same permutations. "
         "Permutation inference requires exchangeability under the chosen null; strong family-wise error control also requires subset pivotality. "
         "Nonlinear marker-covariate relations can invalidate the residual-permutation calibration."
+        + (" Added-value testing also requires a suitable clinical Cox baseline: its functional form and proportional-hazards assumptions need checking. Multiplicity adjustment does not establish model adequacy." if added_value else "")
     )
 
 

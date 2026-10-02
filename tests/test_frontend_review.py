@@ -1626,6 +1626,9 @@ def test_marker_summary_names_the_smith_null_and_a_clinical_only_model(tmp_path:
     assert "The selection procedure's mean subsample-to-left-out C-index gap is 0.030" in result["clinicalText"]
     assert "the gap adjustment is a heuristic that includes training-size effects" in result["clinicalText"]
     assert "Nonlinear marker-covariate relations can inflate false positives" in result["smithText"]
+    for scheme in ("smithText", "rawText", "oldNameText"):
+        assert "Check its functional form and proportional-hazards assumptions" in result[scheme]
+        assert "multiple-testing correction does not resolve an unsuitable clinical baseline" in result[scheme]
     assert "Residual permutation assumes" not in result["rawText"]
     assert "In the patients left out of the one subsample that could be scored, the whole selection procedure" in result["clinicalText"]
     assert "The selected markers add little" not in result["clinicalText"]
