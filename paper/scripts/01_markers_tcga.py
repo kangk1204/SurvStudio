@@ -18,6 +18,7 @@ began = time.time()
 frame, genes, matrix = tcga_development()
 result = evaluate_development("I", frame, genes)
 seconds = time.time() - began
+write_json(RESULTS / "tcga_analysis.json", result)
 
 rows = []
 for row in result["marker_table"]:
