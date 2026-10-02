@@ -283,13 +283,13 @@ function markerSummary(payload) {
   }
   const clinicalOnly = markerModelIsClinicalOnly(signature);
   if (clinicalOnly) cautions.push("No marker was selected, so the final model is the clinical-only model (the clinical covariates alone).");
+  // Keep uncertainty about added discrimination ahead of the separate training-to-left-out gap.
+  const leftOut = markerLeftOutComparison(signature, addedValue);
+  if (leftOut && leftOut.verdict !== "adds") cautions.push(leftOut.text);
   // The gap comes from repeated selection and refitting, even when a full-cohort model was fitted.
   if (signature.apparent_c != null && signature.signature_optimism != null && Number(signature.signature_optimism) > 0.02) {
     cautions.push(`The selection procedure's mean subsample-to-left-out C-index gap is ${Number(signature.signature_optimism).toFixed(3)}; the gap adjustment is a heuristic that includes training-size effects.`);
   }
-  // A gain the markers add is a strength; a little or uncertain one is a caution.
-  const leftOut = markerLeftOutComparison(signature, addedValue);
-  if (leftOut && leftOut.verdict !== "adds") cautions.push(leftOut.text);
   if ((cohort.dropped_markers || []).length) {
     cautions.push(markerDroppedCaution(cohort.dropped_markers));
   }

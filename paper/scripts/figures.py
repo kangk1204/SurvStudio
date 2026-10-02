@@ -362,7 +362,7 @@ def figure_estimates() -> None:
     below = fig.add_gridspec(1, 1, left=0.27, right=0.69, top=0.445, bottom=0.14)
 
     # a: the C-index ladder of each setting, internal (development) rows above the external (pooled) ones.
-    rows = ["Apparent", "Subsample gap-\nadjusted", "Left-out patients,\nmodel", "Left-out patients,\nclinical only", "External cohorts,\nmodel",
+    rows = ["Apparent", "Subsample gap-\nadjusted", "Selection procedure,\nleft-out patients", "Left-out patients,\nclinical only", "External cohorts,\nmodel",
             "External cohorts,\nclinical only"]
     colours = [OPPOSITE, ROBUST, ML, MUTED, ML, MUTED]
     positions = np.arange(len(rows))[::-1].astype(float)
@@ -404,7 +404,7 @@ def figure_estimates() -> None:
     for setting in settings:
         signature, pooled = setting["signature"], setting["pooled"]
         headers.append((len(entries), setting["title"].split("\n")[0]))
-        entries.append(("Left-out patients", signature["signature_gain_left_out"], interval_bounds(signature.get("signature_gain_left_out_ci")),
+        entries.append(("Selection procedure (left-out)", signature["signature_gain_left_out"], interval_bounds(signature.get("signature_gain_left_out_ci")),
                         None, "o", ROBUST))
         if setting["case"] == "V":
             sites = held_out["held_out_gain_pooled"]

@@ -192,8 +192,8 @@ def test_a_full_cohort_model_that_could_not_be_fitted_is_named_in_the_text_and_t
 
     assert "it reached" not in text
     assert "The final model could not be fitted in the full cohort, so it has no apparent or subsample gap-adjusted C-index." in text
-    assert "In the patients left out of each of 150 subsamples, the whole procedure reached a mean C-index of 0.650 against 0.620" in text
-    assert "the whole procedure reached a mean C-index" in items["18"]["text"]
+    assert "In the patients left out of each of 150 subsamples, the whole selection procedure reached a mean C-index of 0.650 against 0.620" in text
+    assert "the whole selection procedure reached a mean C-index" in items["18"]["text"]
     titles = [annotation["text"] for annotation in figure["layout"]["annotations"]]
     assert "C-index (full-cohort model not fitted)" in titles and "C-index of the selected-marker model" not in titles
     assert _ladder(figure) == ["Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
@@ -212,7 +212,7 @@ def test_the_left_out_rung_of_a_clinical_only_model_is_the_whole_procedure() -> 
     selected = build_marker_summary_figure(_added_value_result(signature={**signature, "markers": ["m1"], "clinical_only": False}))
 
     assert _ladder(clinical_only) == ["Apparent", "Subsample gap-adjusted", "Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
-    assert _ladder(selected) == ["Apparent", "Subsample gap-adjusted", "Left-out patients", "Clinical only<br>(left-out)"]
+    assert _ladder(selected) == ["Apparent", "Subsample gap-adjusted", "Whole procedure<br>(left-out)", "Clinical only<br>(left-out)"]
 
 
 def test_a_screen_without_clinical_covariates_says_whether_it_selected_a_marker_or_failed_to_fit_one() -> None:

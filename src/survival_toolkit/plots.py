@@ -1631,21 +1631,18 @@ def marker_evidence_funnel(result: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
-    """The evaluation at a glance: how many markers clear each bar, and how the selected-marker
-    model's C-index falls from its apparent value to the value in patients it did not see, with
-    its left-out gain over the clinical covariates and the gain's 95% interval underneath."""
+    """Marker counts, the full model's apparent and gap-adjusted C, and the repeated selection
+    procedure's left-out C and gain over the clinical covariates."""
     added_value = result.get("primary_lens") == "added_value"
     signature = result.get("signature") or {}
     # The model the right panel is about: with no marker selected it holds the clinical covariates only; it can also
     # have failed to fit in the full cohort, or not exist (no marker selected and no clinical covariates).
-    selected_model = False
     if signature_is_clinical_only(signature):
-        model_title, empty_note = "C-index of the clinical-only model", "No C-index is available for the model."
+        model_title, empty_note = "Clinical model and procedure C-index", "No C-index is available for the model."
     elif signature_fit_failed(result):
         model_title, empty_note = "C-index (full-cohort model not fitted)", "The model could not be fitted in the full cohort."
     elif signature.get("markers") or signature.get("apparent_c") is not None:
-        model_title, empty_note = "C-index of the selected-marker model", "No C-index is available for the model."
-        selected_model = True
+        model_title, empty_note = "Model and procedure C-index", "No C-index is available for the model."
     else:
         model_title, empty_note = "C-index (no marker selected)", "No marker was selected, so there is no model."
     fig = make_subplots(
@@ -1718,12 +1715,11 @@ def build_marker_summary_figure(result: dict[str, Any]) -> dict[str, Any]:
         fig.update_xaxes(title="Markers", range=[0, longest * 1.22], dtick=max(1, int(np.ceil(longest / 5))), row=1, col=1, **_COMMON_AXES)
     fig.update_yaxes(autorange="reversed", row=1, col=1, **_COMMON_AXES)
 
-    # The left-out C-index comes from the model each subsample selected and fitted: the selected-marker model's
-    # in the usual case, else plainly the whole procedure's (it could select markers in a subsample).
+    # Every left-out estimate repeats selection and fitting in the smaller training subsample.
     ladder = [
         ("Apparent", signature.get("apparent_c"), ACCENT),
         ("Subsample gap-adjusted", signature.get("optimism_corrected_c"), SLATE),
-        ("Left-out patients" if selected_model else "Whole procedure<br>(left-out)", signature.get("signature_c_left_out"), SAGE),
+        ("Whole procedure<br>(left-out)", signature.get("signature_c_left_out"), SAGE),
     ]
     if added_value:
         ladder.append(("Clinical only<br>(left-out)", signature.get("clinical_c_left_out"), "rgba(100,116,139,0.9)"))
