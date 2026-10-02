@@ -16,6 +16,13 @@ from survival_toolkit.design_audit import (
 from survival_toolkit.errors import UserInputError
 
 
+def test_historical_map_exposes_its_unreproduced_provenance() -> None:
+    result = audit_design(StudyDesign(candidate_models=12, gene_only=False, selection_cohorts=(Cohort("A", 150, 80),)))
+    assert len(result["map"]["sha256"]) == 64
+    assert result["map"]["validation_status"] == "historical_pilot_generator_not_available"
+    assert "not independently reproduced" in result["map"]["interpretation_note"]
+
+
 def _cell(features: str, m: int, k: int, n: int, with_training: bool, scenario: str = MAIN_SCENARIO) -> dict:
     grid = load_map()
     row = grid[

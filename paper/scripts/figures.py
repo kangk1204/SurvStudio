@@ -469,7 +469,7 @@ def figure_models() -> None:
     ax.scatter(table["c"][~reference], y[~reference], c=colours[~reference], s=16, zorder=3, edgecolor=INK, linewidth=0.4)
     ax.scatter(table["c"][reference], y[reference], marker="D", color=INK, s=14, zorder=3)
     ax.axvline(table.loc[reference, "c"].iloc[0], color=INK, lw=0.7, ls="--")
-    ax.set_yticks(y, table["model"])
+    ax.set_yticks(y, table["model"].replace({"DeepHit": "DeepHit variant"}))
     ax.tick_params(axis="y", length=0)
     ax.set_xlabel("C-index\n(95% bootstrap interval)")
     panel_label(ax, "a", x=-0.62, y=1.02)

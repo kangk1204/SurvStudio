@@ -17,6 +17,7 @@ with the range over all four.
 
 from __future__ import annotations
 
+import hashlib
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -270,5 +271,11 @@ def audit_design(design: StudyDesign) -> dict[str, Any]:
         **effects,
         "flags": [flag._asdict() for flag in flags],
         "high_risk_flags": sum(flag.severity == "high" for flag in flags),
-        "map": {"version": MAP_VERSION, "main_scenario": MAIN_SCENARIO},
+        "map": {
+            "version": MAP_VERSION,
+            "main_scenario": MAIN_SCENARIO,
+            "sha256": hashlib.sha256(MAP_PATH.read_bytes()).hexdigest(),
+            "validation_status": "historical_pilot_generator_not_available",
+            "interpretation_note": "Indicative interpolation of a historical pilot. Its original generator and replicate outputs are not included, so these numbers are not independently reproduced or calibrated predictions for this study.",
+        },
     }

@@ -105,7 +105,7 @@
       list.appendChild(item);
     }
     const placement = result.placement || {};
-    field("designMapNote").textContent = `Estimates from a simulation map (${result.map?.version || "benchmark pilot"}), placed at ${placement.selection_cohorts} selection cohort(s) with a median of ${placement.median_cohort_size} ${placement.size_unit}, ${placement.candidate_models} candidate models, ${placement.features}.`;
+    field("designMapNote").textContent = `Estimates from a simulation map (${result.map?.version || "benchmark pilot"}), placed at ${placement.selection_cohorts} selection cohort(s) with a median of ${placement.median_cohort_size} ${placement.size_unit}, ${placement.candidate_models} candidate models, ${placement.features}. ${result.map?.interpretation_note || ""}`;
     field("designResult").classList.remove("hidden");
     field("designResult").scrollIntoView({ behavior: "smooth", block: "start" });
   }
