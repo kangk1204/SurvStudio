@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from common import CATEGORICAL, COVARIATES, GEO_COHORTS, LUAD, PAPER, RESULTS, SCRIPTS, XENA_EXPRESSION, random_effects
+from common import BOOTSTRAP_DRAWS, CATEGORICAL, COVARIATES, GEO_COHORTS, LUAD, PAPER, RESULTS, SCRIPTS, XENA_EXPRESSION, random_effects
 from survival_toolkit.marker_evaluation import (
     RECIPE_VERSION,
     _centred_baseline,
@@ -53,8 +53,8 @@ SENSITIVITY_CAP = 500
 # A gene is measured in a cohort when at most this share of the cohort's patients lack it (script 15's rule); the
 # rest take the cohort median.
 MAX_MISSING = 0.2
-# SurvStudio's bootstrap for external C-indices (validate_locked_recipe's defaults, used by script 03).
-N_BOOTSTRAP = 200
+# Match script 03's explicitly configured paper bootstrap, rather than the API's smaller default.
+N_BOOTSTRAP = BOOTSTRAP_DRAWS
 BOOTSTRAP_SEED = 20260926
 SELECTION_COHORTS = 3
 
@@ -418,7 +418,8 @@ def external_gain(recipe: dict[str, Any], patients: pd.DataFrame, risk: np.ndarr
 
     frame = patients[["patient_id", "os_months", "os_event", *COVARIATES]].copy()
     frame["risk_score"] = np.asarray(risk, dtype=float)
-    return validation_row(validate_locked_recipe(frame, recipe, marker_scaling=scaling))
+    return validation_row(validate_locked_recipe(frame, recipe, marker_scaling=scaling,
+                                                 n_bootstrap=N_BOOTSTRAP, random_seed=BOOTSTRAP_SEED))
 
 
 def external_gain_point(recipe: dict[str, Any], patients: pd.DataFrame, risk: np.ndarray) -> float:

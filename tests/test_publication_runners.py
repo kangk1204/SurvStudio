@@ -78,6 +78,21 @@ def test_figure_guard_reserves_space_for_the_legend(monkeypatch):
         module.plt.close(fig)
 
 
+def test_comparator_external_intervals_match_the_paper_bootstrap(monkeypatch):
+    module = load_script(monkeypatch, "competitors")
+    import common
+    import survival_toolkit.marker_evaluation as markers
+    # The API default is intentionally smaller than the paper's explicit setting.
+    def validate(frame, recipe, marker_scaling="as_measured", n_bootstrap=200, random_seed=0):
+        return {"draws": n_bootstrap, "seed": random_seed}
+    monkeypatch.setattr(markers, "validate_locked_recipe", validate)
+    monkeypatch.setattr(common, "validation_row", lambda value: value)
+    patients = pd.DataFrame({name: [1] for name in ["patient_id", "os_months", "os_event", *common.COVARIATES]})
+    result = module.external_gain({}, patients, [0.2])
+    assert result["draws"] == common.BOOTSTRAP_DRAWS == 2000
+    assert result["seed"] == 20260926
+
+
 @pytest.mark.parametrize("commit,code,valid", [
     ("3e0c4af1", "0123456789abcdef", True),
     ("unknown", "0123456789abcdef", False),

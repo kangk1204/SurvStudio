@@ -50,7 +50,10 @@ error rate. Accessed 2026-10-02.
   Cox fit sets the direction of the risk score (a score that runs backwards in a cohort still gets C > 0.5). This
   "reported C" drives the selection, as it does in papers. The "honest C" is Harrell's C of the risk score with its
   direction set once, on TCGA (a score with C < 0.5 on TCGA is reversed; survival-SVM predicts survival times), with
-  SurvStudio's conventions (`harrell_c_many`) and bootstrap (200 draws, seed 20260926, as `validate_locked_recipe`).
+  SurvStudio's conventions (`harrell_c_many`) and bootstrap (2,000 draws, seed 20260926, matching script 03's
+  explicit paper setting). The API default is 200; the release comparator used that smaller default. The audit
+  aligns the comparison intervals before interpreting differences; this changes interval precision and pooled
+  weights, without retraining the R models.
 - **Selection replayed.** Models are trained on TCGA only, so selection can be replayed for any choice of cohorts: for
   each of the 35 splits of the seven cohorts into 3 selection and 4 sealed cohorts, the winner is the model with the
   highest mean reported C over the 3 (the first in Mime's order on a tie; a model without a C there cannot win). The
@@ -60,7 +63,7 @@ error rate. Accessed 2026-10-02.
 - **Added value over the clinical covariates** (P1 winners, P2), exactly as SurvStudio's external gain: a Cox model of
   age, sex, stage and the risk score fitted on TCGA (Efron ties) and locked as a SurvStudio recipe beside the locked
   clinical-only model (the same clinical-only model as SurvStudio's own), validated with `validate_locked_recipe` in each
-  cohort (the model's C, the clinical-only C and their paired difference, 200 bootstrap draws) and pooled by random
+  cohort (the model's C, the clinical-only C and their paired difference, 2,000 bootstrap draws) and pooled by random
   effects as script 03 pools. The risk score enters as computed from the z-scored genes (`as_measured`, the analogue of
   SurvStudio's within-cohort rescaling); rescaling it within each cohort to its TCGA mean and SD is reported as well.
 - **Median splits** as papers draw them: high risk above the cohort's median risk score, the log-rank test as R's

@@ -26,6 +26,8 @@ import pandas as pd
 from common import CATEGORICAL, COVARIATES, GEO_COHORTS, RESULTS, read_result, survstudio_version, write_csv_atomic, write_json
 from competitors import (
     CANDIDATE_CAP,
+    N_BOOTSTRAP,
+    BOOTSTRAP_SEED,
     SELECTION_COHORTS,
     SENSITIVITY_CAP,
     WORK,
@@ -341,7 +343,8 @@ def survstudio_same_genes(dev_patients: pd.DataFrame, dev_expression: pd.DataFra
     for cohort, (patients, expression) in validation_data().items():
         external = pd.concat([patients[["patient_id", "os_months", "os_event", *COVARIATES]].reset_index(drop=True),
                               expression[[marker for marker in recipe["markers"] if marker in expression.columns]].reset_index(drop=True)], axis=1)
-        rows.append({"cohort": cohort, **validation_row(validate_locked_recipe(external, recipe, marker_scaling="within_cohort"))})
+        rows.append({"cohort": cohort, **validation_row(validate_locked_recipe(external, recipe, marker_scaling="within_cohort",
+                                                                            n_bootstrap=N_BOOTSTRAP, random_seed=BOOTSTRAP_SEED))})
     rows = pd.DataFrame(rows)
     table = pd.DataFrame(result["marker_table"])
     robust = table.loc[table["tier"] == "robust", "marker"].tolist()
@@ -374,6 +377,7 @@ def main() -> None:
     # the cohort after median imputation, as script 15 standardises).
     tests = pd.concat([adjusted_statistics(patients[cohort], expression[cohort]).assign(cohort=cohort) for cohort in GEO_COHORTS], ignore_index=True)
     result = {"survstudio": survstudio_version(), "code_hash": code_hash(), "r": r_versions(), "genes": len(genes),
+              "external_bootstrap_draws": N_BOOTSTRAP, "external_bootstrap_seed": BOOTSTRAP_SEED,
               "candidate_cap": CANDIDATE_CAP, "cohorts": {cohort: {"n": len(patients[cohort]), "events": int(patients[cohort]["os_event"].sum())} for cohort in COHORTS}}
     result["SurvStudio"] = survstudio_section(patients)
     result["SurvStudio"]["tiers_on_comparison_genes"] = tier_check(tests, genes)

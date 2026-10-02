@@ -8,6 +8,12 @@ Does SurvStudio reduce clinically consequential interpretation errors in common 
 
 Unit of inference: participant. Use synthetic patient data only, with identifiers generated for the study. Freeze both tool versions, browser, task datasets, independent answer keys, instruction time, and recording rules before recruitment. Capture the comparator's actual availability and functionality during setup. Do not substitute a different comparator after viewing participant outcomes.
 
+Setup audit on 2026-10-02 found that ESurv's published URL did not resolve in this environment and surviveR required
+sign-in. KM Plotter's custom-data form and public sample were accessible and expose multivariate Cox options;
+its numerical task compatibility remains unverified. See `competitor_access_20261002.md`. ESurv is therefore a
+candidate comparator until exercised. Choose and document an accessible, task-compatible comparator before the
+pilot and before collecting any participant outcomes; record necessary institutional permission or service terms.
+
 ## Design
 
 Engineering pilot: 6 participants, excluded from the main study. Main study: initially 48 participants, with a recruitment target of 16 novices, 16 users familiar with basic survival analysis, and 16 experienced analysts. Stratify order randomization by experience. Fix any sample-size revision after the pilot, before main enrollment, using pilot discordance and a transparent paired-error precision or power calculation. This initial target is a feasibility target, not a claim of sufficient statistical power.

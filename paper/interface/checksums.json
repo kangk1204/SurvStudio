@@ -1,9 +1,28 @@
 {
-  "schema": "SurvStudio interface audit checksums 1",
+  "schema": "SurvStudio interface audit checksums 2",
   "created": "2026-10-02",
   "numerical_commit": "3e0c4af142e7afc005f3a9bfb28e23c99c203ff7",
-  "rendering_commit": "6d1bb277482b4ba5c0f79d450fed381469b88095",
   "files": {
+    "README.md": {
+      "sha256": "da96cee75ba0553a1ad7d014cc16f6fdbf60eea958240b929cc20b45437d2ea1",
+      "bytes": 2794
+    },
+    "capture_case_i_20261002.py": {
+      "sha256": "b01c77f420894b5c5230530c44e4e8cd1f68d1561fb874fdaf237f2a3c0c6dc2",
+      "bytes": 6078
+    },
+    "capture_case_i_print_20261002.py": {
+      "sha256": "b39a4a943beb69381eb4a973861c03696b98bb55fad48438195caea854d729aa",
+      "bytes": 6718
+    },
+    "marker_summary_case_study_i.png": {
+      "sha256": "11409049e067444b91925397a0af10c0696bc2582aa30a8c0740fae7aa009571",
+      "bytes": 167118
+    },
+    "marker_summary_case_study_i.provenance.json": {
+      "sha256": "a6b90c3bab3324bb517e745c6974eefc53e46f21e4ecb9d3686fbfc3bf71185e",
+      "bytes": 58493
+    },
     "markers_tab_case_study_i.png": {
       "sha256": "b5c4b116f67fd95fb3b657ba185752311ca4da359f0c1b73755c37845aca9433",
       "bytes": 560567
@@ -11,14 +30,10 @@
     "markers_tab_case_study_i.provenance.json": {
       "sha256": "d36332fbaf92b61ca3357939db1d791af538c616b11915dea96c46dd78dff5fa",
       "bytes": 58247
-    },
-    "capture_case_i_20261002.py": {
-      "sha256": "b01c77f420894b5c5230530c44e4e8cd1f68d1561fb874fdaf237f2a3c0c6dc2",
-      "bytes": 6078
-    },
-    "README.md": {
-      "sha256": "1f906bd53062054f8ee691e9ee83aa98f508871e1988c0eac8bb79fbe29bcf6f",
-      "bytes": 1386
     }
+  },
+  "rendering_commits": {
+    "markers_tab_case_study_i.png": "6d1bb277482b4ba5c0f79d450fed381469b88095",
+    "marker_summary_case_study_i.png": "01d8956f2a83ceade9eaf9a67a5b020d6a394901"
   }
 }
