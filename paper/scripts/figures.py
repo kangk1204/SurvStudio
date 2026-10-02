@@ -1,7 +1,8 @@
 """Figures 1 to 5 and Supplementary Figures S1 to S6 of the software paper, drawn from the files the analysis scripts
 write to results/, at print size: BMC prints a figure at most 170 mm wide, so every figure is drawn at its final size,
-at most 170 mm wide with no text below 7 pt, and save() refuses one that is not. Figure 1b is a screenshot of the
-Markers tab after case study I (INTERFACE), which Figure 1 places under the workflow diagram (fig1_workflow).
+at most 170 mm wide, reserving 25 mm of BMC's 225-mm combined height for a legend, with a project readability
+floor of 7 pt. save() refuses one that is not. Figure 1b is a native screenshot of the Markers summary after
+case study I (INTERFACE), which Figure 1 places under the workflow diagram (fig1_workflow).
 
 Needs matplotlib, numpy and pandas (no SurvStudio). Writes PNG (300 dpi; Figure 1, with its screenshot, 600 dpi) and
 PDF to paper/figures/.
@@ -41,11 +42,13 @@ PAPER = Path(__file__).resolve().parents[1]
 RESULTS = PAPER / "results"
 FIGURES = PAPER / "figures"
 FIGURES.mkdir(exist_ok=True)
-# Figure 1b: the Markers tab after case study I (TCGA-LUAD and the Xena HiSeqV2.gz file, age, sex and stage, the
-# defaults), captured from the web interface in a 1,080-pixel-wide window at three device pixels per pixel.
-INTERFACE = PAPER / "interface" / "markers_tab_case_study_i.png"
-# BMC's largest print width, 170 mm, and its smallest legible type, 7 pt: save() checks both at the final size.
+# Figure 1b: the native summary panel after case study I (TCGA-LUAD, Xena HiSeqV2.gz, age, sex and stage,
+# defaults), captured in a 900-pixel-wide window at three device pixels per pixel; its provenance records fonts.
+INTERFACE = PAPER / "interface" / "marker_summary_case_study_i.png"
+INTERFACE_PROVENANCE = PAPER / "interface" / "marker_summary_case_study_i.provenance.json"
+# BMC's width and combined figure/legend height; 25 mm reserved for the legend and our own 7-pt readability floor.
 PRINT_WIDTH = 170 / 25.4
+PRINT_HEIGHT = 200 / 25.4
 MIN_POINTS = 7.0
 PAD = 0.02  # inches of white space kept around the drawing
 WIDE = PRINT_WIDTH - 0.06  # a full-width figure, its drawing and the white space around it within the print width
@@ -90,13 +93,15 @@ def panel_label(ax, letter: str, x: float = -0.12, y: float = 1.04) -> None:
 
 def print_size(fig) -> tuple[float, float, list[str]]:
     """The figure's width and height as saved (inches), and what keeps it from print: wider than 170 mm, or text
-    below 7 pt."""
+    below 7 pt or more than 200 mm high (leaving 25 mm for the legend)."""
     fig.canvas.draw()
     box = fig.get_tightbbox(fig.canvas.get_renderer())
     width, height = box.width + 2 * PAD, box.height + 2 * PAD
     problems = []
     if width > PRINT_WIDTH + 1e-6:
         problems.append(f"{width * 25.4:.1f} mm wide (at most {PRINT_WIDTH * 25.4:.0f} mm)")
+    if height > PRINT_HEIGHT + 1e-6:
+        problems.append(f"{height * 25.4:.1f} mm high (at most 200 mm, reserving 25 mm for the legend)")
     small = sorted({f"{text.get_text()!r} ({text.get_fontsize():g} pt)" for text in fig.findobj(Text)
                     if text.get_visible() and text.get_text().strip() and text.get_fontsize() < MIN_POINTS - 1e-9})
     if small:
@@ -239,9 +244,16 @@ def figure_workflow() -> None:
 
 
 def figure_interface() -> None:
-    """Figure 1: a, the workflow; b, the Markers tab after case study I (INTERFACE), 146 mm wide under it."""
+    """Figure 1: a, the workflow; b, the actual summary panel, with its recorded fonts checked at print size."""
     shot = plt.imread(INTERFACE)
-    gap, shot_width = 0.15, 5.76
+    provenance = json.loads(INTERFACE_PROVENANCE.read_text(encoding="utf-8"))
+    from common import sha256_file
+    if sha256_file(INTERFACE) != provenance["summary_png_sha256"]:
+        raise MixedResults(["interface screenshot changed since its capture record"])
+    gap, shot_width = 0.15, WIDE
+    effective_points = shot_width * 72 * provenance["summary_min_svg_font_px"] / provenance["summary_css_width"]
+    if effective_points < MIN_POINTS:
+        raise NotPrintable([f"interface text is only {effective_points:.2f} pt at print size"])
     shot_height = shot_width * shot.shape[0] / shot.shape[1]
     height = WORKFLOW_HEIGHT + gap + shot_height
     fig = plt.figure(figsize=(WIDE, height))

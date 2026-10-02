@@ -66,6 +66,18 @@ def test_comparison_table_retains_missing_marker_and_gain_outcomes(monkeypatch):
     assert "not selection-procedure coverage" in rows[1]["notes"]
 
 
+def test_figure_guard_reserves_space_for_the_legend(monkeypatch):
+    pytest.importorskip("matplotlib")
+    module = load_script(monkeypatch, "figures")
+    fig, ax = module.plt.subplots(figsize=(5, 10))
+    ax.plot([0, 1], [0, 1])
+    try:
+        _, _, problems = module.print_size(fig)
+        assert any("high" in problem and "legend" in problem for problem in problems)
+    finally:
+        module.plt.close(fig)
+
+
 @pytest.mark.parametrize("commit,code,valid", [
     ("3e0c4af1", "0123456789abcdef", True),
     ("unknown", "0123456789abcdef", False),

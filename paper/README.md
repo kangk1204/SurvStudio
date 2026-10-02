@@ -169,13 +169,15 @@ input; `figures.py --available names...` applies the same partial-input rule whe
 
 ## Figures
 
-`figures.py` draws each figure at its print size, at most 170 mm wide (BMC's largest figure) with no text below 7 pt,
-and refuses to save one that is not. A pooled estimate is drawn with its Hartung-Knapp-Sidik-Jonkman 95% interval and,
+`figures.py` draws each figure at its print size, at most 170 mm wide and 200 mm high (reserving 25 mm of BMC's
+225-mm combined figure/legend height for a legend), with a project readability floor of 7 pt. It refuses to save
+one that is not. The native summary screenshot's fonts are checked using its capture record; raster text in other
+images still needs visual inspection. A pooled estimate is drawn with its Hartung-Knapp-Sidik-Jonkman 95% interval and,
 from three cohorts on, its 95% prediction interval.
 
 | File (`.png`, `.pdf`) | Figure | Drawn from |
 | --- | --- | --- |
-| `fig1` | Figure 1: a, what SurvStudio checks by default (`fig1_workflow`); b, the Markers tab after case study I (`interface/markers_tab_case_study_i.png`, a screenshot of the web interface) | nothing |
+| `fig1` | Figure 1: a, what SurvStudio checks by default (`fig1_workflow`); b, the native Markers summary after case study I (`interface/marker_summary_case_study_i.png` with capture provenance); the wider full-tab capture is retained separately | screenshot and capture record |
 | `fig1_workflow` | Figure 1a alone | nothing |
 | `fig2_markers` | Figure 2: genome-wide markers in TCGA-LUAD | 01, 02 |
 | `fig3_estimates` | Figure 3: internal and external estimates in three settings (lung adenocarcinoma, breast cancer survival, the ER-positive positive control): a, the C-index from apparent to subsample gap-adjusted, left-out and external, for the model and the clinical-only model; b, the gain over the clinical covariates in left-out patients, held-out METABRIC sites (positive control) and the external cohorts | 01, 03, 07 to 10, 14 |
