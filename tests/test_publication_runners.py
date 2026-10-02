@@ -48,6 +48,24 @@ def test_failed_competitor_draws_remain_in_rate_bounds(monkeypatch, tmp_path):
     assert "P1" not in summary  # no success-conditioned rate is fabricated when every fit fails
 
 
+def test_comparison_table_retains_missing_marker_and_gain_outcomes(monkeypatch):
+    module = load_script(monkeypatch, "18_competitors_table")
+    rows = module.experiment_2({"SurvStudio": {
+        "fwer": 0.5, "replicates": 2, "planned_replicates": 4,
+        "fwer_failure_bounds": [0.25, 0.75],
+        "null_with_subsamples": {
+            "replicates": 3, "planned_replicates": 4,
+            "gain_interval_replicates": 2, "verdict_adds": 0.5,
+            "gain_coverage": 0.5,
+        },
+    }})
+    assert rows[0]["claim_rate_failure_bounds"] == [0.25, 0.75]
+    assert rows[1]["replicates"] == 2  # only two gain intervals were available, despite three successful runs
+    assert rows[1]["planned_replicates"] == 4
+    assert rows[1]["claim_rate_failure_bounds"] == [0.25, 0.75]
+    assert "not selection-procedure coverage" in rows[1]["notes"]
+
+
 @pytest.mark.parametrize("commit,code,valid", [
     ("3e0c4af1", "0123456789abcdef", True),
     ("unknown", "0123456789abcdef", False),

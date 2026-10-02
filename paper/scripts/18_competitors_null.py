@@ -422,6 +422,8 @@ def null_summary(table: pd.DataFrame, splits_table: pd.DataFrame) -> dict:
         null = next(row for row in simulation["scenarios"] if row["scenario"] == "null_filter")
         summary["SurvStudio"] = {"source": "script 06, scenario null_filter", "replicates": null["replicates"], "fwer": null["fwer"],
                                  "fwer_mcse": null["fwer_mcse"], "false_per_replicate": null["false_per_replicate"],
+                                 "planned_replicates": null.get("planned_replicates"),
+                                 "fwer_failure_bounds": null.get("fwer_failure_bounds"),
                                  "null_with_subsamples": subsample_scenario(simulation)}
         # The null with subsamples (script 06's null_filter_subsamples, with SurvStudio's gain verdicts) may come from a
         # newer run of script 06 than results/ holds: SUBSAMPLES_SUMMARY names its simulation_summary.json.

@@ -1,0 +1,24 @@
+{
+  "schema": "SurvStudio interface audit checksums 1",
+  "created": "2026-10-02",
+  "numerical_commit": "3e0c4af142e7afc005f3a9bfb28e23c99c203ff7",
+  "rendering_commit": "6d1bb277482b4ba5c0f79d450fed381469b88095",
+  "files": {
+    "markers_tab_case_study_i.png": {
+      "sha256": "b5c4b116f67fd95fb3b657ba185752311ca4da359f0c1b73755c37845aca9433",
+      "bytes": 560567
+    },
+    "markers_tab_case_study_i.provenance.json": {
+      "sha256": "d36332fbaf92b61ca3357939db1d791af538c616b11915dea96c46dd78dff5fa",
+      "bytes": 58247
+    },
+    "capture_case_i_20261002.py": {
+      "sha256": "b01c77f420894b5c5230530c44e4e8cd1f68d1561fb874fdaf237f2a3c0c6dc2",
+      "bytes": 6078
+    },
+    "README.md": {
+      "sha256": "1f906bd53062054f8ee691e9ee83aa98f508871e1988c0eac8bb79fbe29bcf6f",
+      "bytes": 1386
+    }
+  }
+}

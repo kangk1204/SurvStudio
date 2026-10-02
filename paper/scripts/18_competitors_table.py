@@ -144,19 +144,31 @@ def experiment_2(null: dict) -> list[dict]:
     survstudio = null.get("SurvStudio", {})
     subsamples = survstudio.get("null_with_subsamples")
     rows.append({
-        "approach": "SurvStudio", "claim": "at least one marker declared (FWER <= 0.05 beyond the clinical covariates)",
+        "approach": "SurvStudio", "claim": "at least one marker declared (family-wise adjusted p <= 0.05 beyond the clinical covariates)",
         "claim_rate": survstudio.get("fwer"), "claim_rate_mcse": survstudio.get("fwer_mcse"), "replicates": survstudio.get("replicates"),
+        "planned_replicates": survstudio.get("planned_replicates"),
+        "claim_rate_failure_bounds": survstudio.get("fwer_failure_bounds"),
         "mean_claimed": survstudio.get("false_per_replicate"),
         "notes": "script 06 (null with the near-constant filter, 2,000 genes per replicate); the null with subsamples: "
                  + ("the next row" if subsamples else "not yet available"),
     })
     if subsamples:
+        completed = subsamples.get("gain_interval_replicates")
+        planned = subsamples.get("planned_replicates")
+        share = subsamples.get("verdict_adds")
+        bounds = None
+        if completed is not None and planned and share is not None:
+            successes = round(share * completed)
+            bounds = [successes / planned, (successes + planned - completed) / planned]
         rows.append({
             "approach": "SurvStudio", "design": "script 06's null with 100 subsamples per replicate (null_filter_subsamples)",
             "claim": "the gain verdict 'adds' (the paired left-out gain's interval above 0)",
-            "claim_rate": subsamples.get("verdict_adds"), "replicates": subsamples.get("replicates"),
+            "claim_rate": share, "replicates": completed,
+            "claim_rate_mcse": ((share * (1 - share) / completed) ** 0.5 if share is not None and completed else None),
+            "planned_replicates": planned, "claim_rate_failure_bounds": bounds,
             "notes": (f"verdicts: adds little {subsamples.get('verdict_adds_little')}, uncertain {subsamples.get('verdict_uncertain')}; "
-                      f"FWER {subsamples.get('fwer')}; gain interval coverage {subsamples.get('gain_coverage')}; SurvStudio "
+                      f"FWER {subsamples.get('fwer')}; coverage against fitted full-model gain {subsamples.get('gain_coverage')} "
+                      "is a diagnostic, not selection-procedure coverage; SurvStudio "
                       f"{(subsamples.get('survstudio') or {}).get('commit')}"),
         })
     if "P1" in null:
@@ -179,6 +191,8 @@ def experiment_2(null: dict) -> list[dict]:
         rows.append({
             "approach": "P2 uni-Cox -> LASSO -> Cox", "claim": "at least one gene selected and training median-split log-rank p < 0.05",
             "claim_rate": entry["claim_training_p05"]["rate"], "claim_rate_mcse": entry["claim_training_p05"]["mcse"], "replicates": entry["replicates"],
+            "planned_replicates": entry["claim_training_p05"].get("planned_replicates"),
+            "claim_rate_failure_bounds": entry["claim_training_p05"].get("failure_bounds"),
             "mean_claimed": entry["selected_genes"]["mean"],
             "external_p05_any": (entry.get("external_p05_any") or {}).get("rate"),
             "external_p05_claimed_direction": (entry.get("external_p05_claimed_direction") or {}).get("rate"),
@@ -190,6 +204,8 @@ def experiment_2(null: dict) -> list[dict]:
         rows.append({
             "approach": "P3 best cut-off", "claim": "at least one gene with best-cutoff log-rank p < 0.05",
             "claim_rate": entry["any_gene_p05"]["rate"], "claim_rate_mcse": entry["any_gene_p05"]["mcse"], "replicates": entry["replicates"],
+            "planned_replicates": entry["any_gene_p05"].get("planned_replicates"),
+            "claim_rate_failure_bounds": entry["any_gene_p05"].get("failure_bounds"),
             "mean_claimed": entry["genes_p05"]["mean"],
             "notes": (f"of {entry['genes']} genes; Bonferroni: at least one gene in {entry['any_gene_bonferroni']['rate']:.0%} of replicates "
                       f"(mean {entry['genes_bonferroni']['mean']:.1f}); median cut instead: mean {entry['median_cut_genes_p05']['mean']:.0f} genes at p < 0.05; "

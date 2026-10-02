@@ -518,7 +518,7 @@ def figure_simulation() -> None:
     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(0.1))
     ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(0.05))
     ax.set_ylim(-0.6, len(summary) - 0.4)
-    ax.set_xlabel("Family-wise error rate\n(95% Monte Carlo interval)")
+    ax.set_xlabel("Any unlinked discoveries\n(95% Monte Carlo interval)")
     panel_label(ax, "a", x=-1.25, y=1.02)
 
     ax = fig.add_subplot(grid[0, 1])
@@ -630,8 +630,8 @@ def figure_tier_replication() -> None:
     cases = list(summary["cases"].items())
     rows = [group for group in names if any(result["groups"].get(group, {}).get("evaluable") for _, result in cases)]
     position = dict(zip(rows, np.arange(len(rows))[::-1]))
-    fig, axes = plt.subplots(1, len(cases), figsize=(WIDE, 2.7), sharex=True, sharey=True,
-                             gridspec_kw={"wspace": 0.22, "left": 0.17, "right": 0.985, "top": 0.78, "bottom": 0.15})
+    fig, axes = plt.subplots(1, len(cases), figsize=(WIDE, 2.9), sharex=True, sharey=True,
+                             gridspec_kw={"wspace": 0.22, "left": 0.17, "right": 0.985, "top": 0.78, "bottom": 0.2})
     for ax, letter, (case, result) in zip(np.atleast_1d(axes), "abc", cases):
         for group, value in result["groups"].items():
             if not value["evaluable"]:
@@ -652,6 +652,7 @@ def figure_tier_replication() -> None:
                      loc="left", color=INK, linespacing=1.15)
         ax.set_xlabel("Genes replicated (%)")
         panel_label(ax, letter, x=-0.04, y=1.3)
+    fig.text(0.17, 0.025, "Binomial intervals are descriptive; genes can be correlated.", fontsize=7, color=MUTED)
     save(fig, "figS6_tier_replication")
 
 
@@ -806,8 +807,8 @@ def figure_comparison() -> None:
     table = load("competitors_table.json")
     null = comparison_null_rows(table["experiment_2"])
     real = comparison_real_rows(table["experiment_1"])
-    fig = plt.figure(figsize=(WIDE, 4.5))
-    grid = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.05], width_ratios=[1.0, 1.0], hspace=0.62, wspace=0.12,
+    fig = plt.figure(figsize=(WIDE, 5.1))
+    grid = fig.add_gridspec(2, 2, height_ratios=[1.25, 1.05], width_ratios=[1.0, 1.0], hspace=0.68, wspace=0.12,
                             left=0.3, right=0.985, top=0.93, bottom=0.1)
 
     # a: how often each approach makes its claim when no marker adds anything (script 06's null).
@@ -818,13 +819,18 @@ def figure_comparison() -> None:
         ax.barh(position, rate, height=0.62, color=ROBUST if ours else OTHER)
         if mcse > 0:
             ax.plot([max(rate - 1.96 * mcse, 0), min(rate + 1.96 * mcse, 100)], [position, position], color=INK, lw=0.8)
+        bounds = row.get("claim_rate_failure_bounds")
+        if bounds and bounds[1] > bounds[0]:
+            ax.plot([100 * bounds[0], 100 * bounds[1]], [position - 0.22, position - 0.22], color=MUTED, lw=3)
         ax.text(min(rate + 1.96 * mcse, 100) + 1.5, position, f"{rate:.1f}%" if rate < 10 else f"{rate:.0f}%", va="center", fontsize=7)
-    ax.set_yticks(y, [label for label, _, _ in null])
+    labels = [label + (f"\n{row['replicates']}/{row['planned_replicates']} completed" if row.get("planned_replicates") else "")
+              for label, row, _ in null]
+    ax.set_yticks(y, labels)
     ax.tick_params(axis="y", length=0)
     ax.set_xlim(0, 108)
     ax.set_xticks([0, 25, 50, 75, 100])
-    ax.set_xlabel("Null datasets in which the claim is made (%)")
-    ax.set_title("No marker adds to the clinical covariates (simulated on TCGA-LUAD)", loc="left", fontsize=7.5)
+    ax.set_xlabel("Claim rate among completed fits (%)\nThin: 95% Monte Carlo; thick: bounds including failures")
+    ax.set_title("Different claims under a conditional marker null (TCGA-LUAD plasmode)", loc="left", fontsize=7.5)
     panel_label(ax, "a", x=-0.4)
 
     # b: the C-index each approach would report, against its C-index in the external cohorts.
