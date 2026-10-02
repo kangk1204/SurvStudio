@@ -5130,6 +5130,7 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
                    if len((result.get("inference") or {}).get("reasons") or []) > 3 else ""),
             "Clinical basis": result.get("clinical_basis", "linear"),
             "Method version": result.get("method_version"),
+            "Engineering qualification": (result.get("inference") or {}).get("engineering_qualification", {}).get("status", "not_evaluated"),
             "Tier": row["tier"],
             "Evidence": row["pattern"],
             "Direction": row["direction"],
@@ -5146,6 +5147,10 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
             "Rank 95% interval": None if low is None or high is None else f"{low:.0f} to {high:.0f}",
         }
         if primary == "added_value":
+            exploratory = (row.get("exploratory") or {}).get("added_value") or {}
+            display["Exploratory raw P"] = exploratory.get("p_value")
+            display["Exploratory raw family-wise P"] = exploratory.get("p_fwer")
+            display["Exploratory raw permutation q"] = exploratory.get("q_perm")
             display["LR test P"] = exact.get("lr_p")
             display["Apparent C gain"] = exact.get("delta_c_apparent")
             display["Unadjusted HR"] = ((row.get("exact") or {}).get("marginal") or {}).get("hazard_ratio")
@@ -5328,6 +5333,8 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
                 settings=request_model.marker_settings(),
                 id_column=id_column,
             )
+            from survival_toolkit.marker_qualification import qualify_marker_result
+            result = qualify_marker_result(result)
             report_dataset = {**_report_dataset(stored), "marker_matrix": matrix_info} if matrix_info else _report_dataset(stored)
             payload = {
                 "analysis": _trim_marker_table(result),
@@ -5391,6 +5398,8 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
                 if isinstance(exc, KeyError):
                     raise UserInputError("The recipe is incomplete; export it again from a marker evaluation.") from exc
                 raise UserInputError("The recipe is malformed; export it again from a marker evaluation.") from exc
+            from survival_toolkit.marker_qualification import qualify_external_result
+            validation = qualify_external_result(validation, recipe)
             if bootstrap_note and isinstance(validation.get("notes"), list):
                 validation["notes"].append(bootstrap_note)
             return _attach_dataset_hash(

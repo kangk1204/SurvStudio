@@ -1,0 +1,14 @@
+node,x,y,width,text
+input,5.0,8.3,7.7,"Declare event, endpoint, marker and clinical roles"
+basis,5.0,7.1,7.7,Prespecify clinical basis: linear default or five-knot spline
+train,5.0,5.9,7.7,Fit transformations within training rows; retain a fixed recipe
+diagnostics,5.0,4.5,7.7,"Clinical PH and form; marker residual mean and variance
+Separate Holm families, fixed 1% withholding rule"
+qualification,5.0,3.2,7.7,"Apply the method engineering gate
+Failed profiles remain exploratory"
+raw,2.5,1.9,4.2,"Retain raw calculations
+Exploratory p/q and fitted prediction"
+state,7.4,1.9,4.2,"Carry inference state and reasons
+API, screen, figures, CSV, reports"
+external,5.0,0.5,7.7,"Apply fixed external transformations and coefficients
+Preserve state; report endpoints separately"

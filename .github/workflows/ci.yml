@@ -116,6 +116,7 @@ jobs:
           done
           curl -fsS -X POST http://127.0.0.1:8765/api/load-tcga-example -o tcga.json
           grep -q '"dataset_id"' tcga.json
+          "$RUNNER_TEMP/wheel-env/bin/python" -c "from survival_toolkit.marker_qualification import qualification; assert qualification('linear', 'marker-inference/1')['status'] == 'failed_exploratory_only'"
 
   numerical-agreement:
     name: Numerical agreement with R survival

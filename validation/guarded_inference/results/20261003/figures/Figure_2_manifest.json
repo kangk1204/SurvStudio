@@ -1,0 +1,105 @@
+{
+  "schema_version": "1.0",
+  "profile": "publication",
+  "figure_id": "Figure_2",
+  "generated_at": "2026-10-02T16:57:14.494119+00:00",
+  "base_dir": "../../../../..",
+  "script": {
+    "path": "validation/guarded_inference/make_figures.py",
+    "bytes": 16769,
+    "sha256": "19076ede60da895e28fff7fb69f5551e3c3aef1351fbc9f85237187eb39d6c3c",
+    "media_type": "text/x-python"
+  },
+  "inputs": [
+    {
+      "path": "validation/guarded_inference/results/20261003/confirmation-summary.json",
+      "bytes": 268877,
+      "sha256": "5d05a9246d0a6047c39b54b3054e4c945b0e574c34c3f3a43d407b2ced4d3cd7",
+      "media_type": "application/json"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_2_error_and_availability.png",
+      "bytes": 300511,
+      "sha256": "9e8729f2c4010c6d500f907eea092cfeff0f89a416e7d57fc8ff9a26df0cd91b",
+      "media_type": "image/png",
+      "png_width": 2430,
+      "png_height": 2130
+    },
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_2_error_and_availability.svg",
+      "bytes": 82424,
+      "sha256": "44f29955a6c6edd58dc7a0df61eea441bbe31826967346fd83238bc84ef6318c",
+      "media_type": "image/svg+xml",
+      "svg_check": "parsed_no_active_content"
+    },
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_2_error_and_availability.pdf",
+      "bytes": 41110,
+      "sha256": "293a14e7efa08d7a6ac515d3ad1d88f09b88883391dd8ea55839433efd1becbc",
+      "media_type": "application/pdf",
+      "pdf_check": "header_and_eof"
+    }
+  ],
+  "source_data": [
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_2_source.csv",
+      "bytes": 12893,
+      "sha256": "5cfa1fefabd5377db5a53010afa48e2fba4a7d810eeb8df74b55cad828f9c436",
+      "media_type": "text/csv",
+      "table": {
+        "rows": 30,
+        "columns": 30,
+        "header": [
+          "stage",
+          "condition",
+          "n",
+          "p",
+          "method",
+          "planned",
+          "completed",
+          "failures",
+          "diagnostic_exceptions",
+          "missing",
+          "allowed",
+          "allowed_fraction",
+          "fwer",
+          "fwer_raw_lower",
+          "fwer_raw_upper",
+          "raw_fwer_mc95",
+          "raw_fwer_worst_case_mc95",
+          "fwer_failure_bounds",
+          "fwer_mc95",
+          "fwer_worst_case_upper95",
+          "conditional_fwer",
+          "conditional_mc95",
+          "conditional_upper95",
+          "withhold_fraction",
+          "healthy_false_alarm_fraction",
+          "power",
+          "power_mc95",
+          "power_failure_bounds",
+          "freeze_hash",
+          "engineering_status"
+        ]
+      }
+    }
+  ],
+  "panel_claims": [
+    "All ten main global-null conditions: raw, guarded and conditional FWER and availability."
+  ],
+  "transformations": [
+    "Percentages; exact Monte Carlo intervals; raw and conditional axes use symlog; zero allowed is NA."
+  ],
+  "known_limitations": [
+    "Both inference profiles failed the engineering gates. Numerical agreement and structural checks do not establish statistical or clinical validity."
+  ],
+  "validation": {
+    "status": "structural_pass",
+    "scientific_validation": "not_assessed",
+    "commands": [
+      "python3 validate_figure_package.py --manifest validation/guarded_inference/results/20261003/figures/Figure_2_manifest.json --base /Users/keunsoo/Documents/projects/00_SurvStudio_remote/SurvStudio-next --profile publication --figure-id Figure_2 --script validation/guarded_inference/make_figures.py --source-data validation/guarded_inference/results/20261003/figures/Figure_2_source.csv --claim 'All ten main global-null conditions: raw, guarded and conditional FWER and availability.' --transformation 'Percentages; exact Monte Carlo intervals; raw and conditional axes use symlog; zero allowed is NA.' --limitation 'Both inference profiles failed the engineering gates. Numerical agreement and structural checks do not establish statistical or clinical validity.' --write-manifest --input validation/guarded_inference/results/20261003/confirmation-summary.json --figure validation/guarded_inference/results/20261003/figures/Figure_2_error_and_availability.png --figure validation/guarded_inference/results/20261003/figures/Figure_2_error_and_availability.svg --figure validation/guarded_inference/results/20261003/figures/Figure_2_error_and_availability.pdf"
+    ]
+  }
+}

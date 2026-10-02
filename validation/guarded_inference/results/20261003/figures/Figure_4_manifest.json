@@ -1,0 +1,98 @@
+{
+  "schema_version": "1.0",
+  "profile": "publication",
+  "figure_id": "Figure_4",
+  "generated_at": "2026-10-02T16:57:14.582742+00:00",
+  "base_dir": "../../../../..",
+  "script": {
+    "path": "validation/guarded_inference/make_figures.py",
+    "bytes": 16769,
+    "sha256": "19076ede60da895e28fff7fb69f5551e3c3aef1351fbc9f85237187eb39d6c3c",
+    "media_type": "text/x-python"
+  },
+  "inputs": [
+    {
+      "path": "validation/guarded_inference/results/20261003/independent_R/verification.json",
+      "bytes": 5022,
+      "sha256": "693d9bf83bf04637134b311e11213031204b039685008d87e2f51863bc9ab300",
+      "media_type": "application/json"
+    },
+    {
+      "path": "validation/guarded_inference/results/20261003/tool_comparison/numerical-comparison.csv",
+      "bytes": 7404,
+      "sha256": "0322168716d27ae30524f78c26e84f30487de3fd1a037dd6035a46dca5d21286",
+      "media_type": "text/csv",
+      "table": {
+        "rows": 84,
+        "columns": 6,
+        "header": [
+          "quantity",
+          "SurvStudio",
+          "R_survival_script",
+          "absolute_difference",
+          "tolerance",
+          "passed"
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_4_independent_numerical_validation.png",
+      "bytes": 181483,
+      "sha256": "3f6cd10c4bf293604160ffc79ca8faf51f2015cdb7de9e13f756154b1acca1da",
+      "media_type": "image/png",
+      "png_width": 2370,
+      "png_height": 1350
+    },
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_4_independent_numerical_validation.svg",
+      "bytes": 24749,
+      "sha256": "3dd01cf6e8e59281016d96b5b4ddd8717d126395b58ec62b735bd566c5d2432a",
+      "media_type": "image/svg+xml",
+      "svg_check": "parsed_no_active_content"
+    },
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_4_independent_numerical_validation.pdf",
+      "bytes": 35502,
+      "sha256": "19f9eabec75811405d425bfc88e5e3ab12015803fb9daa70c5421d50d9e39d1f",
+      "media_type": "application/pdf",
+      "pdf_check": "header_and_eof"
+    }
+  ],
+  "source_data": [
+    {
+      "path": "validation/guarded_inference/results/20261003/figures/Figure_4_source.csv",
+      "bytes": 993,
+      "sha256": "ffbb2831b2f827c13437b979e80113680d09a3f50559db6c832e4db84f641a48",
+      "media_type": "text/csv",
+      "table": {
+        "rows": 19,
+        "columns": 5,
+        "header": [
+          "panel",
+          "quantity",
+          "absolute_difference",
+          "tolerance",
+          "n_quantities"
+        ]
+      }
+    }
+  ],
+  "panel_claims": [
+    "Fixture-based R numerical agreement, with six exact discrete checks described separately."
+  ],
+  "transformations": [
+    "Per-quantity maximum absolute differences; log axis; values below 1e-16 plotted at 1e-16."
+  ],
+  "known_limitations": [
+    "Both inference profiles failed the engineering gates. Numerical agreement and structural checks do not establish statistical or clinical validity."
+  ],
+  "validation": {
+    "status": "structural_pass",
+    "scientific_validation": "not_assessed",
+    "commands": [
+      "python3 validate_figure_package.py --manifest validation/guarded_inference/results/20261003/figures/Figure_4_manifest.json --base /Users/keunsoo/Documents/projects/00_SurvStudio_remote/SurvStudio-next --profile publication --figure-id Figure_4 --script validation/guarded_inference/make_figures.py --source-data validation/guarded_inference/results/20261003/figures/Figure_4_source.csv --claim 'Fixture-based R numerical agreement, with six exact discrete checks described separately.' --transformation 'Per-quantity maximum absolute differences; log axis; values below 1e-16 plotted at 1e-16.' --limitation 'Both inference profiles failed the engineering gates. Numerical agreement and structural checks do not establish statistical or clinical validity.' --write-manifest --input validation/guarded_inference/results/20261003/independent_R/verification.json --input validation/guarded_inference/results/20261003/tool_comparison/numerical-comparison.csv --figure validation/guarded_inference/results/20261003/figures/Figure_4_independent_numerical_validation.png --figure validation/guarded_inference/results/20261003/figures/Figure_4_independent_numerical_validation.svg --figure validation/guarded_inference/results/20261003/figures/Figure_4_independent_numerical_validation.pdf"
+    ]
+  }
+}

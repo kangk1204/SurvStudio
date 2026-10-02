@@ -37,3 +37,39 @@ method version and new confirmation seeds; preserve this frozen study.
 
 No raw patient data or manuscript belongs here. Public artifacts may include synthetic
 reference data, aggregate summaries and their provenance after validation.
+
+## Completed study and independent reproduction
+
+The complete 2026 study is in `results/20261003`; numerical confirmation sources
+remain frozen at `7bf9218ff48c8e66069f60cdad0c51bd8e873d22`. The current API separately
+applies the failed-profile qualification mask. See `../../docs/guarded_inference_validation.md`.
+
+- `compare_tools.py --output PRIVATE/tool_comparison_qualified_v2 --rlib RLIB` executes
+  the fixed synthetic A/B tasks against R. KM Plotter execution is unverified under
+  its automated-access terms; it must not be inferred from documentation alone.
+- `benchmark.py --data PRIVATE/tool_comparison_qualified_v2/A.csv --output PRIVATE/tool_benchmark` measures only the common same-server
+  numerical operation, with three warmups and ten measured repetitions.
+- `reanalyse_cases.py --case I --basis linear --data PRIVATE/data --output PRIVATE/cases/case-I-linear
+  --development-only` fixes a case development analysis. Repeat for I/IV/V and the
+  prespecified spline sensitivity, without consulting external performance.
+- `external_fixed_cases.py --case I --development PRIVATE/cases/case-I-linear/development-analysis.json
+  --data PRIVATE/data --output PRIVATE/cases_final/case-I-linear` applies both frozen
+  primary and within-cohort sensitivity marker scalings, with endpoint-specific pooling.
+- `verify_cases.py --output PRIVATE/cases_final/case-I-linear --rlib RLIB` compares
+  private score-level inputs with R. `collect_case_aggregate.py --evidence PRIVATE
+  --output PRIVATE/case_aggregate` checks all six references and exports only aggregate
+  allowlisted files. Original case patient data and source archives are prerequisites;
+  public aggregate reproduction is not a patient-level reanalysis.
+- `make_figures.py --results validation/guarded_inference/results/20261003` regenerates
+  six figures and source tables with matplotlib. Preserve manifests before regeneration;
+  then validate regenerated hashes and inspect the rendered figures.
+- `audit_publication.py --results validation/guarded_inference/results/20261003 --with-r`
+  verifies the immutable source freeze, all fixed indexes, package hashes and 2,826
+  independent base-R operating-characteristic quantities.
+
+`publish_aggregate.py` expects separate latest-source numerical reference and qualified
+comparison directories, preserving the preconfirmation reference used by the freeze.
+Its central manifest excludes the audit outputs that refer back to that manifest.
+No new patient-level input, prediction row, full real-case recipe or manuscript is copied.
+Both profiles failed qualification; the zero-discovery API mask is not an error-control
+claim and is not a substitute for a newly frozen statistical repair study.

@@ -118,7 +118,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 survival_toolkit = [
-  "data/*.csv",
+    "data/*.csv",
+    "data/*.json",
   "templates/*.html",
   "static/*.css",
   "static/*.js",

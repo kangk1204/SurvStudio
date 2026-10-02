@@ -429,7 +429,7 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
                 + "Reasons: " + "; ".join(inference.get("reasons") or []) + ". "
                 + "Standard inferential p/q values are unavailable, rather than zero; raw computations are retained separately for exploration. "
                 + "Any fitted prediction model and its performance estimates are exploratory. "
-                + str(inference.get("interpretation", "")))
+                + str(inference.get("interpretation", "")) + _marker_duplicate_results(result))
     counts = result.get("tier_counts") or {}
     cohort = result.get("cohort") or {}
     signature = result.get("signature") or {}
@@ -461,6 +461,12 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
     elif signature_fit_failed(result):
         text += " The final model could not be fitted in the full cohort, so it has no apparent or subsample gap-adjusted C-index."
     text += _left_out_comparison(signature, added_value)
+    return text + _marker_duplicate_results(result)
+
+
+def _marker_duplicate_results(result: dict[str, Any]) -> str:
+    """Dataset quality warnings remain relevant when inference is withheld."""
+    text = ""
     duplicates = result.get("duplicates") or {}
     n_pairs, n_identical = int(duplicates.get("n_pairs") or 0), int(duplicates.get("n_identical") or 0)
     if n_pairs or n_identical:

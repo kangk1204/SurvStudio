@@ -49,6 +49,12 @@ def run(a):
                    'original_qc_eligibility_retained':True,'existing_external_data_reanalysis':True,
                    'primary_endpoint':'RFS' if a.case=='V' else 'OS','secondary_endpoint':'DMFS' if a.case=='V' else None,
                    'external_basis_or_signature_selection':False}
+    configuration['resample_workers']=a.resample_workers
+    if a.resample_workers>1:
+        from parallel_case_resampling import install
+        helper=Path(__file__).with_name('parallel_case_resampling.py')
+        source_hashes[str(helper.relative_to(ROOT))]=hashlib.sha256(helper.read_bytes()).hexdigest()
+        install(a.resample_workers,out/'resample-progress')
     if (out/'complete.json').exists():
         old=json.loads((out/'complete.json').read_text())
         if old['configuration']!=configuration: raise ValueError('Completed reanalysis source/settings differ')
@@ -69,6 +75,10 @@ def run(a):
         result=evaluate_development(a.case,frame,genes,settings)
         save(analysis,result)
     recipe=result['locked_recipe'];save(out/'recipe.json',recipe)
+    if a.development_only:
+        save(out/'development-complete.json',{'configuration':configuration,'inference':result['inference'],
+                                             'prediction_estimable':recipe is not None,'completed':time.time()})
+        return
     if recipe is None:
         save(out/'complete.json',{'configuration':configuration,'inference':result['inference'],
                                  'prediction_status':'not_estimable','completed':time.time()})
@@ -95,8 +105,10 @@ def run(a):
             rows.append(row)
             # Patient-level scores are private numerical verification inputs, never release files.
             pd.DataFrame({k:v for k,v in parts.items() if isinstance(v,np.ndarray)}).to_csv(Path(str(prefix)+'-private-scores.csv'),index=False)
-            data[[*DEVELOPMENT[a.case]['covariates'],*recipe['markers'],recipe['outcome']['time_column'],
-                  recipe['outcome']['event_column']]].to_csv(Path(str(prefix)+'-private-input.csv'),index=False)
+            # Missing external markers are allowed by the frozen recipe and are imputed from development.
+            columns=[*DEVELOPMENT[a.case]['covariates'],*[m for m in recipe['markers'] if m in data],
+                     recipe['outcome']['time_column'],recipe['outcome']['event_column']]
+            data.loc[result_rows(parts,data,recipe),columns].to_csv(Path(str(prefix)+'-private-input.csv'),index=False)
             print(name,scaling,report['inference']['status'],flush=True)
     cohorts=pd.DataFrame(rows);cohorts.to_csv(out/'external-aggregate.csv',index=False)
     pooled={}
@@ -111,7 +123,19 @@ def run(a):
                              'cohorts':len(external),'pooled':pooled,'completed':time.time()})
 
 
+def result_rows(parts,data,recipe):
+    from survival_toolkit.analysis import _cohort_frame
+    outcome=recipe['outcome']
+    selected=_cohort_frame(data,time_column=outcome['time_column'],event_column=outcome['event_column'],
+                           event_positive_value=outcome['event_positive_value'])
+    return list(selected.attrs['source_row_index'])
+
+
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--case',choices=['I','IV','V'],required=True)
     p.add_argument('--basis',choices=['linear','restricted_cubic_spline'],required=True)
-    p.add_argument('--data',required=True);p.add_argument('--output',required=True);run(p.parse_args())
+    p.add_argument('--data',required=True);p.add_argument('--output',required=True)
+    p.add_argument('--resample-workers',type=int,default=1);p.add_argument('--development-only',action='store_true')
+    a=p.parse_args()
+    if a.resample_workers<1: p.error('resample workers must be positive')
+    run(a)
