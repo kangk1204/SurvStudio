@@ -30,13 +30,14 @@ def test_finite_fit_with_cancelling_large_coefficients_is_not_separation():
     assert original.loglik == pytest.approx(reparameterized.loglik, abs=1e-8)
 
 
-def test_corrected_diagnostics_require_new_qualification():
+def test_corrected_diagnostics_have_separate_audited_qualification():
     assert METHOD_VERSION == "marker-inference/2"
     for basis in ("linear", "restricted_cubic_spline"):
         gate = qualification(basis, METHOD_VERSION)
-        assert gate["status"] == "not_evaluated" and gate["failed_conditions"] == []
-        assert gate["previous_method_evidence"]["method_version"] == "marker-inference/1"
-        assert gate["previous_method_evidence"]["status"] == "failed_exploratory_only"
+        assert gate["status"] == ("passed_supported_conditions_only" if basis == "linear" else "failed_exploratory_only")
+        assert gate["evaluated_method_version"] == "marker-inference/2"
+        assert gate["qualification_dimensions"] == {"n": 180, "markers": 30, "permutations": 999, "datasets_per_condition": 5000}
+        assert "not universal" in gate["claim_boundary"]
         assert qualification(basis, "marker-inference/1")["status"] == "failed_exploratory_only"
 
 

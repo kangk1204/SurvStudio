@@ -117,7 +117,7 @@ jobs:
           curl -fsS -X POST http://127.0.0.1:8765/api/load-tcga-example -o tcga.json
           grep -q '"dataset_id"' tcga.json
           "$RUNNER_TEMP/wheel-env/bin/python" -c "from survival_toolkit.marker_qualification import qualification; assert qualification('linear', 'marker-inference/1')['status'] == 'failed_exploratory_only'"
-          "$RUNNER_TEMP/wheel-env/bin/python" -c "from survival_toolkit.marker_diagnostics import METHOD_VERSION; from survival_toolkit.marker_qualification import qualification; assert METHOD_VERSION == 'marker-inference/2'; assert qualification('linear', METHOD_VERSION)['status'] == 'not_evaluated'"
+          "$RUNNER_TEMP/wheel-env/bin/python" -c "from survival_toolkit.marker_diagnostics import METHOD_VERSION; from survival_toolkit.marker_qualification import qualification; assert METHOD_VERSION == 'marker-inference/2'; gate = qualification('linear', METHOD_VERSION); assert gate['status'] == 'passed_supported_conditions_only' and gate['kernel_sources_match']; assert qualification('restricted_cubic_spline', METHOD_VERSION)['status'] == 'failed_exploratory_only'"
 
   numerical-agreement:
     name: Numerical agreement with R survival

@@ -507,7 +507,7 @@ async function renderMarkerResults(payload) {
   refs.markersMetaBanner.textContent = markerMetaBanner(payload);
   const inference = payload?.analysis?.inference;
   if (refs.markersInferenceNote) refs.markersInferenceNote.textContent = inference
-    ? `${inference.status}. ${inference.interpretation} ${(inference.reasons || []).join("; ")}`
+    ? `${inference.status}. ${inference.interpretation} ${(inference.reasons || []).join("; ")} ${inference.engineering_qualification?.claim_boundary || ""} ${inference.engineering_qualification?.extension_limitations || ""}`
     : "Diagnostics were not assessed in this saved result.";
   if (refs.markersDiagnosticsTable) renderTable(refs.markersDiagnosticsTable,
     [...(inference?.clinical_tests || []), ...(inference?.residual_tests || [])].map((test) => ({

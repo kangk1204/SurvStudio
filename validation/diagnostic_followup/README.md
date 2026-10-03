@@ -1,6 +1,6 @@
 # Diagnostic follow-up after the failed v1 confirmation
 
-This is a new development study, not evidence of qualification. The completed v1 study (85,500 datasets and one retained calculation failure) remains unchanged. Neither the old failed profiles nor this development pilot enables routine conditional marker inference.
+This follow-up contains a separate development study and a newly frozen, completed v2 confirmation. The original v1 study (85,500 datasets and one retained calculation failure) remains unchanged. The v2 linear profile passes the prespecified main-study engineering gates; the spline profile remains exploratory. This result is limited to the declared main conditions and dimensions and does not establish universal error control.
 
 The defect was a separation flag based on coefficient magnitude alone. Correlated spline columns can have large coefficients that cancel at a finite maximum. The correction removes that flag and keeps the pending Newton-step check. Fits, coefficients, covariance, log likelihood, score calculations, fixed knots, PH and HC3 chi-square diagnostics, Holm families and the 1% withholding threshold remain unchanged. The method is now `marker-inference/2`; old v3 prediction recipes preserve their original method provenance, and v1/v2 recipe predictions retain their existing calculation.
 
@@ -36,8 +36,21 @@ The original failure occurred at a wide-block cumulative-sum row access. A deter
 
 ## Confirmation and release boundary
 
-`confirmation_protocol.json` fixes v2 with new main seed `2026100312` and extension seed `2026100313`. It preserves all original scenarios, supported sets, 85,500 planned datasets, 999 permutations, 1% Holm withholding and engineering gates. It excludes the offline F candidate. The source, development review, independent R checks and exact runtime must be sealed before execution. Failures remain in the fixed-index ledgers without replacement. Qualification remains `not_evaluated` until the complete new study is audited. No model, cutoff, supported set or DGP may be changed after inspecting v2 confirmation outcomes.
+`confirmation_protocol.json` fixes v2 with new main seed `2026100312` and extension seed `2026100313`. It preserves all original scenarios, supported sets, 85,500 planned datasets, 999 permutations, 1% Holm withholding and engineering gates. It excludes the offline F candidate. The sources were frozen at `1ed6c10ddad27be6bce4b0896f55ac8428e36dd9`; the seal was pushed before dispatch. Each server used its own pinned environment and source-isolation preflight. All 85,500 fixed datasets and 256,500 paired method records completed in 1,872 ledgers with no calculation failures. Base R independently recomputed all 2,826 aggregate quantities; the largest absolute difference was 8.882e-16. The complete outcomes, source/ownership hashes, failure record and audit are in `results/20261003/confirmation-v2`. No model, cutoff, supported set or DGP was changed after inspecting the v2 confirmation.
 
-A successful finite simulation gate, if obtained, would support only its stated scenarios. It would not establish universal error control, clinical utility, external prediction superiority or a human usability benefit. The v1 manuscript and review package remain historical deliverables and require a separate evidence update after the new confirmation audit.
+| Main condition | Linear allowed | Linear all-planned FWER | Conditional FWER | Conditional one-sided 95% upper bound |
+|---|---:|---:|---:|---:|
+| independent | 91.92% | 4.62% | 5.03% | 5.59% |
+| linear | 91.70% | 4.54% | 4.95% | 5.51% |
+| correlated | 94.94% | 4.62% | 4.87% | 5.41% |
+| z_dependent_censoring | 91.58% | 4.36% | 4.76% | 5.31% |
+
+Weak and strong partial-null linear power are 8.412% and 43.244%, retaining 90.53% and 90.33% of the corresponding original calculation. These descriptive point ratios just exceed the fixed 90% gate; they are not lower confidence bounds proving 90% retention. Both error upper bounds, availability and power criteria pass in every prespecified supported main linear condition. The source-bound product registry retains the failed v1 studies separately. Dataset diagnostic failures still withhold inference even under a passed method profile.
+
+Spline availability is 81.00–86.54% in the four healthy main conditions, but only 28.30–28.32% in its two supported nonlinear conditions. The nonlinear clinical-risk conditional error upper bound is 6.46%, and the nonlinear-marker upper bound is 6.08%. Weak and strong spline power retention is 80.15% and 78.05%. The spline profile therefore fails as a whole; passing healthy subsets do not enable it.
+
+The full extension grid remains part of the record. With 300 independent markers, linear availability is 78.5% and its conditional error upper bound is 7.57%. With 3,000 independent markers, linear availability is 52.0% and the upper bound is 8.74%; the corresponding linear-marker availability is 49.0%. The 500-subject extension also has limiting error bounds and strong-signal power retention. These extensions do not establish broader qualification. Healthy-condition diagnostic false alarms and approximate residual-test calibration remain limitations.
+
+The finite main-study result supports only its stated scenarios. It does not establish universal error control, clinical utility, external prediction superiority or a human usability benefit. The v1 manuscript and review package remain historical deliverables; the new manuscript update is maintained privately.
 
 The separation-check rationale can be inspected in the primary [R survival implementation](https://github.com/therneau/survival/blob/master/R/coxph.fit.R). The coefficient size cap was SurvStudio's additional heuristic, not R's warning rule. The classical PH implementation is retained; [R documentation](https://www.stat.ethz.ch/R-manual/R-devel/library/survival/html/cox.zph.html) distinguishes the older approximation from the modern score test.
