@@ -154,6 +154,39 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
         run: python validation/diagnostic_followup/verify_reference.py --output "${{ runner.temp }}/diagnostic-followup-reference"
+      - name: Check v3 joint diagnostic candidates against independent R
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: python validation/publication_v3/verify_reference.py --output "${{ runner.temp }}/joint-diagnostic-reference"
+      - name: Check prespecified case transforms and fixed predictions with synthetic data
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: python validation/publication_v3/verify_case_reference.py --self-test --output "${{ runner.temp }}/case-synthetic-reference"
+      - name: Check independent R aggregation with unresolved and zero-denominator fixtures
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: python validation/publication_v3/verify_aggregate_reference.py --self-test --output "${{ runner.temp }}/aggregate-synthetic-reference"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aggregate-synthetic-reference
+          path: ${{ runner.temp }}/aggregate-synthetic-reference
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: case-synthetic-reference
+          path: ${{ runner.temp }}/case-synthetic-reference
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: joint-diagnostic-reference
+          path: ${{ runner.temp }}/joint-diagnostic-reference
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -193,4 +226,4 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Run browser E2E smoke test
-        run: pytest -q tests/test_browser_e2e.py tests/test_guarded_marker_surfaces.py
+        run: pytest -q tests/test_browser_e2e.py tests/test_guarded_marker_surfaces.py tests/test_v3_marker_surfaces.py

@@ -1,0 +1,223 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "linear-residual_vector",
+      "draws": 9999,
+      "markers": 30,
+      "differences": {
+        "maximum": 9.592326932761353e-14,
+        "observed": 8.881784197001252e-15,
+        "global_p": 0.0,
+        "mc_interval": 3.885780586188048e-16
+      },
+      "exceedance_count_exact": true,
+      "passed": true
+    },
+    {
+      "name": "linear-restricted_wild",
+      "draws": 9999,
+      "markers": 30,
+      "differences": {
+        "maximum": 9.237055564881302e-14,
+        "observed": 8.881784197001252e-15,
+        "global_p": 0.0,
+        "mc_interval": 1.6653345369377348e-16
+      },
+      "exceedance_count_exact": true,
+      "passed": true
+    },
+    {
+      "name": "restricted_cubic_spline-residual_vector",
+      "draws": 9999,
+      "markers": 30,
+      "differences": {
+        "maximum": 3.270272941335861e-12,
+        "observed": 2.1227464230832993e-13,
+        "global_p": 0.0,
+        "mc_interval": 3.885780586188048e-16
+      },
+      "exceedance_count_exact": true,
+      "passed": true
+    },
+    {
+      "name": "restricted_cubic_spline-restricted_wild",
+      "draws": 9999,
+      "markers": 30,
+      "differences": {
+        "maximum": 2.611244553918368e-12,
+        "observed": 2.1227464230832993e-13,
+        "global_p": 0.0,
+        "mc_interval": 3.3306690738754696e-16
+      },
+      "exceedance_count_exact": true,
+      "passed": true
+    },
+    {
+      "name": "linear-residual_vector-stratified",
+      "draws": 9999,
+      "markers": 30,
+      "differences": {
+        "maximum": 9.237055564881302e-14,
+        "observed": 1.021405182655144e-14,
+        "global_p": 0.0,
+        "mc_interval": 1.1102230246251565e-16
+      },
+      "exceedance_count_exact": true,
+      "passed": true
+    },
+    {
+      "name": "linear-restricted_wild-stratified",
+      "draws": 9999,
+      "markers": 30,
+      "differences": {
+        "maximum": 8.348877145181177e-14,
+        "observed": 1.021405182655144e-14,
+        "global_p": 0.0,
+        "mc_interval": 3.0531133177191805e-16
+      },
+      "exceedance_count_exact": true,
+      "passed": true
+    },
+    {
+      "name": "linear-residual_vector-two-clinical",
+      "draws": 9999,
+      "markers": 30,
+      "differences": {
+        "maximum": 6.394884621840902e-14,
+        "observed": 7.549516567451064e-15,
+        "global_p": 0.0,
+        "mc_interval": 4.440892098500626e-16
+      },
+      "exceedance_count_exact": true,
+      "passed": true
+    },
+    {
+      "name": "linear-restricted_wild-two-clinical",
+      "draws": 9999,
+      "markers": 30,
+      "differences": {
+        "maximum": 7.105427357601002e-14,
+        "observed": 7.549516567451064e-15,
+        "global_p": 0.0,
+        "mc_interval": 4.996003610813204e-16
+      },
+      "exceedance_count_exact": true,
+      "passed": true
+    },
+    {
+      "name": "restricted_cubic_spline-residual_vector-two-clinical",
+      "draws": 9999,
+      "markers": 30,
+      "differences": {
+        "maximum": 9.57456336436735e-13,
+        "observed": 1.0702549957386509e-13,
+        "global_p": 0.0,
+        "mc_interval": 4.440892098500626e-16
+      },
+      "exceedance_count_exact": true,
+      "passed": true
+    },
+    {
+      "name": "restricted_cubic_spline-restricted_wild-two-clinical",
+      "draws": 9999,
+      "markers": 30,
+      "differences": {
+        "maximum": 1.042721464727947e-12,
+        "observed": 1.0702549957386509e-13,
+        "global_p": 0.0,
+        "mc_interval": 4.996003610813204e-16
+      },
+      "exceedance_count_exact": true,
+      "passed": true
+    }
+  ],
+  "environment": {
+    "python": "3.12.3",
+    "packages": {
+      "numpy": "2.5.3",
+      "pandas": "3.0.6",
+      "scipy": "1.18.1",
+      "statsmodels": "0.15.0"
+    }
+  },
+  "input_and_output_hashes": {
+    "restricted_cubic_spline-restricted_wild-r-maxima.csv": "383985b61ec1fc8b1f1d688434814a3e8e97c41afc2c062a1bfc2bf218c38f5f",
+    "linear-restricted_wild-r-observed.csv": "f9801b1553fb16836ea726c9c4ecea7d9cfc3a99c299efa18bb4d4ba75d2302b",
+    "restricted_cubic_spline-residual_vector-two-clinical-r-observed.csv": "c17f54c75d39175e75e0c0d551ff9aef0146a1105c5e90c39a836cba1afa9508",
+    "restricted_cubic_spline-restricted_wild-two-clinical-r-decision.csv": "e938fa59d3a60771531b47d597edd280f64552d3c0b82001c0ea5308dd435089",
+    "restricted_cubic_spline-residual_vector-r-observed.csv": "39ad778099f13e4ce1a8830a8198be99fdac9d01f279e7c88cce27fddb32fbbd",
+    "linear-residual_vector-stratified-r-decision.csv": "a90a5566b0b28ea06217236ff29b2812c0fc72e2488e22c63d0654e5611928b9",
+    "linear-residual_vector-stratified-uniforms.csv": "7ada59439f465fbf0cc1efa8c8ed483a9fc2b553c38c1e02c698c1ad32b64381",
+    "linear-residual_vector-stratified-r-observed.csv": "1ff431354f217f292b2e20e01e567ee78a00f6aaa82e1616669bae9f4f553269",
+    "linear-restricted_wild-two-clinical-r-decision.csv": "ef5ffadc04feaf9d1946175100ede03f2fe11195091aa3937640108f3744b251",
+    "linear-restricted_wild-input.csv": "1e8a899d023b9b1b8d41d6d1f11c83700c05be535019cd11a02a06e2ddeb9154",
+    "linear-residual_vector-two-clinical-r-maxima.csv": "d4cdf5fc487b9a1cf3792d098e8ad025309b8fa8065ed41888c694dce92b2acf",
+    "restricted_cubic_spline-restricted_wild-two-clinical-uniforms.csv": "7ada59439f465fbf0cc1efa8c8ed483a9fc2b553c38c1e02c698c1ad32b64381",
+    "linear-restricted_wild-stratified-input.csv": "e6f4c4d2af50ff0f7d732e9129f6d2e249d7167fb2fac4b09d887681f87ef7ec",
+    "linear-restricted_wild-stratified-r-decision.csv": "cd2fa8690426e9bc8020192075187a3d408f284f26acc74b383b8823869663fa",
+    "linear-restricted_wild-r-maxima.csv": "056466a7c4cac5b1399e0b2c98449d14e3acbddafd7346b3e1cb227f5e4ac3dd",
+    "R-session.txt": "a43ff70913f20c417aa04e1d8b9e6d5366dfecf4cf215dad21a7263b9ac08bd5",
+    "restricted_cubic_spline-restricted_wild-r-observed.csv": "39ad778099f13e4ce1a8830a8198be99fdac9d01f279e7c88cce27fddb32fbbd",
+    "linear-residual_vector-uniforms.csv": "7ada59439f465fbf0cc1efa8c8ed483a9fc2b553c38c1e02c698c1ad32b64381",
+    "linear-residual_vector-two-clinical-input.csv": "9aa1c817359772a874026ef13be3dd6d6c5e72e7bc24b9e9c3d4f2db54b5f225",
+    "linear-restricted_wild-uniforms.csv": "7ada59439f465fbf0cc1efa8c8ed483a9fc2b553c38c1e02c698c1ad32b64381",
+    "restricted_cubic_spline-restricted_wild-two-clinical-input.csv": "9aa1c817359772a874026ef13be3dd6d6c5e72e7bc24b9e9c3d4f2db54b5f225",
+    "linear-residual_vector-two-clinical-r-observed.csv": "4e58262b4b00d2963e3aa52c2560ed59118920c63f3fb35c5bb7c656caf78b62",
+    "linear-restricted_wild-r-decision.csv": "c4f60bfc4848ff9233f2e3c12ddf93b6954ee557d6f75f2c7c528a8b953653c4",
+    "linear-residual_vector-input.csv": "1e8a899d023b9b1b8d41d6d1f11c83700c05be535019cd11a02a06e2ddeb9154",
+    "linear-residual_vector-two-clinical-r-decision.csv": "a9e8c2f36855d82b249819b15beab16881a52cfb61ea574cadc833d95a022a51",
+    "restricted_cubic_spline-residual_vector-r-decision.csv": "e0c67bf65a6dcf7e57c62eee81154efbac1ce048ef756f777efaad550fb6e3d4",
+    "restricted_cubic_spline-restricted_wild-input.csv": "1e8a899d023b9b1b8d41d6d1f11c83700c05be535019cd11a02a06e2ddeb9154",
+    "restricted_cubic_spline-residual_vector-two-clinical-input.csv": "9aa1c817359772a874026ef13be3dd6d6c5e72e7bc24b9e9c3d4f2db54b5f225",
+    "restricted_cubic_spline-restricted_wild-r-decision.csv": "d56fc43853525f3a14d640e3d7dcfb6f8e02043e389e6ef68023b6dfa0a7feb7",
+    "linear-restricted_wild-two-clinical-uniforms.csv": "7ada59439f465fbf0cc1efa8c8ed483a9fc2b553c38c1e02c698c1ad32b64381",
+    "fixtures.csv": "0fd51913b4d1768f907b070e2ca4958ca458323f90a95a2beceb458267c02a8c",
+    "restricted_cubic_spline-residual_vector-r-maxima.csv": "c03c888ec106197f3a4951e92621659639da15db53fbf99d318f15b7cd651df0",
+    "linear-residual_vector-r-maxima.csv": "54ee5faa6566d669d22d96290c89a556cd6dcee43816bfcb0026baa1e95c90ea",
+    "linear-restricted_wild-two-clinical-input.csv": "9aa1c817359772a874026ef13be3dd6d6c5e72e7bc24b9e9c3d4f2db54b5f225",
+    "restricted_cubic_spline-residual_vector-uniforms.csv": "7ada59439f465fbf0cc1efa8c8ed483a9fc2b553c38c1e02c698c1ad32b64381",
+    "linear-restricted_wild-two-clinical-r-observed.csv": "4e58262b4b00d2963e3aa52c2560ed59118920c63f3fb35c5bb7c656caf78b62",
+    "linear-restricted_wild-two-clinical-r-maxima.csv": "aec925fc3d92224f6c8da2501b6a824562a434d11fa7428416dccaf9a343bffa",
+    "linear-restricted_wild-stratified-r-maxima.csv": "42e69be6db3884d37c412026aea4cef54ee89a062e06d6d76fd635062c7a1dd5",
+    "linear-residual_vector-r-decision.csv": "fdc194af1db417eccae16e989ef059852037de9f32c9f50c0043ae1c7be18afb",
+    "linear-residual_vector-r-observed.csv": "f9801b1553fb16836ea726c9c4ecea7d9cfc3a99c299efa18bb4d4ba75d2302b",
+    "restricted_cubic_spline-restricted_wild-two-clinical-r-observed.csv": "c17f54c75d39175e75e0c0d551ff9aef0146a1105c5e90c39a836cba1afa9508",
+    "linear-restricted_wild-stratified-r-observed.csv": "1ff431354f217f292b2e20e01e567ee78a00f6aaa82e1616669bae9f4f553269",
+    "restricted_cubic_spline-residual_vector-two-clinical-r-maxima.csv": "8f5b944c57fd0d9b973b5c42362e141fcf8ff39135904e1143342649335261f6",
+    "linear-residual_vector-stratified-r-maxima.csv": "34f74da7c4d3bd671b11426b8f273bab15703f6aeff3cb345c47e8de58fe60bc",
+    "linear-residual_vector-two-clinical-uniforms.csv": "7ada59439f465fbf0cc1efa8c8ed483a9fc2b553c38c1e02c698c1ad32b64381",
+    "restricted_cubic_spline-residual_vector-two-clinical-r-decision.csv": "1ae486c05d874e7fde3f5562423dbd0791df3dd5ff146a440e46e131346ecb08",
+    "restricted_cubic_spline-residual_vector-two-clinical-uniforms.csv": "7ada59439f465fbf0cc1efa8c8ed483a9fc2b553c38c1e02c698c1ad32b64381",
+    "linear-residual_vector-stratified-input.csv": "e6f4c4d2af50ff0f7d732e9129f6d2e249d7167fb2fac4b09d887681f87ef7ec",
+    "restricted_cubic_spline-restricted_wild-two-clinical-r-maxima.csv": "bef9a43d3180e24635ec0a779f27e4c22fe864b07e25d1d63c49c7eeec4168b7",
+    "restricted_cubic_spline-restricted_wild-uniforms.csv": "7ada59439f465fbf0cc1efa8c8ed483a9fc2b553c38c1e02c698c1ad32b64381",
+    "linear-restricted_wild-stratified-uniforms.csv": "7ada59439f465fbf0cc1efa8c8ed483a9fc2b553c38c1e02c698c1ad32b64381",
+    "restricted_cubic_spline-residual_vector-input.csv": "1e8a899d023b9b1b8d41d6d1f11c83700c05be535019cd11a02a06e2ddeb9154"
+  },
+  "source_hashes": {
+    "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c",
+    "src/survival_toolkit/clinical_basis.py": "e4384eca71cb0a0b39819a3265241b9cc5bf443bd279127b518f9397e2604ce3",
+    "src/survival_toolkit/data/marker_bootstrap_policy.json": "332353b639e649ac2ac28d7b079a963a2479e249fd75e209232d3f7f996bfa64",
+    "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
+    "src/survival_toolkit/marker_bootstrap.py": "49d8901f981aed58dfa5ab158d4e19cced6156dfc9d45d0064ee52986bd494eb",
+    "src/survival_toolkit/marker_diagnostics.py": "af2b425f8b066bca2190f9f63d1b888aaf99b003c44df0f108c94be9bcb57a6d",
+    "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
+    "src/survival_toolkit/marker_evaluation_v3.py": "0d0a32dd2ca0b1899efd00cbfcb765f0e478ccb86a9d6fde30e08cc797fd19f6",
+    "src/survival_toolkit/marker_qualification.py": "915898bd6cb80fdfb5dbc8396f80f33de898776772890982cdc02d8fdcef1919",
+    "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
+    "validation/guarded_inference/protocol.json": "d291060d0e42bf47124ce904d493daa0e708f3c8165f49c5a06e30c3381d5b86",
+    "validation/guarded_inference/study.py": "b26cb8762d7b38653ffe9de1cc1101aa27b99d6b9f9f4cdbc9545c2a01fa2510",
+    "validation/publication_v3/control.py": "df2ed134b3f89fa33c86a443d9ea29017863b997f8742d4c46e163b027104f65",
+    "validation/publication_v3/execute.py": "0e06076b79423714f2b71b9ac30162cc992ef802af0d7bbbdc0fd1c5cb80f3c3",
+    "validation/publication_v3/protocol.json": "8506d7b4984a89234ec747c0a1af2071db50b50f90382248175a71d1f682e362",
+    "validation/publication_v3/reference.R": "94d4d46e7b2b7339672d220d7fd7054cab3383d198260fb08064941fe4b35f66",
+    "validation/publication_v3/study.py": "dc531ffb6f4f90fb966bf49a29a84d390192020146b05c24314c007c905d6e81",
+    "validation/publication_v3/verify_reference.py": "8bdc79761b657b665011c2b7236a532646b1f3dfe0f4636861d301be9c54f826",
+    "validation/publication_v3/verify_reference_full.py": "24b687f0f8bef86f7866f975e59c64820cc62b7b61b77c197fe76198196803c6"
+  },
+  "diagnostic_draws": 9999,
+  "markers": 30,
+  "full_draw_coverage": true,
+  "boundary": "Raw inputs and uniforms shared; R independently builds basis projections, HC3 statistics, resamples, counts and intervals"
+}

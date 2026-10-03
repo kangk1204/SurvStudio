@@ -1,0 +1,9 @@
+{
+  "policy_version": "joint-diagnostic-policy/1",
+  "candidate": "residual_vector",
+  "draws": 9999,
+  "selection_status": "development_provisional_not_selected",
+  "qualification_status": "not_evaluated",
+  "selection_seed": 2026100322,
+  "selection_evidence_sha256": null
+}

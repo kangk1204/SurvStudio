@@ -1,0 +1,92 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "engine": "SurvStudio",
+      "coefficient_maximum_difference": 4.440892098500626e-15,
+      "passed": true
+    },
+    {
+      "engine": "lifelines",
+      "coefficient_maximum_difference": 8.139222629210963e-11,
+      "passed": true
+    },
+    {
+      "engine": "R_survival",
+      "coefficient_maximum_difference": 0.0,
+      "passed": true
+    }
+  ],
+  "summary": [
+    {
+      "engine": "SurvStudio",
+      "n": 260,
+      "terms": 5,
+      "warmups": 3,
+      "measured_runs": 10,
+      "median_seconds": 0.0030473504884866503,
+      "q25_seconds": 0.00301293024676845,
+      "q75_seconds": 0.0031177385026239,
+      "minimum_seconds": 0.003003460005857,
+      "maximum_seconds": 0.0033612139814067,
+      "process_peak_rss_kb": 185496
+    },
+    {
+      "engine": "lifelines",
+      "n": 260,
+      "terms": 5,
+      "warmups": 3,
+      "measured_runs": 10,
+      "median_seconds": 0.08385391550837079,
+      "q25_seconds": 0.04588699775922572,
+      "q75_seconds": 0.0874963197566103,
+      "minimum_seconds": 0.0380275320203509,
+      "maximum_seconds": 0.0896603989822324,
+      "process_peak_rss_kb": 187448
+    },
+    {
+      "engine": "R_survival",
+      "n": 260,
+      "terms": 5,
+      "warmups": 3,
+      "measured_runs": 10,
+      "median_seconds": 0.0070000000000001,
+      "q25_seconds": 0.005999999999999825,
+      "q75_seconds": 0.007750000000000025,
+      "minimum_seconds": 0.0059999999999997,
+      "maximum_seconds": 0.0089999999999999,
+      "process_peak_rss_kb": 177308
+    }
+  ],
+  "host": "keunsoo-3900x",
+  "platform": "Linux-7.0.0-34-generic-x86_64-with-glibc2.39",
+  "load_before": [
+    13.7705078125,
+    13.7421875,
+    11.66943359375
+  ],
+  "load_after": [
+    13.9697265625,
+    13.7880859375,
+    11.71826171875
+  ],
+  "engine_order": [
+    "R_survival",
+    "SurvStudio",
+    "lifelines"
+  ],
+  "task": "Unstratified Efron Cox, grade A reference, z/binary/m0; common input preparation excluded",
+  "input_sha256": "498807c1828e9b86a8c9668bf886542253fbf0597724b822f220850fc6d7cb21",
+  "source_hashes": {
+    "validation/publication_v3/benchmark.py": "549c68484d89cd7e28515d1d06e48b40f4e87d5d4dc3946c8e628f8a90942dfe",
+    "validation/guarded_inference/benchmark_reference.R": "4e929e6562f84a7e123e30d1016a886ddfd7bdef2f5bf24d511a0d60ce56e40b"
+  },
+  "python_packages": {
+    "numpy": "2.5.3",
+    "pandas": "3.0.6",
+    "scipy": "1.18.1",
+    "statsmodels": "0.15.0",
+    "lifelines": "0.30.0"
+  },
+  "limitation": "Shared server load and R timer resolution affect timing. Process peak RSS includes runtime/imports. No web latency, usability or interpretation-error claim."
+}

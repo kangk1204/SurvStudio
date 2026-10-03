@@ -1,0 +1,59 @@
+{
+  "checked_on": "2026-10-03",
+  "status": "documentation_review; manual task comparisons remain pending",
+  "claim_policy": "Documented presence is distinguished from executed behaviour. Missing documentation is not verified absence. No first, SOTA, human usability or clinical superiority claim.",
+  "tools": [
+    {
+      "name": "ESurv",
+      "source": "https://pubmed.ncbi.nlm.nih.gov/32369034/",
+      "publication": "10.2196/16084",
+      "documented_features": ["user-derived and TCGA inputs", "clinical variables and prognostic signatures", "regularized grouped variable selection"],
+      "external_validation": "Prior project review acknowledged this feature; publisher full text was access limited in this refresh and must be checked in the final citation audit.",
+      "direct_task_execution": "not a primary task comparator",
+      "locked_transform_and_withhold_propagation": "unverified; do not claim absent"
+    },
+    {
+      "name": "surviveR",
+      "source": "https://www.nature.com/articles/s41598-023-48894-9",
+      "publication": "10.1038/s41598-023-48894-9",
+      "app": "https://generatr.qub.ac.uk/app/surviveR",
+      "documented_features": ["custom patient data", "event and time column declaration", "complex cohort filtering and grouping"],
+      "direct_task_execution": "pending_human_execution",
+      "locked_transform_and_withhold_propagation": "unverified; do not claim absent"
+    },
+    {
+      "name": "KM Plotter custom-data",
+      "source": "https://kmplot.com/analysis/index.php?cancer=custom_plot&p=service",
+      "terms": "https://kmplot.com/analysis/index.php?p=termsofuse",
+      "documented_features": ["custom CSV/TXT upload", "multiple-variable weighted inputs", "PH check control", "univariate and multivariate Cox controls", "plot data export"],
+      "direct_task_execution": "pending_human_execution",
+      "interpretation": "Presence of multivariate Cox and PH controls is confirmed from the page; numerical behaviour is not confirmed. Automated tool execution will not be performed.",
+      "locked_transform_and_withhold_propagation": "unverified; do not claim absent"
+    },
+    {
+      "name": "Survival Genie 2",
+      "source": "https://link.springer.com/article/10.1186/s13073-026-01651-9",
+      "publication": "10.1186/s13073-026-01651-9",
+      "version_of_record": "2026-07-08",
+      "documented_features": ["single-cell-derived cluster markers and co-expression modules", "targeted gene-category analyses", "univariate Cox and KM/forest outputs"],
+      "direct_task_execution": "not a primary task comparator",
+      "locked_transform_and_withhold_propagation": "unverified; do not claim absent"
+    },
+    {
+      "name": "lifelines",
+      "source": "https://lifelines.readthedocs.io/en/latest/Survival%20Regression.html",
+      "tested_version": "0.30.0",
+      "documentation_version": "0.30.3",
+      "documented_features": ["Cox regression", "PH assumption checks", "formula-based models and predictions"],
+      "direct_task_execution": "15 common numerical quantities passed; benchmark time and memory still pending",
+      "locked_transform_and_withhold_propagation": "Custom workflows can be programmed; no impossibility claim"
+    },
+    {
+      "name": "R survival/Hmisc/rms",
+      "sources": ["https://search.r-project.org/CRAN/refmans/survival/html/coxph.html", "https://search.r-project.org/CRAN/refmans/Hmisc/html/rcspline.eval.html", "https://search.r-project.org/CRAN/refmans/rms/html/val.surv.html"],
+      "documented_features": ["Cox fitting and prediction", "restricted cubic spline basis", "external survival probability validation and calibration"],
+      "direct_task_execution": "Independent diagnostics verified in 10 synthetic fixtures; final task/benchmark and actual-case comparison pending",
+      "locked_transform_and_withhold_propagation": "Custom workflows can be programmed; no impossibility claim"
+    }
+  ]
+}
