@@ -36,6 +36,9 @@ classification are retained under `exploratory`. `null` does not mean zero, no a
 or a negative result. The API, browser, figure titles, CSV and reporting text use this policy.
 Subsample withholding contributes to the resampling denominator and cannot select
 added-value markers on that subset.
+When the full dataset is withheld, its internal gap-adjusted signature C-index is also
+withheld from standard summaries and retained as exploratory, including under a passed
+method profile. That procedure's subsample gap cannot validate the exploratory full-cohort signature.
 
 ## Locked recipes
 
@@ -48,10 +51,19 @@ their diagnostic status is `not_assessed`. Malformed or modified recipes are rej
 
 ## Confirmation and release gate
 
-The [fixed protocol](../validation/guarded_inference/protocol.json) compares the original
+The original [fixed protocol](../validation/guarded_inference/protocol.json) compares the original
 linear calculation, guarded linear inference and guarded spline inference using the
 same generated data and permutation stream. It separates development seed `2026100301`,
 main seed `2026100302` and extension seed `2026100303`.
+
+The initial study failed both profiles and is preserved. A coefficient-magnitude-only
+separation flag was corrected in method version 2. Separate development seed `2026100311`
+preceded the [new frozen protocol](../validation/diagnostic_followup/confirmation_protocol.json),
+with main seed `2026100312` and extension seed `2026100313`. Its complete 85,500 datasets
+support corrected linear only within the unchanged declared main engineering settings;
+spline remains exploratory. No thresholds, support sets or DGPs were changed after
+inspecting that confirmation. The registry preserves both versions and binds a passed
+profile to its numerical source hashes. See [full results and limits](../validation/diagnostic_followup/README.md).
 
 The main study contains 12 conditions × 5,000 datasets (`n=180`, 30 markers, 999
 permutations). Two extensions contain 12 × 1,000 each (`n=500,p=30` and `n=180,p=300`);
@@ -75,10 +87,11 @@ conditions. Reduced errors obtained by withholding everything would not satisfy 
 
 ## Evidence still required for publication
 
-The implementation is reviewable before completion of the confirmation study. A final
-package also requires latest-commit operating-system CI, independent R numerical checks,
-executed R survival/KM Plotter comparisons on eight fixed tasks, and reanalysis of existing
-Case I/IV/V external data. RFS is the ER-positive primary endpoint; DMFS is separate.
+The review package records latest-commit operating-system CI, independent R numerical
+checks, a scripted R survival comparison on eight fixed tasks, and reanalysis of existing
+Case I/IV/V external data. KM Plotter task execution remains unverified under the
+accessed automated-access terms; unexecuted tasks do not establish absent capabilities.
+RFS is the ER-positive primary endpoint; DMFS is separate.
 Manuscript numbers and regenerated figures/source tables must agree with those results.
 Existing external cohorts are reanalyses, not newly locked unseen validation.
 No participant study or claim about users' time, interpretation errors or usability is included.

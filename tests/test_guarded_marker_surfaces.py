@@ -9,6 +9,23 @@ from test_guarded_marker_inference import cohort
 from test_browser_e2e import browser_server, _launch_browser, _wait_for_workspace
 
 
+def test_qualified_linear_nonrejection_remains_assumption_dependent_through_export():
+    with TestClient(app,base_url="http://127.0.0.1") as client:
+        dataset=client.post("/api/upload",files={"file":("synthetic.csv",cohort().to_csv(index=False),"text/csv")}).json()
+        response=client.post("/api/marker-evaluation",json={"dataset_id":dataset["dataset_id"],
+            "time_column":"time","event_column":"event","marker_columns":["m0","m1","m2"],
+            "clinical_columns":["z"],"clinical_basis":"linear","n_permutations":19,"n_resamples":2})
+        assert response.status_code==200,response.text
+        payload=response.json()
+        inference=payload['analysis']['inference']
+        assert inference['allowed'] and inference['status']=='assumption_dependent'
+        assert inference['engineering_qualification']['kernel_sources_match'] is True
+        assert all(row['Family-wise P'] is not None for row in payload['display_table'])
+        assert payload['analysis']['locked_recipe']['inference']==inference
+        assert 'not universal' in payload['report']['results']
+        assert 'extensions do not establish broader qualification' in payload['report']['results']
+
+
 def test_api_returns_consistent_withheld_display_report_and_figures():
     with TestClient(app,base_url="http://127.0.0.1") as client:
         dataset=client.post("/api/upload",files={"file":("synthetic.csv",cohort(n=500,nonlinear=True).to_csv(index=False),"text/csv")}).json()
@@ -20,7 +37,8 @@ def test_api_returns_consistent_withheld_display_report_and_figures():
         assert payload["analysis"]["inference"]["status"]=="withheld"
         assert all(row["P value"] is None and row["Family-wise P"] is None and row["Inference status"]=="withheld"
                    for row in payload["display_table"])
-        assert all(row['Engineering qualification']=='failed_exploratory_only' and row['Exploratory raw family-wise P'] is not None
+        assert payload['analysis']['method_version']=='marker-inference/2'
+        assert all(row['Engineering qualification']=='passed_supported_conditions_only' and row['Exploratory raw family-wise P'] is not None
                    for row in payload['display_table'])
         assert "withheld" in payload["report"]["results"]
         for name in ("summary_figure","stability_figure","rank_figure"):

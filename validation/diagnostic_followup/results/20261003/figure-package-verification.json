@@ -1,0 +1,50 @@
+{
+  "structural_passed": true,
+  "profile": "publication",
+  "figures": [
+    {
+      "figure": "Figure_1_workflow",
+      "manifest_sha256": "68e903dd3cef6a29cc5b8dcff15361e86da797f56c2b2039c7ba47c4a71fb39f",
+      "structural_passed": true,
+      "scientific_source_checks": "see followup-evidence-audit.json",
+      "visual_inspection": "separate full-size image and manuscript-page review"
+    },
+    {
+      "figure": "Figure_2_error_and_availability",
+      "manifest_sha256": "26f861a5eae37cb91dbaea140ffb5304f6544be75e7c5bc3f541d4e940a20f48",
+      "structural_passed": true,
+      "scientific_source_checks": "see followup-evidence-audit.json",
+      "visual_inspection": "separate full-size image and manuscript-page review"
+    },
+    {
+      "figure": "Figure_3_power_and_dimension",
+      "manifest_sha256": "55841d4865926c0281be9115d2d52dafaf67c74cc25381d770a0c86db9ba565d",
+      "structural_passed": true,
+      "scientific_source_checks": "see followup-evidence-audit.json",
+      "visual_inspection": "separate full-size image and manuscript-page review"
+    },
+    {
+      "figure": "Figure_4_independent_numerical_validation",
+      "manifest_sha256": "86b00adc5f269b5cddd5e36e75763c7217a81b59e2029882100c0a210afc3f2b",
+      "structural_passed": true,
+      "scientific_source_checks": "see followup-evidence-audit.json",
+      "visual_inspection": "separate full-size image and manuscript-page review"
+    },
+    {
+      "figure": "Figure_5_external_reanalysis",
+      "manifest_sha256": "c511c4851fbfb2b1691c09efa2cc06ddbe65d9e33cddcab15300b920a72e7575",
+      "structural_passed": true,
+      "scientific_source_checks": "see followup-evidence-audit.json",
+      "visual_inspection": "separate full-size image and manuscript-page review"
+    },
+    {
+      "figure": "Figure_S1_full_availability",
+      "manifest_sha256": "20d2935c62dc7de5a24e5185688b70f4ec2b971c7448e5f227688b9a2b72df0d",
+      "structural_passed": true,
+      "scientific_source_checks": "see followup-evidence-audit.json",
+      "visual_inspection": "separate full-size image and manuscript-page review"
+    }
+  ],
+  "helper_sha256": "9db701926543ad72abb3ce95ef2674aa4972e237c20391dbadbb8ad7173dd942",
+  "structural_validation_is_not_scientific_validation": true
+}

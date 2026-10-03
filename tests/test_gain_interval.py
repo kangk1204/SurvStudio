@@ -255,7 +255,12 @@ def test_a_result_without_the_interval_does_not_claim_added_discrimination(tmp_p
 
 
 @_needs_node
-def test_the_markers_tab_preserves_but_withholds_an_unqualified_gain_interval(tmp_path: Path, marker_payloads: dict) -> None:
+def test_the_markers_tab_preserves_but_withholds_an_unqualified_gain_interval(tmp_path: Path, marker_payloads: dict, monkeypatch) -> None:
+    import copy
+    import survival_toolkit.marker_qualification as policy
+    marker_payloads=copy.deepcopy(marker_payloads)
+    monkeypatch.setattr(policy,'qualification',lambda *args:{'status':'failed_exploratory_only'})
+    marker_payloads['added']['analysis']=policy.qualify_marker_result(marker_payloads['added']['analysis'])
     analysis = marker_payloads["added"]["analysis"]
     signature = analysis["signature"]
     low, high = signature["signature_gain_left_out_ci"]

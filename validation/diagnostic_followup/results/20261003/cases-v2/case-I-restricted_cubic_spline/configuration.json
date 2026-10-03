@@ -1,0 +1,71 @@
+{
+  "case": "I",
+  "development_sha256": "0eab60d49df009a5291a21940b2eb0a1016f930f53a5bcd9da36d64621f1afcc",
+  "clinical_basis": "restricted_cubic_spline",
+  "primary_marker_scaling": "as_measured",
+  "sensitivity_marker_scaling": "within_cohort",
+  "clinical_transform": "frozen_development_only",
+  "primary_endpoint": "os",
+  "secondary_endpoint": null,
+  "external_basis_or_signature_selection": false,
+  "existing_external_data_reanalysis": true,
+  "external_bootstraps": 2000,
+  "seed": 20260926,
+  "engineering_qualification": {
+    "policy_version": "marker-qualification/1",
+    "status": "failed_exploratory_only",
+    "requested_method_version": "marker-inference/2",
+    "evaluated_method_version": "marker-inference/2",
+    "kernel_sources_match": null,
+    "clinical_basis": "restricted_cubic_spline",
+    "registry_sha256": "e288d92293fc218f1a7ac394ba7ab3095188fcbc8d78842b18a29d6af9398beb",
+    "study_git_revision": "1ed6c10ddad27be6bce4b0896f55ac8428e36dd9",
+    "summary_sha256": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+    "supported_conditions": [
+      "independent",
+      "linear",
+      "nonlinear_marker",
+      "correlated",
+      "z_dependent_censoring",
+      "nonlinear_clinical_risk",
+      "partial_weak",
+      "partial_strong"
+    ],
+    "qualification_dimensions": {
+      "n": 180,
+      "markers": 30,
+      "permutations": 999,
+      "datasets_per_condition": 5000
+    },
+    "claim_boundary": "Finite main-study engineering gates in prespecified supported conditions; not universal 5% error control or certification of an individual dataset.",
+    "extension_limitations": "The 500-subject, 300-marker and 3000-marker extensions do not establish broader qualification. In particular, large independent and linear marker families substantially reduce availability; power retention and conditional error bounds also remain limiting.",
+    "failed_conditions": [
+      "nonlinear_clinical_risk",
+      "nonlinear_marker",
+      "partial_strong",
+      "partial_weak"
+    ],
+    "previous_method_evidence": null
+  },
+  "source_hashes": {
+    "validation/guarded_inference/external_fixed_cases.py": "66443705652236b367f8be96f40f6d7c86e6ca91d814674997490e589ab1613d",
+    "validation/guarded_inference/case_reference.R": "bd001ce2fdd15eca1229e0caa59f2adab87d7061ae4017ea710d202b204a5015",
+    "validation/guarded_inference/verify_cases.py": "12a3e15e8ba1ce3844f4fd459a36c11c123bbb3a158ff3e8e066f36a5a50b212",
+    "paper/scripts/common.py": "6823de4d3d30d9776dede106f893e2f2512abd43ce0fce240670ff39f5481dad",
+    "src/survival_toolkit/clinical_basis.py": "e4384eca71cb0a0b39819a3265241b9cc5bf443bd279127b518f9397e2604ce3",
+    "src/survival_toolkit/marker_diagnostics.py": "af2b425f8b066bca2190f9f63d1b888aaf99b003c44df0f108c94be9bcb57a6d",
+    "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
+    "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
+    "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c",
+    "src/survival_toolkit/marker_qualification.py": "e29da9a61ff468457e46b26f8805c24963002fdf92689a75e31044b3f258d89d"
+  },
+  "state_refresh": {
+    "original_configuration_sha256": "f702336010adeaa774c94c83360f6fab9a4dfc532c041e7476fb8b7326dae08d",
+    "original_recipe_sha256": "aa5f5b03f3d75959cac1e283abea319d066ec649916c679897a08388a2959e84",
+    "script_sha256": "7b0fa785e329be9b5e2272258c668a56a79617595a827f9baa46ab93efd7e875",
+    "product_policy_sha256": "e29da9a61ff468457e46b26f8805c24963002fdf92689a75e31044b3f258d89d",
+    "product_git_revision": "7b279b8d24416328e6a42cc5efe0e1dd06f9cd36",
+    "numerical_quantities_recomputed": false,
+    "prediction_model_and_metrics_unchanged": true
+  }
+}

@@ -1,0 +1,310 @@
+{
+  "dmfs:as_measured": {
+    "n": 362,
+    "events": 95,
+    "k": 2,
+    "endpoint": "dmfs",
+    "role": "primary",
+    "quantities": {
+      "c": {
+        "eligible_cohorts": 2,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.6454771140750947,
+          "ci_lower": 0.587317684877102,
+          "ci_upper": 0.7036365432730873,
+          "tau2": 0.0,
+          "q": 0.29021211806363845,
+          "k": 2,
+          "hksj_ci_lower": 0.26844363717267056,
+          "hksj_ci_upper": 1.0225105909775187,
+          "hksj_scale": 0.29021211806363845,
+          "pi_lower": null,
+          "pi_upper": null
+        }
+      },
+      "clinical_c": {
+        "eligible_cohorts": 2,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.6266895570862754,
+          "ci_lower": 0.4686892398836168,
+          "ci_upper": 0.7846898742889339,
+          "tau2": 0.011203954653777668,
+          "q": 7.248331205477925,
+          "k": 2,
+          "hksj_ci_lower": -0.39758818717776756,
+          "hksj_ci_upper": 1.6509673013503183,
+          "hksj_scale": 1.0000000000000002,
+          "pi_lower": null,
+          "pi_upper": null
+        }
+      },
+      "delta_c": {
+        "eligible_cohorts": 2,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.017215683137285092,
+          "ci_lower": -0.10869860307429947,
+          "ci_upper": 0.14312996934886965,
+          "tau2": 0.006519155649874387,
+          "q": 4.688074782744209,
+          "k": 2,
+          "hksj_ci_lower": -0.7990561024819457,
+          "hksj_ci_upper": 0.8334874687565158,
+          "hksj_scale": 1.0000000000000004,
+          "pi_lower": null,
+          "pi_upper": null
+        }
+      },
+      "calibration_slope": {
+        "eligible_cohorts": 2,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.7424717086044953,
+          "ci_lower": 0.4558097103622596,
+          "ci_upper": 1.029133706846731,
+          "tau2": 0.0,
+          "q": 0.18533901687848098,
+          "k": 2,
+          "hksj_ci_lower": -1.1158885157561156,
+          "hksj_ci_upper": 2.6008319329651064,
+          "hksj_scale": 0.18533901687848098,
+          "pi_lower": null,
+          "pi_upper": null
+        }
+      }
+    }
+  },
+  "dmfs:within_cohort": {
+    "n": 362,
+    "events": 95,
+    "k": 2,
+    "endpoint": "dmfs",
+    "role": "sensitivity",
+    "quantities": {
+      "c": {
+        "eligible_cohorts": 2,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.6484973718584007,
+          "ci_lower": 0.580268713914916,
+          "ci_upper": 0.7167260298018855,
+          "tau2": 0.0007598939425369162,
+          "q": 1.4483528715197547,
+          "k": 2,
+          "hksj_ci_lower": 0.2061875266010798,
+          "hksj_ci_upper": 1.0908072171157217,
+          "hksj_scale": 1.0,
+          "pi_lower": null,
+          "pi_upper": null
+        }
+      },
+      "clinical_c": {
+        "eligible_cohorts": 2,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.6266895570862754,
+          "ci_lower": 0.4686892398836168,
+          "ci_upper": 0.7846898742889339,
+          "tau2": 0.011203954653777668,
+          "q": 7.248331205477925,
+          "k": 2,
+          "hksj_ci_lower": -0.39758818717776756,
+          "hksj_ci_upper": 1.6509673013503183,
+          "hksj_scale": 1.0000000000000002,
+          "pi_lower": null,
+          "pi_upper": null
+        }
+      },
+      "delta_c": {
+        "eligible_cohorts": 2,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.01965273748082723,
+          "ci_lower": -0.06898458084632866,
+          "ci_upper": 0.10829005580798312,
+          "tau2": 0.002761699621111921,
+          "q": 2.98213807779948,
+          "k": 2,
+          "hksj_ci_lower": -0.5549615043203627,
+          "hksj_ci_upper": 0.5942669792820171,
+          "hksj_scale": 1.0,
+          "pi_lower": null,
+          "pi_upper": null
+        }
+      },
+      "calibration_slope": {
+        "eligible_cohorts": 2,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.9848879151684301,
+          "ci_lower": 0.6184916704253166,
+          "ci_upper": 1.3512841599115437,
+          "tau2": 0.0,
+          "q": 0.7483037910547787,
+          "k": 2,
+          "hksj_ci_lower": -1.3903700951742084,
+          "hksj_ci_upper": 3.3601459255110684,
+          "hksj_scale": 0.7483037910547787,
+          "pi_lower": null,
+          "pi_upper": null
+        }
+      }
+    }
+  },
+  "rfs:as_measured": {
+    "n": 552,
+    "events": 160,
+    "k": 3,
+    "endpoint": "rfs",
+    "role": "primary",
+    "quantities": {
+      "c": {
+        "eligible_cohorts": 3,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.6868978647890646,
+          "ci_lower": 0.6057532439555238,
+          "ci_upper": 0.7680424856226054,
+          "tau2": 0.0037516823833730383,
+          "q": 7.533307474654752,
+          "k": 3,
+          "hksj_ci_lower": 0.508766678904412,
+          "hksj_ci_upper": 0.8650290506737172,
+          "hksj_scale": 0.870939158767274,
+          "pi_lower": -0.2524738888947605,
+          "pi_upper": 1.6262696184728895
+        }
+      },
+      "clinical_c": {
+        "eligible_cohorts": 3,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.6783101008315117,
+          "ci_lower": 0.5892304627944076,
+          "ci_upper": 0.7673897388686157,
+          "tau2": 0.004894028079235634,
+          "q": 9.725668206790179,
+          "k": 3,
+          "hksj_ci_lower": 0.4782588679453963,
+          "hksj_ci_upper": 0.878361333717627,
+          "hksj_scale": 1.0465624037104426,
+          "pi_lower": -0.38169668387004874,
+          "pi_upper": 1.738316885533072
+        }
+      },
+      "delta_c": {
+        "eligible_cohorts": 3,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.0007148079384973807,
+          "ci_lower": -0.04892067549651701,
+          "ci_upper": 0.050350291373511775,
+          "tau2": 0.0011015891922844829,
+          "q": 4.7944398386206775,
+          "k": 3,
+          "hksj_ci_lower": -0.11820294769131504,
+          "hksj_ci_upper": 0.11963256356830979,
+          "hksj_scale": 1.1911006125205252,
+          "pi_lower": -0.5297453678858647,
+          "pi_upper": 0.5311749837628595
+        }
+      },
+      "calibration_slope": {
+        "eligible_cohorts": 3,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.9138637091486164,
+          "ci_lower": 0.6292681028230199,
+          "ci_upper": 1.1984593154742127,
+          "tau2": 0.013764231528245631,
+          "q": 2.5481278556064915,
+          "k": 3,
+          "hksj_ci_lower": 0.2891106160713047,
+          "hksj_ci_upper": 1.5386168022259281,
+          "hksj_scale": 0.9598306139011107,
+          "pi_lower": -1.4580755760831963,
+          "pi_upper": 3.285802994380429
+        }
+      }
+    }
+  },
+  "rfs:within_cohort": {
+    "n": 552,
+    "events": 160,
+    "k": 3,
+    "endpoint": "rfs",
+    "role": "sensitivity",
+    "quantities": {
+      "c": {
+        "eligible_cohorts": 3,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.6975998504238409,
+          "ci_lower": 0.6404471294105268,
+          "ci_upper": 0.7547525714371549,
+          "tau2": 0.0012380313580191429,
+          "q": 3.8916590045971,
+          "k": 3,
+          "hksj_ci_lower": 0.5721364264031545,
+          "hksj_ci_upper": 0.8230632744445272,
+          "hksj_scale": 0.9888861013503425,
+          "pi_lower": 0.11695120592167862,
+          "pi_upper": 1.2782484949260031
+        }
+      },
+      "clinical_c": {
+        "eligible_cohorts": 3,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.6783101008315117,
+          "ci_lower": 0.5892304627944076,
+          "ci_upper": 0.7673897388686157,
+          "tau2": 0.004894028079235634,
+          "q": 9.725668206790179,
+          "k": 3,
+          "hksj_ci_lower": 0.4782588679453963,
+          "hksj_ci_upper": 0.878361333717627,
+          "hksj_scale": 1.0465624037104426,
+          "pi_lower": -0.38169668387004874,
+          "pi_upper": 1.738316885533072
+        }
+      },
+      "delta_c": {
+        "eligible_cohorts": 3,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.010925412782642125,
+          "ci_lower": -0.0236671251213061,
+          "ci_upper": 0.045517950686590355,
+          "tau2": 0.0,
+          "q": 1.899121102797402,
+          "k": 3,
+          "hksj_ci_lower": -0.06501319825888062,
+          "hksj_ci_upper": 0.08686402382416487,
+          "hksj_scale": 0.949560551398701,
+          "pi_lower": -0.21332962239666892,
+          "pi_upper": 0.23518044796195314
+        }
+      },
+      "calibration_slope": {
+        "eligible_cohorts": 3,
+        "unavailable_cohorts": [],
+        "pooled": {
+          "estimate": 0.9929780318665113,
+          "ci_lower": 0.7404074409865016,
+          "ci_upper": 1.2455486227465211,
+          "tau2": 0.0,
+          "q": 1.2967607264448633,
+          "k": 3,
+          "hksj_ci_lower": 0.43852724497655815,
+          "hksj_ci_upper": 1.5474288187564644,
+          "hksj_scale": 0.6483803632224316,
+          "pi_lower": -0.6443758651018665,
+          "pi_upper": 2.630331928834889
+        }
+      }
+    }
+  }
+}

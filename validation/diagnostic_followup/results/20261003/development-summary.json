@@ -1,0 +1,3601 @@
+{
+  "status": "development_only_not_qualification",
+  "protocol": {
+    "protocol_version": "diagnostic-followup/development/1",
+    "purpose": "New development after failure of v1 confirmation; not confirmation or qualification",
+    "development_seed": 2026100311,
+    "n": 180,
+    "p": 30,
+    "datasets_per_condition": 500,
+    "permutations": 999,
+    "withhold_alpha": 0.01,
+    "conditions": [
+      "independent",
+      "linear",
+      "nonlinear_marker",
+      "heteroskedastic",
+      "correlated",
+      "z_dependent_censoring",
+      "nonph_linear",
+      "nonph_nonlinear",
+      "nonph_heteroskedastic",
+      "nonlinear_clinical_risk",
+      "partial_weak",
+      "partial_strong"
+    ],
+    "methods": [
+      "legacy_linear",
+      "v1_guarded_linear",
+      "v2_guarded_linear",
+      "candidate_F_linear",
+      "v1_guarded_spline",
+      "v2_guarded_spline",
+      "candidate_F_spline"
+    ],
+    "variants": {
+      "v1": "Original magnitude-or-pending-step separation flag; HC3 chi-square; reconstructed using unchanged fit and score calculations",
+      "v2": "Pending-step separation flag only; all fit coefficients, covariance, likelihood, score, PH, HC3 chi-square, Holm families and 1% threshold unchanged",
+      "candidate_F": "Offline sensitivity analysis of v2 HC3 W/q against F(q,n-k); this is an approximation, not an exact robust finite-sample reference, and is not enabled in the product"
+    },
+    "dgp": "Unchanged dataset() from guarded-inference-study/1 with a new seed; true first-five signals and conditionally null remaining markers preserved",
+    "shared_stream": "Same dataset and same 999 permutation row draws within each clinical basis across all diagnostic variants",
+    "failure_policy": "Append once per owned index; retain failures and trace-local array metadata; no replacement",
+    "qualification": "No variant can qualify from this development study. A new confirmation protocol, unused seeds and sealed sources are required."
+  },
+  "datasets": 6000,
+  "complete": true,
+  "source_hashes": {
+    "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c",
+    "src/survival_toolkit/clinical_basis.py": "e4384eca71cb0a0b39819a3265241b9cc5bf443bd279127b518f9397e2604ce3",
+    "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
+    "src/survival_toolkit/marker_diagnostics.py": "af2b425f8b066bca2190f9f63d1b888aaf99b003c44df0f108c94be9bcb57a6d",
+    "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
+    "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
+    "validation/diagnostic_followup/development.py": "0e30090674022e302e709a753c1ca4868ab917439f92280c5c832a487cb2db56",
+    "validation/diagnostic_followup/protocol.json": "07d3662c6294274c8c46fafe3329783ac22d4e72b4ab1e5548122521f3c34fd4",
+    "validation/guarded_inference/protocol.json": "d291060d0e42bf47124ce904d493daa0e708f3c8165f49c5a06e30c3381d5b86",
+    "validation/guarded_inference/study.py": "b26cb8762d7b38653ffe9de1cc1101aa27b99d6b9f9f4cdbc9545c2a01fa2510"
+  },
+  "environment": {
+    "numpy": "2.5.3",
+    "pandas": "3.0.6",
+    "scipy": "1.18.1"
+  },
+  "ledgers": [
+    {
+      "ledger": "worker00.sqlite",
+      "sha256": "1e4444f1ad788f93ced2297471b4f3b8db45181fb8aaaa7ff5bbe4deb10fdfcf"
+    },
+    {
+      "ledger": "worker01.sqlite",
+      "sha256": "d36ee4d9b676d018aab6237de5e5d87b8f02aa49dc2c6ce3d8ad0e0b24d708cf"
+    },
+    {
+      "ledger": "worker02.sqlite",
+      "sha256": "2249ca8965df3f1f1eab9c18fd2f08bb177d0f3f33c66d356ffa5bb97a022c82"
+    },
+    {
+      "ledger": "worker03.sqlite",
+      "sha256": "c1de62ecb0952ff0352f29a7f88cb5d4e773a8af14af4218bb04657fd40bd6ef"
+    },
+    {
+      "ledger": "worker04.sqlite",
+      "sha256": "38a48f001e72f6e95b36302044f4235e71488480b174f1a6f194e3c100e4fb17"
+    },
+    {
+      "ledger": "worker05.sqlite",
+      "sha256": "3184b53676087357d19a8238168192de95b0da67478977b029fa55a596e1f3b9"
+    },
+    {
+      "ledger": "worker06.sqlite",
+      "sha256": "7e547b3abc73452f0e15913e46a1a481a7e849564d5d1e1a2a16b1cb9deba70e"
+    },
+    {
+      "ledger": "worker07.sqlite",
+      "sha256": "03b138c0b86e0e6b67d57ecb15acb57e0cf1b6d43a1f8bf4ca58f3539636cddd"
+    },
+    {
+      "ledger": "worker08.sqlite",
+      "sha256": "de29d6ce0973f957090c5a59e610fc609f46b941bea632d367f77582670d3f5a"
+    },
+    {
+      "ledger": "worker09.sqlite",
+      "sha256": "65e3afe4b10bf39d6ff9477aa2c251c5efd046f48bdfc6a7304e32f407b5e848"
+    },
+    {
+      "ledger": "worker10.sqlite",
+      "sha256": "eb60c1902a148bacb829a00e3b7b2cb0955ffc114688f0409e692679dc15d129"
+    },
+    {
+      "ledger": "worker11.sqlite",
+      "sha256": "de88107a2fc8705ecde17db2040115db6160bac6cf0a62a56f28ac164c9988b6"
+    }
+  ],
+  "summaries": [
+    {
+      "condition": "independent",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.05,
+      "fwer": 0.05,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "conditional_fwer": 0.05,
+      "conditional_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "independent",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 431,
+      "allowed_fraction": 0.862,
+      "fwer_raw": 0.05,
+      "fwer": 0.038,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.02303077080624761,
+        0.05870729046322855
+      ],
+      "fwer_failure_bounds": [
+        0.038,
+        0.038
+      ],
+      "conditional_fwer": 0.04408352668213457,
+      "conditional_mc95": [
+        0.026746597636723202,
+        0.06798780944823798
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_diagnostic_failed": 28,
+        "residual_misspecification/nonlinear_mean": 42,
+        "clinical_misspecification": 2,
+        "residual_misspecification/variance": 3
+      }
+    },
+    {
+      "condition": "independent",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 455,
+      "allowed_fraction": 0.91,
+      "fwer_raw": 0.05,
+      "fwer": 0.038,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.02303077080624761,
+        0.05870729046322855
+      ],
+      "fwer_failure_bounds": [
+        0.038,
+        0.038
+      ],
+      "conditional_fwer": 0.041758241758241756,
+      "conditional_mc95": [
+        0.02532535766498881,
+        0.06444440647541562
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 42,
+        "clinical_misspecification": 3,
+        "residual_misspecification/variance": 3
+      }
+    },
+    {
+      "condition": "independent",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 465,
+      "allowed_fraction": 0.93,
+      "fwer_raw": 0.05,
+      "fwer": 0.038,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.02303077080624761,
+        0.05870729046322855
+      ],
+      "fwer_failure_bounds": [
+        0.038,
+        0.038
+      ],
+      "conditional_fwer": 0.04086021505376344,
+      "conditional_mc95": [
+        0.024776789653556716,
+        0.06307466393125963
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 32,
+        "clinical_misspecification": 3,
+        "residual_misspecification/variance": 1
+      }
+    },
+    {
+      "condition": "independent",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 381,
+      "allowed_fraction": 0.762,
+      "fwer_raw": 0.044,
+      "fwer": 0.034,
+      "fwer_raw_mc95": [
+        0.027776767285571744,
+        0.06586100032359485
+      ],
+      "fwer_raw_failure_bounds": [
+        0.044,
+        0.044
+      ],
+      "fwer_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "fwer_failure_bounds": [
+        0.034,
+        0.034
+      ],
+      "conditional_fwer": 0.04461942257217848,
+      "conditional_mc95": [
+        0.026204043617392394,
+        0.07048045057689961
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 21,
+        "clinical_misspecification": 16,
+        "clinical_fit_failed": 28,
+        "residual_misspecification/variance": 73
+      }
+    },
+    {
+      "condition": "independent",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 399,
+      "allowed_fraction": 0.798,
+      "fwer_raw": 0.044,
+      "fwer": 0.036,
+      "fwer_raw_mc95": [
+        0.027776767285571744,
+        0.06586100032359485
+      ],
+      "fwer_raw_failure_bounds": [
+        0.044,
+        0.044
+      ],
+      "fwer_mc95": [
+        0.021472856586093284,
+        0.05630017620179107
+      ],
+      "fwer_failure_bounds": [
+        0.036,
+        0.036
+      ],
+      "conditional_fwer": 0.045112781954887216,
+      "conditional_mc95": [
+        0.026952554752828563,
+        0.07036236423302776
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 24,
+        "clinical_misspecification": 16,
+        "residual_misspecification/variance": 80
+      }
+    },
+    {
+      "condition": "independent",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 415,
+      "allowed_fraction": 0.83,
+      "fwer_raw": 0.044,
+      "fwer": 0.04,
+      "fwer_raw_mc95": [
+        0.027776767285571744,
+        0.06586100032359485
+      ],
+      "fwer_raw_failure_bounds": [
+        0.044,
+        0.044
+      ],
+      "fwer_mc95": [
+        0.024601312085545394,
+        0.06110260938824469
+      ],
+      "fwer_failure_bounds": [
+        0.04,
+        0.04
+      ],
+      "conditional_fwer": 0.04819277108433735,
+      "conditional_mc95": [
+        0.02968243213814419,
+        0.07345077281313159
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 20,
+        "clinical_misspecification": 16,
+        "residual_misspecification/variance": 65
+      }
+    },
+    {
+      "condition": "linear",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.054,
+      "fwer": 0.054,
+      "fwer_raw_mc95": [
+        0.03588425972193365,
+        0.07759746849493715
+      ],
+      "fwer_raw_failure_bounds": [
+        0.054,
+        0.054
+      ],
+      "fwer_mc95": [
+        0.03588425972193365,
+        0.07759746849493715
+      ],
+      "fwer_failure_bounds": [
+        0.054,
+        0.054
+      ],
+      "conditional_fwer": 0.054,
+      "conditional_mc95": [
+        0.03588425972193365,
+        0.07759746849493715
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "linear",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 430,
+      "allowed_fraction": 0.86,
+      "fwer_raw": 0.054,
+      "fwer": 0.044,
+      "fwer_raw_mc95": [
+        0.03588425972193365,
+        0.07759746849493715
+      ],
+      "fwer_raw_failure_bounds": [
+        0.054,
+        0.054
+      ],
+      "fwer_mc95": [
+        0.027776767285571744,
+        0.06586100032359485
+      ],
+      "fwer_failure_bounds": [
+        0.044,
+        0.044
+      ],
+      "conditional_fwer": 0.05116279069767442,
+      "conditional_mc95": [
+        0.03233759125255468,
+        0.0764390323064904
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_misspecification": 2,
+        "clinical_diagnostic_failed": 24,
+        "residual_misspecification/nonlinear_mean": 46,
+        "residual_misspecification/variance": 3
+      }
+    },
+    {
+      "condition": "linear",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 452,
+      "allowed_fraction": 0.904,
+      "fwer_raw": 0.054,
+      "fwer": 0.046,
+      "fwer_raw_mc95": [
+        0.03588425972193365,
+        0.07759746849493715
+      ],
+      "fwer_raw_failure_bounds": [
+        0.054,
+        0.054
+      ],
+      "fwer_mc95": [
+        0.029380175392402792,
+        0.0682254278812379
+      ],
+      "fwer_failure_bounds": [
+        0.046,
+        0.046
+      ],
+      "conditional_fwer": 0.05088495575221239,
+      "conditional_mc95": [
+        0.032526553408325026,
+        0.07537660597879323
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_misspecification": 2,
+        "residual_misspecification/nonlinear_mean": 46,
+        "residual_misspecification/variance": 3
+      }
+    },
+    {
+      "condition": "linear",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 461,
+      "allowed_fraction": 0.922,
+      "fwer_raw": 0.054,
+      "fwer": 0.046,
+      "fwer_raw_mc95": [
+        0.03588425972193365,
+        0.07759746849493715
+      ],
+      "fwer_raw_failure_bounds": [
+        0.054,
+        0.054
+      ],
+      "fwer_mc95": [
+        0.029380175392402792,
+        0.0682254278812379
+      ],
+      "fwer_failure_bounds": [
+        0.046,
+        0.046
+      ],
+      "conditional_fwer": 0.049891540130151846,
+      "conditional_mc95": [
+        0.031886281069088106,
+        0.07392379389375761
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_misspecification": 2,
+        "residual_misspecification/nonlinear_mean": 37,
+        "residual_misspecification/variance": 2
+      }
+    },
+    {
+      "condition": "linear",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 393,
+      "allowed_fraction": 0.786,
+      "fwer_raw": 0.054,
+      "fwer": 0.044,
+      "fwer_raw_mc95": [
+        0.03588425972193365,
+        0.07759746849493715
+      ],
+      "fwer_raw_failure_bounds": [
+        0.054,
+        0.054
+      ],
+      "fwer_mc95": [
+        0.027776767285571744,
+        0.06586100032359485
+      ],
+      "fwer_failure_bounds": [
+        0.044,
+        0.044
+      ],
+      "conditional_fwer": 0.05597964376590331,
+      "conditional_mc95": [
+        0.03541094453596241,
+        0.08352988368231662
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_fit_failed": 24,
+        "residual_misspecification/variance": 74,
+        "residual_misspecification/nonlinear_mean": 23,
+        "clinical_misspecification": 7
+      }
+    },
+    {
+      "condition": "linear",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 411,
+      "allowed_fraction": 0.822,
+      "fwer_raw": 0.054,
+      "fwer": 0.046,
+      "fwer_raw_mc95": [
+        0.03588425972193365,
+        0.07759746849493715
+      ],
+      "fwer_raw_failure_bounds": [
+        0.054,
+        0.054
+      ],
+      "fwer_mc95": [
+        0.029380175392402792,
+        0.0682254278812379
+      ],
+      "fwer_failure_bounds": [
+        0.046,
+        0.046
+      ],
+      "conditional_fwer": 0.05596107055961071,
+      "conditional_mc95": [
+        0.03580153362611228,
+        0.08278842035685817
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 79,
+        "residual_misspecification/nonlinear_mean": 24,
+        "clinical_misspecification": 7
+      }
+    },
+    {
+      "condition": "linear",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 429,
+      "allowed_fraction": 0.858,
+      "fwer_raw": 0.054,
+      "fwer": 0.05,
+      "fwer_raw_mc95": [
+        0.03588425972193365,
+        0.07759746849493715
+      ],
+      "fwer_raw_failure_bounds": [
+        0.054,
+        0.054
+      ],
+      "fwer_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "conditional_fwer": 0.05827505827505827,
+      "conditional_mc95": [
+        0.03806386028101619,
+        0.08482621529654283
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 62,
+        "residual_misspecification/nonlinear_mean": 19,
+        "clinical_misspecification": 7
+      }
+    },
+    {
+      "condition": "nonlinear_marker",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.056,
+      "fwer": 0.056,
+      "fwer_raw_mc95": [
+        0.037530444475022184,
+        0.0799213006043601
+      ],
+      "fwer_raw_failure_bounds": [
+        0.056,
+        0.056
+      ],
+      "fwer_mc95": [
+        0.037530444475022184,
+        0.0799213006043601
+      ],
+      "fwer_failure_bounds": [
+        0.056,
+        0.056
+      ],
+      "conditional_fwer": 0.056,
+      "conditional_mc95": [
+        0.037530444475022184,
+        0.0799213006043601
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "nonlinear_marker",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.056,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.037530444475022184,
+        0.0799213006043601
+      ],
+      "fwer_raw_failure_bounds": [
+        0.056,
+        0.056
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 15000,
+        "clinical_diagnostic_failed": 23,
+        "clinical_misspecification": 3
+      }
+    },
+    {
+      "condition": "nonlinear_marker",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.056,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.037530444475022184,
+        0.0799213006043601
+      ],
+      "fwer_raw_failure_bounds": [
+        0.056,
+        0.056
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 15000,
+        "clinical_misspecification": 4
+      }
+    },
+    {
+      "condition": "nonlinear_marker",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.056,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.037530444475022184,
+        0.0799213006043601
+      ],
+      "fwer_raw_failure_bounds": [
+        0.056,
+        0.056
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 15000,
+        "clinical_misspecification": 4
+      }
+    },
+    {
+      "condition": "nonlinear_marker",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 141,
+      "allowed_fraction": 0.282,
+      "fwer_raw": 0.044,
+      "fwer": 0.018,
+      "fwer_raw_mc95": [
+        0.027776767285571744,
+        0.06586100032359485
+      ],
+      "fwer_raw_failure_bounds": [
+        0.044,
+        0.044
+      ],
+      "fwer_mc95": [
+        0.008262954434763135,
+        0.033893696108537937
+      ],
+      "fwer_failure_bounds": [
+        0.018,
+        0.018
+      ],
+      "conditional_fwer": 0.06382978723404255,
+      "conditional_mc95": [
+        0.029599837390874902,
+        0.11770976129287558
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 781,
+        "clinical_fit_failed": 23,
+        "residual_misspecification/variance": 64,
+        "clinical_misspecification": 1
+      }
+    },
+    {
+      "condition": "nonlinear_marker",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 151,
+      "allowed_fraction": 0.302,
+      "fwer_raw": 0.044,
+      "fwer": 0.018,
+      "fwer_raw_mc95": [
+        0.027776767285571744,
+        0.06586100032359485
+      ],
+      "fwer_raw_failure_bounds": [
+        0.044,
+        0.044
+      ],
+      "fwer_mc95": [
+        0.008262954434763135,
+        0.033893696108537937
+      ],
+      "fwer_failure_bounds": [
+        0.018,
+        0.018
+      ],
+      "conditional_fwer": 0.059602649006622516,
+      "conditional_mc95": [
+        0.02761341627825541,
+        0.11012750558415878
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 807,
+        "residual_misspecification/variance": 64,
+        "clinical_misspecification": 2
+      }
+    },
+    {
+      "condition": "nonlinear_marker",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 170,
+      "allowed_fraction": 0.34,
+      "fwer_raw": 0.044,
+      "fwer": 0.02,
+      "fwer_raw_mc95": [
+        0.027776767285571744,
+        0.06586100032359485
+      ],
+      "fwer_raw_failure_bounds": [
+        0.044,
+        0.044
+      ],
+      "fwer_mc95": [
+        0.009631429586433347,
+        0.03647240829220973
+      ],
+      "fwer_failure_bounds": [
+        0.02,
+        0.02
+      ],
+      "conditional_fwer": 0.058823529411764705,
+      "conditional_mc95": [
+        0.02856549318496242,
+        0.10551628550966849
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 722,
+        "residual_misspecification/variance": 51,
+        "clinical_misspecification": 2
+      }
+    },
+    {
+      "condition": "heteroskedastic",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.048,
+      "fwer": 0.048,
+      "fwer_raw_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_raw_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "fwer_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "conditional_fwer": 0.048,
+      "conditional_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "heteroskedastic",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 1,
+      "allowed_fraction": 0.002,
+      "fwer_raw": 0.048,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_raw_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": 0.0,
+      "conditional_mc95": [
+        0.0,
+        0.975
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 4471,
+        "residual_misspecification/nonlinear_mean": 181,
+        "clinical_diagnostic_failed": 22,
+        "clinical_misspecification": 4
+      }
+    },
+    {
+      "condition": "heteroskedastic",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 1,
+      "allowed_fraction": 0.002,
+      "fwer_raw": 0.048,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_raw_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": 0.0,
+      "conditional_mc95": [
+        0.0,
+        0.975
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 4471,
+        "residual_misspecification/nonlinear_mean": 181,
+        "clinical_misspecification": 5
+      }
+    },
+    {
+      "condition": "heteroskedastic",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 3,
+      "allowed_fraction": 0.006,
+      "fwer_raw": 0.048,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_raw_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": 0.0,
+      "conditional_mc95": [
+        0.0,
+        0.7075982261787133
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 4088,
+        "residual_misspecification/nonlinear_mean": 165,
+        "clinical_misspecification": 5
+      }
+    },
+    {
+      "condition": "heteroskedastic",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.05,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 12557,
+        "residual_misspecification/nonlinear_mean": 209,
+        "clinical_fit_failed": 22,
+        "clinical_misspecification": 1
+      }
+    },
+    {
+      "condition": "heteroskedastic",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.05,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 13142,
+        "residual_misspecification/nonlinear_mean": 218,
+        "clinical_misspecification": 1
+      }
+    },
+    {
+      "condition": "heteroskedastic",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.05,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 12977,
+        "residual_misspecification/nonlinear_mean": 190,
+        "clinical_misspecification": 1
+      }
+    },
+    {
+      "condition": "correlated",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.05,
+      "fwer": 0.05,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "conditional_fwer": 0.05,
+      "conditional_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "correlated",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 454,
+      "allowed_fraction": 0.908,
+      "fwer_raw": 0.05,
+      "fwer": 0.036,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.021472856586093284,
+        0.05630017620179107
+      ],
+      "fwer_failure_bounds": [
+        0.036,
+        0.036
+      ],
+      "conditional_fwer": 0.039647577092511016,
+      "conditional_mc95": [
+        0.023664040523331334,
+        0.06193804769838046
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_diagnostic_failed": 29,
+        "residual_misspecification/nonlinear_mean": 16,
+        "clinical_misspecification": 5,
+        "residual_misspecification/variance": 1
+      }
+    },
+    {
+      "condition": "correlated",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 482,
+      "allowed_fraction": 0.964,
+      "fwer_raw": 0.05,
+      "fwer": 0.048,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "conditional_fwer": 0.04979253112033195,
+      "conditional_mc95": [
+        0.03216001012681085,
+        0.07318394770744088
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 16,
+        "clinical_misspecification": 6,
+        "residual_misspecification/variance": 1
+      }
+    },
+    {
+      "condition": "correlated",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 487,
+      "allowed_fraction": 0.974,
+      "fwer_raw": 0.05,
+      "fwer": 0.048,
+      "fwer_raw_mc95": [
+        0.03261518014933005,
+        0.07292762165047896
+      ],
+      "fwer_raw_failure_bounds": [
+        0.05,
+        0.05
+      ],
+      "fwer_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "conditional_fwer": 0.049281314168377825,
+      "conditional_mc95": [
+        0.031827164956621835,
+        0.07244178823947278
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 11,
+        "clinical_misspecification": 6,
+        "residual_misspecification/variance": 1
+      }
+    },
+    {
+      "condition": "correlated",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 403,
+      "allowed_fraction": 0.806,
+      "fwer_raw": 0.04,
+      "fwer": 0.026,
+      "fwer_raw_mc95": [
+        0.024601312085545394,
+        0.06110260938824469
+      ],
+      "fwer_raw_failure_bounds": [
+        0.04,
+        0.04
+      ],
+      "fwer_mc95": [
+        0.013914930062859742,
+        0.044050436856873765
+      ],
+      "fwer_failure_bounds": [
+        0.026,
+        0.026
+      ],
+      "conditional_fwer": 0.03225806451612903,
+      "conditional_mc95": [
+        0.01728566464318896,
+        0.05453060998515378
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 53,
+        "clinical_fit_failed": 29,
+        "residual_misspecification/nonlinear_mean": 32,
+        "clinical_misspecification": 11
+      }
+    },
+    {
+      "condition": "correlated",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 430,
+      "allowed_fraction": 0.86,
+      "fwer_raw": 0.04,
+      "fwer": 0.032,
+      "fwer_raw_mc95": [
+        0.024601312085545394,
+        0.06110260938824469
+      ],
+      "fwer_raw_failure_bounds": [
+        0.04,
+        0.04
+      ],
+      "fwer_mc95": [
+        0.018399185323639905,
+        0.05144676829164562
+      ],
+      "fwer_failure_bounds": [
+        0.032,
+        0.032
+      ],
+      "conditional_fwer": 0.037209302325581395,
+      "conditional_mc95": [
+        0.021415224316561975,
+        0.05972343132232949
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 55,
+        "residual_misspecification/nonlinear_mean": 33,
+        "clinical_misspecification": 11
+      }
+    },
+    {
+      "condition": "correlated",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 446,
+      "allowed_fraction": 0.892,
+      "fwer_raw": 0.04,
+      "fwer": 0.034,
+      "fwer_raw_mc95": [
+        0.024601312085545394,
+        0.06110260938824469
+      ],
+      "fwer_raw_failure_bounds": [
+        0.04,
+        0.04
+      ],
+      "fwer_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "fwer_failure_bounds": [
+        0.034,
+        0.034
+      ],
+      "conditional_fwer": 0.03811659192825112,
+      "conditional_mc95": [
+        0.022358333785345463,
+        0.06032827557163408
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 25,
+        "residual_misspecification/variance": 38,
+        "clinical_misspecification": 11
+      }
+    },
+    {
+      "condition": "z_dependent_censoring",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.042,
+      "fwer": 0.042,
+      "fwer_raw_mc95": [
+        0.026183576776147133,
+        0.06348694053291891
+      ],
+      "fwer_raw_failure_bounds": [
+        0.042,
+        0.042
+      ],
+      "fwer_mc95": [
+        0.026183576776147133,
+        0.06348694053291891
+      ],
+      "fwer_failure_bounds": [
+        0.042,
+        0.042
+      ],
+      "conditional_fwer": 0.042,
+      "conditional_mc95": [
+        0.026183576776147133,
+        0.06348694053291891
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "z_dependent_censoring",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 451,
+      "allowed_fraction": 0.902,
+      "fwer_raw": 0.042,
+      "fwer": 0.036,
+      "fwer_raw_mc95": [
+        0.026183576776147133,
+        0.06348694053291891
+      ],
+      "fwer_raw_failure_bounds": [
+        0.042,
+        0.042
+      ],
+      "fwer_mc95": [
+        0.021472856586093284,
+        0.05630017620179107
+      ],
+      "fwer_failure_bounds": [
+        0.036,
+        0.036
+      ],
+      "conditional_fwer": 0.03991130820399113,
+      "conditional_mc95": [
+        0.023822582330944107,
+        0.062345207654398924
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 38,
+        "clinical_diagnostic_failed": 12,
+        "clinical_misspecification": 1
+      }
+    },
+    {
+      "condition": "z_dependent_censoring",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 463,
+      "allowed_fraction": 0.926,
+      "fwer_raw": 0.042,
+      "fwer": 0.038,
+      "fwer_raw_mc95": [
+        0.026183576776147133,
+        0.06348694053291891
+      ],
+      "fwer_raw_failure_bounds": [
+        0.042,
+        0.042
+      ],
+      "fwer_mc95": [
+        0.02303077080624761,
+        0.05870729046322855
+      ],
+      "fwer_failure_bounds": [
+        0.038,
+        0.038
+      ],
+      "conditional_fwer": 0.04103671706263499,
+      "conditional_mc95": [
+        0.02488459367550851,
+        0.06334393519524874
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 38,
+        "clinical_misspecification": 1
+      }
+    },
+    {
+      "condition": "z_dependent_censoring",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 473,
+      "allowed_fraction": 0.946,
+      "fwer_raw": 0.042,
+      "fwer": 0.04,
+      "fwer_raw_mc95": [
+        0.026183576776147133,
+        0.06348694053291891
+      ],
+      "fwer_raw_failure_bounds": [
+        0.042,
+        0.042
+      ],
+      "fwer_mc95": [
+        0.024601312085545394,
+        0.06110260938824469
+      ],
+      "fwer_failure_bounds": [
+        0.04,
+        0.04
+      ],
+      "conditional_fwer": 0.042283298097251586,
+      "conditional_mc95": [
+        0.026015934214687623,
+        0.06454971751660062
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 27,
+        "clinical_misspecification": 1
+      }
+    },
+    {
+      "condition": "z_dependent_censoring",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 398,
+      "allowed_fraction": 0.796,
+      "fwer_raw": 0.034,
+      "fwer": 0.02,
+      "fwer_raw_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "fwer_raw_failure_bounds": [
+        0.034,
+        0.034
+      ],
+      "fwer_mc95": [
+        0.009631429586433347,
+        0.03647240829220973
+      ],
+      "fwer_failure_bounds": [
+        0.02,
+        0.02
+      ],
+      "conditional_fwer": 0.02512562814070352,
+      "conditional_mc95": [
+        0.012113008270110566,
+        0.04572046432466269
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 78,
+        "clinical_fit_failed": 12,
+        "residual_misspecification/nonlinear_mean": 20
+      }
+    },
+    {
+      "condition": "z_dependent_censoring",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 409,
+      "allowed_fraction": 0.818,
+      "fwer_raw": 0.034,
+      "fwer": 0.02,
+      "fwer_raw_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "fwer_raw_failure_bounds": [
+        0.034,
+        0.034
+      ],
+      "fwer_mc95": [
+        0.009631429586433347,
+        0.03647240829220973
+      ],
+      "fwer_failure_bounds": [
+        0.02,
+        0.02
+      ],
+      "conditional_fwer": 0.02444987775061125,
+      "conditional_mc95": [
+        0.011785531138836394,
+        0.04450353535387689
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 79,
+        "residual_misspecification/nonlinear_mean": 20
+      }
+    },
+    {
+      "condition": "z_dependent_censoring",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 434,
+      "allowed_fraction": 0.868,
+      "fwer_raw": 0.034,
+      "fwer": 0.022,
+      "fwer_raw_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "fwer_raw_failure_bounds": [
+        0.034,
+        0.034
+      ],
+      "fwer_mc95": [
+        0.011032276361257526,
+        0.039022550844808795
+      ],
+      "fwer_failure_bounds": [
+        0.022,
+        0.022
+      ],
+      "conditional_fwer": 0.02534562211981567,
+      "conditional_mc95": [
+        0.012718837665872618,
+        0.0448970656471337
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 54,
+        "residual_misspecification/nonlinear_mean": 15
+      }
+    },
+    {
+      "condition": "nonph_linear",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.034,
+      "fwer": 0.034,
+      "fwer_raw_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "fwer_raw_failure_bounds": [
+        0.034,
+        0.034
+      ],
+      "fwer_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "fwer_failure_bounds": [
+        0.034,
+        0.034
+      ],
+      "conditional_fwer": 0.034,
+      "conditional_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "nonph_linear",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 46,
+      "allowed_fraction": 0.092,
+      "fwer_raw": 0.034,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "fwer_raw_failure_bounds": [
+        0.034,
+        0.034
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": 0.0,
+      "conditional_mc95": [
+        0.0,
+        0.0770618270519007
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 45,
+        "clinical_misspecification": 1072,
+        "clinical_diagnostic_failed": 8,
+        "residual_misspecification/variance": 2
+      }
+    },
+    {
+      "condition": "nonph_linear",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 46,
+      "allowed_fraction": 0.092,
+      "fwer_raw": 0.034,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "fwer_raw_failure_bounds": [
+        0.034,
+        0.034
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": 0.0,
+      "conditional_mc95": [
+        0.0,
+        0.0770618270519007
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 45,
+        "clinical_misspecification": 1079,
+        "residual_misspecification/variance": 2
+      }
+    },
+    {
+      "condition": "nonph_linear",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 46,
+      "allowed_fraction": 0.092,
+      "fwer_raw": 0.034,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.019928600046206307,
+        0.0538803507360769
+      ],
+      "fwer_raw_failure_bounds": [
+        0.034,
+        0.034
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": 0.0,
+      "conditional_mc95": [
+        0.0,
+        0.0770618270519007
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 39,
+        "clinical_misspecification": 1079,
+        "residual_misspecification/variance": 1
+      }
+    },
+    {
+      "condition": "nonph_linear",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 272,
+      "allowed_fraction": 0.544,
+      "fwer_raw": 0.042,
+      "fwer": 0.016,
+      "fwer_raw_mc95": [
+        0.026183576776147133,
+        0.06348694053291891
+      ],
+      "fwer_raw_failure_bounds": [
+        0.042,
+        0.042
+      ],
+      "fwer_mc95": [
+        0.006932321202483599,
+        0.03128200168985308
+      ],
+      "fwer_failure_bounds": [
+        0.016,
+        0.016
+      ],
+      "conditional_fwer": 0.029411764705882353,
+      "conditional_mc95": [
+        0.012781694089137987,
+        0.05712815240600499
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_misspecification": 159,
+        "residual_misspecification/variance": 83,
+        "clinical_fit_failed": 8,
+        "residual_misspecification/nonlinear_mean": 18
+      }
+    },
+    {
+      "condition": "nonph_linear",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 278,
+      "allowed_fraction": 0.556,
+      "fwer_raw": 0.042,
+      "fwer": 0.016,
+      "fwer_raw_mc95": [
+        0.026183576776147133,
+        0.06348694053291891
+      ],
+      "fwer_raw_failure_bounds": [
+        0.042,
+        0.042
+      ],
+      "fwer_mc95": [
+        0.006932321202483599,
+        0.03128200168985308
+      ],
+      "fwer_failure_bounds": [
+        0.016,
+        0.016
+      ],
+      "conditional_fwer": 0.02877697841726619,
+      "conditional_mc95": [
+        0.01250403983318352,
+        0.05591254069107874
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_misspecification": 161,
+        "residual_misspecification/variance": 83,
+        "residual_misspecification/nonlinear_mean": 18
+      }
+    },
+    {
+      "condition": "nonph_linear",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 298,
+      "allowed_fraction": 0.596,
+      "fwer_raw": 0.042,
+      "fwer": 0.018,
+      "fwer_raw_mc95": [
+        0.026183576776147133,
+        0.06348694053291891
+      ],
+      "fwer_raw_failure_bounds": [
+        0.042,
+        0.042
+      ],
+      "fwer_mc95": [
+        0.008262954434763135,
+        0.033893696108537937
+      ],
+      "fwer_failure_bounds": [
+        0.018,
+        0.018
+      ],
+      "conditional_fwer": 0.030201342281879196,
+      "conditional_mc95": [
+        0.013901104516204438,
+        0.056555455448038375
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_misspecification": 161,
+        "residual_misspecification/variance": 58,
+        "residual_misspecification/nonlinear_mean": 12
+      }
+    },
+    {
+      "condition": "nonph_nonlinear",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.688,
+      "fwer": 0.688,
+      "fwer_raw_mc95": [
+        0.645365073161317,
+        0.728394800568974
+      ],
+      "fwer_raw_failure_bounds": [
+        0.688,
+        0.688
+      ],
+      "fwer_mc95": [
+        0.645365073161317,
+        0.728394800568974
+      ],
+      "fwer_failure_bounds": [
+        0.688,
+        0.688
+      ],
+      "conditional_fwer": 0.688,
+      "conditional_mc95": [
+        0.645365073161317,
+        0.728394800568974
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "nonph_nonlinear",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.688,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.645365073161317,
+        0.728394800568974
+      ],
+      "fwer_raw_failure_bounds": [
+        0.688,
+        0.688
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 14999,
+        "clinical_misspecification": 1047,
+        "clinical_diagnostic_failed": 7
+      }
+    },
+    {
+      "condition": "nonph_nonlinear",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.688,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.645365073161317,
+        0.728394800568974
+      ],
+      "fwer_raw_failure_bounds": [
+        0.688,
+        0.688
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 14999,
+        "clinical_misspecification": 1050
+      }
+    },
+    {
+      "condition": "nonph_nonlinear",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.688,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.645365073161317,
+        0.728394800568974
+      ],
+      "fwer_raw_failure_bounds": [
+        0.688,
+        0.688
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 14999,
+        "clinical_misspecification": 1050
+      }
+    },
+    {
+      "condition": "nonph_nonlinear",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 92,
+      "allowed_fraction": 0.184,
+      "fwer_raw": 0.048,
+      "fwer": 0.004,
+      "fwer_raw_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_raw_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "fwer_mc95": [
+        0.0004847861762900009,
+        0.014374078562200309
+      ],
+      "fwer_failure_bounds": [
+        0.004,
+        0.004
+      ],
+      "conditional_fwer": 0.021739130434782608,
+      "conditional_mc95": [
+        0.0026436380721019683,
+        0.07633067175232446
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 925,
+        "clinical_misspecification": 184,
+        "residual_misspecification/variance": 58,
+        "clinical_fit_failed": 7
+      }
+    },
+    {
+      "condition": "nonph_nonlinear",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 93,
+      "allowed_fraction": 0.186,
+      "fwer_raw": 0.048,
+      "fwer": 0.004,
+      "fwer_raw_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_raw_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "fwer_mc95": [
+        0.0004847861762900009,
+        0.014374078562200309
+      ],
+      "fwer_failure_bounds": [
+        0.004,
+        0.004
+      ],
+      "conditional_fwer": 0.021505376344086023,
+      "conditional_mc95": [
+        0.002615094697133009,
+        0.07553297205250831
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 932,
+        "clinical_misspecification": 188,
+        "residual_misspecification/variance": 59
+      }
+    },
+    {
+      "condition": "nonph_nonlinear",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 105,
+      "allowed_fraction": 0.21,
+      "fwer_raw": 0.048,
+      "fwer": 0.004,
+      "fwer_raw_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_raw_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "fwer_mc95": [
+        0.0004847861762900009,
+        0.014374078562200309
+      ],
+      "fwer_failure_bounds": [
+        0.004,
+        0.004
+      ],
+      "conditional_fwer": 0.01904761904761905,
+      "conditional_mc95": [
+        0.0023151367400750583,
+        0.0671157603022928
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_misspecification": 188,
+        "residual_misspecification/nonlinear_mean": 825,
+        "residual_misspecification/variance": 42
+      }
+    },
+    {
+      "condition": "nonph_heteroskedastic",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.252,
+      "fwer": 0.252,
+      "fwer_raw_mc95": [
+        0.21450706675787148,
+        0.2924540655325544
+      ],
+      "fwer_raw_failure_bounds": [
+        0.252,
+        0.252
+      ],
+      "fwer_mc95": [
+        0.21450706675787148,
+        0.2924540655325544
+      ],
+      "fwer_failure_bounds": [
+        0.252,
+        0.252
+      ],
+      "conditional_fwer": 0.252,
+      "conditional_mc95": [
+        0.21450706675787148,
+        0.2924540655325544
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "nonph_heteroskedastic",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.252,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.21450706675787148,
+        0.2924540655325544
+      ],
+      "fwer_raw_failure_bounds": [
+        0.252,
+        0.252
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_misspecification": 1064,
+        "residual_misspecification/variance": 4235,
+        "residual_misspecification/nonlinear_mean": 191,
+        "clinical_diagnostic_failed": 5
+      }
+    },
+    {
+      "condition": "nonph_heteroskedastic",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.252,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.21450706675787148,
+        0.2924540655325544
+      ],
+      "fwer_raw_failure_bounds": [
+        0.252,
+        0.252
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_misspecification": 1068,
+        "residual_misspecification/variance": 4235,
+        "residual_misspecification/nonlinear_mean": 191
+      }
+    },
+    {
+      "condition": "nonph_heteroskedastic",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.252,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.21450706675787148,
+        0.2924540655325544
+      ],
+      "fwer_raw_failure_bounds": [
+        0.252,
+        0.252
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "clinical_misspecification": 1068,
+        "residual_misspecification/variance": 3858,
+        "residual_misspecification/nonlinear_mean": 173
+      }
+    },
+    {
+      "condition": "nonph_heteroskedastic",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.238,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.20131537141932035,
+        0.2778149060651691
+      ],
+      "fwer_raw_failure_bounds": [
+        0.238,
+        0.238
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 12908,
+        "residual_misspecification/nonlinear_mean": 247,
+        "clinical_misspecification": 198,
+        "clinical_fit_failed": 5
+      }
+    },
+    {
+      "condition": "nonph_heteroskedastic",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.238,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.20131537141932035,
+        0.2778149060651691
+      ],
+      "fwer_raw_failure_bounds": [
+        0.238,
+        0.238
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 13044,
+        "residual_misspecification/nonlinear_mean": 248,
+        "clinical_misspecification": 199
+      }
+    },
+    {
+      "condition": "nonph_heteroskedastic",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.238,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.20131537141932035,
+        0.2778149060651691
+      ],
+      "fwer_raw_failure_bounds": [
+        0.238,
+        0.238
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 12823,
+        "residual_misspecification/nonlinear_mean": 223,
+        "clinical_misspecification": 199
+      }
+    },
+    {
+      "condition": "nonlinear_clinical_risk",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.982,
+      "fwer": 0.982,
+      "fwer_raw_mc95": [
+        0.966106303891462,
+        0.9917370455652369
+      ],
+      "fwer_raw_failure_bounds": [
+        0.982,
+        0.982
+      ],
+      "fwer_mc95": [
+        0.966106303891462,
+        0.9917370455652369
+      ],
+      "fwer_failure_bounds": [
+        0.982,
+        0.982
+      ],
+      "conditional_fwer": 0.982,
+      "conditional_mc95": [
+        0.966106303891462,
+        0.9917370455652369
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "nonlinear_clinical_risk",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.982,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.966106303891462,
+        0.9917370455652369
+      ],
+      "fwer_raw_failure_bounds": [
+        0.982,
+        0.982
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 15000,
+        "clinical_misspecification": 834,
+        "clinical_diagnostic_failed": 39
+      }
+    },
+    {
+      "condition": "nonlinear_clinical_risk",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.982,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.966106303891462,
+        0.9917370455652369
+      ],
+      "fwer_raw_failure_bounds": [
+        0.982,
+        0.982
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 15000,
+        "clinical_misspecification": 880
+      }
+    },
+    {
+      "condition": "nonlinear_clinical_risk",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 0,
+      "allowed_fraction": 0.0,
+      "fwer_raw": 0.982,
+      "fwer": 0.0,
+      "fwer_raw_mc95": [
+        0.966106303891462,
+        0.9917370455652369
+      ],
+      "fwer_raw_failure_bounds": [
+        0.982,
+        0.982
+      ],
+      "fwer_mc95": [
+        0.0,
+        0.007350610051907784
+      ],
+      "fwer_failure_bounds": [
+        0.0,
+        0.0
+      ],
+      "conditional_fwer": null,
+      "conditional_mc95": [
+        null,
+        null
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 15000,
+        "clinical_misspecification": 880
+      }
+    },
+    {
+      "condition": "nonlinear_clinical_risk",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 131,
+      "allowed_fraction": 0.262,
+      "fwer_raw": 0.048,
+      "fwer": 0.012,
+      "fwer_raw_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_raw_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "fwer_mc95": [
+        0.004416172285801643,
+        0.025934927265336975
+      ],
+      "fwer_failure_bounds": [
+        0.012,
+        0.012
+      ],
+      "conditional_fwer": 0.04580152671755725,
+      "conditional_mc95": [
+        0.016991344513786942,
+        0.09702457691727535
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 777,
+        "clinical_misspecification": 15,
+        "residual_misspecification/variance": 53,
+        "clinical_fit_failed": 39
+      }
+    },
+    {
+      "condition": "nonlinear_clinical_risk",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 138,
+      "allowed_fraction": 0.276,
+      "fwer_raw": 0.048,
+      "fwer": 0.012,
+      "fwer_raw_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_raw_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "fwer_mc95": [
+        0.004416172285801643,
+        0.025934927265336975
+      ],
+      "fwer_failure_bounds": [
+        0.012,
+        0.012
+      ],
+      "conditional_fwer": 0.043478260869565216,
+      "conditional_mc95": [
+        0.016120490554681934,
+        0.09223051408016189
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 865,
+        "clinical_misspecification": 20,
+        "residual_misspecification/variance": 55
+      }
+    },
+    {
+      "condition": "nonlinear_clinical_risk",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 162,
+      "allowed_fraction": 0.324,
+      "fwer_raw": 0.048,
+      "fwer": 0.012,
+      "fwer_raw_mc95": [
+        0.03099316879350537,
+        0.07058079625732981
+      ],
+      "fwer_raw_failure_bounds": [
+        0.048,
+        0.048
+      ],
+      "fwer_mc95": [
+        0.004416172285801643,
+        0.025934927265336975
+      ],
+      "fwer_failure_bounds": [
+        0.012,
+        0.012
+      ],
+      "conditional_fwer": 0.037037037037037035,
+      "conditional_mc95": [
+        0.01371115406103647,
+        0.07886821807640954
+      ],
+      "power": null,
+      "power_mc95": null,
+      "power_failure_bounds": null,
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 759,
+        "clinical_misspecification": 20,
+        "residual_misspecification/variance": 41
+      }
+    },
+    {
+      "condition": "partial_weak",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.028,
+      "fwer": 0.028,
+      "fwer_raw_mc95": [
+        0.01539060067383811,
+        0.04653332699148415
+      ],
+      "fwer_raw_failure_bounds": [
+        0.028,
+        0.028
+      ],
+      "fwer_mc95": [
+        0.01539060067383811,
+        0.04653332699148415
+      ],
+      "fwer_failure_bounds": [
+        0.028,
+        0.028
+      ],
+      "conditional_fwer": 0.028,
+      "conditional_mc95": [
+        0.01539060067383811,
+        0.04653332699148415
+      ],
+      "power": 0.09040000000000001,
+      "power_mc95": [
+        0.07881682599076331,
+        0.1019831740092367
+      ],
+      "power_failure_bounds": [
+        0.09040000000000001,
+        0.09040000000000001
+      ],
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "partial_weak",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 451,
+      "allowed_fraction": 0.902,
+      "fwer_raw": 0.028,
+      "fwer": 0.026,
+      "fwer_raw_mc95": [
+        0.01539060067383811,
+        0.04653332699148415
+      ],
+      "fwer_raw_failure_bounds": [
+        0.028,
+        0.028
+      ],
+      "fwer_mc95": [
+        0.013914930062859742,
+        0.044050436856873765
+      ],
+      "fwer_failure_bounds": [
+        0.026,
+        0.026
+      ],
+      "conditional_fwer": 0.028824833702882482,
+      "conditional_mc95": [
+        0.015435405144088333,
+        0.04878697908382565
+      ],
+      "power": 0.0824,
+      "power_mc95": [
+        0.07099687962544668,
+        0.09380312037455332
+      ],
+      "power_failure_bounds": [
+        0.0824,
+        0.0824
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 35,
+        "residual_misspecification/variance": 1,
+        "clinical_diagnostic_failed": 16,
+        "clinical_misspecification": 7
+      }
+    },
+    {
+      "condition": "partial_weak",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 462,
+      "allowed_fraction": 0.924,
+      "fwer_raw": 0.028,
+      "fwer": 0.026,
+      "fwer_raw_mc95": [
+        0.01539060067383811,
+        0.04653332699148415
+      ],
+      "fwer_raw_failure_bounds": [
+        0.028,
+        0.028
+      ],
+      "fwer_mc95": [
+        0.013914930062859742,
+        0.044050436856873765
+      ],
+      "fwer_failure_bounds": [
+        0.026,
+        0.026
+      ],
+      "conditional_fwer": 0.02813852813852814,
+      "conditional_mc95": [
+        0.0150658414147434,
+        0.04763710654814984
+      ],
+      "power": 0.084,
+      "power_mc95": [
+        0.07257874652843553,
+        0.09542125347156448
+      ],
+      "power_failure_bounds": [
+        0.084,
+        0.084
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 35,
+        "residual_misspecification/variance": 1,
+        "clinical_misspecification": 9
+      }
+    },
+    {
+      "condition": "partial_weak",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 470,
+      "allowed_fraction": 0.94,
+      "fwer_raw": 0.028,
+      "fwer": 0.026,
+      "fwer_raw_mc95": [
+        0.01539060067383811,
+        0.04653332699148415
+      ],
+      "fwer_raw_failure_bounds": [
+        0.028,
+        0.028
+      ],
+      "fwer_mc95": [
+        0.013914930062859742,
+        0.044050436856873765
+      ],
+      "fwer_failure_bounds": [
+        0.026,
+        0.026
+      ],
+      "conditional_fwer": 0.027659574468085105,
+      "conditional_mc95": [
+        0.014807993129908357,
+        0.04683430354069985
+      ],
+      "power": 0.08480000000000001,
+      "power_mc95": [
+        0.0733703373694717,
+        0.09622966263052833
+      ],
+      "power_failure_bounds": [
+        0.08480000000000001,
+        0.08480000000000001
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 27,
+        "residual_misspecification/variance": 1,
+        "clinical_misspecification": 9
+      }
+    },
+    {
+      "condition": "partial_weak",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 378,
+      "allowed_fraction": 0.756,
+      "fwer_raw": 0.028,
+      "fwer": 0.024,
+      "fwer_raw_mc95": [
+        0.01539060067383811,
+        0.04653332699148415
+      ],
+      "fwer_raw_failure_bounds": [
+        0.028,
+        0.028
+      ],
+      "fwer_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "conditional_fwer": 0.031746031746031744,
+      "conditional_mc95": [
+        0.01650910118293763,
+        0.05479691173845399
+      ],
+      "power": 0.07160000000000001,
+      "power_mc95": [
+        0.06087057731140856,
+        0.08232942268859146
+      ],
+      "power_failure_bounds": [
+        0.07160000000000001,
+        0.07160000000000001
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 96,
+        "residual_misspecification/nonlinear_mean": 27,
+        "clinical_fit_failed": 16
+      }
+    },
+    {
+      "condition": "partial_weak",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 391,
+      "allowed_fraction": 0.782,
+      "fwer_raw": 0.028,
+      "fwer": 0.024,
+      "fwer_raw_mc95": [
+        0.01539060067383811,
+        0.04653332699148415
+      ],
+      "fwer_raw_failure_bounds": [
+        0.028,
+        0.028
+      ],
+      "fwer_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "conditional_fwer": 0.030690537084398978,
+      "conditional_mc95": [
+        0.015956773491893585,
+        0.052996128572078235
+      ],
+      "power": 0.0728,
+      "power_mc95": [
+        0.06204666741724825,
+        0.08355333258275176
+      ],
+      "power_failure_bounds": [
+        0.0728,
+        0.0728
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 98,
+        "residual_misspecification/nonlinear_mean": 28
+      }
+    },
+    {
+      "condition": "partial_weak",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 412,
+      "allowed_fraction": 0.824,
+      "fwer_raw": 0.028,
+      "fwer": 0.024,
+      "fwer_raw_mc95": [
+        0.01539060067383811,
+        0.04653332699148415
+      ],
+      "fwer_raw_failure_bounds": [
+        0.028,
+        0.028
+      ],
+      "fwer_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "conditional_fwer": 0.02912621359223301,
+      "conditional_mc95": [
+        0.015138621047882772,
+        0.05032456114663202
+      ],
+      "power": 0.0752,
+      "power_mc95": [
+        0.06440208600862508,
+        0.08599791399137492
+      ],
+      "power_failure_bounds": [
+        0.0752,
+        0.0752
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 76,
+        "residual_misspecification/nonlinear_mean": 22
+      }
+    },
+    {
+      "condition": "partial_strong",
+      "method": "legacy_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 500,
+      "allowed_fraction": 1.0,
+      "fwer_raw": 0.024,
+      "fwer": 0.024,
+      "fwer_raw_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_raw_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "fwer_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "conditional_fwer": 0.024,
+      "conditional_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "power": 0.484,
+      "power_mc95": [
+        0.46549836694636654,
+        0.5025016330536335
+      ],
+      "power_failure_bounds": [
+        0.484,
+        0.484
+      ],
+      "reason_counts_overlap": {}
+    },
+    {
+      "condition": "partial_strong",
+      "method": "v1_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 447,
+      "allowed_fraction": 0.894,
+      "fwer_raw": 0.024,
+      "fwer": 0.022,
+      "fwer_raw_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_raw_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "fwer_mc95": [
+        0.011032276361257526,
+        0.039022550844808795
+      ],
+      "fwer_failure_bounds": [
+        0.022,
+        0.022
+      ],
+      "conditional_fwer": 0.024608501118568233,
+      "conditional_mc95": [
+        0.01234704516623631,
+        0.04360412357567366
+      ],
+      "power": 0.4384,
+      "power_mc95": [
+        0.41662920479965626,
+        0.46017079520034376
+      ],
+      "power_failure_bounds": [
+        0.4384,
+        0.4384
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 35,
+        "clinical_misspecification": 14,
+        "clinical_diagnostic_failed": 13,
+        "residual_misspecification/variance": 1
+      }
+    },
+    {
+      "condition": "partial_strong",
+      "method": "v2_guarded_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 458,
+      "allowed_fraction": 0.916,
+      "fwer_raw": 0.024,
+      "fwer": 0.022,
+      "fwer_raw_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_raw_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "fwer_mc95": [
+        0.011032276361257526,
+        0.039022550844808795
+      ],
+      "fwer_failure_bounds": [
+        0.022,
+        0.022
+      ],
+      "conditional_fwer": 0.024017467248908297,
+      "conditional_mc95": [
+        0.012049019504714695,
+        0.0425668715704202
+      ],
+      "power": 0.4492,
+      "power_mc95": [
+        0.428014550055978,
+        0.470385449944022
+      ],
+      "power_failure_bounds": [
+        0.4492,
+        0.4492
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 35,
+        "clinical_misspecification": 14,
+        "residual_misspecification/variance": 1
+      }
+    },
+    {
+      "condition": "partial_strong",
+      "method": "candidate_F_linear",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 467,
+      "allowed_fraction": 0.934,
+      "fwer_raw": 0.024,
+      "fwer": 0.022,
+      "fwer_raw_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_raw_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "fwer_mc95": [
+        0.011032276361257526,
+        0.039022550844808795
+      ],
+      "fwer_failure_bounds": [
+        0.022,
+        0.022
+      ],
+      "conditional_fwer": 0.023554603854389723,
+      "conditional_mc95": [
+        0.011815674494810826,
+        0.041754212341695546
+      ],
+      "power": 0.456,
+      "power_mc95": [
+        0.4353435954023503,
+        0.47665640459764974
+      ],
+      "power_failure_bounds": [
+        0.456,
+        0.456
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 26,
+        "clinical_misspecification": 14
+      }
+    },
+    {
+      "condition": "partial_strong",
+      "method": "v1_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 395,
+      "allowed_fraction": 0.79,
+      "fwer_raw": 0.024,
+      "fwer": 0.016,
+      "fwer_raw_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_raw_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "fwer_mc95": [
+        0.006932321202483599,
+        0.03128200168985308
+      ],
+      "fwer_failure_bounds": [
+        0.016,
+        0.016
+      ],
+      "conditional_fwer": 0.020253164556962026,
+      "conditional_mc95": [
+        0.008783456136424813,
+        0.03951539667119979
+      ],
+      "power": 0.3752,
+      "power_mc95": [
+        0.3516001121595002,
+        0.39879988784049974
+      ],
+      "power_failure_bounds": [
+        0.3752,
+        0.3752
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 28,
+        "residual_misspecification/variance": 70,
+        "clinical_fit_failed": 13,
+        "clinical_misspecification": 2
+      }
+    },
+    {
+      "condition": "partial_strong",
+      "method": "v2_guarded_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 401,
+      "allowed_fraction": 0.802,
+      "fwer_raw": 0.024,
+      "fwer": 0.016,
+      "fwer_raw_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_raw_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "fwer_mc95": [
+        0.006932321202483599,
+        0.03128200168985308
+      ],
+      "fwer_failure_bounds": [
+        0.016,
+        0.016
+      ],
+      "conditional_fwer": 0.0199501246882793,
+      "conditional_mc95": [
+        0.008651444730354424,
+        0.03892990205135566
+      ],
+      "power": 0.38039999999999996,
+      "power_mc95": [
+        0.356958715018772,
+        0.4038412849812279
+      ],
+      "power_failure_bounds": [
+        0.38039999999999996,
+        0.38039999999999996
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/nonlinear_mean": 32,
+        "residual_misspecification/variance": 73,
+        "clinical_misspecification": 2
+      }
+    },
+    {
+      "condition": "partial_strong",
+      "method": "candidate_F_spline",
+      "planned": 500,
+      "completed": 500,
+      "failures": 0,
+      "missing": 0,
+      "allowed": 425,
+      "allowed_fraction": 0.85,
+      "fwer_raw": 0.024,
+      "fwer": 0.018,
+      "fwer_raw_mc95": [
+        0.012461239059555668,
+        0.04154761879968625
+      ],
+      "fwer_raw_failure_bounds": [
+        0.024,
+        0.024
+      ],
+      "fwer_mc95": [
+        0.008262954434763135,
+        0.033893696108537937
+      ],
+      "fwer_failure_bounds": [
+        0.018,
+        0.018
+      ],
+      "conditional_fwer": 0.021176470588235293,
+      "conditional_mc95": [
+        0.009727867706503444,
+        0.039817736716346315
+      ],
+      "power": 0.4056,
+      "power_mc95": [
+        0.3830504573306421,
+        0.42814954266935795
+      ],
+      "power_failure_bounds": [
+        0.4056,
+        0.4056
+      ],
+      "reason_counts_overlap": {
+        "residual_misspecification/variance": 52,
+        "residual_misspecification/nonlinear_mean": 26,
+        "clinical_misspecification": 2
+      }
+    }
+  ]
+}

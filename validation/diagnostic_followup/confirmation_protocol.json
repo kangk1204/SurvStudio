@@ -1,0 +1,122 @@
+{
+  "protocol_version": "guarded-inference-study/2",
+  "development_seed": 2026100311,
+  "main_seed": 2026100312,
+  "extension_seed": 2026100313,
+  "permutations": 999,
+  "methods": [
+    "legacy_linear",
+    "guarded_linear",
+    "guarded_spline"
+  ],
+  "withhold_alpha": 0.01,
+  "familywise_alpha": 0.05,
+  "knot_quantiles": [
+    0.05,
+    0.275,
+    0.5,
+    0.725,
+    0.95
+  ],
+  "conditions": [
+    "independent",
+    "linear",
+    "nonlinear_marker",
+    "heteroskedastic",
+    "correlated",
+    "z_dependent_censoring",
+    "nonph_linear",
+    "nonph_nonlinear",
+    "nonph_heteroskedastic",
+    "nonlinear_clinical_risk",
+    "partial_weak",
+    "partial_strong"
+  ],
+  "main": {
+    "n": 180,
+    "p": 30,
+    "replicates_per_condition": 5000
+  },
+  "extensions": [
+    {
+      "n": 500,
+      "p": 30,
+      "replicates_per_condition": 1000
+    },
+    {
+      "n": 180,
+      "p": 300,
+      "replicates_per_condition": 1000
+    }
+  ],
+  "large_marker": {
+    "n": 180,
+    "p": 3000,
+    "replicates_per_condition": 500,
+    "conditions": [
+      "independent",
+      "linear",
+      "correlated"
+    ]
+  },
+  "supported": {
+    "guarded_linear": [
+      "independent",
+      "linear",
+      "correlated",
+      "z_dependent_censoring",
+      "partial_weak",
+      "partial_strong"
+    ],
+    "guarded_spline": [
+      "independent",
+      "linear",
+      "nonlinear_marker",
+      "correlated",
+      "z_dependent_censoring",
+      "nonlinear_clinical_risk",
+      "partial_weak",
+      "partial_strong"
+    ]
+  },
+  "engineering_gates": {
+    "fwer_one_sided_95_upper": 0.06,
+    "allowed_fraction_on_supported_global_null": 0.8,
+    "power_fraction_of_legacy": 0.9,
+    "include_failure_upper_bounds": true,
+    "interpretation": "Finite prespecified simulation engineering criteria; not a universal 5% error-control guarantee."
+  },
+  "dgp": {
+    "z": "standard normal",
+    "marker_noise": "standard normal independent of Z; partial-null noise mutually independent",
+    "event_rate": 0.06,
+    "censor_rate": 0.04,
+    "clinical_beta": 0.8,
+    "linear_marker_beta": 0.8,
+    "correlated_residual_rho": 0.7,
+    "nonlinear_marker": "Z^2 + noise",
+    "heteroskedastic_marker": "0.8*Z + exp(0.8*Z)*noise",
+    "z_dependent_censoring": "exponential rate 0.04*exp(0.8*Z), independent conditional on Z",
+    "nonph": "clinical beta +0.8 through time 10, -0.8 after time 10",
+    "nonlinear_clinical": "0.8*Z + 0.4*(Z^2-1)",
+    "partial_null": "first five independent marker residuals causal with beta 0.2 or 0.4; remaining markers independent of causal residuals conditional on Z"
+  },
+  "diagnostics": {
+    "clinical_family": "global and per-term classic GT log-time PH plus linear-versus-fixed-five-knot-RCS LR; Holm over all applicable tests",
+    "residual_family": "HC3 Wald nonlinear mean and variance across all retained markers; Holm over the entire family",
+    "mean_directions": "standardized raw numeric Z^2 and Z^3 orthogonal to clinical basis and stratum intercepts",
+    "variance_directions": "all clinical basis columns conditional on stratum intercepts; squared OLS residual divided by (1-leverage) removes the fitted projection variance effect",
+    "required_failure": "withhold; do not shrink the prespecified family or replace a replicate"
+  },
+  "failure_policy": "Retain every planned index and calculation failure. Report FWER lower and worst-case upper failure bounds with Clopper-Pearson MC intervals. No replacement or completion-only denominator.",
+  "confirmation_policy": "Freeze source hashes, protocol and independent-reference results before main/extension execution. No method/threshold/condition changes after inspection of confirmation outcomes. Any later repair requires a new version and new seeds; preserve this study.",
+  "excluded_claims": [
+    "human usability advantage",
+    "clinical utility",
+    "external prediction superiority",
+    "universal error control"
+  ],
+  "method_version": "marker-inference/2",
+  "revision_scope": "Proven separation diagnostic defect only: remove unconditional coefficient-per-SD magnitude flag. Numeric fits, PH and HC3 chi-square diagnostics, Holm families, 1% withholding threshold, scenarios, supported sets and engineering gates stay as in v1. Offline F sensitivity is excluded.",
+  "development_evidence": "diagnostic-followup/development/1: 6000 new-seed datasets; descriptive, not qualification. V1 confirmation is retained as failed development evidence."
+}

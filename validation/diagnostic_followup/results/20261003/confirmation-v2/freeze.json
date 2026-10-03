@@ -1,0 +1,220 @@
+{
+  "git_revision": "1ed6c10ddad27be6bce4b0896f55ac8428e36dd9",
+  "source_hashes": {
+    "src/survival_toolkit/clinical_basis.py": "e4384eca71cb0a0b39819a3265241b9cc5bf443bd279127b518f9397e2604ce3",
+    "src/survival_toolkit/marker_diagnostics.py": "af2b425f8b066bca2190f9f63d1b888aaf99b003c44df0f108c94be9bcb57a6d",
+    "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
+    "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
+    "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
+    "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c",
+    "validation/guarded_inference/study.py": "b26cb8762d7b38653ffe9de1cc1101aa27b99d6b9f9f4cdbc9545c2a01fa2510",
+    "validation/guarded_inference/protocol.json": "d291060d0e42bf47124ce904d493daa0e708f3c8165f49c5a06e30c3381d5b86",
+    "validation/diagnostic_followup/confirmation.py": "ebd58b4048f124d0872c5719fb810d83a02800b2b422f86a853a3841ae950d6e",
+    "validation/diagnostic_followup/confirmation_protocol.json": "c1fae5300c506d23b05e6f37cee05be182e267b0f7e50c5774ac90bcc460e7f6",
+    "validation/diagnostic_followup/launch_confirmation.py": "cbbc15f9cda43037505a86765620e701647e780320cd065a8b61d88471ca6d2b",
+    "validation/diagnostic_followup/freeze_confirmation.py": "24cfa7650aa0d92de20335e57f723b249a7cf7dab85add9a4f6e9c232d328899",
+    "validation/diagnostic_followup/development.py": "0e30090674022e302e709a753c1ca4868ab917439f92280c5c832a487cb2db56",
+    "validation/diagnostic_followup/protocol.json": "07d3662c6294274c8c46fafe3329783ac22d4e72b4ab1e5548122521f3c34fd4"
+  },
+  "method_version": "marker-inference/2",
+  "python_version": "3.12.3",
+  "package_versions": {
+    "numpy": "2.5.3",
+    "pandas": "3.0.6",
+    "scipy": "1.18.1",
+    "statsmodels": "0.15.0"
+  },
+  "reference_verification": {
+    "synthetic": true,
+    "differences": {
+      "training_basis": 8.881784197001252e-15,
+      "external_basis": 6.004086117172847e-13,
+      "coefficients": 3.1459536087297124e-09,
+      "external_prediction": 1.5784229034920827e-08,
+      "C": 2.220446049250313e-16,
+      "calibration_slope": 1.2375331315261917e-10,
+      "loglik": 3.410605131648481e-13,
+      "classic_PH_statistic": 1.206437136858085e-07,
+      "classic_PH_p": 1.3294798560659071e-09,
+      "linear_coefficients": 1.2212453270876722e-15,
+      "functional_LR_statistic": 1.1333156635373598e-12,
+      "functional_LR_p": 2.4265311981963578e-14,
+      "HC3_statistic": 2.220446049250313e-16,
+      "HC3_p": 9.992007221626409e-16
+    },
+    "tolerances": {
+      "training_basis": 1e-06,
+      "external_basis": 1e-06,
+      "coefficients": 1e-06,
+      "external_prediction": 1e-06,
+      "C": 1e-06,
+      "calibration_slope": 1e-06,
+      "loglik": 1e-06,
+      "classic_PH_statistic": 1e-06,
+      "classic_PH_p": 1e-06,
+      "linear_coefficients": 1e-06,
+      "functional_LR_statistic": 1e-06,
+      "functional_LR_p": 1e-06,
+      "HC3_statistic": 1e-06,
+      "HC3_p": 1e-06
+    },
+    "passed": true,
+    "input_hashes": {
+      "external.csv": "981d744bc58c51a031b69210156beca2bb7e122753ca65ff66b88f08c5512ab7",
+      "knots.csv": "1b9b4a15b3056b0926649eb5e98c9b1f34ab5afdb59d2dad904b5661d3f9b122",
+      "r_HC3.csv": "aae40dd313bf3dfffc4388fcd4196ff924002a01f2065261f49252d98b84f344",
+      "r_classic_ph.csv": "731d5b0d07a525b8dd3339a3012ae33202f0203c84afb896c1539e3ce5d476bb",
+      "r_coefficients.csv": "549f27b1fc92439c8a4ae81a9c347dbc20ae2df37a343e9a993898f3e457ce66",
+      "r_external_basis.csv": "ae07386e740881300c9a05a0c516021c61236ecb2573903c276dd63792bd0707",
+      "r_external_prediction.csv": "3712f10515427054558c94a2ddc1f01da5f4240e2b82947327f67d79ed39231b",
+      "r_functional_LR.csv": "46dee00e7def48224dc3ef8d9da44dceed1d4e117942d69f25f7089d83859437",
+      "r_linear_coefficients.csv": "1e1768ce12c29057f2984bdf0f829e4074dd9a966a99a41a6ade2a19f5583612",
+      "r_metrics.csv": "46be7690907474c47e61a0e19c2b64c3452a9fbca708d5dd1ae5e10d2ecba913",
+      "r_training_basis.csv": "e181a4676a43a7bd086240542e78952105800056938e5f652c31e6604e9ef882",
+      "scaling.csv": "ae04a8b1413b5b79d322d727a3b230261a96eda1062f0a2a953eb7041e707a7f",
+      "training.csv": "a309763641170beca40c63690211474f353416cca6e48ac60e526df2caf7ce7b"
+    },
+    "R_session": "R version 4.6.1 (2026-06-24)\nPlatform: x86_64-pc-linux-gnu\nRunning under: Ubuntu 24.04.4 LTS\n\nMatrix products: default\nBLAS:   /usr/lib/x86_64-linux-gnu/blas/libblas.so.3.12.0 \nLAPACK: /usr/lib/x86_64-linux-gnu/lapack/liblapack.so.3.12.0  LAPACK version 3.12.0\n\nlocale:\n [1] LC_CTYPE=C.UTF-8       LC_NUMERIC=C           LC_TIME=C.UTF-8       \n [4] LC_COLLATE=C.UTF-8     LC_MONETARY=C.UTF-8    LC_MESSAGES=C.UTF-8   \n [7] LC_PAPER=C.UTF-8       LC_NAME=C              LC_ADDRESS=C          \n[10] LC_TELEPHONE=C         LC_MEASUREMENT=C.UTF-8 LC_IDENTIFICATION=C   \n\ntime zone: Asia/Seoul\ntzcode source: system (glibc)\n\nattached base packages:\n[1] stats     graphics  grDevices utils     datasets  methods   base     \n\nother attached packages:\n[1] Hmisc_5.3-0    survival_3.5-8\n\nloaded via a namespace (and not attached):\n [1] Matrix_1.6-5        gtable_0.3.6        compiler_4.6.1     \n [4] rpart_4.1.23        htmlTable_2.5.0     stringr_1.6.0      \n [7] gridExtra_2.3.1     cluster_2.1.6       splines_4.6.1      \n[10] scales_1.4.0        fastmap_1.2.0       lattice_0.22-5     \n[13] ggplot2_4.0.3       R6_2.6.1            Formula_1.2-6      \n[16] knitr_1.52          htmlwidgets_1.6.4   backports_1.5.1    \n[19] checkmate_2.3.4     nnet_7.3-19         RColorBrewer_1.1-3 \n[22] rlang_1.3.0         stringi_1.8.9       xfun_0.61          \n[25] S7_0.2.2            cli_3.6.6           magrittr_2.0.5     \n[28] digest_0.6.39       grid_4.6.1          rstudioapi_0.19.0  \n[31] base64enc_0.1-6     lifecycle_1.0.5     vctrs_0.7.3        \n[34] data.table_1.18.6.1 evaluate_1.0.5      glue_1.8.1         \n[37] farver_2.1.2        colorspace_2.1-3    rmarkdown_2.32     \n[40] foreign_0.8-86      tools_4.6.1         htmltools_0.5.9    \n",
+    "python_version": "3.12.3",
+    "package_versions": {
+      "numpy": "2.5.3",
+      "pandas": "3.0.6",
+      "scipy": "1.18.1",
+      "statsmodels": "0.15.0"
+    },
+    "source_hashes": {
+      "validation/guarded_inference/run_independent_reference.py": "69260b171ab05430aff0032612030e8d7a2881630c5c239958d3d704d76fbdd0",
+      "validation/guarded_inference/independent_reference.R": "e0e3567eafd0b2476e97146984f5f9c223453139f6628ef94b423305455ea4e7",
+      "src/survival_toolkit/clinical_basis.py": "e4384eca71cb0a0b39819a3265241b9cc5bf443bd279127b518f9397e2604ce3",
+      "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
+      "src/survival_toolkit/marker_diagnostics.py": "af2b425f8b066bca2190f9f63d1b888aaf99b003c44df0f108c94be9bcb57a6d",
+      "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c"
+    }
+  },
+  "separation_verification": {
+    "passed": true,
+    "method_version": "marker-inference/2",
+    "solver_tolerance": 1e-06,
+    "checks": [
+      {
+        "case": "finite_cancellation",
+        "role": "independent synthetic regression fixture",
+        "passed": true,
+        "differences": {
+          "loglik": 5.6843418860808015e-12,
+          "coefficients": 5.755396159656812e-13,
+          "covariance": 3.1683100587542867e-10,
+          "linear_predictor": 6.261657858885883e-14
+        },
+        "expected_separation": false,
+        "python_separation": false,
+        "R_separation_warning": false,
+        "max_coefficient_per_SD": 50.09514236116072
+      },
+      {
+        "case": "v1_failed_spline_27",
+        "role": "post-confirmation defect reproduction; not new performance evidence",
+        "passed": true,
+        "differences": {
+          "loglik": 3.410605131648481e-13,
+          "coefficients": 3.446132268436486e-13,
+          "covariance": 1.3486101124726702e-11,
+          "linear_predictor": 4.39648317751562e-14
+        },
+        "expected_separation": false,
+        "python_separation": false,
+        "R_separation_warning": false,
+        "max_coefficient_per_SD": 14.680125511623649
+      },
+      {
+        "case": "v1_failed_spline_371",
+        "role": "post-confirmation defect reproduction; not new performance evidence",
+        "passed": true,
+        "differences": {
+          "loglik": 1.7053025658242404e-13,
+          "coefficients": 3.6415315207705135e-14,
+          "covariance": 1.9059598344028927e-10,
+          "linear_predictor": 1.2212453270876722e-14
+        },
+        "expected_separation": false,
+        "python_separation": false,
+        "R_separation_warning": false,
+        "max_coefficient_per_SD": 10.580393153220328
+      },
+      {
+        "case": "v1_failed_spline_1099",
+        "role": "post-confirmation defect reproduction; not new performance evidence",
+        "passed": true,
+        "differences": {
+          "loglik": 4.547473508864641e-13,
+          "coefficients": 1.2434497875801753e-13,
+          "covariance": 3.0523494842782384e-10,
+          "linear_predictor": 5.595524044110789e-14
+        },
+        "expected_separation": false,
+        "python_separation": false,
+        "R_separation_warning": false,
+        "max_coefficient_per_SD": 11.629512597307523
+      },
+      {
+        "case": "genuine_separation",
+        "role": "positive control",
+        "passed": true,
+        "differences": {
+          "loglik": 2.842170943040401e-14
+        },
+        "expected_separation": true,
+        "python_separation": true,
+        "R_separation_warning": true,
+        "max_coefficient_per_SD": 10.765350810657168
+      },
+      {
+        "case": "HC3_and_offline_F_reference",
+        "passed": true,
+        "differences": {
+          "statistic": 8.881784197001252e-16,
+          "chi_square_p": 4.163336342344337e-17,
+          "approximate_F_p": 4.163336342344337e-17
+        },
+        "F_is_exact": false
+      }
+    ],
+    "source_hashes": {
+      "validation/diagnostic_followup/verify_reference.py": "5ebf93caddd43ac831b1cdf0655198427350372e172716deec8523b164b9de1e",
+      "validation/diagnostic_followup/reference.R": "641f227325ae95cb0f5f9638ca059623db290e1dcaee52081594614a97bfff26",
+      "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
+      "src/survival_toolkit/marker_diagnostics.py": "af2b425f8b066bca2190f9f63d1b888aaf99b003c44df0f108c94be9bcb57a6d"
+    },
+    "files": {
+      "R-session.txt": "a92b6775c8aa646d23233ea112d6f33f7b083882457431e21e99d4168e0fbca6",
+      "cases.csv": "bc7fc32ce5783473775ecaebdc114ec8db61609e0325b5f105f9e0547044b42c",
+      "finite_cancellation-r-coefficients.csv": "7ef9e1920bcfe7b989be741963f88957defebad2708cb68aebd208162dc0ed06",
+      "finite_cancellation-r-covariance.csv": "2f90bce8c157fe9cae52f08a42c2e633beaf6fbadaf44725fcf87d9918c35f90",
+      "finite_cancellation-r-lp.csv": "3ee2e333c10d2d7c2eedf3180ee7c0bf027ed3919653543a3bb6a4a90641473c",
+      "finite_cancellation.csv": "294497b12efdb3fd5a5e09e761c97b60d06f091066367d405935a27953137d15",
+      "genuine_separation-r-coefficients.csv": "d3bad830bd2414fc55658921d4f34211e825c4814c47b5562422b4817ef42515",
+      "genuine_separation-r-covariance.csv": "a3fd7c2a37b4b3b3ac17e600e1357ac1580b82a429a6cdfbf7a5245cfff8cc96",
+      "genuine_separation-r-lp.csv": "0390740743b831aa8976c8bc1596b7bb2d769939c86cd38ecd79399fdd01a282",
+      "genuine_separation.csv": "bfa347c9f6c8921ad3a89641002209dd5be866c9b78eed05a9271b2ef767d6fe",
+      "hc3.csv": "c816d1cf1491ee80ff99756b258dbcdb6ee42513cc824187b346ae6b2cb9bf6c",
+      "r-fit-states.csv": "d96454f0372fd14b375bd03899ae551ede29fbc90a280fde5259ece86e86685e",
+      "r-hc3.csv": "b7693e0dab39195b0019cb1a8acfb161267e5e2d8981491a3dbb431e483448e3",
+      "v1_failed_spline_1099-r-coefficients.csv": "c4359afcb96af074fdac9f2462a3b7987d971d0be02b22d954dcd097fb69370d",
+      "v1_failed_spline_1099-r-covariance.csv": "b122b073e8eacd80ef27ea23651faf5af38002d6cf7290daa7a6e60c13ae2603",
+      "v1_failed_spline_1099-r-lp.csv": "5585e94bc0235f03ff597ce6e9ba417194f7ee25ab5b3ce0d7542c1e2b94a5cd",
+      "v1_failed_spline_1099.csv": "1d5e1bf44ec268342c651de16dc92214e008f5aeae1c93a2ef2bb55d8db65b98",
+      "v1_failed_spline_27-r-coefficients.csv": "f47844e12895ae07c2a0cfdddf9915ae252db8781ebd72fe072477915bf78ad4",
+      "v1_failed_spline_27-r-covariance.csv": "9d248a6402c0d6d7c55c2f0fee13b878eca016a55b1a172428ba59f46454a0e2",
+      "v1_failed_spline_27-r-lp.csv": "2dacbf1ed8e92cd5e0c4426a41197694bf0fd6939426571f38f07f586c03416c",
+      "v1_failed_spline_27.csv": "19574b1632ecfcf03c445fb1527f9c1a0227b7e9ae59e910dd2869e3bfb7af4e",
+      "v1_failed_spline_371-r-coefficients.csv": "e3ba5f23e589ba51947804fb0763f6c23ecbb8f1cda4b386402de5064a8bc1c0",
+      "v1_failed_spline_371-r-covariance.csv": "80efb34a2be49fbf514c0067e178a15175931af6dc1df175e92a1e7000bb1492",
+      "v1_failed_spline_371-r-lp.csv": "49ecc380fed347d635a80a0f506c730c03144a168516c14b15a99e82ea46c38d",
+      "v1_failed_spline_371.csv": "07718cbe2362fa4133626fb334c61ecf31b13a6733a5e8c969adad1fb5bbbab2"
+    }
+  },
+  "development_review_complete": true,
+  "development_summary_sha256": "e23b0340fd916522a261c4483ae8a66ab373d49f9c42c4f866824f477c7c165f",
+  "development_review_record": "Development review sealed for method marker-inference/2.\n\nThe only product-method change is removal of the proven coefficient-magnitude separation defect. Fresh R checks pass. The new 6000-dataset pilot is complete with unchanged scenarios and thresholds. Linear power retention is about 92.9% and 92.8% for weak and strong signals; these are development estimates, not qualification. Spline limitations and residual-test false alarms remain. HC3 F sensitivity is excluded; no cutoffs or supported-condition sets were relaxed. Confirmation uses unused seeds 2026100312/2026100313 and retains the original full 85500-dataset specification and both guarded profiles. Any failures are retained. The v1 study and manuscript package remain unchanged. No routine conditional inference is enabled before complete new confirmation and audit.\n",
+  "confirmation_policy": "Freeze source hashes, protocol and independent-reference results before main/extension execution. No method/threshold/condition changes after inspection of confirmation outcomes. Any later repair requires a new version and new seeds; preserve this study."
+}

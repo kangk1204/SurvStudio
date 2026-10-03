@@ -1,0 +1,14 @@
+{
+  "Python": "3.12.14",
+  "matplotlib": "3.11.2",
+  "numpy": "2.5.3",
+  "pandas": "3.0.6",
+  "formats": [
+    "PNG 300 dpi",
+    "SVG standalone with editable text",
+    "PDF embedded TrueType fonts"
+  ],
+  "regeneration": "python validation/diagnostic_followup/make_figures.py --results validation/diagnostic_followup/results/20261003",
+  "random_jitter_or_smoothing": false,
+  "determinism_scope": "Figures and CSV source tables; inventory timestamps are excluded from regeneration equality."
+}

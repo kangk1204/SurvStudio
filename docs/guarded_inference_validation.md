@@ -1,6 +1,32 @@
-# Conditional marker inference and the 2026 confirmation study
+# Conditional marker inference and the preserved version 1 study
 
-SurvStudio's conditional marker calculations are **exploratory only** in this branch. Both prespecified clinical-basis profiles failed at least one engineering gate. The API withholds added-value p/q values and robust tiers, retains raw calculations under explicitly exploratory fields, and carries this state into figures, CSV, reports and version 3 locked recipes. An estimable fixed prediction can still be exported and scored externally. Diagnostic non-rejection does not certify assumptions.
+## Current version 2 result
+
+The following sections preserve the first study and its negative results. They describe
+`marker-inference/1`, rather than the current method. A false separation flag was
+subsequently corrected, evaluated in separate development data, and confirmed with
+new frozen seeds. All 85,500 version 2 datasets completed without calculation failures.
+The corrected linear profile passed every condition in the unchanged main support set;
+the complete spline profile remains exploratory. The qualification registry retains
+both study versions and requires matching numerical source hashes.
+
+In the four healthy main conditions (180 individuals, 30 markers, 999 permutations),
+linear availability was 91.58–94.94%, all-planned FWER was 4.36–4.62%, and the largest
+conditional one-sided 95% upper bound was 5.59%. Weak and strong signal power retention
+was 90.53% and 90.33%. These are point-estimate passes near the fixed 90% threshold;
+descriptive paired Monte Carlo intervals extend below 90%. Larger marker panels and
+the sample-size extension do not establish broader qualification. Diagnostics can
+still withhold individual datasets under a passed profile, and non-rejection leaves
+inference dependent on assumptions.
+
+See the [version 2 methods, complete outcomes and limitations](../validation/diagnostic_followup/README.md).
+The original runtime failure below remains in the version 1 denominator. Its diagnostic
+reruns are not replacement confirmation observations. New case results are also retained
+as reanalyses of existing external data, rather than new external validation cohorts.
+
+## Historical version 1 result
+
+Version 1 conditional marker calculations are **exploratory only**. Both prespecified clinical-basis profiles failed at least one engineering gate. For that method version, the API withholds added-value p/q values and robust tiers, retains raw calculations under explicitly exploratory fields, and carries this state into figures, CSV, reports and version 3 locked recipes. An estimable fixed prediction can still be exported and scored externally. Diagnostic non-rejection does not certify assumptions.
 
 ## What changed
 
