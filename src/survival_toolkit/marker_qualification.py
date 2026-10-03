@@ -64,12 +64,22 @@ def _withhold(inference,gate):
     return inference
 
 
+def _withhold_signature_summary(result):
+    signature=result.get('signature')
+    if signature:
+        result.setdefault('exploratory_signature',copy.deepcopy(signature))
+        signature['optimism_corrected_c']=None
+        signature['correction_note']='The subsample gap describes the diagnosis-governed procedure; it does not validate an exploratory marker signature fitted in the full cohort. Use the fixed external prediction metrics as exploratory estimates.'
+
+
 def qualify_marker_result(result):
     """Apply to a product/API result before figures, tables, reporting and recipe export."""
     if result.get('primary_lens')!='added_value': return result
     gate=qualification(result.get('clinical_basis','linear'),result.get('method_version'))
     result['inference']=_withhold(result['inference'],gate)
     if gate['status']=='passed_supported_conditions_only':
+        if not result['inference'].get('allowed'):
+            _withhold_signature_summary(result)
         recipe=result.get('locked_recipe')
         if recipe:
             from survival_toolkit.marker_evaluation import recipe_hash
@@ -84,11 +94,7 @@ def qualify_marker_result(result):
             row['exact']={**row['exact'],'adjusted':{**row['exact']['adjusted'],'wald_p':None,'lr_p':None}}
     result['tier_counts']={key:0 for key in result['tier_counts']}
     result['tier_counts']['inference withheld']=len(result['marker_table'])
-    signature=result.get('signature')
-    if signature:
-        result.setdefault('exploratory_signature',copy.deepcopy(signature))
-        signature['optimism_corrected_c']=None
-        signature['correction_note']='The subsample gap describes the diagnosis-governed procedure; it does not validate an exploratory marker signature fitted in the full cohort. Use the fixed external prediction metrics as exploratory estimates.'
+    _withhold_signature_summary(result)
     recipe=result.get('locked_recipe')
     if recipe:
         from survival_toolkit.marker_evaluation import recipe_hash

@@ -38,8 +38,15 @@ def test_missing_or_version_mismatched_evidence_cannot_enable_inference(monkeypa
 def test_passed_profile_cannot_override_dataset_diagnostic_failure(monkeypatch):
     monkeypatch.setattr(policy,'qualification',lambda *a:{'status':'passed_supported_conditions_only'})
     raw=evaluate(cohort(n=500,nonlinear=True))
+    # A saved numerical internal summary must not validate a withheld full-cohort signature.
+    raw['signature']['optimism_corrected_c']=0.67
+    prediction=copy.deepcopy(raw['locked_recipe']['model'])
     result=policy.qualify_marker_result(raw)
     assert result['inference']['status']=='withheld' and not result['inference']['allowed']
+    assert result['signature']['optimism_corrected_c'] is None
+    assert result['exploratory_signature']['optimism_corrected_c']==0.67
+    assert result['locked_recipe']['model']==prediction
+    assert result['locked_recipe']['inference']==result['inference']
 
 
 def test_historical_evidence_and_changed_kernel_cannot_enable_new_inference(monkeypatch,tmp_path):
