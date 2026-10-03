@@ -63,3 +63,17 @@ fresh cross-host end-to-end reproduction, manual web records, final figures and
 clean/marked manuscripts remain completion gates. The public case code stores
 clinical-only and clinical-plus-PGR baselines separately, with no external
 recalibration; both use 365.25 days per year and fixed 7-year administrative censoring.
+
+`verify_case_reference.py --self-test --output PRIVATE_NEW_DIR` checks a generated
+synthetic case, including missing inputs, tied events and fixed extrapolation.
+For the actual case, pass `--data`, `--recipes` and `--evaluation` after lock and
+external evaluation. R reads raw rows, prespecified settings and common bootstrap
+row indices only. It independently estimates training transforms, both Cox models,
+baselines, fixed predictions, C, paired C intervals and absolute-risk calibration.
+R numerical warnings stop verification. A synthetic PASS is not actual-case evidence.
+
+`benchmark.py --inputs PRIVATE_FIXTURES --output PRIVATE_NEW_DIR` extends the
+same-server common Cox benchmark to SurvStudio, R survival and lifelines. Each
+engine uses three warmups and ten measured fits. Imports/input preparation are
+outside the operation timer; whole-process peak RSS includes them. Shared load and
+R timer resolution are recorded. Web responses and human usability are not measured.

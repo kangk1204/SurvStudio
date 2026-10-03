@@ -95,6 +95,7 @@ def lock(args):
             clinical_model["baseline"]=module._centred_baseline(cohort.time,cohort.event,clinical_lp,"efron")
             clinical_model["calibration_lp_boundaries"]=np.quantile(clinical_lp,[.2,.4,.6,.8]).tolist()
             recipe["model"]["default_horizon"]=cfg["primary_horizon_days"]
+            recipe=module._json_ready(recipe)
             recipe["recipe_hash"]=module.recipe_hash(recipe)
             name=endpoint+"-"+basis+".json";(args.output/name).write_text(json.dumps(recipe,indent=2,allow_nan=False)+"\n")
             recipes.append({"name":name,"sha256":digest(args.output/name),"recipe_hash":recipe["recipe_hash"]})
