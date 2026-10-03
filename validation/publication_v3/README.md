@@ -27,6 +27,12 @@ Commands (PYTHONPATH=src and single-thread BLAS):
 - `study.py run --stage main|extension|large|stress --freeze SEALED_MANIFEST ...`
 - `control.py qualify MAIN EXTENSION LARGE STRESS --output PRIVATE_NEW_REPORT`
 
+Before interpreting that report, run `confirmation_audit.py MAIN EXTENSION LARGE
+STRESS --freeze SEALED_MANIFEST --output PRIVATE_NEW_AUDIT`. It requires every
+fixed cell, method and replicate count, exact source/environment/seed/seal identity,
+and consistent allowance and null conditional values. A missing or duplicated
+cell cannot pass a reduced support set. This audit does not promote a method.
+
 Cost pilot: 20 fixed datasets per each of four shapes, both candidates and bases,
 4 owners. The estimate uses the observed 95th-percentile paired cost, all declared
 confirmation counts, 48 workers and a factor of two. Recheck resources and use the
@@ -71,6 +77,16 @@ external evaluation. R reads raw rows, prespecified settings and common bootstra
 row indices only. It independently estimates training transforms, both Cox models,
 baselines, fixed predictions, C, paired C intervals and absolute-risk calibration.
 R numerical warnings stop verification. A synthetic PASS is not actual-case evidence.
+
+`verify_reference_full.py --output PRIVATE_NEW_DIR --markers 2 --r-library
+PINNED_R_LIBRARY` supplements the unchanged development reference with 9999 draws
+in all ten candidate/basis/design fixtures. `--markers 30` checks a larger joint
+family. Its separate source footprint preserves the active development ledgers;
+fresh final-source R verification is still required before confirmation seal.
+
+The development checkpoint under `results/20261003-development-checkpoint`
+preserves the complete cost and screen aggregate grids and implementation checks.
+It contains no selection decision, confirmation outcome, patient rows or manuscript.
 
 `benchmark.py --inputs PRIVATE_FIXTURES --output PRIVATE_NEW_DIR` extends the
 same-server common Cox benchmark to SurvStudio, R survival and lifelines. Each
