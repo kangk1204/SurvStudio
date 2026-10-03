@@ -35,8 +35,17 @@ def call(command):
     return result.stdout
 
 
-def remote(host,command):
-    return call(command) if host=="local" else call(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",host,shlex.join(command)])
+def remote(host,command,*,safe_to_retry=True):
+    if host=="local": return call(command)
+    # Read-only probes and idempotent directory creation can survive a transient
+    # Tailscale/SSH failure. A worker launch is never repeated after an uncertain reply.
+    for attempt in range(3 if safe_to_retry else 1):
+        result=subprocess.run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",host,shlex.join(command)],
+            text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+        if result.returncode==0: return result.stdout
+        if result.returncode!=255 or not safe_to_retry or attempt==2:
+            raise RuntimeError(f"Remote command failed ({result.returncode}): {result.stdout[-3000:]}")
+        time.sleep(2*(attempt+1))
 
 
 def require_deadline(stage_name):
@@ -102,7 +111,7 @@ def stage(stage_name,out,freeze=None):
             if existing["status"]=="done" and existing["returncode"]: raise RuntimeError(f"Owner {owner} failed; no automatic replacement")
             if existing["status"]=="new":
                 launch="import os,subprocess,json; from pathlib import Path; p="+repr(str(directory/f"owner-{owner:02d}.log"))+"; f=open(p,'ab'); q=subprocess.Popen("+repr(command)+",cwd="+repr(str(ROOT))+",env={**os.environ,'PYTHONPATH':"+repr(str(ROOT/"src"))+",'OPENBLAS_NUM_THREADS':'1','OMP_NUM_THREADS':'1','MKL_NUM_THREADS':'1'},stdin=subprocess.DEVNULL,stdout=f,stderr=subprocess.STDOUT,start_new_session=True); Path("+repr(str(directory/f"owner-{owner:02d}.pid.json"))+").write_text(json.dumps({'pid':q.pid,'command':"+repr(command)+"})+'\\n');print(json.dumps({'pid':q.pid}))"
-                remote(host,["python3","-c",launch])
+                remote(host,["python3","-c",launch],safe_to_retry=False)
             owner+=1
     while True:
         completed=0
@@ -153,7 +162,7 @@ def pipeline(args):
     expected=environment()
     if reference.get("environment")!=expected: raise ValueError("R reference numerical environment differs")
     for host,unused in HOSTS:
-        code="import sys,json;sys.path.insert(0,"+repr(str(ROOT/"validation/publication_v3"))+ ");from study import environment;print(json.dumps(environment()))"
+        code="import sys,json;sys.path.insert(0,"+repr(str(ROOT/"validation/publication_v3"))+ ");sys.path.insert(0,"+repr(str(ROOT/"src"))+ ");from study import environment;print(json.dumps(environment()))"
         if json.loads(remote(host,[PYTHON,"-c",code]))!=expected: raise ValueError("Worker numerical environments differ")
     while True:
         require_deadline("screen");snapshots=[]

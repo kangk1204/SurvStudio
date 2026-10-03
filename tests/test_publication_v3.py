@@ -81,6 +81,18 @@ def test_fixed_owner_interruption_is_detected(tmp_path):
     assert probe()["returncode"]==1
 
 
+def test_read_probe_retry_never_repeats_uncertain_worker_launch(monkeypatch):
+    execute=load("execute");calls=[]
+    def failed(*args,**kwargs):
+        calls.append(args);return SimpleNamespace(returncode=255,stdout="SSH banner timeout")
+    monkeypatch.setattr(execute.subprocess,"run",failed);monkeypatch.setattr(execute.time,"sleep",lambda delay:None)
+    with pytest.raises(RuntimeError,match="255"): execute.remote("fixture",["hostname"])
+    assert len(calls)==3
+    calls.clear()
+    with pytest.raises(RuntimeError,match="255"): execute.remote("fixture",["launch-worker"],safe_to_retry=False)
+    assert len(calls)==1
+
+
 def test_public_endpoint_gap_and_external_missing_size():
     case=load("public_case")
     development=pd.DataFrame(dict(nodes=[1,1,0],er=[0,2,1],pgr=[1,2,1],size=["<=20","20-50",">50"],
