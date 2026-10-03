@@ -540,6 +540,25 @@
           ]
         }
       }
+    },
+    "marker-inference/3": {
+      "study_complete": false,
+      "method_version": "marker-inference/3",
+      "study_git_revision": null,
+      "summary_sha256": null,
+      "claim_boundary": "Experimental joint diagnostic calibration; no completed v3 confirmation",
+      "profiles": {
+        "linear": {
+          "status": "not_evaluated",
+          "supported_conditions": [],
+          "failed_conditions": []
+        },
+        "restricted_cubic_spline": {
+          "status": "not_evaluated",
+          "supported_conditions": [],
+          "failed_conditions": []
+        }
+      }
     }
   }
 }

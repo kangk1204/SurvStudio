@@ -46,7 +46,12 @@ def test_current_registry_is_reproducible_and_preserves_v1(tmp_path):
     old.write_text(json.dumps(current["studies"]["marker-inference/1"]))
     output = tmp_path / "registry.json"
     module("qualify_confirmation").build(ROOT / "validation/diagnostic_followup/results/20261003/confirmation-v2", old, output)
-    assert json.loads(output.read_text()) == current
+    rebuilt=json.loads(output.read_text())
+    historical={name:current["studies"][name] for name in rebuilt["studies"]}
+    assert rebuilt["studies"]==historical
+    assert {k:v for k,v in rebuilt.items() if k!="studies"}=={k:v for k,v in current.items() if k!="studies"}
+    assert current["studies"]["marker-inference/3"]["study_complete"] is False
+    assert all(profile["status"]=="not_evaluated" for profile in current["studies"]["marker-inference/3"]["profiles"].values())
     assert current["studies"]["marker-inference/1"]["profiles"]["linear"]["status"] == "failed_exploratory_only"
     assert current["profiles"]["restricted_cubic_spline"]["status"] == "failed_exploratory_only"
 

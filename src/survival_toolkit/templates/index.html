@@ -1021,6 +1021,10 @@
                 <option value="linear" selected>Linear (default)</option>
                 <option value="restricted_cubic_spline">Restricted cubic spline (fixed five knots)</option>
               </select></label>
+              <label><span>Diagnostic policy</span><select id="markerDiagnosticPolicy">
+                <option value="v2_holm" selected>v2 Holm (default)</option>
+                <option value="v3_joint_bootstrap">v3 joint bootstrap (experimental)</option>
+              </select></label>
               <p class="marker-matrix-hint">Choose the model before inspecting results. Failed or unsuitable diagnostics withhold added-value inference.</p>
               <div class="checklist" id="markerClinicalChecklist"></div>
             </div>

@@ -1217,6 +1217,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
     max_mode_fraction: float = Field(default=0.9, ge=0.5, le=1.0)
     max_signature_markers: int = Field(default=10, ge=1, le=50)
     clinical_basis: Literal["linear", "restricted_cubic_spline"] = "linear"
+    diagnostic_policy: Literal["v2_holm", "v3_joint_bootstrap"] = "v2_holm"
     nonlinear_lens: Literal["off", "gbs", "rsf"] = "off"
     random_seed: int = Field(default=20260926, ge=0, le=2**32 - 1)
 
@@ -1243,7 +1244,11 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
         return self
 
     def marker_settings(self) -> MarkerSettings:
-        return MarkerSettings(
+        factory = MarkerSettings
+        if self.diagnostic_policy == "v3_joint_bootstrap":
+            from survival_toolkit.marker_evaluation_v3 import MarkerSettings as V3Settings
+            factory = V3Settings
+        return factory(
             alpha=self.alpha,
             fdr_level=self.fdr_level,
             n_permutations=self.n_permutations,
@@ -5129,6 +5134,8 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
                 + (f"; see diagnostics for {len(result['inference']['reasons']) - 3} further findings"
                    if len((result.get("inference") or {}).get("reasons") or []) > 3 else ""),
             "Clinical basis": result.get("clinical_basis", "linear"),
+            "Diagnostic policy": (result.get("inference") or {}).get("diagnostic_policy", "v2_holm"),
+            "Diagnostic MC interval": (result.get("inference") or {}).get("bootstrap", {}).get("global_mc95"),
             "Method version": result.get("method_version"),
             "Engineering qualification": (result.get("inference") or {}).get("engineering_qualification", {}).get("status", "not_evaluated"),
             "Tier": row["tier"],
@@ -5321,7 +5328,10 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
                     "id_column": request_model.marker_matrix_id_column,
                     "fingerprint": matrix.fingerprint,
                 }
-            result = evaluate_markers(
+            evaluator = evaluate_markers
+            if request_model.diagnostic_policy == "v3_joint_bootstrap":
+                from survival_toolkit.marker_evaluation_v3 import evaluate_markers as evaluator
+            result = evaluator(
                 frame,
                 time_column=request_model.time_column,
                 event_column=request_model.event_column,
@@ -5377,7 +5387,10 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
                     request_model.n_bootstrap,
                 )
             try:
-                validation = validate_locked_recipe(
+                validator = validate_locked_recipe
+                if isinstance(recipe.get("inference"),dict) and recipe["inference"].get("method_version") == "marker-inference/3":
+                    from survival_toolkit.marker_evaluation_v3 import validate_locked_recipe as validator
+                validation = validator(
                     stored.dataframe,
                     recipe,
                     column_mapping=request_model.column_mapping,

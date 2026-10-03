@@ -1,0 +1,284 @@
+{
+  "protocol_version": "survstudio-publication/3",
+  "baseline_revision": "d9e8102f94a5dc81b04da937e8a23cf41ca22ef1",
+  "deadline": "2026-12-26",
+  "freeze_deadline": "2026-10-31",
+  "cost_seed": 2026100320,
+  "screen_seed": 2026100321,
+  "selection_seed": 2026100322,
+  "main_seed": 2026100323,
+  "extension_seed": 2026100324,
+  "stress_seed": 2026100325,
+  "external_seed": 2026100326,
+  "mc_seed": 2026100327,
+  "permutations": 999,
+  "diagnostic_draws": 9999,
+  "screen_draws": 1999,
+  "conditions": [
+    "independent",
+    "linear",
+    "nonlinear_marker",
+    "heteroskedastic",
+    "correlated",
+    "z_dependent_censoring",
+    "nonph_linear",
+    "nonph_nonlinear",
+    "nonph_heteroskedastic",
+    "nonlinear_clinical_risk",
+    "partial_weak",
+    "partial_strong"
+  ],
+  "stress_conditions": [
+    "t5_residual",
+    "lognormal_residual",
+    "uniform_clinical",
+    "block_correlated",
+    "two_clinical",
+    "sine_mean",
+    "step_variance",
+    "conditional_shape"
+  ],
+  "supported": {
+    "guarded_linear": [
+      "independent",
+      "linear",
+      "correlated",
+      "z_dependent_censoring",
+      "partial_weak",
+      "partial_strong"
+    ],
+    "guarded_spline": [
+      "independent",
+      "linear",
+      "nonlinear_marker",
+      "correlated",
+      "z_dependent_censoring",
+      "nonlinear_clinical_risk",
+      "partial_weak",
+      "partial_strong"
+    ]
+  },
+  "candidates": [
+    "residual_vector",
+    "restricted_wild"
+  ],
+  "methods": [
+    "legacy_linear",
+    "v2_linear",
+    "v2_spline",
+    "v3_linear",
+    "v3_spline"
+  ],
+  "development_methods": [
+    "legacy_linear",
+    "v2_linear",
+    "v2_spline",
+    "candidate_A_linear",
+    "candidate_A_spline",
+    "candidate_B_linear",
+    "candidate_B_spline"
+  ],
+  "cost": {
+    "cells": [
+      [
+        180,
+        30
+      ],
+      [
+        180,
+        300
+      ],
+      [
+        500,
+        30
+      ],
+      [
+        180,
+        3000
+      ]
+    ],
+    "replicates_per_cell": 20,
+    "condition": "linear",
+    "safety_factor": 2,
+    "available_workers": 48,
+    "maximum_confirmation_days": 21,
+    "observational_only": true
+  },
+  "screen": {
+    "cells": [
+      [
+        180,
+        30
+      ]
+    ],
+    "replicates_per_condition": 500
+  },
+  "selection": {
+    "cells": [
+      [
+        180,
+        30
+      ],
+      [
+        180,
+        300
+      ]
+    ],
+    "replicates_per_condition": 1000
+  },
+  "confirmation": [
+    {
+      "stage": "main",
+      "n": 180,
+      "p": 30,
+      "replicates": 5000,
+      "conditions": [
+        "independent",
+        "linear",
+        "nonlinear_marker",
+        "heteroskedastic",
+        "correlated",
+        "z_dependent_censoring",
+        "nonph_linear",
+        "nonph_nonlinear",
+        "nonph_heteroskedastic",
+        "nonlinear_clinical_risk",
+        "partial_weak",
+        "partial_strong"
+      ]
+    },
+    {
+      "stage": "main",
+      "n": 180,
+      "p": 300,
+      "replicates": 5000,
+      "conditions": [
+        "independent",
+        "linear",
+        "nonlinear_marker",
+        "heteroskedastic",
+        "correlated",
+        "z_dependent_censoring",
+        "nonph_linear",
+        "nonph_nonlinear",
+        "nonph_heteroskedastic",
+        "nonlinear_clinical_risk",
+        "partial_weak",
+        "partial_strong"
+      ]
+    },
+    {
+      "stage": "extension",
+      "n": 500,
+      "p": 30,
+      "replicates": 1000,
+      "conditions": [
+        "independent",
+        "linear",
+        "nonlinear_marker",
+        "heteroskedastic",
+        "correlated",
+        "z_dependent_censoring",
+        "nonph_linear",
+        "nonph_nonlinear",
+        "nonph_heteroskedastic",
+        "nonlinear_clinical_risk",
+        "partial_weak",
+        "partial_strong"
+      ]
+    },
+    {
+      "stage": "large",
+      "n": 180,
+      "p": 3000,
+      "replicates": 500,
+      "conditions": [
+        "independent",
+        "linear",
+        "correlated"
+      ]
+    },
+    {
+      "stage": "stress",
+      "n": 180,
+      "p": 30,
+      "replicates": 1000,
+      "conditions": [
+        "t5_residual",
+        "lognormal_residual",
+        "uniform_clinical",
+        "block_correlated",
+        "two_clinical",
+        "sine_mean",
+        "step_variance",
+        "conditional_shape"
+      ]
+    },
+    {
+      "stage": "stress",
+      "n": 180,
+      "p": 300,
+      "replicates": 1000,
+      "conditions": [
+        "t5_residual",
+        "lognormal_residual",
+        "uniform_clinical",
+        "block_correlated",
+        "two_clinical",
+        "sine_mean",
+        "step_variance",
+        "conditional_shape"
+      ]
+    }
+  ],
+  "engineering_gates": {
+    "fwer_upper95": 0.06,
+    "healthy_allowed_lower95": 0.9,
+    "paired_power_ratio_lower95": 0.9,
+    "withholding_sensitivity_loss": 0.05,
+    "extension_clear_failure_lower95": 0.06
+  },
+  "healthy_original": [
+    "independent",
+    "linear",
+    "correlated",
+    "z_dependent_censoring"
+  ],
+  "healthy_stress": [
+    "t5_residual",
+    "lognormal_residual",
+    "uniform_clinical",
+    "block_correlated",
+    "two_clinical"
+  ],
+  "misspecification_sensitivity": [
+    "heteroskedastic",
+    "nonph_linear",
+    "nonph_nonlinear",
+    "nonph_heteroskedastic"
+  ],
+  "selection_rules": {
+    "fwer_point_max": 0.06,
+    "allowed_point_min": 0.9,
+    "power_ratio_point_min": 0.9,
+    "ordering": [
+      "minimum_healthy_allowed_desc",
+      "minimum_power_ratio_desc",
+      "mean_diagnostic_seconds_asc",
+      "A_before_B"
+    ]
+  },
+  "new_stress_dgp": {
+    "t5_residual": "sqrt(3/5)*t(df=5)",
+    "lognormal_residual": "(exp(U)-exp(0.5))/sqrt(exp(2)-exp(1)), U~N(0,1)",
+    "uniform_clinical": "Z~Uniform(-sqrt(3),sqrt(3))",
+    "block_correlated": "blocks of size 10; residual=sqrt(.85)*block_normal+sqrt(.15)*independent_normal",
+    "two_clinical": "corr(Z1,Z2)=.3; eta=.8*Z1-.5*Z2; marker_mean=.8*Z1+.4*Z2",
+    "sine_mean": "marker_mean=.8*Z+.7*sin(Z)",
+    "step_variance": "residual_sd=1 when Z<=0 else 2",
+    "conditional_shape": "N(0,1) when Z<=0 else standardized centered lognormal; identical mean and variance",
+    "otherwise": "same exponential .06 event and .04 independent censor rates, .8 clinical beta and .8 marker mean, standard-normal Z; all new stresses global conditional null"
+  },
+  "failure_policy": "Append-only fixed-index ledgers; no replacement or discarded draw/test. Report missing, failures and worst-case bounds.",
+  "interpretation": "Finite engineering criteria chosen after v2. No universal error control, prediction superiority or human usability claim."
+}
