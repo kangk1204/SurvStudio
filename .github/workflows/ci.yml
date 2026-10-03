@@ -166,6 +166,17 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
         run: python validation/publication_v3/verify_case_reference.py --self-test --output "${{ runner.temp }}/case-synthetic-reference"
+      - name: Check independent R aggregation with unresolved and zero-denominator fixtures
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: python validation/publication_v3/verify_aggregate_reference.py --self-test --output "${{ runner.temp }}/aggregate-synthetic-reference"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aggregate-synthetic-reference
+          path: ${{ runner.temp }}/aggregate-synthetic-reference
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -18,12 +18,19 @@ checks. Neither diagnostic candidate is selected or qualified at this checkpoint
   agreement for these inputs, not validity of the survival inference procedure.
 - Synthetic public-case R check: 292 comparisons passed. These are generated rows,
   not a Rotterdam–GBSG prediction result. Actual additional-case analysis is pending.
+- Independent R aggregation: 25 synthetic method cells, 1143 comparisons and
+  9999 draws per applicable interval passed, with maximum difference 3.109e-15.
+  Fixtures retain missing and failed repeats, zero allowed analyses, undefined
+  bootstrap denominators, a zero-power baseline and a wholly unresolved cell.
+  This validates aggregation from raw decisions, not each underlying decision.
 - Common Cox benchmark: three engines, three warmups, ten measured fits, same
   server and input. Imports/preparation are excluded from the operation timer;
   peak RSS includes process imports. Shared load and R timer resolution limit
   comparison. No whole-tool speed, usability or prediction superiority is inferred.
 - CI: all nine jobs passed on 5cf70f0, including Linux/macOS/Windows, browser, R
-  and wheel checks. Future source changes require their own checks.
+  and wheel checks. The subsequent 92cc602 full suite exposed a test-fixture module
+  leak; related existing/new tests pass together after isolation was repaired.
+  These earlier CI results do not substitute for fresh CI on the final sources.
 - Initial three-host synthetic outputs matched exactly. Final selected-source
   reproduction in a fresh environment remains required.
 

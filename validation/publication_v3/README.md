@@ -84,6 +84,18 @@ in all ten candidate/basis/design fixtures. `--markers 30` checks a larger joint
 family. Its separate source footprint preserves the active development ledgers;
 fresh final-source R verification is still required before confirmation seal.
 
+`verify_aggregate_reference.py --self-test --output PRIVATE_NEW_DIR` checks all
+9,999 Monte Carlo draws on synthetic raw indicator ledgers with missing and failed
+indices, zero allowed analyses, undefined bootstrap denominators, a zero-power
+baseline and an entirely unresolved cell. For a completed stage, pass `--ledgers`
+and `--summary`. R reads raw method decisions, timings, reasons and the shared
+resampling rows only; it recomputes counts, Clopper–Pearson limits, power retention,
+paired differences and conservative failure bounds. Python summary values are
+never provided to R. This verifies aggregation and does not independently validate
+each simulated decision. Resampling streams are generated one method cell at a
+time and removed after hash checks by default; seed words, encoding and byte hashes
+are retained for exact regeneration. `--retain-streams` keeps the binary streams.
+
 The development checkpoint under `results/20261003-development-checkpoint`
 preserves the complete cost and screen aggregate grids and implementation checks.
 It contains no selection decision, confirmation outcome, patient rows or manuscript.

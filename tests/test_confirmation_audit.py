@@ -13,12 +13,20 @@ DIRECTORY = Path(__file__).resolve().parents[1] / "validation/publication_v3"
 def gate(monkeypatch):
     monkeypatch.syspath_prepend(str(DIRECTORY))
     # Existing study tests may install isolated protocol modules in sys.modules.
+    previous = {name: sys.modules.get(name) for name in ("study", "control")}
     for name in ("study", "control"):
-        monkeypatch.delitem(sys.modules, name, raising=False)
-    spec = importlib.util.spec_from_file_location("confirmation_grid_audit", DIRECTORY / "confirmation_audit.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+        sys.modules.pop(name, None)
+    try:
+        spec = importlib.util.spec_from_file_location("confirmation_grid_audit", DIRECTORY / "confirmation_audit.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        yield module
+    finally:
+        # Removing a key that was originally absent is essential: a monkeypatch
+        # deletion alone does not undo modules first imported by this fixture.
+        for name, old in previous.items():
+            if old is None: sys.modules.pop(name, None)
+            else: sys.modules[name] = old
 
 
 def evidence(gate):
