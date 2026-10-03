@@ -69,7 +69,12 @@ def qualify_marker_result(result):
     if result.get('primary_lens')!='added_value': return result
     gate=qualification(result.get('clinical_basis','linear'),result.get('method_version'))
     result['inference']=_withhold(result['inference'],gate)
-    if gate['status']=='passed_supported_conditions_only': return result
+    if gate['status']=='passed_supported_conditions_only':
+        recipe=result.get('locked_recipe')
+        if recipe:
+            from survival_toolkit.marker_evaluation import recipe_hash
+            recipe['inference']=copy.deepcopy(result['inference']);recipe['recipe_hash']=recipe_hash(recipe)
+        return result
     for row in result['marker_table']:
         row.setdefault('exploratory',{'added_value':copy.deepcopy(row['added_value']),
                                      'tier':row['tier'],'pattern':row['pattern'],'exact':copy.deepcopy(row.get('exact'))})

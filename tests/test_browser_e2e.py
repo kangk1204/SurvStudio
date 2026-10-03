@@ -1707,11 +1707,13 @@ def test_browser_locked_marker_model_validates_on_an_external_cohort(browser_ser
             summary = page.locator("#markerValidationSummary").inner_text()
             assert "edited after it was locked" not in summary
             # The key-number labels are styled in capitals, so compare case-insensitively.
-            assert "240 patients" in summary and "Inference withheld" in summary
-            assert "markers replicated" not in summary
+            assert "240 patients" in summary and "Assumption-dependent inference" in summary
+            assert "markers replicated" in summary
             validation = response.json()["validation"]
-            assert validation["inference"]["status"] == "withheld"
-            assert all(row["replication_p_holm"] is None and not row["replicated"] for row in validation["markers"])
+            assert validation["inference"]["status"] == "assumption_dependent"
+            assert validation["inference"]["engineering_qualification"]["kernel_sources_match"] is True
+            assert "not universal" in summary
+            assert all(row["replication_p_holm"] is not None for row in validation["markers"])
             assert "c-index" in summary.lower() and "brier skill" in summary.lower()
 
             browser.close()

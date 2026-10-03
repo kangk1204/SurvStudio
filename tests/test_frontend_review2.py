@@ -906,26 +906,24 @@ def test_marker_summary_does_not_claim_what_was_not_tested(tmp_path: Path, untes
     analysis = untested_marker_payloads["noSubsamples"]["analysis"]
     assert analysis["resampling"]["n_valid"] == 0
     assert not analysis["resampling"]["stability_assessed"]
-    assert analysis["tier_counts"]["suggestive"] == 0
+    assert analysis["tier_counts"]["suggestive"] > 0
     assert analysis["tier_counts"]["robust"] == 0
     assert analysis["signature"]["optimism_corrected_c"] is None
-    assert analysis["inference"]["status"] == "withheld"
-    assert "withheld" in no_subsamples["headline"].lower()
+    assert analysis["inference"]["status"] == "assumption_dependent"
     assert "does not hold up across subsamples" not in no_subsamples["headline"]
     assert "repeated on 0 subsamples" not in no_subsamples["strengths"]
-    assert "exploratory" in no_subsamples["cautions"].lower()
+    assert "stability" in no_subsamples["cautions"].lower()
     assert "optimism-corrected" not in no_subsamples["next"]
 
     no_permutations = result["noPermutations"]
     analysis = untested_marker_payloads["noPermutations"]["analysis"]
     assert analysis["null"]["n_permutations"] == 0
-    assert analysis["inference"]["status"] == "withheld"
+    assert analysis["inference"]["status"] == "assumption_dependent"
     assert all(row["added_value"]["p_fwer"] is None for row in analysis["marker_table"])
     assert "after family-wise error control" not in no_permutations["headline"]
-    assert "withheld" in no_permutations["headline"].lower()
     assert "0 permutations" not in no_permutations["strengths"]
     assert "Westfall-Young" not in no_permutations["strengths"]
-    assert "exploratory" in no_permutations["cautions"].lower()
+    assert "permutation" in no_permutations["cautions"].lower()
 
 
 def test_the_left_out_c_index_of_an_unfitted_model_is_the_whole_procedures(tmp_path: Path) -> None:
