@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.0",
+  "profile": "publication",
+  "figure_id": "Figure_3_power_and_dimension",
+  "generated_at": "2026-10-03T01:42:57.675536+00:00",
+  "base_dir": "../../../../..",
+  "script": {
+    "path": "validation/diagnostic_followup/make_figures.py",
+    "bytes": 17606,
+    "sha256": "d4776d25f00a88539df60180ede8f7047f0c1185109d0c7e026575c8006a0b1f",
+    "media_type": "text/x-python"
+  },
+  "inputs": [
+    {
+      "path": "validation/diagnostic_followup/results/20261003/confirmation-v2/confirmation-summary.json",
+      "bytes": 360178,
+      "sha256": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+      "media_type": "application/json"
+    },
+    {
+      "path": "validation/diagnostic_followup/results/20261003/power-retention-uncertainty.csv",
+      "bytes": 576,
+      "sha256": "6bd5b2864d819d43706a44606699ad0dda7b9087aaca2aad36d0788fc8867f0d",
+      "media_type": "text/csv",
+      "table": {
+        "rows": 4,
+        "columns": 8,
+        "header": [
+          "condition",
+          "method",
+          "datasets",
+          "ratio",
+          "paired_delta_MC95_lower",
+          "paired_delta_MC95_upper",
+          "preplanned_gate_uses_point_estimate",
+          "postconfirmation_descriptive_uncertainty_not_a_new_gate"
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "path": "validation/diagnostic_followup/results/20261003/figures/Figure_3_power_and_dimension.png",
+      "bytes": 256167,
+      "sha256": "40d6db14e8ce9f5b346e7d5af960e6edee027f42b15f04984dfbfacbbc919e05",
+      "media_type": "image/png",
+      "png_width": 2220,
+      "png_height": 1740
+    },
+    {
+      "path": "validation/diagnostic_followup/results/20261003/figures/Figure_3_power_and_dimension.pdf",
+      "bytes": 33457,
+      "sha256": "ed1f671f2a7a335772e81fbba64a5cf062f5fb09f2ace07db6f52dc3f4f25018",
+      "media_type": "application/pdf",
+      "pdf_check": "header_and_eof"
+    },
+    {
+      "path": "validation/diagnostic_followup/results/20261003/figures/Figure_3_power_and_dimension.svg",
+      "bytes": 34923,
+      "sha256": "5506b2d55098684fd4a0e05a11d5af6e524a66c6f696ea3cb492c6cd2a2e4192",
+      "media_type": "image/svg+xml",
+      "svg_check": "parsed_no_active_content"
+    }
+  ],
+  "source_data": [
+    {
+      "path": "validation/diagnostic_followup/results/20261003/figures/Figure_3_source.csv",
+      "bytes": 21191,
+      "sha256": "85ce085d1c40c351976c15e8512b2d8c57ecd1c8d0fbd7f397a9b46d023dca88",
+      "media_type": "text/csv",
+      "table": {
+        "rows": 45,
+        "columns": 30,
+        "header": [
+          "stage",
+          "condition",
+          "n",
+          "p",
+          "method",
+          "planned",
+          "completed",
+          "failures",
+          "diagnostic_exceptions",
+          "missing",
+          "allowed",
+          "allowed_fraction",
+          "fwer",
+          "fwer_raw_lower",
+          "fwer_raw_upper",
+          "raw_fwer_mc95",
+          "raw_fwer_worst_case_mc95",
+          "fwer_failure_bounds",
+          "fwer_mc95",
+          "fwer_worst_case_upper95",
+          "conditional_fwer",
+          "conditional_mc95",
+          "conditional_upper95",
+          "withhold_fraction",
+          "healthy_false_alarm_fraction",
+          "power",
+          "power_mc95",
+          "power_failure_bounds",
+          "freeze_hash",
+          "engineering_status"
+        ]
+      }
+    },
+    {
+      "path": "validation/diagnostic_followup/results/20261003/figures/Figure_3_ratio_source.csv",
+      "bytes": 575,
+      "sha256": "73028b5d23a6c285bcbe5d9a5798cff8a2f5c178114f6a1735b8a4bacde87d81",
+      "media_type": "text/csv",
+      "table": {
+        "rows": 4,
+        "columns": 8,
+        "header": [
+          "condition",
+          "method",
+          "datasets",
+          "ratio",
+          "paired_delta_MC95_lower",
+          "paired_delta_MC95_upper",
+          "preplanned_gate_uses_point_estimate",
+          "postconfirmation_descriptive_uncertainty_not_a_new_gate"
+        ]
+      }
+    }
+  ],
+  "panel_claims": [
+    "Weak and strong partial-null power and point-estimate retention; paired delta intervals are descriptive after confirmation. Dimension extensions expose reduced availability."
+  ],
+  "transformations": [
+    "Displayed errors and availability are percentages. Declared intervals are preserved; no smoothing or external selection. See source tables and make_figures.py."
+  ],
+  "known_limitations": [
+    "Finite prespecified main engineering result; no universal error control, clinical utility, human usability or external prediction superiority.",
+    "Corrected linear passes declared main support only; spline is exploratory and extensions do not establish broader qualification."
+  ],
+  "validation": {
+    "status": "structural_pass",
+    "scientific_validation": "not_assessed",
+    "commands": [
+      "python3 validate_figure_package.py --write-manifest --manifest /Users/keunsoo/Documents/projects/00_SurvStudio_remote/SurvStudio-diagnostic-next/validation/diagnostic_followup/results/20261003/figures/Figure_3_power_and_dimension-manifest.json --base /Users/keunsoo/Documents/projects/00_SurvStudio_remote/SurvStudio-diagnostic-next --profile publication --figure-id Figure_3_power_and_dimension --script validation/diagnostic_followup/make_figures.py --claim 'Weak and strong partial-null power and point-estimate retention; paired delta intervals are descriptive after confirmation. Dimension extensions expose reduced availability.' --transformation 'Displayed errors and availability are percentages. Declared intervals are preserved; no smoothing or external selection. See source tables and make_figures.py.' --limitation 'Finite prespecified main engineering result; no universal error control, clinical utility, human usability or external prediction superiority.' --limitation 'Corrected linear passes declared main support only; spline is exploratory and extensions do not establish broader qualification.' --figure validation/diagnostic_followup/results/20261003/figures/Figure_3_power_and_dimension.png --figure validation/diagnostic_followup/results/20261003/figures/Figure_3_power_and_dimension.pdf --figure validation/diagnostic_followup/results/20261003/figures/Figure_3_power_and_dimension.svg --source-data validation/diagnostic_followup/results/20261003/figures/Figure_3_source.csv --source-data validation/diagnostic_followup/results/20261003/figures/Figure_3_ratio_source.csv --input validation/diagnostic_followup/results/20261003/confirmation-v2/confirmation-summary.json --input validation/diagnostic_followup/results/20261003/power-retention-uncertainty.csv"
+    ]
+  }
+}

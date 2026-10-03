@@ -26,3 +26,4 @@ paper/data/
 !paper/figures/*.pdf
 # Aggregate publication figures only; manuscript and patient outputs stay private.
 !validation/guarded_inference/results/20261003/figures/*.pdf
+!validation/diagnostic_followup/results/20261003/figures/*.pdf

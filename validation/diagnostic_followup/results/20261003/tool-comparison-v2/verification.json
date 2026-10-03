@@ -68,7 +68,7 @@
       "KM_Plotter_capability": "not_inferred_from_nonexecution"
     }
   ],
-  "elapsed_seconds": 4.561712980270386,
+  "elapsed_seconds": 3.6361427307128906,
   "application_inference_status": "assumption_dependent",
   "research_kernel_inference_status": "assumption_dependent",
   "engineering_qualification": {
@@ -136,7 +136,7 @@
     "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
     "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c",
     "src/survival_toolkit/app.py": "9f519bf22e34442aaac5eea24c263c9bbcdc5bcb76346f4eaef526ae8c6497e3",
-    "src/survival_toolkit/marker_qualification.py": "d0c310312b667e44039b3ea075545524b17d9ef1e78b0135a30d37a7f6e8ec8c",
+    "src/survival_toolkit/marker_qualification.py": "e29da9a61ff468457e46b26f8805c24963002fdf92689a75e31044b3f258d89d",
     "src/survival_toolkit/data/marker_qualification.json": "e288d92293fc218f1a7ac394ba7ab3095188fcbc8d78842b18a29d6af9398beb"
   },
   "passed": true

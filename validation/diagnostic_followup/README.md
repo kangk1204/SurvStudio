@@ -47,6 +47,14 @@ The original failure occurred at a wide-block cumulative-sum row access. A deter
 
 Weak and strong partial-null linear power are 8.412% and 43.244%, retaining 90.53% and 90.33% of the corresponding original calculation. These descriptive point ratios just exceed the fixed 90% gate; they are not lower confidence bounds proving 90% retention. Both error upper bounds, availability and power criteria pass in every prespecified supported main linear condition. The source-bound product registry retains the failed v1 studies separately. Dataset diagnostic failures still withhold inference even under a passed method profile.
 
+Post-confirmation paired delta-method Monte Carlo intervals for linear retention are
+89.15–91.91% (weak) and 89.44–91.23% (strong). These describe uncertainty without
+changing the frozen point-estimate gate. Base R independently reproduced the four
+method/signal ratios and intervals within 5.56e-16. Separate gate-decision code applied
+to independently reconstructed R quantities matches all 14 prespecified decisions.
+The scripts and complete descriptive outputs are `review_statistics.py`,
+`review_statistics.R` and `results/20261003/power-retention-*`.
+
 Spline availability is 81.00–86.54% in the four healthy main conditions, but only 28.30–28.32% in its two supported nonlinear conditions. The nonlinear clinical-risk conditional error upper bound is 6.46%, and the nonlinear-marker upper bound is 6.08%. Weak and strong spline power retention is 80.15% and 78.05%. The spline profile therefore fails as a whole; passing healthy subsets do not enable it.
 
 The full extension grid remains part of the record. With 300 independent markers, linear availability is 78.5% and its conditional error upper bound is 7.57%. With 3,000 independent markers, linear availability is 52.0% and the upper bound is 8.74%; the corresponding linear-marker availability is 49.0%. The 500-subject extension also has limiting error bounds and strong-signal power retention. These extensions do not establish broader qualification. Healthy-condition diagnostic false alarms and approximate residual-test calibration remain limitations.
@@ -54,3 +62,52 @@ The full extension grid remains part of the record. With 300 independent markers
 The finite main-study result supports only its stated scenarios. It does not establish universal error control, clinical utility, external prediction superiority or a human usability benefit. The v1 manuscript and review package remain historical deliverables; the new manuscript update is maintained privately.
 
 The separation-check rationale can be inspected in the primary [R survival implementation](https://github.com/therneau/survival/blob/master/R/coxph.fit.R). The coefficient size cap was SurvStudio's additional heuristic, not R's warning rule. The classical PH implementation is retained; [R documentation](https://www.stat.ethz.ch/R-manual/R-devel/library/survival/html/cox.zph.html) distinguishes the older approximation from the modern score test.
+
+## Current workflow and existing-case checks
+
+The current product reproduces all 84 numerical quantities and six exact coding/selection
+checks in the eight scripted R tasks. The maximum numerical difference is 1.910e-11.
+The separate common-task benchmark retains its original three warmups and ten measured
+fits per engine, including its measured revision and input hash; a presentation-policy
+change is not a new timing experiment. KM Plotter execution remains unverified, and
+`web-access-provenance.json` records the checked official terms and journal criteria.
+
+Cases I, IV and V were reanalysed in both prespecified bases with 1,000 full-cohort
+permutations, 200 fixed internal attempts and 2,000 external bootstrap draws. All six
+analyses have 200 estimable signature replicates; all six still withhold inference by
+diagnostics. The full-cohort exploratory signature is not validated by that procedure's
+internal gap. Its standard gap-adjusted C-index is withheld even under a passed method
+profile, with the numerical value retained separately as exploratory.
+
+The original completed v2 case run is preserved privately. A fresh copy carries the
+current product state and recipe hash while asserting unchanged prediction models and
+external metrics. R verification was rerun on the copy: all 852 quantities passed,
+maximum difference 3.955e-9. `cases-v2` contains only the explicit aggregate allowlist,
+including all cohort/scaling/basis sensitivities. New actual patient rows and recipes
+remain private. These are existing external-cohort reanalyses, with no external basis
+or signature selection.
+
+| Linear primary endpoint | Cohorts / individuals / events | External gain in C (95% HKSJ) | Calibration slope (95% HKSJ) |
+|---|---:|---:|---:|
+| Case I OS | 7 / 1,520 / 576 | 0.0077 (-0.0290, 0.0444) | 0.7118 (0.3906, 1.0331) |
+| Case IV OS | 3 / 598 / 173 | -0.0408 (-0.1930, 0.1114) | 0.3912 (-0.4553, 1.2376) |
+| Case V RFS primary | 3 / 552 / 160 | 0.0084 (-0.1010, 0.1178) | 0.9508 (0.0965, 1.8050) |
+| Case V DMFS secondary | 2 / 362 / 95 | -0.0058 (-0.7392, 0.7277) | 0.7767 (-1.1975, 2.7508) |
+
+Every primary gain interval includes zero. RFS and DMFS are pooled separately;
+two-cohort DMFS prediction intervals are unavailable. No external-superiority claim is made.
+
+## Review reproduction
+
+```bash
+python validation/diagnostic_followup/review_statistics.py --results validation/diagnostic_followup/results/20261003 --with-r
+python validation/diagnostic_followup/make_figures.py --results validation/diagnostic_followup/results/20261003
+python validation/diagnostic_followup/audit_followup.py --results validation/diagnostic_followup/results/20261003
+```
+
+The saved figure environment specifies the plotting versions. Six figures have PNG,
+PDF and standalone SVG outputs with source tables; retention intervals have their own
+paired source table. Exact regeneration and structural manifests are checked separately
+from independent scientific-number checks and visual review. Original confirmation,
+development and case evidence remain separate. The private clean and native tracked
+Word drafts retain the previous manuscript template and require final author review.

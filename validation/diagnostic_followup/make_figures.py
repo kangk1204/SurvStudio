@@ -105,7 +105,10 @@ def run(root):
         a.errorbar(x,y,yerr=np.stack([y-ci[:,0],ci[:,1]-y]),fmt='o',color=COLORS[method],ms=4,capsize=2,lw=1)
     for i,method in enumerate(('guarded_linear','guarded_spline')):
         retention=[100*lookup[cond,method]['power']/lookup[cond,'legacy_linear']['power'] for cond in ('partial_weak','partial_strong')]
-        b.bar(np.arange(2)+(i-.5)*.3,retention,width=.28,color=COLORS[method],label=METHODS[method])
+        uncertainty=pd.read_csv(root/'power-retention-uncertainty.csv').set_index(['condition','method'])
+        bounds=np.array([[100*uncertainty.loc[(cond,method),'paired_delta_MC95_lower'],100*uncertainty.loc[(cond,method),'paired_delta_MC95_upper']] for cond in ('partial_weak','partial_strong')])
+        error=np.stack([np.array(retention)-bounds[:,0],bounds[:,1]-np.array(retention)])
+        b.bar(np.arange(2)+(i-.5)*.3,retention,width=.28,color=COLORS[method],label=METHODS[method],yerr=error,capsize=2,error_kw={'elinewidth':.8})
     a.set_title('A  Power over all planned datasets',loc='left',fontweight='bold');a.set_ylabel('True markers rejected (%)');a.set_ylim(0,55)
     b.set_title('B  Power retained versus original',loc='left',fontweight='bold');b.set_ylabel('Power ratio (%)');b.axhline(90,color='#737373',ls='--',lw=.8);b.set_ylim(0,105)
     for ax in (a,b): ax.set_xticks([0,1],['Weak signal','Strong signal']);style(ax)
@@ -123,9 +126,10 @@ def run(root):
     power_handles=[plt.Line2D([],[],color=COLORS[m],ls=ls,label=METHODS[m],marker='o' if m=='legacy_linear' else None,ms=4)
                    for m,ls in [('legacy_linear',''),('guarded_linear','-'),('guarded_spline','--')]]
     fig.legend(handles=power_handles,ncol=3,loc='lower center',bbox_to_anchor=(.5,.005),frameon=False)
-    fig.text(.5,.075,'v2 linear passes declared main support only; spline remains exploratory. Extensions do not establish broader qualification.',ha='center',fontsize=7.5)
+    fig.text(.5,.075,'Power whiskers: 95% Monte Carlo intervals; retention whiskers: paired delta intervals (descriptive).\nThe retention gate uses point estimates. Linear passes declared main support only; spline remains exploratory.',ha='center',fontsize=7.5)
     fig.subplots_adjust(left=.1,right=.98,top=.95,bottom=.20,wspace=.36,hspace=.48);save(fig,out,'Figure_3_power_and_dimension')
     pd.DataFrame([r for r in data if r['condition'].startswith('partial_') or (r['n']==180 and r['condition'] in shapes)]).drop(columns=['source_hashes']).to_csv(out/'Figure_3_source.csv',index=False)
+    uncertainty.reset_index().to_csv(out/'Figure_3_ratio_source.csv',index=False)
 
     reference=json.loads((root/'independent_R_full_v2/verification.json').read_text())
     comparison=pd.read_csv(root/'tool-comparison-v2/numerical-comparison.csv')

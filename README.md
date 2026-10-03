@@ -17,7 +17,10 @@ leave your computer.
   resampled patients, and the model is locked and validated in another cohort.
   This development branch adds a predeclared linear or restricted cubic spline clinical basis and
   [diagnostics that can withhold marker inference](docs/guarded-marker-inference.md). Passing those
-  diagnostics leaves inference dependent on assumptions; the confirmation study is still pending.
+  diagnostics leaves inference dependent on assumptions. In a separately frozen confirmation study,
+  the corrected linear method passed its declared main engineering criteria; spline remains exploratory.
+  [Complete validation results](validation/diagnostic_followup/README.md) include failed conditions,
+  reduced availability with large marker panels, and the limits of this finite study.
 - **Prediction models.** Compare Cox, penalized Cox, random survival forests, gradient boosting and deep-learning
   models fairly: all are trained and tested on the same patients, and the differences come with intervals.
 - **Exports.** Save figures (PNG, SVG), tables (CSV, Excel, Word), and REMARK and TRIPOD+AI reporting checklists

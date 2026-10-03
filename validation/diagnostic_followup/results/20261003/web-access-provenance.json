@@ -1,0 +1,26 @@
+{
+  "checked_at_UTC": "2026-10-03 01:15:02 UTC",
+  "sources": [
+    {
+      "url": "https://link.springer.com/journal/12859/submission-guidelines/software-article",
+      "type": "official_journal_criteria",
+      "observed": "Broad utility and a significant advance over published software, usually shown through direct comparison; structured abstract limit 350 words; author and ethics declarations required.",
+      "inference": "Finite validation and R workflow checks strengthen the review case but do not establish journal acceptance or satisfy an unexecuted web-tool comparison."
+    },
+    {
+      "url": "https://kmplot.com/analysis/index.php?p=service",
+      "type": "official_site_terms",
+      "observed_section": "3 USER REPRESENTATIONS",
+      "short_excerpt": "you will not access the Services through automated or non-human means",
+      "task_execution": "unverified_no_upload_or_automated_task_execution",
+      "capabilities": "not_inferred_from_nonexecution"
+    },
+    {
+      "url": "https://kmplot.com/analysis/index.php?cancer=custom_plot&p=service",
+      "type": "specific_custom_data_terms_URL",
+      "retrieval": "web tool returned Internal Error on this check",
+      "fallback": "The general site terms above were accessible; no task was performed."
+    }
+  ],
+  "scope": "Read-only source verification and comparison boundaries; no claim of usability superiority."
+}
