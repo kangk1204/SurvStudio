@@ -1,0 +1,28 @@
+{
+  "status": "selected",
+  "selection_eligible": true,
+  "candidate": "restricted_wild",
+  "candidate_evaluations": [
+    {
+      "candidate": "residual_vector",
+      "label": "A",
+      "eligible": true,
+      "minimum_healthy_allowed": 0.978,
+      "minimum_power_ratio": 0.9610091743119268,
+      "mean_diagnostic_seconds": 35.184325678498126
+    },
+    {
+      "candidate": "restricted_wild",
+      "label": "B",
+      "eligible": true,
+      "minimum_healthy_allowed": 0.979,
+      "minimum_power_ratio": 0.9669966996699669,
+      "mean_diagnostic_seconds": 30.54081213036562
+    }
+  ],
+  "confirmation_evidence": false,
+  "selection_seed": 2026100322,
+  "input_hashes": {
+    "/home/keunsoo/projects/SurvStudio-v3-validation/development/selection/summary.json": "4eb6620cf0e340c79f020d30e170b0396ea90c8d93cf066e3bbc0f820797de0e"
+  }
+}

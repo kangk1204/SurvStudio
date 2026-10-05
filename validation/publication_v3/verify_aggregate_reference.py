@@ -227,6 +227,7 @@ def self_test(output):
         db.execute("CREATE TABLE metadata(key TEXT,value TEXT)")
         db.execute("INSERT INTO metadata VALUES('configuration',?)", (json.dumps(configuration, sort_keys=True),))
         db.execute("CREATE TABLE replicates(condition TEXT,n INTEGER,p INTEGER,idx INTEGER,elapsed REAL,result TEXT)")
+        db.execute("CREATE TABLE attempts(condition TEXT,n INTEGER,p INTEGER,idx INTEGER,started_utc TEXT,ended_utc TEXT,status TEXT,error TEXT)")
         for cell in cfg["confirmation"]:
             for condition in cell["conditions"]:
                 for index in range(9):
@@ -247,6 +248,8 @@ def self_test(output):
                                             n_true=n_true, reasons={"diagnostic_exception":1} if diagnostic_failure else {"fixture_misfit":2} if not allowed and not failure else {},
                                             diagnostic_seconds=0. if method == "legacy_linear" else .1*j))
                     db.execute("INSERT INTO replicates VALUES(?,?,?,?,?,?)", (condition, cell["n"], cell["p"], index, .5+.01*index, json.dumps(results)))
+                    db.execute("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,NULL)", (condition,cell["n"],cell["p"],index,
+                        "2026-10-03T00:00:00+00:00","2026-10-03T00:00:01+00:00","completed_with_scientific_failure" if any(r["failure"] or r["diagnostic_failure"] for r in results) else "completed"))
     summary = output/"synthetic-summary.json"
     study.summarize(SimpleNamespace(ledgers=[ledger], output=summary))
     return [ledger], summary

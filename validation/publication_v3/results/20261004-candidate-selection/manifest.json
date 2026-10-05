@@ -1,0 +1,317 @@
+{
+  "development_only": true,
+  "confirmation_evidence": false,
+  "development_revision": "ad6f09ef45d1359e0ec671b928f1152b9eb93720",
+  "seed": 2026100322,
+  "planned_datasets": 24000,
+  "completed_datasets": 24000,
+  "methods": [
+    "legacy_linear",
+    "v2_linear",
+    "v2_spline",
+    "candidate_A_linear",
+    "candidate_A_spline",
+    "candidate_B_linear",
+    "candidate_B_spline"
+  ],
+  "method_results": 168000,
+  "method_cells": 168,
+  "files": {
+    "summary.json": "4eb6620cf0e340c79f020d30e170b0396ea90c8d93cf066e3bbc0f820797de0e",
+    "selection-decision.json": "906cd1d8e9bd0ae7134d24a3e7dd7bf7b6d94b19358f2c8d3319d95908daf95f",
+    "README.md": "8b8d830988dc6edb25971b9da3033d0402d71becac4f22671396ee2973cdb8f4"
+  },
+  "ledger_owners": [
+    {
+      "owner": 0,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "911393b5b3a44e4aff2c96562e68c0bf5e052d718e1e07b24b913eb2ae68a7a1"
+    },
+    {
+      "owner": 1,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "69fe5d175db8e7d169b608db7eb586e34b019f55435f960d0097045e68f582ab"
+    },
+    {
+      "owner": 2,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "4b91956d99e2de8eb51c4b739d76e4778d2e268ac90d57727eedd32c27eae8b1"
+    },
+    {
+      "owner": 3,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "3c16b092100c8f27bc3c236205078650fcf1dc4eabe67f19350ffae25604f36f"
+    },
+    {
+      "owner": 4,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "060a2b547a6af520abb0f85d592f352e252ec476ee6f4d1c3dc23bc6956c344e"
+    },
+    {
+      "owner": 5,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "f23e51b2fcbcf69d18a833f7d052e29d306e481fadcdb758ce3c89f19a2a2f46"
+    },
+    {
+      "owner": 6,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "13d342d4d39a1e94715185b66f1fe27f3070f0dfe6377c768337cf21f9479f6e"
+    },
+    {
+      "owner": 7,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "cd5ec3682754fe7c90ec98ef1df5b9d90cd63342a13a64526da67e1c8750f4cb"
+    },
+    {
+      "owner": 8,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "94756563509672ef305fa1aa46ba06b7b4c86f1a5f721b26d2975dede243d8cd"
+    },
+    {
+      "owner": 9,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "d5e39c3ca25fe54c979a2ad94d26d54449f69655886a4c83499e281a34bc073c"
+    },
+    {
+      "owner": 10,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "fb473c68758bf3ccce05f6b40ea191162f0a6e0fd40104f2a2d1dc2496bb2bae"
+    },
+    {
+      "owner": 11,
+      "host": "keunsoo-3900x",
+      "datasets": 504,
+      "sha256": "9387b6312aaef1136ee694afda4a665bba87665fd5555d75ec6a5defb2e325d8"
+    },
+    {
+      "owner": 12,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "de25fd3b64e8dab671091298dc51ca3a001742479623c4a458cc2edf6f2ba111"
+    },
+    {
+      "owner": 13,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "0dc1016de4cfd4c00b992f16215995744693e2bd314d39946e42543369987582"
+    },
+    {
+      "owner": 14,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "27ebf5ad734a9075eb9a645054fd7fd871cd35e904628a7991b51ce400d81223"
+    },
+    {
+      "owner": 15,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "379e90a76ffaecdd5271c8fcb79be6e1fc7ec27dc05fbc9c43f58a4469aad2f4"
+    },
+    {
+      "owner": 16,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "e3d94e57b223597f995733d2d113d79b808a81deef20bad76222150d43e65fb7"
+    },
+    {
+      "owner": 17,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "2b426d9f2bbe560adea5d7245fc3632d07716bb76dfbcc3ab13cee94758ca301"
+    },
+    {
+      "owner": 18,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "4a3dc1c269f8b366f4f74ed38e36f33c233566b67c37b98f05ad7c0785b4583b"
+    },
+    {
+      "owner": 19,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "daee1e0cb2a415990e8847782d2f7019dc46c5fec113ac87d9f47f8b4f6ae413"
+    },
+    {
+      "owner": 20,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "272c76d596492abfea768716d72b319ec83489301a52a7ac1b4d8ed39d496633"
+    },
+    {
+      "owner": 21,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "5ef421cd84039922cc09520d9a398397661e165cf002ef2f7ecdba1732f2a0c7"
+    },
+    {
+      "owner": 22,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "044abd7b5c4ac64fc7d48f53e2fade7b419549c21a849ec6c00eec570e888f56"
+    },
+    {
+      "owner": 23,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "4b4610a9ebcb72f0324b8aac5f304afb0bc2f8b661ad65eace43fdd5dc19846f"
+    },
+    {
+      "owner": 24,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "92f95f2d33945bc7e05b152b63e8520f6eef4dc8c7e76fede9d5cb18e73cc64e"
+    },
+    {
+      "owner": 25,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "1e0a4ff4bc2a2cbe34a35274f097b6237c6ff4b2c4ee78503f15ce51933e16e5"
+    },
+    {
+      "owner": 26,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "31c3e24f37ab1265f6336be21d23458c9149e2728a75c29e1133192dc3a907c7"
+    },
+    {
+      "owner": 27,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "32e145afd349b9a5b7219a09020ca600b44de8b7ebbd66414be005dbd014adc1"
+    },
+    {
+      "owner": 28,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "9cbb832c1e70d1811231a633b3d3c72ed8af390faa301373b386fccd26c37f68"
+    },
+    {
+      "owner": 29,
+      "host": "keunsoo-System-Product-Name",
+      "datasets": 504,
+      "sha256": "7711ac7ab27f52e74098339d3938794a71fad6c11ac842ccc4a586c18848eafd"
+    },
+    {
+      "owner": 30,
+      "host": "keunsoo",
+      "datasets": 504,
+      "sha256": "b936da9059df19791d36ab83dcf9364c5b825d8e00a30e948cca734683f16daa"
+    },
+    {
+      "owner": 31,
+      "host": "keunsoo",
+      "datasets": 504,
+      "sha256": "100141a34d7d7dd28e191b615e3da83db8e3d58dac65ddca2dd14a2088f40053"
+    },
+    {
+      "owner": 32,
+      "host": "keunsoo",
+      "datasets": 504,
+      "sha256": "b96926005dec9a77f249643e2ce8055e27266152dabd03d1b8b8b5e5a4b5379f"
+    },
+    {
+      "owner": 33,
+      "host": "keunsoo",
+      "datasets": 504,
+      "sha256": "254ec17a1f1c4d8d685ded81067604f4fd2754a7e21222ec9941fe7988bbcf58"
+    },
+    {
+      "owner": 34,
+      "host": "keunsoo",
+      "datasets": 504,
+      "sha256": "1a7ecd5022b31312db5d6e627b7d5f561144ec78757a07ac0ac283b07768f946"
+    },
+    {
+      "owner": 35,
+      "host": "keunsoo",
+      "datasets": 504,
+      "sha256": "45d5b0bcb5f24267eed6811c3a19cd42001f2af7017aec161d30c0903d82b28f"
+    },
+    {
+      "owner": 36,
+      "host": "keunsoo",
+      "datasets": 504,
+      "sha256": "79a64db86c69a012afbf3ca9f7cf136f102dfd64b93485970a8d0bcfc19855f8"
+    },
+    {
+      "owner": 37,
+      "host": "keunsoo",
+      "datasets": 504,
+      "sha256": "1fba4a385c680a47f766ae8428bf72948f281de6becf57e9fc057ea12615cc76"
+    },
+    {
+      "owner": 38,
+      "host": "keunsoo",
+      "datasets": 504,
+      "sha256": "fd1e8184059b7768ae10e351ad291c92a7ab28235f974b9ea6bc317d9d6da056"
+    },
+    {
+      "owner": 39,
+      "host": "keunsoo",
+      "datasets": 504,
+      "sha256": "4868e09255293378d9859fd942e2588ad907f2eabf940c4df1d775647d271624"
+    },
+    {
+      "owner": 40,
+      "host": "keunsoo",
+      "datasets": 480,
+      "sha256": "faf03c2a220f41d84043d7eabf6e2086fe0595f458ce615b774f71b4aedd64e7"
+    },
+    {
+      "owner": 41,
+      "host": "keunsoo",
+      "datasets": 480,
+      "sha256": "3b00c0612539e833edaf0bdb0841ebf7135e249059b276ef06c891f2d4fe7531"
+    },
+    {
+      "owner": 42,
+      "host": "keunsoo",
+      "datasets": 480,
+      "sha256": "ca52fbc1c312148c69a083764a221ff5bd2f098bf45cfbe32e8ea8a250a4bb01"
+    },
+    {
+      "owner": 43,
+      "host": "keunsoo",
+      "datasets": 480,
+      "sha256": "db8ccffb648efaa6f3473cf46b6b98d24a471eb5e6427dab4507f208f78d679b"
+    },
+    {
+      "owner": 44,
+      "host": "keunsoo",
+      "datasets": 480,
+      "sha256": "cec6808390f672f96b2fa97f055ed56c7cb03ef2d8ebd44693b0f5e18294fde2"
+    },
+    {
+      "owner": 45,
+      "host": "keunsoo",
+      "datasets": 480,
+      "sha256": "7537f425055e3bc3e6a7551c4e993846ecee16ed8aca6f057db8dbbe98ff3c19"
+    },
+    {
+      "owner": 46,
+      "host": "keunsoo",
+      "datasets": 480,
+      "sha256": "d605eeff815b3972e30cdf0a586b1f81816531d859a40213ef9252f0ebcc9d12"
+    },
+    {
+      "owner": 47,
+      "host": "keunsoo",
+      "datasets": 480,
+      "sha256": "06eb278ae3ccac3035cce39611dfd2df73fb40a34d1cb32731a9e17bb110e6f3"
+    }
+  ],
+  "patient_rows_included": false,
+  "manuscript_included": false,
+  "actual_case_recipes_included": false
+}

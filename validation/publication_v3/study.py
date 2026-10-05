@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 from collections import Counter
+from datetime import datetime, timezone, timedelta
 import hashlib
 import importlib.util
 import importlib.metadata
@@ -38,6 +39,8 @@ def hashes():
         "validation/publication_v3/study.py", "validation/publication_v3/protocol.json",
         "validation/publication_v3/reference.R", "validation/publication_v3/verify_reference.py",
         "validation/publication_v3/control.py", "validation/publication_v3/execute.py",
+        "validation/publication_v3/confirmation_audit.py", "validation/publication_v3/verify_reference_full.py",
+        "validation/publication_v3/verify_aggregate_reference.py", "validation/publication_v3/aggregate_reference.R",
         "src/survival_toolkit/marker_qualification.py"]
     return {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in sorted(set(files))}
 
@@ -142,6 +145,13 @@ def run(args):
     if confirmation:
         if not args.freeze: raise ValueError("Confirmation requires a sealed source/reference/selection manifest")
         manifest=json.loads(Path(args.freeze).read_text())
+        sealed=datetime.fromisoformat(manifest["sealed_at_utc"])
+        if sealed.tzinfo is None or sealed.utcoffset().total_seconds()!=0:
+            raise ValueError("Seal requires absolute UTC time")
+        if sealed.astimezone(timezone(timedelta(hours=9))).date().isoformat()>cfg["freeze_deadline"]:
+            raise ValueError("Late source seal is not eligible for confirmation")
+        if manifest.get("freeze_deadline")!=cfg["freeze_deadline"] or manifest.get("source_ci_passed") is not True:
+            raise ValueError("Dated, source-bound CI seal required")
         if manifest["source_hashes"]!=hashes() or manifest["environment"]!=environment() or manifest.get("reference_passed") is not True or manifest.get("selection_eligible") is not True:
             raise ValueError("Confirmation freeze/source/environment/eligibility mismatch")
         selected=manifest["candidate"];freeze_sha=hashlib.sha256(Path(args.freeze).read_bytes()).hexdigest()
@@ -152,6 +162,7 @@ def run(args):
     with sqlite3.connect(output) as db:
         db.execute("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT)")
         db.execute("CREATE TABLE IF NOT EXISTS replicates(condition TEXT,n INTEGER,p INTEGER,idx INTEGER,elapsed REAL,result TEXT,PRIMARY KEY(condition,n,p,idx))")
+        db.execute("CREATE TABLE IF NOT EXISTS attempts(condition TEXT,n INTEGER,p INTEGER,idx INTEGER,started_utc TEXT NOT NULL,ended_utc TEXT,status TEXT NOT NULL,error TEXT,PRIMARY KEY(condition,n,p,idx))")
         existing=db.execute("SELECT value FROM metadata WHERE key='configuration'").fetchone()
         encoded=json.dumps(config,sort_keys=True)
         if existing and existing[0]!=encoded: raise ValueError("Immutable ledger source/configuration changed")
@@ -162,9 +173,23 @@ def run(args):
                     if index % args.owners != args.owner: continue
                     key=(condition,cell["n"],cell["p"],index)
                     if db.execute("SELECT 1 FROM replicates WHERE condition=? AND n=? AND p=? AND idx=?",key).fetchone(): continue
+                    if db.execute("SELECT 1 FROM attempts WHERE condition=? AND n=? AND p=? AND idx=?",key).fetchone():
+                        raise ValueError("Unresolved prior attempt; no automatic replacement")
+                    db.execute("INSERT INTO attempts VALUES(?,?,?,?,?,NULL,'started',NULL)",(*key,datetime.now(timezone.utc).isoformat()))
+                    db.commit()
                     started=time.perf_counter()
-                    result=paired(args.stage,condition,cell["n"],cell["p"],seed,index,selected)
-                    db.execute("INSERT INTO replicates VALUES(?,?,?,?,?,?)",(*key,time.perf_counter()-started,json.dumps(result)))
+                    try:
+                        result=paired(args.stage,condition,cell["n"],cell["p"],seed,index,selected)
+                        db.execute("INSERT INTO replicates VALUES(?,?,?,?,?,?)",(*key,time.perf_counter()-started,json.dumps(result)))
+                        state="completed_with_scientific_failure" if any(r.get("failure") or r.get("diagnostic_failure") for r in result) else "completed"
+                        db.execute("UPDATE attempts SET ended_utc=?,status=? WHERE condition=? AND n=? AND p=? AND idx=?",
+                                   (datetime.now(timezone.utc).isoformat(),state,*key))
+                    except BaseException as exc:
+                        db.rollback()
+                        db.execute("UPDATE attempts SET ended_utc=?,status='interrupted',error=? WHERE condition=? AND n=? AND p=? AND idx=?",
+                                   (datetime.now(timezone.utc).isoformat(),type(exc).__name__+": "+str(exc),*key))
+                        db.commit()
+                        raise
                     db.commit()
         print(json.dumps({"stage":args.stage,"owner":args.owner,"records":db.execute("SELECT count(*) FROM replicates").fetchone()[0]}))
 
@@ -209,15 +234,35 @@ def paired_differences(data,baseline,planned,seed):
 
 
 def summarize(args):
-    cfg=protocol();records={};metadata=[]
+    cfg=protocol();records={};metadata=[];attempt_counts=Counter();attempt_keys=set();utc_logged=0;unresolved_attempts=0
     for path in args.ledgers:
         with sqlite3.connect(path) as db:
             configuration=json.loads(db.execute("SELECT value FROM metadata WHERE key='configuration'").fetchone()[0]);metadata.append(configuration)
+            local_records={}
             for condition,n,p,index,elapsed,value in db.execute("SELECT condition,n,p,idx,elapsed,result FROM replicates"):
                 key=(condition,n,p,index)
                 if key in records: raise ValueError("Duplicate fixed index")
                 if index%configuration["owners"]!=configuration["owner"]: raise ValueError("Wrong owner for index")
                 records[key]=(json.loads(value),elapsed)
+                local_records[key]=True
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='attempts'").fetchone():
+                for condition,n,p,index,started,ended,status,error in db.execute("SELECT * FROM attempts"):
+                    key=(condition,n,p,index)
+                    if key in attempt_keys: raise ValueError("Duplicate fixed-index attempt")
+                    attempt_keys.add(key)
+                    if index%configuration["owners"]!=configuration["owner"]: raise ValueError("Wrong attempt owner")
+                    attempt_counts[status]+=1
+                    a=datetime.fromisoformat(started);b=None if ended is None else datetime.fromisoformat(ended)
+                    if a.tzinfo is None or a.utcoffset().total_seconds()!=0 or b is not None and (b.tzinfo is None or b.utcoffset().total_seconds()!=0 or b<a):
+                        raise ValueError("Invalid absolute UTC attempt timestamps")
+                    if key in local_records:
+                        if status not in {"completed","completed_with_scientific_failure"} or b is None: raise ValueError("Committed replicate has no completed attempt")
+                        utc_logged+=1
+                    else:
+                        if status not in {"started","interrupted"}: raise ValueError("Completed attempt has no replicate")
+                        if status=="started" and b is not None or status=="interrupted" and b is None:
+                            raise ValueError("Unresolved attempt timestamps contradict its status")
+                        unresolved_attempts+=1
     if not metadata: raise ValueError("No ledgers")
     first=metadata[0];stage=first["stage"]
     for item in metadata:
@@ -262,8 +307,14 @@ def summarize(args):
                     mean_diagnostic_seconds=float(np.mean([r.get("diagnostic_seconds",0.) for r in data])) if data else None,
                     elapsed_p95_seconds=float(np.quantile(seconds,.95)) if seconds else None))
     if set(records)-expected: raise ValueError("Unexpected fixed index")
+    if attempt_keys-expected: raise ValueError("Unexpected fixed-index attempt")
+    if stage not in {"cost","screen","selection"} and utc_logged!=len(records):
+        raise ValueError("Confirmation requires original per-replicate UTC records")
     result=dict(stage=stage,complete=set(records)==expected,planned_datasets=planned,completed_datasets=len(records),
-        methods=methods,summaries=rows,configuration=first,note="Development is descriptive and cannot qualify a release" if stage in {"cost","screen","selection"} else "Frozen finite-simulation engineering evidence")
+        methods=methods,summaries=rows,configuration=first,attempt_status_counts=dict(attempt_counts),
+        original_utc_completed_replicates=utc_logged,original_utc_coverage_complete=utc_logged==len(records),
+        unresolved_attempts=unresolved_attempts,historical_missing_utc_policy="Unavailable original timestamps are not reconstructed",
+        note="Development is descriptive and cannot qualify a release" if stage in {"cost","screen","selection"} else "Frozen finite-simulation engineering evidence")
     out=Path(args.output)
     if out.exists(): raise ValueError("Summary is immutable")
     out.write_text(json.dumps(result,indent=2,allow_nan=False)+"\n")

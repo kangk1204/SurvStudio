@@ -5,10 +5,13 @@ numerical source files are unchanged. `marker_evaluation_v3.py` is an explicit
 versioned copy of that pipeline: only diagnostic calls, method provenance and
 v3 recipe checks differ. No Cox or marker permutation engine was replaced.
 
-The joint diagnostic is **experimental**. A provisional A policy is visible in
-`marker_bootstrap_policy.json`; neither candidate is selected or qualified yet.
-The API omission default stays v2. Both v3 candidate and basis results must be
-retained. A new qualification report does not itself promote a production default.
+The joint diagnostic is **experimental**. The complete, independent development
+selection selected B (`restricted_wild`) by the fixed rule; both candidates passed
+the development point-estimate criteria. The byte-preserved full results are in
+`results/20261004-candidate-selection`. The same candidate applies to both bases.
+No v3 basis is qualified yet. The API omission default stays v2. Both candidate
+and basis development results are retained. A qualification report does not itself
+promote a production default.
 
 `protocol.json` fixes 149500 confirmation datasets, 747500 method records,
 999 marker permutations and 9999 joint diagnostic draws. Screening is descriptive
@@ -23,14 +26,18 @@ Commands (PYTHONPATH=src and single-thread BLAS):
 - `control.py cost COST_SUMMARY --output PRIVATE_NEW_DECISION`
 - `study.py run --stage screen|selection ...` only after the cost and R gates.
 - `control.py select SELECTION_SUMMARY --output PRIVATE_NEW_DECISION`
-- Commit the selected global policy and use `control.py seal SELECTION REFERENCE`.
+- Commit the selected global policy, verify all ten R fixtures with 9999 draws
+  and at least 30 markers, and complete all nine CI jobs on that commit.
+- `control.py seal SELECTION FULL_R_REFERENCE CURRENT_CI ORIGINAL_SELECTION_SUMMARY --output PRIVATE_NEW_SEAL`
 - `study.py run --stage main|extension|large|stress --freeze SEALED_MANIFEST ...`
-- `control.py qualify MAIN EXTENSION LARGE STRESS --output PRIVATE_NEW_REPORT`
+- `control.py qualify MAIN EXTENSION LARGE STRESS --freeze ORIGINAL_SEAL --aggregate-references MAIN_R EXTENSION_R LARGE_R STRESS_R --output PRIVATE_NEW_REPORT`
 
 Before interpreting that report, run `confirmation_audit.py MAIN EXTENSION LARGE
-STRESS --freeze SEALED_MANIFEST --output PRIVATE_NEW_AUDIT`. It requires every
+STRESS --freeze SEALED_MANIFEST --aggregate-references MAIN_R EXTENSION_R LARGE_R
+STRESS_R --output PRIVATE_NEW_AUDIT`. It requires every
 fixed cell, method and replicate count, exact source/environment/seed/seal identity,
-and consistent allowance and null conditional values. A missing or duplicated
+original UTC attempt, independently verified aggregate, and consistent allowance
+and null conditional values. A missing or duplicated
 cell cannot pass a reduced support set. This audit does not promote a method.
 
 Cost pilot: 20 fixed datasets per each of four shapes, both candidates and bases,

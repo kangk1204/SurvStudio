@@ -86,9 +86,26 @@ def worker(args):
     raise SystemExit(result.returncode)
 
 
+def confirmation_preflight(stage_name,out,freeze):
+    """Wait for additional workers only; verify every host before new dispatch."""
+    expected=json.loads(freeze.read_text());directory=out/stage_name
+    while True:
+        require_deadline(stage_name);snapshots=[];offset=0
+        for host,count in HOSTS:
+            code="import os,json,hashlib,shutil,sys;from pathlib import Path;sys.path.insert(0,"+repr(str(ROOT/'src'))+");sys.path.insert(0,"+repr(str(ROOT/'validation/publication_v3'))+");from study import hashes,environment;p=Path("+repr(str(directory))+");owners="+repr(list(range(offset,offset+count)))+";m=dict(line.split(':',1) for line in Path('/proc/meminfo').read_text().splitlines());new=sum(not any(p.joinpath('owner-%02d'%i+suffix).exists() for suffix in ('.pid.json','.done.json','.sqlite')) for i in owners);print(json.dumps({'source_hashes':hashes(),'environment':environment(),'load1':os.getloadavg()[0],'cpus':os.cpu_count(),'available_bytes':int(m['MemAvailable'].split()[0])*1024,'free_disk_bytes':shutil.disk_usage("+repr(str(ROOT))+").free,'new_workers':new}))"
+            measured=json.loads(remote(host,[PYTHON,'-c',code]));offset+=count
+            for key in ('source_hashes','environment'):
+                if measured[key]!=expected[key]:raise ValueError('Confirmation host '+key+' differs from immutable seal')
+            snapshots.append(dict(host=host,planned_workers=count,**measured))
+        state(out/'execution-state.json',phase=stage_name,confirmation_resource_snapshots=snapshots,error=None)
+        if all(r['new_workers']==0 or (r['load1']+r['new_workers']<=r['cpus'] and r['available_bytes']>=r['new_workers']*1024**3 and r['free_disk_bytes']>=20*1024**3) for r in snapshots):return
+        state(out/'execution-state.json',phase=stage_name,status='waiting_for_confirmation_resources');time.sleep(30)
+
+
 def stage(stage_name,out,freeze=None):
     require_deadline(stage_name)
     directory=out/stage_name;directory.mkdir(parents=True,exist_ok=True)
+    if freeze:confirmation_preflight(stage_name,out,freeze)
     jobs=[dict(host=host,owner=owner) for owner,host in enumerate(host for host,count in HOSTS for unused in range(count))]
     ownership=directory/"ownership.json"
     if ownership.exists() and json.loads(ownership.read_text())!=jobs: raise ValueError("Fixed owner assignment changed")
@@ -138,7 +155,7 @@ def stage(stage_name,out,freeze=None):
 
 def pipeline(args):
     args.output.mkdir(parents=True,exist_ok=True);status=args.output/"execution-state.json"
-    state(status,status="waiting_for_cost",phase="cost",confirmation_started=False,deadline="2026-12-26")
+    state(status,status="waiting_for_cost",phase="cost",confirmation_started=False,deadline="2026-12-26",error=None)
     # Existing cost owners were launched before this controller. Read only their ledgers.
     while True:
         require_deadline("cost")

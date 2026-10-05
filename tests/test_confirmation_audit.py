@@ -32,6 +32,7 @@ def gate(monkeypatch):
 def evidence(gate):
     cfg = gate.protocol()
     freeze = dict(selection_eligible=True, reference_passed=True, candidate=cfg["candidates"][0],
+                  source_ci_passed=True,freeze_deadline=cfg["freeze_deadline"],sealed_at_utc="2026-10-03T00:00:00+00:00",
                   source_hashes={"source.py": "a" * 64}, environment={"python": "fixture"},
                   _input_file_sha256="b" * 64)
     summaries = []
@@ -54,6 +55,8 @@ def evidence(gate):
         configuration.update(stage=stage, seed=cfg[("extension" if stage == "large" else stage) + "_seed"],
                              freeze_sha256=freeze["_input_file_sha256"])
         summaries.append(dict(stage=stage, complete=True, planned_datasets=planned, completed_datasets=planned,
+                              original_utc_coverage_complete=True,original_utc_completed_replicates=planned,
+                              unresolved_attempts=0,attempt_status_counts={"completed":planned},
                               methods=cfg["methods"], configuration=configuration, summaries=rows))
     return summaries, freeze
 

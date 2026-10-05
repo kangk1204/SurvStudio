@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import math
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from study import protocol, cells, binomial
@@ -30,6 +31,11 @@ def audit(summaries, freeze):
         raise ValueError("Eligible selection and R-verified seal required")
     if freeze.get("candidate") not in cfg["candidates"]:
         raise ValueError("Unknown sealed diagnostic candidate")
+    if freeze.get("source_ci_passed") is not True or freeze.get("freeze_deadline")!=cfg["freeze_deadline"]:
+        raise ValueError("Dated source-bound CI seal required")
+    sealed=datetime.fromisoformat(freeze["sealed_at_utc"])
+    if sealed.tzinfo is None or sealed.utcoffset().total_seconds()!=0 or sealed.astimezone(timezone(timedelta(hours=9))).date().isoformat()>cfg["freeze_deadline"]:
+        raise ValueError("Invalid or late source seal")
     expected_freeze_hash = hashlib.sha256(
         json.dumps({k: v for k, v in freeze.items() if k != "_input_file_sha256"}, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -64,6 +70,11 @@ def audit(summaries, freeze):
         planned = sum(c["replicates"] * len(c["conditions"]) for c in cells(stage))
         if summary.get("planned_datasets") != planned or summary.get("completed_datasets") != planned:
             raise ValueError("Wrong fixed dataset count")
+        if summary.get("original_utc_coverage_complete") is not True or summary.get("original_utc_completed_replicates")!=planned or summary.get("unresolved_attempts")!=0:
+            raise ValueError("Complete original per-replicate UTC and attempt records required")
+        counts=summary.get("attempt_status_counts",{})
+        if set(counts)-{"completed","completed_with_scientific_failure"} or sum(integer(v,"attempt counts") for v in counts.values())!=planned:
+            raise ValueError("Confirmation attempt counts disagree with the fixed grid")
         found = set()
         for row in summary["summaries"]:
             key = tuple(row[k] for k in ("stage", "condition", "n", "p", "method"))
@@ -141,16 +152,19 @@ def main():
     parser.add_argument("summaries", nargs=4, type=Path)
     parser.add_argument("--freeze", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--aggregate-references", required=True, nargs=4, type=Path)
     args = parser.parse_args()
     if args.output.exists():
         raise ValueError("Audit evidence cannot be overwritten")
     summaries = [json.loads(p.read_text()) for p in args.summaries]
+    for summary,path in zip(summaries,args.summaries): summary["_input_file_sha256"]=hashlib.sha256(path.read_bytes()).hexdigest()
     freeze = json.loads(args.freeze.read_text())
     freeze["_input_file_sha256"] = hashlib.sha256(args.freeze.read_bytes()).hexdigest()
     result = audit(summaries, freeze)
-    result["finite_qualification"] = qualify(summaries)
+    references=[json.loads(p.read_text()) for p in args.aggregate_references]
+    result["finite_qualification"] = qualify(summaries,freeze,references)
     result["input_hashes"] = {
-        str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in [args.freeze, *args.summaries]
+        str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in [args.freeze, *args.summaries,*args.aggregate_references]
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
