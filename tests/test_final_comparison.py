@@ -50,3 +50,14 @@ def test_frozen_comparison_rejects_input_edit(tmp_path):
     (tmp_path/'contract.json').write_text(json.dumps(contract));comparison.verify_inputs(tmp_path)
     p.write_text('event,time\n0,2\n')
     with pytest.raises(ValueError,match='input changed'):comparison.verify_inputs(tmp_path)
+
+
+def test_continuation_excludes_uncertain_unreadable_and_completed_indices():
+    continuation=module('continue_fixed_study')
+    audit=dict(absent_indices=[['independent',500,30,2],['independent',500,30,3]],absent_rows=2,
+        unresolved_original_attempts=[dict(condition='independent',n=500,p=30,idx=2)],
+        invalid_records=[dict(condition='independent',n=500,p=30,idx=1)])
+    assert continuation.untouched_extension_indices(audit)==[('independent',500,30,3)]
+    audit['absent_indices'].append(['independent',500,30,3])
+    audit['absent_rows']=3
+    with pytest.raises(ValueError,match='uniqueness'):continuation.untouched_extension_indices(audit)

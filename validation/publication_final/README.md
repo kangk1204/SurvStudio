@@ -101,3 +101,31 @@ No general speed or human-usability claim follows from these observations.
 The paper package is a review draft. Author declarations, web access gaps,
 incomplete fixed confirmation cells and latest-source CI are tracked separately.
 No submission, formal release or public archival publication is authorized here.
+
+## Continuation after the read-only audit
+
+The earlier result tables and figures remain dated evidence snapshots. A new
+sidecar schedule uses the unchanged 89afd9a numerical source and its original
+seal. It preserves all 48 logical owners and all original seeds, 999 permutations
+and 9,999 diagnostic draws. Original ledgers are read-only. Only 787 extension
+indices with no original attempt, 1,500 previously undispatched large-marker
+indices and 16,000 stress indices enter the continuation plan. The four uncertain
+attempts and one unreadable completed record are excluded from execution and
+remain in the 149,500 planned denominator.
+
+The measured remaining-cost estimate, using observed main/pilot timings, the
+worst extension-owner duration and a factor of two for the two-clinical-variable
+stress, is 6.19 days with the required additional safety factor of two and 12
+concurrent workers. This is below the fixed 21-day gate, but is not a guaranteed
+runtime. The detached controller runs on keunsoo-3900x in a new persistent output
+directory. It records each physical host, logical owner, command, PID, start,
+completion and failure. It never automatically retries a ledger. cs-node32b was
+not selected for this schedule after bounded SSH probes failed; this is an access
+observation, not a diagnosis of the earlier allocator failures.
+
+`continue_fixed_study.py` is an execution wrapper, not a new numerical method.
+Its worker checks the original numerical source/environment seal before calling
+the original `study.paired` function. The plan and exclusion evidence are in
+`execution-20261009`. Continuation cannot reverse the completed main-study
+NO_GO decision or qualify incomplete evidence. New outcomes require fresh
+aggregation and independent verification before entering figures or the paper.
