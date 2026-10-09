@@ -86,7 +86,7 @@ def fixtures(output):
                      'external range/missingness changes use training transformation parameters',
                      'endpoint conflict and edited recipe are rejected'],
                   input_hashes={p.name:sha(p) for p in output.glob('*.csv')},
-                  source_hashes={str(p.relative_to(ROOT)):sha(p) for p in [Path(__file__),ROOT/'validation/guarded_inference/compare_tools.py']},
+                  source_hashes={p.relative_to(ROOT).as_posix():sha(p) for p in [Path(__file__),ROOT/'validation/guarded_inference/compare_tools.py']},
                   versions={n:importlib.metadata.version(n) for n in ['numpy','pandas','scipy','statsmodels','lifelines','mlsurv']})
     save(output/'fixture-manifest.json',contract['input_hashes'])
     save(output/'contract.json',contract)
@@ -97,7 +97,7 @@ def verify_inputs(inputs):
     contract=json.loads((inputs/'contract.json').read_text())
     for name,digest in contract['input_hashes'].items():
         if sha(inputs/name)!=digest:raise ValueError('Frozen comparison input changed: '+name)
-    if sha(__file__)!=contract['source_hashes'][str(Path(__file__).relative_to(ROOT))]:
+    if sha(__file__)!=contract['source_hashes'][Path(__file__).relative_to(ROOT).as_posix()]:
         raise ValueError('Comparison source changed after input lock')
     return contract
 
