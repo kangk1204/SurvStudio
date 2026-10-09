@@ -1,0 +1,65 @@
+{
+  "locked_utc": "2026-10-09T02:14:37.265534+00:00",
+  "public_fixture_contract_sha256": "260797d10fb40410eaa0dabf95668f1760de2f68bda5ef0f8ffceb69d0342300",
+  "synthetic_only": true,
+  "version": "surviveR-browser-execution/1",
+  "service": "https://generatr.qub.ac.uk/app/surviveR",
+  "deployed_version": "not exposed by inspected dashboard/Introduction",
+  "tasks": [
+    "event_coding",
+    "KM_estimation",
+    "adjusted_HR_reference",
+    "misspecification",
+    "duplicates_outcome_leakage",
+    "selection_internal_evaluation",
+    "locked_external_validation",
+    "endpoint_mixing"
+  ],
+  "input_sha256": {
+    "misspecified.csv": "e408c773747e6dcc9d424554f1d37a55b657bfc6afd427bc5b529aca58ec12e6",
+    "endpoint_recipe_conflict-normal.csv": "f9af0ae4b40b87e48aa54406cf7e7598217f1b1b77ffe3ea46545d9181c2a5b9",
+    "A.csv": "498807c1828e9b86a8c9668bf886542253fbf0597724b822f220850fc6d7cb21",
+    "diagnostic_failure-changed.csv": "b4827757a77f9e904626160ac60d7d6269786184787832b4bd9b37c535fd9d40",
+    "B.csv": "78b465acebdd221edd46775a3c6c2a56c175571939c9a8a17570622c06884b35",
+    "diagnostic_failure-normal.csv": "b4827757a77f9e904626160ac60d7d6269786184787832b4bd9b37c535fd9d40",
+    "external_outcomes-changed.csv": "924f569de762ece987152b96e1e8d19f5cedbc50461187448e97c302453a2ae4",
+    "withheld_export-changed.csv": "1b182df0b631e0eddce946e5f95bb16836440dc156e8e2d93d83dcd17be3248d",
+    "external_range_missingness-normal.csv": "dd2d188c4353c512fb827d5912628746b5fd05ac940afff78ea813205c319517",
+    "external_outcomes-normal.csv": "eef4bdd108f0cddd865e63d5d4fa640e8382c91ad506d42b5a1c5b807c66cd81",
+    "endpoint_recipe_conflict-changed.csv": "6b449126bdf56cdda26d9841d3c68ad2ad72733f8e3aedd6e1770df2e48f7d10",
+    "withheld_export-normal.csv": "1f17a73781d741e7dfb0b04d55a1842114b3283adbdfb88e9e20861339a76071",
+    "duplicate.csv": "edaae16baf36f2a88e86da7f7616bc0134b86440becc884b61bdcb99992a7ec3",
+    "external_range_missingness-changed.csv": "da4d86edf0118a62fe819eb42d55675cce9f88342ccdf1bac08c82cdd57a52ed"
+  },
+  "settings": {
+    "main_input": "A.csv",
+    "time": "time",
+    "outcome": "event_code2",
+    "event_value": 2,
+    "censored_value": 1,
+    "group": "grade",
+    "reference": "A",
+    "time_units": "months; no conversion",
+    "KM_query_times": [
+      5,
+      10,
+      15
+    ],
+    "adjusted_cox_terms": [
+      "z",
+      "grade",
+      "binary",
+      "m0"
+    ],
+    "common_numerical_tolerance": 1e-06,
+    "web_display_rounding": "Reported precision retained; no pretending rounded values meet solver tolerance"
+  },
+  "boundaries": [
+    "Native analysis targets may differ; classify task comparability before numerical adjudication",
+    "No patient data uploaded",
+    "No refitting on external outcomes described as fixed validation",
+    "No human usability or timing inference",
+    "Source/UI without version hash is not a pinned software build",
+    "Interface-level absence does not prove a tool cannot implement the task"
+  ]
+}

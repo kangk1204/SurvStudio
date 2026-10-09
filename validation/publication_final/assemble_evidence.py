@@ -16,7 +16,28 @@ def table(path,rows):
         for row in rows:writer.writerow({k:json.dumps(v,allow_nan=False,sort_keys=True) if isinstance(v,(dict,list)) else v for k,v in row.items()})
 
 
-def run(evidence,v2,output):
+def web_task_records(path,tasks):
+    if path is None:
+        return [dict(tool='surviveR',task=task,display_code='P',status='authentication_pending',
+            capability_layer='not_executed',detail='Official service opened; user authentication required. No account created or analysis submitted.') for task in tasks], 'surviveR authentication pending'
+    record=read(path)
+    if record.get('synthetic_only') is not True:
+        raise ValueError('Public web evidence must declare synthetic-only inputs')
+    rows=record['tasks']
+    if len(rows)!=len(tasks) or {r['task'] for r in rows}!=set(tasks):
+        raise ValueError('Web task identities must match the original eight tasks exactly')
+    for row in rows:
+        if row['tool']!='surviveR' or row['display_code'] not in ('N','D','P'):
+            raise ValueError('Unexpected web tool or evidence category')
+        if row['display_code'] in ('N','D') and not row['status'].startswith('executed_'):
+            raise ValueError('An executed evidence category needs an actual execution')
+        if row['display_code']=='P' and not row['status'].startswith('execution_unverified'):
+            raise ValueError('Unverified web execution must remain explicitly unverified')
+    by_task={row['task']:row for row in rows}
+    return [by_task[task] for task in tasks],record['execution_summary']
+
+
+def run(evidence,v2,output,web_observations=None):
     output.mkdir(parents=True,exist_ok=False)
     paths={'v2':v2/'confirmation-v2-summary.json','v3_main':evidence/'evidence-v3/main-summary.json',
         'v3_extension':evidence/'extension-audit-r1/audit.json','public_case':evidence/'case-evaluation/external-aggregate.json',
@@ -59,14 +80,21 @@ def run(evidence,v2,output):
         row=dict(row)
         if row['tool']=='lifelines' and row['task'] in ('selection_internal_evaluation','locked_external_validation'):
             row.update(status='executed_added_script',capability_layer='added_script',detail='Fixed training-only partial-likelihood selection or native-fitter pickle persistence; estimand differences retained.')
+        if row['tool']=='mlsurv' and row['task']=='selection_internal_evaluation':
+            row['detail']='Native fixed-version CV and feature-selection workflow executed. The added lifelines training-only selection follow-up also executed, with a different selection objective.'
+        if row['tool']=='mlsurv' and row['task']=='locked_external_validation':
+            row['detail']='Native fixed-version model save/load and external prediction executed. The added lifelines pickle-persistence follow-up also executed; these do not establish conditional-marker withholding parity.'
         code='N' if row['status']=='executed_numeric_match' or row['tool']=='mlsurv' and row['task']=='locked_external_validation' else 'S' if row['status']=='executed_added_script' else 'D'
         if row['tool']=='mlsurv' and row['task']=='adjusted_HR_reference':
             code='N';row.update(status='executed_common_model_numeric_match',detail='Native CoxPHModel coefficients match independent R on the untied common fixture. Full-learner significance tests are not compared.')
         row['display_code']=code;task_records.append(row)
     tasks=[r['task'] for r in records['R_eight_tasks']['tasks']]
-    for tool,code,status,detail in [('surviveR','P','authentication_pending','Official service opened; user authentication required. No account created or analysis submitted.'),
-                                  ('KM Plotter','L','access_limited_execution_unverified','Non-human execution requires operator permission under terms. No analysis submitted; capability not inferred from nonexecution.')]:
-        for task in tasks:task_records.append(dict(tool=tool,task=task,display_code=code,status=status,capability_layer='not_executed',detail=detail))
+    web_rows,web_summary=web_task_records(web_observations,tasks)
+    task_records.extend(web_rows)
+    for task in tasks:
+        task_records.append(dict(tool='KM Plotter',task=task,display_code='L',status='access_limited_execution_unverified',capability_layer='not_executed',detail='Non-human execution requires operator permission under terms. No analysis submitted; capability not inferred from nonexecution.'))
+    if web_observations is not None:
+        shutil.copyfile(web_observations,output/'surviveR-observations.json')
     table(output/'tool_tasks.csv',task_records)
     table(output/'state_checks.csv',records['state_surfaces']['checks'])
     shutil.copyfile(evidence/'comparison-surfaces-r2/ablation.csv',output/'controlled_ablation.csv')
@@ -86,7 +114,7 @@ def run(evidence,v2,output):
         v3_extension_valid=extension['valid_paired_rows'],v3_extension_unusable=extension['invalid_paired_rows'],v3_extension_absent=extension['absent_rows'],
         v3_adoption='NO_GO',fresh_reproduction=records['fresh_environment']['passed'],state_surface_checks=len(records['state_surfaces']['checks']),
         R_public_case_checks=len(records['R_public_case']['checks']),R_main_aggregate_checks=len(records['R_v3_aggregation']['checks']),
-        web_comparison_status='surviveR authentication pending; KM Plotter permission absent',
+        web_comparison_status=web_summary+'; KM Plotter permission absent',
         patient_rows_or_actual_recipes_in_public_bundle=False,submission_ready=False,
         missing_author_facts=['authors','affiliations','corresponding author','contributions','ethics determination','data-use basis','funding','competing interests'],
         source_input_hashes={k:sha(p) for k,p in paths.items()},assembler_sha256=sha(Path(__file__)))
@@ -96,5 +124,5 @@ def run(evidence,v2,output):
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--evidence',type=Path,required=True);p.add_argument('--v2',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();run(a.evidence,a.v2,a.output)
+    p=argparse.ArgumentParser();p.add_argument('--evidence',type=Path,required=True);p.add_argument('--v2',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--web-observations',type=Path)
+    a=p.parse_args();run(a.evidence,a.v2,a.output,a.web_observations)

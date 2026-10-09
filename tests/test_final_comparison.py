@@ -61,3 +61,19 @@ def test_continuation_excludes_uncertain_unreadable_and_completed_indices():
     audit['absent_indices'].append(['independent',500,30,3])
     audit['absent_rows']=3
     with pytest.raises(ValueError,match='uniqueness'):continuation.untouched_extension_indices(audit)
+
+
+@pytest.mark.parametrize('damage',['duplicate','missing','wrong_tool','unexecuted_native','nonsynthetic'])
+def test_web_evidence_cannot_promote_unverified_or_changed_task_set(tmp_path,damage):
+    assemble=module('assemble_evidence');tasks=['event_coding','KM_estimation']
+    rows=[dict(tool='surviveR',task=task,display_code='P',status='execution_unverified_upload') for task in tasks]
+    payload=dict(synthetic_only=True,tasks=rows,execution_summary='Only declared synthetic tasks')
+    p=tmp_path/'web.json';p.write_text(json.dumps(payload))
+    assert assemble.web_task_records(p,tasks)[0]==rows
+    if damage=='duplicate':rows[1]['task']=rows[0]['task']
+    elif damage=='missing':rows.pop()
+    elif damage=='wrong_tool':rows[0]['tool']='SurvStudio'
+    elif damage=='unexecuted_native':rows[0]['display_code']='N'
+    else:payload['synthetic_only']=False
+    p.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):assemble.web_task_records(p,tasks)

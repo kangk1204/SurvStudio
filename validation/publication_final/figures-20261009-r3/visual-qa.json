@@ -1,0 +1,37 @@
+{
+  "all_six_reviewed": true,
+  "scope": "All six regenerated figures were visually inspected in the current execution; prior-byte equality was not used as a substitute.",
+  "checks": [
+    {
+      "figure": 1,
+      "prior_pixel_file_unchanged": false,
+      "sha256": "0d137f4ab3d1a241bda26ad0ec8c43633d4bc1e2d9dead1731e18abe6e3153b5"
+    },
+    {
+      "figure": 2,
+      "prior_pixel_file_unchanged": false,
+      "sha256": "e627611182a4aea522613206cae1ec55d23adae98cb3ee93451a843d5d393ff7"
+    },
+    {
+      "figure": 3,
+      "prior_pixel_file_unchanged": false,
+      "sha256": "4394b5ac51f97a7ab448497abf850a49e00629f5cacdd558aa627ea379ced87b"
+    },
+    {
+      "figure": 4,
+      "prior_pixel_file_unchanged": false,
+      "sha256": "0b48a68ff24752c7e6a0a259a9e56283b835d638f643b7e6717a8a6887b224fe"
+    },
+    {
+      "figure": 5,
+      "prior_pixel_file_unchanged": false,
+      "sha256": "2eb2df78a7d2a83da692759ffa29de26dd331e16c8fe2449788335198c5f65d0"
+    },
+    {
+      "figure": 6,
+      "prior_pixel_file_unchanged": false,
+      "sha256": "d1a3e0541361f1bd0bd4a986505d081a8faab1e2ffedb65e3c9158caaacd4bf1"
+    }
+  ],
+  "notes": "Labels, interval bars, null/NA distinctions, legend categories and clipping inspected. Figure 4 contains the new native surviveR evidence and preserves unverified tasks."
+}

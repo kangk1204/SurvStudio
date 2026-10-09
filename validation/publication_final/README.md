@@ -33,9 +33,10 @@ are scripts, synthetic fixtures, aggregate tables, hashes and reproduction recor
 
 ## Executed evidence on 9 October 2026
 
-The current aggregate bundle is `results/20261009-r2`; the earlier bundle is
-retained as an assembly checkpoint, not a second experiment. Six figures and
-their exact source tables and manifests are in `figures-20261009`.
+The current aggregate bundle is `results/20261009-r3`; the earlier bundles are
+retained as assembly checkpoints, not additional experiments. Six current
+figures and their source tables are in `figures-20261009-r3`; the earlier
+`figures-20261009` snapshot remains preserved.
 
 - Preserved v2: 85,500 datasets, 256,500 method records; finite main linear support.
 - Sealed v3 main: 120,000 datasets, 600,000 method records; necessary adoption
@@ -56,8 +57,18 @@ their exact source tables and manifests are in `figures-20261009`.
   These are prior capabilities. Different diagnostic targets are not failures.
 - The public Rotterdam/GBSG benchmark produced a small positive paired C gain;
   its development conditional inference remained withheld in all four analyses.
-- surviveR authentication and KM Plotter operator permission are pending. Neither
-  web tool is labelled unsupported on the basis of nonexecution.
+- surviveR authentication succeeded. Native event mapping, grade KM and a
+  grade-only Cox model with reference A executed on synthetic A.csv. Five
+  original tasks remain unverified; the original multivariable HR target is
+  noncomparable to this native subgroup model. Its 21 risk counts match R
+  exactly and ten Cox quantities match four-decimal output rounding. Three
+  downloaded pairwise log-rank values match a BH-adjusted R reconstruction.
+  Neither rounded output nor that reconstruction verifies the deployed build.
+  Raw KM probabilities at the original 5/10/15 query times were not verified.
+- KM Plotter operator permission is absent. Unexecuted tasks are not labelled
+  unsupported. Native web downloads and independent references are in
+  `synthetic-execution/surviveR-web-20261009`; authentication/session-bearing
+  snapshots remain private. No patient data were uploaded.
 
 The five-pair surface analysis uses 999 marker permutations. The separate
 eight-task reference harness uses 99 permutations and four resamples as an
@@ -74,9 +85,9 @@ specific environment, not a promise about every later dependency version.
 
 ```sh
 python validation/publication_final/verify_aggregates.py \
-  --inputs validation/publication_final/results/20261009-r2
+  --inputs validation/publication_final/results/20261009-r3
 python validation/publication_final/figures.py \
-  --inputs validation/publication_final/results/20261009-r2 \
+  --inputs validation/publication_final/results/20261009-r3 \
   --output /absolute/path/to/a/new/figure-directory
 python validation/publication_final/comparison.py --help
 python validation/publication_final/tool_probes.py --help
@@ -97,6 +108,13 @@ Benchmark timing is for matched small KM/Cox calculations on one shared server,
 after three warmups and ten measured runs. Whole-process RSS includes imports.
 mlsurv timing measures the Cox model core, not its full CV/reporting workflow.
 No general speed or human-usability claim follows from these observations.
+
+The web output check script additionally requires `pypdf`. Run it from the
+preserved synthetic web-artifact directory. It distinguishes exact counts,
+rounded display agreement and full-precision log-rank reconstruction; it does
+not certify the original adjusted-HR task or unexposed KM probabilities.
+`assemble_evidence.py --web-observations PATH` imports only the original task
+identities and distinguishes completed native calculations from pending tasks.
 
 The paper package is a review draft. Author declarations, web access gaps,
 incomplete fixed confirmation cells and latest-source CI are tracked separately.

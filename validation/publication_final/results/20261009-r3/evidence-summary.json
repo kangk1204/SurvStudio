@@ -1,0 +1,43 @@
+{
+  "v2_datasets": 85500,
+  "v2_method_records": 256500,
+  "v3_main_datasets": 120000,
+  "v3_main_method_records": 600000,
+  "v3_total_planned": 149500,
+  "v3_extension_valid": 11208,
+  "v3_extension_unusable": 1,
+  "v3_extension_absent": 791,
+  "v3_adoption": "NO_GO",
+  "fresh_reproduction": true,
+  "state_surface_checks": 9,
+  "R_public_case_checks": 292,
+  "R_main_aggregate_checks": 6325,
+  "web_comparison_status": "surviveR native event mapping, KM display and grade-only Cox executed; five remaining original tasks unverified and adjusted HR target noncomparable; KM Plotter permission absent",
+  "patient_rows_or_actual_recipes_in_public_bundle": false,
+  "submission_ready": false,
+  "missing_author_facts": [
+    "authors",
+    "affiliations",
+    "corresponding author",
+    "contributions",
+    "ethics determination",
+    "data-use basis",
+    "funding",
+    "competing interests"
+  ],
+  "source_input_hashes": {
+    "v2": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+    "v3_main": "9bb18edd1af07be5b04bb0b4a37fceb6326671cbb55f0df0d03981209006d1db",
+    "v3_extension": "4227f536c91cf07598ef311c52a81d28cd3299cefab402e59f0175020f5b26f5",
+    "public_case": "3e433124909169002dc226fac13aacb2897bcafe2a574160c3bf334aecd81f56",
+    "common_benchmark": "db68d3e41f3d30b43be6d9bec75192e3ac8efa907623f6e92009143cfd913391",
+    "fresh_environment": "444f6c525c2a6fbbe184b6350b8d70336268f5bd5d6399ec4ffa54658f06c69b",
+    "state_surfaces": "5cf12a9f0c17f25d07d1316c78ab6bbcff4d137a3385d2c6d1a2ddf1a1204817",
+    "R_eight_tasks": "ccb4436ed99ccf82eec7bbe6ad34be02aa319abe3d6594cf4ef92fdb82a86b1d",
+    "native_probes": "819228723cdcefd1881eee4cec226dcc2f03ea04b9a7ac89b338eb8bc470d2b8",
+    "native_followups": "0a7214febfaa83c8e641a241a622890436c5ea3f64e2f8622b55c2458aede2b4",
+    "R_public_case": "335114fc1dfa840eab949decaad8024e82dd55227738b1750253af5efbec6d82",
+    "R_v3_aggregation": "fbce847d819e4c003bc847d41fc4e2ccc50c1f23c0296031edd078688c40f042"
+  },
+  "assembler_sha256": "68775f3dd11886537d05796152cbeab8e9ed0b7c96913cf53f2fbf677ddb5b7b"
+}

@@ -1,0 +1,6 @@
+group,checks,maximum_difference
+eight_task,84,1.9099388737231493e-11
+native_lifelines,15,8.139222629210963e-11
+public_case,292,1.413975070363449e-08
+v3_aggregation,6325,4.831690603168681e-13
+common_KM_Cox,8,8.139222629210963e-11

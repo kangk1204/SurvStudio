@@ -44,9 +44,14 @@ def verify(root: Path) -> dict:
     check("149500 planned indices preserved", sum(int(row["planned"]) for row in grid) == 149500)
     tasks = read_csv("tool_tasks.csv")
     check("six tools by eight tasks retained", len(tasks) == 48)
-    check("web pending not treated as failed feature", all(
-        row["display_code"] == ("P" if row["tool"] == "surviveR" else "L")
+    check("web evidence not treated as failed feature", all(
+        row["display_code"] in ("N", "D", "P") if row["tool"] == "surviveR"
+        else row["display_code"] == "L"
         for row in tasks if row["tool"] in ("surviveR", "KM Plotter")))
+    check("unique task identities", len({(row['tool'],row['task']) for row in tasks}) == 48)
+    check("web execution categories need actual execution", all(
+        row['status'].startswith('executed_')
+        for row in tasks if row['tool']=='surviveR' and row['display_code'] in ('N','D')))
     check("no unconfirmed submission claim", summary["submission_ready"] is False)
     states = json.loads((root / "state_surfaces-verification.json").read_text())
     fresh = json.loads((root / "fresh_environment-verification.json").read_text())

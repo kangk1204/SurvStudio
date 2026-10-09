@@ -103,7 +103,7 @@ def run(inputs,output):
     fig.tight_layout(w_pad=2.2,h_pad=2.5);save_figure(fig,output,3,pd.concat(used).drop_duplicates(['condition','p','method']))
     # Figure 4 encodes execution evidence, not a feature superiority score.
     tools=['SurvStudio','R survival/Hmisc/rms','lifelines','mlsurv','surviveR','KM Plotter'];names=['Event coding','Kaplan-Meier','Adjusted HR and reference','Misspecification response','Duplicates and outcome role','Selection and internal assessment','Fixed external validation','Endpoint pairing']
-    codes={'N':('#DCF0EA','Executed native calculation'),'S':('#DEEDF8','Executed added script'),'D':('#FFF0DC','Different target or supplied-input response'),'P':('#EAEAEA','Authentication pending'),'L':('#D8D8D8','Access restricted')}
+    codes={'N':('#DCF0EA','Executed native calculation'),'S':('#DEEDF8','Executed added script'),'D':('#FFF0DC','Different target or supplied-input response'),'P':('#EAEAEA','Execution unverified'),'L':('#D8D8D8','Access restricted')}
     fig,ax=plt.subplots(figsize=(9.3,4.9));ax.set(xlim=(0,6),ylim=(8,0));ax.set_xticks(np.arange(6)+.5,['SurvStudio','R workflow','lifelines','mlsurv','surviveR','KM Plotter']);ax.xaxis.tick_top();ax.set_yticks(np.arange(8)+.5,names);ax.tick_params(length=0);ax.spines[:].set_visible(False)
     for j,tool in enumerate(tools):
         part=tasks[tasks.tool==tool]

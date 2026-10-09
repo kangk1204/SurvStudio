@@ -1,0 +1,35 @@
+target,quantity,group,observed,reference,absolute_difference,criterion,solver_precision_comparable,passed,time
+grade-only Cox; reference A,exp(coef),B,1.2286,1.22861119499573,1.1194995729990609e-05,four-decimal display rounding,False,True,
+grade-only Cox; reference A,exp(-coef),B,0.8139,0.813927143162223,2.7143162223075556e-05,four-decimal display rounding,False,True,
+grade-only Cox; reference A,lower .95,B,0.8375,0.837526642870781,2.664287078102401e-05,four-decimal display rounding,False,True,
+grade-only Cox; reference A,upper .95,B,1.8023,1.80231337273617,1.3372736169969812e-05,four-decimal display rounding,False,True,
+grade-only Cox; reference A,p.value,B,0.2923,0.29230447142894,4.471428940000521e-06,four-decimal display rounding,False,True,
+grade-only Cox; reference A,exp(coef),C,0.8144,0.814407420246705,7.4202467049699905e-06,four-decimal display rounding,False,True,
+grade-only Cox; reference A,exp(-coef),C,1.2279,1.22788665125015,1.334874984992851e-05,four-decimal display rounding,False,True,
+grade-only Cox; reference A,lower .95,C,0.5408,0.540840881039313,4.088103931310094e-05,four-decimal display rounding,False,True,
+grade-only Cox; reference A,upper .95,C,1.2263,1.22634857941643,4.857941642999464e-05,four-decimal display rounding,False,True,
+grade-only Cox; reference A,p.value,C,0.3256,0.325615935128312,1.5935128311994617e-05,four-decimal display rounding,False,True,
+grade-stratified KM,number at risk,A,79,79,0,exact integer equality,False,True,0
+grade-stratified KM,number at risk,A,28,28,0,exact integer equality,False,True,10
+grade-stratified KM,number at risk,A,12,12,0,exact integer equality,False,True,20
+grade-stratified KM,number at risk,A,7,7,0,exact integer equality,False,True,30
+grade-stratified KM,number at risk,A,4,4,0,exact integer equality,False,True,40
+grade-stratified KM,number at risk,A,3,3,0,exact integer equality,False,True,50
+grade-stratified KM,number at risk,A,1,1,0,exact integer equality,False,True,60
+grade-stratified KM,number at risk,B,97,97,0,exact integer equality,False,True,0
+grade-stratified KM,number at risk,B,23,23,0,exact integer equality,False,True,10
+grade-stratified KM,number at risk,B,9,9,0,exact integer equality,False,True,20
+grade-stratified KM,number at risk,B,5,5,0,exact integer equality,False,True,30
+grade-stratified KM,number at risk,B,3,3,0,exact integer equality,False,True,40
+grade-stratified KM,number at risk,B,2,2,0,exact integer equality,False,True,50
+grade-stratified KM,number at risk,B,1,1,0,exact integer equality,False,True,60
+grade-stratified KM,number at risk,C,84,84,0,exact integer equality,False,True,0
+grade-stratified KM,number at risk,C,35,35,0,exact integer equality,False,True,10
+grade-stratified KM,number at risk,C,16,16,0,exact integer equality,False,True,20
+grade-stratified KM,number at risk,C,6,6,0,exact integer equality,False,True,30
+grade-stratified KM,number at risk,C,5,5,0,exact integer equality,False,True,40
+grade-stratified KM,number at risk,C,4,4,0,exact integer equality,False,True,50
+grade-stratified KM,number at risk,C,2,2,0,exact integer equality,False,True,60
+pairwise log-rank BH reconstruction,p,A/B,0.342037505533009,0.342037505533009,0.0,maximum absolute difference 1e-6,True,True,
+pairwise log-rank BH reconstruction,p,A/C,0.342037505533009,0.342037505533009,0.0,maximum absolute difference 1e-6,True,True,
+pairwise log-rank BH reconstruction,p,B/C,0.165370253014826,0.165370253014826,0.0,maximum absolute difference 1e-6,True,True,
