@@ -1,0 +1,10 @@
+{
+  "tool": "surviveR",
+  "task": "duplicates_outcome_leakage",
+  "display_code": "D",
+  "status": "executed_different_target_duplicate_input_response_partial_composite",
+  "capability_layer": "native_application_supplied_input_response",
+  "detail": "Fixed duplicate.csv includes one repeated whole subject row. In a fresh session, the native grade workflow retained a 260-row risk population and produced five downloads. Twenty-one risk counts, ten rounded Cox quantities and three BH-reconstructed log-rank p values matched independent R using the duplicate input. No duplicate warning was visible in the inspected execution. This is a bounded supplied-input response; the outcome-feature leakage component is unexecuted, and universal absence of duplicate safeguards is not inferred. Initial unverified session attempts remain preserved.",
+  "checks": 34,
+  "source_sha256": "f8fb9cd7393adfe9dfc21847b2197f88d551833e120bab9bdb6ed04cd39c17b7"
+}

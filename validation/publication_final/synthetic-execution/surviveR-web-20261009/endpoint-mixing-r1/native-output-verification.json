@@ -1,0 +1,26 @@
+{
+  "passed": true,
+  "checks": 34,
+  "exact_risk_counts": 21,
+  "rounded_cox_quantities": 10,
+  "full_precision_logrank_reconstruction": 3,
+  "n": 260,
+  "events": 151,
+  "scope": "Implementation reference for the native unadjusted grade workflow; intentionally mixed endpoint supplied-input response; clinical endpoint validity and raw KM survival estimates remain unverified",
+  "rounding_is_not_solver_precision": true,
+  "logrank_adjustment_is_reconstructed_not_build_verified": true,
+  "source_hashes": {
+    "native-grade-60/SurviveR_LogRankTest.csv": "77da6165c1205f87833ca24417bd6b54494e7cb0a5a56ec331c80ffa2e1c9aef",
+    "native-grade-60/SurviveR_KMplot.pdf": "e84e7dc07ab2d2379bebb1cf9d38266c315dbcc11a46ce6a29134ea396cafc28",
+    "native-grade-60/SurviveR_COXplot.png": "3f78cc5308f96315201cc0b2385e664b069fa6c78b5e1845a0e6b384d7971cfc",
+    "native-grade-60/SurviveR_COXHR.csv": "ea0ae111a7db11248fe3aceaf4562192dc8d908d02011c2e80b6ae19fb18a568",
+    "native-grade-60/SurviveR_RiskCumEvTable.pdf": "22a0cb8e0acd45cb43a6977ef5520db3b19b372fe3a168b4ef897c01aa9db378",
+    "independent-reference/sessionInfo.txt": "acc8d149243d5280261f733ca7d5a546212141334979597fca78a8feae84a5e7",
+    "independent-reference/cox-60.csv": "cc35586c9f364109977798e8358256cc141c4deade3e4ab15e8fb97abdf24a8c",
+    "independent-reference/logrank-60.csv": "396ea6c96ee3ab4dc845f5633763326019ab78b0bfcd0d6c715d56f89d41e0a6",
+    "independent-reference/summary-60.csv": "5c5e80602e686ba1ae15a5fd6719f3012dabc198aff22dab6cd2ef6e310e4988",
+    "independent-reference/KM-60.csv": "6a85ecb505f7c7abd238f20bd00e5b03741561b69de7d1794dad61c97185b2f3",
+    "pre-execution-lock.json": "707c00084a002391beba6d0a310e2285c5473180ca87099f212dea9e27bf5905",
+    "independent-native-reference.R": "2a6c22dc6c352a73b27dac840324182787186e0e8a1b1563ef2d8c45b58b7824"
+  }
+}

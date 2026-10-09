@@ -1,0 +1,21 @@
+{
+  "created_utc": "2026-10-09T05:49:24.958697+00:00",
+  "synthetic_only": true,
+  "input": "A.csv",
+  "input_sha256": "498807c1828e9b86a8c9668bf886542253fbf0597724b822f220850fc6d7cb21",
+  "time": "rfs_months",
+  "outcome": "dmfs_event",
+  "censor": 0,
+  "event": 1,
+  "group": "grade",
+  "groups": [
+    "A",
+    "B",
+    "C"
+  ],
+  "reference": "A",
+  "administrative_endpoint": 60,
+  "ties_reference": "efron",
+  "target": "native supplied-input response to intentionally incompatible endpoint names",
+  "boundary": "This pairing is intentionally invalid semantically. Numerical checks establish what the native workflow calculated, not the clinical validity of mixing endpoints. No document-only absence is classified as unsupported."
+}

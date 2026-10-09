@@ -33,9 +33,9 @@ are scripts, synthetic fixtures, aggregate tables, hashes and reproduction recor
 
 ## Executed evidence on 9 October 2026
 
-The current aggregate bundle is `results/20261009-r3`; the earlier bundles are
+The current aggregate bundle is `results/20261009-r4`; the earlier bundles are
 retained as assembly checkpoints, not additional experiments. Six current
-figures and their source tables are in `figures-20261009-r3`; the earlier
+figures and their source tables are in `figures-20261009-r4`; the earlier
 `figures-20261009` snapshot remains preserved.
 
 - Preserved v2: 85,500 datasets, 256,500 method records; finite main linear support.
@@ -58,13 +58,24 @@ figures and their source tables are in `figures-20261009-r3`; the earlier
 - The public Rotterdam/GBSG benchmark produced a small positive paired C gain;
   its development conditional inference remained withheld in all four analyses.
 - surviveR authentication succeeded. Native event mapping, grade KM and a
-  grade-only Cox model with reference A executed on synthetic A.csv. Five
-  original tasks remain unverified; the original multivariable HR target is
+  grade-only Cox model with reference A executed on synthetic A.csv. Two
+  original workflows remain unverified; the original multivariable HR target is
   noncomparable to this native subgroup model. Its 21 risk counts match R
   exactly and ten Cox quantities match four-decimal output rounding. Three
   downloaded pairwise log-rank values match a BH-adjusted R reconstruction.
   Neither rounded output nor that reconstruction verifies the deployed build.
   Raw KM probabilities at the original 5/10/15 query times were not verified.
+- Three supplementary web executions added 111 checks: 43 for native median
+  conversion and grouped KM/Cox on misspecified.csv, 34 for the repeated-row
+  duplicate input, and 34 for the endpoint-name conflict in A.csv. All passed
+  their declared independent R checks. With the original A execution, 145
+  checks are preserved. These are not additional solver-precision checks.
+  The conditional residual diagnostic and the outcome-feature component of
+  the composite duplicate/leakage task remain unexecuted. The endpoint columns
+  have conflicting names but identical values by fixture design. Native
+  supplied-input responses do not establish clinical endpoint validity or
+  universal absence of safeguards. Earlier unverified UI attempts remain
+  privately preserved; their causes are unknown.
 - KM Plotter operator permission is absent. Unexecuted tasks are not labelled
   unsupported. Native web downloads and independent references are in
   `synthetic-execution/surviveR-web-20261009`; authentication/session-bearing
@@ -85,9 +96,9 @@ specific environment, not a promise about every later dependency version.
 
 ```sh
 python validation/publication_final/verify_aggregates.py \
-  --inputs validation/publication_final/results/20261009-r3
+  --inputs validation/publication_final/results/20261009-r4
 python validation/publication_final/figures.py \
-  --inputs validation/publication_final/results/20261009-r3 \
+  --inputs validation/publication_final/results/20261009-r4 \
   --output /absolute/path/to/a/new/figure-directory
 python validation/publication_final/comparison.py --help
 python validation/publication_final/tool_probes.py --help

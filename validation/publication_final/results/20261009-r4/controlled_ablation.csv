@@ -1,0 +1,4 @@
+challenge,mode,markers,standard_inference_policy_violations,state_lost_on_export,fixed_prediction_guarantee,boundary
+withheld_export,warning_only,30,30,1,False,Controlled removal of guards; not a competitor or human error-rate estimate
+withheld_export,state_only,30,0,0,False,Controlled removal of guards; not a competitor or human error-rate estimate
+withheld_export,state_and_locked_transform,30,0,0,True,Controlled removal of guards; not a competitor or human error-rate estimate
