@@ -1,0 +1,5 @@
+stage,planned,validated_paired_rows,unusable,absent,status
+v3_main,120000,120000,0,0,complete
+v3_extension,12000,11208,1,791,INCOMPLETE_CORRUPTED_EVIDENCE
+v3_large,1500,0,0,1500,never_dispatched
+v3_stress,16000,0,0,16000,never_dispatched

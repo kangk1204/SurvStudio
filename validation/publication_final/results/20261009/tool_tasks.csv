@@ -1,0 +1,49 @@
+tool,task,status,display_code,capability_layer,detail
+SurvStudio,event_coding,executed_numerical_match,N,native_application,explicit_positive_value=2; R script recodes before Surv
+SurvStudio,KM_estimation,executed_numerical_match,N,native_application,"fixed 5,10,15 time points, three grades"
+SurvStudio,adjusted_HR_reference,executed_numerical_match,N,native_application,grade A is reference; numeric coefficients/log-likelihood compared
+SurvStudio,misspecification,executed_workflow,N,native_application,SurvStudio diagnostic withholding; R explicit HC3 calculation and manual 1% rule
+SurvStudio,duplicates_outcome_leakage,executed_workflow,N,native_application,SurvStudio duplicate profile warning and API role rejection; R explicit ID/input checks
+SurvStudio,selection_internal_evaluation,executed_kernel_workflow,N,native_application,both scripted numerical kernels select on inner training rows and score untouched held-out rows; application resampling checked separately
+SurvStudio,locked_external_validation,executed_numerical_match,N,native_application,R reconstructs frozen training encoder and applies fixed coefficients; no external selection
+SurvStudio,endpoint_mixing,executed_workflow,N,native_application,SurvStudio rejects RFS-time/DMFS-event pair; R workflow needs an explicit endpoint declaration check
+R survival/Hmisc/rms,event_coding,executed_numerical_match,N,independent_added_R_workflow,explicit_positive_value=2; R script recodes before Surv
+R survival/Hmisc/rms,KM_estimation,executed_numerical_match,N,independent_added_R_workflow,"fixed 5,10,15 time points, three grades"
+R survival/Hmisc/rms,adjusted_HR_reference,executed_numerical_match,N,independent_added_R_workflow,grade A is reference; numeric coefficients/log-likelihood compared
+R survival/Hmisc/rms,misspecification,executed_workflow,S,independent_added_R_workflow,SurvStudio diagnostic withholding; R explicit HC3 calculation and manual 1% rule
+R survival/Hmisc/rms,duplicates_outcome_leakage,executed_workflow,S,independent_added_R_workflow,SurvStudio duplicate profile warning and API role rejection; R explicit ID/input checks
+R survival/Hmisc/rms,selection_internal_evaluation,executed_kernel_workflow,S,independent_added_R_workflow,both scripted numerical kernels select on inner training rows and score untouched held-out rows; application resampling checked separately
+R survival/Hmisc/rms,locked_external_validation,executed_numerical_match,S,independent_added_R_workflow,R reconstructs frozen training encoder and applies fixed coefficients; no external selection
+R survival/Hmisc/rms,endpoint_mixing,executed_workflow,S,independent_added_R_workflow,SurvStudio rejects RFS-time/DMFS-event pair; R workflow needs an explicit endpoint declaration check
+lifelines,event_coding,executed_numeric_match,N,native_with_input_script,"Explicit event recoding, KM time points, reference coding and Cox estimates match independent R."
+lifelines,KM_estimation,executed_numeric_match,N,native_with_input_script,"Explicit event recoding, KM time points, reference coding and Cox estimates match independent R."
+lifelines,adjusted_HR_reference,executed_numeric_match,N,native_with_input_script,"Explicit event recoding, KM time points, reference coding and Cox estimates match independent R."
+lifelines,misspecification,native_input_response_observed,D,native_with_input_script,See fixed misspecified probe and retained warnings/exports. This is not a universal unsupported-feature claim.
+lifelines,duplicates_outcome_leakage,native_input_response_observed,D,native_with_input_script,See fixed duplicate/outcome_feature probe and retained warnings/exports. This is not a universal unsupported-feature claim.
+lifelines,selection_internal_evaluation,executed_added_script,S,added_script,Fixed training-only partial-likelihood selection or native-fitter pickle persistence; estimand differences retained.
+lifelines,locked_external_validation,executed_added_script,S,added_script,Fixed training-only partial-likelihood selection or native-fitter pickle persistence; estimand differences retained.
+lifelines,endpoint_mixing,native_input_response_observed,D,native_with_input_script,See fixed endpoint_mixing probe and retained warnings/exports. This is not a universal unsupported-feature claim.
+mlsurv,event_coding,native_input_response_observed,D,native_with_input_script,See fixed normal probe and retained warnings/exports. This is not a universal unsupported-feature claim.
+mlsurv,KM_estimation,executed_different_output,D,native,Native report includes overall KM; not the declared grade-specific estimate comparison.
+mlsurv,adjusted_HR_reference,native_input_response_observed,D,native_with_input_script,See fixed normal probe and retained warnings/exports. This is not a universal unsupported-feature claim.
+mlsurv,misspecification,native_input_response_observed,D,native_with_input_script,See fixed misspecified probe and retained warnings/exports. This is not a universal unsupported-feature claim.
+mlsurv,duplicates_outcome_leakage,native_input_response_observed,D,native_with_input_script,See fixed duplicate/outcome_feature probe and retained warnings/exports. This is not a universal unsupported-feature claim.
+mlsurv,selection_internal_evaluation,executed_different_estimand,D,native,mlsurv native three-fold CV of a prespecified model; not a post-marker-selection comparison. lifelines added nested selection was not executed.
+mlsurv,locked_external_validation,executed_workflow,N,native,"mlsurv native save/load, fixed predict and external validation executed; outcomes leave predictions unchanged. lifelines persistence workflow was not executed."
+mlsurv,endpoint_mixing,native_input_response_observed,D,native_with_input_script,See fixed endpoint_mixing probe and retained warnings/exports. This is not a universal unsupported-feature claim.
+surviveR,event_coding,authentication_pending,P,not_executed,Official service opened; user authentication required. No account created or analysis submitted.
+surviveR,KM_estimation,authentication_pending,P,not_executed,Official service opened; user authentication required. No account created or analysis submitted.
+surviveR,adjusted_HR_reference,authentication_pending,P,not_executed,Official service opened; user authentication required. No account created or analysis submitted.
+surviveR,misspecification,authentication_pending,P,not_executed,Official service opened; user authentication required. No account created or analysis submitted.
+surviveR,duplicates_outcome_leakage,authentication_pending,P,not_executed,Official service opened; user authentication required. No account created or analysis submitted.
+surviveR,selection_internal_evaluation,authentication_pending,P,not_executed,Official service opened; user authentication required. No account created or analysis submitted.
+surviveR,locked_external_validation,authentication_pending,P,not_executed,Official service opened; user authentication required. No account created or analysis submitted.
+surviveR,endpoint_mixing,authentication_pending,P,not_executed,Official service opened; user authentication required. No account created or analysis submitted.
+KM Plotter,event_coding,access_limited_execution_unverified,L,not_executed,Non-human execution requires operator permission under terms. No analysis submitted; capability not inferred from nonexecution.
+KM Plotter,KM_estimation,access_limited_execution_unverified,L,not_executed,Non-human execution requires operator permission under terms. No analysis submitted; capability not inferred from nonexecution.
+KM Plotter,adjusted_HR_reference,access_limited_execution_unverified,L,not_executed,Non-human execution requires operator permission under terms. No analysis submitted; capability not inferred from nonexecution.
+KM Plotter,misspecification,access_limited_execution_unverified,L,not_executed,Non-human execution requires operator permission under terms. No analysis submitted; capability not inferred from nonexecution.
+KM Plotter,duplicates_outcome_leakage,access_limited_execution_unverified,L,not_executed,Non-human execution requires operator permission under terms. No analysis submitted; capability not inferred from nonexecution.
+KM Plotter,selection_internal_evaluation,access_limited_execution_unverified,L,not_executed,Non-human execution requires operator permission under terms. No analysis submitted; capability not inferred from nonexecution.
+KM Plotter,locked_external_validation,access_limited_execution_unverified,L,not_executed,Non-human execution requires operator permission under terms. No analysis submitted; capability not inferred from nonexecution.
+KM Plotter,endpoint_mixing,access_limited_execution_unverified,L,not_executed,Non-human execution requires operator permission under terms. No analysis submitted; capability not inferred from nonexecution.

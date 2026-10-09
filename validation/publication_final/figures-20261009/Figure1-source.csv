@@ -1,0 +1,32 @@
+source,target,source_label,target_label
+training,transform,"Training data
+Declare event and variable roles","Training transformations
+Impute, encode and fix knots"
+transform,diagnosis,"Training transformations
+Impute, encode and fix knots","Model and residual diagnostics
+Check method qualification"
+diagnosis,allowed,"Model and residual diagnostics
+Check method qualification","Diagnostics do not reject
+Qualified method profile required
+Assumption-dependent inference"
+diagnosis,held,"Model and residual diagnostics
+Check method qualification","Test or qualification fails
+Inference withheld"
+held,raw,"Test or qualification fails
+Inference withheld","Exploratory calculations retained
+Standard p and q are null"
+held,export,"Test or qualification fails
+Inference withheld","API, screen, CSV and report
+State and reasons remain visible"
+raw,export,"Exploratory calculations retained
+Standard p and q are null","API, screen, CSV and report
+State and reasons remain visible"
+allowed,recipe,"Diagnostics do not reject
+Qualified method profile required
+Assumption-dependent inference","Locked external prediction
+Fixed state and transformations
+Withholding remains"
+export,recipe,"API, screen, CSV and report
+State and reasons remain visible","Locked external prediction
+Fixed state and transformations
+Withholding remains"

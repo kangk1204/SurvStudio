@@ -1,0 +1,5 @@
+"condition","method","datasets","ratio","paired_delta_MC95_lower","paired_delta_MC95_upper"
+"partial_weak","guarded_linear",5000,0.905294877313818,0.8914675648953,0.919122189732336
+"partial_weak","guarded_spline",5000,0.80154972018941,0.777696287354434,0.825403153024386
+"partial_strong","guarded_linear",5000,0.903325534759358,0.894386224946184,0.912264844572532
+"partial_strong","guarded_spline",5000,0.780497994652406,0.767967614815941,0.793028374488872

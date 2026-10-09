@@ -1,0 +1,111 @@
+{
+  "version": "publication-comparison/1",
+  "locked_utc": "2026-10-09T00:29:08.810707+00:00",
+  "eight_tasks": [
+    "event_coding",
+    "KM_estimation",
+    "adjusted_HR_reference",
+    "misspecification",
+    "duplicates_outcome_leakage",
+    "selection_internal_evaluation",
+    "locked_external_validation",
+    "endpoint_mixing"
+  ],
+  "pairs": [
+    {
+      "challenge": "diagnostic_failure",
+      "seed": 2026100901,
+      "n": 180,
+      "p": 30,
+      "change": "inject one nonfinite diagnostic-response operand inside required HC3 checks; analysis data are identical",
+      "normal": "diagnostic_failure-normal.csv",
+      "changed": "diagnostic_failure-changed.csv"
+    },
+    {
+      "challenge": "withheld_export",
+      "seed": 2026100902,
+      "n": 180,
+      "p": 30,
+      "change": "data_change",
+      "normal": "withheld_export-normal.csv",
+      "changed": "withheld_export-changed.csv"
+    },
+    {
+      "challenge": "external_outcomes",
+      "seed": 2026100903,
+      "n": 180,
+      "p": 30,
+      "change": "data_change",
+      "normal": "external_outcomes-normal.csv",
+      "changed": "external_outcomes-changed.csv"
+    },
+    {
+      "challenge": "external_range_missingness",
+      "seed": 2026100904,
+      "n": 180,
+      "p": 30,
+      "change": "data_change",
+      "normal": "external_range_missingness-normal.csv",
+      "changed": "external_range_missingness-changed.csv"
+    },
+    {
+      "challenge": "endpoint_recipe_conflict",
+      "seed": 2026100905,
+      "n": 180,
+      "p": 30,
+      "change": "data_change",
+      "normal": "endpoint_recipe_conflict-normal.csv",
+      "changed": "endpoint_recipe_conflict-changed.csv"
+    }
+  ],
+  "marker_permutations": 999,
+  "diagnostic_draws_v3": 9999,
+  "solver_tolerance": 1e-06,
+  "discrete_tolerance": 0,
+  "comparison_boundary": "Native capabilities, scripted checks and non-comparable estimands are separate.",
+  "ablations": [
+    "warning_only",
+    "state_only",
+    "state_and_locked_transform"
+  ],
+  "forbidden_claims": [
+    "human time saved",
+    "human interpretation error reduction",
+    "universal error control"
+  ],
+  "expected_invariants": [
+    "required diagnostic failure withholds inference",
+    "withheld standard p/q are null; exploratory calculations remain separate",
+    "external outcome changes cannot alter fixed predictions or restore development permission",
+    "external range/missingness changes use training transformation parameters",
+    "endpoint conflict and edited recipe are rejected"
+  ],
+  "input_hashes": {
+    "external_outcomes-normal.csv": "eef4bdd108f0cddd865e63d5d4fa640e8382c91ad506d42b5a1c5b807c66cd81",
+    "A.csv": "498807c1828e9b86a8c9668bf886542253fbf0597724b822f220850fc6d7cb21",
+    "misspecified.csv": "e408c773747e6dcc9d424554f1d37a55b657bfc6afd427bc5b529aca58ec12e6",
+    "external_range_missingness-normal.csv": "dd2d188c4353c512fb827d5912628746b5fd05ac940afff78ea813205c319517",
+    "endpoint_recipe_conflict-normal.csv": "f9af0ae4b40b87e48aa54406cf7e7598217f1b1b77ffe3ea46545d9181c2a5b9",
+    "endpoint_recipe_conflict-changed.csv": "6b449126bdf56cdda26d9841d3c68ad2ad72733f8e3aedd6e1770df2e48f7d10",
+    "duplicate.csv": "edaae16baf36f2a88e86da7f7616bc0134b86440becc884b61bdcb99992a7ec3",
+    "B.csv": "78b465acebdd221edd46775a3c6c2a56c175571939c9a8a17570622c06884b35",
+    "withheld_export-normal.csv": "1f17a73781d741e7dfb0b04d55a1842114b3283adbdfb88e9e20861339a76071",
+    "diagnostic_failure-changed.csv": "b4827757a77f9e904626160ac60d7d6269786184787832b4bd9b37c535fd9d40",
+    "diagnostic_failure-normal.csv": "b4827757a77f9e904626160ac60d7d6269786184787832b4bd9b37c535fd9d40",
+    "withheld_export-changed.csv": "1b182df0b631e0eddce946e5f95bb16836440dc156e8e2d93d83dcd17be3248d",
+    "external_range_missingness-changed.csv": "da4d86edf0118a62fe819eb42d55675cce9f88342ccdf1bac08c82cdd57a52ed",
+    "external_outcomes-changed.csv": "924f569de762ece987152b96e1e8d19f5cedbc50461187448e97c302453a2ae4"
+  },
+  "source_hashes": {
+    "validation/publication_final/comparison.py": "c85a41db008e1e55edbaf5c74b74346cd796615d27d7d823cd09304f2e59b3b2",
+    "validation/guarded_inference/compare_tools.py": "5eb58caf7516c0967416aa889dad2e46dd2e82b2a9590565bb24f0a377e15654"
+  },
+  "versions": {
+    "numpy": "2.5.3",
+    "pandas": "3.0.6",
+    "scipy": "1.18.1",
+    "statsmodels": "0.15.0",
+    "lifelines": "0.30.0",
+    "mlsurv": "0.2.0"
+  }
+}

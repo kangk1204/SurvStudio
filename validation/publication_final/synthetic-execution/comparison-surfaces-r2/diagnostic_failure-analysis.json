@@ -1,0 +1,4814 @@
+{
+  "method_version": "marker-inference/2",
+  "inference": {
+    "method_version": "marker-inference/2",
+    "threshold": 0.01,
+    "status": "withheld",
+    "allowed": false,
+    "reasons": [
+      "residual_diagnostic_failed: m0/nonlinear_mean",
+      "residual_diagnostic_failed: m0/variance",
+      "residual_diagnostic_failed: m1/nonlinear_mean",
+      "residual_diagnostic_failed: m1/variance",
+      "residual_diagnostic_failed: m2/nonlinear_mean",
+      "residual_diagnostic_failed: m2/variance",
+      "residual_diagnostic_failed: m3/nonlinear_mean",
+      "residual_diagnostic_failed: m3/variance",
+      "residual_diagnostic_failed: m4/nonlinear_mean",
+      "residual_diagnostic_failed: m4/variance",
+      "residual_diagnostic_failed: m5/nonlinear_mean",
+      "residual_diagnostic_failed: m5/variance",
+      "residual_diagnostic_failed: m6/nonlinear_mean",
+      "residual_diagnostic_failed: m6/variance",
+      "residual_diagnostic_failed: m7/nonlinear_mean",
+      "residual_diagnostic_failed: m7/variance",
+      "residual_diagnostic_failed: m8/nonlinear_mean",
+      "residual_diagnostic_failed: m8/variance",
+      "residual_diagnostic_failed: m9/nonlinear_mean",
+      "residual_diagnostic_failed: m9/variance",
+      "residual_diagnostic_failed: m10/nonlinear_mean",
+      "residual_diagnostic_failed: m10/variance",
+      "residual_diagnostic_failed: m11/nonlinear_mean",
+      "residual_diagnostic_failed: m11/variance",
+      "residual_diagnostic_failed: m12/nonlinear_mean",
+      "residual_diagnostic_failed: m12/variance",
+      "residual_diagnostic_failed: m13/nonlinear_mean",
+      "residual_diagnostic_failed: m13/variance",
+      "residual_diagnostic_failed: m14/nonlinear_mean",
+      "residual_diagnostic_failed: m14/variance",
+      "residual_diagnostic_failed: m15/nonlinear_mean",
+      "residual_diagnostic_failed: m15/variance",
+      "residual_diagnostic_failed: m16/nonlinear_mean",
+      "residual_diagnostic_failed: m16/variance",
+      "residual_diagnostic_failed: m17/nonlinear_mean",
+      "residual_diagnostic_failed: m17/variance",
+      "residual_diagnostic_failed: m18/nonlinear_mean",
+      "residual_diagnostic_failed: m18/variance",
+      "residual_diagnostic_failed: m19/nonlinear_mean",
+      "residual_diagnostic_failed: m19/variance",
+      "residual_diagnostic_failed: m20/nonlinear_mean",
+      "residual_diagnostic_failed: m20/variance",
+      "residual_diagnostic_failed: m21/nonlinear_mean",
+      "residual_diagnostic_failed: m21/variance",
+      "residual_diagnostic_failed: m22/nonlinear_mean",
+      "residual_diagnostic_failed: m22/variance",
+      "residual_diagnostic_failed: m23/nonlinear_mean",
+      "residual_diagnostic_failed: m23/variance",
+      "residual_diagnostic_failed: m24/nonlinear_mean",
+      "residual_diagnostic_failed: m24/variance",
+      "residual_diagnostic_failed: m25/nonlinear_mean",
+      "residual_diagnostic_failed: m25/variance",
+      "residual_diagnostic_failed: m26/nonlinear_mean",
+      "residual_diagnostic_failed: m26/variance",
+      "residual_diagnostic_failed: m27/nonlinear_mean",
+      "residual_diagnostic_failed: m27/variance",
+      "residual_diagnostic_failed: m28/nonlinear_mean",
+      "residual_diagnostic_failed: m28/variance",
+      "residual_diagnostic_failed: m29/nonlinear_mean",
+      "residual_diagnostic_failed: m29/variance"
+    ],
+    "clinical_basis": "linear",
+    "clinical_tests": [
+      {
+        "name": "PH_global",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.5571419689156849,
+        "statistic": 0.34467693122736676,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "PH_z",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.5571419689156851,
+        "statistic": 0.34467693122736653,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "functional_form_LR",
+        "statistic": 0.2665341599108615,
+        "df": 3,
+        "method": "linear versus fixed five-knot RCS Cox LR",
+        "p_value": 0.9661945052041647,
+        "p_holm": 1.0
+      }
+    ],
+    "residual_tests": [
+      {
+        "marker": "m0",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m0",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m1",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m1",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m2",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m2",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m3",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m3",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m4",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m4",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m5",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m5",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m6",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m6",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m7",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m7",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m8",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m8",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m9",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m9",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m10",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m10",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m11",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m11",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m12",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m12",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m13",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m13",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m14",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m14",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m15",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m15",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m16",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m16",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m17",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m17",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m18",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m18",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m19",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m19",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m20",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m20",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m21",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m21",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m22",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m22",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m23",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m23",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m24",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m24",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m25",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m25",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m26",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m26",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m27",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m27",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m28",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m28",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m29",
+        "diagnostic": "nonlinear_mean",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      },
+      {
+        "marker": "m29",
+        "diagnostic": "variance",
+        "status": "failed",
+        "p_value": null,
+        "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": null
+      }
+    ],
+    "families": {
+      "clinical": "global and per-term classic GT log-time PH, plus linear-versus-fixed-RCS LR",
+      "residual": "HC3 nonlinear mean and variance tests across all retained markers"
+    },
+    "interpretation": "Inference depends on model and permutation assumptions; diagnostics do not certify them.",
+    "clinical_fit": {
+      "converged": true,
+      "separated": false,
+      "finite": true,
+      "loglik": -480.8475824169455,
+      "iterations": 3,
+      "separation_method": "pending Newton step per SD; coefficient magnitude alone is not separation"
+    },
+    "functional_form_encoder": {
+      "features": [
+        "z"
+      ],
+      "categorical_features": [],
+      "numeric_features": [
+        "z"
+      ],
+      "categorical_mappings": {},
+      "categorical_levels": {},
+      "categorical_all_levels": {},
+      "categorical_unknown_columns": {},
+      "categorical_missing_columns": {},
+      "numeric_impute_values": {
+        "z": 0.03012587563473865
+      },
+      "scaler_params": {
+        "z": {
+          "mean": 0.0,
+          "std": 1.0,
+          "impute_value": 0.03012587563473865
+        }
+      },
+      "feature_names": [
+        "z",
+        "z__rcs1",
+        "z__rcs2",
+        "z__rcs3"
+      ],
+      "encoded_columns": [
+        "z",
+        "z__rcs1",
+        "z__rcs2",
+        "z__rcs3"
+      ],
+      "categorical_feature_indices": [],
+      "numeric_feature_indices": [
+        0
+      ],
+      "standardize_numeric": false,
+      "clinical_basis": "restricted_cubic_spline",
+      "basis_method_version": "clinical-basis/1",
+      "knot_quantiles": [
+        0.05,
+        0.275,
+        0.5,
+        0.725,
+        0.95
+      ],
+      "spline_specifications": {
+        "z": {
+          "knots": [
+            -1.7773326752822394,
+            -0.4680394728489289,
+            0.03012587563473865,
+            0.6905923242452905,
+            1.7173293442064212
+          ],
+          "terms": [
+            "z",
+            "z__rcs1",
+            "z__rcs2",
+            "z__rcs3"
+          ],
+          "means": [
+            0.0,
+            0.9144159554308406,
+            0.13143411263351865,
+            0.04223552635589262
+          ],
+          "scales": [
+            1.0,
+            1.102967540286513,
+            0.2505071377755736,
+            0.09732208836441501
+          ]
+        }
+      },
+      "numeric_kinds": {
+        "z": "continuous"
+      },
+      "base_encoder": {
+        "features": [
+          "z"
+        ],
+        "categorical_features": [],
+        "numeric_features": [
+          "z"
+        ],
+        "categorical_mappings": {},
+        "categorical_levels": {},
+        "categorical_all_levels": {},
+        "categorical_unknown_columns": {},
+        "categorical_missing_columns": {},
+        "numeric_impute_values": {
+          "z": 0.03012587563473865
+        },
+        "scaler_params": {
+          "z": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": 0.03012587563473865
+          }
+        },
+        "feature_names": [
+          "z"
+        ],
+        "encoded_columns": [
+          "z"
+        ],
+        "categorical_feature_indices": [],
+        "numeric_feature_indices": [
+          0
+        ],
+        "standardize_numeric": false
+      }
+    },
+    "clinical_status": "calculated",
+    "provenance": {
+      "row_mask_hash": "23d7ddfb01b51631",
+      "n_training": 180,
+      "ties": "efron",
+      "basis_method_version": "clinical-basis/1",
+      "mean_directions": "standardized raw numeric squared/cubed beyond clinical span",
+      "variance_directions": "clinical basis conditional on stratum intercepts; squared residual/(1-h) response"
+    },
+    "engineering_qualification": {
+      "policy_version": "marker-qualification/1",
+      "status": "passed_supported_conditions_only",
+      "requested_method_version": "marker-inference/2",
+      "evaluated_method_version": "marker-inference/2",
+      "kernel_sources_match": true,
+      "clinical_basis": "linear",
+      "registry_sha256": "9d14644f58ddbfbb6c5e68f31054a3d183ef85e8d20b9e4fe01660b6c351a39c",
+      "study_git_revision": "1ed6c10ddad27be6bce4b0896f55ac8428e36dd9",
+      "summary_sha256": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+      "supported_conditions": [
+        "independent",
+        "linear",
+        "correlated",
+        "z_dependent_censoring",
+        "partial_weak",
+        "partial_strong"
+      ],
+      "qualification_dimensions": {
+        "n": 180,
+        "markers": 30,
+        "permutations": 999,
+        "datasets_per_condition": 5000
+      },
+      "claim_boundary": "Finite main-study engineering gates in prespecified supported conditions; not universal 5% error control or certification of an individual dataset.",
+      "extension_limitations": "The 500-subject, 300-marker and 3000-marker extensions do not establish broader qualification. In particular, large independent and linear marker families substantially reduce availability; power retention and conditional error bounds also remain limiting.",
+      "failed_conditions": [],
+      "previous_method_evidence": null
+    }
+  },
+  "clinical_basis": "linear",
+  "primary_lens": "added_value",
+  "marker_table": [
+    {
+      "marker": "m0",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 58.441251136717014,
+        "p_value": 2.0945294707811146e-14,
+        "q_bh": 6.283588412343343e-13,
+        "p_fwer": 0.001,
+        "q_perm": 0.0,
+        "log_hr_one_step": 0.7002522325960583,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 41.94833577546346,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.7103356631085215,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 2.1222513180525655,
+          "ci_lower": 1.7566438913513744,
+          "ci_upper": 2.56395202189272,
+          "wald_p": 6.174046957386353e-15
+        },
+        "adjusted": {
+          "hazard_ratio": 2.0833175497099767,
+          "ci_lower": 1.6647545806630446,
+          "ci_upper": 2.6071182283222467,
+          "wald_p": null,
+          "lr_statistic": 42.740371545734774,
+          "lr_p": null,
+          "delta_c_apparent": 0.11372440509131154
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 41.94833577546346,
+          "p_value": 9.371711218296298e-11,
+          "q_bh": 2.8115133654888893e-09,
+          "p_fwer": 0.001,
+          "q_perm": 0.0,
+          "log_hr_one_step": 0.7103356631085215,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "suggestive",
+        "pattern": "M+ A+",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 2.1222513180525655,
+            "ci_lower": 1.7566438913513744,
+            "ci_upper": 2.56395202189272,
+            "wald_p": 6.174046957386353e-15
+          },
+          "adjusted": {
+            "hazard_ratio": 2.0833175497099767,
+            "ci_lower": 1.6647545806630446,
+            "ci_upper": 2.6071182283222467,
+            "wald_p": 1.4182713391299035e-10,
+            "lr_statistic": 42.740371545734774,
+            "lr_p": 6.250880412534439e-11,
+            "delta_c_apparent": 0.11372440509131154
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m6",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 22.213466606905712,
+        "p_value": 2.439566950679962e-06,
+        "q_bh": 3.659350426019943e-05,
+        "p_fwer": 0.002,
+        "q_perm": 0.0005005005005005005,
+        "log_hr_one_step": 0.3688531243771146,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 7.20669918118107,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.2507204498409469,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.4900324186654825,
+          "ci_lower": 1.262778829306787,
+          "ci_upper": 1.7581832678434302,
+          "wald_p": 2.3202852666522295e-06
+        },
+        "adjusted": {
+          "hazard_ratio": 1.3196401068640848,
+          "ci_lower": 1.0774567255931204,
+          "ci_upper": 1.6162598184030237,
+          "wald_p": null,
+          "lr_statistic": 7.699908274271479,
+          "lr_p": null,
+          "delta_c_apparent": 0.016140933407120417
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 7.20669918118107,
+          "p_value": 0.00726319511708448,
+          "q_bh": 0.1089479267562672,
+          "p_fwer": 0.197,
+          "q_perm": 0.10810810810810811,
+          "log_hr_one_step": 0.2507204498409469,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "marginal only",
+        "pattern": "M+ A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.4900324186654825,
+            "ci_lower": 1.262778829306787,
+            "ci_upper": 1.7581832678434302,
+            "wald_p": 2.3202852666522295e-06
+          },
+          "adjusted": {
+            "hazard_ratio": 1.3196401068640848,
+            "ci_lower": 1.0774567255931204,
+            "ci_upper": 1.6162598184030237,
+            "wald_p": 0.007337461329437332,
+            "lr_statistic": 7.699908274271479,
+            "lr_p": 0.0055223631761314,
+            "delta_c_apparent": 0.016140933407120417
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m26",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 1.474225361187885,
+        "p_value": 0.22468020839187897,
+        "q_bh": 0.22468020839187897,
+        "p_fwer": 0.362,
+        "q_perm": 0.22742742742742741,
+        "log_hr_one_step": 0.08441102719975138,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 3.1031392641167455,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.15339961312056646,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.088874118846163,
+          "ci_lower": 0.9490069715408564,
+          "ci_upper": 1.2493552547542732,
+          "wald_p": 0.2248176409255609
+        },
+        "adjusted": {
+          "hazard_ratio": 0.8603444467554966,
+          "ci_lower": 0.7276337930935594,
+          "ci_upper": 1.0172597453398473,
+          "wald_p": null,
+          "lr_statistic": 3.061771447942988,
+          "lr_p": null,
+          "delta_c_apparent": 0.009961261759822926
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 3.1031392641167455,
+          "p_value": 0.07814147726617486,
+          "q_bh": 0.7758530020752876,
+          "p_fwer": 0.904,
+          "q_perm": 0.783908908908909,
+          "log_hr_one_step": -0.15339961312056646,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.088874118846163,
+            "ci_lower": 0.9490069715408564,
+            "ci_upper": 1.2493552547542732,
+            "wald_p": 0.2248176409255609
+          },
+          "adjusted": {
+            "hazard_ratio": 0.8603444467554966,
+            "ci_lower": 0.7276337930935594,
+            "ci_upper": 1.0172597453398473,
+            "wald_p": 0.07844718942287278,
+            "lr_statistic": 3.061771447942988,
+            "lr_p": 0.08015424098932354,
+            "delta_c_apparent": 0.009961261759822926
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m28",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 2.994213301842637,
+        "p_value": 0.08356248948944685,
+        "q_bh": 0.10027498738733621,
+        "p_fwer": 0.362,
+        "q_perm": 0.10506506506506506,
+        "log_hr_one_step": 0.12577426267205835,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 2.3143585126180977,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.1453120397822534,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.1340730533360974,
+          "ci_lower": 0.9834144307680879,
+          "ci_upper": 1.3078125051495775,
+          "wald_p": 0.08363100450056322
+        },
+        "adjusted": {
+          "hazard_ratio": 0.8658500439221817,
+          "ci_lower": 0.7191349981965727,
+          "ci_upper": 1.0424973064029872,
+          "wald_p": null,
+          "lr_statistic": 2.300514186566488,
+          "lr_p": null,
+          "delta_c_apparent": 0.0065486072680317475
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 2.3143585126180977,
+          "p_value": 0.12818417269140975,
+          "q_bh": 0.7758530020752876,
+          "p_fwer": 0.979,
+          "q_perm": 0.783908908908909,
+          "log_hr_one_step": -0.1453120397822534,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.1340730533360974,
+            "ci_lower": 0.9834144307680879,
+            "ci_upper": 1.3078125051495775,
+            "wald_p": 0.08363100450056322
+          },
+          "adjusted": {
+            "hazard_ratio": 0.8658500439221817,
+            "ci_lower": 0.7191349981965727,
+            "ci_upper": 1.0424973064029872,
+            "wald_p": 0.12835814216281957,
+            "lr_statistic": 2.300514186566488,
+            "lr_p": 0.12933117869221128,
+            "delta_c_apparent": 0.0065486072680317475
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m8",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 13.205577575501353,
+        "p_value": 0.0002791172129612261,
+        "q_bh": 0.0019004107080975955,
+        "p_fwer": 0.008,
+        "q_perm": 0.0025025025025025025,
+        "log_hr_one_step": 0.27747001075787564,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 1.9957728072167669,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.13792106540107668,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.336173233631655,
+          "ci_lower": 1.141954728493783,
+          "ci_upper": 1.5634235453699017,
+          "wald_p": 0.00029876561155855644
+        },
+        "adjusted": {
+          "hazard_ratio": 1.1478267057814329,
+          "ci_lower": 0.9477701729599262,
+          "ci_upper": 1.3901114258432812,
+          "wald_p": null,
+          "lr_statistic": 1.9944611816478073,
+          "lr_p": null,
+          "delta_c_apparent": -0.0034126544917911783
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 1.9957728072167669,
+          "p_value": 0.15773858820602116,
+          "q_bh": 0.7758530020752876,
+          "p_fwer": 0.988,
+          "q_perm": 0.783908908908909,
+          "log_hr_one_step": 0.13792106540107668,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "marginal only",
+        "pattern": "M+ A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.336173233631655,
+            "ci_lower": 1.141954728493783,
+            "ci_upper": 1.5634235453699017,
+            "wald_p": 0.00029876561155855644
+          },
+          "adjusted": {
+            "hazard_ratio": 1.1478267057814329,
+            "ci_lower": 0.9477701729599262,
+            "ci_upper": 1.3901114258432812,
+            "wald_p": 0.15825194847024548,
+            "lr_statistic": 1.9944611816478073,
+            "lr_p": 0.1578752042253416,
+            "delta_c_apparent": -0.0034126544917911783
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m21",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 12.678930639316155,
+        "p_value": 0.000369799003207961,
+        "q_bh": 0.0019004107080975955,
+        "p_fwer": 0.011,
+        "q_perm": 0.0025025025025025025,
+        "log_hr_one_step": 0.29166856129831775,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 1.9367295377897167,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.1339924933179882,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.346312721067147,
+          "ci_lower": 1.143685622999827,
+          "ci_upper": 1.5848393181274605,
+          "wald_p": 0.0003526743683780527
+        },
+        "adjusted": {
+          "hazard_ratio": 1.1455840723955701,
+          "ci_lower": 0.945822336891698,
+          "ci_upper": 1.3875363434948054,
+          "wald_p": null,
+          "lr_statistic": 1.95451022136956,
+          "lr_p": null,
+          "delta_c_apparent": 0.005902969931746882
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 1.9367295377897167,
+          "p_value": 0.1640240761948004,
+          "q_bh": 0.7758530020752876,
+          "p_fwer": 0.989,
+          "q_perm": 0.783908908908909,
+          "log_hr_one_step": 0.1339924933179882,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "marginal only",
+        "pattern": "M+ A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.346312721067147,
+            "ci_lower": 1.143685622999827,
+            "ci_upper": 1.5848393181274605,
+            "wald_p": 0.0003526743683780527
+          },
+          "adjusted": {
+            "hazard_ratio": 1.1455840723955701,
+            "ci_lower": 0.945822336891698,
+            "ci_upper": 1.3875363434948054,
+            "wald_p": 0.16446122670593388,
+            "lr_statistic": 1.95451022136956,
+            "lr_p": 0.1621016593337704,
+            "delta_c_apparent": 0.005902969931746882
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m19",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 12.627652678122391,
+        "p_value": 0.00038008214161951913,
+        "q_bh": 0.0019004107080975955,
+        "p_fwer": 0.012,
+        "q_perm": 0.0025025025025025025,
+        "log_hr_one_step": 0.2681346496067022,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 1.7385861682955384,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.12234624685360676,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.3309495615796056,
+          "ci_lower": 1.137120031285095,
+          "ci_upper": 1.5578186002642127,
+          "wald_p": 0.00037070119564165324
+        },
+        "adjusted": {
+          "hazard_ratio": 1.134473091016557,
+          "ci_lower": 0.9403562914127361,
+          "ci_upper": 1.3686612255309147,
+          "wald_p": null,
+          "lr_statistic": 1.7741213964826557,
+          "lr_p": null,
+          "delta_c_apparent": 0.0054418004058292
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 1.7385861682955384,
+          "p_value": 0.18731806830792247,
+          "q_bh": 0.7758530020752876,
+          "p_fwer": 0.993,
+          "q_perm": 0.783908908908909,
+          "log_hr_one_step": 0.12234624685360676,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "marginal only",
+        "pattern": "M+ A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.3309495615796056,
+            "ci_lower": 1.137120031285095,
+            "ci_upper": 1.5578186002642127,
+            "wald_p": 0.00037070119564165324
+          },
+          "adjusted": {
+            "hazard_ratio": 1.134473091016557,
+            "ci_lower": 0.9403562914127361,
+            "ci_upper": 1.3686612255309147,
+            "wald_p": 0.1876049917177257,
+            "lr_statistic": 1.7741213964826557,
+            "lr_p": 0.18287284513392432,
+            "delta_c_apparent": 0.0054418004058292
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m20",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 2.228642784753416,
+        "p_value": 0.13547280235896678,
+        "q_bh": 0.1401442783023794,
+        "p_fwer": 0.362,
+        "q_perm": 0.14217665941803873,
+        "log_hr_one_step": 0.11279295149751391,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 1.5930274116102285,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.1182334356135285,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.1228113857015118,
+          "ci_lower": 0.9645813849961952,
+          "ci_upper": 1.306997447256275,
+          "wald_p": 0.1350035817723131
+        },
+        "adjusted": {
+          "hazard_ratio": 0.890833842605694,
+          "ci_lower": 0.7444616170645424,
+          "ci_upper": 1.0659850245346163,
+          "wald_p": null,
+          "lr_statistic": 1.5692637319897358,
+          "lr_p": null,
+          "delta_c_apparent": -0.00018446781036707272
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 1.5930274116102285,
+          "p_value": 0.20689413388674338,
+          "q_bh": 0.7758530020752876,
+          "p_fwer": 0.997,
+          "q_perm": 0.783908908908909,
+          "log_hr_one_step": -0.1182334356135285,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.1228113857015118,
+            "ci_lower": 0.9645813849961952,
+            "ci_upper": 1.306997447256275,
+            "wald_p": 0.1350035817723131
+          },
+          "adjusted": {
+            "hazard_ratio": 0.890833842605694,
+            "ci_lower": 0.7444616170645424,
+            "ci_upper": 1.0659850245346163,
+            "wald_p": 0.20686480033407706,
+            "lr_statistic": 1.5692637319897358,
+            "lr_p": 0.2103139698874369,
+            "delta_c_apparent": -0.00018446781036707272
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m18",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 14.033058777442424,
+        "p_value": 0.00017962473658194507,
+        "q_bh": 0.0017962473658194509,
+        "p_fwer": 0.007,
+        "q_perm": 0.0025025025025025025,
+        "log_hr_one_step": 0.29212967814633173,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 1.3047350515529872,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.1207009575853529,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.3363810531139915,
+          "ci_lower": 1.147816904309919,
+          "ci_upper": 1.555922649698014,
+          "wald_p": 0.00018666345368685685
+        },
+        "adjusted": {
+          "hazard_ratio": 1.1262654668341874,
+          "ci_lower": 0.9183495246027344,
+          "ci_upper": 1.3812539428622825,
+          "wald_p": null,
+          "lr_statistic": 1.2916481999484404,
+          "lr_p": null,
+          "delta_c_apparent": 0.0022136137244050946
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 1.3047350515529872,
+          "p_value": 0.25335012002013957,
+          "q_bh": 0.7793025894564037,
+          "p_fwer": 0.998,
+          "q_perm": 0.785985985985986,
+          "log_hr_one_step": 0.1207009575853529,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "marginal only",
+        "pattern": "M+ A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.3363810531139915,
+            "ci_lower": 1.147816904309919,
+            "ci_upper": 1.555922649698014,
+            "wald_p": 0.00018666345368685685
+          },
+          "adjusted": {
+            "hazard_ratio": 1.1262654668341874,
+            "ci_lower": 0.9183495246027344,
+            "ci_upper": 1.3812539428622825,
+            "wald_p": 0.25347544894775664,
+            "lr_statistic": 1.2916481999484404,
+            "lr_p": 0.2557444304640924,
+            "delta_c_apparent": 0.0022136137244050946
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m17",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 2.4936307109933753,
+        "p_value": 0.11430775545598897,
+        "q_bh": 0.12247259513141674,
+        "p_fwer": 0.362,
+        "q_perm": 0.1249106249106249,
+        "log_hr_one_step": 0.12949081593292258,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 1.269995469504649,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.11510958568580958,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.1391679532030066,
+          "ci_lower": 0.9691044491592393,
+          "ci_upper": 1.3390750880677194,
+          "wald_p": 0.11421506128250823
+        },
+        "adjusted": {
+          "hazard_ratio": 0.8902391508669864,
+          "ci_lower": 0.7272254621938453,
+          "ci_upper": 1.0897937255188148,
+          "wald_p": null,
+          "lr_statistic": 1.278378109400137,
+          "lr_p": null,
+          "delta_c_apparent": 0.002305847629588631
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 1.269995469504649,
+          "p_value": 0.25976752981880125,
+          "q_bh": 0.7793025894564037,
+          "p_fwer": 0.998,
+          "q_perm": 0.785985985985986,
+          "log_hr_one_step": -0.11510958568580958,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.1391679532030066,
+            "ci_lower": 0.9691044491592393,
+            "ci_upper": 1.3390750880677194,
+            "wald_p": 0.11421506128250823
+          },
+          "adjusted": {
+            "hazard_ratio": 0.8902391508669864,
+            "ci_lower": 0.7272254621938453,
+            "ci_upper": 1.0897937255188148,
+            "wald_p": 0.2598768994158146,
+            "lr_statistic": 1.278378109400137,
+            "lr_p": 0.2582008163203491,
+            "delta_c_apparent": 0.002305847629588631
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m27",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 3.464605162750886,
+        "p_value": 0.06269547394257877,
+        "q_bh": 0.07836934242822345,
+        "p_fwer": 0.319,
+        "q_perm": 0.0836252919586253,
+        "log_hr_one_step": 0.13492108435845765,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.9431845323829338,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.09201501074649115,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.148864860306503,
+          "ci_lower": 0.992879414890952,
+          "ci_upper": 1.329356261648394,
+          "wald_p": 0.06232450391261386
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9117251818572004,
+          "ci_lower": 0.7565780622253708,
+          "ci_upper": 1.098687430597126,
+          "wald_p": null,
+          "lr_statistic": 0.9458863294067896,
+          "lr_p": null,
+          "delta_c_apparent": 9.223390518353636e-05
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.9431845323829338,
+          "p_value": 0.3314602048568475,
+          "q_bh": 0.8340365564771356,
+          "p_fwer": 1.0,
+          "q_perm": 0.8336757810442021,
+          "log_hr_one_step": -0.09201501074649115,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.148864860306503,
+            "ci_lower": 0.992879414890952,
+            "ci_upper": 1.329356261648394,
+            "wald_p": 0.06232450391261386
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9117251818572004,
+            "ci_lower": 0.7565780622253708,
+            "ci_upper": 1.098687430597126,
+            "wald_p": 0.33152183336242413,
+            "lr_statistic": 0.9458863294067896,
+            "lr_p": 0.3307686118245339,
+            "delta_c_apparent": 9.223390518353636e-05
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m23",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 12.13372588257577,
+        "p_value": 0.0004951808808417785,
+        "q_bh": 0.0021222037750361937,
+        "p_fwer": 0.015,
+        "q_perm": 0.002877877877877878,
+        "log_hr_one_step": 0.2629358685785971,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.8942361637576588,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.08478897792476238,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2846098068839842,
+          "ci_lower": 1.1161625703486828,
+          "ci_upper": 1.4784784938873081,
+          "wald_p": 0.0004787475578084449
+        },
+        "adjusted": {
+          "hazard_ratio": 1.0888931323644664,
+          "ci_lower": 0.9127121226042002,
+          "ci_upper": 1.2990823988701152,
+          "wald_p": null,
+          "lr_statistic": 0.8968765950918396,
+          "lr_p": null,
+          "delta_c_apparent": 0.01217487548422802
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.8942361637576588,
+          "p_value": 0.3443319236087291,
+          "q_bh": 0.8340365564771356,
+          "p_fwer": 1.0,
+          "q_perm": 0.8336757810442021,
+          "log_hr_one_step": 0.08478897792476238,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "marginal only",
+        "pattern": "M+ A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.2846098068839842,
+            "ci_lower": 1.1161625703486828,
+            "ci_upper": 1.4784784938873081,
+            "wald_p": 0.0004787475578084449
+          },
+          "adjusted": {
+            "hazard_ratio": 1.0888931323644664,
+            "ci_lower": 0.9127121226042002,
+            "ci_upper": 1.2990823988701152,
+            "wald_p": 0.34429823879499,
+            "lr_statistic": 0.8968765950918396,
+            "lr_p": 0.343620593648716,
+            "delta_c_apparent": 0.01217487548422802
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m22",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 11.717938782656557,
+        "p_value": 0.0006190047933072507,
+        "q_bh": 0.00232126797490219,
+        "p_fwer": 0.015,
+        "q_perm": 0.002877877877877878,
+        "log_hr_one_step": 0.25355440894141956,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.7228376047337919,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.08324456329716796,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2937570934426157,
+          "ci_lower": 1.1160760310973754,
+          "ci_upper": 1.4997252608205585,
+          "wald_p": 0.0006332914868166212
+        },
+        "adjusted": {
+          "hazard_ratio": 1.0867548950496142,
+          "ci_lower": 0.8971070657683382,
+          "ci_upper": 1.3164941476665168,
+          "wald_p": null,
+          "lr_statistic": 0.7225780737455807,
+          "lr_p": null,
+          "delta_c_apparent": -0.0018446781036709492
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.7228376047337919,
+          "p_value": 0.3952146978530613,
+          "q_bh": 0.8340365564771356,
+          "p_fwer": 1.0,
+          "q_perm": 0.8336757810442021,
+          "log_hr_one_step": 0.08324456329716796,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "marginal only",
+        "pattern": "M+ A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.2937570934426157,
+            "ci_lower": 1.1160760310973754,
+            "ci_upper": 1.4997252608205585,
+            "wald_p": 0.0006332914868166212
+          },
+          "adjusted": {
+            "hazard_ratio": 1.0867548950496142,
+            "ci_lower": 0.8971070657683382,
+            "ci_upper": 1.3164941476665168,
+            "wald_p": 0.3951754694149987,
+            "lr_statistic": 0.7225780737455807,
+            "lr_p": 0.3952995541143324,
+            "delta_c_apparent": -0.0018446781036709492
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m1",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 2.583190413806755,
+        "p_value": 0.10800377731070851,
+        "q_bh": 0.12000419701189834,
+        "p_fwer": 0.362,
+        "q_perm": 0.1234567901234568,
+        "log_hr_one_step": 0.12412550984344538,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.7164954075621008,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.07647808578763712,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.1303210891743836,
+          "ci_lower": 0.9734744900320226,
+          "ci_upper": 1.3124388750960874,
+          "wald_p": 0.10800054059325208
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9256264869387799,
+          "ci_lower": 0.7739379248123021,
+          "ci_upper": 1.1070453661130735,
+          "wald_p": null,
+          "lr_statistic": 0.7214810653896393,
+          "lr_p": null,
+          "delta_c_apparent": -0.005165098690278591
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.7164954075621008,
+          "p_value": 0.39729589060894455,
+          "q_bh": 0.8340365564771356,
+          "p_fwer": 1.0,
+          "q_perm": 0.8336757810442021,
+          "log_hr_one_step": -0.07647808578763712,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.1303210891743836,
+            "ci_lower": 0.9734744900320226,
+            "ci_upper": 1.3124388750960874,
+            "wald_p": 0.10800054059325208
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9256264869387799,
+            "ci_lower": 0.7739379248123021,
+            "ci_upper": 1.1070453661130735,
+            "wald_p": 0.3973705081617559,
+            "lr_statistic": 0.7214810653896393,
+            "lr_p": 0.39565852219461106,
+            "delta_c_apparent": -0.005165098690278591
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m7",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 4.825621137417911,
+        "p_value": 0.028039760271522447,
+        "q_bh": 0.042052019767124735,
+        "p_fwer": 0.251,
+        "q_perm": 0.04514037847371181,
+        "log_hr_one_step": 0.15955545616762973,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.4862487950837165,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.06427099322092344,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.1673753452448816,
+          "ci_lower": 1.0167983387218915,
+          "ci_upper": 1.3402512030051046,
+          "wald_p": 0.028063815281370415
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9366477987227285,
+          "ci_lower": 0.7792435787176767,
+          "ci_upper": 1.1258470686352435,
+          "wald_p": null,
+          "lr_statistic": 0.4921328995069416,
+          "lr_p": null,
+          "delta_c_apparent": -0.0009223390518354746
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.4862487950837165,
+          "p_value": 0.4856054199777552,
+          "q_bh": 0.8340365564771356,
+          "p_fwer": 1.0,
+          "q_perm": 0.8336757810442021,
+          "log_hr_one_step": -0.06427099322092344,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.1673753452448816,
+            "ci_lower": 1.0167983387218915,
+            "ci_upper": 1.3402512030051046,
+            "wald_p": 0.028063815281370415
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9366477987227285,
+            "ci_lower": 0.7792435787176767,
+            "ci_upper": 1.1258470686352435,
+            "wald_p": 0.48567008341727536,
+            "lr_statistic": 0.4921328995069416,
+            "lr_p": 0.4829774064673159,
+            "delta_c_apparent": -0.0009223390518354746
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m25",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 8.831726988397586,
+        "p_value": 0.002960381011464824,
+        "q_bh": 0.009867936704882747,
+        "p_fwer": 0.057,
+        "q_perm": 0.012234456678901124,
+        "log_hr_one_step": 0.23174967681020983,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.4319070660573276,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.06193195085449241,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2667283229232134,
+          "ci_lower": 1.0838473959486414,
+          "ci_upper": 1.4804673149502048,
+          "wald_p": 0.0029578235320666902
+        },
+        "adjusted": {
+          "hazard_ratio": 1.0642211346834969,
+          "ci_lower": 0.8839070104308678,
+          "ci_upper": 1.2813187474946608,
+          "wald_p": null,
+          "lr_statistic": 0.4333383342813022,
+          "lr_p": null,
+          "delta_c_apparent": -0.0017524441984874128
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.4319070660573276,
+          "p_value": 0.511054660679994,
+          "q_bh": 0.8340365564771356,
+          "p_fwer": 1.0,
+          "q_perm": 0.8336757810442021,
+          "log_hr_one_step": 0.06193195085449241,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.2667283229232134,
+            "ci_lower": 1.0838473959486414,
+            "ci_upper": 1.4804673149502048,
+            "wald_p": 0.0029578235320666902
+          },
+          "adjusted": {
+            "hazard_ratio": 1.0642211346834969,
+            "ci_lower": 0.8839070104308678,
+            "ci_upper": 1.2813187474946608,
+            "wald_p": 0.5110956871365543,
+            "lr_statistic": 0.4333383342813022,
+            "lr_p": 0.5103554085170013,
+            "delta_c_apparent": -0.0017524441984874128
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m29",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 2.8199713334742498,
+        "p_value": 0.09309806607967461,
+        "q_bh": 0.10742084547654764,
+        "p_fwer": 0.362,
+        "q_perm": 0.11126511126511127,
+        "log_hr_one_step": 0.13379640615847488,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.4309179808369036,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.06231543131148398,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.1430372119242989,
+          "ci_lower": 0.9779104908592966,
+          "ci_upper": 1.336046683266087,
+          "wald_p": 0.0930799602140605
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9395238335501986,
+          "ci_lower": 0.7798960768626434,
+          "ci_upper": 1.13182391859156,
+          "wald_p": null,
+          "lr_statistic": 0.4312595295633628,
+          "lr_p": null,
+          "delta_c_apparent": 0.004058291828075933
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.4309179808369036,
+          "p_value": 0.5115388525146503,
+          "q_bh": 0.8340365564771356,
+          "p_fwer": 1.0,
+          "q_perm": 0.8336757810442021,
+          "log_hr_one_step": -0.06231543131148398,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.1430372119242989,
+            "ci_lower": 0.9779104908592966,
+            "ci_upper": 1.336046683266087,
+            "wald_p": 0.0930799602140605
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9395238335501986,
+            "ci_lower": 0.7798960768626434,
+            "ci_upper": 1.13182391859156,
+            "wald_p": 0.5114398095340343,
+            "lr_statistic": 0.4312595295633628,
+            "lr_p": 0.5113715626358428,
+            "delta_c_apparent": 0.004058291828075933
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m15",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 4.940096641622313,
+        "p_value": 0.026240569425763454,
+        "q_bh": 0.042052019767124735,
+        "p_fwer": 0.251,
+        "q_perm": 0.04514037847371181,
+        "log_hr_one_step": 0.16499696142701178,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.4199886495848598,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.06130078884999207,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.1833216737728207,
+          "ci_lower": 1.0198333524267449,
+          "ci_upper": 1.373018621413532,
+          "wald_p": 0.02649720285410787
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9414680349945042,
+          "ci_lower": 0.7844773174971846,
+          "ci_upper": 1.1298759583569398,
+          "wald_p": null,
+          "lr_statistic": 0.4154597360846992,
+          "lr_p": null,
+          "delta_c_apparent": 0.001567976388120229
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.4199886495848598,
+          "p_value": 0.5169427079547209,
+          "q_bh": 0.8340365564771356,
+          "p_fwer": 1.0,
+          "q_perm": 0.8336757810442021,
+          "log_hr_one_step": -0.06130078884999207,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.1833216737728207,
+            "ci_lower": 1.0198333524267449,
+            "ci_upper": 1.373018621413532,
+            "wald_p": 0.02649720285410787
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9414680349945042,
+            "ci_lower": 0.7844773174971846,
+            "ci_upper": 1.1298759583569398,
+            "wald_p": 0.5169669978415827,
+            "lr_statistic": 0.4154597360846992,
+            "lr_p": 0.5192112861524485,
+            "delta_c_apparent": 0.001567976388120229
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m4",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 4.629074159683911,
+        "p_value": 0.03143452211050803,
+        "q_bh": 0.042865257423420046,
+        "p_fwer": 0.251,
+        "q_perm": 0.04631904631904631,
+        "log_hr_one_step": 0.1875981705523967,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.3978086195290292,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.07082407036481113,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.21395701506214,
+          "ci_lower": 1.0176195258411278,
+          "ci_upper": 1.4481754693145064,
+          "wald_p": 0.03123961417506803
+        },
+        "adjusted": {
+          "hazard_ratio": 0.931984508873292,
+          "ci_lower": 0.7487322232566349,
+          "ci_upper": 1.1600878094999156,
+          "wald_p": null,
+          "lr_statistic": 0.39633773795856087,
+          "lr_p": null,
+          "delta_c_apparent": 0.001014572957019011
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.3978086195290292,
+          "p_value": 0.5282231524355192,
+          "q_bh": 0.8340365564771356,
+          "p_fwer": 1.0,
+          "q_perm": 0.8336757810442021,
+          "log_hr_one_step": -0.07082407036481113,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.21395701506214,
+            "ci_lower": 1.0176195258411278,
+            "ci_upper": 1.4481754693145064,
+            "wald_p": 0.03123961417506803
+          },
+          "adjusted": {
+            "hazard_ratio": 0.931984508873292,
+            "ci_lower": 0.7487322232566349,
+            "ci_upper": 1.1600878094999156,
+            "wald_p": 0.5283086849199781,
+            "lr_statistic": 0.39633773795856087,
+            "lr_p": 0.5289866882203972,
+            "delta_c_apparent": 0.001014572957019011
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m2",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 4.971495962794814,
+        "p_value": 0.02576835101800171,
+        "q_bh": 0.042052019767124735,
+        "p_fwer": 0.251,
+        "q_perm": 0.04514037847371181,
+        "log_hr_one_step": 0.16633964357531122,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.25331177719108755,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.04772129720958145,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.187930491028192,
+          "ci_lower": 1.020997417203611,
+          "ci_upper": 1.38215712178737,
+          "wald_p": 0.025819520601133426
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9538205688927434,
+          "ci_lower": 0.7934064607671232,
+          "ci_upper": 1.146667846343526,
+          "wald_p": null,
+          "lr_statistic": 0.25173536314821376,
+          "lr_p": null,
+          "delta_c_apparent": 0.0007378712414682909
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.25331177719108755,
+          "p_value": 0.6147527468740279,
+          "q_bh": 0.9221291203110418,
+          "p_fwer": 1.0,
+          "q_perm": 0.9204204204204205,
+          "log_hr_one_step": -0.04772129720958145,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.187930491028192,
+            "ci_lower": 1.020997417203611,
+            "ci_upper": 1.38215712178737,
+            "wald_p": 0.025819520601133426
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9538205688927434,
+            "ci_lower": 0.7934064607671232,
+            "ci_upper": 1.146667846343526,
+            "wald_p": 0.6147957282938146,
+            "lr_statistic": 0.25173536314821376,
+            "lr_p": 0.6158557969606089,
+            "delta_c_apparent": 0.0007378712414682909
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m3",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 8.528806649235198,
+        "p_value": 0.003495688302158128,
+        "q_bh": 0.010487064906474384,
+        "p_fwer": 0.061,
+        "q_perm": 0.012812812812812813,
+        "log_hr_one_step": 0.22864975864761303,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.15987815983222048,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.03901772987371975,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2613928265385246,
+          "ci_lower": 1.0791539747648478,
+          "ci_upper": 1.4744067112290986,
+          "wald_p": 0.0035363492022855523
+        },
+        "adjusted": {
+          "hazard_ratio": 1.0399294341961993,
+          "ci_lower": 0.8583263470433374,
+          "ci_upper": 1.2599557637172518,
+          "wald_p": null,
+          "lr_statistic": 0.16024552224064337,
+          "lr_p": null,
+          "delta_c_apparent": 0.00018446781036707272
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.15987815983222048,
+          "p_value": 0.6892687167998836,
+          "q_bh": 0.9389096494420126,
+          "p_fwer": 1.0,
+          "q_perm": 0.9392871132001567,
+          "log_hr_one_step": 0.03901772987371975,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.2613928265385246,
+            "ci_lower": 1.0791539747648478,
+            "ci_upper": 1.4744067112290986,
+            "wald_p": 0.0035363492022855523
+          },
+          "adjusted": {
+            "hazard_ratio": 1.0399294341961993,
+            "ci_lower": 0.8583263470433374,
+            "ci_upper": 1.2599557637172518,
+            "wald_p": 0.6892766684665332,
+            "lr_statistic": 0.16024552224064337,
+            "lr_p": 0.6889305710228396,
+            "delta_c_apparent": 0.00018446781036707272
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m13",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 7.780494261376215,
+        "p_value": 0.0052813345864101665,
+        "q_bh": 0.014403639781118636,
+        "p_fwer": 0.087,
+        "q_perm": 0.01710801710801711,
+        "log_hr_one_step": 0.23067873332187738,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.1556835915431517,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.039440901959686185,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2538878585591176,
+          "ci_lower": 1.0695965468283648,
+          "ci_upper": 1.4699325334436233,
+          "wald_p": 0.00527894019902651
+        },
+        "adjusted": {
+          "hazard_ratio": 1.040011067062206,
+          "ci_lower": 0.8558574023036601,
+          "ci_upper": 1.2637888235826769,
+          "wald_p": null,
+          "lr_statistic": 0.15512982772872874,
+          "lr_p": null,
+          "delta_c_apparent": 0.0022136137244050946
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.1556835915431517,
+          "p_value": 0.6931620283056508,
+          "q_bh": 0.9389096494420126,
+          "p_fwer": 1.0,
+          "q_perm": 0.9392871132001567,
+          "log_hr_one_step": 0.039440901959686185,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.2538878585591176,
+            "ci_lower": 1.0695965468283648,
+            "ci_upper": 1.4699325334436233,
+            "wald_p": 0.00527894019902651
+          },
+          "adjusted": {
+            "hazard_ratio": 1.040011067062206,
+            "ci_lower": 0.8558574023036601,
+            "ci_upper": 1.2637888235826769,
+            "wald_p": 0.6931711925066595,
+            "lr_statistic": 0.15512982772872874,
+            "lr_p": 0.6936805343338721,
+            "delta_c_apparent": 0.0022136137244050946
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m5",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 4.154283485644841,
+        "p_value": 0.041529340936233373,
+        "q_bh": 0.05416870556900005,
+        "p_fwer": 0.254,
+        "q_perm": 0.05797101449275362,
+        "log_hr_one_step": 0.1740575836273899,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.12865494815003403,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.03777368369492064,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.1973448478404867,
+          "ci_lower": 1.0068268052075713,
+          "ci_upper": 1.4239139018101474,
+          "wald_p": 0.041659141954853755
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9630702328906297,
+          "ci_lower": 0.7840779278424859,
+          "ci_upper": 1.1829235852004991,
+          "wald_p": null,
+          "lr_statistic": 0.12832557754813934,
+          "lr_p": null,
+          "delta_c_apparent": 0.0011990407673860837
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.12865494815003403,
+          "p_value": 0.7198307312388763,
+          "q_bh": 0.9389096494420126,
+          "p_fwer": 1.0,
+          "q_perm": 0.9392871132001567,
+          "log_hr_one_step": -0.03777368369492064,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.1973448478404867,
+            "ci_lower": 1.0068268052075713,
+            "ci_upper": 1.4239139018101474,
+            "wald_p": 0.041659141954853755
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9630702328906297,
+            "ci_lower": 0.7840779278424859,
+            "ci_upper": 1.1829235852004991,
+            "wald_p": 0.7198333054610503,
+            "lr_statistic": 0.12832557754813934,
+            "lr_p": 0.7201744938042973,
+            "delta_c_apparent": 0.0011990407673860837
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m11",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 4.790688929712889,
+        "p_value": 0.028613979592967412,
+        "q_bh": 0.042052019767124735,
+        "p_fwer": 0.251,
+        "q_perm": 0.04514037847371181,
+        "log_hr_one_step": 0.1714578020983385,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.07752875786344089,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.026126725970403164,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.1889383527726467,
+          "ci_lower": 1.0179395283165087,
+          "ci_upper": 1.3886624572203574,
+          "wald_p": 0.028933489823000022
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9742906043194816,
+          "ci_lower": 0.8110818133167078,
+          "ci_upper": 1.1703408535121036,
+          "wald_p": null,
+          "lr_statistic": 0.07736785110671462,
+          "lr_p": null,
+          "delta_c_apparent": -0.0013835085777531564
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.07752875786344089,
+          "p_value": 0.7806747218523914,
+          "q_bh": 0.9589449846261152,
+          "p_fwer": 1.0,
+          "q_perm": 0.9566874566874566,
+          "log_hr_one_step": -0.026126725970403164,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.1889383527726467,
+            "ci_lower": 1.0179395283165087,
+            "ci_upper": 1.3886624572203574,
+            "wald_p": 0.028933489823000022
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9742906043194816,
+            "ci_lower": 0.8110818133167078,
+            "ci_upper": 1.1703408535121036,
+            "wald_p": 0.7806780943089023,
+            "lr_statistic": 0.07736785110671462,
+            "lr_p": 0.7808966236221014,
+            "delta_c_apparent": -0.0013835085777531564
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m14",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 5.725783032017522,
+        "p_value": 0.01671758012106634,
+        "q_bh": 0.03343516024213268,
+        "p_fwer": 0.197,
+        "q_perm": 0.03650316983650317,
+        "log_hr_one_step": 0.18551776445664978,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.04893582427252356,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.019688093342214965,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2067060844957096,
+          "ci_lower": 1.0345407578591292,
+          "ci_upper": 1.407522674478568,
+          "wald_p": 0.016742176321088854
+        },
+        "adjusted": {
+          "hazard_ratio": 1.0199456521662342,
+          "ci_lower": 0.8562201769674529,
+          "ci_upper": 1.2149785316404065,
+          "wald_p": null,
+          "lr_statistic": 0.04903747405739978,
+          "lr_p": null,
+          "delta_c_apparent": -0.0009223390518354746
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.04893582427252356,
+          "p_value": 0.8249254736501035,
+          "q_bh": 0.9589449846261152,
+          "p_fwer": 1.0,
+          "q_perm": 0.9566874566874566,
+          "log_hr_one_step": 0.019688093342214965,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.2067060844957096,
+            "ci_lower": 1.0345407578591292,
+            "ci_upper": 1.407522674478568,
+            "wald_p": 0.016742176321088854
+          },
+          "adjusted": {
+            "hazard_ratio": 1.0199456521662342,
+            "ci_lower": 0.8562201769674529,
+            "ci_upper": 1.2149785316404065,
+            "wald_p": 0.8249230223755701,
+            "lr_statistic": 0.04903747405739978,
+            "lr_p": 0.8247466848096832,
+            "delta_c_apparent": -0.0009223390518354746
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m16",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 6.05733172291154,
+        "p_value": 0.013848677275306313,
+        "q_bh": 0.029675737018513528,
+        "p_fwer": 0.174,
+        "q_perm": 0.031102531102531104,
+        "log_hr_one_step": 0.20276915315006291,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.04550089399837158,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.02318624261431211,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2374427111634447,
+          "ci_lower": 1.0444580955741831,
+          "ci_upper": 1.4660851114086442,
+          "wald_p": 0.013785756511871168
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9771180317553138,
+          "ci_lower": 0.7899071556207623,
+          "ci_upper": 1.2086985681640823,
+          "wald_p": null,
+          "lr_statistic": 0.04545050938156692,
+          "lr_p": null,
+          "delta_c_apparent": 0.0023980815347721673
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.04550089399837158,
+          "p_value": 0.8310856533426332,
+          "q_bh": 0.9589449846261152,
+          "p_fwer": 1.0,
+          "q_perm": 0.9566874566874566,
+          "log_hr_one_step": -0.02318624261431211,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.2374427111634447,
+            "ci_lower": 1.0444580955741831,
+            "ci_upper": 1.4660851114086442,
+            "wald_p": 0.013785756511871168
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9771180317553138,
+            "ci_lower": 0.7899071556207623,
+            "ci_upper": 1.2086985681640823,
+            "wald_p": 0.8310867811899207,
+            "lr_statistic": 0.04545050938156692,
+            "lr_p": 0.8311777923258353,
+            "delta_c_apparent": 0.0023980815347721673
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m9",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 4.741907610339744,
+        "p_value": 0.029436413836987314,
+        "q_bh": 0.042052019767124735,
+        "p_fwer": 0.251,
+        "q_perm": 0.04514037847371181,
+        "log_hr_one_step": 0.16852521568520154,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.02336716913294157,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.013844333048347781,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.179442037030671,
+          "ci_lower": 1.01676965475423,
+          "ci_upper": 1.3681402785877854,
+          "wald_p": 0.029287626722629884
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9862229540395868,
+          "ci_lower": 0.8255173126924708,
+          "ci_upper": 1.178213588158755,
+          "wald_p": null,
+          "lr_statistic": 0.023399254661512714,
+          "lr_p": null,
+          "delta_c_apparent": 0.001014572957019011
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.02336716913294157,
+          "p_value": 0.8785061279827002,
+          "q_bh": 0.960497679355018,
+          "p_fwer": 1.0,
+          "q_perm": 0.960374167270719,
+          "log_hr_one_step": -0.013844333048347781,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.179442037030671,
+            "ci_lower": 1.01676965475423,
+            "ci_upper": 1.3681402785877854,
+            "wald_p": 0.029287626722629884
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9862229540395868,
+            "ci_lower": 0.8255173126924708,
+            "ci_upper": 1.178213588158755,
+            "wald_p": 0.8785055721406257,
+            "lr_statistic": 0.023399254661512714,
+            "lr_p": 0.8784233929186616,
+            "delta_c_apparent": 0.001014572957019011
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m12",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 5.228380545769089,
+        "p_value": 0.02222121273222429,
+        "q_bh": 0.041664773872920544,
+        "p_fwer": 0.228,
+        "q_perm": 0.04479479479479479,
+        "log_hr_one_step": 0.19451526315075174,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.010923250755647679,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": 0.01112975016454323,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2212610970549596,
+          "ci_lower": 1.0295427261696153,
+          "ci_upper": 1.4486806902408877,
+          "wald_p": 0.021783511978729013
+        },
+        "adjusted": {
+          "hazard_ratio": 1.0111700447576883,
+          "ci_lower": 0.8210240864272206,
+          "ci_upper": 1.2453530612781865,
+          "wald_p": null,
+          "lr_statistic": 0.010909096849104571,
+          "lr_p": null,
+          "delta_c_apparent": -9.223390518353636e-05
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.010923250755647679,
+          "p_value": 0.9167611756777398,
+          "q_bh": 0.960497679355018,
+          "p_fwer": 1.0,
+          "q_perm": 0.960374167270719,
+          "log_hr_one_step": 0.01112975016454323,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.2212610970549596,
+            "ci_lower": 1.0295427261696153,
+            "ci_upper": 1.4486806902408877,
+            "wald_p": 0.021783511978729013
+          },
+          "adjusted": {
+            "hazard_ratio": 1.0111700447576883,
+            "ci_lower": 0.8210240864272206,
+            "ci_upper": 1.2453530612781865,
+            "wald_p": 0.9167610578142077,
+            "lr_statistic": 0.010909096849104571,
+            "lr_p": 0.916814925963143,
+            "delta_c_apparent": -9.223390518353636e-05
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m24",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 7.063158158314398,
+        "p_value": 0.007868516528313128,
+        "q_bh": 0.018158115065337987,
+        "p_fwer": 0.113,
+        "q_perm": 0.01917301917301917,
+        "log_hr_one_step": 0.19737447355066118,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 0.008056144928374765,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.008772262162986018,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2214399084776222,
+          "ci_lower": 1.0536560815606724,
+          "ci_upper": 1.41594157347054,
+          "wald_p": 0.007972601857555228
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9912628911303853,
+          "ci_lower": 0.8184011410999198,
+          "ci_upper": 1.2006363016693335,
+          "wald_p": null,
+          "lr_statistic": 0.008058123508476456,
+          "lr_p": null,
+          "delta_c_apparent": 0.0011990407673860837
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 0.008056144928374765,
+          "p_value": 0.9284810900431841,
+          "q_bh": 0.960497679355018,
+          "p_fwer": 1.0,
+          "q_perm": 0.960374167270719,
+          "log_hr_one_step": -0.008772262162986018,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.2214399084776222,
+            "ci_lower": 1.0536560815606724,
+            "ci_upper": 1.41594157347054,
+            "wald_p": 0.007972601857555228
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9912628911303853,
+            "ci_lower": 0.8184011410999198,
+            "ci_upper": 1.2006363016693335,
+            "wald_p": 0.9284812046509637,
+            "lr_statistic": 0.008058123508476456,
+            "lr_p": 0.9284723316624556,
+            "delta_c_apparent": 0.0011990407673860837
+          }
+        }
+      },
+      "inference_status": "withheld"
+    },
+    {
+      "marker": "m10",
+      "tier": "inference withheld",
+      "pattern": "Inference withheld",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 7.469133353919403,
+        "p_value": 0.0062765758470952285,
+        "q_bh": 0.01569143961773807,
+        "p_fwer": 0.098,
+        "q_perm": 0.017851184517851185,
+        "log_hr_one_step": 0.1916277497519622,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "added_value": {
+        "chi2": 1.137589802429787e-05,
+        "p_value": null,
+        "q_bh": null,
+        "p_fwer": null,
+        "q_perm": null,
+        "log_hr_one_step": -0.00030670469835601303,
+        "selection_frequency": null,
+        "direction_consistency": null,
+        "median_rank": null,
+        "rank_interval": [
+          null,
+          null
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2104600033296073,
+          "ci_lower": 1.054934396459617,
+          "ci_upper": 1.3889142534151904,
+          "wald_p": 0.006486034460734893
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9996933364194958,
+          "ci_lower": 0.8364922359701684,
+          "ci_upper": 1.1947352574318264,
+          "wald_p": null,
+          "lr_statistic": 1.1376044426469889e-05,
+          "lr_p": null,
+          "delta_c_apparent": 0.0
+        }
+      },
+      "exploratory": {
+        "added_value": {
+          "chi2": 1.137589802429787e-05,
+          "p_value": 0.9973088860765662,
+          "q_bh": 0.9973088860765661,
+          "p_fwer": 1.0,
+          "q_perm": 0.9974641307974641,
+          "log_hr_one_step": -0.00030670469835601303,
+          "selection_frequency": null,
+          "direction_consistency": null,
+          "median_rank": null,
+          "rank_interval": [
+            null,
+            null
+          ]
+        },
+        "tier": "not supported",
+        "pattern": "M\u00b7 A\u00b7",
+        "exact": {
+          "marginal": {
+            "hazard_ratio": 1.2104600033296073,
+            "ci_lower": 1.054934396459617,
+            "ci_upper": 1.3889142534151904,
+            "wald_p": 0.006486034460734893
+          },
+          "adjusted": {
+            "hazard_ratio": 0.9996933364194958,
+            "ci_lower": 0.8364922359701684,
+            "ci_upper": 1.1947352574318264,
+            "wald_p": 0.9973088860718468,
+            "lr_statistic": 1.1376044426469889e-05,
+            "lr_p": 0.9973088687600361,
+            "delta_c_apparent": 0.0
+          }
+        }
+      },
+      "inference_status": "withheld"
+    }
+  ],
+  "tier_counts": {
+    "robust": 0,
+    "suggestive": 0,
+    "marginal only": 0,
+    "not supported": 0,
+    "inference withheld": 30
+  },
+  "cohort": {
+    "n": 180,
+    "events": 113,
+    "n_markers_evaluated": 30,
+    "dropped_markers": [],
+    "clinical_columns": [
+      "z"
+    ],
+    "clinical_design_columns": [
+      "z"
+    ],
+    "dropped_clinical_columns": [],
+    "strata_columns": [],
+    "row_mask_hash": "23d7ddfb01b51631",
+    "notes": []
+  },
+  "duplicates": {
+    "checked": false,
+    "identical_checked": true,
+    "markers_used": 0,
+    "note": "Near-identical profiles are checked on panels of at least 200 markers.",
+    "pairs": [],
+    "identical": [],
+    "n_pairs": 0,
+    "n_identical": 0,
+    "mostly_missing": [],
+    "n_mostly_missing": 0
+  },
+  "null": {
+    "n_permutations": 999,
+    "lens2_null": "smith",
+    "assumption_note": "Added-value residual permutation approximates a conditional null and assumes exchangeable residuals after the declared clinical-basis adjustment. Nonlinear marker-covariate relations can inflate false positives; family-wise error control also requires subset pivotality. Clinical Cox baseline misspecification, including non-proportional hazards, can invalidate conditional-null interpretation; multiplicity adjustment does not establish model adequacy."
+  },
+  "resampling": {
+    "scheme": "event-stratified subsampling without replacement",
+    "fraction": 0.632,
+    "n_valid": 0,
+    "n_failed": 0,
+    "n_withheld": 0,
+    "inference_policy": "Training diagnostics are refitted; withheld subsamples select no added-value markers and remain in the selection-frequency denominator.",
+    "stability_assessed": false,
+    "note": "No subsample was evaluated, so the stability of the selection was not assessed and no marker can be robust."
+  },
+  "signature": {
+    "markers": [
+      "m0"
+    ],
+    "clinical_only": false,
+    "apparent_c": 0.7337207157351042,
+    "correction_method": "subsampling_train_vs_left_out_gap",
+    "correction_note": "The subsample gap describes the diagnosis-governed procedure; it does not validate an exploratory marker signature fitted in the full cohort. Use the fixed external prediction metrics as exploratory estimates.",
+    "optimism_corrected_c": null,
+    "signature_c_in_subsample": null,
+    "signature_c_left_out": null,
+    "signature_c_left_out_ci": null,
+    "signature_optimism": null,
+    "clinical_c_left_out": null,
+    "signature_gain_left_out": null,
+    "signature_gain_left_out_sd": null,
+    "signature_gain_left_out_ci": null,
+    "n_signature_replicates": 0,
+    "n_clinical_replicates": 0,
+    "top_marker_log_hr_in_subsample": null,
+    "top_marker_log_hr_left_out": null,
+    "top_marker_shrinkage": null,
+    "n_top_marker_replicates": 0,
+    "notes": []
+  },
+  "nonlinear_lens": null,
+  "locked_recipe": {
+    "recipe_version": 3,
+    "inference": {
+      "method_version": "marker-inference/2",
+      "threshold": 0.01,
+      "status": "withheld",
+      "allowed": false,
+      "reasons": [
+        "residual_diagnostic_failed: m0/nonlinear_mean",
+        "residual_diagnostic_failed: m0/variance",
+        "residual_diagnostic_failed: m1/nonlinear_mean",
+        "residual_diagnostic_failed: m1/variance",
+        "residual_diagnostic_failed: m2/nonlinear_mean",
+        "residual_diagnostic_failed: m2/variance",
+        "residual_diagnostic_failed: m3/nonlinear_mean",
+        "residual_diagnostic_failed: m3/variance",
+        "residual_diagnostic_failed: m4/nonlinear_mean",
+        "residual_diagnostic_failed: m4/variance",
+        "residual_diagnostic_failed: m5/nonlinear_mean",
+        "residual_diagnostic_failed: m5/variance",
+        "residual_diagnostic_failed: m6/nonlinear_mean",
+        "residual_diagnostic_failed: m6/variance",
+        "residual_diagnostic_failed: m7/nonlinear_mean",
+        "residual_diagnostic_failed: m7/variance",
+        "residual_diagnostic_failed: m8/nonlinear_mean",
+        "residual_diagnostic_failed: m8/variance",
+        "residual_diagnostic_failed: m9/nonlinear_mean",
+        "residual_diagnostic_failed: m9/variance",
+        "residual_diagnostic_failed: m10/nonlinear_mean",
+        "residual_diagnostic_failed: m10/variance",
+        "residual_diagnostic_failed: m11/nonlinear_mean",
+        "residual_diagnostic_failed: m11/variance",
+        "residual_diagnostic_failed: m12/nonlinear_mean",
+        "residual_diagnostic_failed: m12/variance",
+        "residual_diagnostic_failed: m13/nonlinear_mean",
+        "residual_diagnostic_failed: m13/variance",
+        "residual_diagnostic_failed: m14/nonlinear_mean",
+        "residual_diagnostic_failed: m14/variance",
+        "residual_diagnostic_failed: m15/nonlinear_mean",
+        "residual_diagnostic_failed: m15/variance",
+        "residual_diagnostic_failed: m16/nonlinear_mean",
+        "residual_diagnostic_failed: m16/variance",
+        "residual_diagnostic_failed: m17/nonlinear_mean",
+        "residual_diagnostic_failed: m17/variance",
+        "residual_diagnostic_failed: m18/nonlinear_mean",
+        "residual_diagnostic_failed: m18/variance",
+        "residual_diagnostic_failed: m19/nonlinear_mean",
+        "residual_diagnostic_failed: m19/variance",
+        "residual_diagnostic_failed: m20/nonlinear_mean",
+        "residual_diagnostic_failed: m20/variance",
+        "residual_diagnostic_failed: m21/nonlinear_mean",
+        "residual_diagnostic_failed: m21/variance",
+        "residual_diagnostic_failed: m22/nonlinear_mean",
+        "residual_diagnostic_failed: m22/variance",
+        "residual_diagnostic_failed: m23/nonlinear_mean",
+        "residual_diagnostic_failed: m23/variance",
+        "residual_diagnostic_failed: m24/nonlinear_mean",
+        "residual_diagnostic_failed: m24/variance",
+        "residual_diagnostic_failed: m25/nonlinear_mean",
+        "residual_diagnostic_failed: m25/variance",
+        "residual_diagnostic_failed: m26/nonlinear_mean",
+        "residual_diagnostic_failed: m26/variance",
+        "residual_diagnostic_failed: m27/nonlinear_mean",
+        "residual_diagnostic_failed: m27/variance",
+        "residual_diagnostic_failed: m28/nonlinear_mean",
+        "residual_diagnostic_failed: m28/variance",
+        "residual_diagnostic_failed: m29/nonlinear_mean",
+        "residual_diagnostic_failed: m29/variance"
+      ],
+      "clinical_basis": "linear",
+      "clinical_tests": [
+        {
+          "name": "PH_global",
+          "method": "classic GT log-time (pre-survival 3.0)",
+          "p_value": 0.5571419689156849,
+          "statistic": 0.34467693122736676,
+          "df": 1,
+          "p_holm": 1.0
+        },
+        {
+          "name": "PH_z",
+          "method": "classic GT log-time (pre-survival 3.0)",
+          "p_value": 0.5571419689156851,
+          "statistic": 0.34467693122736653,
+          "df": 1,
+          "p_holm": 1.0
+        },
+        {
+          "name": "functional_form_LR",
+          "statistic": 0.2665341599108615,
+          "df": 3,
+          "method": "linear versus fixed five-knot RCS Cox LR",
+          "p_value": 0.9661945052041647,
+          "p_holm": 1.0
+        }
+      ],
+      "residual_tests": [
+        {
+          "marker": "m0",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m0",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m1",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m1",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m2",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m2",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m3",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m3",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m4",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m4",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m5",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m5",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m6",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m6",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m7",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m7",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m8",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m8",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m9",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m9",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m10",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m10",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m11",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m11",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m12",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m12",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m13",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m13",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m14",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m14",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m15",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m15",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m16",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m16",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m17",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m17",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m18",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m18",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m19",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m19",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m20",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m20",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m21",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m21",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m22",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m22",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m23",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m23",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m24",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m24",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m25",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m25",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m26",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m26",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m27",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m27",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m28",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m28",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m29",
+          "diagnostic": "nonlinear_mean",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        },
+        {
+          "marker": "m29",
+          "diagnostic": "variance",
+          "status": "failed",
+          "p_value": null,
+          "reason": "insufficient observations, non-finite values or deficient diagnostic rank",
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": null
+        }
+      ],
+      "families": {
+        "clinical": "global and per-term classic GT log-time PH, plus linear-versus-fixed-RCS LR",
+        "residual": "HC3 nonlinear mean and variance tests across all retained markers"
+      },
+      "interpretation": "Inference depends on model and permutation assumptions; diagnostics do not certify them.",
+      "clinical_fit": {
+        "converged": true,
+        "separated": false,
+        "finite": true,
+        "loglik": -480.8475824169455,
+        "iterations": 3,
+        "separation_method": "pending Newton step per SD; coefficient magnitude alone is not separation"
+      },
+      "functional_form_encoder": {
+        "features": [
+          "z"
+        ],
+        "categorical_features": [],
+        "numeric_features": [
+          "z"
+        ],
+        "categorical_mappings": {},
+        "categorical_levels": {},
+        "categorical_all_levels": {},
+        "categorical_unknown_columns": {},
+        "categorical_missing_columns": {},
+        "numeric_impute_values": {
+          "z": 0.03012587563473865
+        },
+        "scaler_params": {
+          "z": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": 0.03012587563473865
+          }
+        },
+        "feature_names": [
+          "z",
+          "z__rcs1",
+          "z__rcs2",
+          "z__rcs3"
+        ],
+        "encoded_columns": [
+          "z",
+          "z__rcs1",
+          "z__rcs2",
+          "z__rcs3"
+        ],
+        "categorical_feature_indices": [],
+        "numeric_feature_indices": [
+          0
+        ],
+        "standardize_numeric": false,
+        "clinical_basis": "restricted_cubic_spline",
+        "basis_method_version": "clinical-basis/1",
+        "knot_quantiles": [
+          0.05,
+          0.275,
+          0.5,
+          0.725,
+          0.95
+        ],
+        "spline_specifications": {
+          "z": {
+            "knots": [
+              -1.7773326752822394,
+              -0.4680394728489289,
+              0.03012587563473865,
+              0.6905923242452905,
+              1.7173293442064212
+            ],
+            "terms": [
+              "z",
+              "z__rcs1",
+              "z__rcs2",
+              "z__rcs3"
+            ],
+            "means": [
+              0.0,
+              0.9144159554308406,
+              0.13143411263351865,
+              0.04223552635589262
+            ],
+            "scales": [
+              1.0,
+              1.102967540286513,
+              0.2505071377755736,
+              0.09732208836441501
+            ]
+          }
+        },
+        "numeric_kinds": {
+          "z": "continuous"
+        },
+        "base_encoder": {
+          "features": [
+            "z"
+          ],
+          "categorical_features": [],
+          "numeric_features": [
+            "z"
+          ],
+          "categorical_mappings": {},
+          "categorical_levels": {},
+          "categorical_all_levels": {},
+          "categorical_unknown_columns": {},
+          "categorical_missing_columns": {},
+          "numeric_impute_values": {
+            "z": 0.03012587563473865
+          },
+          "scaler_params": {
+            "z": {
+              "mean": 0.0,
+              "std": 1.0,
+              "impute_value": 0.03012587563473865
+            }
+          },
+          "feature_names": [
+            "z"
+          ],
+          "encoded_columns": [
+            "z"
+          ],
+          "categorical_feature_indices": [],
+          "numeric_feature_indices": [
+            0
+          ],
+          "standardize_numeric": false
+        }
+      },
+      "clinical_status": "calculated",
+      "provenance": {
+        "row_mask_hash": "23d7ddfb01b51631",
+        "n_training": 180,
+        "ties": "efron",
+        "basis_method_version": "clinical-basis/1",
+        "mean_directions": "standardized raw numeric squared/cubed beyond clinical span",
+        "variance_directions": "clinical basis conditional on stratum intercepts; squared residual/(1-h) response"
+      },
+      "engineering_qualification": {
+        "policy_version": "marker-qualification/1",
+        "status": "passed_supported_conditions_only",
+        "requested_method_version": "marker-inference/2",
+        "evaluated_method_version": "marker-inference/2",
+        "kernel_sources_match": true,
+        "clinical_basis": "linear",
+        "registry_sha256": "9d14644f58ddbfbb6c5e68f31054a3d183ef85e8d20b9e4fe01660b6c351a39c",
+        "study_git_revision": "1ed6c10ddad27be6bce4b0896f55ac8428e36dd9",
+        "summary_sha256": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+        "supported_conditions": [
+          "independent",
+          "linear",
+          "correlated",
+          "z_dependent_censoring",
+          "partial_weak",
+          "partial_strong"
+        ],
+        "qualification_dimensions": {
+          "n": 180,
+          "markers": 30,
+          "permutations": 999,
+          "datasets_per_condition": 5000
+        },
+        "claim_boundary": "Finite main-study engineering gates in prespecified supported conditions; not universal 5% error control or certification of an individual dataset.",
+        "extension_limitations": "The 500-subject, 300-marker and 3000-marker extensions do not establish broader qualification. In particular, large independent and linear marker families substantially reduce availability; power retention and conditional error bounds also remain limiting.",
+        "failed_conditions": [],
+        "previous_method_evidence": null
+      }
+    },
+    "created_with": "SurvStudio 0.4.0.dev0",
+    "outcome": {
+      "time_column": "time",
+      "event_column": "event",
+      "event_positive_value": null
+    },
+    "clinical": {
+      "columns": [
+        "z"
+      ],
+      "categorical": [],
+      "encoder": {
+        "features": [
+          "z"
+        ],
+        "categorical_features": [],
+        "numeric_features": [
+          "z"
+        ],
+        "categorical_mappings": {},
+        "categorical_levels": {},
+        "categorical_all_levels": {},
+        "categorical_unknown_columns": {},
+        "categorical_missing_columns": {},
+        "numeric_impute_values": {
+          "z": 0.03012587563473865
+        },
+        "scaler_params": {
+          "z": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": 0.03012587563473865
+          }
+        },
+        "feature_names": [
+          "z"
+        ],
+        "encoded_columns": [
+          "z"
+        ],
+        "categorical_feature_indices": [],
+        "numeric_feature_indices": [
+          0
+        ],
+        "standardize_numeric": false,
+        "clinical_basis": "linear",
+        "basis_method_version": "clinical-basis/1",
+        "knot_quantiles": [
+          0.05,
+          0.275,
+          0.5,
+          0.725,
+          0.95
+        ],
+        "spline_specifications": {},
+        "numeric_kinds": {
+          "z": "continuous"
+        },
+        "base_encoder": {
+          "features": [
+            "z"
+          ],
+          "categorical_features": [],
+          "numeric_features": [
+            "z"
+          ],
+          "categorical_mappings": {},
+          "categorical_levels": {},
+          "categorical_all_levels": {},
+          "categorical_unknown_columns": {},
+          "categorical_missing_columns": {},
+          "numeric_impute_values": {
+            "z": 0.03012587563473865
+          },
+          "scaler_params": {
+            "z": {
+              "mean": 0.0,
+              "std": 1.0,
+              "impute_value": 0.03012587563473865
+            }
+          },
+          "feature_names": [
+            "z"
+          ],
+          "encoded_columns": [
+            "z"
+          ],
+          "categorical_feature_indices": [],
+          "numeric_feature_indices": [
+            0
+          ],
+          "standardize_numeric": false
+        }
+      },
+      "basis": "linear"
+    },
+    "strata_columns": [],
+    "markers": [
+      "m0"
+    ],
+    "marker_medians": {
+      "m0": 0.00030719250343710014
+    },
+    "marker_scale": {
+      "m0": {
+        "mean": -0.011291984612367963,
+        "sd": 1.1518112941949203
+      }
+    },
+    "marker_development_log_hr": {
+      "m0": 0.7103356631085215
+    },
+    "primary_lens": "added_value",
+    "model": {
+      "terms": [
+        "z",
+        "m0"
+      ],
+      "coefficients": [
+        0.03467881318891414,
+        0.7339615989122902
+      ],
+      "ties": "efron",
+      "baseline": {
+        "times": [
+          0.0563883615597286,
+          0.0687664012207995,
+          0.1297007748407241,
+          0.1631199238615629,
+          0.1808316156197886,
+          0.1828210748685985,
+          0.2216787916436414,
+          0.3521539881128324,
+          0.4204878098453088,
+          0.4512107054870397,
+          0.5360594201524298,
+          0.6121513153858301,
+          0.6425764956910934,
+          0.6805188302713132,
+          0.7170874547983579,
+          0.8275381566617602,
+          0.9655809777208924,
+          1.054511543793875,
+          1.1143274610236025,
+          1.156457861231725,
+          1.193986279021526,
+          1.2860714440698569,
+          1.3147744346129917,
+          1.4138021567895565,
+          1.582105402751803,
+          1.7375370942987072,
+          1.924669608752912,
+          1.9576084796861244,
+          2.097163772033268,
+          2.2759495860336063,
+          2.5023623765246863,
+          2.722752765584422,
+          3.0683459998006217,
+          3.103907379683833,
+          3.3676953070821907,
+          3.387810953288734,
+          3.692256142137619,
+          3.7329937309687,
+          3.8061562922189536,
+          3.8159989333102464,
+          3.8334991442526594,
+          3.851093205534257,
+          3.882979168508501,
+          3.9592113632495263,
+          3.969018990800843,
+          4.058809432158844,
+          4.059230920419415,
+          4.158006295223863,
+          4.216303250025351,
+          4.333660790212685,
+          4.399659741780929,
+          4.470036408259372,
+          4.66041803965255,
+          4.917829507387487,
+          5.005558594845503,
+          5.091255669470215,
+          5.136171575697293,
+          5.356696197178168,
+          5.4220916724423045,
+          5.463900053971354,
+          5.5533944881880215,
+          5.610086134422153,
+          5.821461859180139,
+          6.062270186755235,
+          6.419917320480258,
+          6.421694123894006,
+          6.680576381289664,
+          6.781945453436413,
+          6.932613615713447,
+          6.998786493708118,
+          7.016584366504604,
+          7.072563585584577,
+          7.206988603754033,
+          8.282293024140834,
+          8.421476880619826,
+          8.888253766071374,
+          8.943816896153942,
+          9.527380025228146,
+          9.652355046792522,
+          9.67170659106718,
+          9.816687173898291,
+          10.412470795209051,
+          11.171243033194346,
+          12.228515689877945,
+          12.422327926827665,
+          12.703671841907862,
+          12.713413268633104,
+          12.802483417956326,
+          13.191066595924376,
+          13.629367576538376,
+          13.825154842704416,
+          13.877923292306434,
+          14.366370351205187,
+          14.50052579034198,
+          15.182117958430752,
+          15.542388769240182,
+          16.136198356147887,
+          17.36760710480734,
+          17.896027283732092,
+          18.93874154367493,
+          19.360005573747944,
+          19.936775904093142,
+          20.95704182856409,
+          21.424071099587024,
+          23.85869005865884,
+          24.500962563831408,
+          31.376108354389647,
+          33.687662342931176,
+          38.14621870224963,
+          38.46873077169532,
+          41.64193026164488,
+          45.7997413292169,
+          47.71326821673376
+        ],
+        "log_cumulative_hazard": [
+          -5.560703157429155,
+          -4.860032850580422,
+          -4.445962629448804,
+          -4.152420796464561,
+          -3.9247655258438403,
+          -3.7369573696835934,
+          -3.576697572214066,
+          -3.436042356307685,
+          -3.309422494792858,
+          -3.195471940784548,
+          -3.0927650842409715,
+          -2.998154129625684,
+          -2.9090048388332543,
+          -2.826293778051836,
+          -2.7494266780591348,
+          -2.677282408994346,
+          -2.6089367621790345,
+          -2.5440755492418976,
+          -2.481913113458546,
+          -2.421934694172858,
+          -2.3649884878950607,
+          -2.310258929476954,
+          -2.2575975672655337,
+          -2.2071995534736266,
+          -2.1591639138989893,
+          -2.112958899102762,
+          -2.068239607920059,
+          -2.0249770487598666,
+          -1.9829670161031439,
+          -1.9421549615177072,
+          -1.9018006724119259,
+          -1.8628298300751012,
+          -1.8246506492012315,
+          -1.787056881871018,
+          -1.7496305944506114,
+          -1.7131054372292018,
+          -1.674868495151831,
+          -1.637756375252433,
+          -1.601792976898884,
+          -1.5669277038321519,
+          -1.5329572896635568,
+          -1.4996597770921125,
+          -1.4658713119942754,
+          -1.4326936337477543,
+          -1.4004674428730028,
+          -1.3688916350476954,
+          -1.3382275841197926,
+          -1.308330149396255,
+          -1.2785439428851189,
+          -1.2494998427059931,
+          -1.2209540164993133,
+          -1.1927357509947498,
+          -1.1646171754383658,
+          -1.137013152523889,
+          -1.1097573683017483,
+          -1.082745154411915,
+          -1.0558315587918634,
+          -1.0292859340604814,
+          -1.003125798233447,
+          -0.9772002241342188,
+          -0.9517157151327148,
+          -0.9263038137417894,
+          -0.9011168556618592,
+          -0.8760357492466939,
+          -0.8509186176696149,
+          -0.826081446123897,
+          -0.8013810846352509,
+          -0.7769901473507722,
+          -0.7514729944113425,
+          -0.7261824918465001,
+          -0.7006344946924851,
+          -0.6753913226330179,
+          -0.6504461976128323,
+          -0.6246754570952181,
+          -0.5994182545524938,
+          -0.5742463821063624,
+          -0.5481675989785855,
+          -0.5195360578433267,
+          -0.49021318343586867,
+          -0.4597712608147381,
+          -0.4293726727018694,
+          -0.3980627736362543,
+          -0.3663584551865923,
+          -0.33322559527822737,
+          -0.3006978351082593,
+          -0.26842870562292837,
+          -0.23645838943207806,
+          -0.20424111610018908,
+          -0.17087767969945478,
+          -0.13768123566626764,
+          -0.10498269361648603,
+          -0.07204964809533254,
+          -0.03916086954761962,
+          -0.00607615071143993,
+          0.026753804681861424,
+          0.060911003676260844,
+          0.09531468843338545,
+          0.13921053393716937,
+          0.1821938540279464,
+          0.22818518369667443,
+          0.27290766400721167,
+          0.3210619070926533,
+          0.3735026972967236,
+          0.42565490542063,
+          0.48037618730387066,
+          0.5367136622941533,
+          0.62013475567563,
+          0.7183347693275542,
+          0.8085070064303347,
+          0.9042474310345047,
+          1.0020696358041965,
+          1.1267105147274736,
+          1.2621997372827285
+        ],
+        "lp_center": -0.0064843800898127255
+      },
+      "default_horizon": 5.136171575697293
+    },
+    "clinical_only_model": {
+      "terms": [
+        "z"
+      ],
+      "coefficients": [
+        0.4233506921469798
+      ]
+    },
+    "development": {
+      "n": 180,
+      "events": 113,
+      "row_mask_hash": "23d7ddfb01b51631"
+    },
+    "recipe_hash": "4d4b4bb396910e1e806fc08e810f028cc8ee8494dcad239d263b83d140b03726"
+  },
+  "settings": {
+    "ties": "efron",
+    "alpha": 0.05,
+    "fdr_level": 0.1,
+    "n_permutations": 999,
+    "n_resamples": 0,
+    "resample_fraction": 0.632,
+    "max_missing_fraction": 0.2,
+    "max_mode_fraction": 0.9,
+    "robust_frequency": 0.5,
+    "robust_direction": 0.9,
+    "nonlinear_frequency": 0.8,
+    "max_signature_markers": 10,
+    "shortlist_size": 50,
+    "lens2_null": "smith",
+    "nonlinear_lens": "off",
+    "nonlinear_replicates": 30,
+    "nonlinear_top_markers": 100,
+    "random_seed": 2026100901,
+    "clinical_basis": "linear"
+  },
+  "exploratory_signature": {
+    "markers": [
+      "m0"
+    ],
+    "clinical_only": false,
+    "apparent_c": 0.7337207157351042,
+    "correction_method": "subsampling_train_vs_left_out_gap",
+    "correction_note": "The apparent C-index is adjusted by the mean train-versus-left-out gap of the whole selection procedure. This heuristic includes training-size effects; use locked external validation for final performance claims.",
+    "optimism_corrected_c": null,
+    "signature_c_in_subsample": null,
+    "signature_c_left_out": null,
+    "signature_c_left_out_ci": null,
+    "signature_optimism": null,
+    "clinical_c_left_out": null,
+    "signature_gain_left_out": null,
+    "signature_gain_left_out_sd": null,
+    "signature_gain_left_out_ci": null,
+    "n_signature_replicates": 0,
+    "n_clinical_replicates": 0,
+    "top_marker_log_hr_in_subsample": null,
+    "top_marker_log_hr_left_out": null,
+    "top_marker_shrinkage": null,
+    "n_top_marker_replicates": 0,
+    "notes": []
+  }
+}

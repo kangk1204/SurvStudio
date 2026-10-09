@@ -1,0 +1,2638 @@
+{
+  "inference": {
+    "method_version": "marker-inference/2",
+    "threshold": 0.01,
+    "status": "assumption_dependent",
+    "allowed": true,
+    "reasons": [],
+    "clinical_basis": "linear",
+    "clinical_tests": [
+      {
+        "name": "PH_global",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.15158690813938758,
+        "statistic": 6.717581721644278,
+        "df": 4,
+        "p_holm": 0.7097811125572983
+      },
+      {
+        "name": "PH_grade_B",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.5964122371940832,
+        "statistic": 0.28044111934222005,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "PH_grade_C",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.040261639986841596,
+        "statistic": 4.206824545946229,
+        "df": 1,
+        "p_holm": 0.24156983992104958
+      },
+      {
+        "name": "PH_z",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.14195622251145965,
+        "statistic": 2.156624629308567,
+        "df": 1,
+        "p_holm": 0.7097811125572983
+      },
+      {
+        "name": "PH_binary",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.9837582954588292,
+        "statistic": 0.0004144222657290143,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "functional_form_LR",
+        "statistic": 2.927379960673534,
+        "df": 3,
+        "method": "linear versus fixed five-knot RCS Cox LR",
+        "p_value": 0.4029578104554018,
+        "p_holm": 1.0
+      }
+    ],
+    "residual_tests": [
+      {
+        "marker": "m0",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.3968702225112496,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.8200129786266442,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m0",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 9.237282470154941,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.05543459766732552,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m1",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.8260410970619442,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.6616486867796265,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m1",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 1.3559548983754384,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.8518129825177743,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m2",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 3.4241476762267946,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.18049109490846924,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m2",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 5.327295676941418,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.25533253865478617,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m3",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 3.416627001902752,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.18117107996535048,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m3",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 5.5297013812413045,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.23713101436446446,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m4",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 1.180658168350813,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.5541448944096355,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m4",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 9.505040011994117,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.049643789332702255,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m5",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.374830361642216,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.3050086381961763,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m5",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 1.528763669387736,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.8215344220217997,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m6",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.2005195609768371,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.9046023894588039,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m6",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.8582219693228943,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.9304765332101321,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m7",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.6329780191156003,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.2680748598820937,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m7",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 3.0685307151140657,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.5464231724582325,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m8",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.028452635685847057,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.9858743980456699,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m8",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.6030428862211854,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.9627249535983043,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m9",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.268155765315462,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.32171864694135377,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m9",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 7.951662042408201,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.0933650103827512,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m10",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.10336245503238765,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.9496315350022995,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m10",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 2.248545296085091,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.690152157536498,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m11",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 3.55790858329953,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.1688145858229192,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m11",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 2.5518422716519575,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.635377308139062,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m12",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.829165689023521,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.24302697234136586,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m12",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 4.256115410148869,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.37245262343982694,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m13",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.8249580979559585,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.24353878959101463,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m13",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 4.6316408453063715,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.32722235918996534,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m14",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.5146974382130256,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.7730985725102006,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m14",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 7.938975582488407,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.09383934857233461,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m15",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 4.517857208165772,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.1044623453508728,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m15",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 12.304186025658156,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.015226956469580416,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 0.913617388174825
+      },
+      {
+        "marker": "m16",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.6280882236553147,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.7304868043406851,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m16",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 9.216892970482714,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.0559010160427938,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m17",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 5.947013809642096,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.05112370961096396,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m17",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.5415037447464734,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.9693368301193792,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m18",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.3696819522947903,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.8312364597665431,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m18",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 1.8903782258627861,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.7559123034273953,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m19",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 1.5045514737134014,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.4712927930277615,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m19",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 8.227707621323999,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.08358422103502175,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m20",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.346115634175262,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.30941934545473293,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m20",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 4.3246922147493425,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.36384332995721846,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m21",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.9597072637181252,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.61887396860946,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m21",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 3.496458941219739,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.4784169745064407,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m22",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.9036959838580738,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.6364509080471928,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m22",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 3.633666039917436,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.4578471845823413,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m23",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.7058426715546813,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.7026324632398687,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m23",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 6.887633461044071,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.1419467773047954,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m24",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.3592879846517167,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.8355676269544831,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m24",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.6881082059693886,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.9527872844391264,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m25",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.6599301145413209,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.7189488550282654,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m25",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 4.125101221499733,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.38933991125563033,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m26",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 3.992926369528345,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.13581478658583993,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m26",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 1.6184063325629254,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.8054802000899475,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m27",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.05102908493304933,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.9748082027470063,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m27",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 4.0937620829574275,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.3934652270334538,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m28",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.46197969374781156,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.7937475250130392,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m28",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 11.231088785919955,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.024086053425417215,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m29",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 5.080196913835563,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.07885863523027865,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m29",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 7.650074216436268,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.10527085459423001,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      }
+    ],
+    "families": {
+      "clinical": "global and per-term classic GT log-time PH, plus linear-versus-fixed-RCS LR",
+      "residual": "HC3 nonlinear mean and variance tests across all retained markers"
+    },
+    "interpretation": "Inference depends on model and permutation assumptions; diagnostics do not certify them.",
+    "clinical_fit": {
+      "converged": true,
+      "separated": false,
+      "finite": true,
+      "loglik": -708.5377136238651,
+      "iterations": 4,
+      "separation_method": "pending Newton step per SD; coefficient magnitude alone is not separation"
+    },
+    "functional_form_encoder": {
+      "features": [
+        "z",
+        "grade",
+        "binary"
+      ],
+      "categorical_features": [
+        "grade"
+      ],
+      "numeric_features": [
+        "z",
+        "binary"
+      ],
+      "categorical_mappings": {
+        "grade": {
+          "all_levels": [
+            "A",
+            "B",
+            "C"
+          ],
+          "baseline_level": "A",
+          "retained_levels": [
+            "B",
+            "C"
+          ],
+          "level_columns": {
+            "B": "grade_B",
+            "C": "grade_C"
+          },
+          "unknown_column": null,
+          "missing_column": null
+        }
+      },
+      "categorical_levels": {
+        "grade": [
+          "B",
+          "C"
+        ]
+      },
+      "categorical_all_levels": {
+        "grade": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "categorical_unknown_columns": {
+        "grade": null
+      },
+      "categorical_missing_columns": {
+        "grade": null
+      },
+      "numeric_impute_values": {
+        "z": -0.10295851068131479,
+        "binary": 0.5
+      },
+      "scaler_params": {
+        "z": {
+          "mean": 0.0,
+          "std": 1.0,
+          "impute_value": -0.10295851068131479
+        },
+        "binary": {
+          "mean": 0.0,
+          "std": 1.0,
+          "impute_value": 0.5
+        }
+      },
+      "feature_names": [
+        "grade_B",
+        "grade_C",
+        "z",
+        "z__rcs1",
+        "z__rcs2",
+        "z__rcs3",
+        "binary"
+      ],
+      "encoded_columns": [
+        "grade_B",
+        "grade_C",
+        "z",
+        "z__rcs1",
+        "z__rcs2",
+        "z__rcs3",
+        "binary"
+      ],
+      "categorical_feature_indices": [
+        0,
+        1
+      ],
+      "numeric_feature_indices": [
+        2,
+        3
+      ],
+      "standardize_numeric": false,
+      "clinical_basis": "restricted_cubic_spline",
+      "basis_method_version": "clinical-basis/1",
+      "knot_quantiles": [
+        0.05,
+        0.275,
+        0.5,
+        0.725,
+        0.95
+      ],
+      "spline_specifications": {
+        "z": {
+          "knots": [
+            -1.6203519836365834,
+            -0.6346287021732513,
+            -0.10295851068131479,
+            0.6205283787591417,
+            1.7620672666508266
+          ],
+          "terms": [
+            "z",
+            "z__rcs1",
+            "z__rcs2",
+            "z__rcs3"
+          ],
+          "means": [
+            0.0,
+            0.8008734248671361,
+            0.19436671626295263,
+            0.06525460329118243
+          ],
+          "scales": [
+            1.0,
+            1.0640314989374426,
+            0.3462909079425405,
+            0.13573517139218083
+          ]
+        }
+      },
+      "numeric_kinds": {
+        "z": "continuous",
+        "binary": "binary_or_constant"
+      },
+      "base_encoder": {
+        "features": [
+          "z",
+          "grade",
+          "binary"
+        ],
+        "categorical_features": [
+          "grade"
+        ],
+        "numeric_features": [
+          "z",
+          "binary"
+        ],
+        "categorical_mappings": {
+          "grade": {
+            "all_levels": [
+              "A",
+              "B",
+              "C"
+            ],
+            "baseline_level": "A",
+            "retained_levels": [
+              "B",
+              "C"
+            ],
+            "level_columns": {
+              "B": "grade_B",
+              "C": "grade_C"
+            },
+            "unknown_column": null,
+            "missing_column": null
+          }
+        },
+        "categorical_levels": {
+          "grade": [
+            "B",
+            "C"
+          ]
+        },
+        "categorical_all_levels": {
+          "grade": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "categorical_unknown_columns": {
+          "grade": null
+        },
+        "categorical_missing_columns": {
+          "grade": null
+        },
+        "numeric_impute_values": {
+          "z": -0.10295851068131479,
+          "binary": 0.5
+        },
+        "scaler_params": {
+          "z": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": -0.10295851068131479
+          },
+          "binary": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": 0.5
+          }
+        },
+        "feature_names": [
+          "grade_B",
+          "grade_C",
+          "z",
+          "binary"
+        ],
+        "encoded_columns": [
+          "grade_B",
+          "grade_C",
+          "z",
+          "binary"
+        ],
+        "categorical_feature_indices": [
+          0,
+          1
+        ],
+        "numeric_feature_indices": [
+          2,
+          3
+        ],
+        "standardize_numeric": false
+      }
+    },
+    "clinical_status": "calculated",
+    "provenance": {
+      "row_mask_hash": "38016ca0ffe37aa6",
+      "n_training": 260,
+      "ties": "efron",
+      "basis_method_version": "clinical-basis/1",
+      "mean_directions": "standardized raw numeric squared/cubed beyond clinical span",
+      "variance_directions": "clinical basis conditional on stratum intercepts; squared residual/(1-h) response"
+    },
+    "engineering_qualification": {
+      "policy_version": "marker-qualification/1",
+      "status": "passed_supported_conditions_only",
+      "requested_method_version": "marker-inference/2",
+      "evaluated_method_version": "marker-inference/2",
+      "kernel_sources_match": true,
+      "clinical_basis": "linear",
+      "registry_sha256": "9d14644f58ddbfbb6c5e68f31054a3d183ef85e8d20b9e4fe01660b6c351a39c",
+      "study_git_revision": "1ed6c10ddad27be6bce4b0896f55ac8428e36dd9",
+      "summary_sha256": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+      "supported_conditions": [
+        "independent",
+        "linear",
+        "correlated",
+        "z_dependent_censoring",
+        "partial_weak",
+        "partial_strong"
+      ],
+      "qualification_dimensions": {
+        "n": 180,
+        "markers": 30,
+        "permutations": 999,
+        "datasets_per_condition": 5000
+      },
+      "claim_boundary": "Finite main-study engineering gates in prespecified supported conditions; not universal 5% error control or certification of an individual dataset.",
+      "extension_limitations": "The 500-subject, 300-marker and 3000-marker extensions do not establish broader qualification. In particular, large independent and linear marker families substantially reduce availability; power retention and conditional error bounds also remain limiting.",
+      "failed_conditions": [],
+      "previous_method_evidence": null
+    }
+  },
+  "development_inference": {
+    "method_version": "marker-inference/2",
+    "threshold": 0.01,
+    "status": "assumption_dependent",
+    "allowed": true,
+    "reasons": [],
+    "clinical_basis": "linear",
+    "clinical_tests": [
+      {
+        "name": "PH_global",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.15158690813938758,
+        "statistic": 6.717581721644278,
+        "df": 4,
+        "p_holm": 0.7097811125572983
+      },
+      {
+        "name": "PH_grade_B",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.5964122371940832,
+        "statistic": 0.28044111934222005,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "PH_grade_C",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.040261639986841596,
+        "statistic": 4.206824545946229,
+        "df": 1,
+        "p_holm": 0.24156983992104958
+      },
+      {
+        "name": "PH_z",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.14195622251145965,
+        "statistic": 2.156624629308567,
+        "df": 1,
+        "p_holm": 0.7097811125572983
+      },
+      {
+        "name": "PH_binary",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.9837582954588292,
+        "statistic": 0.0004144222657290143,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "functional_form_LR",
+        "statistic": 2.927379960673534,
+        "df": 3,
+        "method": "linear versus fixed five-knot RCS Cox LR",
+        "p_value": 0.4029578104554018,
+        "p_holm": 1.0
+      }
+    ],
+    "residual_tests": [
+      {
+        "marker": "m0",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.3968702225112496,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.8200129786266442,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m0",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 9.237282470154941,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.05543459766732552,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m1",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.8260410970619442,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.6616486867796265,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m1",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 1.3559548983754384,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.8518129825177743,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m2",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 3.4241476762267946,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.18049109490846924,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m2",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 5.327295676941418,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.25533253865478617,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m3",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 3.416627001902752,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.18117107996535048,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m3",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 5.5297013812413045,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.23713101436446446,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m4",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 1.180658168350813,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.5541448944096355,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m4",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 9.505040011994117,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.049643789332702255,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m5",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.374830361642216,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.3050086381961763,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m5",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 1.528763669387736,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.8215344220217997,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m6",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.2005195609768371,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.9046023894588039,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m6",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.8582219693228943,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.9304765332101321,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m7",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.6329780191156003,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.2680748598820937,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m7",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 3.0685307151140657,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.5464231724582325,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m8",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.028452635685847057,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.9858743980456699,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m8",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.6030428862211854,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.9627249535983043,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m9",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.268155765315462,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.32171864694135377,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m9",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 7.951662042408201,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.0933650103827512,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m10",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.10336245503238765,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.9496315350022995,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m10",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 2.248545296085091,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.690152157536498,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m11",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 3.55790858329953,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.1688145858229192,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m11",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 2.5518422716519575,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.635377308139062,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m12",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.829165689023521,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.24302697234136586,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m12",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 4.256115410148869,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.37245262343982694,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m13",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.8249580979559585,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.24353878959101463,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m13",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 4.6316408453063715,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.32722235918996534,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m14",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.5146974382130256,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.7730985725102006,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m14",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 7.938975582488407,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.09383934857233461,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m15",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 4.517857208165772,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.1044623453508728,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m15",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 12.304186025658156,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.015226956469580416,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 0.913617388174825
+      },
+      {
+        "marker": "m16",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.6280882236553147,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.7304868043406851,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m16",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 9.216892970482714,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.0559010160427938,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m17",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 5.947013809642096,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.05112370961096396,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m17",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.5415037447464734,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.9693368301193792,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m18",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.3696819522947903,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.8312364597665431,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m18",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 1.8903782258627861,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.7559123034273953,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m19",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 1.5045514737134014,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.4712927930277615,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m19",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 8.227707621323999,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.08358422103502175,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m20",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.346115634175262,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.30941934545473293,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m20",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 4.3246922147493425,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.36384332995721846,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m21",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.9597072637181252,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.61887396860946,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m21",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 3.496458941219739,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.4784169745064407,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m22",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.9036959838580738,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.6364509080471928,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m22",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 3.633666039917436,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.4578471845823413,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m23",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.7058426715546813,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.7026324632398687,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m23",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 6.887633461044071,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.1419467773047954,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m24",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.3592879846517167,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.8355676269544831,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m24",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.6881082059693886,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.9527872844391264,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m25",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.6599301145413209,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.7189488550282654,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m25",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 4.125101221499733,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.38933991125563033,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m26",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 3.992926369528345,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.13581478658583993,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m26",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 1.6184063325629254,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.8054802000899475,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m27",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.05102908493304933,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.9748082027470063,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m27",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 4.0937620829574275,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.3934652270334538,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m28",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.46197969374781156,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.7937475250130392,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m28",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 11.231088785919955,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.024086053425417215,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m29",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 5.080196913835563,
+        "df": 2,
+        "n_observations": 260,
+        "n_parameters": 7,
+        "df_residual": 253,
+        "p_value": 0.07885863523027865,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m29",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 7.650074216436268,
+        "df": 4,
+        "n_observations": 260,
+        "n_parameters": 5,
+        "df_residual": 255,
+        "p_value": 0.10527085459423001,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      }
+    ],
+    "families": {
+      "clinical": "global and per-term classic GT log-time PH, plus linear-versus-fixed-RCS LR",
+      "residual": "HC3 nonlinear mean and variance tests across all retained markers"
+    },
+    "interpretation": "Inference depends on model and permutation assumptions; diagnostics do not certify them.",
+    "clinical_fit": {
+      "converged": true,
+      "separated": false,
+      "finite": true,
+      "loglik": -708.5377136238651,
+      "iterations": 4,
+      "separation_method": "pending Newton step per SD; coefficient magnitude alone is not separation"
+    },
+    "functional_form_encoder": {
+      "features": [
+        "z",
+        "grade",
+        "binary"
+      ],
+      "categorical_features": [
+        "grade"
+      ],
+      "numeric_features": [
+        "z",
+        "binary"
+      ],
+      "categorical_mappings": {
+        "grade": {
+          "all_levels": [
+            "A",
+            "B",
+            "C"
+          ],
+          "baseline_level": "A",
+          "retained_levels": [
+            "B",
+            "C"
+          ],
+          "level_columns": {
+            "B": "grade_B",
+            "C": "grade_C"
+          },
+          "unknown_column": null,
+          "missing_column": null
+        }
+      },
+      "categorical_levels": {
+        "grade": [
+          "B",
+          "C"
+        ]
+      },
+      "categorical_all_levels": {
+        "grade": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "categorical_unknown_columns": {
+        "grade": null
+      },
+      "categorical_missing_columns": {
+        "grade": null
+      },
+      "numeric_impute_values": {
+        "z": -0.10295851068131479,
+        "binary": 0.5
+      },
+      "scaler_params": {
+        "z": {
+          "mean": 0.0,
+          "std": 1.0,
+          "impute_value": -0.10295851068131479
+        },
+        "binary": {
+          "mean": 0.0,
+          "std": 1.0,
+          "impute_value": 0.5
+        }
+      },
+      "feature_names": [
+        "grade_B",
+        "grade_C",
+        "z",
+        "z__rcs1",
+        "z__rcs2",
+        "z__rcs3",
+        "binary"
+      ],
+      "encoded_columns": [
+        "grade_B",
+        "grade_C",
+        "z",
+        "z__rcs1",
+        "z__rcs2",
+        "z__rcs3",
+        "binary"
+      ],
+      "categorical_feature_indices": [
+        0,
+        1
+      ],
+      "numeric_feature_indices": [
+        2,
+        3
+      ],
+      "standardize_numeric": false,
+      "clinical_basis": "restricted_cubic_spline",
+      "basis_method_version": "clinical-basis/1",
+      "knot_quantiles": [
+        0.05,
+        0.275,
+        0.5,
+        0.725,
+        0.95
+      ],
+      "spline_specifications": {
+        "z": {
+          "knots": [
+            -1.6203519836365834,
+            -0.6346287021732513,
+            -0.10295851068131479,
+            0.6205283787591417,
+            1.7620672666508266
+          ],
+          "terms": [
+            "z",
+            "z__rcs1",
+            "z__rcs2",
+            "z__rcs3"
+          ],
+          "means": [
+            0.0,
+            0.8008734248671361,
+            0.19436671626295263,
+            0.06525460329118243
+          ],
+          "scales": [
+            1.0,
+            1.0640314989374426,
+            0.3462909079425405,
+            0.13573517139218083
+          ]
+        }
+      },
+      "numeric_kinds": {
+        "z": "continuous",
+        "binary": "binary_or_constant"
+      },
+      "base_encoder": {
+        "features": [
+          "z",
+          "grade",
+          "binary"
+        ],
+        "categorical_features": [
+          "grade"
+        ],
+        "numeric_features": [
+          "z",
+          "binary"
+        ],
+        "categorical_mappings": {
+          "grade": {
+            "all_levels": [
+              "A",
+              "B",
+              "C"
+            ],
+            "baseline_level": "A",
+            "retained_levels": [
+              "B",
+              "C"
+            ],
+            "level_columns": {
+              "B": "grade_B",
+              "C": "grade_C"
+            },
+            "unknown_column": null,
+            "missing_column": null
+          }
+        },
+        "categorical_levels": {
+          "grade": [
+            "B",
+            "C"
+          ]
+        },
+        "categorical_all_levels": {
+          "grade": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "categorical_unknown_columns": {
+          "grade": null
+        },
+        "categorical_missing_columns": {
+          "grade": null
+        },
+        "numeric_impute_values": {
+          "z": -0.10295851068131479,
+          "binary": 0.5
+        },
+        "scaler_params": {
+          "z": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": -0.10295851068131479
+          },
+          "binary": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": 0.5
+          }
+        },
+        "feature_names": [
+          "grade_B",
+          "grade_C",
+          "z",
+          "binary"
+        ],
+        "encoded_columns": [
+          "grade_B",
+          "grade_C",
+          "z",
+          "binary"
+        ],
+        "categorical_feature_indices": [
+          0,
+          1
+        ],
+        "numeric_feature_indices": [
+          2,
+          3
+        ],
+        "standardize_numeric": false
+      }
+    },
+    "clinical_status": "calculated",
+    "provenance": {
+      "row_mask_hash": "38016ca0ffe37aa6",
+      "n_training": 260,
+      "ties": "efron",
+      "basis_method_version": "clinical-basis/1",
+      "mean_directions": "standardized raw numeric squared/cubed beyond clinical span",
+      "variance_directions": "clinical basis conditional on stratum intercepts; squared residual/(1-h) response"
+    },
+    "engineering_qualification": {
+      "policy_version": "marker-qualification/1",
+      "status": "passed_supported_conditions_only",
+      "requested_method_version": "marker-inference/2",
+      "evaluated_method_version": "marker-inference/2",
+      "kernel_sources_match": true,
+      "clinical_basis": "linear",
+      "registry_sha256": "9d14644f58ddbfbb6c5e68f31054a3d183ef85e8d20b9e4fe01660b6c351a39c",
+      "study_git_revision": "1ed6c10ddad27be6bce4b0896f55ac8428e36dd9",
+      "summary_sha256": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+      "supported_conditions": [
+        "independent",
+        "linear",
+        "correlated",
+        "z_dependent_censoring",
+        "partial_weak",
+        "partial_strong"
+      ],
+      "qualification_dimensions": {
+        "n": 180,
+        "markers": 30,
+        "permutations": 999,
+        "datasets_per_condition": 5000
+      },
+      "claim_boundary": "Finite main-study engineering gates in prespecified supported conditions; not universal 5% error control or certification of an individual dataset.",
+      "extension_limitations": "The 500-subject, 300-marker and 3000-marker extensions do not establish broader qualification. In particular, large independent and linear marker families substantially reduce availability; power retention and conditional error bounds also remain limiting.",
+      "failed_conditions": [],
+      "previous_method_evidence": null
+    }
+  },
+  "external_inference": {
+    "method_version": "marker-inference/2",
+    "threshold": 0.01,
+    "status": "assumption_dependent",
+    "allowed": true,
+    "reasons": [],
+    "clinical_basis": "linear",
+    "clinical_tests": [
+      {
+        "name": "PH_global",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.8724679803660995,
+        "statistic": 1.2340099844638301,
+        "df": 4,
+        "p_holm": 1.0
+      },
+      {
+        "name": "PH_grade_B",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.6469598133467884,
+        "statistic": 0.2097546008370459,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "PH_grade_C",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.8030335418681719,
+        "statistic": 0.06221186771373529,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "PH_z",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.43844487277110133,
+        "statistic": 0.6003490654934114,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "PH_binary",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.41792506964783704,
+        "statistic": 0.6561425803423796,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "functional_form_LR",
+        "statistic": 5.022791932031396,
+        "df": 3,
+        "method": "linear versus fixed five-knot RCS Cox LR",
+        "p_value": 0.17013579451894675,
+        "p_holm": 1.0
+      }
+    ],
+    "residual_tests": [
+      {
+        "marker": "m0",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.205964867219842,
+        "df": 2,
+        "n_observations": 180,
+        "n_parameters": 7,
+        "df_residual": 173,
+        "p_value": 0.3318797967488288,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 0.6637595934976576
+      },
+      {
+        "marker": "m0",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 3.7877276528761206,
+        "df": 4,
+        "n_observations": 180,
+        "n_parameters": 5,
+        "df_residual": 175,
+        "p_value": 0.4354953095162717,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 0.6637595934976576
+      }
+    ],
+    "families": {
+      "clinical": "global and per-term classic GT log-time PH, plus linear-versus-fixed-RCS LR",
+      "residual": "HC3 nonlinear mean and variance tests across all retained markers"
+    },
+    "interpretation": "Inference depends on model and permutation assumptions; diagnostics do not certify them.",
+    "clinical_fit": {
+      "converged": true,
+      "separated": false,
+      "finite": true,
+      "loglik": -574.744151013982,
+      "iterations": 3,
+      "separation_method": "pending Newton step per SD; coefficient magnitude alone is not separation"
+    },
+    "functional_form_encoder": {
+      "features": [
+        "z",
+        "grade",
+        "binary"
+      ],
+      "categorical_features": [
+        "grade"
+      ],
+      "numeric_features": [
+        "z",
+        "binary"
+      ],
+      "categorical_mappings": {
+        "grade": {
+          "all_levels": [
+            "A",
+            "B",
+            "C"
+          ],
+          "baseline_level": "A",
+          "retained_levels": [
+            "B",
+            "C"
+          ],
+          "level_columns": {
+            "B": "grade_B",
+            "C": "grade_C"
+          },
+          "unknown_column": null,
+          "missing_column": null
+        }
+      },
+      "categorical_levels": {
+        "grade": [
+          "B",
+          "C"
+        ]
+      },
+      "categorical_all_levels": {
+        "grade": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "categorical_unknown_columns": {
+        "grade": null
+      },
+      "categorical_missing_columns": {
+        "grade": null
+      },
+      "numeric_impute_values": {
+        "z": -0.10295851068131479,
+        "binary": 0.5
+      },
+      "scaler_params": {
+        "z": {
+          "mean": 0.0,
+          "std": 1.0,
+          "impute_value": -0.10295851068131479
+        },
+        "binary": {
+          "mean": 0.0,
+          "std": 1.0,
+          "impute_value": 0.5
+        }
+      },
+      "feature_names": [
+        "grade_B",
+        "grade_C",
+        "z",
+        "z__rcs1",
+        "z__rcs2",
+        "z__rcs3",
+        "binary"
+      ],
+      "encoded_columns": [
+        "grade_B",
+        "grade_C",
+        "z",
+        "z__rcs1",
+        "z__rcs2",
+        "z__rcs3",
+        "binary"
+      ],
+      "categorical_feature_indices": [
+        0,
+        1
+      ],
+      "numeric_feature_indices": [
+        2,
+        3
+      ],
+      "standardize_numeric": false,
+      "clinical_basis": "restricted_cubic_spline",
+      "basis_method_version": "clinical-basis/1",
+      "knot_quantiles": [
+        0.05,
+        0.275,
+        0.5,
+        0.725,
+        0.95
+      ],
+      "spline_specifications": {
+        "z": {
+          "knots": [
+            -1.6203519836365834,
+            -0.6346287021732513,
+            -0.10295851068131479,
+            0.6205283787591417,
+            1.7620672666508266
+          ],
+          "terms": [
+            "z",
+            "z__rcs1",
+            "z__rcs2",
+            "z__rcs3"
+          ],
+          "means": [
+            0.0,
+            0.8008734248671361,
+            0.19436671626295263,
+            0.06525460329118243
+          ],
+          "scales": [
+            1.0,
+            1.0640314989374426,
+            0.3462909079425405,
+            0.13573517139218083
+          ]
+        }
+      },
+      "numeric_kinds": {
+        "z": "continuous",
+        "binary": "binary_or_constant"
+      },
+      "base_encoder": {
+        "features": [
+          "z",
+          "grade",
+          "binary"
+        ],
+        "categorical_features": [
+          "grade"
+        ],
+        "numeric_features": [
+          "z",
+          "binary"
+        ],
+        "categorical_mappings": {
+          "grade": {
+            "all_levels": [
+              "A",
+              "B",
+              "C"
+            ],
+            "baseline_level": "A",
+            "retained_levels": [
+              "B",
+              "C"
+            ],
+            "level_columns": {
+              "B": "grade_B",
+              "C": "grade_C"
+            },
+            "unknown_column": null,
+            "missing_column": null
+          }
+        },
+        "categorical_levels": {
+          "grade": [
+            "B",
+            "C"
+          ]
+        },
+        "categorical_all_levels": {
+          "grade": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        "categorical_unknown_columns": {
+          "grade": null
+        },
+        "categorical_missing_columns": {
+          "grade": null
+        },
+        "numeric_impute_values": {
+          "z": -0.10295851068131479,
+          "binary": 0.5
+        },
+        "scaler_params": {
+          "z": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": -0.10295851068131479
+          },
+          "binary": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": 0.5
+          }
+        },
+        "feature_names": [
+          "grade_B",
+          "grade_C",
+          "z",
+          "binary"
+        ],
+        "encoded_columns": [
+          "grade_B",
+          "grade_C",
+          "z",
+          "binary"
+        ],
+        "categorical_feature_indices": [
+          0,
+          1
+        ],
+        "numeric_feature_indices": [
+          2,
+          3
+        ],
+        "standardize_numeric": false
+      }
+    },
+    "clinical_status": "calculated",
+    "provenance": {
+      "row_mask_hash": "23d7ddfb01b51631",
+      "n_training": 180,
+      "ties": "efron",
+      "basis_method_version": "clinical-basis/1",
+      "mean_directions": "standardized raw numeric squared/cubed beyond clinical span",
+      "variance_directions": "clinical basis conditional on stratum intercepts; squared residual/(1-h) response"
+    }
+  },
+  "recipe_hash": "c2eac324be6948ab84d7ecc4c339fd9b91d0284d477aed868520e3d57383a144",
+  "recipe_version": 3,
+  "cohort": {
+    "n": 180,
+    "events": 133,
+    "row_mask_hash": "23d7ddfb01b51631"
+  },
+  "metrics": {
+    "marker_scaling": "as_measured",
+    "marker_weight_available": 1.0,
+    "absent_markers": [],
+    "c_index": 0.7641975308641975,
+    "c_index_ci": [
+      null,
+      null
+    ],
+    "calibration_slope": 0.8797710445614765,
+    "calibration_slope_ci": [
+      0.7086458983854889,
+      1.0508961907374643
+    ],
+    "clinical_only_c_index": 0.5939043209876543,
+    "clinical_only_c_index_ci": [
+      null,
+      null
+    ],
+    "delta_c_index": 0.17029320987654317,
+    "delta_c_index_ci": [
+      null,
+      null
+    ],
+    "horizon": 3.1943712046866133,
+    "observed_risk": 0.44885469637529263,
+    "expected_risk": 0.4212206230359082,
+    "observed_expected_ratio": 1.0656047492172023,
+    "brier": 0.16232672265790404,
+    "brier_skill": 0.3438273330652126
+  },
+  "markers": [
+    {
+      "marker": "m0",
+      "marginal": {
+        "log_hr": 0.824790936790405,
+        "hazard_ratio": 2.281403757876683,
+        "ci_lower": 1.903242347463602,
+        "ci_upper": 2.7347032885171703,
+        "wald_p": 4.669616180335132e-19
+      },
+      "adjusted": {
+        "log_hr": 1.0246607934605578,
+        "hazard_ratio": 2.7861502198845507,
+        "ci_lower": 2.255252450556838,
+        "ci_upper": 3.442023994185698,
+        "wald_p": 2.098051166997458e-21
+      },
+      "same_direction": true,
+      "tested": "added_value",
+      "replication_p_holm": 1.049025583498729e-21,
+      "replicated": true
+    }
+  ],
+  "notes": []
+}

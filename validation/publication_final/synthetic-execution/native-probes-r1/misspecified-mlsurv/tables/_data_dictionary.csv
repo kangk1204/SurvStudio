@@ -1,0 +1,17 @@
+table,column,dtype,description,n_non_null,example
+cv_scores,model,str,Model name/key,3,coxph
+cv_scores,fold,int64,Cross-validation fold index (0-based),3,0
+cv_scores,harrell,float64,Harrell's C-index (per-fold score),3,0.6740139211136891
+cv_scores,ipcw,float64,IPCW C-index (per-fold score),3,0.6823746669189223
+cv_scores,integrated_brier,float64,Integrated Brier Score (per-fold score),3,0.1889518459627235
+cv_scores,ctd,float64,Antolini's C^td (per-fold score),3,0.6740139211136891
+ph_test,feature,str,Feature/variable name,3,m0
+ph_test,test_statistic,float64,,3,1.6415282730344887
+ph_test,p_value,float64,p-value (unadjusted),3,0.20011591190475675
+ph_test,p_adjusted,float64,p-value after multiplicity correction,2,0.20011591190475675
+ph_test,significant,bool,,3,False
+linearity_test,feature,str,Feature/variable name,3,z
+linearity_test,test_statistic,float64,,3,3.554500399725965
+linearity_test,p_value,float64,p-value (unadjusted),3,0.16910250662417028
+linearity_test,p_adjusted,float64,p-value after multiplicity correction,2,0.16910250662417028
+linearity_test,significant,bool,,3,False

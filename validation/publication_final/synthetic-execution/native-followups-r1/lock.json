@@ -1,0 +1,10 @@
+{
+  "input_contract_sha256": "260797d10fb40410eaa0dabf95668f1760de2f68bda5ef0f8ffceb69d0342300",
+  "source_sha256": "547038be327db00e8a4d0ad9cd82804af93ae1092450a27278788573eb76e9af",
+  "selection": "training-only maximum partial likelihood over 30 single-marker clinical Cox models",
+  "folds": "frozen A.inner_train split",
+  "ties": "Efron",
+  "persistence": "Python pickle of fixed-version native fitter",
+  "leakage_probe": "outcome_as_feature retains the event vector under a distinct feature name",
+  "prior_probe_limitation": "native-probes-r1 lifelines outcome_feature was consumed as the event column; excluded from outcome-feature assessment"
+}

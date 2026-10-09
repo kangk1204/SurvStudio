@@ -1,0 +1,74 @@
+[
+  {
+    "category": "SuggestionWarning",
+    "message": "Consider using cv_repeats > 1 for more stable CV estimates due to small sample size (n=182). Example: setup(cv_repeats=3)"
+  },
+  {
+    "category": "DeprecationWarning",
+    "message": "datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC)."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of var will be keyword-only."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of mean will be keyword-only."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of std will be keyword-only."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of var will be keyword-only."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of var will be keyword-only."
+  },
+  {
+    "category": "DeprecationWarning",
+    "message": "datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC)."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of var will be keyword-only."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of mean will be keyword-only."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of std will be keyword-only."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of var will be keyword-only."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of var will be keyword-only."
+  },
+  {
+    "category": "Pandas4Warning",
+    "message": "Starting with pandas version 4.0 all arguments of var will be keyword-only."
+  },
+  {
+    "category": "MethodologicalWarning",
+    "message": "Log-hazard linearity assumption violated (Harrell/rms Wald, BH-FDR-adjusted per-feature p < 0.05; Harrell 2015 \u00a75.5). 1 continuous feature(s) with significant non-linearity: m0. Linearity-assuming models (CoxNet, CoxPH, Weibull-AFT) may produce biased estimates for these features. Consider non-linear transformations (log, Box-Cox), or switch to a flexible model (RSF, GBSA, DeepSurv). Inspect learner.linearity_test_result and the Linearity Assumption Assessment section of the report for per-feature details."
+  },
+  {
+    "category": "ClampWarning",
+    "message": "CoxPH: 31 linear predictor(s) clamped to [-20, 20] to prevent overflow. Survival estimates for these samples may be extreme (near 0 or 1). Consider stronger regularization. (2 occurrences across 3 CV folds)"
+  },
+  {
+    "category": "ClampWarning",
+    "message": "CoxPH: 34 linear predictor(s) clamped to [-20, 20] to prevent overflow. Survival estimates for these samples may be extreme (near 0 or 1). Consider stronger regularization. (2 occurrences across 3 CV folds)"
+  },
+  {
+    "category": "ClampWarning",
+    "message": "CoxPH: 21 linear predictor(s) clamped to [-20, 20] to prevent overflow. Survival estimates for these samples may be extreme (near 0 or 1). Consider stronger regularization. (2 occurrences across 3 CV folds)"
+  }
+]

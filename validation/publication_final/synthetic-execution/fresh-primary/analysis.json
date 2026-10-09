@@ -1,0 +1,1405 @@
+{
+  "method_version": "marker-inference/2",
+  "inference": {
+    "method_version": "marker-inference/2",
+    "threshold": 0.01,
+    "status": "assumption_dependent",
+    "allowed": true,
+    "reasons": [],
+    "clinical_basis": "linear",
+    "clinical_tests": [
+      {
+        "name": "PH_global",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.9904754022643876,
+        "statistic": 0.00014250621063849274,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "PH_z",
+        "method": "classic GT log-time (pre-survival 3.0)",
+        "p_value": 0.9904754022643877,
+        "statistic": 0.0001425062106384925,
+        "df": 1,
+        "p_holm": 1.0
+      },
+      {
+        "name": "functional_form_LR",
+        "statistic": 0.5941296898657811,
+        "df": 3,
+        "method": "linear versus fixed five-knot RCS Cox LR",
+        "p_value": 0.8977749221238259,
+        "p_holm": 1.0
+      }
+    ],
+    "residual_tests": [
+      {
+        "marker": "m0",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 2.7580537243630143,
+        "df": 2,
+        "n_observations": 100,
+        "n_parameters": 4,
+        "df_residual": 96,
+        "p_value": 0.2518234928248052,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m0",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.03186806073671549,
+        "df": 1,
+        "n_observations": 100,
+        "n_parameters": 2,
+        "df_residual": 98,
+        "p_value": 0.8583175402254886,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m1",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.17507047572040957,
+        "df": 2,
+        "n_observations": 100,
+        "n_parameters": 4,
+        "df_residual": 96,
+        "p_value": 0.9161865866271923,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m1",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.8794721681395573,
+        "df": 1,
+        "n_observations": 100,
+        "n_parameters": 2,
+        "df_residual": 98,
+        "p_value": 0.34834628904136644,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m2",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.9136790574745167,
+        "df": 2,
+        "n_observations": 100,
+        "n_parameters": 4,
+        "df_residual": 96,
+        "p_value": 0.6332819554644306,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m2",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.6614189252350854,
+        "df": 1,
+        "n_observations": 100,
+        "n_parameters": 2,
+        "df_residual": 98,
+        "p_value": 0.4160594558433849,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m3",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 1.4934430094777726,
+        "df": 2,
+        "n_observations": 100,
+        "n_parameters": 4,
+        "df_residual": 96,
+        "p_value": 0.4739177456455579,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m3",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.030102327912081374,
+        "df": 1,
+        "n_observations": 100,
+        "n_parameters": 2,
+        "df_residual": 98,
+        "p_value": 0.8622582514078714,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m4",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 6.031437352273697,
+        "df": 2,
+        "n_observations": 100,
+        "n_parameters": 4,
+        "df_residual": 96,
+        "p_value": 0.04901060007838068,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 0.5881272009405681
+      },
+      {
+        "marker": "m4",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 0.0029024880129466697,
+        "df": 1,
+        "n_observations": 100,
+        "n_parameters": 2,
+        "df_residual": 98,
+        "p_value": 0.9570349590108242,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m5",
+        "diagnostic": "nonlinear_mean",
+        "status": "calculated",
+        "statistic": 0.22444736847699798,
+        "df": 2,
+        "n_observations": 100,
+        "n_parameters": 4,
+        "df_residual": 96,
+        "p_value": 0.893844296256357,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      },
+      {
+        "marker": "m5",
+        "diagnostic": "variance",
+        "status": "calculated",
+        "statistic": 1.056571877290031,
+        "df": 1,
+        "n_observations": 100,
+        "n_parameters": 2,
+        "df_residual": 98,
+        "p_value": 0.3039983644987948,
+        "method": "OLS HC3 Wald chi-square",
+        "p_holm": 1.0
+      }
+    ],
+    "families": {
+      "clinical": "global and per-term classic GT log-time PH, plus linear-versus-fixed-RCS LR",
+      "residual": "HC3 nonlinear mean and variance tests across all retained markers"
+    },
+    "interpretation": "Inference depends on model and permutation assumptions; diagnostics do not certify them.",
+    "clinical_fit": {
+      "converged": true,
+      "separated": false,
+      "finite": true,
+      "loglik": -195.49469185182585,
+      "iterations": 4,
+      "separation_method": "pending Newton step per SD; coefficient magnitude alone is not separation"
+    },
+    "functional_form_encoder": {
+      "features": [
+        "z"
+      ],
+      "categorical_features": [],
+      "numeric_features": [
+        "z"
+      ],
+      "categorical_mappings": {},
+      "categorical_levels": {},
+      "categorical_all_levels": {},
+      "categorical_unknown_columns": {},
+      "categorical_missing_columns": {},
+      "numeric_impute_values": {
+        "z": -0.018795707417945163
+      },
+      "scaler_params": {
+        "z": {
+          "mean": 0.0,
+          "std": 1.0,
+          "impute_value": -0.018795707417945163
+        }
+      },
+      "feature_names": [
+        "z",
+        "z__rcs1",
+        "z__rcs2",
+        "z__rcs3"
+      ],
+      "encoded_columns": [
+        "z",
+        "z__rcs1",
+        "z__rcs2",
+        "z__rcs3"
+      ],
+      "categorical_feature_indices": [],
+      "numeric_feature_indices": [
+        0
+      ],
+      "standardize_numeric": false,
+      "clinical_basis": "restricted_cubic_spline",
+      "basis_method_version": "clinical-basis/1",
+      "knot_quantiles": [
+        0.05,
+        0.275,
+        0.5,
+        0.725,
+        0.95
+      ],
+      "spline_specifications": {
+        "z": {
+          "knots": [
+            -2.075236965373497,
+            -0.5938064157368598,
+            -0.01879570741794516,
+            0.6979847060283755,
+            1.6993245623955515
+          ],
+          "terms": [
+            "z",
+            "z__rcs1",
+            "z__rcs2",
+            "z__rcs3"
+          ],
+          "means": [
+            0.0,
+            1.0141661285104753,
+            0.1267057525888117,
+            0.034633551108374856
+          ],
+          "scales": [
+            1.0,
+            1.0600801372783555,
+            0.20771536759627846,
+            0.07108117338668078
+          ]
+        }
+      },
+      "numeric_kinds": {
+        "z": "continuous"
+      },
+      "base_encoder": {
+        "features": [
+          "z"
+        ],
+        "categorical_features": [],
+        "numeric_features": [
+          "z"
+        ],
+        "categorical_mappings": {},
+        "categorical_levels": {},
+        "categorical_all_levels": {},
+        "categorical_unknown_columns": {},
+        "categorical_missing_columns": {},
+        "numeric_impute_values": {
+          "z": -0.018795707417945163
+        },
+        "scaler_params": {
+          "z": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": -0.018795707417945163
+          }
+        },
+        "feature_names": [
+          "z"
+        ],
+        "encoded_columns": [
+          "z"
+        ],
+        "categorical_feature_indices": [],
+        "numeric_feature_indices": [
+          0
+        ],
+        "standardize_numeric": false
+      }
+    },
+    "clinical_status": "calculated",
+    "provenance": {
+      "row_mask_hash": "3e6eb4bbfca540e9",
+      "n_training": 100,
+      "ties": "efron",
+      "basis_method_version": "clinical-basis/1",
+      "mean_directions": "standardized raw numeric squared/cubed beyond clinical span",
+      "variance_directions": "clinical basis conditional on stratum intercepts; squared residual/(1-h) response"
+    },
+    "engineering_qualification": {
+      "policy_version": "marker-qualification/1",
+      "status": "passed_supported_conditions_only",
+      "requested_method_version": "marker-inference/2",
+      "evaluated_method_version": "marker-inference/2",
+      "kernel_sources_match": true,
+      "clinical_basis": "linear",
+      "registry_sha256": "9d14644f58ddbfbb6c5e68f31054a3d183ef85e8d20b9e4fe01660b6c351a39c",
+      "study_git_revision": "1ed6c10ddad27be6bce4b0896f55ac8428e36dd9",
+      "summary_sha256": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+      "supported_conditions": [
+        "independent",
+        "linear",
+        "correlated",
+        "z_dependent_censoring",
+        "partial_weak",
+        "partial_strong"
+      ],
+      "qualification_dimensions": {
+        "n": 180,
+        "markers": 30,
+        "permutations": 999,
+        "datasets_per_condition": 5000
+      },
+      "claim_boundary": "Finite main-study engineering gates in prespecified supported conditions; not universal 5% error control or certification of an individual dataset.",
+      "extension_limitations": "The 500-subject, 300-marker and 3000-marker extensions do not establish broader qualification. In particular, large independent and linear marker families substantially reduce availability; power retention and conditional error bounds also remain limiting.",
+      "failed_conditions": [],
+      "previous_method_evidence": null
+    }
+  },
+  "clinical_basis": "linear",
+  "primary_lens": "added_value",
+  "marker_table": [
+    {
+      "marker": "m0",
+      "tier": "robust",
+      "pattern": "M+ A+",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 46.24308161020318,
+        "p_value": 1.0445473314734458e-11,
+        "q_bh": 6.267283988840674e-11,
+        "p_fwer": 0.001,
+        "q_perm": 0.0,
+        "log_hr_one_step": 0.8858712448951496,
+        "selection_frequency": 1.0,
+        "direction_consistency": 1.0,
+        "median_rank": 1.0,
+        "rank_interval": [
+          1.0,
+          1.0
+        ]
+      },
+      "added_value": {
+        "chi2": 38.616487076425805,
+        "p_value": 5.15813595968693e-10,
+        "q_bh": 3.094881575812158e-09,
+        "p_fwer": 0.001,
+        "q_perm": 0.0,
+        "log_hr_one_step": 0.8886025761999017,
+        "selection_frequency": 1.0,
+        "direction_consistency": 1.0,
+        "median_rank": 1.0,
+        "rank_interval": [
+          1.0,
+          1.0
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 2.8207192483046994,
+          "ci_lower": 2.0654235326848474,
+          "ci_upper": 3.8522157571304603,
+          "wald_p": 6.961029043415389e-11
+        },
+        "adjusted": {
+          "hazard_ratio": 2.695280713219089,
+          "ci_lower": 1.9515015047288091,
+          "ci_upper": 3.722537802531861,
+          "wald_p": 1.7632541378573695e-09,
+          "lr_statistic": 41.09652042934795,
+          "lr_p": 1.4489405685973962e-10,
+          "delta_c_apparent": 0.15319701395650764
+        }
+      },
+      "inference_status": "assumption_dependent"
+    },
+    {
+      "marker": "m1",
+      "tier": "suggestive",
+      "pattern": "M+ A\u00b7",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 12.222466951597497,
+        "p_value": 0.00047217455973038813,
+        "q_bh": 0.0014165236791911645,
+        "p_fwer": 0.003,
+        "q_perm": 0.0015015015015015015,
+        "log_hr_one_step": 0.49967948655601924,
+        "selection_frequency": 1.0,
+        "direction_consistency": 1.0,
+        "median_rank": 3.0,
+        "rank_interval": [
+          2.05,
+          3.95
+        ]
+      },
+      "added_value": {
+        "chi2": 4.511017581478103,
+        "p_value": 0.03367719960779066,
+        "q_bh": 0.07158080816734509,
+        "p_fwer": 0.211,
+        "q_perm": 0.0950950950950951,
+        "log_hr_one_step": 0.3486442214193764,
+        "selection_frequency": 0.0,
+        "direction_consistency": 1.0,
+        "median_rank": 4.0,
+        "rank_interval": [
+          3.05,
+          4.95
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.607055660340493,
+          "ci_lower": 1.2297483525797568,
+          "ci_upper": 2.100127143910867,
+          "wald_p": 0.0005113910234621084
+        },
+        "adjusted": {
+          "hazard_ratio": 1.398165939833538,
+          "ci_lower": 1.0259435722422523,
+          "ci_upper": 1.905434224845462,
+          "wald_p": 0.03382633419371268,
+          "lr_statistic": 4.392754100611228,
+          "lr_p": 0.036091966760519366,
+          "delta_c_apparent": 0.020123336579032758
+        }
+      },
+      "inference_status": "assumption_dependent"
+    },
+    {
+      "marker": "m5",
+      "tier": "suggestive",
+      "pattern": "M+ A\u00b7",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 8.036325787628881,
+        "p_value": 0.004584844020198764,
+        "q_bh": 0.0082509469848603,
+        "p_fwer": 0.021,
+        "q_perm": 0.00975975975975976,
+        "log_hr_one_step": 0.3855091221707953,
+        "selection_frequency": 0.3333333333333333,
+        "direction_consistency": 1.0,
+        "median_rank": 4.0,
+        "rank_interval": [
+          3.05,
+          4.95
+        ]
+      },
+      "added_value": {
+        "chi2": 4.4070633186917405,
+        "p_value": 0.035790404083672546,
+        "q_bh": 0.07158080816734509,
+        "p_fwer": 0.211,
+        "q_perm": 0.0950950950950951,
+        "log_hr_one_step": 0.31671427791231144,
+        "selection_frequency": 0.0,
+        "direction_consistency": 1.0,
+        "median_rank": 3.0,
+        "rank_interval": [
+          2.05,
+          3.95
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.5387744340726435,
+          "ci_lower": 1.1430925197589061,
+          "ci_upper": 2.0714217948473594,
+          "wald_p": 0.00448617481985803
+        },
+        "adjusted": {
+          "hazard_ratio": 1.393026182210362,
+          "ci_lower": 1.0216786114147245,
+          "ci_upper": 1.8993467443118188,
+          "wald_p": 0.036122313432728814,
+          "lr_statistic": 4.539674495148972,
+          "lr_p": 0.033117888970661966,
+          "delta_c_apparent": 0.005517689061992903
+        }
+      },
+      "inference_status": "assumption_dependent"
+    },
+    {
+      "marker": "m3",
+      "tier": "marginal only",
+      "pattern": "M+ A\u00b7",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 7.707025587701478,
+        "p_value": 0.0055006313232402,
+        "q_bh": 0.0082509469848603,
+        "p_fwer": 0.021,
+        "q_perm": 0.00975975975975976,
+        "log_hr_one_step": 0.3067497760269446,
+        "selection_frequency": 0.6666666666666666,
+        "direction_consistency": 1.0,
+        "median_rank": 5.0,
+        "rank_interval": [
+          2.15,
+          5.0
+        ]
+      },
+      "added_value": {
+        "chi2": 1.9445596421878832,
+        "p_value": 0.1631743093522403,
+        "q_bh": 0.24476146402836046,
+        "p_fwer": 0.466,
+        "q_perm": 0.27127127127127126,
+        "log_hr_one_step": 0.17835236375216162,
+        "selection_frequency": 0.0,
+        "direction_consistency": 1.0,
+        "median_rank": 5.0,
+        "rank_interval": [
+          3.1,
+          5.95
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.338033362631514,
+          "ci_lower": 1.0880675973284408,
+          "ci_upper": 1.6454246812521998,
+          "wald_p": 0.005781690198578174
+        },
+        "adjusted": {
+          "hazard_ratio": 1.1848545058502362,
+          "ci_lower": 0.9330476651269345,
+          "ci_upper": 1.5046178802051016,
+          "wald_p": 0.16408234849200243,
+          "lr_statistic": 1.8789916432657492,
+          "lr_p": 0.1704487983206881,
+          "delta_c_apparent": -0.0025965595585848433
+        }
+      },
+      "inference_status": "assumption_dependent"
+    },
+    {
+      "marker": "m4",
+      "tier": "not supported",
+      "pattern": "M\u00b7 A\u00b7",
+      "direction": "higher values, higher hazard",
+      "marginal": {
+        "chi2": 3.9194027198695554,
+        "p_value": 0.04773183568696205,
+        "q_bh": 0.05727820282435446,
+        "p_fwer": 0.103,
+        "q_perm": 0.06466466466466467,
+        "log_hr_one_step": 0.24716965146890751,
+        "selection_frequency": 1.0,
+        "direction_consistency": 1.0,
+        "median_rank": 3.0,
+        "rank_interval": [
+          2.05,
+          3.95
+        ]
+      },
+      "added_value": {
+        "chi2": 0.7486344545491181,
+        "p_value": 0.386908915208097,
+        "q_bh": 0.46429069824971647,
+        "p_fwer": 0.649,
+        "q_perm": 0.48308308308308306,
+        "log_hr_one_step": 0.12115244000883382,
+        "selection_frequency": 0.0,
+        "direction_consistency": 1.0,
+        "median_rank": 2.0,
+        "rank_interval": [
+          2.0,
+          3.9
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.2873950477097387,
+          "ci_lower": 1.0012998455233257,
+          "ci_upper": 1.6552344597649802,
+          "wald_p": 0.048827551930830826
+        },
+        "adjusted": {
+          "hazard_ratio": 1.1290330463732734,
+          "ci_lower": 0.8574591459140354,
+          "ci_upper": 1.4866196551488071,
+          "wald_p": 0.38730750306126993,
+          "lr_statistic": 0.749286435739009,
+          "lr_p": 0.3867022435069739,
+          "delta_c_apparent": 0.01071080817916259
+        }
+      },
+      "inference_status": "assumption_dependent"
+    },
+    {
+      "marker": "m2",
+      "tier": "not supported",
+      "pattern": "M\u00b7 A\u00b7",
+      "direction": "higher values, lower hazard",
+      "marginal": {
+        "chi2": 2.2484224309744656,
+        "p_value": 0.13375069546972365,
+        "q_bh": 0.13375069546972365,
+        "p_fwer": 0.152,
+        "q_perm": 0.14481147814481146,
+        "log_hr_one_step": 0.16881879641215944,
+        "selection_frequency": 0.0,
+        "direction_consistency": 1.0,
+        "median_rank": 6.0,
+        "rank_interval": [
+          6.0,
+          6.0
+        ]
+      },
+      "added_value": {
+        "chi2": 0.06303396789774493,
+        "p_value": 0.801763341578012,
+        "q_bh": 0.801763341578012,
+        "p_fwer": 0.8,
+        "q_perm": 0.8063063063063063,
+        "log_hr_one_step": -0.03192465588802616,
+        "selection_frequency": 0.0,
+        "direction_consistency": 0.6666666666666666,
+        "median_rank": 6.0,
+        "rank_interval": [
+          5.05,
+          6.0
+        ]
+      },
+      "exact": {
+        "marginal": {
+          "hazard_ratio": 1.1773798308064152,
+          "ci_lower": 0.9511989375701739,
+          "ci_upper": 1.4573431605493938,
+          "wald_p": 0.13354140643270657
+        },
+        "adjusted": {
+          "hazard_ratio": 0.9684265927181466,
+          "ci_lower": 0.7538662092623756,
+          "ci_upper": 1.2440537246009784,
+          "wald_p": 0.8017652525937625,
+          "lr_statistic": 0.06324138640354704,
+          "lr_p": 0.8014442588858625,
+          "delta_c_apparent": -0.0012982797792924217
+        }
+      },
+      "inference_status": "assumption_dependent"
+    }
+  ],
+  "tier_counts": {
+    "robust": 1,
+    "suggestive": 2,
+    "marginal only": 1,
+    "not supported": 2,
+    "inference withheld": 0
+  },
+  "cohort": {
+    "n": 100,
+    "events": 51,
+    "n_markers_evaluated": 6,
+    "dropped_markers": [],
+    "clinical_columns": [
+      "z"
+    ],
+    "clinical_design_columns": [
+      "z"
+    ],
+    "dropped_clinical_columns": [],
+    "strata_columns": [],
+    "row_mask_hash": "3e6eb4bbfca540e9",
+    "notes": []
+  },
+  "duplicates": {
+    "checked": false,
+    "identical_checked": false,
+    "markers_used": 0,
+    "note": "Near-identical profiles are checked on panels of at least 200 markers.",
+    "pairs": [],
+    "identical": [],
+    "n_pairs": 0,
+    "n_identical": 0,
+    "mostly_missing": [],
+    "n_mostly_missing": 0
+  },
+  "null": {
+    "n_permutations": 999,
+    "lens2_null": "smith",
+    "assumption_note": "Added-value residual permutation approximates a conditional null and assumes exchangeable residuals after the declared clinical-basis adjustment. Nonlinear marker-covariate relations can inflate false positives; family-wise error control also requires subset pivotality. Clinical Cox baseline misspecification, including non-proportional hazards, can invalidate conditional-null interpretation; multiplicity adjustment does not establish model adequacy."
+  },
+  "resampling": {
+    "scheme": "event-stratified subsampling without replacement",
+    "fraction": 0.632,
+    "n_valid": 3,
+    "n_failed": 0,
+    "n_withheld": 0,
+    "inference_policy": "Training diagnostics are refitted; withheld subsamples select no added-value markers and remain in the selection-frequency denominator.",
+    "stability_assessed": true,
+    "note": null
+  },
+  "signature": {
+    "markers": [
+      "m0"
+    ],
+    "clinical_only": false,
+    "apparent_c": 0.7900032456994482,
+    "correction_method": "subsampling_train_vs_left_out_gap",
+    "correction_note": "The apparent C-index is adjusted by the mean train-versus-left-out gap of the whole selection procedure. This heuristic includes training-size effects; use locked external validation for final performance claims.",
+    "optimism_corrected_c": 0.7556963714450521,
+    "signature_c_in_subsample": 0.7949554240022249,
+    "signature_c_left_out": 0.7606485497478288,
+    "signature_c_left_out_ci": [
+      0.5372101563894647,
+      0.9840869431061929
+    ],
+    "signature_optimism": 0.03430687425439616,
+    "clinical_c_left_out": 0.5878235237937314,
+    "signature_gain_left_out": 0.1728250259540974,
+    "signature_gain_left_out_sd": 0.01069563387607728,
+    "signature_gain_left_out_ci": [
+      0.1286693491955251,
+      0.2169807027126697
+    ],
+    "n_signature_replicates": 3,
+    "n_clinical_replicates": 3,
+    "top_marker_log_hr_in_subsample": 1.02325474680921,
+    "top_marker_log_hr_left_out": 0.9417740466771689,
+    "top_marker_shrinkage": 0.9203710509175548,
+    "n_top_marker_replicates": 3,
+    "notes": []
+  },
+  "nonlinear_lens": null,
+  "locked_recipe": {
+    "recipe_version": 3,
+    "inference": {
+      "method_version": "marker-inference/2",
+      "threshold": 0.01,
+      "status": "assumption_dependent",
+      "allowed": true,
+      "reasons": [],
+      "clinical_basis": "linear",
+      "clinical_tests": [
+        {
+          "name": "PH_global",
+          "method": "classic GT log-time (pre-survival 3.0)",
+          "p_value": 0.9904754022643876,
+          "statistic": 0.00014250621063849274,
+          "df": 1,
+          "p_holm": 1.0
+        },
+        {
+          "name": "PH_z",
+          "method": "classic GT log-time (pre-survival 3.0)",
+          "p_value": 0.9904754022643877,
+          "statistic": 0.0001425062106384925,
+          "df": 1,
+          "p_holm": 1.0
+        },
+        {
+          "name": "functional_form_LR",
+          "statistic": 0.5941296898657811,
+          "df": 3,
+          "method": "linear versus fixed five-knot RCS Cox LR",
+          "p_value": 0.8977749221238259,
+          "p_holm": 1.0
+        }
+      ],
+      "residual_tests": [
+        {
+          "marker": "m0",
+          "diagnostic": "nonlinear_mean",
+          "status": "calculated",
+          "statistic": 2.7580537243630143,
+          "df": 2,
+          "n_observations": 100,
+          "n_parameters": 4,
+          "df_residual": 96,
+          "p_value": 0.2518234928248052,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        },
+        {
+          "marker": "m0",
+          "diagnostic": "variance",
+          "status": "calculated",
+          "statistic": 0.03186806073671549,
+          "df": 1,
+          "n_observations": 100,
+          "n_parameters": 2,
+          "df_residual": 98,
+          "p_value": 0.8583175402254886,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        },
+        {
+          "marker": "m1",
+          "diagnostic": "nonlinear_mean",
+          "status": "calculated",
+          "statistic": 0.17507047572040957,
+          "df": 2,
+          "n_observations": 100,
+          "n_parameters": 4,
+          "df_residual": 96,
+          "p_value": 0.9161865866271923,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        },
+        {
+          "marker": "m1",
+          "diagnostic": "variance",
+          "status": "calculated",
+          "statistic": 0.8794721681395573,
+          "df": 1,
+          "n_observations": 100,
+          "n_parameters": 2,
+          "df_residual": 98,
+          "p_value": 0.34834628904136644,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        },
+        {
+          "marker": "m2",
+          "diagnostic": "nonlinear_mean",
+          "status": "calculated",
+          "statistic": 0.9136790574745167,
+          "df": 2,
+          "n_observations": 100,
+          "n_parameters": 4,
+          "df_residual": 96,
+          "p_value": 0.6332819554644306,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        },
+        {
+          "marker": "m2",
+          "diagnostic": "variance",
+          "status": "calculated",
+          "statistic": 0.6614189252350854,
+          "df": 1,
+          "n_observations": 100,
+          "n_parameters": 2,
+          "df_residual": 98,
+          "p_value": 0.4160594558433849,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        },
+        {
+          "marker": "m3",
+          "diagnostic": "nonlinear_mean",
+          "status": "calculated",
+          "statistic": 1.4934430094777726,
+          "df": 2,
+          "n_observations": 100,
+          "n_parameters": 4,
+          "df_residual": 96,
+          "p_value": 0.4739177456455579,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        },
+        {
+          "marker": "m3",
+          "diagnostic": "variance",
+          "status": "calculated",
+          "statistic": 0.030102327912081374,
+          "df": 1,
+          "n_observations": 100,
+          "n_parameters": 2,
+          "df_residual": 98,
+          "p_value": 0.8622582514078714,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        },
+        {
+          "marker": "m4",
+          "diagnostic": "nonlinear_mean",
+          "status": "calculated",
+          "statistic": 6.031437352273697,
+          "df": 2,
+          "n_observations": 100,
+          "n_parameters": 4,
+          "df_residual": 96,
+          "p_value": 0.04901060007838068,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 0.5881272009405681
+        },
+        {
+          "marker": "m4",
+          "diagnostic": "variance",
+          "status": "calculated",
+          "statistic": 0.0029024880129466697,
+          "df": 1,
+          "n_observations": 100,
+          "n_parameters": 2,
+          "df_residual": 98,
+          "p_value": 0.9570349590108242,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        },
+        {
+          "marker": "m5",
+          "diagnostic": "nonlinear_mean",
+          "status": "calculated",
+          "statistic": 0.22444736847699798,
+          "df": 2,
+          "n_observations": 100,
+          "n_parameters": 4,
+          "df_residual": 96,
+          "p_value": 0.893844296256357,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        },
+        {
+          "marker": "m5",
+          "diagnostic": "variance",
+          "status": "calculated",
+          "statistic": 1.056571877290031,
+          "df": 1,
+          "n_observations": 100,
+          "n_parameters": 2,
+          "df_residual": 98,
+          "p_value": 0.3039983644987948,
+          "method": "OLS HC3 Wald chi-square",
+          "p_holm": 1.0
+        }
+      ],
+      "families": {
+        "clinical": "global and per-term classic GT log-time PH, plus linear-versus-fixed-RCS LR",
+        "residual": "HC3 nonlinear mean and variance tests across all retained markers"
+      },
+      "interpretation": "Inference depends on model and permutation assumptions; diagnostics do not certify them.",
+      "clinical_fit": {
+        "converged": true,
+        "separated": false,
+        "finite": true,
+        "loglik": -195.49469185182585,
+        "iterations": 4,
+        "separation_method": "pending Newton step per SD; coefficient magnitude alone is not separation"
+      },
+      "functional_form_encoder": {
+        "features": [
+          "z"
+        ],
+        "categorical_features": [],
+        "numeric_features": [
+          "z"
+        ],
+        "categorical_mappings": {},
+        "categorical_levels": {},
+        "categorical_all_levels": {},
+        "categorical_unknown_columns": {},
+        "categorical_missing_columns": {},
+        "numeric_impute_values": {
+          "z": -0.018795707417945163
+        },
+        "scaler_params": {
+          "z": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": -0.018795707417945163
+          }
+        },
+        "feature_names": [
+          "z",
+          "z__rcs1",
+          "z__rcs2",
+          "z__rcs3"
+        ],
+        "encoded_columns": [
+          "z",
+          "z__rcs1",
+          "z__rcs2",
+          "z__rcs3"
+        ],
+        "categorical_feature_indices": [],
+        "numeric_feature_indices": [
+          0
+        ],
+        "standardize_numeric": false,
+        "clinical_basis": "restricted_cubic_spline",
+        "basis_method_version": "clinical-basis/1",
+        "knot_quantiles": [
+          0.05,
+          0.275,
+          0.5,
+          0.725,
+          0.95
+        ],
+        "spline_specifications": {
+          "z": {
+            "knots": [
+              -2.075236965373497,
+              -0.5938064157368598,
+              -0.01879570741794516,
+              0.6979847060283755,
+              1.6993245623955515
+            ],
+            "terms": [
+              "z",
+              "z__rcs1",
+              "z__rcs2",
+              "z__rcs3"
+            ],
+            "means": [
+              0.0,
+              1.0141661285104753,
+              0.1267057525888117,
+              0.034633551108374856
+            ],
+            "scales": [
+              1.0,
+              1.0600801372783555,
+              0.20771536759627846,
+              0.07108117338668078
+            ]
+          }
+        },
+        "numeric_kinds": {
+          "z": "continuous"
+        },
+        "base_encoder": {
+          "features": [
+            "z"
+          ],
+          "categorical_features": [],
+          "numeric_features": [
+            "z"
+          ],
+          "categorical_mappings": {},
+          "categorical_levels": {},
+          "categorical_all_levels": {},
+          "categorical_unknown_columns": {},
+          "categorical_missing_columns": {},
+          "numeric_impute_values": {
+            "z": -0.018795707417945163
+          },
+          "scaler_params": {
+            "z": {
+              "mean": 0.0,
+              "std": 1.0,
+              "impute_value": -0.018795707417945163
+            }
+          },
+          "feature_names": [
+            "z"
+          ],
+          "encoded_columns": [
+            "z"
+          ],
+          "categorical_feature_indices": [],
+          "numeric_feature_indices": [
+            0
+          ],
+          "standardize_numeric": false
+        }
+      },
+      "clinical_status": "calculated",
+      "provenance": {
+        "row_mask_hash": "3e6eb4bbfca540e9",
+        "n_training": 100,
+        "ties": "efron",
+        "basis_method_version": "clinical-basis/1",
+        "mean_directions": "standardized raw numeric squared/cubed beyond clinical span",
+        "variance_directions": "clinical basis conditional on stratum intercepts; squared residual/(1-h) response"
+      },
+      "engineering_qualification": {
+        "policy_version": "marker-qualification/1",
+        "status": "passed_supported_conditions_only",
+        "requested_method_version": "marker-inference/2",
+        "evaluated_method_version": "marker-inference/2",
+        "kernel_sources_match": true,
+        "clinical_basis": "linear",
+        "registry_sha256": "9d14644f58ddbfbb6c5e68f31054a3d183ef85e8d20b9e4fe01660b6c351a39c",
+        "study_git_revision": "1ed6c10ddad27be6bce4b0896f55ac8428e36dd9",
+        "summary_sha256": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+        "supported_conditions": [
+          "independent",
+          "linear",
+          "correlated",
+          "z_dependent_censoring",
+          "partial_weak",
+          "partial_strong"
+        ],
+        "qualification_dimensions": {
+          "n": 180,
+          "markers": 30,
+          "permutations": 999,
+          "datasets_per_condition": 5000
+        },
+        "claim_boundary": "Finite main-study engineering gates in prespecified supported conditions; not universal 5% error control or certification of an individual dataset.",
+        "extension_limitations": "The 500-subject, 300-marker and 3000-marker extensions do not establish broader qualification. In particular, large independent and linear marker families substantially reduce availability; power retention and conditional error bounds also remain limiting.",
+        "failed_conditions": [],
+        "previous_method_evidence": null
+      }
+    },
+    "created_with": "SurvStudio 0.4.0.dev0",
+    "outcome": {
+      "time_column": "time",
+      "event_column": "event",
+      "event_positive_value": null
+    },
+    "clinical": {
+      "columns": [
+        "z"
+      ],
+      "categorical": [],
+      "encoder": {
+        "features": [
+          "z"
+        ],
+        "categorical_features": [],
+        "numeric_features": [
+          "z"
+        ],
+        "categorical_mappings": {},
+        "categorical_levels": {},
+        "categorical_all_levels": {},
+        "categorical_unknown_columns": {},
+        "categorical_missing_columns": {},
+        "numeric_impute_values": {
+          "z": -0.018795707417945163
+        },
+        "scaler_params": {
+          "z": {
+            "mean": 0.0,
+            "std": 1.0,
+            "impute_value": -0.018795707417945163
+          }
+        },
+        "feature_names": [
+          "z"
+        ],
+        "encoded_columns": [
+          "z"
+        ],
+        "categorical_feature_indices": [],
+        "numeric_feature_indices": [
+          0
+        ],
+        "standardize_numeric": false,
+        "clinical_basis": "linear",
+        "basis_method_version": "clinical-basis/1",
+        "knot_quantiles": [
+          0.05,
+          0.275,
+          0.5,
+          0.725,
+          0.95
+        ],
+        "spline_specifications": {},
+        "numeric_kinds": {
+          "z": "continuous"
+        },
+        "base_encoder": {
+          "features": [
+            "z"
+          ],
+          "categorical_features": [],
+          "numeric_features": [
+            "z"
+          ],
+          "categorical_mappings": {},
+          "categorical_levels": {},
+          "categorical_all_levels": {},
+          "categorical_unknown_columns": {},
+          "categorical_missing_columns": {},
+          "numeric_impute_values": {
+            "z": -0.018795707417945163
+          },
+          "scaler_params": {
+            "z": {
+              "mean": 0.0,
+              "std": 1.0,
+              "impute_value": -0.018795707417945163
+            }
+          },
+          "feature_names": [
+            "z"
+          ],
+          "encoded_columns": [
+            "z"
+          ],
+          "categorical_feature_indices": [],
+          "numeric_feature_indices": [
+            0
+          ],
+          "standardize_numeric": false
+        }
+      },
+      "basis": "linear"
+    },
+    "strata_columns": [],
+    "markers": [
+      "m0"
+    ],
+    "marker_medians": {
+      "m0": -0.045569886112199365
+    },
+    "marker_scale": {
+      "m0": {
+        "mean": -0.04924759036098367,
+        "sd": 1.1953028802605126
+      }
+    },
+    "marker_development_log_hr": {
+      "m0": 0.8886025761999017
+    },
+    "primary_lens": "added_value",
+    "model": {
+      "terms": [
+        "z",
+        "m0"
+      ],
+      "coefficients": [
+        0.18283499090123473,
+        0.9915023596858045
+      ],
+      "ties": "efron",
+      "baseline": {
+        "times": [
+          0.0018132426821951294,
+          0.1325698392129406,
+          0.14023621085586258,
+          0.15385175500438783,
+          0.1784912705515431,
+          0.44344644164285996,
+          0.5341867196935824,
+          0.7669563417532984,
+          0.9358523291201097,
+          1.2169842438904659,
+          1.4783002016967335,
+          1.5449198525271677,
+          1.635879248666375,
+          1.7596220478413152,
+          1.8702317133862336,
+          1.8896140777993142,
+          2.15481951452677,
+          2.3535886398841703,
+          2.3545470772825086,
+          2.5870236959287807,
+          2.787313656679289,
+          2.8346275239734773,
+          3.329858162754066,
+          3.5857126788447697,
+          3.756062838193891,
+          3.8427958973207264,
+          3.9949275917625875,
+          4.150501896866725,
+          4.703503070148678,
+          4.941554186823118,
+          5.131130076042919,
+          5.299026015375071,
+          5.3172892771294356,
+          5.415004529296585,
+          6.3423587048042,
+          6.572455692251476,
+          6.742034646725801,
+          7.06724718985287,
+          7.533642565444565,
+          8.588366602846614,
+          8.728926056842589,
+          9.044398438771804,
+          9.945891416082276,
+          10.177307647497795,
+          12.909701402617523,
+          15.265718368728127,
+          16.90532750330575,
+          17.34010532800926,
+          49.08807999505396,
+          57.314703803765866,
+          61.632860857721795
+        ],
+        "log_cumulative_hazard": [
+          -5.325724803636457,
+          -4.623629938531545,
+          -4.211994241427807,
+          -3.9098157109589127,
+          -3.672809555706726,
+          -3.4798768360752463,
+          -3.3037838699644895,
+          -3.1532570140091343,
+          -3.0173908004499537,
+          -2.8880410559822245,
+          -2.770643891291452,
+          -2.6649339625951063,
+          -2.567513349406587,
+          -2.4747808543663985,
+          -2.385770511390133,
+          -2.302680490468028,
+          -2.2223671709433668,
+          -2.1465847114272707,
+          -2.0753502378966884,
+          -2.006935114807665,
+          -1.938819353374829,
+          -1.874233849291608,
+          -1.811937669342512,
+          -1.7505807489328509,
+          -1.690030236582575,
+          -1.632400617365442,
+          -1.5749955053161753,
+          -1.5193276883935303,
+          -1.4658015654122425,
+          -1.4134415960343398,
+          -1.3609615501403656,
+          -1.3083644102237149,
+          -1.25517922077148,
+          -1.200284494253771,
+          -1.1356545798568125,
+          -1.0697501889606897,
+          -1.0038513449646107,
+          -0.9369398069823734,
+          -0.8640302547211894,
+          -0.7921934738686619,
+          -0.7239585188113906,
+          -0.6565522054394242,
+          -0.5888080309523477,
+          -0.5195098581813363,
+          -0.4035176289355445,
+          -0.29568924899586757,
+          -0.1893594292485975,
+          -0.05413086605542013,
+          0.5645789121636219,
+          1.0696760554160414,
+          1.4376654890103457
+        ],
+        "lp_center": -0.0629030845058283
+      },
+      "default_horizon": 3.8427958973207264
+    },
+    "clinical_only_model": {
+      "terms": [
+        "z"
+      ],
+      "coefficients": [
+        0.4576241875330611
+      ]
+    },
+    "development": {
+      "n": 100,
+      "events": 51,
+      "row_mask_hash": "3e6eb4bbfca540e9"
+    },
+    "recipe_hash": "2b4b17f4622048b85a1c0101f154a5bba8b52be511325effd4bfc169084c8f2d"
+  },
+  "settings": {
+    "ties": "efron",
+    "alpha": 0.05,
+    "fdr_level": 0.1,
+    "n_permutations": 999,
+    "n_resamples": 3,
+    "resample_fraction": 0.632,
+    "max_missing_fraction": 0.2,
+    "max_mode_fraction": 0.9,
+    "robust_frequency": 0.5,
+    "robust_direction": 0.9,
+    "nonlinear_frequency": 0.8,
+    "max_signature_markers": 10,
+    "shortlist_size": 50,
+    "lens2_null": "smith",
+    "nonlinear_lens": "off",
+    "nonlinear_replicates": 30,
+    "nonlinear_top_markers": 100,
+    "random_seed": 2026100907,
+    "clinical_basis": "linear"
+  }
+}

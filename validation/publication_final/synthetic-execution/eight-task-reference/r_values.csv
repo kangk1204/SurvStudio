@@ -1,0 +1,85 @@
+"quantity","value"
+"recoded_events",151
+"A @ 5 survival",0.686370048448854
+"A @ 10 survival",0.51196499395277
+"A @ 15 survival",0.430100461640517
+"B @ 5 survival",0.549108230281199
+"B @ 10 survival",0.395374297408981
+"B @ 15 survival",0.288723554624609
+"C @ 5 survival",0.642474409454481
+"C @ 10 survival",0.569733622908136
+"C @ 15 survival",0.460741103743101
+"adjusted_coefficient_1",0.286333133446902
+"adjusted_coefficient_2",0.200044650039498
+"adjusted_coefficient_3",0.624553493673292
+"adjusted_coefficient_4",0.439560240938818
+"adjusted_coefficient_5",1.11068825533016
+"adjusted_loglik",-650.643331309786
+"inner_selected_marker",0
+"inner_heldout_C",0.765009380863039
+"locked_external_C",0.764197530864198
+"locked_external_calibration",0.879771044561477
+"diagnostic_m0_mean",1137.77442907088
+"diagnostic_m0_variance",0.114879528627142
+"diagnostic_m1_mean",879.704562854765
+"diagnostic_m1_variance",0.235396535343773
+"diagnostic_m2_mean",1098.47788897149
+"diagnostic_m2_variance",0.00333606064290134
+"diagnostic_m3_mean",1188.97674141099
+"diagnostic_m3_variance",0.0690138544574661
+"diagnostic_m4_mean",1482.09243661382
+"diagnostic_m4_variance",0.114309799358401
+"diagnostic_m5_mean",1159.37580226735
+"diagnostic_m5_variance",0.0107247617076935
+"diagnostic_m6_mean",1394.55391178215
+"diagnostic_m6_variance",0.0971163818723213
+"diagnostic_m7_mean",1361.07126673992
+"diagnostic_m7_variance",0.000640840371171825
+"diagnostic_m8_mean",1283.73703669583
+"diagnostic_m8_variance",0.309415845403986
+"diagnostic_m9_mean",1024.91249221324
+"diagnostic_m9_variance",0.113250897907302
+"diagnostic_m10_mean",1552.35831852808
+"diagnostic_m10_variance",0.531938605662287
+"diagnostic_m11_mean",778.988474040124
+"diagnostic_m11_variance",0.207599323118925
+"diagnostic_m12_mean",1197.41922648358
+"diagnostic_m12_variance",0.515044359234894
+"diagnostic_m13_mean",974.322660378501
+"diagnostic_m13_variance",0.0192741140729439
+"diagnostic_m14_mean",911.194711655668
+"diagnostic_m14_variance",0.0460157915329468
+"diagnostic_m15_mean",1222.16715138689
+"diagnostic_m15_variance",0.15255518800863
+"diagnostic_m16_mean",1062.46452684836
+"diagnostic_m16_variance",0.122038228086401
+"diagnostic_m17_mean",927.300659740327
+"diagnostic_m17_variance",0.0438549541856111
+"diagnostic_m18_mean",1237.83112060531
+"diagnostic_m18_variance",0.544932479425803
+"diagnostic_m19_mean",1343.79334490262
+"diagnostic_m19_variance",0.177626415732627
+"diagnostic_m20_mean",1378.3922168221
+"diagnostic_m20_variance",0.104489647118119
+"diagnostic_m21_mean",1249.0394647991
+"diagnostic_m21_variance",0.014347654273267
+"diagnostic_m22_mean",1181.59195366133
+"diagnostic_m22_variance",0.201623092348382
+"diagnostic_m23_mean",1336.73828109967
+"diagnostic_m23_variance",0.0043286552533858
+"diagnostic_m24_mean",1454.45564084809
+"diagnostic_m24_variance",0.47736031404752
+"diagnostic_m25_mean",881.749007178709
+"diagnostic_m25_variance",0.0194323134985953
+"diagnostic_m26_mean",898.878926185735
+"diagnostic_m26_variance",0.0272129165492974
+"diagnostic_m27_mean",1006.01738985648
+"diagnostic_m27_variance",0.00926788098511671
+"diagnostic_m28_mean",1208.90377450355
+"diagnostic_m28_variance",0.301339260269857
+"diagnostic_m29_mean",1063.39021855063
+"diagnostic_m29_variance",0.066352326986378
+"misspecified_withheld_by_explicit_rule",1
+"duplicate_ID_rows",1
+"outcome_role_rejected",1
+"manual_endpoint_mismatch_rejected",1
