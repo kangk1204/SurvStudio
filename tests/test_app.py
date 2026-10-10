@@ -350,19 +350,23 @@ def test_frontend_limits_fresh_model_feature_defaults_and_marks_dl_batch_size_sc
 
 
 def test_readme_states_current_scope_and_validation_limitations() -> None:
-    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    guide = (root / "docs/user-guide.md").read_text(encoding="utf-8")
 
-    assert "single-event survival analysis" in readme
-    assert "right-censored data" in readme
-    assert "no left-truncated entry-time handling" in readme
-    assert "no competing-risks analysis" in readme
-    assert "external validation in the interface covers locked marker models" in readme
-    assert "Apparent C-index" in readme
-    assert "Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time" in readme
-    assert "Martingale residual trend plots" in readme
-    assert 'pip install -e ".[all]"' in readme
-    assert "LASSO-Cox (penalized Cox)" in readme
-    assert "0.50` is chance-level ranking" in readme
+    # The quick start links to the scope and interpretation details.
+    assert "[User guide](docs/user-guide.md)" in readme
+    assert "[Mode settings and how to read results](docs/user-guide.md#main-analyses)" in readme
+    assert "single-event survival analysis" in guide
+    assert "right-censored data" in guide
+    assert "does not handle left-truncated entry times or competing-risks analysis" in guide
+    assert "External validation in the interface covers locked marker models" in guide
+    assert "Apparent C-index" in guide
+    assert "Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time" in guide
+    assert "Martingale residual trend plots" in guide
+    assert 'uv tool install --python 3.12 "survstudio[all]' in readme
+    assert "LASSO-Cox (penalized Cox)" in guide
+    assert "0.50` is chance-level ranking" in guide
 
 
 def test_input_checks_and_analysis_jobs_run_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2320,21 +2324,26 @@ def test_get_ml_artifact_returns_isolated_copy() -> None:
 
 
 def test_readme_highlights_synthetic_columns_cli_inspect_and_dl_runtime_note() -> None:
-    readme = Path(__file__).resolve().parents[1] / "README.md"
-    text = readme.read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    guide = (root / "docs/user-guide.md").read_text(encoding="utf-8")
+    with (root / "examples/synthetic_demo.csv").open(encoding="utf-8", newline="") as handle:
+        columns = csv.DictReader(handle).fieldnames
 
-    assert "Synthetic Example Workflow" in text
-    assert "This synthetic dataset does **not** use `stage_group` or `treatment_group`." in text
-    assert "survival-toolkit inspect path/to/data.csv" in text
-    assert "This is the fastest way to catch file-format problems before uploading a cohort in the browser." in text
-    assert 'pip install -e ".[formats]"' in text
-    assert 'requires `pip install -e ".[formats]"`: `xlsx`, `xls`, `parquet`' in text
-    assert "## DL Runtime Note" in text
-    assert "Batch Size` currently affects DeepHit and Neural MTLR only." in text
-    assert "weight_decay=1e-4" in text
-    assert "with a stabilized ranking-loss scale (`sigma=1.0`)" in text
-    assert "neuralized right-cumulative MTLR parameterization" in text
-    assert "SurvStudio does not claim validated generative simulation or uncertainty estimation from this path." in text
+    assert "[Synthetic demo](examples/synthetic_demo.csv) | 360 | `os_months` / `os_event` | `stage`" in readme
+    assert "[Exact settings and KM / Cox / ML / DL outputs](examples/results.md)" in readme
+    assert columns is not None and {"os_months", "os_event", "stage"}.issubset(columns)
+    assert not {"stage_group", "treatment_group"}.intersection(columns)
+    assert "survival-toolkit inspect path/to/data.csv" in guide
+    assert "This is the fastest way to catch file-format problems before uploading a cohort in the browser." in guide
+    assert 'requires `pip install -e ".[formats]"`: `xlsx`, `xls`, `parquet`' in guide
+    assert "[Other install options and troubleshooting](docs/installation.md)" in readme
+    assert "## DL Runtime Note" in guide
+    assert "Batch Size` currently affects DeepHit and Neural MTLR only." in guide
+    assert "weight_decay=1e-4" in guide
+    assert "with a stabilized ranking-loss scale (`sigma=1.0`)" in guide
+    assert "neuralized right-cumulative MTLR parameterization" in guide
+    assert "SurvStudio does not claim validated generative simulation or uncertainty estimation from this path." in guide
 
 
 def test_kaplan_meier_response_exposes_groups_and_logrank_p_summary_fields() -> None:

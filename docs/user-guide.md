@@ -2,6 +2,11 @@
 
 [Back to quick start](../README.md)
 
+SurvStudio supports single-event survival analysis of right-censored data.
+It does not handle left-truncated entry times or competing-risks analysis.
+External validation in the interface covers locked marker models; see the
+current limitations below before interpreting model performance.
+
 ## Input Data Format
 
 Supported file types:
