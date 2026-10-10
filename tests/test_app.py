@@ -367,6 +367,7 @@ def test_reference_manual_states_current_scope_and_validation_limitations() -> N
     assert "A C-index of 0.50 is chance-level ranking" in manual
 
 
+
 def test_readme_states_current_scope_and_validation_limitations() -> None:
     root = Path(__file__).resolve().parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
@@ -2353,7 +2354,8 @@ def test_reference_manual_highlights_synthetic_columns_cli_inspect_and_dl_runtim
     assert "## 11. Deep-learning run time" in text
     assert "`Batch Size` affects DeepHit and Neural MTLR only." in text
     assert "weight_decay=1e-4" in text
-    assert "with a stabilized ranking-loss scale (`sigma=1.0`)" in text
+    assert "softplus pairwise ranking penalty with `sigma=1.0`" in text
+    assert "differ from the original exponential ranking loss" in text
     assert "neuralized right-cumulative MTLR parameterization" in text
     assert "SurvStudio does not claim validated generative simulation or uncertainty estimation from this path." in text
 
@@ -7297,4 +7299,3 @@ def test_design_check_page_is_served_without_a_dataset() -> None:
     assert 'fetch("/api/design-audit", {' in script
     assert "textContent = flag.message;" in script
     assert "innerHTML = `" not in script.split("function renderResult", 1)[1]
-

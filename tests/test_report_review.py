@@ -68,8 +68,8 @@ def test_remark_text_without_subsamples_says_stability_and_optimism_were_not_ass
     assert "was not repeated on subsamples, so the stability of the selection was not assessed" in methods
     assert "Without subsamples the stability rule could not be applied" in methods
     assert "repeated on 0" not in methods and "0 event-stratified" not in methods
-    assert "could not be corrected for optimism because no subsample was available" in methods
-    assert "Stability over subsamples was not assessed" in results and "not corrected for optimism" in results
+    assert "could not be adjusted for the subsampling gap because no subsample was available" in methods
+    assert "Stability over subsamples was not assessed" in results and "not adjusted for the subsampling gap" in results
     assert items["10"]["status"] == "partly"
     assert items["18"]["text"].startswith("No internal validation was done: no subsamples were drawn")
 
@@ -113,9 +113,9 @@ def test_remark_text_when_every_subsample_failed_or_the_optimism_is_missing() ->
     assert "repeated on 180 event-stratified subsamples of 63.2% of the patients (20 more failed and were left out)" in partial["methods"]
 
     uncorrected = remark_checklist(_hand_built_result(signature={"optimism_corrected_c": None}), request=_REQUEST)
-    assert "could not be corrected for optimism because no subsample gave a model" in uncorrected["methods"]
-    assert "(not corrected for optimism)" in uncorrected["results"]
-    assert "apparent C-index (0.740) could not be corrected for optimism" in _items(uncorrected)["18"]["text"]
+    assert "could not be adjusted for the subsampling gap because no subsample gave a model" in uncorrected["methods"]
+    assert "(not adjusted for the subsampling gap)" in uncorrected["results"]
+    assert "apparent C-index (0.740) could not be adjusted for the subsampling gap" in _items(uncorrected)["18"]["text"]
     assert _items(uncorrected)["10"]["status"] == "partly"
 
 
@@ -123,8 +123,14 @@ def test_remark_text_names_the_permutation_scheme_by_its_setting() -> None:
     for scheme in ("smith", "freedman_lane"):
         methods = remark_checklist(_hand_built_result(null={"lens2_null": scheme}), request=_REQUEST)["methods"]
         assert "the residuals of each marker after regression on the clinical covariates were permuted (Smith method; Winkler et al. 2014)" in methods
+        assert "exchangeable residuals after linear adjustment" in methods
+        assert "Nonlinear marker-covariate relations can invalidate" in methods
+        assert "proportional-hazards assumptions need checking" in methods
+        assert "Multiplicity adjustment does not establish model adequacy" in methods
+        assert "Family-wise error was controlled" not in methods
     raw = remark_checklist(_hand_built_result(null={"lens2_null": "raw"}), request=_REQUEST)["methods"]
     assert "the marker values themselves were permuted" in raw and "Smith" not in raw
+    assert "proportional-hazards assumptions need checking" in raw
 
 
 def test_remark_text_for_a_model_without_markers_calls_it_the_clinical_model() -> None:
@@ -137,7 +143,8 @@ def test_remark_text_for_a_model_without_markers_calls_it_the_clinical_model() -
     assert "(none)" not in report["results"] and "selected-marker model" not in report["results"]
     assert "No marker was selected, so the final model held the clinical covariates only; its apparent C-index was" in report["results"]
     assert "No marker was selected, so the final Cox model held the clinical covariates only" in report["methods"]
-    assert "the clinical model's C-index was corrected from" in _items(report)["18"]["text"]
+    assert "the clinical model's apparent C-index was" in _items(report)["18"]["text"]
+    assert "heuristic subsample gap-adjusted C-index" in _items(report)["18"]["text"]
 
 
 def test_remark_patient_flow_separates_patients_without_marker_values_from_exclusions() -> None:
@@ -163,7 +170,7 @@ def test_remark_left_out_comparison_gives_the_number_of_subsamples() -> None:
         request=_REQUEST,
     )
 
-    assert "In the patients left out of each of 40 subsamples, it reached a mean C-index of 0.700 against 0.660" in unpaired["results"]
+    assert "In the patients left out of each of 40 subsamples, the whole selection procedure reached a mean C-index of 0.700 against 0.660" in unpaired["results"]
     assert "(mean difference +0.040)" in unpaired["results"]
     assert "each of 18 subsamples" in paired["results"] and "(mean difference +0.050)" in paired["results"]
 

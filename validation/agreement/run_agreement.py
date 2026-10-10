@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import importlib.metadata
 import json
 import math
@@ -347,6 +348,40 @@ def compare(reference: dict[str, float], other: dict[str, float] | None) -> dict
     return {key: (abs(other[key] - value) if key in other and np.isfinite(other[key]) and np.isfinite(value) else None) for key, value in reference.items()}
 
 
+def agreement_failures(cases: list[dict[str, Any]], *, atol: float, rtol: float) -> list[dict[str, str]]:
+    """Check every R quantity; missing or non-finite estimates must not disappear from a max difference."""
+    failures = []
+    if not cases:
+        return [{"case": "all", "quantity": "all", "reason": "No reference cases were compared."}]
+    for case in cases:
+        reference, values = case["r"], case["survstudio"]
+        if not reference:
+            failures.append({"case": case["name"], "quantity": "all", "reason": "The reference case is empty."})
+        for quantity, expected in reference.items():
+            reason = None
+            if quantity not in values:
+                reason = "SurvStudio did not report this reference quantity."
+            elif np.isnan(expected) and np.isnan(values[quantity]):
+                continue  # Both report a non-estimable median or interval limit.
+            elif not (np.isfinite(expected) and np.isfinite(values[quantity])):
+                reason = "The reference and estimate disagree on estimability or contain infinity."
+            elif not np.isclose(values[quantity], expected, atol=atol, rtol=rtol):
+                reason = f"Absolute difference {abs(values[quantity] - expected):.6g} exceeds atol + rtol * abs(reference)."
+            if reason:
+                failures.append({"case": case["name"], "quantity": quantity, "reason": reason})
+    return failures
+
+
+def source_provenance() -> dict[str, Any]:
+    paths = [*sorted((ROOT / "src" / "survival_toolkit").glob("*.py")), HERE / "reference.R", Path(__file__).resolve(),
+             *sorted((ROOT / "src" / "survival_toolkit" / "data").glob("*.csv"))]
+    revision = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    status = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain"], capture_output=True, text=True)
+    return {"git_commit": revision or "unavailable", "git_dirty": bool(status.stdout.strip()) if status.returncode == 0 else None, "sha256": {
+        str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths
+    }}
+
+
 def _cell(value: float | None, digits: int = 6) -> str:
     if value is None or (isinstance(value, float) and not math.isfinite(value)):
         return ""
@@ -425,7 +460,12 @@ def _json_ready(value: Any) -> Any:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--output", default=str(ROOT / "docs" / "validation"))
+    parser.add_argument("--check", action="store_true", help="Exit nonzero if a SurvStudio quantity is missing or outside the R agreement tolerances.")
+    parser.add_argument("--atol", type=float, default=1e-6)
+    parser.add_argument("--rtol", type=float, default=1e-7)
     arguments = parser.parse_args()
+    if any(not np.isfinite(value) or value < 0 for value in (arguments.atol, arguments.rtol)):
+        parser.error("--atol and --rtol must be finite and nonnegative.")
 
     frames = {name: loader() for name, loader in COHORTS.items()}
     has_lifelines, has_sksurv = _installed("lifelines"), _installed("sksurv")
@@ -486,13 +526,20 @@ def main() -> None:
     }
     output = Path(arguments.output)
     output.mkdir(parents=True, exist_ok=True)
+    failures = agreement_failures(cases, atol=arguments.atol, rtol=arguments.rtol)
+    validation = {"passed": not failures, "atol": arguments.atol, "rtol": arguments.rtol,
+                  "reference_quantities": sum(len(case["r"]) for case in cases), "failures": failures}
     (output / "numerical_agreement.md").write_text(build_report(cases, environment) + "\n", encoding="utf-8")
     (output / "numerical_agreement.json").write_text(
-        json.dumps(_json_ready({"environment": environment, "cases": cases}), indent=2, allow_nan=False) + "\n",
+        json.dumps(_json_ready({"environment": environment, "provenance": source_provenance(), "validation": validation, "cases": cases}), indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     for case in cases:
         print(f"{case['name']}: {len(case['r'])} quantities, largest difference from R {_cell(_max(case['differences']['survstudio']), 3)}")
+    if arguments.check:
+        print(f"Agreement check: {'PASS' if not failures else 'FAIL'} ({validation['reference_quantities']} quantities; atol={arguments.atol:g}, rtol={arguments.rtol:g}).")
+        if failures:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
