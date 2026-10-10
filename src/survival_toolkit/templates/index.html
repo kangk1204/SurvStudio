@@ -392,7 +392,7 @@
               <span class="run-status hidden" data-run-status="cox" aria-live="polite"></span>
               <button class="button primary" id="runCoxButton">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                Run Analysis
+                Run Cox model
               </button>
               <details class="export-menu">
                 <summary class="button ghost">Save files</summary>
@@ -446,12 +446,12 @@
             <h3>Hazard ratios</h3>
             <div class="diagnostic-copy" id="coxForestCopy">
               <span>Red: p &lt; 0.05. Blue: p ≥ 0.05.</span>
-              <span class="diagnostic-copy-note" id="coxMetaBanner">Select covariates above, then click Run Analysis.</span>
+              <span class="diagnostic-copy-note" id="coxMetaBanner">Choose variables above, then click Run Cox model.</span>
             </div>
             <div class="plot-shell" id="coxPlot">
               <div class="empty-state plot-empty">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                <span>Choose covariates and click <strong>Run Analysis</strong>.</span>
+                <span>Choose variables and click <strong>Run Cox model</strong>.</span>
               </div>
             </div>
           </div>
@@ -924,6 +924,8 @@
               <button class="button ghost hidden" id="runPredictiveSelectedButton" type="button">Test Selected Model</button>
             </div>
           </div>
+          <p class="predictive-input-summary" id="predictiveInputSummary" aria-live="polite">Load data to review the variables and evaluation settings.</p>
+          <p class="predictive-metric-guide">C-index measures how well predicted risk ranks event times. About 0.50 is chance; higher is better. It does not measure how accurately survival probabilities are predicted.</p>
           <div class="benchmark-summary-grid" id="benchmarkSummaryGrid">
             <div class="empty-state">Run ML or DL to see the latest predictive summary here.</div>
           </div>

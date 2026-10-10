@@ -499,13 +499,23 @@ function syncWorkspaceLayout() {
   }
 }
 
+function scrollWorkspaceTargetIntoView(target, options = { behavior: "smooth", block: "start" }) {
+  if (!target) return;
+  // The header grows when its controls wrap. Keep the requested result below it.
+  const headerHeight = document.querySelector(".shell-header")?.getBoundingClientRect().height || 0;
+  target.style.scrollMarginTop = `${Math.ceil(headerHeight) + 16}px`;
+  target.scrollIntoView(options);
+}
+
 function resizeVisiblePlotsNow() {
   const plots = allPlotRefs();
   plots.forEach((plot) => {
     if (!plot?.data?.length || !plotIsDisplayed(plot)) return;
     try {
-      Plotly.Plots.resize(plot);
-      stabilizePlotShellHeight(plot);
+      const resized = plot.__responsiveSourceLayout
+        ? updateResponsivePlotLayout(plot)
+        : Plotly.Plots.resize(plot);
+      Promise.resolve(resized).then(() => stabilizePlotShellHeight(plot)).catch(() => {});
     } catch {
       // Ignore plots that were removed while resizing.
     }
@@ -564,15 +574,16 @@ async function stabilizePlotsBeforeBanner(plots = [], banner, { maxAttempts = 12
   if (!visiblePlots.length || !banner) return;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await waitForRenderFrames(2);
-    visiblePlots.forEach((plot) => {
+    await Promise.all(visiblePlots.map(async (plot) => {
       if (!plot?.data?.length || !plotIsDisplayed(plot)) return;
       try {
-        Plotly.Plots.resize(plot);
+        if (plot.__responsiveSourceLayout) await updateResponsivePlotLayout(plot);
+        else await Plotly.Plots.resize(plot);
         stabilizePlotShellHeight(plot);
       } catch {
         // Ignore detached or stale plot nodes during fast UI transitions.
       }
-    });
+    }));
     const bannerRect = banner.getBoundingClientRect();
     const plotsAreOrdered = visiblePlots.every((plot) => plot.getBoundingClientRect().bottom <= bannerRect.top + tolerance);
     if (plotsAreOrdered) return;
