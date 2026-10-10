@@ -12,6 +12,8 @@ REGISTRY=Path(__file__).with_name('data')/'marker_qualification.json'
 KERNEL_FILES={f'src/survival_toolkit/{name}.py' for name in
               ('clinical_basis','marker_diagnostics','marker_evaluation','marker_screen','encoding','analysis')}
 
+V3_KERNEL_FILES = KERNEL_FILES | {"src/survival_toolkit/marker_bootstrap.py", "src/survival_toolkit/marker_evaluation_v3.py", "src/survival_toolkit/marker_qualification.py", "src/survival_toolkit/data/marker_bootstrap_policy.json"}
+
 
 def qualification(basis,method_version):
     try:
@@ -23,10 +25,11 @@ def qualification(basis,method_version):
         sources_match=None
         if profile['status']=='passed_supported_conditions_only':
             sources=study.get('kernel_source_hashes')
-            source_bound=isinstance(sources,dict) and set(sources)==KERNEL_FILES
+            required = V3_KERNEL_FILES if method_version == 'marker-inference/3' else KERNEL_FILES
+            source_bound=isinstance(sources,dict) and set(sources)==required
             if source_bound:
                 for name,expected in sources.items():
-                    if not name.startswith('src/survival_toolkit/') or '/' in name.removeprefix('src/survival_toolkit/'):
+                    if name not in required:
                         raise ValueError('Invalid qualification kernel path')
                     current=Path(__file__).parent/name.removeprefix('src/survival_toolkit/')
                     canonical=current.read_bytes().replace(b'\r\n',b'\n')

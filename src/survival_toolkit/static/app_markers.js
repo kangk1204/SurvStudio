@@ -195,6 +195,7 @@ function markerRequestFields() {
     n_resamples: numericControlValue(refs.markerResamples, defaults.n_resamples),
     random_seed: numericControlValue(refs.markerRandomSeed, defaults.random_seed),
     clinical_basis: refs.markerClinicalBasis?.value || "linear",
+    diagnostic_policy: refs.markerDiagnosticPolicy?.value || "v2_holm",
     nonlinear_lens: refs.markerNonlinearLens?.value || "off",
   };
 }
@@ -481,6 +482,7 @@ function markerMetaBanner(payload) {
     `tested for ${lens}`,
     `inference=${analysis.inference?.status || "not assessed"}`,
     `clinical model=${analysis.clinical_basis || "linear"}`,
+    `diagnostic policy=${analysis.inference?.diagnostic_policy || "v2_holm"}`,
   ];
   if (signature.apparent_c != null) {
     const model = markerModelIsClinicalOnly(signature) ? "clinical-only model (no marker selected)" : "model";
@@ -506,14 +508,18 @@ async function renderMarkerResults(payload) {
   renderInsightBoard(refs.markersInsightBoard, markerSummary(payload), "Run the evaluation to see which markers hold up.");
   refs.markersMetaBanner.textContent = markerMetaBanner(payload);
   const inference = payload?.analysis?.inference;
+  const bootstrap = inference?.bootstrap;
+  const bootstrapNote = bootstrap ? `Joint diagnostic: ${bootstrap.candidate}, ${bootstrap.draws} draws, status=${bootstrap.status}; global P=${formatValue(bootstrap.global_p)}, Monte Carlo 95% interval=${(bootstrap.global_mc95 || []).map((value) => formatValue(value)).join(" to ") || "unavailable"}.` : "";
   if (refs.markersInferenceNote) refs.markersInferenceNote.textContent = inference
-    ? `${inference.status}. ${inference.interpretation} ${(inference.reasons || []).join("; ")} ${inference.engineering_qualification?.claim_boundary || ""} ${inference.engineering_qualification?.extension_limitations || ""}`
+    ? `${inference.status}. ${inference.interpretation} ${bootstrapNote} ${(inference.reasons || []).join("; ")} ${inference.engineering_qualification?.claim_boundary || ""} ${inference.engineering_qualification?.extension_limitations || ""}`
     : "Diagnostics were not assessed in this saved result.";
   if (refs.markersDiagnosticsTable) renderTable(refs.markersDiagnosticsTable,
     [...(inference?.clinical_tests || []), ...(inference?.residual_tests || [])].map((test) => ({
       Marker: test.marker || "Clinical model", Diagnostic: test.name || test.diagnostic,
       Method: test.method || "", Status: test.status || (test.p_value == null ? "failed" : "calculated"),
-      "Raw P": test.p_value, "Holm P": test.p_holm, "Withhold threshold": inference.threshold,
+      "Raw P": test.p_value, "Holm P": test.p_holm ?? test.p_holm_v2,
+      ...(bootstrap ? {"Joint bootstrap P": test.p_maxT, "Adjusted family": test.marker ? "v3 maxT; Holm retained for comparison" : "clinical Holm"} : {}),
+      "Withhold threshold": inference.threshold,
       Reason: test.reason || ""
     })));
   // Results saved before the summary figure existed simply leave its shell hidden.
@@ -764,7 +770,7 @@ function wireMarkerControls() {
     scheduleResultCurrencySync();
     queueHistorySync();
   });
-  [refs.markerPermutations, refs.markerResamples, refs.markerRandomSeed, refs.markerNonlinearLens, refs.markerClinicalBasis].filter(Boolean).forEach((control) => {
+  [refs.markerPermutations, refs.markerResamples, refs.markerRandomSeed, refs.markerNonlinearLens, refs.markerClinicalBasis, refs.markerDiagnosticPolicy].filter(Boolean).forEach((control) => {
     control.addEventListener("change", () => { scheduleResultCurrencySync(); queueHistorySync(); });
   });
   refs.attachMarkerMatrixButton?.addEventListener("click", async () => {

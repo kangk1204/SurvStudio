@@ -75,6 +75,7 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
       n_resamples: numberOrDefault(requestConfig.n_resamples, MARKER_NUMERIC_DEFAULTS.n_resamples),
       random_seed: numberOrDefault(requestConfig.random_seed, MARKER_NUMERIC_DEFAULTS.random_seed),
       clinical_basis: String(requestConfig.clinical_basis || "linear"),
+      diagnostic_policy: String(requestConfig.diagnostic_policy || "v2_holm"),
       nonlinear_lens: String(requestConfig.nonlinear_lens || "off"),
     };
   }
@@ -660,6 +661,7 @@ function captureControlSnapshot() {
     markerResamples: refs.markerResamples?.value || "",
     markerRandomSeed: refs.markerRandomSeed?.value || "",
     markerClinicalBasis: refs.markerClinicalBasis?.value || "linear",
+    markerDiagnosticPolicy: refs.markerDiagnosticPolicy?.value || "v2_holm",
     markerNonlinearLens: refs.markerNonlinearLens?.value || "",
     mlModelType: refs.mlModelType?.value || "",
     mlNEstimators: refs.mlNEstimators?.value || "",
@@ -847,6 +849,7 @@ function applyControlSnapshot(snapshot) {
   setInputValue(refs.markerResamples, snapshot.markerResamples || undefined);
   setInputValue(refs.markerRandomSeed, snapshot.markerRandomSeed || undefined);
   setSelectValueIfPresent(refs.markerClinicalBasis, snapshot.markerClinicalBasis || "linear");
+  setSelectValueIfPresent(refs.markerDiagnosticPolicy, snapshot.markerDiagnosticPolicy || "v2_holm");
   setSelectValueIfPresent(refs.markerNonlinearLens, snapshot.markerNonlinearLens || undefined);
   renderMarkerSelectionLine();
   syncCoxCovariateSelection();

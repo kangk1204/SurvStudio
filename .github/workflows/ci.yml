@@ -148,6 +148,17 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
         run: python validation/clinical/run_independent_reference.py --output "${{ runner.temp }}/guarded-reference"
+      - name: Check v3 joint diagnostic candidates against independent R
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: python validation/bootstrap/run_reference.py --output "${{ runner.temp }}/joint-diagnostic-reference"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: joint-diagnostic-reference
+          path: ${{ runner.temp }}/joint-diagnostic-reference
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -187,4 +198,4 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Run browser E2E smoke test
-        run: pytest -q tests/test_browser_e2e.py tests/test_guarded_marker_surfaces.py
+        run: pytest -q tests/test_browser_e2e.py tests/test_guarded_marker_surfaces.py tests/test_v3_marker_surfaces.py

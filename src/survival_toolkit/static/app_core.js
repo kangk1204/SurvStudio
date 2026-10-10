@@ -213,6 +213,7 @@ const refs = {
   markerRandomSeed: document.getElementById("markerRandomSeed"),
   markerNonlinearLens: document.getElementById("markerNonlinearLens"),
   markerClinicalBasis: document.getElementById("markerClinicalBasis"),
+  markerDiagnosticPolicy: document.getElementById("markerDiagnosticPolicy"),
   markersInferenceNote: document.getElementById("markersInferenceNote"),
   markersDiagnosticsTable: document.getElementById("markersDiagnosticsTable"),
   markersSummaryPlot: document.getElementById("markersSummaryPlot"),

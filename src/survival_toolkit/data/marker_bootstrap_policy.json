@@ -1,0 +1,9 @@
+{
+  "policy_version": "joint-diagnostic-policy/1",
+  "candidate": "restricted_wild",
+  "draws": 9999,
+  "selection_status": "selected_before_confirmation",
+  "qualification_status": "not_evaluated",
+  "selection_seed": 2026100322,
+  "selection_evidence_sha256": "906cd1d8e9bd0ae7134d24a3e7dd7bf7b6d94b19358f2c8d3319d95908daf95f"
+}
