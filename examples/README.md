@@ -1,6 +1,10 @@
-# Upload-Ready Real Dataset
+# Example data
 
-This folder contains a real public cohort that can be uploaded directly into SurvStudio for a first end-to-end test.
+Download a CSV and upload it, or use the sample buttons in the app.
+
+[Quick start](../README.md) · [Example run results](results.md) · [Raw outputs](demo_results.json)
+
+The [synthetic sample](synthetic_demo.csv) has 360 generated patients and uses seed 42; it matches the built-in Synthetic demo.
 
 Files included:
 
