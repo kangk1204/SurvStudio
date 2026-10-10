@@ -158,6 +158,31 @@ jobs:
           name: guarded-reference
           path: ${{ runner.temp }}/guarded-reference
 
+  numerical-agreement:
+    name: Numerical agreement with R survival
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: r-lib/actions/setup-r@v2
+      - name: Install validation dependencies
+        run: |
+          pip install -e ".[validation]"
+          Rscript -e 'install.packages(c("survival", "jsonlite"), repos="https://cloud.r-project.org")'
+      - name: Check numerical agreement
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: python validation/agreement/run_agreement.py --output "${{ runner.temp }}/numerical-agreement" --check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: numerical-agreement
+          path: ${{ runner.temp }}/numerical-agreement
+
   browser-e2e:
     name: ubuntu-latest / Python 3.11 / browser-e2e
     runs-on: ubuntu-latest
