@@ -179,7 +179,7 @@ Recommended first settings:
 - File: `gse68465_validation_example.csv`
 - Rows: `433` (one row per patient; `429` have every column)
 - Columns: `patient_id` (GEO sample accession), `os_months`, `os_event`, `age`, `sex`, `stage_group`, and six genes: `DKK1`, `NTSR1`, `TLE1`, `FAM117A`, `MYLIP`, `IRX5`
-- Use: an additional external-cohort file for the marker workflow. Check that the stored model has the required marker columns and that the platform and endpoint match before evaluating it. This file contains only six genes.
+- Use: an external cohort for validating a locked marker model (see [Prognostic Marker Evaluation](../docs/user-guide.md#prognostic-marker-evaluation)). Evaluate markers on the TCGA-LUAD sample with `HiSeqV2.gz` attached, then validate the locked model on this file with **Another platform (rescale within cohort)**: the lung adenocarcinoma microarrays of GSE68465 measure six of the model's ten genes.
 
 Source:
 
