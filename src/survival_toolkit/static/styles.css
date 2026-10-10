@@ -1968,6 +1968,25 @@ h3 {
   margin: 16px 0;
 }
 
+.predictive-input-summary,
+.predictive-metric-guide {
+  margin: 12px 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.predictive-input-summary {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.predictive-metric-guide {
+  color: var(--muted);
+}
+
 .benchmark-family-card {
   display: grid;
   gap: 12px;
@@ -3187,6 +3206,18 @@ tbody tr:hover td {
     padding: 16px;
   }
 
+  .simple-view .workspace-card {
+    padding: 16px 12px;
+  }
+
+  .simple-view .table-card {
+    padding: 10px;
+  }
+
+  .simple-view .plot-shell {
+    padding: 4px;
+  }
+
   
 
   
@@ -3201,6 +3232,12 @@ tbody tr:hover td {
 
   .config-row {
     flex-direction: column;
+    align-items: stretch;
+  }
+
+  .config-row-label,
+  .config-row-primary > .compact-toggle {
+    align-self: flex-start;
   }
 
   .config-field,

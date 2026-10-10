@@ -858,6 +858,18 @@ function renderPredictiveWorkbench() {
       ? `Train ${selectedModel.label} directly with the controls below.`
       : "Fits every model on the same splits and ranks them by C-index. Click a result to tune that model.";
   }
+  if (refs.predictiveInputSummary) {
+    const features = selectedCheckboxValues(refs.modelFeatureChecklist);
+    const mode = refs.mlEvaluationStrategy?.value || "holdout";
+    const evaluation = mode === "repeated_cv"
+      ? `${refs.mlCvRepeats?.value || 3} repeats of ${refs.mlCvFolds?.value || 5}-fold cross-validation`
+      : "Holdout: evaluate on patients left out of training";
+    const lockedFraction = currentLockedTestFraction("ml");
+    const reservedTest = lockedFraction !== null ? ` · locked test ${Math.round(lockedFraction * 100)}%` : "";
+    refs.predictiveInputSummary.textContent = state.dataset
+      ? `${features.length} variables: ${summarizeFeatureNames(features, 4)} · ${evaluation}${reservedTest} · seed ${sharedPredictiveSeed()}`
+      : "Load data to review the variables and evaluation settings.";
+  }
   if (refs.runPredictiveSelectedButton) {
     refs.runPredictiveSelectedButton.textContent = `Train ${selectedModel.label}`;
   }
@@ -873,7 +885,7 @@ function setPredictiveWorkbenchFamily(family, { syncHistory = true, historyMode 
   renderPredictiveWorkbench();
   if (scrollIntoView) {
     requestAnimationFrame(() => {
-      (runtime.predictiveFamily === "ml" ? refs.benchmarkMlMount : refs.benchmarkDlMount)?.scrollIntoView({
+      scrollWorkspaceTargetIntoView(runtime.predictiveFamily === "ml" ? refs.benchmarkMlMount : refs.benchmarkDlMount, {
         behavior: "smooth",
         block: "start",
       });
@@ -896,7 +908,7 @@ function setPredictiveModel(modelKey, { syncHistory = true, historyMode = "repla
   renderPredictiveWorkbench();
   if (scrollIntoView) {
     requestAnimationFrame(() => {
-      (meta.family === "ml" ? refs.benchmarkMlMount : refs.benchmarkDlMount)?.scrollIntoView({
+      scrollWorkspaceTargetIntoView(meta.family === "ml" ? refs.benchmarkMlMount : refs.benchmarkDlMount, {
         behavior: "smooth",
         block: "start",
       });
@@ -1008,7 +1020,7 @@ function focusModelFeatureEditor(tabName = "ml") {
     const featureChecklist = tabName === "dl" ? refs.dlModelFeatureChecklist : refs.modelFeatureChecklist;
     const featureCard = featureChecklist?.closest(".selection-card");
     const featureSummaryCard = featureChecklist?.closest(".workspace-card")?.querySelector(".shared-feature-card");
-    (featureCard || featureSummaryCard)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollWorkspaceTargetIntoView(featureCard || featureSummaryCard);
     flashPresetTargets([
       featureSummaryCard,
       refs.modelFeatureChecklist,

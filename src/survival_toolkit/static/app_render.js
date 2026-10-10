@@ -866,6 +866,100 @@ function plotConfig(filename) {
   };
 }
 
+function wrapAxisLabel(value, width = 22) {
+  const words = String(value).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  words.forEach((word) => {
+    if (line && line.length + word.length + 1 > width) {
+      lines.push(line);
+      line = "";
+    }
+    while (word.length > width) {
+      if (line) { lines.push(line); line = ""; }
+      lines.push(word.slice(0, width));
+      word = word.slice(width);
+    }
+    line = line ? `${line} ${word}` : word;
+  });
+  if (line) lines.push(line);
+  return lines.map(escapeHtml).join("<br>");
+}
+
+function responsivePlotOverrides(plotEl, source) {
+  const width = Number.parseFloat(window.getComputedStyle(plotEl).width) || plotEl.clientWidth;
+  const narrow = width < 600;
+  const title = typeof source.title === "string" ? { text: source.title } : (source.title || {});
+  const overrides = {
+    width,
+    title: { ...title, font: { ...title.font, size: narrow ? 18 : (title.font?.size || 24) } },
+  };
+  if (plotEl === refs.kmPlot && narrow) {
+    overrides.title.text = wrapAxisLabel(title.text || "", Math.max(16, Math.floor(width / 10)));
+    overrides.margin = { ...source.margin, l: Math.min(source.margin?.l || 70, 115), r: 24 };
+    ["xaxis", "yaxis"].forEach((axis) => {
+      const axisTitle = typeof source[axis]?.title === "string" ? { text: source[axis].title } : (source[axis]?.title || {});
+      overrides[`${axis}.title`] = { ...axisTitle, font: { ...axisTitle.font, size: 12 } };
+      overrides[`${axis}.tickfont`] = { ...source[axis]?.tickfont, size: 10 };
+    });
+    overrides.legend = { ...source.legend, font: { ...source.legend?.font, size: 10 } };
+    overrides.annotations = (source.annotations || []).map((annotation) => ({ ...annotation, font: { ...annotation.font, size: 10 } }));
+  }
+  if (plotEl === refs.coxPlot) {
+    const xTitle = typeof source.xaxis?.title === "string" ? { text: source.xaxis.title } : (source.xaxis?.title || {});
+    const labels = source.yaxis?.tickvals || [];
+    const labelWidth = Math.max(10, Math.floor(width * 0.43 / 6) - 2);
+    const tickText = narrow ? labels.map((label) => wrapAxisLabel(label, labelWidth)) : source.yaxis?.ticktext;
+    const labelLines = (tickText || []).reduce((count, label) => count + String(label).split("<br>").length, 0);
+    overrides.margin = narrow
+      ? { ...source.margin, l: Math.min(source.margin?.l || 200, Math.floor(width * 0.43)), r: 24, t: 72 }
+      : { ...source.margin };
+    overrides.height = narrow
+      ? Math.max(source.height || 420, 150 + labelLines * 16 + labels.length * 10)
+      : source.height;
+    overrides["xaxis.title"] = { ...xTitle, font: { ...xTitle.font, size: narrow ? 12 : (xTitle.font?.size || 16) }, standoff: narrow ? 12 : (xTitle.standoff || 15) };
+    overrides["xaxis.tickangle"] = narrow ? 0 : (source.xaxis?.tickangle ?? "auto");
+    overrides["xaxis.tickfont"] = { ...source.xaxis?.tickfont, size: narrow ? 10 : (source.xaxis?.tickfont?.size || 12) };
+    overrides["xaxis.automargin"] = true;
+    overrides["yaxis.tickfont"] = { ...source.yaxis?.tickfont, size: narrow ? 11 : (source.yaxis?.tickfont?.size || 12) };
+    overrides["yaxis.ticktext"] = tickText;
+    // Wrapped ticks fit their reserved space; automatic left-margin growth would squeeze the HR axis again.
+    overrides["yaxis.automargin"] = narrow ? false : (source.yaxis?.automargin ?? true);
+    overrides.annotations = (source.annotations || []).map((annotation) => narrow && String(annotation.text).startsWith("Points = HR;")
+      ? { ...annotation, text: "Points = HR<br>Whiskers = 95% Wald CI", x: 0, y: 1, xanchor: "left", yanchor: "bottom", yshift: 12, align: "left", font: { ...annotation.font, size: 10 } }
+      : { ...annotation });
+  }
+  return overrides;
+}
+
+// Only display properties change. Keep the server figure, estimates, intervals and axis ranges intact.
+function responsivePlotLayout(plotEl, layout) {
+  const source = structuredClone(layout);
+  plotEl.__responsiveSourceLayout = source;
+  plotEl.__responsiveWidth = Math.round(Number.parseFloat(window.getComputedStyle(plotEl).width) || plotEl.clientWidth);
+  const next = structuredClone(source);
+  Object.entries(responsivePlotOverrides(plotEl, source)).forEach(([path, value]) => {
+    const parts = path.split(".");
+    const key = parts.pop();
+    const parent = parts.reduce((current, part) => (current[part] ||= {}), next);
+    parent[key] = value;
+  });
+  return next;
+}
+
+function updateResponsivePlotLayout(plotEl) {
+  if (!plotEl?.__responsiveSourceLayout || !plotEl?.data?.length) return;
+  const width = Math.round(Number.parseFloat(window.getComputedStyle(plotEl).width) || plotEl.clientWidth);
+  if (width <= 0 || width === plotEl.__responsiveWidth) return;
+  plotEl.__responsiveWidth = width;
+  return Promise.resolve(Plotly.relayout(plotEl, responsivePlotOverrides(plotEl, plotEl.__responsiveSourceLayout)))
+    .then(() => {
+      stabilizePlotShellHeight(plotEl);
+      if (plotEl.__stableResetAxesState) plotEl.__stableResetAxesState.height = plotEl._fullLayout.height;
+    })
+    .catch(() => {});
+}
+
 function stabilizePlotShellHeight(plotEl) {
   if (!plotEl?._fullLayout) return;
   const height = Number(plotEl._fullLayout.height);

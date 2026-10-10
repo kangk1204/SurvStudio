@@ -406,7 +406,7 @@ function reviewBenchmarkSourceTab(tabName) {
   setPredictiveWorkbenchFamily(tabName, { syncHistory: false });
   activateTab("benchmark", { historyMode: "push" });
   requestAnimationFrame(() => {
-    (tabName === "ml" ? refs.benchmarkMlMount : refs.benchmarkDlMount).scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollWorkspaceTargetIntoView(tabName === "ml" ? refs.benchmarkMlMount : refs.benchmarkDlMount);
   });
 }
 
@@ -427,7 +427,7 @@ function closePredictiveWorkbench() {
   renderWorkspaceChrome();
   if (state.dataset) syncHistoryState("push");
   requestAnimationFrame(() => {
-    refs.benchmarkActionCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollWorkspaceTargetIntoView(refs.benchmarkActionCard);
   });
 }
 
@@ -566,7 +566,7 @@ function scrollToAnalysisResult(tabName, { mode = "single" } = {}) {
   const target = resultAnchorFor(tabName, { mode });
   if (!target) return;
   requestAnimationFrame(() => {
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollWorkspaceTargetIntoView(target);
   });
 }
 
@@ -731,12 +731,21 @@ function initListeners() {
     setAdditionalAnalyses(!expanded);
   });
   document.getElementById("saveResultsButton")?.addEventListener("click", (event) => {
-    const panel = document.getElementById(`panel-${activeTabName()}`);
-    const menu = Array.from(panel?.querySelectorAll(".export-menu") || []).find(
-      (item) => item.offsetParent !== null && item.querySelector("button:not([disabled])"),
+    const availableMenu = (panel, visibleOnly = true) => Array.from(panel?.querySelectorAll(".export-menu") || []).find(
+      (item) => (!visibleOnly || item.offsetParent !== null) && item.querySelector("button:not([disabled])"),
     );
+    let menu = availableMenu(document.getElementById(`panel-${activeTabName()}`));
+    if (!menu && hasCompletedResults()) {
+      for (const tabName of ["km", "cox", "benchmark", "markers", "tables"]) {
+        const panel = document.getElementById(`panel-${tabName}`);
+        if (!availableMenu(panel, false)) continue;
+        activateTab(tabName);
+        menu = availableMenu(panel);
+        if (menu) break;
+      }
+    }
     if (!menu) {
-      showToast("Run an analysis first. Then save its tables or figures here.", "info");
+      showToast("No results to save in this view yet. Run the analysis or open a completed result.", "info");
       return;
     }
     event.stopPropagation();

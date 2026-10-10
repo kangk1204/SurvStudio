@@ -527,6 +527,7 @@ function createPage(staticDir, templatePath) {
     Blob: FakeBlob,
     FormData: FakeFormData,
     AbortController,
+    structuredClone,
     URL: {
       createObjectURL: (blob) => {
         page.downloads.push({ kind: "blob", blob });

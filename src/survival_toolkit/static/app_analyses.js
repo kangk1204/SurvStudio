@@ -396,6 +396,8 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   renderSharedFeatureSummary();
   renderDatasetPreview();
   applyBundledPresets();
+  // Presets set Group by without firing a change event. Refresh the locked controls and their help.
+  syncDeriveControlsState();
   refs.downloadSignatureButton.disabled = true;
   showWorkspace();
   if (scrollToTop) scrollWorkspaceEntryToTop();
@@ -444,7 +446,7 @@ function clearAnalysisOutputs() {
   runtime.workbenchRevealed = false;
   runtime.predictiveWorkbenchIntent = null;
   refs.kmMetaBanner.textContent = "";
-  refs.coxMetaBanner.textContent = "Select covariates above, then click Run Analysis.";
+  refs.coxMetaBanner.textContent = "Choose variables above, then click Run Cox model.";
   refs.mlMetaBanner.textContent = "Select shared model features in Predictive Models, then run analysis.";
   refs.dlMetaBanner.textContent = "Select model features here, configure hyperparameters, then run analysis.";
   resetCoxPreview({ rerender: false });
@@ -481,8 +483,8 @@ function clearAnalysisOutputs() {
   clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Training and monitor metric curves will appear here</span></div>', { state: "placeholder" });
   purgePlot(refs.kmPlot);
   purgePlot(refs.coxPlot);
-  refs.kmPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Click <strong>Run Analysis</strong> to draw the survival curves (Ctrl+Enter).</span></div>';
-  refs.coxPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg><span>Choose covariates and click <strong>Run Analysis</strong>.</span></div>';
+  refs.kmPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Click <strong>Draw curves</strong> to draw the survival curves (Ctrl+Enter).</span></div>';
+  refs.coxPlot.innerHTML = '<div class="empty-state plot-empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg><span>Choose variables and click <strong>Run Cox model</strong>.</span></div>';
   refs.downloadKmSummaryButton.disabled = true;
   refs.downloadKmPairwiseButton.disabled = true;
   if (refs.downloadKmPngButton) refs.downloadKmPngButton.disabled = true;
@@ -936,7 +938,7 @@ async function runKaplanMeier() {
   const cohort = kmAnalysis.cohort || {};
   const test = kmAnalysis.test || null;
   resetPlotElement(refs.kmPlot);
-  await Plotly.newPlot(refs.kmPlot, kmFigure.data || [], kmFigure.layout || {}, plotConfig("km_curve"));
+  await Plotly.newPlot(refs.kmPlot, kmFigure.data || [], responsivePlotLayout(refs.kmPlot, kmFigure.layout || {}), plotConfig("km_curve"));
   markPlotResult(refs.kmPlot, payload);
   stabilizePlotShellHeight(refs.kmPlot);
   renderTable(refs.kmSummaryShell, kmAnalysis.summary_table);
@@ -1087,7 +1089,7 @@ async function runCox() {
   const coxSummary = coxAnalysis.scientific_summary || null;
   const stats = coxAnalysis.model_stats || {};
   resetPlotElement(refs.coxPlot);
-  await Plotly.newPlot(refs.coxPlot, coxFigure.data || [], coxFigure.layout || {}, plotConfig("cox_forest"));
+  await Plotly.newPlot(refs.coxPlot, coxFigure.data || [], responsivePlotLayout(refs.coxPlot, coxFigure.layout || {}), plotConfig("cox_forest"));
   markPlotResult(refs.coxPlot, payload);
   stabilizePlotShellHeight(refs.coxPlot);
   stabilizeCoxPlotResetAxes(refs.coxPlot);
