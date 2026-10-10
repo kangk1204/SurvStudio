@@ -254,6 +254,9 @@ def test_browser_predictor_review_resets_when_feature_selection_changes(browser_
         page.locator('[data-tab="benchmark"]').click()
         declaration = page.locator("#predictorAvailabilityConfirmed")
         assert declaration.is_visible() and not declaration.is_checked()
+        dimensions = declaration.bounding_box()
+        assert dimensions is not None and 12 <= dimensions["width"] <= 20
+        assert 12 <= dimensions["height"] <= 20
         assert "every hidden outcome proxy" in page.locator(".predictor-availability-note").first.inner_text()
         declaration.check()
         _open_predictive_workbench(page)

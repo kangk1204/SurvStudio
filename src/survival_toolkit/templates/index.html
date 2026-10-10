@@ -926,7 +926,7 @@
           </div>
           <p class="predictive-input-summary" id="predictiveInputSummary" aria-live="polite">Load data to review the variables and evaluation settings.</p>
           <p class="predictor-availability-note"><strong>Check your predictors:</strong> use only information known at the time you intend to predict risk. Remove values collected after the outcome. Automatic checks cannot find every hidden outcome proxy.</p>
-          <label class="predictor-availability-note" style="display:block"><input type="checkbox" id="predictorAvailabilityConfirmed"> I checked: the selected predictors were known at the intended prediction time. This records my review in the saved results.</label>
+          <label class="predictor-availability-note predictor-availability-review"><input type="checkbox" id="predictorAvailabilityConfirmed"><span>I checked: the selected predictors were known at the intended prediction time. This records my review in the saved results.</span></label>
           <p class="predictive-metric-guide">C-index measures how well predicted risk ranks event times. About 0.50 is chance; higher is better. It does not measure how accurately survival probabilities are predicted.</p>
           <div class="benchmark-summary-grid" id="benchmarkSummaryGrid">
             <div class="empty-state">Run ML or DL to see the latest predictive summary here.</div>
