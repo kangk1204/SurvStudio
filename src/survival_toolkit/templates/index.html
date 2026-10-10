@@ -21,7 +21,7 @@
     <script src="../static/app_markers.js?v={{ static_version }}" defer></script>
     <script src="../static/app.js?v={{ static_version }}" defer></script>
   </head>
-  <body class="simple-view">
+  <body class="simple-view"{% if api_base %} data-api-base="{{ api_base }}"{% endif %}>
     <a class="skip-link" href="#workspace">Skip to workspace</a>
     <header class="shell-header">
       <a class="brand-line" id="brandHome" href="#" style="text-decoration:none;color:inherit;">
@@ -34,13 +34,14 @@
           <input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" />
           <button class="button ghost compact-btn" id="uploadButton" type="button">Upload</button>
         </div>
-        <button class="button ghost compact-btn shutdown-button" id="shutdownButton" type="button" title="Stop the local SurvStudio server and release its memory">Shutdown</button>
+        <button class="button ghost compact-btn shutdown-button{% if hosted %} hidden{% endif %}" id="shutdownButton" type="button"{% if hosted %} disabled{% endif %} title="Stop the local SurvStudio server and release its memory">Shutdown</button>
       </div>
     </header>
 
     <div class="runtime-banner hidden" id="runtimeBanner"></div>
     <div class="runtime-banner hidden" id="analysisConsistencyBanner"></div>
     <div class="runtime-banner runtime-banner-warning dataset-integrity-warning hidden" id="datasetIntegrityWarning" role="alert"></div>
+    {% if hosted %}<div class="hosting-note" role="note">Private research workspace. Files are analysed on your research server. Connect Tailscale before using this page.</div>{% endif %}
 
     <section class="landing" id="landing">
       <div class="landing-card">
@@ -287,6 +288,7 @@
         <button class="button primary" id="saveResultsButton" type="button">5. Save results</button>
       </div>
       </div>
+      <p class="analysis-step-hint" id="analysisStepHint">Choose a group if needed, then draw the curves. Save results when ready.</p>
       <div id="tabPanelsHome">
 
       <!-- KM Panel -->

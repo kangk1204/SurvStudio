@@ -1133,6 +1133,22 @@ label > span {
 
 /* ─── Tab Strip ─── */
 
+.analysis-step-hint {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.hosting-note {
+  margin: 14px auto 0;
+  padding: 10px 14px;
+  max-width: 1180px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
 .simple-view .feature-cards {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }

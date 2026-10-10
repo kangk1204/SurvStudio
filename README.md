@@ -1,7 +1,8 @@
 # SurvStudio
 
-SurvStudio does survival analysis of your own data in your web browser, without programming; your data never
-leave your computer.
+SurvStudio does survival analysis of your own data in your web browser, without programming. With a local
+installation, your data stay on your computer. A private hosted workspace processes uploads on its configured
+research server and identifies that arrangement on the page.
 
 ![SurvStudio with the lung cancer sample open: Kaplan-Meier survival curves by tumour stage](github_images/hero.png)
 

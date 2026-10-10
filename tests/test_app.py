@@ -193,7 +193,7 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
         'class="scope-tag',
     ):
         assert removed not in response.text
-    assert '<span class="config-row-label">Outcome</span>' in response.text
+    assert '<span class="config-row-label">Check your outcome</span>' in response.text
     assert '<span>Evaluation Mode</span>' in response.text
     assert "Evaluation Mode applies to both <strong>Run Analysis</strong> and <strong>Compare All</strong>" in response.text
     assert 'class="button ghost compact-btn shutdown-button" id="shutdownButton"' in response.text

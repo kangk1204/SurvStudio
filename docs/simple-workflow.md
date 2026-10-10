@@ -13,3 +13,5 @@ Use **More analyses** to open marker analysis or a baseline-characteristics tabl
 Broader time and event column lists are available under **Other columns**. Verify the event mapping before analysis; the interface does not select a model from its observed results.
 
 This interface change preserves the numerical methods, diagnostic policies and export checks. It has been tested as software behavior, not as a human usability study.
+
+Each analysis has a short next-step hint. Result badges say **Assumptions apply**, **Needs review** or **Caution**; they do not certify a model. A hosted page identifies its remote processing arrangement and shows a recovery message when its private server cannot be reached.
