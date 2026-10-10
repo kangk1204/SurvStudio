@@ -5,6 +5,7 @@ from functools import wraps
 import inspect
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 GUARD_VERSION = "prediction-input/1"
@@ -19,6 +20,7 @@ def prediction_input_audit(df: pd.DataFrame, time_column: str, event_column: str
                            features: list[str], event_positive_value: Any = None) -> dict[str, Any]:
     from survival_toolkit.analysis import (
         _coerce_survival_time_values, _cohort_frame, _require_dataframe_columns,
+        _column_name_tokens, _IDENTIFIER_HEAD_TOKENS, _is_identifier_like_name,
         detect_duplicate_identifier_columns,
     )
 
@@ -28,6 +30,22 @@ def prediction_input_audit(df: pd.DataFrame, time_column: str, event_column: str
         raise ValueError("Survival outcome columns cannot be used as ML/DL model features: "
                          + ", ".join(overlapping) + ".")
     duplicates = detect_duplicate_identifier_columns(df)
+    # Explicit ID columns may contain many records per patient. Apply the
+    # stricter predictive rule here, without changing the frozen analysis kernel.
+    found = {item["column"] for item in duplicates}
+    for column in df.columns:
+        if str(column) in found or not _is_identifier_like_name(str(column)):
+            continue
+        if not any(token in _IDENTIFIER_HEAD_TOKENS for token in _column_name_tokens(str(column))):
+            continue
+        values = df[column].dropna()
+        if pd.api.types.is_float_dtype(values.dtype) and not bool(np.all(np.mod(values.to_numpy(dtype=float), 1) == 0)):
+            continue
+        counts = values.value_counts()
+        repeated = counts[counts > 1]
+        if len(repeated):
+            duplicates.append({"column": str(column), "n_repeated_ids": int(len(repeated)),
+                               "n_extra_rows": int((repeated - 1).sum())})
     if duplicates:
         finding = duplicates[0]
         raise ValueError(

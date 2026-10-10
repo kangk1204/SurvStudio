@@ -1049,10 +1049,11 @@ function validateDerivedColumnName(rawName) {
 function flashPresetTargets(targets) {
   targets.filter(Boolean).forEach((target) => {
     const shell = target.closest(".config-field, .selection-card") || target;
+    window.clearTimeout(shell._survstudioFlashTimeout);
     shell.classList.remove("preset-applied-flash");
     void shell.offsetWidth;
     shell.classList.add("preset-applied-flash");
-    window.setTimeout(() => shell.classList.remove("preset-applied-flash"), 1800);
+    shell._survstudioFlashTimeout = window.setTimeout(() => shell.classList.remove("preset-applied-flash"), 1800);
   });
 }
 

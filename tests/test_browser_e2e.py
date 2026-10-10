@@ -1466,12 +1466,21 @@ def test_browser_risk_table_ticks_change_columns_and_flash_table(browser_server:
 
             page.locator("#panel-km .curve-options > summary").click()
             page.locator("#riskTablePoints").fill("10")
+            page.evaluate("""() => {
+                const shell = document.getElementById('kmRiskShell');
+                window.riskTableUpdateFlashed = false;
+                new MutationObserver(() => {
+                    if (shell.classList.contains('preset-applied-flash')) {
+                        window.riskTableUpdateFlashed = true;
+                    }
+                }).observe(shell, {attributes: true, attributeFilter: ['class']});
+            }""")
             page.locator("#runKmButton").click()
             page.wait_for_function(
                 f"document.querySelectorAll('#kmRiskShell thead th').length > {default_columns}"
             )
             page.wait_for_function(
-                "document.getElementById('kmRiskShell').classList.contains('preset-applied-flash')"
+                "window.riskTableUpdateFlashed === true"
             )
             updated_columns = page.locator("#kmRiskShell thead th").count()
             assert updated_columns > default_columns

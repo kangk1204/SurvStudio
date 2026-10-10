@@ -353,7 +353,7 @@ def test_simple_navigation_preserves_data_and_saves_current_analysis(browser_ser
         ) == ["data", "km", "cox", "benchmark"]
         page.locator("#tab-data").click()
         page.locator("#saveResultsButton").click()
-        assert "Run an analysis first" in page.locator("#toastContainer").inner_text()
+        assert "No results to save" in page.locator("#toastContainer").inner_text()
         outcome = [page.locator("#timeColumn").input_value(), page.locator("#eventColumn").input_value()]
         page.locator("#additionalAnalysesButton").click()
         page.locator("#tab-tables").click()

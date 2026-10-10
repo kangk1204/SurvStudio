@@ -93,7 +93,7 @@ Those are not single-event binary outcomes.
 The time column should be:
 - numeric
 - measured in one consistent unit
-- zero or positive for all analyzable rows (negative times are dropped)
+- zero or positive for all analyzable rows (ML/DL stops on negative times; other analyses report their exclusions)
 
 Good examples:
 - months from diagnosis to death
