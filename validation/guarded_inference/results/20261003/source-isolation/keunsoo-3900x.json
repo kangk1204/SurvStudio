@@ -1,7 +1,0 @@
-{
-  "committed_indexes_preserved": 22233,
-  "source_snapshot": "/home/keunsoo/projects/SurvStudio-confirmation-7bf9218",
-  "frozen_git": "7bf9218ff48c8e66069f60cdad0c51bd8e873d22",
-  "resumed": 1790953539.7635062,
-  "policy": "Only unrecorded indexes resume; recorded failures remain unchanged"
-}
