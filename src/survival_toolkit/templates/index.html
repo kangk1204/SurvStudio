@@ -21,7 +21,7 @@
     <script src="../static/app_markers.js?v={{ static_version }}" defer></script>
     <script src="../static/app.js?v={{ static_version }}" defer></script>
   </head>
-  <body>
+  <body class="simple-view">
     <a class="skip-link" href="#workspace">Skip to workspace</a>
     <header class="shell-header">
       <a class="brand-line" id="brandHome" href="#" style="text-decoration:none;color:inherit;">
@@ -49,8 +49,8 @@
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
           </div>
           <div class="landing-hero-copy">
-            <h2>Survival Analysis, Made Simple</h2>
-            <p>Survival curves, Cox models, marker evaluation and prediction models for your cohort, on your own computer.</p>
+            <h2>From your data to survival results</h2>
+            <p>Upload a file, explore survival, compare models, and save your results.</p>
           </div>
         </div>
 
@@ -58,7 +58,7 @@
           <section class="landing-pane landing-upload-pane">
             <div class="landing-pane-head">
               <strong>Upload your own dataset</strong>
-              <span>One row per patient with follow-up time, event status and any covariates or markers.</span>
+              <span>One row per patient. Include follow-up time and whether the event occurred.</span>
             </div>
             <label class="upload-zone" for="datasetFile" id="uploadZone">
               <svg class="upload-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -101,28 +101,28 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
             </div>
             <strong>Survival curves</strong>
-            <span>Kaplan-Meier curves with log-rank tests and confidence intervals</span>
+            <span>See how survival differs between groups.</span>
           </div>
           <div class="feature-card">
             <div class="feature-icon fc-cox">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="10" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg>
             </div>
-            <strong>Cox model</strong>
-            <span>Hazard ratios with confidence intervals and assumption checks</span>
+            <strong>Risk factors</strong>
+            <span>Estimate associations after accounting for other variables.</span>
           </div>
           <div class="feature-card">
             <div class="feature-icon fc-cox">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="9" cy="17" r="2"/><path d="M8 7l8 1M10 15l7-6"/></svg>
             </div>
             <strong>Markers</strong>
-            <span>Which markers hold up, with error control and stability. <a href="/design-check">Check a study design</a> without data.</span>
+            <span>Explore markers with adjustment, diagnostics and stability checks. <a href="/design-check">Check a study design</a> without data.</span>
           </div>
           <div class="feature-card">
             <div class="feature-icon fc-cox">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
             </div>
-            <strong>Prediction models</strong>
-            <span>Cox, random forests, boosting and deep models on the same patient splits</span>
+            <strong>Compare models</strong>
+            <span>Compare statistical, machine-learning and deep-learning models on the same patient splits.</span>
           </div>
           <div class="feature-card">
             <div class="feature-icon fc-table">
@@ -139,27 +139,30 @@
       <div class="config-strip" id="configStrip">
         <div class="config-block" id="outcomeConfigBlock">
         <div class="config-row config-row-primary">
-          <span class="config-row-label">Outcome</span>
+          <span class="config-row-label">Check your outcome</span>
           <label class="config-field" for="timeColumn">
             <span>Time <button class="help-dot" type="button" data-tooltip="Follow-up time of each patient, for example months until death or last contact.">?</button></span>
             <select id="timeColumn"></select>
-          </label>
-          <label class="toggle compact-toggle" title="List every numeric column in the Time menu, not only likely follow-up time columns.">
-            <input id="showAllTimeColumns" type="checkbox" />
-            <span>All numeric</span>
           </label>
           <label class="config-field" for="eventColumn">
             <span>Event <button class="help-dot" type="button" data-tooltip="Whether the event happened, for example death = 1 and alive = 0.">?</button></span>
             <select id="eventColumn"></select>
           </label>
           <label class="config-field narrow" for="eventPositiveValue">
-            <span>Event value <button class="help-dot" type="button" data-tooltip="The value in the event column that means the event happened, usually 1.">?</button></span>
+            <span>Value meaning event occurred <button class="help-dot" type="button" data-tooltip="The value in the event column that means the event happened, usually 1.">?</button></span>
             <select id="eventPositiveValue"></select>
+          </label>
+          <details class="column-options">
+            <summary>Other columns</summary>
+          <label class="toggle compact-toggle" title="List every numeric column in the Time menu, not only likely follow-up time columns.">
+            <input id="showAllTimeColumns" type="checkbox" />
+            <span>All numeric</span>
           </label>
           <label class="toggle compact-toggle" title="List every column in the Event menu, not only likely event columns.">
             <input id="showAllEventColumns" type="checkbox" />
             <span>All columns</span>
           </label>
+          </details>
         </div>
         <div class="event-guard-row">
           <span class="event-guard-note" id="timeColumnHelp"></span>
@@ -182,22 +185,6 @@
           <label class="config-field" for="groupColumn">
             <span>Group by <button class="help-dot" type="button" data-tooltip="Split patients into groups, for example treatment arms or stages. Used by survival curves and Table 1.">?</button></span>
             <select id="groupColumn"></select>
-          </label>
-          <label class="config-field narrow">
-            <span>Time unit</span>
-            <input id="timeUnitLabel" type="text" value="Time" placeholder="Time" />
-          </label>
-          <label class="config-field narrow" for="maxTime">
-            <span>Max time <button class="help-dot" type="button" data-tooltip="Optional: truncate Kaplan-Meier display at this time point. Leave blank for auto.">?</button></span>
-            <input id="maxTime" type="number" min="0" step="0.1" placeholder="Auto" />
-          </label>
-          <label class="config-field narrow" for="confidenceLevel">
-            <span>CI level <button class="help-dot" type="button" data-tooltip="Confidence interval level for KM curves (90%, 95%, or 99%)">?</button></span>
-            <select id="confidenceLevel">
-              <option value="0.90">90%</option>
-              <option value="0.95" selected>95%</option>
-              <option value="0.99">99%</option>
-            </select>
           </label>
           <button class="button primary compact-btn" type="button" id="deriveToggle" aria-expanded="false">Make groups</button>
           </div>
@@ -252,21 +239,37 @@
         </div>
       </div>
 
+      <div class="workflow-navigation">
       <nav class="tab-strip" id="tabStrip" role="tablist" aria-label="Analysis views">
+        <button class="tab-button" type="button" data-tab="data" role="tab" id="tab-data" aria-selected="false" aria-controls="panel-data" tabindex="-1">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+          1. Data
+          <span class="tab-desc">Preview</span>
+        </button>
         <button class="tab-button active" type="button" data-tab="km" role="tab" id="tab-km" aria-selected="true" aria-controls="panel-km" tabindex="0">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
-          Survival curves
+          2. Survival curves
           <span class="tab-desc">Kaplan-Meier</span>
         </button>
         <button class="tab-button" type="button" data-tab="cox" role="tab" id="tab-cox" aria-selected="false" aria-controls="panel-cox" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
-          Cox model
+          3. Risk factors
           <span class="tab-desc">Risk factors</span>
         </button>
-        <button class="tab-button" type="button" data-tab="markers" role="tab" id="tab-markers" aria-selected="false" aria-controls="panel-markers" tabindex="-1">
+        <button class="tab-button" type="button" data-tab="benchmark" role="tab" id="tab-benchmark" aria-selected="false" aria-controls="panel-benchmark" tabindex="-1">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10"/><path d="M17 4v3a5 5 0 0 1-10 0V4"/><path d="M5 6H3a2 2 0 0 0 2 2"/><path d="M19 6h2a2 2 0 0 1-2 2"/></svg></span>
+          4. Compare models
+          <span class="tab-desc">Machine and deep learning</span>
+        </button>
+        <button class="tab-button additional-analysis" type="button" data-tab="markers" role="tab" id="tab-markers" aria-selected="false" aria-controls="panel-markers" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="9" cy="17" r="2"/><path d="M8 7l8 1M10 15l7-6"/></svg></span>
           Markers
           <span class="tab-desc">Which markers hold up</span>
+        </button>
+        <button class="tab-button additional-analysis" type="button" data-tab="tables" role="tab" id="tab-tables" aria-selected="false" aria-controls="panel-tables" tabindex="-1">
+          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/></svg></span>
+          Table 1
+          <span class="tab-desc">Baseline characteristics</span>
         </button>
         <button class="tab-button" type="button" data-tab="ml" role="tab" id="tab-ml" aria-selected="false" aria-controls="panel-ml" tabindex="-1">
           <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg></span>
@@ -278,22 +281,12 @@
           Deep Learning
           <span class="tab-desc">5 survival architectures</span>
         </button>
-        <button class="tab-button" type="button" data-tab="benchmark" role="tab" id="tab-benchmark" aria-selected="false" aria-controls="panel-benchmark" tabindex="-1">
-          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10"/><path d="M17 4v3a5 5 0 0 1-10 0V4"/><path d="M5 6H3a2 2 0 0 0 2 2"/><path d="M19 6h2a2 2 0 0 1-2 2"/></svg></span>
-          Prediction models
-          <span class="tab-desc">Machine and deep learning</span>
-        </button>
-        <button class="tab-button" type="button" data-tab="tables" role="tab" id="tab-tables" aria-selected="false" aria-controls="panel-tables" tabindex="-1">
-          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/></svg></span>
-          Table 1
-          <span class="tab-desc">Baseline characteristics</span>
-        </button>
-        <button class="tab-button" type="button" data-tab="data" role="tab" id="tab-data" aria-selected="false" aria-controls="panel-data" tabindex="-1">
-          <span class="tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
-          Data
-          <span class="tab-desc">Preview</span>
-        </button>
       </nav>
+      <div class="workflow-actions">
+        <button class="button ghost" id="additionalAnalysesButton" type="button" aria-expanded="false" aria-controls="tab-markers tab-tables">More analyses</button>
+        <button class="button primary" id="saveResultsButton" type="button">5. Save results</button>
+      </div>
+      </div>
       <div id="tabPanelsHome">
 
       <!-- KM Panel -->
@@ -308,10 +301,10 @@
               <span class="run-status hidden" data-run-status="km" aria-live="polite"></span>
               <button class="button primary" id="runKmButton">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                Run Analysis
+                Draw curves
               </button>
               <details class="export-menu">
-                <summary class="button ghost">Export</summary>
+                <summary class="button ghost">Save files</summary>
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadKmSummaryButton" type="button" disabled>Survival summary (CSV)</button>
                   <button class="button ghost" id="downloadKmPairwiseButton" type="button" disabled>Pairwise tests (CSV)</button>
@@ -321,10 +314,29 @@
               </details>
             </div>
           </div>
+          <details class="curve-options">
+            <summary>Curve options</summary>
           <div class="toolbar-row">
+          <label class="config-field narrow">
+            <span>Time unit</span>
+            <input id="timeUnitLabel" type="text" value="Time" placeholder="Time" />
+          </label>
+          <label class="config-field narrow" for="maxTime">
+            <span>Max time <button class="help-dot" type="button" data-tooltip="Optional: truncate Kaplan-Meier display at this time point. Leave blank for auto.">?</button></span>
+            <input id="maxTime" type="number" min="0" step="0.1" placeholder="Auto" />
+          </label>
+          <label class="config-field narrow" for="confidenceLevel">
+            <span>CI level <button class="help-dot" type="button" data-tooltip="Confidence interval level for KM curves (90%, 95%, or 99%)">?</button></span>
+            <select id="confidenceLevel">
+              <option value="0.90">90%</option>
+              <option value="0.95" selected>95%</option>
+              <option value="0.99">99%</option>
+            </select>
+          </label>
+
             <label class="toggle">
               <input id="showConfidenceBands" type="checkbox" checked />
-              <span>CI bands</span>
+              <span>Show confidence intervals</span>
             </label>
             <label class="toolbar-field" for="riskTablePoints">
               <span>Risk table ticks <button class="help-dot" type="button" data-tooltip="About how many time points the Number at risk table shows; they are rounded to steps such as 10, 25 or 50. It does not change the Kaplan-Meier curve itself.">?</button></span>
@@ -344,6 +356,7 @@
               <input id="fhPower" type="number" min="0" max="5" step="0.1" value="1" />
             </label>
           </div>
+          </details>
 
 
           <div class="plot-shell" id="kmPlot">
@@ -370,8 +383,8 @@
         <article class="workspace-card">
           <div class="card-head">
             <div class="card-head-left">
-              <h2>Cox model</h2>
-              <p class="card-subtitle">Hazard ratios adjusted for the chosen covariates, with model checks</p>
+              <h2>Risk factors</h2>
+              <p class="card-subtitle">Cox regression: associations adjusted for the variables you choose, with model checks</p>
             </div>
             <div class="button-row compact">
               <span class="run-status hidden" data-run-status="cox" aria-live="polite"></span>
@@ -380,7 +393,7 @@
                 Run Analysis
               </button>
               <details class="export-menu">
-                <summary class="button ghost">Export</summary>
+                <summary class="button ghost">Save files</summary>
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadCoxResultsButton" type="button" disabled>Hazard ratios (CSV)</button>
                   <button class="button ghost" id="downloadCoxDiagnosticsButton" type="button" disabled>Model checks (CSV)</button>
@@ -393,7 +406,7 @@
           <div class="checklist-grid checklist-grid-triple">
             <div class="selection-card">
               <div class="selection-card-head">
-                <h3>Covariates <button class="help-dot" type="button" data-tooltip="Variables in the model.">?</button></h3>
+                <h3>Variables to include <button class="help-dot" type="button" data-tooltip="Variables in the model.">?</button></h3>
                 <div class="selection-card-actions">
                   <button class="button ghost compact-btn" id="selectAllCoxCovariatesButton" type="button">Select all</button>
                   <button class="button ghost compact-btn" id="clearCoxCovariatesButton" type="button">Clear</button>
@@ -493,7 +506,7 @@
               </button>
               <button class="button ghost" id="runCompareButton">Compare All</button>
               <details class="export-menu">
-                <summary class="button ghost">Export</summary>
+                <summary class="button ghost">Save files</summary>
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadMlComparisonButton" type="button" disabled>Comparison (CSV)</button>
                   <button class="button ghost" id="downloadMlManuscriptCsvButton" type="button" disabled>Manuscript table (CSV)</button>
@@ -662,7 +675,7 @@
               </button>
               <button class="button ghost" id="runDlCompareButton">Compare All</button>
               <details class="export-menu">
-                <summary class="button ghost">Export</summary>
+                <summary class="button ghost">Save files</summary>
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadDlComparisonButton" type="button" disabled>Comparison (CSV)</button>
                   <button class="button ghost" id="downloadDlManuscriptCsvButton" type="button" disabled>Manuscript table (CSV)</button>
@@ -924,7 +937,7 @@
               <h3>Leaderboard</h3>
               <div class="benchmark-table-note" id="benchmarkTableNote">Run Compare All on ML or DL to build a shared leaderboard.</div>
               <details class="export-menu">
-                <summary class="button ghost">Export</summary>
+                <summary class="button ghost">Save files</summary>
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadTripodDocxButton" type="button" disabled>TRIPOD+AI checklist (Word)</button>
                   <button class="button ghost" id="downloadTripodMarkdownButton" type="button" disabled>TRIPOD+AI checklist (Markdown)</button>
@@ -967,7 +980,7 @@
                 Run Analysis
               </button>
               <details class="export-menu">
-                <summary class="button ghost">Export</summary>
+                <summary class="button ghost">Save files</summary>
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadMarkersCsvButton" type="button" disabled>Marker table (CSV)</button>
                   <button class="button ghost" id="downloadMarkerRecipeButton" type="button" disabled>Locked model (JSON)</button>
@@ -1136,7 +1149,7 @@
                 <span id="runCohortTableButtonLabel">Build Table</span>
               </button>
               <details class="export-menu">
-                <summary class="button ghost">Export</summary>
+                <summary class="button ghost">Save files</summary>
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadCohortTableButton" type="button" disabled>Table (CSV)</button>
                   <button class="button ghost" id="downloadCohortTableXlsxButton" type="button" disabled>Table (Excel)</button>

@@ -286,6 +286,13 @@ function showWorkspace() {
   refs.workspace.classList.remove("fade-in");
 }
 
+function setAdditionalAnalyses(expanded) {
+  document.body.classList.toggle("additional-analyses-open", expanded);
+  const button = document.getElementById("additionalAnalysesButton");
+  button?.setAttribute("aria-expanded", expanded ? "true" : "false");
+  if (button) button.textContent = expanded ? "Fewer analyses" : "More analyses";
+}
+
 function activateTab(tabName, { historyMode = "replace", focusTabButton = false, syncHistory = true } = {}) {
   let resolvedTabName = tabName;
   if (resolvedTabName === "predictive") {
@@ -298,6 +305,8 @@ function activateTab(tabName, { historyMode = "replace", focusTabButton = false,
   if (resolvedTabName === "ml" || resolvedTabName === "dl") {
     resolvedTabName = "benchmark";
   }
+  // Restored history and completed background runs must reveal their selected tab.
+  if (["markers", "tables"].includes(resolvedTabName)) setAdditionalAnalyses(true);
   if (resolvedTabName !== "benchmark" && activeTabName() === "benchmark") {
     runtime.workbenchRevealed = false;
     runtime.predictiveWorkbenchIntent = null;

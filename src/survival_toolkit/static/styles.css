@@ -1133,6 +1133,48 @@ label > span {
 
 /* ─── Tab Strip ─── */
 
+.simple-view .feature-cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.simple-view .feature-card:nth-child(3),
+.simple-view .feature-card:nth-child(5),
+.simple-view:not(.additional-analyses-open) .additional-analysis {
+  display: none;
+}
+
+.workflow-navigation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.workflow-navigation .tab-strip {
+  margin-bottom: 0;
+  flex: 1 1 auto;
+}
+
+.workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workflow-actions .button {
+  font-size: 0.75rem;
+  padding: 7px 14px;
+}
+
+@media (max-width: 720px) {
+  .simple-view .feature-cards { grid-template-columns: 1fr; }
+  .workflow-actions { width: 100%; }
+  .simple-view .shell-header { flex-wrap: wrap; }
+  .simple-view .header-right { width: 100%; min-width: 0; }
+  .simple-view .dataset-badge { max-width: 100%; min-width: 0; }
+}
+
 .tab-strip {
   display: flex;
   flex-wrap: wrap;

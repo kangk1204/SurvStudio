@@ -1211,7 +1211,7 @@ def test_arrow_keys_move_between_shown_tabs_without_new_history_entries(tmp_path
       return { tabs: keys.map(press), pushes, focused: page.document.activeElement?.dataset?.tab };
     """, dataset=example_dataset)
 
-    assert result == {"tabs": ["markers", "benchmark", "tables", "km", "data", "km"], "pushes": 0, "focused": "km"}
+    assert result == {"tabs": ["cox", "benchmark", "data", "data", "benchmark", "data"], "pushes": 0, "focused": "data"}
 
 
 def test_plot_failures_in_event_handlers_are_caught(tmp_path: Path, example_dataset: dict) -> None:

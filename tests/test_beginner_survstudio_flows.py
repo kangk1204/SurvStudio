@@ -337,3 +337,47 @@ def test_beginner_dl_single_run_keeps_feedback_visible_and_hides_cv_controls(bro
         if _is_playwright_environment_error(exc):
             pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
         raise
+
+
+def test_simple_navigation_preserves_data_and_saves_current_analysis(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 1280, "height": 1000})
+        page.goto(browser_server, wait_until="networkidle")
+        assert page.locator(".feature-card:visible").count() == 3
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        assert page.locator("#tabStrip [role=tab]:visible").evaluate_all(
+            "els => els.map(e => e.dataset.tab)"
+        ) == ["data", "km", "cox", "benchmark"]
+        page.locator("#tab-data").click()
+        page.locator("#saveResultsButton").click()
+        assert "Run an analysis first" in page.locator("#toastContainer").inner_text()
+        outcome = [page.locator("#timeColumn").input_value(), page.locator("#eventColumn").input_value()]
+        page.locator("#additionalAnalysesButton").click()
+        page.locator("#tab-tables").click()
+        _assert_tab_active(page, "tables")
+        page.locator("#additionalAnalysesButton").click()
+        _assert_tab_active(page, "km")
+        assert page.locator("#tab-tables").is_hidden()
+        assert outcome == [page.locator("#timeColumn").input_value(), page.locator("#eventColumn").input_value()]
+        page.locator("#runKmButton").click()
+        page.wait_for_function("() => !document.getElementById('downloadKmSummaryButton').disabled")
+        page.locator("#saveResultsButton").click()
+        assert page.locator("#downloadKmSummaryButton").is_visible()
+        with page.expect_download() as download_info:
+            page.locator("#downloadKmSummaryButton").click()
+        assert download_info.value.suggested_filename.endswith(".csv")
+        page.locator("#tab-data").press("ArrowRight")
+        _assert_tab_active(page, "km")
+        page.locator("#tab-km").press("End")
+        _assert_tab_active(page, "benchmark")
+        # Programmatic history restoration reveals an additional analysis without losing data.
+        page.evaluate("activateTab('markers', { syncHistory: false })")
+        _assert_tab_active(page, "markers")
+        assert page.locator("#additionalAnalysesButton").get_attribute("aria-expanded") == "true"
+        assert page.locator("#tab-markers").is_visible()
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        browser.close()
