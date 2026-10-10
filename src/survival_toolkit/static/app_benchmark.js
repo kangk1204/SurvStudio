@@ -216,6 +216,9 @@
           sourceMode: "compare",
           runGroupId,
           paramsSource,
+          inputRows: row.input_rows,
+          excludedOutcomeRows: row.excluded_outcome_rows,
+          removedFeatureNotes: String(row.removed_feature_notes || ""),
         };
       });
     }
@@ -972,6 +975,13 @@
       if (board.showingStaleBoard) {
         leadParts.push("Current settings no longer match these rows. Rerun Compare All Models to refresh the leaderboard.");
       }
+      const inputNotes = new Set();
+      board.visibleRows.forEach((row) => {
+        if (row.excludedOutcomeRows > 0) {
+          inputNotes.add(`Excluded ${row.excludedOutcomeRows} of ${row.inputRows} input rows because follow-up time or event was missing or non-finite. Review these exclusions before interpreting the comparison.`);
+        }
+      });
+      leadParts.push(...inputNotes);
       if (board.hasLockedTest) leadParts.push(lockedTestRankingNote(board));
       // A failed locked-test refit leaves the model ranked by cross-validation but without an independent estimate.
       const lockedTestFailures = board.visibleRows.filter((row) => row.lockedTestError);
@@ -985,6 +995,11 @@
       }
       leadParts.push(intervalNote(board));
       const detailParts = [intervalDetail(board)];
+      board.visibleRows.forEach((row) => {
+        if (row.removedFeatureNotes) {
+          detailParts.push(`${row.model}: training-only preprocessing removed ${row.removedFeatureNotes}.`);
+        }
+      });
       if (board.visibleExcludedRows.length) {
         detailParts.push(`${board.visibleExcludedRows.length} excluded model row(s) are listed below without rank or C-index.`);
       }
