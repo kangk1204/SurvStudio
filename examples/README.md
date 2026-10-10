@@ -1,6 +1,10 @@
-# Upload-Ready Real Dataset
+# Example data
 
-This folder contains a real public cohort that can be uploaded directly into SurvStudio for a first end-to-end test.
+Download a CSV and upload it, or use the sample buttons in the app.
+
+[Quick start](../README.md) · [Example run results](results.md) · [Raw outputs](demo_results.json)
+
+The [synthetic sample](synthetic_demo.csv) has 360 generated patients and uses seed 42; it matches the built-in Synthetic demo.
 
 Files included:
 
@@ -175,11 +179,11 @@ Recommended first settings:
 - File: `gse68465_validation_example.csv`
 - Rows: `433` (one row per patient; `429` have every column)
 - Columns: `patient_id` (GEO sample accession), `os_months`, `os_event`, `age`, `sex`, `stage_group`, and six genes: `DKK1`, `NTSR1`, `TLE1`, `FAM117A`, `MYLIP`, `IRX5`
-- Use: the external cohort of step 7 of the README's Markers walkthrough. Run the walkthrough on the TCGA-LUAD sample with `HiSeqV2.gz` attached, then validate the locked model on this file with **Another platform (rescale within cohort)**: the lung adenocarcinoma microarrays of GSE68465 measure six of the model's ten genes.
+- Use: an external cohort for validating a locked marker model (see [Prognostic Marker Evaluation](../docs/user-guide.md#prognostic-marker-evaluation)). Evaluate markers on the TCGA-LUAD sample with `HiSeqV2.gz` attached, then validate the locked model on this file with **Another platform (rescale within cohort)**: the lung adenocarcinoma microarrays of GSE68465 measure six of the model's ten genes.
 
 Source:
 
-- GEO series GSE68465 (Director's Challenge Consortium; Affymetrix HG-U133A), as prepared for the SurvStudio software paper (`paper/` folder): gene-level expression, quality-control exclusions applied, overall survival in months (years × 12), stage grouped as I to IV. The same patients and values are case study II's GSE68465 cohort.
+- GEO series GSE68465 (Director's Challenge Consortium; Affymetrix HG-U133A): gene-level expression, quality-control exclusions applied, overall survival in months (years × 12), stage grouped as I to IV.
 
 Study citation:
 

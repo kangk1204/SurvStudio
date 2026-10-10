@@ -1,0 +1,1250 @@
+{
+  "scope": "Bundled-example outputs; not a model-performance benchmark",
+  "source_files_sha256": {
+    "app.py": "9398e5f5c65b942ee7267421f7cf8645a2c55e6467daffe591e946afa767f24e",
+    "analysis.py": "e558be77954fd7f8da4cbe7774433a7084ceb0e516e52fb5075333a72ca0c9aa",
+    "sample_data.py": "e6fb92c53052fddc0decce5489eff6b508d83c277d28775827f9fcc11ba49739",
+    "ml_models.py": "acf538314d6ca6cd6ba26802eeee4782ef75caa72c6b5ba9069825bdbbd99e6f",
+    "deep_models.py": "6c03a7f55623e7bdb12325940963d3a2aee758ffade8ff529c619ff7ee956a28"
+  },
+  "environment": {
+    "numpy": "2.5.3",
+    "pandas": "3.0.6",
+    "statsmodels": "0.15.0",
+    "scikit-survival": "0.28.0",
+    "torch": "2.14.1"
+  },
+  "datasets": [
+    {
+      "name": "Synthetic demo",
+      "rows": 360,
+      "events": 259,
+      "input_sha256": "07c7e8a94d6edd90659c16e124d4475c94f5d231d6d1006b36fba39145c8ad9b",
+      "settings": {
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "event_positive_value": 1
+      },
+      "group": "stage",
+      "unit": "Months",
+      "features": [
+        "age",
+        "sex",
+        "stage",
+        "treatment",
+        "biomarker_score",
+        "immune_index"
+      ],
+      "categorical_features": [
+        "sex",
+        "stage",
+        "treatment"
+      ],
+      "km": {
+        "summary_table": [
+          {
+            "Group": "I",
+            "N": 54,
+            "Events": 31,
+            "Censored": 23,
+            "Median survival": 32.91,
+            "Median CI lower": 23.77,
+            "Median CI upper": 41.14,
+            "RMST": 32.257287775734085,
+            "RMST SE": 2.380853378055921,
+            "RMST CI lower": 27.590900902273955,
+            "RMST CI upper": 36.92367464919421
+          },
+          {
+            "Group": "II",
+            "N": 114,
+            "Events": 76,
+            "Censored": 38,
+            "Median survival": 21.44,
+            "Median CI lower": 17.37,
+            "Median CI upper": 28.14,
+            "RMST": 26.526656338450707,
+            "RMST SE": 1.7547304493336264,
+            "RMST CI lower": 23.08744785518101,
+            "RMST CI upper": 29.965864821720402
+          },
+          {
+            "Group": "III",
+            "N": 121,
+            "Events": 91,
+            "Censored": 30,
+            "Median survival": 15.45,
+            "Median CI lower": 12.43,
+            "Median CI upper": 19.3,
+            "RMST": 20.091900671350963,
+            "RMST SE": 1.5372792676158893,
+            "RMST CI lower": 17.078888672643707,
+            "RMST CI upper": 23.10491267005822
+          },
+          {
+            "Group": "IV",
+            "N": 71,
+            "Events": 61,
+            "Censored": 10,
+            "Median survival": 11.72,
+            "Median CI lower": 8.32,
+            "Median CI upper": 16.24,
+            "RMST": 16.837998552830793,
+            "RMST SE": 1.7741963877613032,
+            "RMST CI lower": 13.360637531317579,
+            "RMST CI upper": 20.315359574344008
+          }
+        ],
+        "logrank_p": 5.12253407961345e-07
+      },
+      "cox": {
+        "model_stats": {
+          "n": 342,
+          "outcome_rows": 360,
+          "dropped_rows": 18,
+          "row_mask_hash": "9932a810be1af4ed",
+          "outcome_row_mask_hash": "fc5dc3575ff33558",
+          "dropped_nonpositive_time_rows": 0,
+          "rows_with_infinite_values": 0,
+          "rows_with_infinite_outcome_values": 0,
+          "time_column_note": null,
+          "events": 246,
+          "parameters": 8,
+          "events_per_parameter": 30.75,
+          "partial_log_likelihood": -1188.4119115561139,
+          "null_log_likelihood": -1234.7273777492555,
+          "lr_statistic": 92.63093238628335,
+          "lr_pvalue": 1.3579897537390867e-16,
+          "lr_note": null,
+          "global_ph_statistic": 8.497813848495998,
+          "global_ph_df": 8.0,
+          "global_ph_pvalue": 0.3864110812788045,
+          "global_ph_terms_tested": 8,
+          "global_ph_method": "grambsch_therneau_log_time",
+          "martingale_terms": [
+            "age",
+            "biomarker_score",
+            "immune_index"
+          ],
+          "martingale_note": null,
+          "aic": 2392.8238231122277,
+          "bic": 2420.866475399687,
+          "bic_sample_size": "events",
+          "c_index": 0.68318626076075,
+          "c_index_std": 0.017658722954716887,
+          "c_index_ci_lower": 0.6527900990520316,
+          "c_index_ci_upper": 0.7194851038461159,
+          "c_index_ci_level": 0.95,
+          "c_index_ci_method": "bootstrap_percentile_fixed_score",
+          "c_index_label": "Apparent C-index (training cohort)",
+          "evaluation_mode": "apparent",
+          "tie_method": "efron",
+          "strata_columns": [],
+          "n_strata": null,
+          "zero_event_strata_count": 0,
+          "sparse_event_strata_count": 0,
+          "high_cardinality_strata_columns": [],
+          "high_cardinality_numeric_strata_columns": [],
+          "design_condition_number": 292.29470123731045,
+          "design_condition_warning_threshold": 10000000000.0,
+          "apparent_c_index": 0.68318626076075
+        },
+        "results_table": [
+          {
+            "Variable": "age",
+            "Label": "age",
+            "Reference": null,
+            "Beta": 0.036639469517404016,
+            "Hazard ratio": 1.0373189683052897,
+            "CI lower": 1.0232816156615059,
+            "CI upper": 1.051548885015729,
+            "SE": 0.006951523809882913,
+            "Z": 5.270710497360887,
+            "P value": 1.358966733218817e-07
+          },
+          {
+            "Variable": "sex",
+            "Label": "sex: Male vs Female",
+            "Reference": "Female",
+            "Beta": -0.10187111321991431,
+            "Hazard ratio": 0.90314594774091,
+            "CI lower": 0.6956338383236627,
+            "CI upper": 1.1725602723502253,
+            "SE": 0.13319670171787112,
+            "Z": -0.764817085603901,
+            "P value": 0.4443804723257887
+          },
+          {
+            "Variable": "stage",
+            "Label": "stage: II vs I",
+            "Reference": "I",
+            "Beta": 0.12373480555190092,
+            "Hazard ratio": 1.1317157064777676,
+            "CI lower": 0.7373446248196959,
+            "CI upper": 1.7370173961757216,
+            "SE": 0.21859314768325078,
+            "Z": 0.5660507059040891,
+            "P value": 0.5713593115760598
+          },
+          {
+            "Variable": "stage",
+            "Label": "stage: III vs I",
+            "Reference": "I",
+            "Beta": 0.8010863918537671,
+            "Hazard ratio": 2.22796005184743,
+            "CI lower": 1.4704162968960384,
+            "CI upper": 3.3757827651300527,
+            "SE": 0.2120145264227631,
+            "Z": 3.778450492851502,
+            "P value": 0.00015780721591371653
+          },
+          {
+            "Variable": "stage",
+            "Label": "stage: IV vs I",
+            "Reference": "I",
+            "Beta": 1.007792011017509,
+            "Hazard ratio": 2.7395454460004616,
+            "CI lower": 1.7463128097866318,
+            "CI upper": 4.297688941317941,
+            "SE": 0.22974167650291769,
+            "Z": 4.386631221456722,
+            "P value": 1.1511972543491736e-05
+          },
+          {
+            "Variable": "treatment",
+            "Label": "treatment: Standard vs Combination",
+            "Reference": "Combination",
+            "Beta": 0.300786207102098,
+            "Hazard ratio": 1.3509204934551506,
+            "CI lower": 1.04415943661268,
+            "CI upper": 1.7478041337800665,
+            "SE": 0.13141772719880127,
+            "Z": 2.288779554428648,
+            "P value": 0.022092163989298648
+          },
+          {
+            "Variable": "biomarker_score",
+            "Label": "biomarker_score",
+            "Reference": null,
+            "Beta": 0.43011508484351635,
+            "Hazard ratio": 1.5374344487703338,
+            "CI lower": 1.3409752394433496,
+            "CI upper": 1.7626758606273252,
+            "SE": 0.069755335322953,
+            "Z": 6.166052859643941,
+            "P value": 7.001568763215615e-10
+          },
+          {
+            "Variable": "immune_index",
+            "Label": "immune_index",
+            "Reference": null,
+            "Beta": -0.14571508113429504,
+            "Hazard ratio": 0.8644039530961812,
+            "CI lower": 0.7547522062608121,
+            "CI upper": 0.9899861013060818,
+            "SE": 0.0692108156922649,
+            "Z": -2.105380202166587,
+            "P value": 0.03525822573826793
+          }
+        ],
+        "diagnostics_table": [
+          {
+            "Term": "age",
+            "Schoenfeld rho": 0.01526503451767735,
+            "Chi-square": 0.06161128390492203,
+            "P value": 0.8039671296520066
+          },
+          {
+            "Term": "sex: Male vs Female",
+            "Schoenfeld rho": 0.030853906296643783,
+            "Chi-square": 0.2579452412288738,
+            "P value": 0.611535328709484
+          },
+          {
+            "Term": "stage: II vs I",
+            "Schoenfeld rho": -0.08805766780009493,
+            "Chi-square": 1.9140061981173502,
+            "P value": 0.16651892194141893
+          },
+          {
+            "Term": "stage: III vs I",
+            "Schoenfeld rho": -0.1109626063761658,
+            "Chi-square": 2.9761664357647213,
+            "P value": 0.08449919504204435
+          },
+          {
+            "Term": "stage: IV vs I",
+            "Schoenfeld rho": -0.08100070856335213,
+            "Chi-square": 1.6689288985257043,
+            "P value": 0.19640206110079877
+          },
+          {
+            "Term": "treatment: Standard vs Combination",
+            "Schoenfeld rho": 0.07610493886237345,
+            "Chi-square": 1.4565702969288552,
+            "P value": 0.22747661169021743
+          },
+          {
+            "Term": "biomarker_score",
+            "Schoenfeld rho": 0.042320397694996154,
+            "Chi-square": 0.41806074703544105,
+            "P value": 0.5179062832564179
+          },
+          {
+            "Term": "immune_index",
+            "Schoenfeld rho": 0.11616530453597669,
+            "Chi-square": 3.081102766984189,
+            "P value": 0.07920680478538836
+          },
+          {
+            "Term": "Global PH test (Grambsch-Therneau)",
+            "Schoenfeld rho": null,
+            "Chi-square": 8.497813848495998,
+            "P value": 0.3864110812788045,
+            "_kind": "global"
+          }
+        ],
+        "scientific_summary": {
+          "status": "review",
+          "headline": "Model fit identified 6 term(s) with nominal hazard association: age, stage: III vs I, stage: IV vs I +3 more.",
+          "strengths": [
+            "Cox regression was fit with the Efron tie method.",
+            "Model estimates use the analyzable cohort after dropping rows with missing selected Cox inputs (N = 342 of 360 outcome-valid rows).",
+            "Proportional-hazards checks use the Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time (per term, 1 df, plus a global test); the plot overlay uses LOWESS smoothing for visual inspection only.",
+            "The reported discrimination metric is an apparent C-index on the fitted cohort, so it reflects training-cohort ranking only.",
+            "A C-index of 0.683 means the fitted model correctly orders approximately 68.3% of evaluable patient pairs by predicted risk.",
+            "The overall likelihood-ratio test compares the fitted Cox model with a null model (LR chi-square 92.63, p=1.36e-16).",
+            "Global proportional-hazards test (Grambsch-Therneau, log time): chi-square 8.50 on 8 df (p=0.386) across 8 model term(s).",
+            "Martingale residual screening is available for continuous covariates not marked categorical: age, biomarker_score, immune_index.",
+            "Apparent C-index (training cohort) includes an internal bootstrap percentile 95% CI (0.653 to 0.719) on the fixed fitted risk scores."
+          ],
+          "cautions": [
+            "18 outcome-valid rows (5.0%) were excluded because at least one selected Cox input was missing.",
+            "Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.",
+            "All Cox outputs assume non-informative (independent) censoring.",
+            "Competing risks are not modeled in this Cox workflow, so cause-specific questions need dedicated competing-risk methods rather than treating other event types as ordinary censoring.",
+            "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, coefficient estimates and survival summaries can be biased.",
+            "The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.",
+            "The reported C-index confidence interval is a bootstrap interval on the same cohort using fixed fitted risk scores, so it understates full model-building uncertainty and does not replace external validation.",
+            "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; validate the final specification on a separate cohort outside this run."
+          ],
+          "next_steps": [
+            "Review missingness patterns or use an imputation strategy before treating the fitted cohort as representative.",
+            "If martingale LOWESS trends curve strongly away from zero, consider splines, nonlinear transforms, or recoding the continuous covariate.",
+            "Interpret hazard ratios together with confidence intervals, not p-values alone."
+          ],
+          "metrics": [
+            {
+              "label": "Outcome-valid rows",
+              "value": 360
+            },
+            {
+              "label": "Dropped for missing Cox inputs",
+              "value": 18
+            },
+            {
+              "label": "Dropped for negative time",
+              "value": 0
+            },
+            {
+              "label": "Events",
+              "value": 246
+            },
+            {
+              "label": "Parameters",
+              "value": 8
+            },
+            {
+              "label": "EPV",
+              "value": 30.75
+            },
+            {
+              "label": "Apparent C-index (training cohort)",
+              "value": 0.68318626076075
+            },
+            {
+              "label": "LR chi-square",
+              "value": 92.63093238628335
+            },
+            {
+              "label": "LR test p-value",
+              "value": 1.3579897537390867e-16
+            },
+            {
+              "label": "Apparent C-index 95% CI",
+              "value": "0.653 to 0.719"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "TCGA-LUAD",
+      "rows": 489,
+      "events": 178,
+      "input_sha256": "ea2837cb0e7d287090b819803569cfb942c8769c8d561a16f84e15e18b3bc341",
+      "settings": {
+        "time_column": "os_months",
+        "event_column": "os_event",
+        "event_positive_value": 1
+      },
+      "group": "stage_group",
+      "unit": "Months",
+      "features": [
+        "age",
+        "sex",
+        "stage_group",
+        "smoking_status"
+      ],
+      "categorical_features": [
+        "sex",
+        "stage_group",
+        "smoking_status"
+      ],
+      "km": {
+        "summary_table": [
+          {
+            "Group": "Stage I",
+            "N": 266,
+            "Events": 66,
+            "Censored": 200,
+            "Median survival": 76.15,
+            "Median CI lower": 50.3,
+            "Median CI upper": 110.41,
+            "RMST": 61.300409678212596,
+            "RMST SE": 2.5986477879189165,
+            "RMST CI lower": 56.207153605386836,
+            "RMST CI upper": 66.39366575103836
+          },
+          {
+            "Group": "Stage II",
+            "N": 119,
+            "Events": 52,
+            "Censored": 67,
+            "Median survival": 37.68,
+            "Median CI lower": 29.43,
+            "Median CI upper": 49.31,
+            "RMST": 43.62889376665819,
+            "RMST SE": 3.833072437450432,
+            "RMST CI lower": 36.116209839122185,
+            "RMST CI upper": 51.14157769419419
+          },
+          {
+            "Group": "Stage III",
+            "N": 79,
+            "Events": 44,
+            "Censored": 35,
+            "Median survival": 26.51,
+            "Median CI lower": 15.7,
+            "Median CI upper": 41.56,
+            "RMST": 35.864634778084586,
+            "RMST SE": 4.240932403656293,
+            "RMST CI lower": 27.55256000604937,
+            "RMST CI upper": 44.1767095501198
+          },
+          {
+            "Group": "Stage IV",
+            "N": 25,
+            "Events": 16,
+            "Censored": 9,
+            "Median survival": 27.14,
+            "Median CI lower": 15.37,
+            "Median CI upper": 42.48,
+            "RMST": 32.05961436442345,
+            "RMST SE": 6.048952314963907,
+            "RMST CI lower": 20.20388568289401,
+            "RMST CI upper": 43.915343045952895
+          }
+        ],
+        "logrank_p": 2.642868525268272e-11
+      },
+      "cox": {
+        "model_stats": {
+          "n": 476,
+          "outcome_rows": 489,
+          "dropped_rows": 13,
+          "row_mask_hash": "1bd28ebeea230674",
+          "outcome_row_mask_hash": "8d894eb24650e672",
+          "dropped_nonpositive_time_rows": 0,
+          "rows_with_infinite_values": 0,
+          "rows_with_infinite_outcome_values": 0,
+          "time_column_note": null,
+          "events": 169,
+          "parameters": 9,
+          "events_per_parameter": 18.77777777777778,
+          "partial_log_likelihood": -866.5632109969065,
+          "null_log_likelihood": -891.6007719273792,
+          "lr_statistic": 50.0751218609455,
+          "lr_pvalue": 1.042761635619015e-07,
+          "lr_note": null,
+          "global_ph_statistic": 9.913415478645508,
+          "global_ph_df": 9.0,
+          "global_ph_pvalue": 0.35754014334302936,
+          "global_ph_terms_tested": 9,
+          "global_ph_method": "grambsch_therneau_log_time",
+          "martingale_terms": [
+            "age"
+          ],
+          "martingale_note": null,
+          "aic": 1751.126421993813,
+          "bic": 1779.2955104281207,
+          "bic_sample_size": "events",
+          "c_index": 0.6810027119115499,
+          "c_index_std": 0.025575694466770604,
+          "c_index_ci_lower": 0.6327568059122739,
+          "c_index_ci_upper": 0.7243973032727333,
+          "c_index_ci_level": 0.95,
+          "c_index_ci_method": "bootstrap_percentile_fixed_score",
+          "c_index_label": "Apparent C-index (training cohort)",
+          "evaluation_mode": "apparent",
+          "tie_method": "efron",
+          "strata_columns": [],
+          "n_strata": null,
+          "zero_event_strata_count": 0,
+          "sparse_event_strata_count": 0,
+          "high_cardinality_strata_columns": [],
+          "high_cardinality_numeric_strata_columns": [],
+          "design_condition_number": 740.3070235031229,
+          "design_condition_warning_threshold": 10000000000.0,
+          "apparent_c_index": 0.6810027119115499
+        },
+        "results_table": [
+          {
+            "Variable": "age",
+            "Label": "age",
+            "Reference": null,
+            "Beta": 0.010326193659427071,
+            "Hazard ratio": 1.0103796927860496,
+            "CI lower": 0.9939913848891789,
+            "CI upper": 1.0270382008474344,
+            "SE": 0.008343486546202742,
+            "Z": 1.2376353221455954,
+            "P value": 0.21585131107341604
+          },
+          {
+            "Variable": "sex",
+            "Label": "sex: Male vs Female",
+            "Reference": "Female",
+            "Beta": 0.06131721941492039,
+            "Hazard ratio": 1.0632361398433081,
+            "CI lower": 0.7719727310873162,
+            "CI upper": 1.464392514845234,
+            "SE": 0.1633312009541913,
+            "Z": 0.3754164486436228,
+            "P value": 0.7073507737472996
+          },
+          {
+            "Variable": "stage_group",
+            "Label": "stage_group: Stage II vs Stage I",
+            "Reference": "Stage I",
+            "Beta": 0.8794841447488363,
+            "Hazard ratio": 2.4096563518666847,
+            "CI lower": 1.6390890618528604,
+            "CI upper": 3.5424821440317182,
+            "SE": 0.1966074429742267,
+            "Z": 4.473300356508518,
+            "P value": 7.702146903918594e-06
+          },
+          {
+            "Variable": "stage_group",
+            "Label": "stage_group: Stage III vs Stage I",
+            "Reference": "Stage I",
+            "Beta": 1.193086667566421,
+            "Hazard ratio": 3.2972430093183043,
+            "CI lower": 2.2088057701990653,
+            "CI upper": 4.922031447572061,
+            "SE": 0.20440920176487784,
+            "Z": 5.836756160022442,
+            "P value": 5.32269038737686e-09
+          },
+          {
+            "Variable": "stage_group",
+            "Label": "stage_group: Stage IV vs Stage I",
+            "Reference": "Stage I",
+            "Beta": 1.3604528347574323,
+            "Hazard ratio": 3.8979580330796177,
+            "CI lower": 2.2048478631268464,
+            "CI upper": 6.891213258633707,
+            "SE": 0.29071673206640447,
+            "Z": 4.6796509615644775,
+            "P value": 2.873637069086243e-06
+          },
+          {
+            "Variable": "smoking_status",
+            "Label": "smoking_status: Former smoker <=15y vs Lifelong Non-smoker",
+            "Reference": "Lifelong Non-smoker",
+            "Beta": 0.12101337622350383,
+            "Hazard ratio": 1.128640009207393,
+            "CI lower": 0.7038747825142802,
+            "CI upper": 1.809737047026288,
+            "SE": 0.24090655968107064,
+            "Z": 0.502324952810376,
+            "P value": 0.6154389595430692
+          },
+          {
+            "Variable": "smoking_status",
+            "Label": "smoking_status: Former smoker >15y vs Lifelong Non-smoker",
+            "Reference": "Lifelong Non-smoker",
+            "Beta": -0.04183202280265032,
+            "Hazard ratio": 0.9590308623595032,
+            "CI lower": 0.5696198433656279,
+            "CI upper": 1.6146561705499594,
+            "SE": 0.2657977715041276,
+            "Z": -0.15738289514590872,
+            "P value": 0.8749430931568246
+          },
+          {
+            "Variable": "smoking_status",
+            "Label": "smoking_status: Current smoker vs Lifelong Non-smoker",
+            "Reference": "Lifelong Non-smoker",
+            "Beta": -0.21671674924824025,
+            "Hazard ratio": 0.8051579986171336,
+            "CI lower": 0.4782876381675658,
+            "CI upper": 1.3554174329507265,
+            "SE": 0.26573254857897927,
+            "Z": -0.8155446158445627,
+            "P value": 0.41476063699311627
+          },
+          {
+            "Variable": "smoking_status",
+            "Label": "smoking_status: Former smoker (duration unknown) vs Lifelong Non-smoker",
+            "Reference": "Lifelong Non-smoker",
+            "Beta": 1.0940904260252602,
+            "Hazard ratio": 2.9864650367564973,
+            "CI lower": 0.39665971406120554,
+            "CI upper": 22.485201041598003,
+            "SE": 1.0300020567847727,
+            "Z": 1.062221593460254,
+            "P value": 0.28813509915992497
+          }
+        ],
+        "diagnostics_table": [
+          {
+            "Term": "age",
+            "Schoenfeld rho": -0.04107191742690916,
+            "Chi-square": 0.30771793190846347,
+            "P value": 0.5790839412666986
+          },
+          {
+            "Term": "sex: Male vs Female",
+            "Schoenfeld rho": -0.10242481242105288,
+            "Chi-square": 1.794497642760413,
+            "P value": 0.1803791290006833
+          },
+          {
+            "Term": "stage_group: Stage II vs Stage I",
+            "Schoenfeld rho": -0.12022615570812147,
+            "Chi-square": 2.4057711726055016,
+            "P value": 0.12088853800559983
+          },
+          {
+            "Term": "stage_group: Stage III vs Stage I",
+            "Schoenfeld rho": -0.16929479566672076,
+            "Chi-square": 4.823658104732157,
+            "P value": 0.028071708589763864
+          },
+          {
+            "Term": "stage_group: Stage IV vs Stage I",
+            "Schoenfeld rho": -0.0015650984027722695,
+            "Chi-square": 0.0004149103096383902,
+            "P value": 0.9837487360821727
+          },
+          {
+            "Term": "smoking_status: Former smoker <=15y vs Lifelong Non-smoker",
+            "Schoenfeld rho": 0.004129638290599258,
+            "Chi-square": 0.002891996874952925,
+            "P value": 0.9571126036178003
+          },
+          {
+            "Term": "smoking_status: Former smoker >15y vs Lifelong Non-smoker",
+            "Schoenfeld rho": -0.012255433239967597,
+            "Chi-square": 0.024969544045119668,
+            "P value": 0.8744429747016694
+          },
+          {
+            "Term": "smoking_status: Current smoker vs Lifelong Non-smoker",
+            "Schoenfeld rho": 0.032531251563110784,
+            "Chi-square": 0.17804278614512128,
+            "P value": 0.6730606625628757
+          },
+          {
+            "Term": "smoking_status: Former smoker (duration unknown) vs Lifelong Non-smoker",
+            "Schoenfeld rho": 0.07093144742751371,
+            "Chi-square": 0.8389602680935152,
+            "P value": 0.35969430404446034
+          },
+          {
+            "Term": "Global PH test (Grambsch-Therneau)",
+            "Schoenfeld rho": null,
+            "Chi-square": 9.913415478645508,
+            "P value": 0.35754014334302936,
+            "_kind": "global"
+          }
+        ],
+        "scientific_summary": {
+          "status": "caution",
+          "headline": "Model fit shows 3 term(s) with nominal hazard association (stage_group: Stage II vs Stage I, stage_group: Stage III vs Stage I, stage_group: Stage IV vs Stage I), but some estimates appear unstable: smoking_status=Former smoker (duration unknown) (n=4), smoking_status: Former smoker (duration unknown) vs Lifelong Non-smoker.",
+          "strengths": [
+            "Cox regression was fit with the Efron tie method.",
+            "Model estimates use the analyzable cohort after dropping rows with missing selected Cox inputs (N = 476 of 489 outcome-valid rows).",
+            "Proportional-hazards checks use the Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time (per term, 1 df, plus a global test); the plot overlay uses LOWESS smoothing for visual inspection only.",
+            "The reported discrimination metric is an apparent C-index on the fitted cohort, so it reflects training-cohort ranking only.",
+            "A C-index of 0.681 means the fitted model correctly orders approximately 68.1% of evaluable patient pairs by predicted risk.",
+            "The overall likelihood-ratio test compares the fitted Cox model with a null model (LR chi-square 50.08, p=1.04e-07).",
+            "Global proportional-hazards test (Grambsch-Therneau, log time): chi-square 9.91 on 9 df (p=0.358) across 9 model term(s).",
+            "Martingale residual screening is available for continuous covariates not marked categorical: age.",
+            "Apparent C-index (training cohort) includes an internal bootstrap percentile 95% CI (0.633 to 0.724) on the fixed fitted risk scores."
+          ],
+          "cautions": [
+            "13 outcome-valid rows (2.7%) were excluded because at least one selected Cox input was missing.",
+            "Possible proportional-hazards violations detected for: stage_group: Stage III vs Stage I.",
+            "Sparse categorical levels remain in the analyzable cohort: smoking_status=Former smoker (duration unknown) (n=4).",
+            "Some hazard-ratio intervals are very wide, which suggests unstable estimates: smoking_status: Former smoker (duration unknown) vs Lifelong Non-smoker.",
+            "Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.",
+            "All Cox outputs assume non-informative (independent) censoring.",
+            "Competing risks are not modeled in this Cox workflow, so cause-specific questions need dedicated competing-risk methods rather than treating other event types as ordinary censoring.",
+            "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, coefficient estimates and survival summaries can be biased.",
+            "The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.",
+            "The reported C-index confidence interval is a bootstrap interval on the same cohort using fixed fitted risk scores, so it understates full model-building uncertainty and does not replace external validation.",
+            "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; validate the final specification on a separate cohort outside this run."
+          ],
+          "next_steps": [
+            "Review missingness patterns or use an imputation strategy before treating the fitted cohort as representative.",
+            "Consider stratification or time-varying effects for PH-violating terms.",
+            "Collapse rare categorical levels before treating term-specific hazard ratios as stable.",
+            "Treat wide-interval terms as unstable unless the category encoding or cohort size is improved.",
+            "If martingale LOWESS trends curve strongly away from zero, consider splines, nonlinear transforms, or recoding the continuous covariate.",
+            "Interpret hazard ratios together with confidence intervals, not p-values alone."
+          ],
+          "metrics": [
+            {
+              "label": "Outcome-valid rows",
+              "value": 489
+            },
+            {
+              "label": "Dropped for missing Cox inputs",
+              "value": 13
+            },
+            {
+              "label": "Dropped for negative time",
+              "value": 0
+            },
+            {
+              "label": "Events",
+              "value": 169
+            },
+            {
+              "label": "Parameters",
+              "value": 9
+            },
+            {
+              "label": "EPV",
+              "value": 18.77777777777778
+            },
+            {
+              "label": "Apparent C-index (training cohort)",
+              "value": 0.6810027119115499
+            },
+            {
+              "label": "LR chi-square",
+              "value": 50.0751218609455
+            },
+            {
+              "label": "LR test p-value",
+              "value": 1.042761635619015e-07
+            },
+            {
+              "label": "Apparent C-index 95% CI",
+              "value": "0.633 to 0.724"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "GBSG2",
+      "rows": 686,
+      "events": 299,
+      "input_sha256": "6d356368877922d24e6fcc361634fa18922f908367020af09573750cda9b1385",
+      "settings": {
+        "time_column": "rfs_days",
+        "event_column": "rfs_event",
+        "event_positive_value": 1
+      },
+      "group": "horTh",
+      "unit": "Days",
+      "features": [
+        "age",
+        "horTh",
+        "menostat",
+        "pnodes",
+        "tgrade",
+        "tsize"
+      ],
+      "categorical_features": [
+        "horTh",
+        "menostat",
+        "tgrade"
+      ],
+      "km": {
+        "summary_table": [
+          {
+            "Group": "no",
+            "N": 440,
+            "Events": 205,
+            "Censored": 235,
+            "Median survival": 1528.0,
+            "Median CI lower": 1280.0,
+            "Median CI upper": 1814.0,
+            "RMST": 1537.4700225426386,
+            "RMST SE": 49.25297645677492,
+            "RMST CI lower": 1440.9359625559605,
+            "RMST CI upper": 1634.0040825293167
+          },
+          {
+            "Group": "yes",
+            "N": 246,
+            "Events": 94,
+            "Censored": 152,
+            "Median survival": 2018.0,
+            "Median CI lower": 1918.0,
+            "Median CI upper": null,
+            "RMST": 1774.4469268940359,
+            "RMST SE": 61.63587428508863,
+            "RMST CI lower": 1653.6428331396237,
+            "RMST CI upper": 1895.251020648448
+          }
+        ],
+        "logrank_p": 0.003427282264745802
+      },
+      "cox": {
+        "model_stats": {
+          "n": 686,
+          "outcome_rows": 686,
+          "dropped_rows": 0,
+          "row_mask_hash": "52f137b615a6ab7f",
+          "outcome_row_mask_hash": "52f137b615a6ab7f",
+          "dropped_nonpositive_time_rows": 0,
+          "rows_with_infinite_values": 0,
+          "rows_with_infinite_outcome_values": 0,
+          "time_column_note": null,
+          "events": 299,
+          "parameters": 7,
+          "events_per_parameter": 42.714285714285715,
+          "partial_log_likelihood": -1746.3856393937756,
+          "null_log_likelihood": -1788.1047371230675,
+          "lr_statistic": 83.43819545858378,
+          "lr_pvalue": 2.735611704365333e-15,
+          "lr_note": null,
+          "global_ph_statistic": 19.585110033048093,
+          "global_ph_df": 7.0,
+          "global_ph_pvalue": 0.006539126929077048,
+          "global_ph_terms_tested": 7,
+          "global_ph_method": "grambsch_therneau_log_time",
+          "martingale_terms": [
+            "age",
+            "pnodes",
+            "tsize"
+          ],
+          "martingale_note": null,
+          "aic": 3506.771278787551,
+          "bic": 3532.674383801286,
+          "bic_sample_size": "events",
+          "c_index": 0.674443158590838,
+          "c_index_std": 0.01386708192165644,
+          "c_index_ci_lower": 0.64553861950488,
+          "c_index_ci_upper": 0.69725033013015,
+          "c_index_ci_level": 0.95,
+          "c_index_ci_method": "bootstrap_percentile_fixed_score",
+          "c_index_label": "Apparent C-index (training cohort)",
+          "evaluation_mode": "apparent",
+          "tie_method": "efron",
+          "strata_columns": [],
+          "n_strata": null,
+          "zero_event_strata_count": 0,
+          "sparse_event_strata_count": 0,
+          "high_cardinality_strata_columns": [],
+          "high_cardinality_numeric_strata_columns": [],
+          "design_condition_number": 270.68495136925895,
+          "design_condition_warning_threshold": 10000000000.0,
+          "apparent_c_index": 0.674443158590838
+        },
+        "results_table": [
+          {
+            "Variable": "age",
+            "Label": "age",
+            "Reference": null,
+            "Beta": -0.012375171735943867,
+            "Hazard ratio": 0.9877010858109234,
+            "CI lower": 0.9703950425408949,
+            "CI upper": 1.0053157653790927,
+            "SE": 0.009018970983521656,
+            "Z": -1.3721267934617203,
+            "P value": 0.1700239698555326
+          },
+          {
+            "Variable": "horTh",
+            "Label": "horTh: yes vs no",
+            "Reference": "no",
+            "Beta": -0.35822682409398565,
+            "Hazard ratio": 0.6989145263716625,
+            "CI lower": 0.5430130176907237,
+            "CI upper": 0.8995760677169307,
+            "SE": 0.1287754079078485,
+            "Z": -2.781795297051843,
+            "P value": 0.005405912574391319
+          },
+          {
+            "Variable": "menostat",
+            "Label": "menostat: Pre vs Post",
+            "Reference": "Post",
+            "Beta": -0.33211817247041736,
+            "Hazard ratio": 0.7174025406145704,
+            "CI lower": 0.5032785636202655,
+            "CI upper": 1.0226273131485237,
+            "SE": 0.18086724454490108,
+            "Z": -1.8362538407996125,
+            "P value": 0.06632012311312935
+          },
+          {
+            "Variable": "pnodes",
+            "Label": "pnodes",
+            "Reference": null,
+            "Beta": 0.050281921165137744,
+            "Hazard ratio": 1.0515675137295897,
+            "CI lower": 1.0363978247895018,
+            "CI upper": 1.0669592404403432,
+            "SE": 0.0074138353509657345,
+            "Z": 6.782173974040031,
+            "P value": 1.1838079310596713e-11
+          },
+          {
+            "Variable": "tgrade",
+            "Label": "tgrade: II vs I",
+            "Reference": "I",
+            "Beta": 0.7619915210197948,
+            "Hazard ratio": 2.1425388857208962,
+            "CI lower": 1.3202704303011668,
+            "CI upper": 3.476918645961803,
+            "SE": 0.24702236254516796,
+            "Z": 3.0847066361470206,
+            "P value": 0.0020375301805705738
+          },
+          {
+            "Variable": "tgrade",
+            "Label": "tgrade: III vs I",
+            "Reference": "I",
+            "Beta": 1.000541600592061,
+            "Hazard ratio": 2.7197544502571493,
+            "CI lower": 1.6255431549228356,
+            "CI upper": 4.550518543473985,
+            "SE": 0.2626066578446212,
+            "Z": 3.8100389716092433,
+            "P value": 0.00013894488767582776
+          },
+          {
+            "Variable": "tsize",
+            "Label": "tsize",
+            "Reference": null,
+            "Beta": 0.007325150146194903,
+            "Hazard ratio": 1.007352044687272,
+            "CI lower": 0.9997059152564971,
+            "CI upper": 1.0150566546115396,
+            "SE": 0.0038874582396390047,
+            "Z": 1.8843032373963529,
+            "P value": 0.05952396977331063
+          }
+        ],
+        "diagnostics_table": [
+          {
+            "Term": "age",
+            "Schoenfeld rho": 0.09733165256066165,
+            "Chi-square": 3.03416427087976,
+            "P value": 0.08152852308205535
+          },
+          {
+            "Term": "horTh: yes vs no",
+            "Schoenfeld rho": -0.01618172467942814,
+            "Chi-square": 0.07957378559364073,
+            "P value": 0.7778758361418932
+          },
+          {
+            "Term": "menostat: Pre vs Post",
+            "Schoenfeld rho": -0.003841674794592904,
+            "Chi-square": 0.003744189489229235,
+            "P value": 0.9512080668252175
+          },
+          {
+            "Term": "pnodes",
+            "Schoenfeld rho": 0.04518997017061228,
+            "Chi-square": 0.3527925602343025,
+            "P value": 0.5525365704604137
+          },
+          {
+            "Term": "tgrade: II vs I",
+            "Schoenfeld rho": -0.0928690347846085,
+            "Chi-square": 2.5835105751361667,
+            "P value": 0.10798193895966746
+          },
+          {
+            "Term": "tgrade: III vs I",
+            "Schoenfeld rho": -0.163970748960368,
+            "Chi-square": 7.901890282479123,
+            "P value": 0.004938316418692828
+          },
+          {
+            "Term": "tsize",
+            "Schoenfeld rho": -0.03887183955877361,
+            "Chi-square": 0.44772240135306773,
+            "P value": 0.5034185387372754
+          },
+          {
+            "Term": "Global PH test (Grambsch-Therneau)",
+            "Schoenfeld rho": null,
+            "Chi-square": 19.585110033048093,
+            "P value": 0.006539126929077048,
+            "_kind": "global"
+          }
+        ],
+        "scientific_summary": {
+          "status": "review",
+          "headline": "Model fit shows 4 term(s) with nominal hazard association, but some terms need closer proportional-hazards review: tgrade: III vs I.",
+          "strengths": [
+            "Cox regression was fit with the Efron tie method.",
+            "Model estimates use the analyzable cohort after dropping rows with missing selected Cox inputs (N = 686 of 686 outcome-valid rows).",
+            "Proportional-hazards checks use the Grambsch-Therneau score test on scaled Schoenfeld residuals versus log time (per term, 1 df, plus a global test); the plot overlay uses LOWESS smoothing for visual inspection only.",
+            "The reported discrimination metric is an apparent C-index on the fitted cohort, so it reflects training-cohort ranking only.",
+            "A C-index of 0.674 means the fitted model correctly orders approximately 67.4% of evaluable patient pairs by predicted risk.",
+            "The overall likelihood-ratio test compares the fitted Cox model with a null model (LR chi-square 83.44, p=2.74e-15).",
+            "Global proportional-hazards test (Grambsch-Therneau, log time): chi-square 19.59 on 7 df (p=0.00654) across 7 model term(s).",
+            "Martingale residual screening is available for continuous covariates not marked categorical: age, pnodes, tsize.",
+            "Apparent C-index (training cohort) includes an internal bootstrap percentile 95% CI (0.646 to 0.697) on the fixed fitted risk scores."
+          ],
+          "cautions": [
+            "Possible proportional-hazards violations detected for: tgrade: III vs I.",
+            "The global Grambsch-Therneau test suggests at least one term departs from proportional hazards, even if not every single term crosses the nominal cutoff.",
+            "Changing the covariate set can change the analyzable cohort because Cox fitting uses complete-case rows for the selected covariates.",
+            "All Cox outputs assume non-informative (independent) censoring.",
+            "Competing risks are not modeled in this Cox workflow, so cause-specific questions need dedicated competing-risk methods rather than treating other event types as ordinary censoring.",
+            "Left truncation (delayed entry) is not supported; if patients entered the risk set after time 0, coefficient estimates and survival summaries can be biased.",
+            "The Cox C-index is apparent, so it is optimistic and should not be treated as external validation.",
+            "The reported C-index confidence interval is a bootstrap interval on the same cohort using fixed fitted risk scores, so it understates full model-building uncertainty and does not replace external validation.",
+            "The current dashboard does not yet provide a built-in external-cohort apply workflow for Cox validation; validate the final specification on a separate cohort outside this run."
+          ],
+          "next_steps": [
+            "Consider stratification or time-varying effects for PH-violating terms.",
+            "Inspect the per-term PH table and Schoenfeld residual plots before writing that the proportional-hazards assumption was fully satisfied.",
+            "If martingale LOWESS trends curve strongly away from zero, consider splines, nonlinear transforms, or recoding the continuous covariate.",
+            "Interpret hazard ratios together with confidence intervals, not p-values alone."
+          ],
+          "metrics": [
+            {
+              "label": "Outcome-valid rows",
+              "value": 686
+            },
+            {
+              "label": "Dropped for missing Cox inputs",
+              "value": 0
+            },
+            {
+              "label": "Dropped for negative time",
+              "value": 0
+            },
+            {
+              "label": "Events",
+              "value": 299
+            },
+            {
+              "label": "Parameters",
+              "value": 7
+            },
+            {
+              "label": "EPV",
+              "value": 42.714285714285715
+            },
+            {
+              "label": "Apparent C-index (training cohort)",
+              "value": 0.674443158590838
+            },
+            {
+              "label": "LR chi-square",
+              "value": 83.43819545858378
+            },
+            {
+              "label": "LR test p-value",
+              "value": 2.735611704365333e-15
+            },
+            {
+              "label": "Apparent C-index 95% CI",
+              "value": "0.646 to 0.697"
+            }
+          ]
+        }
+      },
+      "prediction_examples": {
+        "settings": {
+          "seed": 42,
+          "evaluation": "holdout",
+          "rsf_trees": 100,
+          "deepsurv_max_epochs": 100,
+          "hidden_layers": [
+            64,
+            64
+          ]
+        },
+        "RSF": {
+          "model_stats": {
+            "c_index": 0.6878334645324936,
+            "ibs": 0.18119303696399805,
+            "null_ibs": 0.21152272539157294,
+            "brier_skill_score": 0.14338737538214053,
+            "metric_name": "Holdout C-index",
+            "evaluation_mode": "holdout",
+            "n_estimators": 100,
+            "max_depth": null,
+            "min_samples_leaf": 6,
+            "n_patients": 686,
+            "n_events": 299,
+            "n_evaluation_patients": 206,
+            "n_evaluation_events": 90,
+            "n_features": 7
+          },
+          "scientific_summary": {
+            "status": "review",
+            "headline": "Random Survival Forest estimated a holdout C-index of 0.688 on the current evaluation path.",
+            "strengths": [
+              "Random Survival Forest was trained with 7 feature(s) on 480 patients (209 events).",
+              "Holdout C-index was estimated on 206 patients (90 events).",
+              "Ensemble of 100 trees with min_samples_leaf=6.",
+              "Non-parametric model; no proportional-hazards assumption required.",
+              "Discrimination was estimated on a deterministic holdout split.",
+              "Holdout C-index = 0.688.",
+              "IBS = 0.1812 versus a Kaplan-Meier null-model IBS of 0.2115, giving a Brier Skill Score of 0.143."
+            ],
+            "cautions": [
+              "A deterministic holdout scores one split, and the point estimate alone does not show its uncertainty; judge it by the bootstrap intervals over the test patients of a model comparison or by repeated cross-validation."
+            ],
+            "next_steps": [
+              "Validate on an independent cohort or via cross-validation before drawing clinical conclusions.",
+              "Use Brier Skill Score versus the Kaplan-Meier null benchmark, not raw IBS alone, when arguing that a model meaningfully improves survival prediction error."
+            ],
+            "metrics": [
+              {
+                "label": "Patients",
+                "value": 686
+              },
+              {
+                "label": "Events",
+                "value": 299
+              },
+              {
+                "label": "Training patients",
+                "value": 480
+              },
+              {
+                "label": "Training events",
+                "value": 209
+              },
+              {
+                "label": "Features",
+                "value": 7
+              },
+              {
+                "label": "Holdout C-index",
+                "value": 0.6878334645324936
+              },
+              {
+                "label": "Evaluation mode",
+                "value": "holdout"
+              },
+              {
+                "label": "IBS",
+                "value": 0.18119303696399805
+              },
+              {
+                "label": "Null-model IBS",
+                "value": 0.21152272539157294
+              },
+              {
+                "label": "Brier Skill Score",
+                "value": 0.14338737538214053
+              }
+            ]
+          }
+        },
+        "DeepSurv": {
+          "c_index": 0.6774249978133473,
+          "holdout_c_index": 0.6774249978133473,
+          "fit_samples": 480,
+          "evaluation_samples": 206,
+          "epochs_trained": 34,
+          "evaluation_mode": "holdout",
+          "scientific_summary": {
+            "status": "robust",
+            "headline": "DeepSurv estimated a holdout c-index of 0.677 on holdout evaluation.",
+            "strengths": [
+              "DeepSurv trained for 34 epoch(s) on 480 sample(s) (209 events) with 7 features.",
+              "Training loss decreased over epochs, indicating successful optimization.",
+              "Early stopping picked epoch 34 on a held-out monitor subset of 96 training rows; the reported model was then refit on all 480 training rows for that many epochs."
+            ],
+            "cautions": [
+              "Reported C-index is computed on the shared stratified holdout split (480 training and 206 evaluation samples; 30% holdout, identical to the ML comparison for the same seed).",
+              "A deterministic holdout scores one split, and the point estimate alone does not show its uncertainty; judge it by the bootstrap intervals over the test patients of a model comparison or by repeated cross-validation.",
+              "This DeepSurv path uses full-batch Cox optimization; the batch-size control is recorded for reproducibility but does not change optimization.",
+              "Deep-model summaries currently report discrimination (C-index) only; SurvStudio does not yet compute IBS for these paths, so calibration/error comparisons are not symmetric with the ML module."
+            ],
+            "next_steps": [
+              "Validate with external data or cross-validation to confirm generalizability."
+            ],
+            "metrics": [
+              {
+                "label": "Holdout C-index",
+                "value": 0.6774249978133473
+              },
+              {
+                "label": "Evaluation mode",
+                "value": "holdout"
+              },
+              {
+                "label": "Training samples",
+                "value": 480
+              },
+              {
+                "label": "Training events",
+                "value": 209
+              },
+              {
+                "label": "Dropped for negative time",
+                "value": null
+              },
+              {
+                "label": "Dropped for missing outcome",
+                "value": null
+              },
+              {
+                "label": "Evaluation samples",
+                "value": 206
+              },
+              {
+                "label": "Features",
+                "value": 7
+              },
+              {
+                "label": "Epochs",
+                "value": 34
+              },
+              {
+                "label": "Final loss",
+                "value": 5.5283966064453125
+              },
+              {
+                "label": "Early-stopping epochs",
+                "value": 44
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

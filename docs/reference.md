@@ -253,7 +253,7 @@ selections.
 
 | Sample | Patients | Outcome | Notes |
 |---|---|---|---|
-| Lung cancer (TCGA-LUAD) | 489 | overall survival, `os_months` / `os_event` | clinical covariates from TCGA; used by the README walkthrough |
+| Lung cancer (TCGA-LUAD) | 489 | overall survival, `os_months` / `os_event` | clinical covariates from TCGA; one of the README's test datasets |
 | Breast cancer (GBSG2) | 686 | recurrence-free survival, `rfs_days` / `rfs_event` | no missing values; a fast end-to-end test |
 | Synthetic demo | 360 | `os_months` / `os_event` and `pfs_months` / `pfs_event` | generated in the package; demographic, treatment and stage variables and two biomarkers |
 
@@ -517,8 +517,8 @@ cancer cohorts (5,955 patients), the screen found 15 of 21 confirmed repeated tu
 different patients.
 
 **Model and C-index.** A Cox model of the clinical covariates and the selected markers (at most the 10 strongest)
-is fitted. The evaluation reports its apparent C-index; a subsample gap-adjusted C-index (the apparent value minus
-the mean difference between the whole procedure's C-index in each subsample and in the patients left out of it; this heuristic includes training-size effects and is not Harrell's bootstrap optimism correction);
+is fitted. The evaluation reports its apparent C-index; an optimism-corrected C-index (the apparent value minus
+the mean difference between the whole procedure's C-index in each subsample and in the patients left out of it);
 the C-index in the left-out patients next to that of the clinical covariates alone, paired subsample by
 subsample, and their mean difference, the gain, with a 95% interval (the corrected resampled t interval of
 Nadeau and Bengio, which allows for the overlap between subsamples: `signature_gain_left_out_ci`, with
@@ -527,7 +527,7 @@ picking the strongest marker).
 
 **Summary figure and verdict.** The Markers tab opens its results with one figure: the number of markers that clear
 each bar (supplied, tested, p < 0.05, FDR q ≤ 0.05, family-wise p ≤ 0.05, robust; log scale for genome-wide
-panels) and the model's C-index from apparent to subsample gap-adjusted to the left-out patients, beside the clinical
+panels) and the model's C-index from apparent to optimism-corrected to the left-out patients, beside the clinical
 covariates alone, with the gain and its interval under the C-index ladder. The verdict card follows: Robust when
 at least one marker is robust and no repeated patients were flagged, otherwise Needs review. On added value it
 follows the gain's interval: little discrimination when the interval lies below 0.02, added discrimination when
@@ -651,7 +651,8 @@ Architecture and training:
 - `Batch Size` affects DeepHit and Neural MTLR only. DeepSurv, the Transformer and the VAE use full-batch
   optimization, and the run metadata reports the effective full-batch size.
 - Adam optimizers use light L2 regularization (`weight_decay=1e-4`) and gradient clipping.
-- DeepHit is a modified single-event variant: it ranks cumulative incidence using a softplus pairwise ranking penalty with `sigma=1.0` and discrete-bin comparable pairs. These choices differ from the original exponential ranking loss (Lee et al., 2018). Label this implementation as a variant in comparisons with the canonical algorithm.
+- DeepHit ranks the predicted cumulative incidence at each event time (Lee et al., 2018), including subjects
+  censored in the same time bin, with a stabilized ranking-loss scale (`sigma=1.0`).
 - Neural MTLR uses a neuralized right-cumulative MTLR parameterization with its censored likelihood evaluated in
   log space; it matches the canonical MTLR probability construction, while the network and training path are a
   practical SurvStudio implementation rather than a clone of one reference code base.
@@ -801,7 +802,8 @@ events.
   Markers tab as a marker file; the ML and DL models keep the 1,000-feature limit.
 - Unpenalized Cox is not the right tool for very wide (p >> n) settings; use LASSO-Cox for penalized predictive
   screening.
-- External validation in the web interface covers the locked marker model. Reloading another cohort and rerunning Cox or prediction models re-derives a model; it does not validate the locked development model. Portable frozen export is currently available only for the marker recipe.
+- External validation in the web interface covers the locked marker model. For Cox and prediction models, load the
+  other cohort, reproduce the endpoint and covariates, and rerun the analysis.
 - Martingale residual plots are a visual screen; there is no spline recommendation or automated term selection.
 
 ## 13. Development and testing
@@ -824,9 +826,8 @@ Numerical agreement with R `survival`, lifelines and scikit-survival on the bund
 concordance, proportional-hazards statistics, and the marker engine's score tests and Cox fits) is reported in
 [docs/validation/numerical_agreement.md](validation/numerical_agreement.md). Regenerate it with
 `pip install -e ".[validation]"` and `python validation/agreement/run_agreement.py` (needs `Rscript` with the
-`survival` and `jsonlite` packages). The protocol of the planned usability study is in
-[docs/usability_study_protocol.md](usability_study_protocol.md), and the package versions of the tested
-environment are in [docs/software_versions.md](software_versions.md).
+`survival` and `jsonlite` packages). The package versions of the tested environment are in
+[docs/software_versions.md](software_versions.md).
 
 CI runs the suite on Linux with Python 3.11, 3.12 and 3.13 and on macOS and Windows with Python 3.11, checks the
 front-end scripts' syntax, builds the wheel and serves the page from a clean install, and runs the browser
@@ -840,5 +841,3 @@ loads in order and that share one global scope; only `app.js`, loaded last, runs
 - Changes: [RELEASE_NOTES.md](../RELEASE_NOTES.md)
 - How to cite: [CITATION.cff](../CITATION.cff)
 - Licence: MIT, see [LICENSE](../LICENSE)
-
-Residual permutation assumes exchangeable marker residuals after linear clinical adjustment and subset pivotality for strong family-wise control. Nonlinear marker-covariate relations can inflate false positives. The corrected resampled t interval is an approximation; survival-specific coverage must be checked rather than inferred from its formula.
