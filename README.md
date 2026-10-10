@@ -11,7 +11,7 @@ leave your computer.
   whether the groups differ, and read the median survival and the numbers at risk.
 - **Cox model.** See how each factor (age, sex, stage, a marker) changes the risk of the event, as hazard ratios
   with confidence intervals, with checks of the model's assumptions.
-- **Table 1.** Describe your patients, overall or by group, in a table ready for a paper.
+- **Table 1.** Describe your patients, overall or by group, in a table ready for an analysis report.
 - **Candidate markers.** Check up to 60,000 candidate markers (for example gene expression) against clinical
   factors such as age and stage: multiplicity-adjusted tests are reported across all markers, stability is checked on
   resampled patients, and the model is locked and validated in another cohort.
@@ -151,80 +151,17 @@ whether the result still matches the settings.
 
 ## Check candidate markers
 
-The **Markers** tab answers: which of my candidate markers predict survival beyond the clinical factors I already
-know, and would they hold up in new patients? Here we test the 20,530 genes measured by RNA sequencing in the
-TCGA-LUAD patients, adjusted for age, sex and stage.
+Use the additional marker analysis when you need to evaluate candidate variables beyond clinical factors.
 
-**1. Get the gene expression file.** Download
-[HiSeqV2.gz](https://tcga-xena-hub.s3.us-east-1.amazonaws.com/download/TCGA.LUAD.sampleMap%2FHiSeqV2.gz)
-(31 MB) from the [UCSC Xena](https://xenabrowser.net/datapages/?dataset=TCGA.LUAD.sampleMap%2FHiSeqV2&host=https%3A%2F%2Ftcga.xenahubs.net)
-TCGA hub. Keep it as downloaded; do not unzip it.
+1. Load your survival data and confirm the time column, event column and event value.
+2. Open **More analyses** and choose the marker analysis. In older interfaces, open the **Markers** tab.
+3. Select marker columns, or attach a marker matrix and check the patient ID matches.
+4. Choose the clinical adjustment variables and review missing values and repeated patients.
+5. Run the analysis and read its diagnostics, uncertainty and inference status before interpreting a marker.
+6. Save the result table and, when estimable, the locked prediction model for external evaluation.
 
-**2. Attach it.** With the lung cancer sample open, go to the **Markers** tab and open **Markers in a separate
-file (omics)**. Leave **Patient ID column** at `patient_id`, choose `HiSeqV2.gz` and click **Attach**. SurvStudio
-reports 20,530 markers and 484 of 489 patients matched: it matches the TCGA sample codes to the patients and
-leaves normal tissue out.
-
-**3. Choose the clinical covariates and run.** Under **Adjust for**, keep `age`, `sex` and `stage_group` ticked and
-untick `smoking_status`. The line below the lists should read "20,530 markers from HiSeqV2.gz, judged on added
-value over 3 clinical covariates". Keep the default settings (1,000 permutations and 200 subsamples, under
-**More options**) and click **Run Analysis**. The run takes a few minutes (about 4 on an 8-core laptop).
-
-![Markers tab with HiSeqV2.gz attached and age, sex and stage ticked under Adjust for](github_images/markers_setup.png)
-
-**4. Read the summary figure.** The left panel counts the markers that clear each bar, from the 20,530 supplied
-and the 19,112 tested (genes expressed in very few patients are left out) down to those that pass every check.
-3,404 genes have p < 0.05 and 306 pass the false discovery rate, but only 5 pass the family-wise test at the
-nominal 5% threshold, and all 5 meet the internal stability criteria. Error control depends on the residual
-permutation assumptions; the robust tier still requires independent validation.
-The right panel distinguishes the full-cohort model from repeated selection and refitting:
-
-- **Apparent** (0.749): measured on the same patients the genes were chosen in, which can overstate performance in new patients.
-- **Subsample gap-adjusted** (0.650): apparent C minus the mean training-to-left-out gap. This heuristic includes training-size effects and is not a Harrell bootstrap correction or a guarantee of performance in new patients.
-- **Left-out patients** (0.658) against **Clinical only** (0.656): both measured in patients left out of each
-  subsample, after choosing genes and refitting in that subsample. These estimates assess the selection procedure.
-  The note gives the mean gain and its approximate 95% interval: +0.002 (-0.042 to 0.046). Coverage for the survival
-  selection procedure has not been established. The interval is compatible with no gain and with a gain up to about
-  0.05; these data do not establish equivalence. Validate the locked final model independently.
-
-![Summary figure: markers clearing each bar, and the C-index from apparent to left-out beside clinical only](github_images/markers_summary.png)
-
-**5. Read the verdict.** The card below the figure gives the verdict and the cautions that matter most. Here it says
-**Robust**: 5 of 19,112 genes (DKK1, NTSR1, TLE1, CTCFL and FAM117A) meet the internal adjusted-test and stability
-criteria. The cautions give the procedure's mean training-to-left-out gap of 0.099 and say that its internal gain is
-uncertain: its interval includes both no gain and a gain of 0.02 or more. SurvStudio calls the gain little only
-when the whole interval lies below the display threshold of 0.02; an interval above 0 suggests added discrimination
-internally. The threshold is a display convention, not a clinical utility threshold. Without an interval, the gain
-is reported without a claim of added discrimination. **More detail** lists what was checked and the next steps.
-
-![Verdict card: 5 of 19,112 markers are robust beyond the clinical covariates, with two cautions](github_images/markers_verdict.png)
-
-**6. See each marker.** The marker table lists the markers strongest first, with their tier, the direction of the
-effect and the hazard ratio per unit, from a Cox model with the clinical covariates. Export it for all markers.
-
-![Marker table with the five robust genes first](github_images/markers_table.png)
-
-**7. Validate the locked model in another cohort.** SurvStudio locks the model (the genes, their weights and the
-clinical part) so that it can be applied unchanged elsewhere. You need a table of a second cohort with the same
-column names, one row per patient: here `os_months`, `os_event`, `age`, `sex`, `stage_group` and one column per
-gene (genes it lacks are held at their typical value, and the report says how much of the model that leaves out).
-The file used here is in the repository: [examples/gse68465_validation_example.csv](examples/gse68465_validation_example.csv).
-Under **Validate in another cohort**, choose that file. For data measured on another platform (here microarrays
-against RNA sequencing), choose **Another platform (rescale within cohort)**, then click **Validate**. The
-screenshot shows 429 patients of the GEO cohort GSE68465: the locked model reached a C-index of 0.699 against 0.698
-for the clinical covariates alone: a small observed gain in this cohort, which does not establish equivalence.
-The rescaling uses the external cohort's feature distribution, so this evaluation represents adaptation across
-platforms at cohort level. Deployment to individual new patients requires a prespecified preprocessing policy.
-Two of the six genes measured there replicated under the example's rule (TLE1 and FAM117A).
-
-![Validation of the locked model in GSE68465: C-index beside the clinical covariates, and each gene's hazard ratio](github_images/markers_validation.png)
-
-**8. Export for your paper.** The **Export** menu gives the marker table, the locked model (to validate later), the
-figures, and the REMARK checklist as Word or Markdown. The checklist already holds the methods and results
-paragraphs of your run and marks each of the 20 REMARK items as filled in by SurvStudio, partly filled in, or for
-you to complete (for example how the specimens were stored).
-
-![Export menu of the Markers tab](github_images/markers_export.png)
+Withheld standard values are missing values, not zero. Exploratory calculations and predictions retain their
+interpretation limits. A selected marker or an internal performance estimate requires independent assessment.
 
 ## Prepare your own data
 
@@ -288,20 +225,6 @@ too. `.gz` files can be attached as downloaded.
   data, repeated patients). The verdict reads **Needs review** when no marker is robust or when two samples look
   like the same patient; then treat the markers as hypotheses, or keep one sample per patient and run again.
 
-Sentences that report these results without overclaiming:
-
-> Overall survival differed by stage (log-rank p < 0.001); median survival was 76 months in stage I and 38 months
-> in stage II.
-
-> After adjustment for age, sex and smoking status, stage III was associated with a higher hazard of death than
-> stage I (HR 3.30, 95% CI 2.21 to 4.92).
-
-> Of 19,112 genes, five passed family-wise error control and were stable across 200 subsamples. A model with the
-> selected genes had a heuristic subsample gap-adjusted C-index of 0.650. Repeating selection and refitting in
-> each subsample gave a mean left-out C-index of 0.658, against 0.656 for age, sex and stage alone (gain 0.002,
-> approximate 95% CI -0.042 to 0.046). Internal evaluation did not demonstrate added discrimination; the locked
-> model requires independent validation.
-
 ## Troubleshooting
 
 - **`uv` or `survstudio` is not recognized / command not found.** Open a new terminal window. If it is still not
@@ -329,4 +252,4 @@ Sentences that report these results without overclaiming:
 - Licence: [MIT](LICENSE).
 - Changes: [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
-The marker residual permutation assumes exchangeable residuals after linear adjustment for the clinical covariates. Nonlinear or heteroscedastic relations and censoring assumptions require sensitivity checks; a family-wise adjusted p-value does not establish universal error control. The internal gain interval is the approximate corrected resampled t interval. The paper's diagnostic assesses coverage against the final fitted model's new-patient gain; it does not establish coverage for selection and refitting at the subsample training size.
+The marker residual permutation assumes exchangeable residuals after linear adjustment for the clinical covariates. Nonlinear or heteroscedastic relations and censoring assumptions require sensitivity checks; a family-wise adjusted p-value does not establish universal error control. The internal gain interval is the approximate corrected resampled t interval.

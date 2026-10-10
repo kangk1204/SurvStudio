@@ -16,13 +16,24 @@ build/
 *.parquet
 *.xlsx
 node_modules/
-manuscript/
 survival_xai_survey.md
 *.pdf
 *:Zone.Identifier
-# The paper's reproduction: its data and results are regenerated; its figures are committed.
-paper/results/
-paper/data/
-!paper/figures/*.pdf
-# Aggregate publication figures only; manuscript and patient outputs stay private.
-!validation/guarded_inference/results/20261003/figures/*.pdf
+
+# Local working files
+paper/
+manuscript/
+research/
+publication/
+publication-*/
+validation/publication*/
+validation/guarded_inference/
+validation/diagnostic_followup/
+*.docx
+*.doc
+*.pdf
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.claude/
+.codex/

@@ -146,7 +146,7 @@ jobs:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
-        run: python validation/guarded_inference/run_independent_reference.py --output "${{ runner.temp }}/guarded-reference"
+        run: python validation/clinical/run_independent_reference.py --output "${{ runner.temp }}/guarded-reference"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
