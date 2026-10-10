@@ -2,3 +2,9 @@ paper/** text eol=lf
 *.png binary
 *.pdf binary
 *.gz binary
+# Preserve raw, hashed reference outputs byte-for-byte across checkouts.
+validation/diagnostic_followup/results/** -text
+validation/diagnostic_followup/results/**/*.csv whitespace=cr-at-eol
+validation/diagnostic_followup/results/**/R*session.txt whitespace=-blank-at-eol
+validation/diagnostic_followup/results/**/aggregate-R-session.txt whitespace=-blank-at-eol
+validation/diagnostic_followup/results/**/power-retention-R-session.txt whitespace=-blank-at-eol

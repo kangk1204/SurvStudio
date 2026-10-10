@@ -36,6 +36,9 @@ classification are retained under `exploratory`. `null` does not mean zero, no a
 or a negative result. The API, browser, figure titles, CSV and reporting text use this policy.
 Subsample withholding contributes to the resampling denominator and cannot select
 added-value markers on that subset.
+When the full dataset is withheld, its internal gap-adjusted signature C-index is also
+withheld from standard summaries and retained as exploratory, including under a passed
+method profile. That procedure's subsample gap cannot validate the exploratory full-cohort signature.
 
 ## Locked recipes
 

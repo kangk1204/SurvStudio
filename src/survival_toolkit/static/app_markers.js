@@ -507,7 +507,7 @@ async function renderMarkerResults(payload) {
   refs.markersMetaBanner.textContent = markerMetaBanner(payload);
   const inference = payload?.analysis?.inference;
   if (refs.markersInferenceNote) refs.markersInferenceNote.textContent = inference
-    ? `${inference.status}. ${inference.interpretation} ${(inference.reasons || []).join("; ")}`
+    ? `${inference.status}. ${inference.interpretation} ${(inference.reasons || []).join("; ")} ${inference.engineering_qualification?.claim_boundary || ""} ${inference.engineering_qualification?.extension_limitations || ""}`
     : "Diagnostics were not assessed in this saved result.";
   if (refs.markersDiagnosticsTable) renderTable(refs.markersDiagnosticsTable,
     [...(inference?.clinical_tests || []), ...(inference?.residual_tests || [])].map((test) => ({
@@ -656,7 +656,8 @@ async function renderMarkerValidation(payload) {
   });
   if (refs.markerValidationSummary) {
     refs.markerValidationSummary.innerHTML = `
-      <p class="marker-validation-headline">${escapeHtml(`${payload.external_filename || "External cohort"}: ${formatValue(cohort.n)} patients, ${formatValue(cohort.events)} events. ${validation.inference && !validation.inference.allowed ? `Inference ${validation.inference.status}; prediction estimates are exploratory.` : `${formatValue(replicated)} of ${formatValue(total)} markers replicated.`}`)}</p>
+      <p class="marker-validation-headline">${escapeHtml(`${payload.external_filename || "External cohort"}: ${formatValue(cohort.n)} patients, ${formatValue(cohort.events)} events. ${validation.inference && !validation.inference.allowed ? `Inference ${validation.inference.status}; prediction estimates are exploratory.` : `${validation.inference ? "Assumption-dependent inference. " : ""}${formatValue(replicated)} of ${formatValue(total)} markers replicated.`}`)}</p>
+      <p>${escapeHtml([validation.inference?.interpretation, validation.inference?.engineering_qualification?.claim_boundary, validation.inference?.engineering_qualification?.extension_limitations].filter(Boolean).join(" "))}</p>
       <div class="insight-metrics">${metrics.map((metric) => `<div class="metric-pill"><span>${escapeHtml(metric.label)}</span><strong>${escapeHtml(metric.value)}</strong></div>`).join("")}</div>
       ${(validation.notes || []).length ? `<ul class="insight-cautions">${validation.notes.map(escapeListItem).join("")}</ul>` : ""}
     `;

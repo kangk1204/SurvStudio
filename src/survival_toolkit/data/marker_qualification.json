@@ -1,18 +1,32 @@
 {
   "policy_version": "marker-qualification/1",
-  "method_version": "marker-inference/1",
+  "method_version": "marker-inference/2",
   "study_complete": true,
-  "study_git_revision": "7bf9218ff48c8e66069f60cdad0c51bd8e873d22",
+  "study_git_revision": "1ed6c10ddad27be6bce4b0896f55ac8428e36dd9",
   "fixed_datasets": 85500,
-  "freeze_sha256": "7aeaa9b5b4de257a0c7a836572246ec3efebf58deb4a4f529c9af448e7387d8f",
-  "summary_sha256": "5d05a9246d0a6047c39b54b3054e4c945b0e574c34c3f3a43d407b2ced4d3cd7",
+  "freeze_sha256": "45a41235c3f22c11c618bab8b171ea8b1be796992e6dd9c4466ae5047b47ffc0",
+  "summary_sha256": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+  "aggregate_audit_sha256": "fb9123a50fc14d51b26360d4eb4f629efb9082073fab8c9d6f8de7d4643d62a0",
+  "kernel_source_hashes": {
+    "src/survival_toolkit/clinical_basis.py": "e4384eca71cb0a0b39819a3265241b9cc5bf443bd279127b518f9397e2604ce3",
+    "src/survival_toolkit/marker_diagnostics.py": "af2b425f8b066bca2190f9f63d1b888aaf99b003c44df0f108c94be9bcb57a6d",
+    "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
+    "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
+    "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
+    "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c"
+  },
+  "qualification_dimensions": {
+    "n": 180,
+    "markers": 30,
+    "permutations": 999,
+    "datasets_per_condition": 5000
+  },
+  "claim_boundary": "Finite main-study engineering gates in prespecified supported conditions; not universal 5% error control or certification of an individual dataset.",
+  "extension_limitations": "The 500-subject, 300-marker and 3000-marker extensions do not establish broader qualification. In particular, large independent and linear marker families substantially reduce availability; power retention and conditional error bounds also remain limiting.",
   "profiles": {
     "linear": {
-      "status": "failed_exploratory_only",
-      "failed_conditions": [
-        "partial_strong",
-        "partial_weak"
-      ],
+      "status": "passed_supported_conditions_only",
+      "failed_conditions": [],
       "supported_conditions": [
         "independent",
         "linear",
@@ -25,63 +39,66 @@
         {
           "condition": "correlated",
           "status": "passed",
-          "allowed_fraction": 0.901,
-          "fwer_upper95": 0.05201314621009984,
-          "conditional_fwer_upper95": 0.05771085599494382,
-          "power": null
+          "allowed_fraction": 0.9494,
+          "fwer_upper95": 0.05138340612212706,
+          "conditional_fwer_upper95": 0.054114126482608535,
+          "power": null,
+          "power_retention": null
         },
         {
           "condition": "independent",
           "status": "passed",
-          "allowed_fraction": 0.873,
-          "fwer_upper95": 0.0465475886269256,
-          "conditional_fwer_upper95": 0.053299046016350486,
-          "power": null
+          "allowed_fraction": 0.9192,
+          "fwer_upper95": 0.05138340612212706,
+          "conditional_fwer_upper95": 0.05588675721988697,
+          "power": null,
+          "power_retention": null
         },
         {
           "condition": "linear",
           "status": "passed",
-          "allowed_fraction": 0.8772,
-          "fwer_upper95": 0.044651250848094,
-          "conditional_fwer_upper95": 0.05088397590689029,
-          "power": null
+          "allowed_fraction": 0.917,
+          "fwer_upper95": 0.05054340158655049,
+          "conditional_fwer_upper95": 0.05510474490022042,
+          "power": null,
+          "power_retention": null
         },
         {
           "condition": "partial_strong",
-          "status": "failed_exploratory_only",
-          "allowed_fraction": 0.868,
-          "fwer_upper95": 0.044651250848094,
-          "conditional_fwer_upper95": 0.05142172331751737,
-          "power": 0.40840000000000004
+          "status": "passed",
+          "allowed_fraction": 0.9022,
+          "fwer_upper95": 0.047600082711580484,
+          "conditional_fwer_upper95": 0.05274504484531137,
+          "power": 0.43244000000000005,
+          "power_retention": 0.9033255347593582
         },
         {
           "condition": "partial_weak",
-          "status": "failed_exploratory_only",
-          "allowed_fraction": 0.8672,
-          "fwer_upper95": 0.0406394204507475,
-          "conditional_fwer_upper95": 0.04684549277313694,
-          "power": 0.082
+          "status": "passed",
+          "allowed_fraction": 0.9138,
+          "fwer_upper95": 0.045072870407216754,
+          "conditional_fwer_upper95": 0.04931282146035258,
+          "power": 0.08412,
+          "power_retention": 0.9052948773138183
         },
         {
           "condition": "z_dependent_censoring",
           "status": "passed",
-          "allowed_fraction": 0.8906,
-          "fwer_upper95": 0.04570507137730221,
-          "conditional_fwer_upper95": 0.051303261178519015,
-          "power": null
+          "allowed_fraction": 0.9158,
+          "fwer_upper95": 0.04865187438990034,
+          "conditional_fwer_upper95": 0.053112072730058024,
+          "power": null,
+          "power_retention": null
         }
       ]
     },
     "restricted_cubic_spline": {
       "status": "failed_exploratory_only",
       "failed_conditions": [
-        "independent",
-        "linear",
         "nonlinear_clinical_risk",
         "nonlinear_marker",
         "partial_strong",
-        "partial_weak",
-        "z_dependent_censoring"
+        "partial_weak"
       ],
       "supported_conditions": [
         "independent",
@@ -97,69 +114,432 @@
         {
           "condition": "correlated",
           "status": "passed",
-          "allowed_fraction": 0.8172,
-          "fwer_upper95": 0.046968672069792,
-          "conditional_fwer_upper95": 0.05744167815895355,
-          "power": null
+          "allowed_fraction": 0.8654,
+          "fwer_upper95": 0.045072870407216754,
+          "conditional_fwer_upper95": 0.052062665283872836,
+          "power": null,
+          "power_retention": null
         },
         {
           "condition": "independent",
-          "status": "failed_exploratory_only",
-          "allowed_fraction": 0.7754,
-          "fwer_upper95": 0.041273678345859426,
-          "conditional_fwer_upper95": 0.05319136350225218,
-          "power": null
+          "status": "passed",
+          "allowed_fraction": 0.826,
+          "fwer_upper95": 0.04380763839118053,
+          "conditional_fwer_upper95": 0.053007855749940505,
+          "power": null,
+          "power_retention": null
         },
         {
           "condition": "linear",
-          "status": "failed_exploratory_only",
-          "allowed_fraction": 0.774,
-          "fwer_upper95": 0.044651250848094,
-          "conditional_fwer_upper95": 0.057646248548728116,
-          "power": null
+          "status": "passed",
+          "allowed_fraction": 0.8168,
+          "fwer_upper95": 0.04717917069280139,
+          "conditional_fwer_upper95": 0.05772720067244191,
+          "power": null,
+          "power_retention": null
         },
         {
           "condition": "nonlinear_clinical_risk",
           "status": "failed_exploratory_only",
-          "allowed_fraction": 0.2554,
-          "fwer_upper95": 0.013751041213478997,
-          "conditional_fwer_upper95": 0.05362161799999867,
-          "power": null
+          "allowed_fraction": 0.283,
+          "fwer_upper95": 0.018366389328013235,
+          "conditional_fwer_upper95": 0.06463256886879368,
+          "power": null,
+          "power_retention": null
         },
         {
           "condition": "nonlinear_marker",
           "status": "failed_exploratory_only",
-          "allowed_fraction": 0.2702,
-          "fwer_upper95": 0.0152973802853061,
-          "conditional_fwer_upper95": 0.05638931668182631,
-          "power": null
+          "allowed_fraction": 0.2832,
+          "fwer_upper95": 0.01727352288360975,
+          "conditional_fwer_upper95": 0.060751741074053164,
+          "power": null,
+          "power_retention": null
         },
         {
           "condition": "partial_strong",
           "status": "failed_exploratory_only",
-          "allowed_fraction": 0.7758,
-          "fwer_upper95": 0.04042793001766742,
-          "conditional_fwer_upper95": 0.05207501969324781,
-          "power": 0.35596000000000005
+          "allowed_fraction": 0.8112,
+          "fwer_upper95": 0.04211886793848222,
+          "conditional_fwer_upper95": 0.051891974314251556,
+          "power": 0.37364,
+          "power_retention": 0.7804979946524063
         },
         {
           "condition": "partial_weak",
           "status": "failed_exploratory_only",
-          "allowed_fraction": 0.7752,
-          "fwer_upper95": 0.0372510772337672,
-          "conditional_fwer_upper95": 0.04802134431088783,
-          "power": 0.07084
+          "allowed_fraction": 0.8116,
+          "fwer_upper95": 0.037463140906912884,
+          "conditional_fwer_upper95": 0.04613481909019007,
+          "power": 0.07447999999999999,
+          "power_retention": 0.8015497201894102
         },
         {
           "condition": "z_dependent_censoring",
-          "status": "failed_exploratory_only",
-          "allowed_fraction": 0.7924,
-          "fwer_upper95": 0.04296351588435229,
-          "conditional_fwer_upper95": 0.05418418978159382,
-          "power": null
+          "status": "passed",
+          "allowed_fraction": 0.81,
+          "fwer_upper95": 0.04444039473859356,
+          "conditional_fwer_upper95": 0.05483215295639981,
+          "power": null,
+          "power_retention": null
         }
       ]
     }
   },
-  "claim_boundary": "These are frozen engineering gates, not universal error-control guarantees. Failed profiles are exploratory only."
+  "studies": {
+    "marker-inference/1": {
+      "policy_version": "marker-qualification/1",
+      "method_version": "marker-inference/1",
+      "study_complete": true,
+      "study_git_revision": "7bf9218ff48c8e66069f60cdad0c51bd8e873d22",
+      "fixed_datasets": 85500,
+      "freeze_sha256": "7aeaa9b5b4de257a0c7a836572246ec3efebf58deb4a4f529c9af448e7387d8f",
+      "summary_sha256": "5d05a9246d0a6047c39b54b3054e4c945b0e574c34c3f3a43d407b2ced4d3cd7",
+      "profiles": {
+        "linear": {
+          "status": "failed_exploratory_only",
+          "failed_conditions": [
+            "partial_strong",
+            "partial_weak"
+          ],
+          "supported_conditions": [
+            "independent",
+            "linear",
+            "correlated",
+            "z_dependent_censoring",
+            "partial_weak",
+            "partial_strong"
+          ],
+          "main_gates": [
+            {
+              "condition": "correlated",
+              "status": "passed",
+              "allowed_fraction": 0.901,
+              "fwer_upper95": 0.05201314621009984,
+              "conditional_fwer_upper95": 0.05771085599494382,
+              "power": null
+            },
+            {
+              "condition": "independent",
+              "status": "passed",
+              "allowed_fraction": 0.873,
+              "fwer_upper95": 0.0465475886269256,
+              "conditional_fwer_upper95": 0.053299046016350486,
+              "power": null
+            },
+            {
+              "condition": "linear",
+              "status": "passed",
+              "allowed_fraction": 0.8772,
+              "fwer_upper95": 0.044651250848094,
+              "conditional_fwer_upper95": 0.05088397590689029,
+              "power": null
+            },
+            {
+              "condition": "partial_strong",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.868,
+              "fwer_upper95": 0.044651250848094,
+              "conditional_fwer_upper95": 0.05142172331751737,
+              "power": 0.40840000000000004
+            },
+            {
+              "condition": "partial_weak",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.8672,
+              "fwer_upper95": 0.0406394204507475,
+              "conditional_fwer_upper95": 0.04684549277313694,
+              "power": 0.082
+            },
+            {
+              "condition": "z_dependent_censoring",
+              "status": "passed",
+              "allowed_fraction": 0.8906,
+              "fwer_upper95": 0.04570507137730221,
+              "conditional_fwer_upper95": 0.051303261178519015,
+              "power": null
+            }
+          ]
+        },
+        "restricted_cubic_spline": {
+          "status": "failed_exploratory_only",
+          "failed_conditions": [
+            "independent",
+            "linear",
+            "nonlinear_clinical_risk",
+            "nonlinear_marker",
+            "partial_strong",
+            "partial_weak",
+            "z_dependent_censoring"
+          ],
+          "supported_conditions": [
+            "independent",
+            "linear",
+            "nonlinear_marker",
+            "correlated",
+            "z_dependent_censoring",
+            "nonlinear_clinical_risk",
+            "partial_weak",
+            "partial_strong"
+          ],
+          "main_gates": [
+            {
+              "condition": "correlated",
+              "status": "passed",
+              "allowed_fraction": 0.8172,
+              "fwer_upper95": 0.046968672069792,
+              "conditional_fwer_upper95": 0.05744167815895355,
+              "power": null
+            },
+            {
+              "condition": "independent",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.7754,
+              "fwer_upper95": 0.041273678345859426,
+              "conditional_fwer_upper95": 0.05319136350225218,
+              "power": null
+            },
+            {
+              "condition": "linear",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.774,
+              "fwer_upper95": 0.044651250848094,
+              "conditional_fwer_upper95": 0.057646248548728116,
+              "power": null
+            },
+            {
+              "condition": "nonlinear_clinical_risk",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.2554,
+              "fwer_upper95": 0.013751041213478997,
+              "conditional_fwer_upper95": 0.05362161799999867,
+              "power": null
+            },
+            {
+              "condition": "nonlinear_marker",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.2702,
+              "fwer_upper95": 0.0152973802853061,
+              "conditional_fwer_upper95": 0.05638931668182631,
+              "power": null
+            },
+            {
+              "condition": "partial_strong",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.7758,
+              "fwer_upper95": 0.04042793001766742,
+              "conditional_fwer_upper95": 0.05207501969324781,
+              "power": 0.35596000000000005
+            },
+            {
+              "condition": "partial_weak",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.7752,
+              "fwer_upper95": 0.0372510772337672,
+              "conditional_fwer_upper95": 0.04802134431088783,
+              "power": 0.07084
+            },
+            {
+              "condition": "z_dependent_censoring",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.7924,
+              "fwer_upper95": 0.04296351588435229,
+              "conditional_fwer_upper95": 0.05418418978159382,
+              "power": null
+            }
+          ]
+        }
+      },
+      "claim_boundary": "These are frozen engineering gates, not universal error-control guarantees. Failed profiles are exploratory only."
+    },
+    "marker-inference/2": {
+      "policy_version": "marker-qualification/1",
+      "method_version": "marker-inference/2",
+      "study_complete": true,
+      "study_git_revision": "1ed6c10ddad27be6bce4b0896f55ac8428e36dd9",
+      "fixed_datasets": 85500,
+      "freeze_sha256": "45a41235c3f22c11c618bab8b171ea8b1be796992e6dd9c4466ae5047b47ffc0",
+      "summary_sha256": "3635921f11d8d25b51c0a5a622dda96496e999e65977a62e13a3cacc259fc6a9",
+      "aggregate_audit_sha256": "fb9123a50fc14d51b26360d4eb4f629efb9082073fab8c9d6f8de7d4643d62a0",
+      "kernel_source_hashes": {
+        "src/survival_toolkit/clinical_basis.py": "e4384eca71cb0a0b39819a3265241b9cc5bf443bd279127b518f9397e2604ce3",
+        "src/survival_toolkit/marker_diagnostics.py": "af2b425f8b066bca2190f9f63d1b888aaf99b003c44df0f108c94be9bcb57a6d",
+        "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
+        "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
+        "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
+        "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c"
+      },
+      "qualification_dimensions": {
+        "n": 180,
+        "markers": 30,
+        "permutations": 999,
+        "datasets_per_condition": 5000
+      },
+      "claim_boundary": "Finite main-study engineering gates in prespecified supported conditions; not universal 5% error control or certification of an individual dataset.",
+      "extension_limitations": "The 500-subject, 300-marker and 3000-marker extensions do not establish broader qualification. In particular, large independent and linear marker families substantially reduce availability; power retention and conditional error bounds also remain limiting.",
+      "profiles": {
+        "linear": {
+          "status": "passed_supported_conditions_only",
+          "failed_conditions": [],
+          "supported_conditions": [
+            "independent",
+            "linear",
+            "correlated",
+            "z_dependent_censoring",
+            "partial_weak",
+            "partial_strong"
+          ],
+          "main_gates": [
+            {
+              "condition": "correlated",
+              "status": "passed",
+              "allowed_fraction": 0.9494,
+              "fwer_upper95": 0.05138340612212706,
+              "conditional_fwer_upper95": 0.054114126482608535,
+              "power": null,
+              "power_retention": null
+            },
+            {
+              "condition": "independent",
+              "status": "passed",
+              "allowed_fraction": 0.9192,
+              "fwer_upper95": 0.05138340612212706,
+              "conditional_fwer_upper95": 0.05588675721988697,
+              "power": null,
+              "power_retention": null
+            },
+            {
+              "condition": "linear",
+              "status": "passed",
+              "allowed_fraction": 0.917,
+              "fwer_upper95": 0.05054340158655049,
+              "conditional_fwer_upper95": 0.05510474490022042,
+              "power": null,
+              "power_retention": null
+            },
+            {
+              "condition": "partial_strong",
+              "status": "passed",
+              "allowed_fraction": 0.9022,
+              "fwer_upper95": 0.047600082711580484,
+              "conditional_fwer_upper95": 0.05274504484531137,
+              "power": 0.43244000000000005,
+              "power_retention": 0.9033255347593582
+            },
+            {
+              "condition": "partial_weak",
+              "status": "passed",
+              "allowed_fraction": 0.9138,
+              "fwer_upper95": 0.045072870407216754,
+              "conditional_fwer_upper95": 0.04931282146035258,
+              "power": 0.08412,
+              "power_retention": 0.9052948773138183
+            },
+            {
+              "condition": "z_dependent_censoring",
+              "status": "passed",
+              "allowed_fraction": 0.9158,
+              "fwer_upper95": 0.04865187438990034,
+              "conditional_fwer_upper95": 0.053112072730058024,
+              "power": null,
+              "power_retention": null
+            }
+          ]
+        },
+        "restricted_cubic_spline": {
+          "status": "failed_exploratory_only",
+          "failed_conditions": [
+            "nonlinear_clinical_risk",
+            "nonlinear_marker",
+            "partial_strong",
+            "partial_weak"
+          ],
+          "supported_conditions": [
+            "independent",
+            "linear",
+            "nonlinear_marker",
+            "correlated",
+            "z_dependent_censoring",
+            "nonlinear_clinical_risk",
+            "partial_weak",
+            "partial_strong"
+          ],
+          "main_gates": [
+            {
+              "condition": "correlated",
+              "status": "passed",
+              "allowed_fraction": 0.8654,
+              "fwer_upper95": 0.045072870407216754,
+              "conditional_fwer_upper95": 0.052062665283872836,
+              "power": null,
+              "power_retention": null
+            },
+            {
+              "condition": "independent",
+              "status": "passed",
+              "allowed_fraction": 0.826,
+              "fwer_upper95": 0.04380763839118053,
+              "conditional_fwer_upper95": 0.053007855749940505,
+              "power": null,
+              "power_retention": null
+            },
+            {
+              "condition": "linear",
+              "status": "passed",
+              "allowed_fraction": 0.8168,
+              "fwer_upper95": 0.04717917069280139,
+              "conditional_fwer_upper95": 0.05772720067244191,
+              "power": null,
+              "power_retention": null
+            },
+            {
+              "condition": "nonlinear_clinical_risk",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.283,
+              "fwer_upper95": 0.018366389328013235,
+              "conditional_fwer_upper95": 0.06463256886879368,
+              "power": null,
+              "power_retention": null
+            },
+            {
+              "condition": "nonlinear_marker",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.2832,
+              "fwer_upper95": 0.01727352288360975,
+              "conditional_fwer_upper95": 0.060751741074053164,
+              "power": null,
+              "power_retention": null
+            },
+            {
+              "condition": "partial_strong",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.8112,
+              "fwer_upper95": 0.04211886793848222,
+              "conditional_fwer_upper95": 0.051891974314251556,
+              "power": 0.37364,
+              "power_retention": 0.7804979946524063
+            },
+            {
+              "condition": "partial_weak",
+              "status": "failed_exploratory_only",
+              "allowed_fraction": 0.8116,
+              "fwer_upper95": 0.037463140906912884,
+              "conditional_fwer_upper95": 0.04613481909019007,
+              "power": 0.07447999999999999,
+              "power_retention": 0.8015497201894102
+            },
+            {
+              "condition": "z_dependent_censoring",
+              "status": "passed",
+              "allowed_fraction": 0.81,
+              "fwer_upper95": 0.04444039473859356,
+              "conditional_fwer_upper95": 0.05483215295639981,
+              "power": null,
+              "power_retention": null
+            }
+          ]
+        }
+      }
+    }
+  }
 }
