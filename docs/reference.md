@@ -253,7 +253,7 @@ selections.
 
 | Sample | Patients | Outcome | Notes |
 |---|---|---|---|
-| Lung cancer (TCGA-LUAD) | 489 | overall survival, `os_months` / `os_event` | clinical covariates from TCGA; used by the README walkthrough |
+| Lung cancer (TCGA-LUAD) | 489 | overall survival, `os_months` / `os_event` | clinical covariates from TCGA; one of the README's test datasets |
 | Breast cancer (GBSG2) | 686 | recurrence-free survival, `rfs_days` / `rfs_event` | no missing values; a fast end-to-end test |
 | Synthetic demo | 360 | `os_months` / `os_event` and `pfs_months` / `pfs_event` | generated in the package; demographic, treatment and stage variables and two biomarkers |
 
@@ -826,9 +826,8 @@ Numerical agreement with R `survival`, lifelines and scikit-survival on the bund
 concordance, proportional-hazards statistics, and the marker engine's score tests and Cox fits) is reported in
 [docs/validation/numerical_agreement.md](validation/numerical_agreement.md). Regenerate it with
 `pip install -e ".[validation]"` and `python validation/agreement/run_agreement.py` (needs `Rscript` with the
-`survival` and `jsonlite` packages). The protocol of the planned usability study is in
-[docs/usability_study_protocol.md](usability_study_protocol.md), and the package versions of the tested
-environment are in [docs/software_versions.md](software_versions.md).
+`survival` and `jsonlite` packages). The package versions of the tested environment are in
+[docs/software_versions.md](software_versions.md).
 
 CI runs the suite on Linux with Python 3.11, 3.12 and 3.13 and on macOS and Windows with Python 3.11, checks the
 front-end scripts' syntax, builds the wheel and serves the page from a clean install, and runs the browser
