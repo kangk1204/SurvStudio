@@ -192,6 +192,8 @@ def test_browser_km_graph_fits_small_screen_and_result_clears_header(browser_ser
         page.goto(browser_server)
         page.locator("#loadExampleButton").click()
         _wait_for_workspace(page)
+        assert page.locator("#timeColumn").bounding_box()["width"] > 250
+        assert page.locator("#eventColumn").bounding_box()["width"] > 250
         page.locator("#groupColumn").select_option("stage")
         page.locator("#runKmButton").click()
         page.wait_for_function("document.getElementById('kmPlot').data?.length > 0")

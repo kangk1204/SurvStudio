@@ -3232,6 +3232,12 @@ tbody tr:hover td {
 
   .config-row {
     flex-direction: column;
+    align-items: stretch;
+  }
+
+  .config-row-label,
+  .config-row-primary > .compact-toggle {
+    align-self: flex-start;
   }
 
   .config-field,
