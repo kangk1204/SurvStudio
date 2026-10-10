@@ -601,7 +601,12 @@ function initTabKeyboard() {
   strip.addEventListener("keydown", (e) => {
     // The ML and DL buttons (hidden) open the Prediction models tab, so only buttons that stand for their own
     // tab take part: an arrow key always moves to another tab. Like a click, a key replaces the history entry.
-    const tabs = refs.tabButtons.filter((button) => button.offsetParent !== null && !["ml", "dl"].includes(button.dataset.tab));
+    const tabs = refs.tabButtons.filter((button) => {
+      if (["ml", "dl"].includes(button.dataset.tab)) return false;
+      if (["markers", "tables"].includes(button.dataset.tab)
+          && !document.body.classList.contains("additional-analyses-open")) return false;
+      return button.offsetParent !== null;
+    });
     const idx = tabs.indexOf(e.target);
     if (idx < 0) return;
     let next = -1;
@@ -718,6 +723,28 @@ function goHome({ syncHistory = true, historyMode = "replace" } = {}) {
 }
 
 function initListeners() {
+  document.getElementById("additionalAnalysesButton")?.addEventListener("click", () => {
+    const expanded = document.body.classList.contains("additional-analyses-open");
+    if (expanded && ["markers", "tables"].includes(activeTabName())) {
+      activateTab("km", { focusTabButton: true });
+    }
+    setAdditionalAnalyses(!expanded);
+  });
+  document.getElementById("saveResultsButton")?.addEventListener("click", (event) => {
+    const panel = document.getElementById(`panel-${activeTabName()}`);
+    const menu = Array.from(panel?.querySelectorAll(".export-menu") || []).find(
+      (item) => item.offsetParent !== null && item.querySelector("button:not([disabled])"),
+    );
+    if (!menu) {
+      showToast("Run an analysis first. Then save its tables or figures here.", "info");
+      return;
+    }
+    event.stopPropagation();
+    document.querySelectorAll(".export-menu").forEach((item) => { item.open = false; });
+    menu.open = true;
+    menu.scrollIntoView({ behavior: "smooth", block: "center" });
+    menu.querySelector("summary")?.focus({ preventScroll: true });
+  });
   const closestFromEvent = (event, selector) => {
     const target = event?.target;
     return target instanceof Element ? target.closest(selector) : null;

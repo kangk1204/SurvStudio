@@ -63,7 +63,7 @@ function ownEntry(record, key) {
 }
 
 function statusLabel(status) {
-  return { robust: "Robust", review: "Needs review", caution: "Caution" }[status] || "Review";
+  return { robust: "Assumptions apply", review: "Needs review", caution: "Caution" }[status] || "Review";
 }
 
 function escapeListItem(value) { return `<li>${escapeHtml(value)}</li>`; }

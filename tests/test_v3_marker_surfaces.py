@@ -5,7 +5,7 @@ import pytest
 
 from survival_toolkit.app import app
 from test_guarded_marker_inference import cohort
-from test_browser_e2e import browser_server, _launch_browser, _wait_for_workspace
+from test_browser_e2e import browser_server, _launch_browser, _wait_for_workspace, _open_additional_tab
 
 
 def test_experimental_v3_api_export_keeps_nulls_and_raw_calculations():
@@ -34,7 +34,7 @@ def test_browser_v3_policy_currency_diagnostics_and_csv(browser_server,tmp_path)
         page.goto(browser_server,wait_until="networkidle")
         upload=tmp_path/"synthetic.csv";cohort(n=90).to_csv(upload,index=False)
         page.locator("#datasetFile").set_input_files(str(upload));_wait_for_workspace(page)
-        page.locator('[data-tab="markers"]').click()
+        _open_additional_tab(page, "markers")
         assert page.locator("#markerDiagnosticPolicy").input_value()=="v2_holm"
         for checklist in ("#markerChecklist","#markerClinicalChecklist"):
             for box in page.locator(checklist+" input[type=checkbox]").all(): box.set_checked(False)

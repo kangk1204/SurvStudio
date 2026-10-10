@@ -286,6 +286,13 @@ function showWorkspace() {
   refs.workspace.classList.remove("fade-in");
 }
 
+function setAdditionalAnalyses(expanded) {
+  document.body.classList.toggle("additional-analyses-open", expanded);
+  const button = document.getElementById("additionalAnalysesButton");
+  button?.setAttribute("aria-expanded", expanded ? "true" : "false");
+  if (button) button.textContent = expanded ? "Fewer analyses" : "More analyses";
+}
+
 function activateTab(tabName, { historyMode = "replace", focusTabButton = false, syncHistory = true } = {}) {
   let resolvedTabName = tabName;
   if (resolvedTabName === "predictive") {
@@ -298,6 +305,8 @@ function activateTab(tabName, { historyMode = "replace", focusTabButton = false,
   if (resolvedTabName === "ml" || resolvedTabName === "dl") {
     resolvedTabName = "benchmark";
   }
+  // Restored history and completed background runs must reveal their selected tab.
+  if (["markers", "tables"].includes(resolvedTabName)) setAdditionalAnalyses(true);
   if (resolvedTabName !== "benchmark" && activeTabName() === "benchmark") {
     runtime.workbenchRevealed = false;
     runtime.predictiveWorkbenchIntent = null;
@@ -320,6 +329,15 @@ function activateTab(tabName, { historyMode = "replace", focusTabButton = false,
     }
   });
   refs.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === resolvedTabName));
+  const hint = document.getElementById("analysisStepHint");
+  if (hint) hint.textContent = {
+    data: "Check your rows and outcome columns before analysing.",
+    km: "Choose a group if needed, then draw the curves. Save results when ready.",
+    cox: "Choose the variables to include, then run the Cox model and review its checks.",
+    benchmark: "Review the shared inputs and evaluation settings, then compare models.",
+    markers: "Choose markers and clinical variables. Review diagnostics before interpreting the tests.",
+    tables: "Choose the variables to describe, then create your baseline table.",
+  }[resolvedTabName] || "";
   renderPredictiveWorkbench();
   updateGroupingDetailsVisibility(resolvedTabName);
   if (state.dataset && syncHistory) syncHistoryState(historyMode);

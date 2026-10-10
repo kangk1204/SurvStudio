@@ -72,6 +72,14 @@ def _wait_for_workspace(page) -> None:
     page.locator("#workspace").wait_for(state="visible")
 
 
+def _open_additional_tab(page, tab_name: str) -> None:
+    toggle = page.locator("#additionalAnalysesButton")
+    if toggle.get_attribute("aria-expanded") != "true":
+        toggle.click()
+    page.locator(f'[data-tab="{tab_name}"]').click()
+    _assert_tab_active(page, tab_name)
+
+
 def _assert_tab_active(page, tab_name: str) -> None:
     page.wait_for_function(
         """
@@ -597,6 +605,7 @@ def test_browser_back_button_returns_to_home_not_blank(browser_server: str) -> N
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _wait_for_workspace(page)
+            page.locator("#panel-km .curve-options > summary").click()
             page.locator("#timeUnitLabel").fill("Days")
             page.locator("#maxTime").fill("24")
             page.locator("#groupColumn").select_option("stage")
@@ -661,7 +670,7 @@ def test_browser_grouping_controls_show_only_on_curves_and_table_1(browser_serve
             assert "Grouping only:" in page.locator("#dlFeatureSummaryChips").inner_text()
             assert "Training inputs come only from the shared ML/DL model feature selections" in page.locator("#dlFeatureSummaryText").inner_text()
 
-            page.locator('[data-tab="tables"]').click()
+            _open_additional_tab(page, "tables")
             page.wait_for_function(
                 "document.querySelector('[data-tab=\"tables\"]').getAttribute('aria-selected') === 'true'"
             )
@@ -757,6 +766,7 @@ def test_browser_event_column_defaults_to_event_like_fields_and_advanced_toggle_
             assert "kras_status" not in default_options
             assert "Showing likely event columns only" in page.locator("#eventColumnHelp").inner_text()
 
+            page.locator(".column-options > summary").click()
             page.locator("#showAllEventColumns").check()
             page.wait_for_function(
                 "Array.from(document.querySelectorAll('#eventColumn option')).some((option) => option.value === 'egfr_status')"
@@ -840,6 +850,7 @@ def test_browser_event_column_blocks_binary_baseline_covariates(browser_server: 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadGbsg2Button").click()
             page.locator("#workspace").wait_for(state="visible")
+            page.locator(".column-options > summary").click()
             page.locator("#showAllEventColumns").check()
             page.locator("#eventColumn").select_option("menostat")
             page.wait_for_function(
@@ -1302,6 +1313,7 @@ def test_browser_risk_table_ticks_change_columns_and_flash_table(browser_server:
             default_columns = page.locator("#kmRiskShell thead th").count()
             assert 5 <= default_columns <= 9
 
+            page.locator("#panel-km .curve-options > summary").click()
             page.locator("#riskTablePoints").fill("10")
             page.locator("#runKmButton").click()
             page.wait_for_function(
@@ -1650,7 +1662,7 @@ def test_browser_cohort_table_sends_outcome_columns_and_shows_notes(browser_serv
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadGbsg2Button").click()
             _wait_for_workspace(page)
-            page.locator('[data-tab="tables"]').click()
+            _open_additional_tab(page, "tables")
             _assert_tab_active(page, "tables")
             page.evaluate("() => setCheckedValues(refs.cohortVariableChecklist, ['age'])")
             page.evaluate("() => renderSharedFeatureSummary()")
@@ -1688,7 +1700,7 @@ def test_browser_locked_marker_model_validates_on_an_external_cohort(browser_ser
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _wait_for_workspace(page)
-            page.locator('[data-tab="markers"]').click()
+            _open_additional_tab(page, "markers")
             _assert_tab_active(page, "markers")
             page.locator("#panel-markers .options-details > summary").click()
             page.locator("#markerPermutations").fill("99")
@@ -1734,7 +1746,7 @@ def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str, 
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _wait_for_workspace(page)
-            page.locator('[data-tab="markers"]').click()
+            _open_additional_tab(page, "markers")
             _assert_tab_active(page, "markers")
             assert page.locator("#markerChecklist input[value='biomarker_score']").is_checked()
             assert page.locator("#markerClinicalChecklist input[value='age']").is_checked()
@@ -1795,7 +1807,7 @@ def test_browser_markers_tab_warns_about_a_patient_profiled_twice(browser_server
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _wait_for_workspace(page)
-            page.locator('[data-tab="markers"]').click()
+            _open_additional_tab(page, "markers")
             page.locator("#markerMatrixDetails > summary").click()
             page.locator("#markerMatrixFile").set_input_files(str(matrix_path))
             page.locator("#attachMarkerMatrixButton").click()
@@ -1839,7 +1851,7 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _wait_for_workspace(page)
-            page.locator('[data-tab="markers"]').click()
+            _open_additional_tab(page, "markers")
             _assert_tab_active(page, "markers")
 
             # With no column ticked, the attached file alone must enable Run.
@@ -1891,7 +1903,7 @@ def test_browser_signature_search_is_shown_and_exportable_on_the_markers_tab(bro
             page.goto(browser_server, wait_until="networkidle")
             page.locator("#loadExampleButton").click()
             _wait_for_workspace(page)
-            page.locator('[data-tab="markers"]').click()
+            _open_additional_tab(page, "markers")
             _assert_tab_active(page, "markers")
             page.locator("#panel-markers .signature-details > summary").click()
             for field, value in (

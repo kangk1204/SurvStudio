@@ -629,9 +629,17 @@ def _run_page(tmp_path: Path, script: str, **fixtures) -> object:
     """Run `script` (the body of an async function of page, fixtures, deferred, loadDataset, jsonResponse)."""
     harness = tmp_path / "harness.js"
     harness.write_text(_HARNESS_JS, encoding="utf-8")
+    # The browser receives rendered HTML, including the local/hosted configuration.
+    # Reading raw Jinja directives would incorrectly enable optional hosted fields.
+    from jinja2 import Environment, FileSystemLoader
+    rendered_template = tmp_path / "rendered-template.html"
+    rendered_template.write_text(
+        Environment(loader=FileSystemLoader(str(_TEMPLATE.parent)), autoescape=True)
+        .get_template(_TEMPLATE.name).render(static_version="test"), encoding="utf-8",
+    )
     data = tmp_path / "fixtures.json"
     data.write_text(
-        json.dumps({"staticDir": str(_STATIC_DIR), "template": str(_TEMPLATE), "script": script, **fixtures}),
+        json.dumps({"staticDir": str(_STATIC_DIR), "template": str(rendered_template), "script": script, **fixtures}),
         encoding="utf-8",
     )
     completed = subprocess.run(

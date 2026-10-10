@@ -12,8 +12,8 @@ const appState = {
   dl: null,
   markers: null,
   markerValidation: null,
-  // The page is always served by the SurvStudio server, so API paths stay relative to it.
-  apiBase: "",
+  // Local installations use relative paths. A hosted page may name its private HTTPS backend.
+  apiBase: configuredApiBase(),
   historySyncPaused: false,
   historySyncTimer: null,
   lastDerivedGroup: null,
@@ -71,6 +71,15 @@ const runtime = appState;
 
 const shellHelpers = window.SurvStudioShell;
 const downloadHelpers = window.SurvStudioDownloads;
+
+function configuredApiBase() {
+  const value = String(document.body?.dataset?.apiBase || "").trim();
+  if (!value) return "";
+  if (!/^https:\/\/[a-z0-9.-]+(?::\d+)?\/?$/i.test(value)) {
+    throw new Error("The hosted analysis server must have an HTTPS address without a path or credentials.");
+  }
+  return value.replace(/\/$/, "");
+}
 
 
 const refs = {
@@ -537,6 +546,9 @@ async function fetchJSON(url, options = {}) {
     });
   } catch (error) {
     if (error?.name === "AbortError") throw new SupersededRequestError();
+    if (runtime.apiBase) {
+      throw new Error("Cannot reach your private analysis server. Check that Tailscale is connected, then try again.");
+    }
     throw error;
   }
   let rawText;

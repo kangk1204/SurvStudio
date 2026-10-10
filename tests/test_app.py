@@ -193,7 +193,7 @@ def test_index_mentions_fleming_harrington_p_only_label() -> None:
         'class="scope-tag',
     ):
         assert removed not in response.text
-    assert '<span class="config-row-label">Outcome</span>' in response.text
+    assert '<span class="config-row-label">Check your outcome</span>' in response.text
     assert '<span>Evaluation Mode</span>' in response.text
     assert "Evaluation Mode applies to both <strong>Run Analysis</strong> and <strong>Compare All</strong>" in response.text
     assert 'class="button ghost compact-btn shutdown-button" id="shutdownButton"' in response.text
@@ -365,10 +365,6 @@ def test_reference_manual_states_current_scope_and_validation_limitations() -> N
     assert 'pip install -e ".[all]"' in manual
     assert "LASSO-Cox (penalized Cox)" in manual
     assert "A C-index of 0.50 is chance-level ranking" in manual
-
-
-
-
 
 
 def test_readme_states_current_scope_and_validation_limitations() -> None:

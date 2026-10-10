@@ -1,6 +1,6 @@
 # User guide
 
-[Back to quick start](../README.md)
+[Back to quick start](../README.md) · [Full reference](reference.md) · [Marker diagnostic policy](guarded-marker-inference.md)
 
 SurvStudio supports single-event survival analysis of right-censored data.
 It does not handle left-truncated entry times or competing-risks analysis.
@@ -305,7 +305,7 @@ Architecture note:
 - `Dropout` is applied to all current deep model paths, including Neural MTLR
 - `Batch Size` currently affects DeepHit and Neural MTLR only. DeepSurv, Survival Transformer, and Survival VAE use full-batch optimization in the current implementation, and the run metadata reports the effective full-batch size for those paths.
 - Adam-based DL optimizers use light L2 regularization (`weight_decay=1e-4`) and gradient clipping for stability on wider feature sets.
-- DeepHit ranks the predicted cumulative incidence at each event time (Lee et al., 2018), including subjects censored in the same time bin, with a stabilized ranking-loss scale (`sigma=1.0`).
+- DeepHit is a modified single-event variant. It ranks cumulative incidence over discrete-bin comparable pairs with a stabilized ranking-loss scale (`sigma=1.0`), using a softplus penalty. This differs from the original exponential ranking loss (Lee et al., 2018); label it as a variant when comparing algorithms.
 - `Neural MTLR` uses a neuralized right-cumulative MTLR parameterization for workflow comparison; its censored likelihood is evaluated in log space for numerical stability. It matches the canonical MTLR probability construction, while the surrounding network/training path is a practical SurvStudio implementation rather than a line-by-line clone of one reference codebase.
 - `Survival VAE` should be interpreted as a VAE-inspired latent representation model for clustering and risk screening. SurvStudio does not claim validated generative simulation or uncertainty estimation from this path.
 - Early stopping monitors a stratified 20% subset of the training partition that is **held out from gradient updates** (the model never trains on it). `DeepSurv`, `Survival Transformer`, and `Survival VAE` monitor C-index; `DeepHit` and `Neural MTLR` monitor the discrete-time loss. The monitor subset never overlaps the holdout, CV fold, or locked test set, and its curve is not a validation metric.

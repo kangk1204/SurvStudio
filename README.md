@@ -4,7 +4,7 @@
 Upload a patient table or choose a sample, run an analysis, and save the results.
 A local installation keeps your data on your computer.
 
-![SurvStudio start screen](github_images/01_survstudio_main.png)
+![SurvStudio survival analysis workspace](github_images/hero.png)
 
 [See all screenshots](docs/screenshots.md) · [User guide](docs/user-guide.md)
 
@@ -58,13 +58,14 @@ follow-up time and an event column (`1` = event, `0` = censored).
 | Mode | What it does | What you get |
 |---|---|---|
 | **Survival curves** | Compare survival between groups | Kaplan–Meier curves, median survival, log-rank test |
-| **Cox model** | Examine risk factors together | Hazard ratios, confidence intervals, model checks |
-| **Prediction models — ML** | Learn and compare risk predictions | Cox baseline, LASSO-Cox, survival forests and boosting; held-out C-index |
-| **Prediction models — DL** | Evaluate neural survival models | DeepSurv, DeepHit, MTLR; Transformer/VAE are experimental |
+| **Risk factors (Cox)** | Examine risk factors together | Hazard ratios, confidence intervals, model checks |
+| **Compare models — ML** | Learn and compare risk predictions | Cox baseline, LASSO-Cox, survival forests and boosting; held-out C-index |
+| **Compare models — DL** | Evaluate neural survival models | DeepSurv, DeepHit, MTLR; Transformer/VAE are experimental |
 | **Markers** | Evaluate candidate markers beyond clinical factors | Adjusted evidence, stability and analysis status |
 | **Table 1** | Describe the patients | Overall or grouped summary table |
 
-Choose **Export** in a result tab to save its figures or tables.
+Use **Save results** to export the current result. **More analyses** opens Markers and Table 1.
+Earlier interfaces use **Cox model**, **Prediction models** and an **Export** menu.
 [Mode settings and how to read results](docs/user-guide.md#main-analyses)
 
 ## 4. Try the test data
@@ -77,7 +78,7 @@ Click a sample on the start screen, or download a CSV below and upload it.
 | [Lung cancer — TCGA-LUAD](examples/tcga_luad_nature2014_upload_ready.csv) | 489 | `os_months` / `os_event` | `stage_group` |
 | [Breast cancer — GBSG2](examples/gbsg2_jco1994_upload_ready.csv) | 686 | `rfs_days` / `rfs_event` | `horTh` |
 
-Set **Event value = 1**, open **Survival curves**, and click **Run Analysis**.
+Set **Event value = 1**, open **Survival curves**, and click **Draw curves** (or **Run Analysis** in earlier interfaces).
 The result includes a curve, a risk table and group summaries.
 
 **Example results:** TCGA-LUAD median survival is about **76, 38, 27 and 27 months** for stages I–IV.
