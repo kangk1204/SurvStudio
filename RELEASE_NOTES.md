@@ -232,7 +232,7 @@ These changes alter reported numbers; results produced before this release shoul
 
 - Classical ML and deep-learning models now share one stratified 70/30 holdout helper and identical repeated-CV folds for the same seed. Previously DL used a separate 80/20 split, so on GBSG2 only 39 of 137 DL evaluation patients were in the ML test set while the unified leaderboard ranked them together.
 - Added `evaluation_split_fingerprint` to every comparison result; the unified leaderboard only ranks ML and DL together when fingerprints match.
-- Added an optional locked independent test set (`locked_test_fraction`) for repeated-CV comparisons: CV runs on the development set only, each model is refit on the development set and scored once on the untouched test set, and manuscript tables gain locked-test columns.
+- Added an optional locked independent test set (`locked_test_fraction`) for repeated-CV comparisons: CV runs on the development set only, each model is refit on the development set and scored once on the untouched test set, and report tables gain locked-test columns.
 - Deep-model early stopping now monitors a subset that is held out from gradient updates (it was previously part of the training rows, so early stopping tracked training fit).
 - Repeated-CV "SD" is now the SD across fold-level C-indices (it was the SD of repeat means, e.g. 0.0006 vs 0.042 on GBSG2, and exactly 0 with one repeat). The Brier Skill Score is pooled (1 - mean IBS / mean null IBS).
 
@@ -255,15 +255,14 @@ These changes alter reported numbers; results produced before this release shoul
 - DeepHit's ranking loss compares cumulative incidence at the event bin; the MTLR censored likelihood is computed in log space (float32 NaN failures removed).
 - Time 0 is a valid follow-up time (only negative times are dropped); numeric 0/1 columns named like "censored" are refused as event columns; negated status labels ("No recurrence") are coded as censoring; deaths from other causes are refused in disease-specific event columns.
 
-
 ## 2026-03-26
 
 ### Evaluation and Reporting
 
 - Added repeated stratified cross-validation for `/api/ml-model` comparison runs via `evaluation_strategy="repeated_cv"`.
-- Added manuscript-oriented model performance tables to comparison outputs for both deterministic holdout and repeated-CV workflows.
-- Standardized evaluation metadata so comparison outputs include the evaluation mode and manuscript export payloads.
-- Added dashboard controls for repeated-CV selection plus CSV/Markdown/LaTeX/DOCX export of manuscript-ready ML comparison tables.
+- Added report model performance tables to comparison outputs for both deterministic holdout and repeated-CV workflows.
+- Standardized evaluation metadata so comparison outputs include the evaluation mode and report export payloads.
+- Added dashboard controls for repeated-CV selection plus CSV/Markdown/LaTeX/DOCX export of report ML comparison tables.
 - Added server-side `/api/export-table` formatting so ML and DL comparison tables can be exported as CSV, journal-style Markdown, LaTeX, or DOCX with approximate `default`, `NEJM`, `Lancet`, and `JCO` templates.
 
 ### Statistical and Deep-Learning Corrections
@@ -278,8 +277,8 @@ These changes alter reported numbers; results produced before this release shoul
 ### Packaging and Documentation
 
 - Kept contributor installs aligned with the app feature surface by documenting `.[dev]` as the default setup path.
-- Removed over-claiming wording from app metadata and README guidance; the toolkit is exploratory by default and requires external validation for paper-grade claims.
-- Added this release note to track changes that affect statistical interpretation and manuscript reporting.
+- Removed over-claiming wording from app metadata and README guidance; the toolkit is exploratory by default and requires external validation for validated claims.
+- Added this release note to track changes that affect statistical interpretation and report reporting.
 
 ### Verification
 

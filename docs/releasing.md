@@ -36,7 +36,7 @@ release is published; Zenodo archives the release through its GitHub integration
      compiles it under emulation and takes considerably longer than the amd64 one.
 5. Zenodo mints a DOI for the release. Add the DOI badge to the README and a
    `doi` field to `CITATION.cff` (the concept DOI, which always resolves to the latest
-   version, is the one to cite in papers).
+   version, is the one to cite in analysis reports).
 
 ## Checking a release locally
 
@@ -53,7 +53,7 @@ docker run --rm -p 127.0.0.1:8000:8000 survstudio
 
 ## After the first release
 
-- Register the tool at bio.tools and request an RRID (SciCrunch) so papers can cite it
+- Register the tool at bio.tools and request an RRID (SciCrunch) so analysis reports can cite it
   by identifier.
 - Add GitHub topics (survival-analysis, biomarkers, bioinformatics, cox-regression,
   kaplan-meier) so the repository is found by search.

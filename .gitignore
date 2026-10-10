@@ -15,7 +15,24 @@ build/
 *.parquet
 *.xlsx
 node_modules/
-manuscript/
 survival_xai_survey.md
 *.pdf
 *:Zone.Identifier
+
+# Local working files
+paper/
+manuscript/
+research/
+publication/
+publication-*/
+validation/publication*/
+validation/guarded_inference/
+validation/diagnostic_followup/
+*.docx
+*.doc
+*.pdf
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.claude/
+.codex/

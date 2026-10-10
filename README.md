@@ -11,12 +11,12 @@ It supports:
 - optional machine-learning and deep-learning survival models, compared on the same patient splits (the Transformer and VAE are experimental)
 - omics marker matrices (up to 60,000 markers) attached to the clinical table for marker evaluation
 - REMARK and TRIPOD+AI checklists with the methods and results paragraphs of the run, as Word or Markdown
-- manuscript-oriented table export
+- report table export
 - numerical agreement with R `survival`, lifelines and scikit-survival documented in [docs/validation](./docs/validation/numerical_agreement.md)
 
 ## Interface Preview
 
-These screenshots show the main manuscript-facing workflows.
+These screenshots show the main report-facing workflows.
 
 <table>
   <tr>
@@ -38,7 +38,7 @@ These screenshots show the main manuscript-facing workflows.
       <img src="github_images/03_KM_plot.png" alt="Kaplan-Meier analysis screenshot" />
       <br />
       <strong>Survival curves</strong><br />
-      Kaplan-Meier curves, weighted log-rank testing, and manuscript-ready figure export.
+      Kaplan-Meier curves, weighted log-rank testing, and report figure export.
     </td>
     <td width="50%">
       <img src="github_images/04_Cox_PH.png" alt="Cox proportional hazards forest plot screenshot" />
@@ -136,7 +136,7 @@ If you want a file that you can upload manually instead of clicking a built-in l
 ## 1-Minute Quick Start
 
 **Recommended: install everything up front.**
-`pip install -e ".[all]"` is the right default for manuscript work.
+`pip install -e ".[all]"` is the right default for report work.
 It unlocks Excel/Parquet import, ML and DL survival models, and figure export (`kaleido`). To run the test suite as well, use `pip install -e ".[dev]"`.
 A minimal `pip install -e .` works for KM + Cox only — use it only if disk space or install time is a concern.
 
@@ -546,11 +546,11 @@ Recommended first figures and tables:
    - categorical features: `sex`, `stage_group`, `smoking_status`
 5. DL smoke or comparison with the same feature set
 
-Recommended manuscript outputs:
+Recommended report outputs:
 - Kaplan-Meier plot by stage
 - Cox hazard-ratio forest plot
 - cohort summary table stratified by stage
-- ML comparison table or repeated-CV manuscript table
+- ML comparison table or repeated-CV report table
 
 ### GBSG2 Workflow
 
@@ -574,7 +574,7 @@ Recommended first figures and tables:
    - features: `age`, `horTh`, `menostat`, `pnodes`, `tgrade`, `tsize`
    - categorical features: `horTh`, `menostat`, `tgrade`
 
-Recommended manuscript outputs:
+Recommended report outputs:
 - Kaplan-Meier plot for hormonal therapy groups
 - Cox forest plot for recurrence-free survival
 - Table 1 grouped by hormonal therapy
@@ -841,7 +841,7 @@ Comparison supports:
 - deterministic holdout (stratified 70/30, shared with the deep-learning models)
 - repeated stratified CV
 - repeated stratified CV on a development set plus a **locked independent test set** (`locked_test_fraction`)
-- manuscript-oriented result tables
+- report result tables
 
 Single-model ML training also supports:
 - `Fast mode (skip SHAP)` for faster turnaround
@@ -861,7 +861,7 @@ Practical note:
 - Random Survival Forest and Gradient Boosted Survival feature importance is permutation importance on the evaluation rows (up to 300): the mean drop in Harrell's C when a raw feature is shuffled, with all one-hot columns of a categorical feature shuffled together
 - for quick RSF checks on larger cohorts, leave `Fast mode` enabled
 - if `TreeExplainer` is unsupported, SHAP falls back to a tightly capped `KernelExplainer` approximation using a small background/evaluation sample, so treat the ranking as approximate rather than publication-grade
-- if SHAP safe mode is triggered because the encoded matrix is too wide, SurvStudio explains a reduced companion tree model for interpretability only; describe that companion-model caveat explicitly if you cite SHAP outputs in a manuscript
+- if SHAP safe mode is triggered because the encoded matrix is too wide, SurvStudio explains a reduced companion tree model for interpretability only; describe that companion-model caveat explicitly if you cite SHAP outputs in a report
 
 ### Deep Learning
 
@@ -910,7 +910,7 @@ Architecture note:
 - Early stopping monitors a stratified 20% subset of the training partition that is **held out from gradient updates** (the model never trains on it). `DeepSurv`, `Survival Transformer`, and `Survival VAE` monitor C-index; `DeepHit` and `Neural MTLR` monitor the discrete-time loss. The monitor subset never overlaps the holdout, CV fold, or locked test set, and its curve is not a validation metric.
 - After early stopping picks the best epoch, the model is refit from scratch on the **whole** training partition (monitor rows included) for that many epochs, so the reported model uses every training row. The run metadata reports `refit_epochs` (also `epochs_trained`, the epochs behind the reported model), the length of the early-stopping run (`early_stopping_epochs`), the rows used for early stopping (`early_stopping_fit_samples`, `monitor_samples`), and the final `fit_samples`. Every deep fit runs on one torch thread, so a seed gives the same numbers whether cross-validation folds run in parallel or one after another.
 - Deep-model summaries currently report discrimination (`C-index`) only. SurvStudio does not yet compute IBS for deep-model outputs, so calibration/error comparisons are not directly symmetric with the ML module.
-- Cox-style DL paths (`DeepSurv`, `Survival Transformer`) optimize a Breslow-ties partial-likelihood objective, while the classical Cox PH workflow reports Efron-ties estimates; this difference is intentional and should be documented in manuscript Methods if you compare those paths directly.
+- Cox-style DL paths (`DeepSurv`, `Survival Transformer`) optimize a Breslow-ties partial-likelihood objective, while the classical Cox PH workflow reports Efron-ties estimates; this difference is intentional and should be documented in report Methods if you compare those paths directly.
 
 ### Prognostic Marker Evaluation
 
@@ -1017,7 +1017,7 @@ Rough interpretation:
 ### Cutpoints
 
 Optimal cutpoints are exploratory by nature.
-If you use them in a manuscript:
+If you use them in a report:
 - report how the cutpoint was selected
 - prefer selection-adjusted p-values when available
 - validate the cutpoint on separate data
@@ -1077,28 +1077,28 @@ Available exports (each tab's `Export` menu):
   - comparison table as `CSV`
   - comparison plot as `PNG`
   - comparison plot as `SVG`
-  - manuscript table as `CSV`
-  - manuscript table as `Markdown`
-  - manuscript table as `LaTeX`
-  - manuscript table as `DOCX`
+  - report table as `CSV`
+  - report table as `Markdown`
+  - report table as `LaTeX`
+  - report table as `DOCX`
 
 When Group by is active in Table 1:
 - `Overall` refers to the grouped non-missing subset used in that table
 - it is not a separate all-rows summary outside the grouped analysis frame
 
-You can export comparison tables and manuscript tables as:
+You can export comparison tables and report tables as:
 - CSV
 - Markdown
 - LaTeX
 - DOCX
 
-ML and DL manuscript-table export supports these formatting helpers:
+ML and DL report-table export supports these formatting helpers:
 - `default`
 - `NEJM`
 - `Lancet`
 - `JCO`
 
-These apply to manuscript table export only.
+These apply to report table export only.
 They are formatting helpers, not official publisher-certified house styles.
 
 Analysis exports end with provenance notes: the SurvStudio version that produced them (results changed in 0.2.0, see the release notes), the dataset fingerprint, and the request settings needed to replay the run.
@@ -1111,7 +1111,7 @@ Analysis exports end with provenance notes: the SurvStudio version that produced
 - Every classical ML and deep model is trained and scored on identical row partitions for the same seed: one stratified 70/30 holdout helper and identical `StratifiedKFold` folds are shared by both families.
 - Each comparison result carries an `evaluation_split_fingerprint` (a hash of which source rows were trained and scored in each split). The unified ML+DL leaderboard ranks the two families together only when the fingerprints match.
 - Holdout and locked-test comparisons also return each model's test-set risk scores (`test_predictions`, `locked_test_predictions`). The leaderboard sends them to `POST /api/model-comparison-intervals`, which gives every model's C-index a 95% bootstrap interval and its difference from Cox PH a paired 95% interval (every draw scores all models on the same resampled patients). A model whose difference interval contains 0 is not distinguishable from Cox PH on that split; on small test sets this is the usual outcome, so do not report the top-ranked model as better on its point estimate alone.
-- For manuscript benchmarks, use repeated CV with a locked test set: the development set is used for all fitting, preprocessing, tuning, early stopping, and model selection; the locked test set is used once. Describe the training-set composition, the CV procedure, and the locked test set in the Methods or Supplement.
+- For report benchmarks, use repeated CV with a locked test set: the development set is used for all fitting, preprocessing, tuning, early stopping, and model selection; the locked test set is used once. Describe the training-set composition, the CV procedure, and the locked test set in the Methods or Supplement.
 - Datasets with repeated subject identifiers (for example several tumour samples per patient) are flagged: row-level splits would place one subject in both training and test data. Keep one row per subject before benchmarking.
 - Journals often require a supplementary section on how the training data, cross-validation sets, and independent test set were built. [docs/reporting/training_dataset_composition.md](docs/reporting/training_dataset_composition.md) is a fill-in template that maps each required item to the SurvStudio setting or result field that records it.
 
@@ -1138,7 +1138,7 @@ If you want to verify saving on your machine:
 4. run the Cox model once
 5. open `Export` and choose `Hazard ratios (CSV)`
 6. in Prediction models, run `Compare All Models`
-7. open a model's `Export` menu and choose one of the manuscript tables
+7. open a model's `Export` menu and choose one of the report tables
 
 If the browser download dialog is blocked, allow downloads for `http://127.0.0.1:8000`.
 
@@ -1183,7 +1183,7 @@ Then increase epochs or switch to repeated CV only after the single-run workflow
 
 - The toolkit is exploratory by default.
 - It is useful for analysis, figure generation, and workflow standardization.
-- Strong manuscript claims still require:
+- Strong report claims still require:
   - external validation
   - sensitivity checks
   - disciplined model selection
@@ -1195,7 +1195,7 @@ Then increase epochs or switch to repeated CV only after the single-run workflow
 - Uploaded tables are limited to 1,000 candidate model features (5,000 columns). Wider omics data go into the Markers tab as a separate marker matrix; the ML and DL panels keep the 1,000-feature limit.
 - Standard unpenalized Cox PH is not the right tool for very wide `p >> n` settings. Use the ML-panel `LASSO-Cox` path for penalized predictive screening instead of forcing a classical Cox PH fit.
 - External-cohort validation in the web interface covers the locked marker model (Markers tab, Validate in another cohort; the file needs the same column names). For Cox and prediction models, load the separate cohort, reproduce the endpoint and covariate specification, and rerun the analysis. From Python, `validate_locked_recipe` validates a locked marker model (see Prognostic Marker Evaluation).
-- Left truncation and competing risks are outside the current scope. In manuscript Methods, state explicitly that these workflows assume standard cause-specific survival with independent censoring and do not estimate cumulative incidence under competing events.
+- Left truncation and competing risks are outside the current scope. In report Methods, state explicitly that these workflows assume standard cause-specific survival with independent censoring and do not estimate cumulative incidence under competing events.
 - Martingale residual plots are available as a visual screening aid for continuous covariates, but SurvStudio does not yet implement richer Cox linearity tooling such as spline recommendation or automated term selection.
 
 ## Development and Testing
