@@ -1371,6 +1371,24 @@ def test_leaderboard_keeps_its_intervals_on_every_re_render(tmp_path: Path, exam
     assert result["title"] == "C-index on the same test patients, with 95% bootstrap intervals"
 
 
+def test_leaderboard_keeps_outcome_exclusions_visible_and_removal_reasons_in_detail(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:
+    payloads = json.loads(json.dumps(compare_payloads))
+    for family in ["ml", "dl"]:
+        for row in payloads[family]["comparison_table"]:
+            row.update(input_rows=240, excluded_outcome_rows=16)
+    payloads["ml"]["comparison_table"][0]["removed_feature_notes"] = "copy: redundant in Cox training design"
+    result = _run_page(tmp_path, _compare_all_script(r"""
+      return {
+        note: page.run("refs.benchmarkTableNote.innerHTML"),
+        removal: page.run("refs.benchmarkTableNote.querySelector('details').textContent"),
+      };
+    """), dataset=example_dataset, compare=payloads)
+    leading = result["note"].split("<details", 1)[0]
+    assert leading.count("Excluded 16 of 240 input rows") == 1
+    assert "missing or non-finite" in leading
+    assert "copy: redundant in Cox training design" in result["removal"]
+
+
 def test_failed_interval_requests_are_retried(tmp_path: Path, example_dataset: dict, compare_payloads: dict) -> None:
     """I21: one failed bootstrap request does not hide the intervals for good."""
     result = _run_page(tmp_path, _compare_all_script(r"""

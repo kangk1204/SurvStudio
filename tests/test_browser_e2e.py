@@ -243,6 +243,28 @@ def test_browser_comparison_input_summary_tracks_evaluation_settings(browser_ser
         browser.close()
 
 
+def test_browser_predictor_review_resets_when_feature_selection_changes(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.goto(browser_server)
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        page.locator('[data-tab="benchmark"]').click()
+        declaration = page.locator("#predictorAvailabilityConfirmed")
+        assert declaration.is_visible() and not declaration.is_checked()
+        dimensions = declaration.bounding_box()
+        assert dimensions is not None and 12 <= dimensions["width"] <= 20
+        assert 12 <= dimensions["height"] <= 20
+        assert "every hidden outcome proxy" in page.locator(".predictor-availability-note").first.inner_text()
+        declaration.check()
+        _open_predictive_workbench(page)
+        page.locator("#modelFeatureChecklist input[type=checkbox]").first.uncheck()
+        assert not declaration.is_checked()
+        browser.close()
+
+
 @pytest.fixture
 def browser_server() -> str:
     project_root = Path(__file__).resolve().parents[1]
@@ -1447,12 +1469,21 @@ def test_browser_risk_table_ticks_change_columns_and_flash_table(browser_server:
 
             page.locator("#panel-km .curve-options > summary").click()
             page.locator("#riskTablePoints").fill("10")
+            page.evaluate("""() => {
+                const shell = document.getElementById('kmRiskShell');
+                window.riskTableUpdateFlashed = false;
+                new MutationObserver(() => {
+                    if (shell.classList.contains('preset-applied-flash')) {
+                        window.riskTableUpdateFlashed = true;
+                    }
+                }).observe(shell, {attributes: true, attributeFilter: ['class']});
+            }""")
             page.locator("#runKmButton").click()
             page.wait_for_function(
                 f"document.querySelectorAll('#kmRiskShell thead th').length > {default_columns}"
             )
             page.wait_for_function(
-                "document.getElementById('kmRiskShell').classList.contains('preset-applied-flash')"
+                "window.riskTableUpdateFlashed === true"
             )
             updated_columns = page.locator("#kmRiskShell thead th").count()
             assert updated_columns > default_columns

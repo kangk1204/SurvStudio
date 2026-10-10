@@ -25,6 +25,8 @@ from typing import Any, Iterator, Sequence
 
 import numpy as np
 import pandas as pd
+
+from survival_toolkit.prediction_guard import guarded_prediction_inputs
 from scipy import stats
 from scipy.linalg import qr as scipy_qr
 from statsmodels.duration.hazard_regression import PHReg
@@ -1363,10 +1365,15 @@ def _drop_constant_train_columns(
     ]
     if not varying_columns:
         raise ValueError(f"No non-constant encoded features remain for {model_label}.")
-    return (
-        train_encoded.loc[:, varying_columns].copy(),
-        eval_encoded.loc[:, varying_columns].copy(),
-    )
+    reduced_train = train_encoded.loc[:, varying_columns].copy()
+    reduced_eval = eval_encoded.loc[:, varying_columns].copy()
+    removed = list(train_encoded.attrs.get("removed_features", [])) + [
+        {"column": str(column), "reason": "constant in training rows"}
+        for column in train_encoded.columns if column not in varying_columns
+    ]
+    reduced_train.attrs["removed_features"] = removed
+    reduced_eval.attrs["removed_features"] = removed
+    return reduced_train, reduced_eval
 
 
 def _drop_constant_train_columns_with_full(
@@ -1421,10 +1428,15 @@ def _drop_rank_deficient_train_columns(
 
     keep_indices = sorted(int(index) for index in pivots[:rank])
     keep_columns = [train_encoded.columns[index] for index in keep_indices]
-    return (
-        train_encoded.loc[:, keep_columns].copy(),
-        eval_encoded.loc[:, keep_columns].copy(),
-    )
+    reduced_train = train_encoded.loc[:, keep_columns].copy()
+    reduced_eval = eval_encoded.loc[:, keep_columns].copy()
+    removed = list(train_encoded.attrs.get("removed_features", [])) + [
+        {"column": str(column), "reason": "redundant in Cox training design"}
+        for column in train_encoded.columns if column not in keep_columns
+    ]
+    reduced_train.attrs["removed_features"] = removed
+    reduced_eval.attrs["removed_features"] = removed
+    return reduced_train, reduced_eval
 
 
 def _standardize_encoded_matrices(
@@ -2201,6 +2213,7 @@ def _fitted_model_result(
         "evaluation_risk_scores": [_safe_float(v) for v in evaluation_risk_scores],
         "calibration_metrics": brier_result,
         "feature_names": feature_names,
+        "removed_features": list(matrices["train_encoded"].attrs.get("removed_features", [])),
         # The features coded as categorical (declared ones plus text features), reference-coded.
         "categorical_features": list(matrices.get("categorical_features") or []),
         # Missing (or infinite) values per numeric feature, replaced by the training rows' median.
@@ -2227,6 +2240,7 @@ def _fitted_model_result(
 
 
 @user_input_boundary
+@guarded_prediction_inputs
 def train_random_survival_forest(
     df: pd.DataFrame,
     time_column: str,
@@ -2339,6 +2353,7 @@ def train_random_survival_forest(
 
 
 @user_input_boundary
+@guarded_prediction_inputs
 def train_gradient_boosted_survival(
     df: pd.DataFrame,
     time_column: str,
@@ -2446,6 +2461,7 @@ def train_gradient_boosted_survival(
 
 
 @user_input_boundary
+@guarded_prediction_inputs
 def train_lasso_cox(
     df: pd.DataFrame,
     time_column: str,
@@ -2613,6 +2629,7 @@ def _rank_by_c_index(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 @user_input_boundary
+@guarded_prediction_inputs
 def compare_survival_models(
     df: pd.DataFrame,
     time_column: str,
@@ -2697,6 +2714,7 @@ def compare_survival_models(
                 "null_ibs": _safe_float(result.get("null_ibs")),
                 "brier_skill_score": _safe_float(result.get("brier_skill_score")),
                 "n_features": result["n_features"],
+                "removed_features": result.get("removed_features", []),
                 "n_active_features": result.get("n_active_features"),
                 "training_time_ms": result["training_time_ms"],
                 "evaluation_mode": evaluation_mode,
@@ -2876,6 +2894,7 @@ def _fold_result(
     event_column: str,
     extra: dict[str, Any] | None = None,
     risk_score: np.ndarray | None = None,
+    removed_features: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Metrics of one model fitted on a training split and scored on its evaluation split.
 
@@ -2897,6 +2916,7 @@ def _fold_result(
         "null_ibs": None if brier_result is None else _safe_float(brier_result.get("null_ibs")),
         "brier_skill_score": None if brier_result is None else _safe_float(brier_result.get("brier_skill_score")),
         "n_features": int(n_features),
+        "removed_features": list(removed_features or []),
         **(extra or {}),
         "training_time_ms": training_time_ms,
         "train_n": int(train_eval.shape[0]),
@@ -2975,6 +2995,7 @@ def _fit_evaluate_cox_split(
         )
     )
     return _fold_result(
+        removed_features=list(train_encoded.attrs.get("removed_features", [])),
         model="Cox PH",
         c_index=_sksurv_c_index(y_test, risk_score),
         risk_score=risk_score,
@@ -3038,6 +3059,7 @@ def _fit_evaluate_lasso_cox_split(
         support_events=train_eval[event_column].to_numpy(dtype=int),
     )
     return _fold_result(
+        removed_features=list(train_encoded.attrs.get("removed_features", [])),
         model="LASSO-Cox",
         c_index=_sksurv_c_index(y_test, risk_score),
         risk_score=risk_score,
@@ -3109,6 +3131,7 @@ def _fit_evaluate_rsf_split(
         support_events=train_eval[event_column].to_numpy(dtype=int),
     )
     return _fold_result(
+        removed_features=list(train_encoded.attrs.get("removed_features", [])),
         model="Random Survival Forest",
         c_index=_sksurv_c_index(y_test, risk_score),
         risk_score=risk_score,
@@ -3171,6 +3194,7 @@ def _fit_evaluate_gbs_split(
         support_events=train_eval[event_column].to_numpy(dtype=int),
     )
     return _fold_result(
+        removed_features=list(train_encoded.attrs.get("removed_features", [])),
         model="Gradient Boosted Survival",
         c_index=_sksurv_c_index(y_test, risk_score),
         risk_score=risk_score,
@@ -3419,6 +3443,7 @@ def _locked_test_note(n_dev: int, n_dev_events: int, n_test: int, n_test_events:
 
 
 @user_input_boundary
+@guarded_prediction_inputs
 def cross_validate_survival_models(
     df: pd.DataFrame,
     time_column: str,
@@ -3555,6 +3580,7 @@ def cross_validate_survival_models(
                         "null_ibs": result.get("null_ibs"),
                         "brier_skill_score": result.get("brier_skill_score"),
                         "n_features": result["n_features"],
+                        "removed_features": result.get("removed_features", []),
                         "n_active_features": result.get("n_active_features"),
                         "training_time_ms": result["training_time_ms"],
                         "train_n": result["train_n"],
@@ -3616,6 +3642,9 @@ def cross_validate_survival_models(
             "model": model_name,
             **repeated_cv_row_fields(summary, incomplete=incomplete),
             "n_active_features": int(round(float(np.mean(active_counts)))) if active_counts else None,
+            "removed_features": [dict(column=column, reason=reason) for column, reason in sorted({
+                (item["column"], item["reason"]) for fit in model_rows for item in fit.get("removed_features", [])
+            })],
             "n_evaluations": len(model_rows),
             "n_failures": n_failures,
             "cv_folds": cv_folds,

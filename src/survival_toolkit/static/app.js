@@ -990,9 +990,9 @@ function initListeners() {
     scheduleCoxPreview({ delay: 0 });
     showToast("Cleared Cox strata.", "success", 2200);
   });
-  refs.modelFeatureChecklist?.addEventListener("change", () => { syncModelFeatureMirrors(refs.modelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.modelFeatureChecklist?.addEventListener("change", () => { if (refs.predictorAvailabilityConfirmed) refs.predictorAvailabilityConfirmed.checked = false; syncModelFeatureMirrors(refs.modelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.modelCategoricalChecklist?.addEventListener("change", () => { syncModelCategoricalMirrors(refs.modelCategoricalChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
-  refs.dlModelFeatureChecklist?.addEventListener("change", () => { syncModelFeatureMirrors(refs.dlModelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
+  refs.dlModelFeatureChecklist?.addEventListener("change", () => { if (refs.predictorAvailabilityConfirmed) refs.predictorAvailabilityConfirmed.checked = false; syncModelFeatureMirrors(refs.dlModelFeatureChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.dlModelCategoricalChecklist?.addEventListener("change", () => { syncModelCategoricalMirrors(refs.dlModelCategoricalChecklist); renderSharedFeatureSummary(); queueHistorySync(); });
   refs.cohortVariableChecklist?.addEventListener("change", () => { renderSharedFeatureSummary(); queueHistorySync(); });
   refs.cohortVariableSearchInput?.addEventListener("input", () => {

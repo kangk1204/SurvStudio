@@ -1115,6 +1115,8 @@ class SignatureSearchRequest(_EventPositiveValueRequestModel):
 
 
 class MLModelRequest(_FeatureSelectionRequestModel):
+    # This records a user declaration; it is not an automatic leakage certificate.
+    predictor_availability_confirmed: Literal[True] | None = None
     dataset_id: str
     time_column: str
     event_column: str
@@ -1137,6 +1139,8 @@ class MLModelRequest(_FeatureSelectionRequestModel):
 
 
 class DeepModelRequest(_FeatureSelectionRequestModel):
+    # This records a user declaration; it is not an automatic leakage certificate.
+    predictor_availability_confirmed: Literal[True] | None = None
     dataset_id: str
     time_column: str
     event_column: str
@@ -1683,6 +1687,18 @@ def dataset_response(dataset_id: str) -> dict[str, Any]:
 
 def _attach_dataset_hash(payload: dict[str, Any], stored: Any) -> dict[str, Any]:
     payload["dataset_hash"] = str(stored.metadata.get("dataset_hash") or "")
+    analysis = payload.get("analysis") or {}
+    audit = analysis.get("input_audit")
+    if isinstance(audit, dict) and (payload.get("request_config") or {}).get("predictor_availability_confirmed") is True:
+        audit["predictor_availability"] = "user_confirmed"
+        note = "The user confirmed that the selected predictors were available at the intended prediction time; hidden outcome proxies still require review."
+        audit["notes"].append(note)
+        if isinstance(analysis.get("scientific_summary"), dict):
+            analysis["scientific_summary"].setdefault("cautions", []).append(note)
+        if isinstance(analysis.get("manuscript_tables"), dict):
+            analysis["manuscript_tables"].setdefault("table_notes", []).append(note)
+        for row in analysis.get("comparison_table", []):
+            row["input_notes"] = " ".join(audit["notes"])
     return payload
 
 

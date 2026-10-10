@@ -1969,11 +1969,27 @@ h3 {
 }
 
 .predictive-input-summary,
-.predictive-metric-guide {
+.predictive-metric-guide,
+.predictor-availability-note {
   margin: 12px 0;
   font-size: 0.85rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.predictor-availability-review {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.predictor-availability-review input[type="checkbox"] {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  margin: 3px 0 0;
 }
 
 .predictive-input-summary {

@@ -179,28 +179,13 @@ def test_gradient_feature_importance_does_not_accumulate_parameter_grads() -> No
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
-def test_deep_trainers_report_nonpositive_time_exclusions_in_summary() -> None:
+def test_deep_trainers_reject_negative_time_before_training() -> None:
     from survival_toolkit.deep_models import train_deepsurv
 
     df = make_example_dataset(seed=10, n_patients=60)
     df.loc[df.index[:3], "os_months"] = [0.0, -1.0, 0.0]
-
-    result = train_deepsurv(
-        df,
-        time_column="os_months",
-        event_column="os_event",
-        features=["age", "biomarker_score", "immune_index"],
-        hidden_layers=[8],
-        epochs=1,
-        batch_size=8,
-        random_seed=11,
-    )
-
-    assert any(
-        metric["label"] == "Dropped for negative time" and metric["value"] == 1
-        for metric in result["scientific_summary"]["metrics"]
-    )
-    assert any("negative survival time" in caution.lower() for caution in result["scientific_summary"]["cautions"])
+    with pytest.raises(ValueError, match="negative follow-up time"):
+        train_deepsurv(df, "os_months", "os_event", ["age", "biomarker_score"], epochs=1)
 
 
 @pytest.mark.skipif(not _torch_available(), reason="torch not installed")
@@ -437,6 +422,8 @@ def test_train_survival_transformer_rejects_wide_full_batch_attention_before_mod
     with pytest.raises(ValueError, match="Survival Transformer is disabled for this feature set"):
         deep_models.train_survival_transformer(
             None,
+            prepared_data=prepared,
+            evaluation_split=eval_split,
             time_column="os_months",
             event_column="os_event",
             features=[f"f{i}" for i in range(509)],

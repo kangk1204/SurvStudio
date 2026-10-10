@@ -362,6 +362,7 @@ const refs = {
   runPredictiveWorkbenchButton: document.getElementById("runPredictiveWorkbenchButton"),
   predictiveActionStatusText: document.getElementById("predictiveActionStatusText"),
   predictiveInputSummary: document.getElementById("predictiveInputSummary"),
+  predictorAvailabilityConfirmed: document.getElementById("predictorAvailabilityConfirmed"),
   benchmarkActionCard: document.getElementById("benchmarkActionCard"),
   benchmarkSummaryGrid: document.getElementById("benchmarkSummaryGrid"),
   benchmarkComparisonPlot: document.getElementById("benchmarkComparisonPlot"),
