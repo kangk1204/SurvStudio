@@ -1,6 +1,6 @@
 # Release Notes
 
-## Unreleased — Prognostic marker evaluation, design check, and a simpler interface
+## 0.3.0 — 2026-09-30 — Prognostic marker evaluation, design check, and a simpler interface
 
 ### Interface
 
@@ -9,7 +9,7 @@
 - Result sections stay hidden until a run, each tab exports from one menu, and a status next to each Run button says whether the result is up to date, running, or out of date after a settings change.
 - Interpretation panels show the headline, key numbers and the first two cautions; the rest folds under "More detail".
 - The Cox tab previews usable patients, dropped rows, parameters and events per parameter before fitting.
-- New Markers tab: the honest marker evaluation with stability and rank-uncertainty plots, the marker table, export of the locked model as JSON, and validation of the locked model on another cohort file. The outcome-informed cut-point combination search moved here as an exploratory option and now searches the selected markers and clinical covariates.
+- New Markers tab: the marker evaluation (family-wise error control, added value over clinical covariates) with stability and rank-uncertainty plots, the marker table, export of the locked model as JSON, and validation of the locked model on another cohort file. The outcome-informed cut-point combination search moved here as an exploratory option and now searches the selected markers and clinical covariates.
 - New design-check page (`/design-check`, no data needed) for studies that fit many models and keep the best.
 - Prediction models: a "Train one model" entry next to Compare All, results hidden until a run, and the Survival Transformer and VAE labelled experimental.
 - Reporting checklists: the Markers tab exports a REMARK checklist and the prediction-model leaderboard a TRIPOD+AI checklist, as Word or Markdown. Each holds the run's methods and results paragraphs and every guideline item, marked as filled in by SurvStudio, partly filled in, or for the authors to complete.
@@ -30,6 +30,7 @@
 - The Markers Run button is enabled by an attached marker matrix with no column ticked, and follows every change to the selection (it stayed enabled after Clear).
 - `marker_screen.fit_cox` ends as not converged when a diverging fit leaves the information matrix non-finite, instead of raising from numpy's least squares and failing a whole screen. This happened on a heavy-tailed gene in one genome-wide simulation replicate.
 - The marker evaluation screens patients for repeated samples (`survival_toolkit.duplicates`). On panels of at least 200 markers, it flags patients whose profiles are each other's clear best match (r ≥ 0.7, 0.2 above the next-best match), and on continuous panels it flags patients with identical values. The result is in `result["duplicates"]`. In the Markers tab, flagged pairs lead the cautions, named by the patient ID column, and keep the verdict at review; the REMARK report states the screen and its result. A duplicate audit of public breast cancer cohorts found 109 repeated pairs within and across cohorts, which prompted this check.
+- Genome-wide expression files are no longer refused as holding outcome columns. The outcome-name rules flagged genes such as EFS, TTR and the antisense genes DIO3OS and EMX2OS in the UCSC Xena TCGA-LUAD matrix; markers named like gene symbols are now checked for outcome leakage by their values only, while names such as `os_months` or `OS.time` are still refused. A gene-named marker the name rules flag, such as a bare `OS` or `PFS` column, is still refused when its values are the follow-up times, as they are or rescaled.
 
 ### New
 
@@ -46,6 +47,9 @@
 - The marker evaluation runs about 10 times faster with the same results: on one machine, 200 markers with the default 1,000 permutations and 200 subsamples took 37 s instead of 374 s, and 4,000 markers with 48 permutations and 10 subsamples 19 s instead of 175 s, with identical tiers. Cox fits use a Newton-Raphson fitter on the score screen's risk-set sums instead of statsmodels' PHReg (same estimates to 1e-6; the R reference tests are unchanged); the screen sums risk sets with sparse products in cache-sized blocks, and medians, p-values and input conversion are vectorized.
 - `survival_toolkit.reporting`: `remark_checklist` and `tripod_ai_checklist` build the checklists from a marker evaluation or model comparisons; `checklist_markdown` renders one.
 - API: `POST /api/marker-evaluation` (now with a `report` field), `POST /api/marker-validation`, `POST /api/design-audit`, `POST /api/tripod-ai-checklist` and `POST /api/checklist-export`.
+- The marker evaluation gives the left-out gain over the clinical covariates a 95% interval that allows for the overlap of the subsamples, the corrected resampled t of Nadeau and Bengio (Machine Learning 2003;52:239–281): `signature_gain_left_out_ci`, with the gain's SD over the subsamples in `signature_gain_left_out_sd` and the same interval for the left-out C-index in `signature_c_left_out_ci`. The Markers tab now says the selected markers add little discrimination only when the whole interval lies below 0.02 (before, whenever the mean gain did), says they add discrimination when it lies above 0, and calls the gain uncertain otherwise; results without an interval keep the old verdict. The REMARK text and the summary figure give the gain with its interval.
+
+### Documentation and reproduction
 
 ### Validation
 

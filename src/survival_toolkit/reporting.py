@@ -37,6 +37,14 @@ def _finite(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _interval(value: Any) -> tuple[float, float] | None:
+    """A [low, high] pair of finite numbers, or None."""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    low, high = _finite(value[0]), _finite(value[1])
+    return None if low is None or high is None else (low, high)
+
+
 def _number(value: Any, digits: int = 3) -> str:
     if value is None:
         return "NA"
@@ -318,6 +326,24 @@ def _signature_methods_sentence(result: dict[str, Any], added_value: bool) -> st
     return text + f"; its apparent C-index could not be corrected for optimism {missing_reason}."
 
 
+def _gain_interval(signature: dict[str, Any]) -> tuple[float, float] | None:
+    """The 95% interval of the paired left-out gain over the clinical covariates, when the result has one."""
+    if _finite(signature.get("signature_gain_left_out")) is None:
+        return None
+    return _interval(signature.get("signature_gain_left_out_ci"))
+
+
+def _gain_interval_sentence(result: dict[str, Any], added_value: bool) -> str:
+    if not added_value or _gain_interval(result.get("signature") or {}) is None:
+        return ""
+    return (
+        "In the patients left out of each subsample, the C-index of the model fitted in that subsample was compared with that "
+        "of a Cox model of the clinical covariates alone fitted in the same subsample; the 95% confidence interval of the mean "
+        "difference used the corrected resampled t statistic (Nadeau and Bengio 2003), which allows for the overlap between "
+        "subsamples."
+    )
+
+
 def marker_methods_paragraph(result: dict[str, Any], request: dict[str, Any] | None = None) -> str:
     settings = result.get("settings") or {}
     cohort = result.get("cohort") or {}
@@ -346,6 +372,7 @@ def marker_methods_paragraph(result: dict[str, Any], request: dict[str, Any] | N
         "Markers were analysed as continuous variables without cut-points.",
         _duplicate_screen_sentence(result),
         _signature_methods_sentence(result, added_value),
+        _gain_interval_sentence(result, added_value),
     ]
     return " ".join(sentence for sentence in sentences if sentence)
 
@@ -376,9 +403,11 @@ def _left_out_comparison(signature: dict[str, Any], added_value: bool, *, subjec
         where = "the one subsample that could be scored"
     else:
         where = f"each of {replicates} subsamples"
+    interval = _gain_interval(signature)
+    spread = f", 95% CI {interval[0]:.3f} to {interval[1]:.3f}" if interval else ""
     return (
         f" In the patients left out of {where}, {subject} reached a mean C-index of {_number(model_c)} against {_number(clinical_c)} "
-        f"for the clinical covariates alone (mean difference {difference:+.3f})."
+        f"for the clinical covariates alone (mean difference {difference:+.3f}{spread})."
     )
 
 

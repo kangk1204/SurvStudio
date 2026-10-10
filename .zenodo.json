@@ -1,5 +1,5 @@
 {
-  "title": "SurvStudio: local survival analysis with honest prognostic marker evaluation",
+  "title": "SurvStudio: survival analysis and prognostic marker testing without programming",
   "upload_type": "software",
   "description": "A local survival analysis workbench: Kaplan-Meier curves, Cox models, prognostic marker evaluation with family-wise error control, subsample stability and locked external validation, and machine-learning and deep-learning survival models compared on the same patient splits, with REMARK and TRIPOD+AI reporting checklists.",
   "creators": [

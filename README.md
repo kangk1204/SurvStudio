@@ -89,5 +89,5 @@ These are sample outputs, not evidence that a treatment causes a difference or t
 
 ## More help
 
-[Installation](docs/installation.md) · [User guide](docs/user-guide.md) ·
+[Installation](docs/installation.md) · [User guide](docs/user-guide.md) · [Full reference](docs/reference.md) ·
 [Numerical checks](docs/validation/numerical_agreement.md) · [Changes](RELEASE_NOTES.md) · [MIT license](LICENSE)

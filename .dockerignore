@@ -1,6 +1,5 @@
 .git
 .github
-.claude
 .venv
 **/__pycache__
 **/*.pyc
@@ -12,3 +11,4 @@ docs
 examples
 github_images
 tests
+paper
