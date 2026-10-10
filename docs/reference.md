@@ -84,7 +84,7 @@ The part in square brackets after `survstudio` chooses optional parts:
 | `survstudio[e2e]` | Playwright | the browser end-to-end test |
 | `survstudio[validation]` | lifelines, scikit-survival | regenerating the numerical agreement report |
 
-Figures are saved as PNG or SVG by the browser itself, and Word files (checklists, manuscript tables) are written
+Figures are saved as PNG or SVG by the browser itself, and Word files (checklists, report tables) are written
 by SurvStudio, so neither needs an extra. kaleido (in `all` and `dev`) is only for saving Plotly figures from
 Python code (`figure.write_image`); kaleido 1.x also needs a Chrome or Chromium browser (`plotly_get_chrome`
 downloads one).
@@ -289,7 +289,7 @@ For the synthetic demo, the Markers tab evaluates `biomarker_score` and `immune_
 `treatment`.
 
 Useful first outputs: a Kaplan-Meier plot by stage or treatment group, a Cox hazard-ratio forest plot, Table 1 by
-group, and a model comparison table (repeated cross-validation with a locked test set for a manuscript).
+group, and a model comparison table (repeated cross-validation with a locked test set for a report).
 
 ## 4. Input data
 
@@ -536,8 +536,6 @@ against 0.02. The card gives the key numbers and the first two cautions (the res
 detail). Then come the stability and rank plots and the marker table.
 `survival_toolkit.plots.build_marker_summary_figure(result)` draws the figure from Python.
 
-![Marker evaluation of 20,530 genes in TCGA-LUAD: markers clearing each bar, the C-index ladder and the verdict](../github_images/markers_verdict_full.png)
-
 **Locked model and external validation.** The model is locked into a recipe (encoders, coefficients, baseline
 survival and a SHA-256 hash) that is applied unchanged to another cohort, in the tab (`Validate in another
 cohort`; the file needs the same column names) or from Python:
@@ -576,12 +574,6 @@ discrimination is then comparable, absolute risks only roughly. Locked markers t
 measure are held at their development median, and the report gives the share of the model's marker weight
 (|coefficient| × development SD) that was measured; below half, validation stops.
 
-**Case study.** In TCGA-LUAD (484 patients with RNA-seq, 177 deaths), adjusted for age, sex and stage, 5 of 19,112
-tested genes were robust (DKK1, NTSR1, TLE1, CTCFL, FAM117A). The ten-gene model had an apparent C-index of 0.749
-and a subsample gap-adjusted C-index of 0.650; in the left-out patients it reached 0.658 against 0.656 for age, sex
-and stage alone. Locked and applied to seven GEO microarray cohorts (1,509 patients, 573 deaths, rescaled within
-each cohort), it reached a pooled C-index of 0.665 against 0.661 for the clinical covariates alone. This historical development example is re-evaluated by the paper scripts; its gap-adjusted estimate does not establish general correction accuracy, and the gain and its uncertainty must be assessed per external cohort.
-
 **REMARK checklist.** `Export → REMARK checklist` (Word or Markdown) holds the methods and results paragraphs of
 the run and the 20 REMARK items, each marked as filled in by SurvStudio, partly filled in, or for the authors to
 complete (study design, specimens, assay, interpretation). From Python, `survival_toolkit.reporting.remark_checklist(result)`
@@ -615,7 +607,7 @@ gradient boosted survival (GBS) (`Compare All Models`), or trains one model (`Tr
 
 Comparison supports a deterministic stratified 70/30 holdout (shared with the deep-learning models), repeated
 stratified cross-validation, and repeated cross-validation on a development set plus a **locked independent test
-set** (`locked_test_fraction`), with manuscript-style result tables.
+set** (`locked_test_fraction`), with report result tables.
 
 ![Compare All Models on the TCGA-LUAD sample: C-index of nine models on the same 147 test patients, with bootstrap intervals and the difference from Cox PH](../github_images/prediction_models.png)
 
@@ -722,7 +714,7 @@ design matters more than any threshold.
 
 ### 7.4 Cutpoints
 
-If you use an optimal cutpoint in a paper, report how it was chosen, prefer the selection-adjusted p-value, and
+If you use an optimal cutpoint in a report, report how it was chosen, prefer the selection-adjusted p-value, and
 validate the cutpoint in separate data.
 
 ### 7.5 Calibration and time-dependent importance
@@ -741,9 +733,9 @@ Each tab's `Export` menu:
 | Table 1 | table (CSV, Excel) |
 | Markers | marker table (CSV), locked model (JSON, for validation), REMARK checklist (Word, Markdown), summary figure, stability and rank plots (PNG) |
 | Prediction models leaderboard | TRIPOD+AI checklist (Word, Markdown) for the latest ML and DL comparisons: data preparation, missing data, the evaluation design and shared splits, performance, and the winner's-curse caution when the best of several models is chosen on the same data |
-| ML and DL comparisons | comparison table (CSV), comparison plot (PNG, SVG), manuscript table (CSV, Markdown, LaTeX, Word) |
+| ML and DL comparisons | comparison table (CSV), comparison plot (PNG, SVG), report table (CSV, Markdown, LaTeX, Word) |
 
-- Manuscript tables have formatting helpers named `Default`, `NEJM`, `Lancet` and `JCO`; they are conveniences,
+- report tables have formatting helpers named `Default`, `NEJM`, `Lancet` and `JCO`; they are conveniences,
   not publisher-certified house styles.
 - Analysis exports end with provenance notes: the SurvStudio version that produced them (results changed in
   0.2.0; see the release notes), the dataset fingerprint, and the request settings needed to replay the run.
@@ -752,7 +744,7 @@ Each tab's `Export` menu:
   `tcga_luad_upload_ready_os_months_os_event_stage_group_km_curve.png`, so several cohorts and endpoints can share
   one download folder.
 - To check saving on your computer: load a sample, run Survival curves and choose `Export → Plot (PNG)`, run the
-  Cox model and choose `Hazard ratios (CSV)`, then run Compare All Models and export a manuscript table. If the
+  Cox model and choose `Hazard ratios (CSV)`, then run Compare All Models and export a report table. If the
   browser blocks the download, allow downloads for `http://127.0.0.1:8000`.
 
 ## 9. Evaluation contract for prediction models
@@ -769,7 +761,7 @@ Each tab's `Export` menu:
   all models on the same resampled patients). A model whose difference interval contains 0 is not distinguishable
   from Cox PH on that split; on small test sets this is the usual outcome, so do not report the top-ranked model as
   better on its point estimate alone.
-- For a manuscript benchmark, use repeated CV with a locked test set: the development set is used for all fitting,
+- For a report benchmark, use repeated CV with a locked test set: the development set is used for all fitting,
   preprocessing, tuning, early stopping and model selection, and the locked test set once. Describe the training
   set, the CV procedure and the locked test set in the Methods or Supplement;
   [docs/reporting/training_dataset_composition.md](reporting/training_dataset_composition.md) is a fill-in template

@@ -1,2 +1,0 @@
-condition,n,p,idx,owner,ledger,raw_result_sha256,bytes,reason,original_attempt
-heteroskedastic,500,30,22,22,owner-22.sqlite,b2a1fa05158a6c4360463f5947f3b96b83bbb3c710fc0f7e767e0461ae733b70,2688,UnicodeDecodeError: 'utf-8' codec can't decode byte 0xfd in position 82: invalid start byte,"{""ended_utc"": ""2026-10-08T09:27:40.760418+00:00"", ""started_utc"": ""2026-10-08T09:27:13.944250+00:00"", ""status"": ""completed""}"

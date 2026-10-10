@@ -1,5 +1,0 @@
-condition,method,datasets,ratio,paired_delta_MC95_lower,paired_delta_MC95_upper,preplanned_gate_uses_point_estimate,postconfirmation_descriptive_uncertainty_not_a_new_gate
-partial_weak,guarded_linear,5000,0.9052948773138184,0.8914675648953002,0.9191221897323364,True,True
-partial_weak,guarded_spline,5000,0.8015497201894103,0.7776962873544342,0.8254031530243864,True,True
-partial_strong,guarded_linear,5000,0.9033255347593582,0.8943862249461845,0.912264844572532,True,True
-partial_strong,guarded_spline,5000,0.7804979946524063,0.7679676148159404,0.7930283744888722,True,True

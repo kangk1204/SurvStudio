@@ -2,7 +2,7 @@
 
 This file records the package versions of the environment used to test SurvStudio 0.3.0 on 2026-09-30
 (Ubuntu 26.04 on aarch64 under WSL, CPU only).
-Use it as a manuscript supplement seed, not as a substitute for pinning your own deployment environment.
+Use it as a report supplement seed, not as a substitute for pinning your own deployment environment.
 
 | Component | Version |
 | --- | --- |
@@ -27,7 +27,7 @@ Use it as a manuscript supplement seed, not as a substitute for pinning your own
 | pyarrow | 25.0.1 |
 | xlrd | 2.0.2 |
 
-Recommended manuscript note:
+Recommended report note:
 
 - Report this table alongside the exact OS, CPU/GPU, and package installation command used for the final analysis run.
-- If a manuscript depends on optional extras, state that explicitly instead of assuming a core install.
+- If a report depends on optional extras, state that explicitly instead of assuming a core install.

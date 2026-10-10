@@ -1,9 +1,0 @@
-{
-  "synthetic_only": true,
-  "earlier_unverified_attempts": [
-    "misspecified-r1",
-    "duplicate-r1"
-  ],
-  "root_cause": "UNKNOWN; observed UI state and bounded unsuccessful download attempts do not establish an application defect",
-  "preservation": "Session-bearing DOM/screenshots retained privately; no original experiment is replaced"
-}

@@ -1,8 +1,0 @@
-{
-  "old_launcher_pid": 423080,
-  "committed_indexes_preserved": 24325,
-  "source_snapshot": "/home/keunsoo/projects/SurvStudio-confirmation-7bf9218",
-  "frozen_git": "7bf9218ff48c8e66069f60cdad0c51bd8e873d22",
-  "interrupted": 1790953473.2789874,
-  "policy": "Only unrecorded indexes resume; recorded failures remain unchanged"
-}
