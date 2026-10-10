@@ -2168,7 +2168,9 @@ def detect_duplicate_identifier_columns(df: pd.DataFrame) -> list[dict[str, Any]
         n_unique = int(values.nunique())
         # Identifier columns are mostly unique; low-cardinality columns such as
         # "sample_type" are attributes, not identifiers.
-        if n_unique < 0.5 * len(values) or n_unique == len(values):
+        if n_unique == len(values) or (n_unique < 0.5 * len(values) and not any(
+            token in _IDENTIFIER_HEAD_TOKENS for token in _column_name_tokens(str(column))
+        )):
             continue
         counts = values.value_counts()
         repeated = counts[counts > 1]

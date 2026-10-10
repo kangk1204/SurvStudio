@@ -428,6 +428,7 @@ function clearOutcomeInformedGroupingOutputs() {
 }
 
 function clearAnalysisOutputs() {
+  if (refs.predictorAvailabilityConfirmed) refs.predictorAvailabilityConfirmed.checked = false;
   invalidateRequestTokens(["km", "cox", "tables", "signature", "ml", "dl"]);
   invalidateRequestTokens(["markers", "markerValidation"]);
   // A grouping being created is cancelled too: an optimal cutpoint is optimised for the endpoint of its request.

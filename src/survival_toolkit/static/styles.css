@@ -1969,7 +1969,8 @@ h3 {
 }
 
 .predictive-input-summary,
-.predictive-metric-guide {
+.predictive-metric-guide,
+.predictor-availability-note {
   margin: 12px 0;
   font-size: 0.85rem;
   line-height: 1.5;

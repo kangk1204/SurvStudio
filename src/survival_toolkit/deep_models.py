@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, NamedTuple, 
 
 import numpy as np
 import pandas as pd
+
+from survival_toolkit.prediction_guard import guarded_prediction_inputs
 from pandas.api.types import is_numeric_dtype
 
 from survival_toolkit.encoding import (
@@ -2505,6 +2507,7 @@ def _record_fold_error(errors: list[dict[str, Any]], model_name: str, repeat: An
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def compare_deep_survival_models(
     df: pd.DataFrame,
     time_column: str,
@@ -4054,6 +4057,7 @@ class DeepSurvNet(_TorchModuleBase):
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def train_deepsurv(
     df: pd.DataFrame | None,
     time_column: str,
@@ -4379,6 +4383,7 @@ def _deephit_loss(
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def train_deephit(
     df: pd.DataFrame | None,
     time_column: str,
@@ -4691,6 +4696,7 @@ def _mtlr_loss(
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def train_neural_mtlr(
     df: pd.DataFrame | None,
     time_column: str,
@@ -5093,6 +5099,7 @@ class SurvivalTransformerNet(_TorchModuleBase):
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def train_survival_transformer(
     df: pd.DataFrame | None,
     time_column: str,
@@ -5537,6 +5544,7 @@ def _simple_kmeans(data: np.ndarray, n_clusters: int, max_iter: int = 100, seed:
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def train_survival_vae(
     df: pd.DataFrame | None,
     time_column: str,

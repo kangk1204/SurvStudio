@@ -232,6 +232,13 @@ Use this when you want:
 
 ### Machine Learning
 
+ML/DL checks run before training. Negative follow-up times and repeated detected patient IDs stop the run; correct the source table rather than deleting rows automatically. Zero follow-up time is allowed. The ID check uses column names and cannot identify every repeated patient without reliable identifiers.
+
+Results report the number of rows excluded for missing or non-finite outcomes. Missing predictor values are handled by the training-fitted encoder. Columns removed because they are constant, or redundant in the Cox training design, are named in the result and comparison exports. In repeated cross-validation, removal can differ between training folds.
+
+Check that every selected predictor was available at the intended prediction time. The optional checkbox records your review in the saved request and result; changing the selected features or loading a new dataset clears it. This declaration does not certify the absence of leakage. Automatic checks cannot identify every hidden outcome proxy. Existing API calls remain valid and report that this review is required.
+
+
 Implemented ML paths:
 - LASSO-Cox (penalized Cox)
 - Random Survival Forest
