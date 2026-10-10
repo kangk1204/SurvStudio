@@ -74,6 +74,7 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
       n_permutations: numberOrDefault(requestConfig.n_permutations, MARKER_NUMERIC_DEFAULTS.n_permutations),
       n_resamples: numberOrDefault(requestConfig.n_resamples, MARKER_NUMERIC_DEFAULTS.n_resamples),
       random_seed: numberOrDefault(requestConfig.random_seed, MARKER_NUMERIC_DEFAULTS.random_seed),
+      clinical_basis: String(requestConfig.clinical_basis || "linear"),
       nonlinear_lens: String(requestConfig.nonlinear_lens || "off"),
     };
   }
@@ -658,6 +659,7 @@ function captureControlSnapshot() {
     markerPermutations: refs.markerPermutations?.value || "",
     markerResamples: refs.markerResamples?.value || "",
     markerRandomSeed: refs.markerRandomSeed?.value || "",
+    markerClinicalBasis: refs.markerClinicalBasis?.value || "linear",
     markerNonlinearLens: refs.markerNonlinearLens?.value || "",
     mlModelType: refs.mlModelType?.value || "",
     mlNEstimators: refs.mlNEstimators?.value || "",
@@ -844,6 +846,7 @@ function applyControlSnapshot(snapshot) {
   setInputValue(refs.markerPermutations, snapshot.markerPermutations || undefined);
   setInputValue(refs.markerResamples, snapshot.markerResamples || undefined);
   setInputValue(refs.markerRandomSeed, snapshot.markerRandomSeed || undefined);
+  setSelectValueIfPresent(refs.markerClinicalBasis, snapshot.markerClinicalBasis || "linear");
   setSelectValueIfPresent(refs.markerNonlinearLens, snapshot.markerNonlinearLens || undefined);
   renderMarkerSelectionLine();
   syncCoxCovariateSelection();

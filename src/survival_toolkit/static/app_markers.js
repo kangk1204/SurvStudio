@@ -194,6 +194,7 @@ function markerRequestFields() {
     n_permutations: numericControlValue(refs.markerPermutations, defaults.n_permutations),
     n_resamples: numericControlValue(refs.markerResamples, defaults.n_resamples),
     random_seed: numericControlValue(refs.markerRandomSeed, defaults.random_seed),
+    clinical_basis: refs.markerClinicalBasis?.value || "linear",
     nonlinear_lens: refs.markerNonlinearLens?.value || "off",
   };
 }
@@ -256,6 +257,22 @@ function markerSummary(payload) {
   const resampling = analysis.resampling || {};
   const stabilityAssessed = resampling.stability_assessed ?? (resampling.n_valid == null || Number(resampling.n_valid) > 0);
   const lensText = addedValue ? "added value beyond the clinical covariates" : "an association";
+  const repeated = markerDuplicateCaution(analysis.duplicates);
+  if (analysis.inference?.status === "withheld") {
+    const dataCautions = repeated ? [repeated] : [];
+    if ((cohort.dropped_markers || []).length) dataCautions.push(markerDroppedCaution(cohort.dropped_markers));
+    (Array.isArray(cohort.notes) ? cohort.notes : []).forEach((note) => {
+      const text = String(note ?? "").trim();
+      if (text) dataCautions.push(text);
+    });
+    return {
+      status: "review", headline: "Added-value inference is withheld; marker claims and robust tiers are unavailable.",
+      metrics: [{ label: "Patients", value: cohort.n }, { label: "Markers", value: evaluated },
+                { label: "Inference", value: "Withheld" }],
+      strengths: [], cautions: [...dataCautions, ...(analysis.inference.reasons || []), analysis.inference.interpretation],
+      next_steps: ["Review the model and residual diagnostics. Exported estimates and the locked model remain exploratory."]
+    };
+  }
   let headline;
   if (!permutationsRun) {
     headline = `No marker was tested for ${lensText}: with Permutations at 0 there are no family-wise p-values.`;
@@ -269,7 +286,6 @@ function markerSummary(payload) {
     headline = `No marker shows ${lensText} after family-wise error control.`;
   }
   const cautions = [];
-  const repeated = markerDuplicateCaution(analysis.duplicates);
   if (repeated) cautions.push(repeated);
   if (!permutationsRun) {
     cautions.push("No permutations were run, so there are no family-wise p-values (Westfall-Young) and every marker is left untested.");
@@ -279,7 +295,7 @@ function markerSummary(payload) {
   }
   if (!addedValue) cautions.push("No clinical covariates were given, so markers are judged on marginal association only. Add clinical covariates to test added value.");
   if (permutationsRun && addedValue && markerResidualNull(analysis)) {
-    cautions.push("Residual permutation assumes exchangeable residuals after linear adjustment. Nonlinear marker-covariate relations can inflate false positives; a robust tier is internal evidence and needs independent validation.");
+    cautions.push("Residual permutation assumes exchangeable residuals after the declared clinical-basis adjustment. Nonlinear marker-covariate relations can inflate false positives; a robust tier is internal evidence and needs independent validation.");
   }
   if (permutationsRun && addedValue) {
     cautions.push("Added-value testing uses a fitted clinical Cox model. Check its functional form and proportional-hazards assumptions; multiple-testing correction does not resolve an unsuitable clinical baseline.");
@@ -463,6 +479,8 @@ function markerMetaBanner(payload) {
     `events=${formatValue(cohort.events)}`,
     `markers=${formatCount(cohort.n_markers_evaluated)}`,
     `tested for ${lens}`,
+    `inference=${analysis.inference?.status || "not assessed"}`,
+    `clinical model=${analysis.clinical_basis || "linear"}`,
   ];
   if (signature.apparent_c != null) {
     const model = markerModelIsClinicalOnly(signature) ? "clinical-only model (no marker selected)" : "model";
@@ -487,6 +505,17 @@ async function renderMarkerPlot(plot, figure, name, payload) {
 async function renderMarkerResults(payload) {
   renderInsightBoard(refs.markersInsightBoard, markerSummary(payload), "Run the evaluation to see which markers hold up.");
   refs.markersMetaBanner.textContent = markerMetaBanner(payload);
+  const inference = payload?.analysis?.inference;
+  if (refs.markersInferenceNote) refs.markersInferenceNote.textContent = inference
+    ? `${inference.status}. ${inference.interpretation} ${(inference.reasons || []).join("; ")}`
+    : "Diagnostics were not assessed in this saved result.";
+  if (refs.markersDiagnosticsTable) renderTable(refs.markersDiagnosticsTable,
+    [...(inference?.clinical_tests || []), ...(inference?.residual_tests || [])].map((test) => ({
+      Marker: test.marker || "Clinical model", Diagnostic: test.name || test.diagnostic,
+      Method: test.method || "", Status: test.status || (test.p_value == null ? "failed" : "calculated"),
+      "Raw P": test.p_value, "Holm P": test.p_holm, "Withhold threshold": inference.threshold,
+      Reason: test.reason || ""
+    })));
   // Results saved before the summary figure existed simply leave its shell hidden.
   if (payload.summary_figure?.data?.length) await renderMarkerPlot(refs.markersSummaryPlot, payload.summary_figure, "marker_summary", payload);
   else clearPlotShell(refs.markersSummaryPlot, "", { state: "placeholder" });
@@ -527,6 +556,8 @@ function clearMarkerOutputs() {
   state.markerValidation = null;
   if (refs.markersInsightBoard) refs.markersInsightBoard.innerHTML = '<div class="empty-state">Run the evaluation to see which markers hold up.</div>';
   if (refs.markersMetaBanner) refs.markersMetaBanner.textContent = "";
+  if (refs.markersInferenceNote) refs.markersInferenceNote.textContent = "";
+  if (refs.markersDiagnosticsTable) refs.markersDiagnosticsTable.innerHTML = "";
   clearPlotShell(refs.markersStabilityPlot, '<div class="empty-state plot-empty"><span>Choose markers and click <strong>Run Analysis</strong>.</span></div>', { state: "placeholder" });
   clearPlotShell(refs.markersSummaryPlot, "", { state: "placeholder" });
   clearPlotShell(refs.markersRankPlot, "", { state: "placeholder" });
@@ -625,7 +656,7 @@ async function renderMarkerValidation(payload) {
   });
   if (refs.markerValidationSummary) {
     refs.markerValidationSummary.innerHTML = `
-      <p class="marker-validation-headline">${escapeHtml(`${payload.external_filename || "External cohort"}: ${formatValue(cohort.n)} patients, ${formatValue(cohort.events)} events. ${formatValue(replicated)} of ${formatValue(total)} markers replicated.`)}</p>
+      <p class="marker-validation-headline">${escapeHtml(`${payload.external_filename || "External cohort"}: ${formatValue(cohort.n)} patients, ${formatValue(cohort.events)} events. ${validation.inference && !validation.inference.allowed ? `Inference ${validation.inference.status}; prediction estimates are exploratory.` : `${formatValue(replicated)} of ${formatValue(total)} markers replicated.`}`)}</p>
       <div class="insight-metrics">${metrics.map((metric) => `<div class="metric-pill"><span>${escapeHtml(metric.label)}</span><strong>${escapeHtml(metric.value)}</strong></div>`).join("")}</div>
       ${(validation.notes || []).length ? `<ul class="insight-cautions">${validation.notes.map(escapeListItem).join("")}</ul>` : ""}
     `;
@@ -653,15 +684,16 @@ function markerValidationRows(validation) {
     const lens = "tested" in row ? row.tested : (row.adjusted ? "added_value" : (row.marginal ? "marginal" : null));
     const fit = lens === "added_value" ? row.adjusted : (lens === "marginal" ? row.marginal : null);
     const estimable = !row.absent && row.replication_p_holm != null;
-    const status = (text) => (row.absent ? "not measured" : (estimable ? text : "not estimable"));
+    const status = (text) => (row.absent ? "not measured" : (row.inference_status ? `inference ${row.inference_status}` : (estimable ? text : "not estimable")));
     return {
       Marker: row.marker,
+      "Inference status": row.inference_status || validation.inference?.status || "not assessed",
       ...(showTested ? { "Tested as": row.absent ? "not measured" : ({ added_value: "added value", marginal: "marginal" }[lens] || "not estimable") } : {}),
       "HR per unit": fit?.hazard_ratio ?? null,
       "CI lower": fit?.ci_lower ?? null,
       "CI upper": fit?.ci_upper ?? null,
       "Same direction": status(row.same_direction ? "yes" : "no"),
-      "Replication P (Holm)": estimable ? row.replication_p_holm : status(""),
+      "Replication P (Holm)": row.inference_status ? null : (estimable ? row.replication_p_holm : status("")),
       Replicated: status(row.replicated ? "yes" : "no"),
     };
   });
@@ -731,7 +763,7 @@ function wireMarkerControls() {
     scheduleResultCurrencySync();
     queueHistorySync();
   });
-  [refs.markerPermutations, refs.markerResamples, refs.markerRandomSeed, refs.markerNonlinearLens].filter(Boolean).forEach((control) => {
+  [refs.markerPermutations, refs.markerResamples, refs.markerRandomSeed, refs.markerNonlinearLens, refs.markerClinicalBasis].filter(Boolean).forEach((control) => {
     control.addEventListener("change", () => { scheduleResultCurrencySync(); queueHistorySync(); });
   });
   refs.attachMarkerMatrixButton?.addEventListener("click", async () => {

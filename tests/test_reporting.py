@@ -73,7 +73,7 @@ def test_remark_checklist_fills_in_what_the_run_knows() -> None:
     assert f"SurvStudio {__version__}" in report["methods"]
     assert "constant" in items["8"]["text"]
     assert "cohort.csv" in items["2"]["text"] and "fingerprint abc" in items["2"]["text"]
-    assert "5 of 240 rows were excluded" in items["12"]["text"]
+    assert "240 patients" in items["12"]["text"] and "no rows were excluded" in items["12"]["text"]
     # Exact fits cover the shortlist, the 5 strongest markers on the added-value lens and every supported one, which
     # is smaller than the panel here; every one of them had an estimate.
     table = result["marker_table"]

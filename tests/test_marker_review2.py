@@ -118,9 +118,11 @@ def test_an_external_cohort_without_the_reference_level_replicates_the_true_mark
         reference = fit_cox(time, event, np.column_stack([base, external[row["marker"]].to_numpy()]))
         beta, se = reference.beta[-1], np.sqrt(reference.covariance[-1, -1])
         assert row["adjusted"]["log_hr"] == pytest.approx(beta, rel=1e-10)
-        assert row["adjusted"]["wald_p"] == pytest.approx(2.0 * stats.norm.sf(abs(beta / se)), rel=1e-8, abs=0.0)
+        assert row["adjusted"]["wald_p"] is None
+        assert row["exploratory"]["adjusted"]["wald_p"] == pytest.approx(2.0 * stats.norm.sf(abs(beta / se)), rel=1e-8, abs=0.0)
     replicated = {row["marker"]: row["replicated"] for row in report["markers"]}
-    assert replicated["m0"] and replicated["m1"]
+    assert report["inference"]["status"] == "withheld"
+    assert not replicated["m0"] and not replicated["m1"]
 
 
 def test_subsamples_that_lose_a_rare_reference_level_are_not_counted_as_failed() -> None:
@@ -165,7 +167,7 @@ def test_left_out_and_subsample_fits_drop_the_indicator_of_a_missing_reference_l
 
     full = marker_evaluation.run_procedure(cohort, np.arange(len(frame)), _QUICK)
     signature = marker_evaluation._fit_signature(cohort, rows, full, "added_value", 10)
-    assert signature is not None and signature.design_columns.tolist() == [0, 2]
+    assert signature is not None and signature.design_columns.tolist() == [0, 1] and signature.clinical_names == ["grade_3", "age"]
     subsample = marker_evaluation.run_procedure(cohort, rows, _QUICK)
     screen = CoxScoreScreen(
         cohort.time[rows], cohort.event[rows], null=fit_cox_null(cohort.time[rows], cohort.event[rows], cohort.clinical[rows][:, [0, 2]]),
@@ -190,10 +192,12 @@ def test_a_level_whose_patients_leave_before_the_first_event_is_left_out_of_ever
     # Patients outside every risk set change no score test; the aliased indicator is dropped as in the data without them.
     chi2 = {row["marker"]: row["added_value"]["chi2"] for row in result["marker_table"]}
     reference = {row["marker"]: row["added_value"]["chi2"] for row in without["marker_table"]}
-    assert chi2 == pytest.approx(reference, rel=1e-8)
+    assert result["inference"]["status"] == "withheld"
+    assert all(value is None for value in chi2.values())
+    assert all(row["added_value"]["p_value"] is None for row in result["marker_table"])
+    assert all(np.isfinite(value) for value in reference.values())
     recipe = result["locked_recipe"]
-    assert recipe is not None and "grade_3" not in recipe["model"]["terms"]
-    assert all(np.isfinite(recipe["model"]["coefficients"]))
+    assert recipe is None  # No silently reduced clinical model is locked after risk-set aliasing.
 
 
 # 2: only a clinical model that does not converge (or a failing matrix routine) counts as a failed subsample.
@@ -398,7 +402,7 @@ def test_validation_refuses_text_in_a_numeric_clinical_covariate() -> None:
     # Blank cells stay missing values: their rows are left out, as in development.
     blank = _copy_cohort(2)
     blank.loc[blank.index[:5], "age"] = np.nan
-    assert validate_locked_recipe(blank, recipe, n_bootstrap=0)["cohort"]["n"] == 195
+    assert validate_locked_recipe(blank, recipe, n_bootstrap=0)["cohort"]["n"] == 200
 
 
 def test_within_cohort_scaling_of_a_clinical_only_model_and_of_a_recipe_without_a_marker_scale() -> None:
@@ -535,7 +539,7 @@ def test_a_replication_that_cannot_be_estimated_keeps_its_place_in_the_holm_fami
 # 13: notes and lenses say what was done.
 
 
-def test_an_evaluation_whose_clinical_columns_are_all_left_out_is_the_unadjusted_one() -> None:
+def test_all_unestimable_clinical_columns_withhold_without_marginal_fallback() -> None:
     frame = _copy_cohort(6).drop(columns=["age_copy"])
     frame["centre"] = np.where(np.arange(len(frame)) < 100, "A", "B")
     frame["centre_b"] = (frame["centre"] == "B").astype(float)  # constant within each stratum
@@ -543,12 +547,13 @@ def test_an_evaluation_whose_clinical_columns_are_all_left_out_is_the_unadjusted
                   settings=_QUICK)
     result = evaluate_markers(frame, clinical_columns=["centre_b"], **common)
     unadjusted = evaluate_markers(frame, **common)
-    # Before, the primary lens stayed "added value" and the null was reported as the Smith scheme, although
-    # the markers themselves were permuted and nothing was adjusted for.
-    assert result["primary_lens"] == "marginal" and result["null"]["lens2_null"] is None
-    assert result["marker_table"] == unadjusted["marker_table"]
-    assert any("without clinical adjustment" in note for note in result["cohort"]["notes"])
-    assert result["locked_recipe"]["model"]["terms"] == unadjusted["locked_recipe"]["model"]["terms"]
+    assert result["primary_lens"] == "added_value"
+    assert result["inference"]["status"] == "withheld"
+    assert result["locked_recipe"] is None
+    assert all(row["added_value"]["p_value"] is None for row in result["marker_table"])
+    assert all(row["tier"] == "inference withheld" for row in result["marker_table"])
+    assert result["cohort"]["notes"]
+    assert result["cohort"]["dropped_clinical_columns"] == [{"column": "centre_b", "reason": "constant within every stratum"}]
 
 
 def test_a_clinical_model_that_cannot_be_fitted_is_not_blamed_on_a_marker(monkeypatch: pytest.MonkeyPatch) -> None:

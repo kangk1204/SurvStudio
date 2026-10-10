@@ -1272,6 +1272,7 @@ def _endpoint_family_from_column_name(name: str) -> str | None:
     phrase_families = (
         ("os", ("overall", "survival")),
         ("pfs", ("progression", "free")),
+        ("dmfs", ("distant", "metastasis", "free")),
         ("dfs", ("disease", "free")),
         ("rfs", ("recurrence", "free")),
         ("rfs", ("relapse", "free")),
@@ -1283,7 +1284,7 @@ def _endpoint_family_from_column_name(name: str) -> str | None:
         if _tokens_contain_phrase(tokens, phrase):
             return family
     # "tte" and "tts" (time to event, time to ...) are generic, so they pair with any endpoint.
-    for family in ("os", "pfs", "dfs", "rfs", "efs", "dss", "css", "pfi", "dfi"):
+    for family in ("os", "pfs", "dfs", "rfs", "dmfs", "efs", "dss", "css", "pfi", "dfi"):
         if family in token_set:
             return family
     return None
