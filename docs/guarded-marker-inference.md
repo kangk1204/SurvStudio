@@ -3,7 +3,7 @@
 This branch preserves the analysis at `323bb5d3` and adds a versioned policy for withholding
 conditional marker inference when the requested clinical model or required diagnostics fail.
 It does not establish universal error control, clinical utility, or human usability gains.
-The numerical implementation and the confirmation protocol are separate pieces of evidence.
+Numerical agreement checks assess the implementation; model assumptions must be assessed separately.
 
 ## Clinical transformation
 
@@ -48,50 +48,3 @@ can be exported even when inference is withheld; external results retain that st
 External diagnostics use development knots, imputation and category mappings, including
 the saved functional-form contrast. v1/v2 prediction calculations remain compatible and
 their diagnostic status is `not_assessed`. Malformed or modified recipes are rejected.
-
-## Confirmation and release gate
-
-The original [fixed protocol](../validation/guarded_inference/protocol.json) compares the original
-linear calculation, guarded linear inference and guarded spline inference using the
-same generated data and permutation stream. It separates development seed `2026100301`,
-main seed `2026100302` and extension seed `2026100303`.
-
-The initial study failed both profiles and is preserved. A coefficient-magnitude-only
-separation flag was corrected in method version 2. Separate development seed `2026100311`
-preceded the [new frozen protocol](../validation/diagnostic_followup/confirmation_protocol.json),
-with main seed `2026100312` and extension seed `2026100313`. Its complete 85,500 datasets
-support corrected linear only within the unchanged declared main engineering settings;
-spline remains exploratory. No thresholds, support sets or DGPs were changed after
-inspecting that confirmation. The registry preserves both versions and binds a passed
-profile to its numerical source hashes. See [full results and limits](../validation/diagnostic_followup/README.md).
-
-The main study contains 12 conditions × 5,000 datasets (`n=180`, 30 markers, 999
-permutations). Two extensions contain 12 × 1,000 each (`n=500,p=30` and `n=180,p=300`);
-three large-marker conditions contain 500 each (`n=180,p=3000`). In total there are
-**85,500 fixed datasets**. A durable ledger records assigned indexes, settings, host,
-source/runtime hashes, completion and failures. Failures are retained and never replaced.
-
-Reports include raw FWER, post-withholding FWER over all planned datasets, conditional
-FWER over allowed datasets, availability/withholding, healthy-condition false alarms,
-partial-null power, Monte Carlo intervals and failure bounds. The supported conditions
-are specified before confirmation. Engineering gates require one-sided 95% FWER upper
-bounds ≤6% for both planned and allowed datasets, availability ≥80% in supported healthy
-global-null conditions and power ≥90% of the original linear method. These are engineering
-criteria for this study, not a universal 5% theorem. A failed model remains exploratory;
-conditions or thresholds cannot be changed after inspecting confirmation results.
-
-Development experiments are not confirmation evidence. The historical 68.45% experiment
-is preserved as a development finding. The current development candidate has shown
-substantial withholding, including losses of availability and power in some healthy
-conditions. Reduced errors obtained by withholding everything would not satisfy the gates.
-
-## Evidence still required for publication
-
-The review package records latest-commit operating-system CI, independent R numerical
-checks, a scripted R survival comparison on eight fixed tasks, and reanalysis of existing
-Case I/IV/V external data. KM Plotter task execution remains unverified under the
-accessed automated-access terms; unexecuted tasks do not establish absent capabilities.
-RFS is the ER-positive primary endpoint; DMFS is separate.
-Manuscript numbers and regenerated figures/source tables must agree with those results.
-Existing external cohorts are reanalyses, not newly locked unseen validation.
-No participant study or claim about users' time, interpretation errors or usability is included.

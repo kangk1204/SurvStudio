@@ -1,6 +1,0 @@
-{
-  "measured_source_git_revision": "ffe67aa4daab9050cb9214fb2ef7ed4382cd34cd",
-  "calculation_kernel_matches_v2_freeze": true,
-  "comparison_fixture_A_sha256": "498807c1828e9b86a8c9668bf886542253fbf0597724b822f220850fc6d7cb21",
-  "scope": "Completed common numerical task before the case jobs were dispatched; no human or web latency measurement."
-}
