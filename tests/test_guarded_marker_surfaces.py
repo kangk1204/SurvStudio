@@ -6,7 +6,7 @@ import pytest
 
 from survival_toolkit.app import app
 from test_guarded_marker_inference import cohort
-from test_browser_e2e import browser_server, _launch_browser, _wait_for_workspace
+from test_browser_e2e import browser_server, _launch_browser, _wait_for_workspace, _open_additional_tab
 
 
 def test_qualified_linear_nonrejection_remains_assumption_dependent_through_export():
@@ -56,7 +56,7 @@ def test_browser_spline_choice_currency_and_withheld_exports(browser_server,tmp_
         upload=tmp_path/"synthetic.csv"
         cohort(n=500,nonlinear=True).to_csv(upload,index=False)
         page.locator("#datasetFile").set_input_files(str(upload));_wait_for_workspace(page)
-        page.locator('[data-tab="markers"]').click()
+        _open_additional_tab(page, "markers")
         assert page.locator("#markerClinicalBasis").input_value()=="linear"
         for checklist in ("#markerChecklist", "#markerClinicalChecklist"):
             for box in page.locator(checklist+" input[type=checkbox]").all(): box.set_checked(False)
