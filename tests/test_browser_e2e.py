@@ -243,6 +243,42 @@ def test_browser_comparison_input_summary_tracks_evaluation_settings(browser_ser
         browser.close()
 
 
+def test_browser_outcome_pattern_pause_requires_separate_review(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    requests = []
+    def pause(route):
+        requests.append(json.loads(route.request.post_data or "{}"))
+        route.fulfill(status=400, content_type="application/json", body=json.dumps({"detail": {
+            "code": "outcome_proxy_review_required", "message": "Model training paused: check hidden outcome information.",
+            "outcome_proxy": {"status": "review_required", "findings": [{"features": ["marker"]}]},
+        }}))
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.route("**/api/ml-model", pause)
+        page.goto(browser_server)
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        page.locator('[data-tab="benchmark"]').click()
+        page.locator("#predictorAvailabilityConfirmed").check()
+        page.locator("#runPredictiveCompareAllButton").click()
+        page.locator("#outcomeProxyReviewPanel").wait_for(state="visible")
+        assert "paused" in page.locator("#outcomeProxyReviewMessage").inner_text()
+        assert "outcome_proxy_review" not in requests[0]
+        assert not page.locator("#outcomeProxyReviewConfirmed").is_checked()
+        reason = "Baseline values recorded at enrollment; reviewed against the original source."
+        page.locator("#outcomeProxyReviewReason").fill(reason)
+        page.locator("#outcomeProxyReviewConfirmed").check()
+        page.locator("#runPredictiveCompareAllButton").click()
+        page.wait_for_function("document.getElementById('outcomeProxyReviewReason').value === ''")
+        assert requests[-1]["outcome_proxy_review"] == reason
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        _open_predictive_workbench(page)
+        page.locator("#modelFeatureChecklist input[type=checkbox]").first.uncheck()
+        assert page.locator("#outcomeProxyReviewPanel").is_hidden()
+        browser.close()
+
+
 def test_browser_predictor_review_resets_when_feature_selection_changes(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as api:

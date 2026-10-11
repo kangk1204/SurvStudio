@@ -18,6 +18,14 @@ class UserInputError(SurvStudioError, ValueError):
     """Validation or configuration error that is safe to show to the user."""
 
 
+class OutcomeProxyError(UserInputError):
+    """Stop the whole predictive request; never treat this as a model/fold failure."""
+
+    def __init__(self, message: str, audit: dict) -> None:
+        super().__init__(message)
+        self.audit = audit
+
+
 class NotFoundError(UserInputError):
     """User-facing missing-resource error."""
 
@@ -109,7 +117,7 @@ def must_propagate(exc: BaseException) -> bool:
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, (JobCancelledError, MemoryError)) or is_programming_error(current):
+        if isinstance(current, (JobCancelledError, MemoryError, OutcomeProxyError)) or is_programming_error(current):
             return True
         current = current.__cause__ if isinstance(current, InternalAnalysisError) else None
     return False

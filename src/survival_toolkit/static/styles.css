@@ -1983,6 +1983,19 @@ h3 {
   gap: 8px;
 }
 
+#outcomeProxyReviewPanel textarea {
+  width: 100%;
+  resize: vertical;
+  margin: 8px 0;
+}
+
+#outcomeProxyReviewPanel pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .predictor-availability-review input[type="checkbox"] {
   flex: 0 0 16px;
   width: 16px;

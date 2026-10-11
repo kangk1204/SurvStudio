@@ -238,6 +238,12 @@ Results report the number of rows excluded for missing or non-finite outcomes. M
 
 Check that every selected predictor was available at the intended prediction time. The optional checkbox records your review in the saved request and result; changing the selected features or loading a new dataset clears it. This declaration does not certify the absence of leakage. Automatic checks cannot identify every hidden outcome proxy. Existing API calls remain valid and report that this review is required.
 
+Training data are also checked for renamed outcome copies, transformed follow-up times, and near-perfect outcome reconstruction by a tree ensemble and a small neural network. The learned check uses three internal folds with fitting, imputation, scaling and feature reduction confined to each inner training fold. Holdout and locked-test outcomes do not enter this screen. This is a pattern warning, not a statistical guarantee or proof that the input is wrong.
+
+A suspect pattern pauses model training. Remove the suspect input, or review its measurement time and source in the displayed form and run again. The ordinary predictor checkbox does not clear this warning. API users can supply `outcome_proxy_review` (20–1000 characters) to record that separate review. Findings and the review remain in the result JSON, comparison CSV and report notes. No predictors are automatically deleted and no results are automatically re-certified.
+
+The check needs at least 48 training rows. Event reconstruction needs at least 12 rows in each event stratum. Learned screening uses at most 1,200 training rows, 256 encoded tree inputs and 64 neural inputs; reductions are fitted within each screen-training fold. Small samples, rare events and reduced feature coverage are explicitly marked as unassessed or partially assessed. Hidden information that these checks cannot reconstruct may still pass; measurement provenance must be reviewed by the data owner.
+
 
 Implemented ML paths:
 - LASSO-Cox (penalized Cox)

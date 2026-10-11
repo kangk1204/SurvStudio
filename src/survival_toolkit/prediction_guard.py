@@ -2,18 +2,73 @@
 from __future__ import annotations
 
 from functools import wraps
+from contextvars import ContextVar
 import inspect
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-GUARD_VERSION = "prediction-input/1"
+GUARD_VERSION = "prediction-input/2"
+_PROXY_CONTEXT: ContextVar[dict | None] = ContextVar("survstudio_proxy_context", default=None)
 AVAILABILITY_NOTE = (
     "Use only variables available at the time you intend to predict risk. "
     "Remove measurements collected after the outcome or derived from follow-up. "
     "Automatic checks cannot identify every hidden outcome proxy."
 )
+
+
+def check_training_outcome_proxies(frame, time_column, event_column, features, categorical_features=()):
+    """Called at the actual training boundary, before any survival model is fitted."""
+    from survival_toolkit.errors import OutcomeProxyError, must_propagate
+    from survival_toolkit.outcome_proxy import screen_training_outcomes, training_fingerprint, PROXY_VERSION
+
+    context = _PROXY_CONTEXT.get()
+    key = training_fingerprint(frame[[time_column, event_column, *features]])
+    cache = context["partitions"] if context is not None else {}
+    if key not in cache:
+        try:
+            cache[key] = screen_training_outcomes(frame, time_column, event_column, features, categorical_features or ())
+        except Exception as exc:
+            if must_propagate(exc):
+                raise
+            audit = {"version": PROXY_VERSION, "status": "screen_failed", "training_hash": key,
+                     "training_rows": int(len(frame)), "scope": "training_partition_only", "findings": [],
+                     "failure_type": type(exc).__name__,
+                     "notes": ["Outcome pattern screening could not finish. Model evaluation was stopped; no completed result is reported."]}
+            raise OutcomeProxyError(audit["notes"][0], audit) from exc
+    audit = cache[key]
+    if audit["findings"]:
+        reason = context.get("review") if context is not None else None
+        if not reason:
+            finding = audit["findings"][0]
+            labels = ", ".join(finding["features"][:6])
+            if len(finding["features"]) > 6:
+                labels += ", … (combined predictors)"
+            raise OutcomeProxyError(
+                f"Model training paused: '{labels}' can reconstruct the observed {finding['target'].replace('_', ' ')}. "
+                "This may be hidden outcome information or a strong baseline predictor. Remove the suspect input, "
+                "or review when it was measured and record its source before continuing. "
+                "The usual predictor checkbox does not clear this finding.", audit)
+        audit["status"] = "reviewed_by_user"
+        audit["review_reason"] = reason
+        audit["notes"] = [note for note in audit["notes"] if not note.startswith("Outcome-pattern findings were retained")]
+        audit["notes"].append("Outcome-pattern findings were retained; the user reviewed predictor timing and source: " + reason)
+    return audit
+
+
+def _proxy_summary(context):
+    partitions = list(context["partitions"].values())
+    statuses = {item["status"] for item in partitions}
+    status = ("reviewed_by_user" if "reviewed_by_user" in statuses else
+              "partially_assessed" if statuses & {"not_assessed", "partially_assessed"} else
+              "no_pattern_detected" if partitions else "not_assessed")
+    notes = list(dict.fromkeys(note for item in partitions for note in item["notes"]))
+    if not partitions:
+        notes.append("Outcome-pattern screening was not assessed on a training partition.")
+    return {"status": status, "scope": "training_partitions_only", "partitions": partitions,
+            "coverage": "limited" if not partitions or any(item.get("coverage") == "limited" for item in partitions) else "screened",
+            "review_reason": context.get("review"), "notes": notes}
 
 
 def prediction_input_audit(df: pd.DataFrame, time_column: str, event_column: str,
@@ -83,8 +138,8 @@ def prediction_input_audit(df: pd.DataFrame, time_column: str, event_column: str
 def guarded_prediction_inputs(function):
     """Check raw input before fitting; carry the audit into results and table exports.
 
-    No association-based feature screening is performed. The patient's predictor
-    measurement time remains a question for the data owner.
+    Pattern screening runs at each actual training boundary. Predictor measurement
+    time and provenance remain questions for the data owner.
     """
     signature = inspect.signature(function)
 
@@ -93,6 +148,18 @@ def guarded_prediction_inputs(function):
         arguments = signature.bind(*args, **kwargs)
         arguments.apply_defaults()
         values = arguments.arguments
+        review = values.get("outcome_proxy_review")
+        if review is not None and (not isinstance(review, str) or not 20 <= len(review.strip()) <= 1000):
+            raise ValueError("Outcome-pattern review needs 20–1000 characters explaining predictor timing and source.")
+        parent = _PROXY_CONTEXT.get()
+        context = parent if parent is not None else {"partitions": {}, "review": review.strip() if review else None}
+        token = _PROXY_CONTEXT.set(context)
+        try:
+            return _run_checked(args, kwargs, values, context)
+        finally:
+            _PROXY_CONTEXT.reset(token)
+
+    def _run_checked(args, kwargs, values, context):
         if values.get("prepared_data") is not None or values.get("evaluation_split") is not None:
             # Internal deep-model folds receive matrices prepared from an already
             # checked cohort. Do not reinterpret those matrices as raw input.
@@ -104,10 +171,13 @@ def guarded_prediction_inputs(function):
                 "notes": ["Preprocessed matrices were supplied; raw patient IDs and outcomes were not rechecked.",
                           AVAILABILITY_NOTE],
             }
-            return result
-        audit = prediction_input_audit(values["df"], values["time_column"], values["event_column"],
+            audit = result["input_audit"]
+        else:
+            audit = prediction_input_audit(values["df"], values["time_column"], values["event_column"],
                                        list(values["features"]), values.get("event_positive_value"))
-        result = function(*args, **kwargs)
+            result = function(*args, **kwargs)
+        audit["outcome_proxy"] = _proxy_summary(context)
+        audit["notes"] = list(dict.fromkeys([*audit["notes"], *audit["outcome_proxy"]["notes"]]))
         result["input_audit"] = audit
         notes = list(audit["notes"])
         for row in result.get("comparison_table", []):
@@ -119,14 +189,17 @@ def guarded_prediction_inputs(function):
             row["input_rows"] = audit["input_rows"]
             row["excluded_outcome_rows"] = audit["excluded_outcome_rows"]
             row["input_notes"] = " ".join(audit["notes"])
+            row["outcome_proxy_status"] = audit["outcome_proxy"]["status"]
+            row["outcome_proxy_review"] = audit["outcome_proxy"]["review_reason"]
             row["removed_feature_notes"] = "; ".join(
                 f"{item['column']}: {item['reason']}" for item in removed)
         if result.get("removed_features"):
             labels = ", ".join(f"{item['column']} ({item['reason']})" for item in result["removed_features"])
             notes.append(f"Training-only preprocessing removed {labels}.")
-        summary = result.get("scientific_summary")
-        if isinstance(summary, dict):
-            summary.setdefault("cautions", []).extend(note for note in notes if note not in summary.get("cautions", []))
+        for key in ("scientific_summary", "insight_board"):
+            summary = result.get(key)
+            if isinstance(summary, dict):
+                summary.setdefault("cautions", []).extend(note for note in notes if note not in summary.get("cautions", []))
         tables = result.get("manuscript_tables")
         if isinstance(tables, dict):
             tables.setdefault("table_notes", []).extend(note for note in notes if note not in tables.get("table_notes", []))

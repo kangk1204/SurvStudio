@@ -26,7 +26,7 @@ from typing import Any, Iterator, Sequence
 import numpy as np
 import pandas as pd
 
-from survival_toolkit.prediction_guard import guarded_prediction_inputs
+from survival_toolkit.prediction_guard import guarded_prediction_inputs, check_training_outcome_proxies
 from scipy import stats
 from scipy.linalg import qr as scipy_qr
 from statsmodels.duration.hazard_regression import PHReg
@@ -1657,6 +1657,7 @@ def _prepare_model_evaluation_split(
         event_column,
         random_state=random_state,
     )
+    check_training_outcome_proxies(train_frame, time_column, event_column, features, categorical_features)
     train_encoded, eval_encoded, encoder = _encode_train_test_features(
         train_frame,
         eval_frame,
@@ -2067,6 +2068,7 @@ def _prepare_training_matrices(
             )
         }
     else:
+        check_training_outcome_proxies(frame, time_column, event_column, features, resolved_categorical)
         feature_encoder = _fit_feature_encoder(frame, features, resolved_categorical)
         full_encoded = _transform_feature_encoder(frame, feature_encoder).reset_index(drop=True)
         full_frame = frame.reset_index(drop=True)
@@ -2256,6 +2258,7 @@ def train_random_survival_forest(
     *,
     compute_importance: bool = True,
     compute_brier: bool = True,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Train a Random Survival Forest and return model statistics,
     feature importances, predicted risk scores, and a scientific summary.
@@ -2370,6 +2373,7 @@ def train_gradient_boosted_survival(
     *,
     compute_importance: bool = True,
     compute_brier: bool = True,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Train a Gradient Boosted Survival model and return model statistics,
     feature importances, predicted risk scores, and a scientific summary.
@@ -2471,6 +2475,7 @@ def train_lasso_cox(
     event_positive_value: Any = None,
     random_state: int = 42,
     internal_evaluation: bool = True,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Train an L1-penalized Cox model for high-dimensional screening."""
     if not SKSURV_AVAILABLE:
@@ -2641,6 +2646,7 @@ def compare_survival_models(
     max_depth: int | None = None,
     learning_rate: float = 0.1,
     random_state: int = 42,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Train Cox PH, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival
     on a deterministic train/test split and return a comparison table with
@@ -2676,6 +2682,7 @@ def compare_survival_models(
     )
     train_frame = frame.iloc[train_positions].reset_index(drop=True)
     test_frame = frame.iloc[eval_positions].reset_index(drop=True)
+    check_training_outcome_proxies(train_frame, time_column, event_column, features, resolved_categorical)
     split_fingerprint = evaluation_split_fingerprint(
         _frame_source_rows(frame),
         [(train_positions, eval_positions)],
@@ -3458,6 +3465,7 @@ def cross_validate_survival_models(
     cv_repeats: int = 3,
     random_state: int = 42,
     locked_test_fraction: float | None = None,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate Cox PH, LASSO-Cox, RSF, and GBS with repeated stratified cross-validation.
 
@@ -3542,6 +3550,7 @@ def cross_validate_survival_models(
             design_splits.append((dev_positions[train_idx], dev_positions[test_idx]))
             train_frame = dev_frame.iloc[train_idx].reset_index(drop=True)
             test_frame = dev_frame.iloc[test_idx].reset_index(drop=True)
+            check_training_outcome_proxies(train_frame, time_column, event_column, features, resolved_categorical)
             if not _has_comparable_pair(test_frame[time_column], test_frame[event_column]):
                 # No event in this test fold is followed by a longer follow-up, so the C-index is
                 # undefined for every model alike: the fold is skipped for all of them instead of
@@ -3608,6 +3617,7 @@ def cross_validate_survival_models(
 
     locked_results: dict[str, dict[str, Any]] = {}
     if use_locked_test and locked_test_frame is not None:
+        check_training_outcome_proxies(dev_frame, time_column, event_column, features, resolved_categorical)
         design_splits.append((dev_positions, test_positions))
         for model_name, fit_fn, extra_kwargs in model_specs:
             raise_if_cancelled()

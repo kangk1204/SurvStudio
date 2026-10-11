@@ -428,6 +428,7 @@ function clearOutcomeInformedGroupingOutputs() {
 }
 
 function clearAnalysisOutputs() {
+  resetOutcomeProxyReview();
   if (refs.predictorAvailabilityConfirmed) refs.predictorAvailabilityConfirmed.checked = false;
   invalidateRequestTokens(["km", "cox", "tables", "signature", "ml", "dl"]);
   invalidateRequestTokens(["markers", "markerValidation"]);

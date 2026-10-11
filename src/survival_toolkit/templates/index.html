@@ -927,6 +927,17 @@
           <p class="predictive-input-summary" id="predictiveInputSummary" aria-live="polite">Load data to review the variables and evaluation settings.</p>
           <p class="predictor-availability-note"><strong>Check your predictors:</strong> use only information known at the time you intend to predict risk. Remove values collected after the outcome. Automatic checks cannot find every hidden outcome proxy.</p>
           <label class="predictor-availability-note predictor-availability-review"><input type="checkbox" id="predictorAvailabilityConfirmed"><span>I checked: the selected predictors were known at the intended prediction time. This records my review in the saved results.</span></label>
+          <p class="predictor-availability-note">Before fitting, a tree model and a small neural network check training data for hidden outcome patterns. A suspect pattern pauses training for review; it does not prove that a predictor is wrong.</p>
+          <div id="outcomeProxyReviewPanel" class="table-card full-width hidden" role="alert">
+            <h3>Check your predictors before training</h3>
+            <p id="outcomeProxyReviewMessage"></p>
+            <div id="outcomeProxyReviewControls">
+              <label>Predictor timing and source<textarea id="outcomeProxyReviewReason" rows="3" minlength="20" maxlength="1000" placeholder="Explain when these predictors were measured and how they were obtained."></textarea></label>
+              <label class="predictor-availability-review"><input type="checkbox" id="outcomeProxyReviewConfirmed"><span>I reviewed this finding and confirmed that these predictors were available before the outcome at the intended prediction time.</span></label>
+              <p>Remove the suspect predictors, or record your review above and run the model again. Your review and the finding stay in the saved results.</p>
+            </div>
+            <details><summary>Pattern check details</summary><pre id="outcomeProxyReviewDetails"></pre></details>
+          </div>
           <p class="predictive-metric-guide">C-index measures how well predicted risk ranks event times. About 0.50 is chance; higher is better. It does not measure how accurately survival probabilities are predicted.</p>
           <div class="benchmark-summary-grid" id="benchmarkSummaryGrid">
             <div class="empty-state">Run ML or DL to see the latest predictive summary here.</div>
