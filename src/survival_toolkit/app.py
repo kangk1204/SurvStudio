@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import threading
 import time
 import zipfile
-from typing import Any, Callable, Literal, NoReturn, Sequence, TypeVar
+from typing import Any, Callable, Literal, NoReturn, Sequence, TypeVar, get_args, get_origin
 from urllib.parse import urlsplit
 from xml.sax.saxutils import escape as xml_escape
 
@@ -639,10 +639,27 @@ _COLUMN_NAME_FIELDS = (
 )
 
 
-class _DatasetRequestModel(BaseModel):
+class _NumericSettingsRequestModel(BaseModel):
     # NaN/Infinity (accepted by Python's JSON parser) are never valid analysis settings.
     model_config = ConfigDict(allow_inf_nan=False)
 
+    @field_validator("*", mode="before")
+    @classmethod
+    def validate_numeric_setting_type(cls, value: Any, info: Any) -> Any:
+        # Pydantic otherwise converts JSON true/false to 1/0 before numeric bounds
+        # or the training functions can check the original value. Keep real boolean
+        # flags and event coding intact, but never accept them as numeric settings.
+        annotation = cls.model_fields[info.field_name].annotation
+        numeric = annotation in (int, float) or any(arg in (int, float) for arg in get_args(annotation))
+        numeric_list = get_origin(annotation) is list and any(arg in (int, float) for arg in get_args(annotation))
+        if numeric and isinstance(value, bool):
+            raise ValueError(f"{info.field_name} must be a number, not a boolean.")
+        if numeric_list and isinstance(value, (list, tuple)) and any(isinstance(item, bool) for item in value):
+            raise ValueError(f"{info.field_name} must contain numbers, not booleans.")
+        return value
+
+
+class _DatasetRequestModel(_NumericSettingsRequestModel):
     @field_validator("dataset_id", mode="before", check_fields=False)
     @classmethod
     def validate_dataset_id(cls, value: Any) -> str:
@@ -1350,7 +1367,7 @@ def _check_prediction_block(block: dict[str, Any], index: int) -> None:
             raise ValueError(f"{where}: every risk score of '{name}' must be a finite number.")
 
 
-class ModelComparisonIntervalsRequest(BaseModel):
+class ModelComparisonIntervalsRequest(_NumericSettingsRequestModel):
     # The ``test_predictions`` (or ``locked_test_predictions``) blocks of ML and DL comparisons run on one split.
     model_config = ConfigDict(extra="forbid")
 
@@ -1394,7 +1411,7 @@ def _c_index_draw_work(n_patients: int, n_events: int, n_models: int) -> int:
     return int(columns * (n + 2 * events) * log_n * log_n)
 
 
-class DesignAuditCohort(BaseModel):
+class DesignAuditCohort(_NumericSettingsRequestModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(default="", max_length=120)
@@ -1407,7 +1424,7 @@ class DesignAuditCohort(BaseModel):
         return _normalize_optional_text_field(value, field_name="cohort name", allow_empty_as_none=True) or ""
 
 
-class DesignAuditRequest(BaseModel):
+class DesignAuditRequest(_NumericSettingsRequestModel):
     model_config = ConfigDict(extra="forbid")
 
     candidate_models: int = Field(ge=2, le=1_000_000)
