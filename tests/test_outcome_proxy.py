@@ -163,6 +163,14 @@ def test_screen_failure_stops_the_whole_request(monkeypatch):
     assert caught.value.audit["status"] == "screen_failed"
 
 
+def test_worker_stop_preserves_type_and_audit_when_serialized():
+    import pickle
+    original = OutcomeProxyError("Pattern review needed", {"status": "review_required", "findings": [{"target": "event"}]})
+    restored = pickle.loads(pickle.dumps(original))
+    assert isinstance(restored, OutcomeProxyError) and must_propagate(restored)
+    assert restored.audit == original.audit and str(restored) == str(original)
+
+
 def test_guard_reproducibility_does_not_modify_global_random_stream():
     df = fixture_frame()
     np.random.seed(912)

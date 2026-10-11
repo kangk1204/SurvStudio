@@ -25,6 +25,10 @@ class OutcomeProxyError(UserInputError):
         super().__init__(message)
         self.audit = audit
 
+    def __reduce__(self):
+        # Deep CV workers must return the typed stop and its audit intact.
+        return type(self), (str(self), self.audit), self.__dict__
+
 
 class NotFoundError(UserInputError):
     """User-facing missing-resource error."""
