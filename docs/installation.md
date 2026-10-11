@@ -1,6 +1,6 @@
 # Installation and troubleshooting
 
-[Back to quick start](../README.md)
+[Back to quick start](../README.md) · [Beginner walkthrough](getting-started.md)
 
 ## Recommended install
 

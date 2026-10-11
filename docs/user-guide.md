@@ -1,6 +1,6 @@
 # User guide
 
-[Back to quick start](../README.md) · [Full reference](reference.md) · [Marker diagnostic policy](guarded-marker-inference.md)
+[Back to quick start](../README.md) · [Beginner walkthrough](getting-started.md) · [Full reference](reference.md) · [Marker diagnostic policy](guarded-marker-inference.md)
 
 SurvStudio supports single-event survival analysis of right-censored data.
 It does not handle left-truncated entry times or competing-risks analysis.
@@ -106,13 +106,13 @@ Avoid mixing units like:
 
 ### Missing Data
 
-The app will drop rows that become unusable after required columns are checked.
-
-For example, rows may be removed if they have:
-- missing survival time
-- missing event status
-- missing values in selected model covariates
-- non-numeric values in a numeric time column
+Rows with missing or unusable time/event cannot be analysed. The app reports exclusions or
+stops the analysis when the endpoint inputs are invalid.
+Grouped Kaplan–Meier curves also require a usable group value. Cox excludes rows missing any
+selected covariate. ML/DL instead fills missing numeric predictors with the training-partition
+median and fits category encoding on that partition; it does not drop a row just for a missing
+predictor. Missing categories get their own indicator when observed in training and are otherwise
+encoded as the reference level. Check each result's usable-patient counts and preprocessing notes.
 
 So before analysis, it is better if your file has:
 - clean time values
@@ -169,7 +169,7 @@ On upload and analysis, the app checks things like:
 - supported file extension
 - readable file encoding for text files
 - file is not empty
-- uploaded dataset stays within the 1000-feature model-input cap
+- uploaded cohort stays within the file limits and the 1,000 candidate model-feature cap; a separate marker matrix has its own limits
 - required columns exist
 - survival time can be interpreted as numeric
 - survival time is zero or positive
@@ -184,7 +184,7 @@ You should expect an error if:
 - the event-positive value you selected is not present
 - the event column has more than two states
 - you pick a baseline status field as the event column after enabling `Show all columns for Event`
-- the selected time column has no positive values
+- the selected time column has no usable nonnegative durations
 - all usable rows disappear after missing-value filtering
 - a model has too few analyzable samples or too few events
 
@@ -248,15 +248,18 @@ Single-model ML training also supports:
 - `Fast mode (skip SHAP)` for faster turnaround
 - feature-importance output for trained models
 
+Single-model ML uses holdout or apparent evaluation. CV and the locked test option apply to
+model comparisons. See the [beginner option combinations](getting-started.md#choose-an-option-combination).
+
 LASSO-Cox note:
 - use this when the feature set is too wide for stable unpenalized Cox PH
 - it is a predictive penalized Cox path, not an inferential hazard-ratio workflow
 - SHAP, partial dependence, and counterfactual analysis remain tree-model features only
 
 Practical note:
-- `Compare All Models` is usually faster than training one model (`Train one model`)
-- `Compare All Models` focuses on cross-model scoring
-- training one model may do extra post-fit work such as feature importance and optional SHAP computation
+- `Train one model` with `Fast mode` is the simplest starting point; it skips SHAP
+- `Compare All Models` focuses on cross-model scoring and fits multiple models
+- training one model may also do post-fit work such as feature importance and optional SHAP computation
 - ML result payloads now include IPCW `IBS`, a Kaplan-Meier null-model `IBS`, and `Brier Skill Score = 1 - IBS_model / IBS_null` so raw error can be interpreted relative to a no-covariate reference
 - the IPCW weights follow Graf et al. (1999) with the Gerds & Schumacher (2006) convention used by `pec` and `riskRegression`: an event at `t_i` is weighted by `1 / G(t_i-)`, a patient still at risk at `t` by `1 / G(t)`, and the reverse Kaplan-Meier estimate `G` counts events before censorings at tied times. scikit-survival's `brier_score` uses `G(t_i)` instead, so the two differ slightly when censoring times coincide with event times
 - Random Survival Forest and Gradient Boosted Survival feature importance is permutation importance on the evaluation rows (up to 300): the mean drop in Harrell's C when a raw feature is shuffled, with all one-hot columns of a categorical feature shuffled together
@@ -278,6 +281,8 @@ Deep comparison supports:
 - repeated CV, optionally with a locked independent test set
 - early stopping on a monitor subset held out from gradient updates
 - parallel fold execution
+
+Single-model DL supports holdout or repeated CV; the locked test option applies to comparisons.
 
 Single-model and comparison DL runs expose:
 - epochs
@@ -399,7 +404,7 @@ The app explicitly distinguishes different evaluation modes:
 
 - `Holdout C-index`
   - discrimination measured on a deterministic stratified 70/30 holdout split
-  - this is one split only, so no CI or SD is shown
+  - single-model runs report one split without SD or a score interval; the combined comparison can add bootstrap intervals from shared test predictions (see Evaluation Contract)
 - `Repeated-CV mean C-index`
   - average of all fold-level C-indices across repeated stratified CV; the reported SD is the SD across those fold-level estimates (folds share training data, so it is descriptive, not a confidence interval)
 - `Locked-test C-index`
@@ -410,10 +415,10 @@ The app explicitly distinguishes different evaluation modes:
   - optimistic
   - should not be treated as external validation
 
-Rough interpretation:
+Interpretation:
 - `0.50` is chance-level ranking
-- values above about `0.70` can be useful for screening
-- the evaluation design still matters more than the threshold itself
+- higher values indicate better ranking; there is no universal score that establishes clinical usefulness
+- assess the evaluation design, uncertainty and comparison with a baseline model
 
 ### Cutpoints
 
@@ -583,7 +588,7 @@ Then increase epochs or switch to repeated CV only after the single-run workflow
 - Cox PH currently reports an apparent C-index only. If you need bootstrap optimism correction or cross-validated Cox discrimination, run that validation outside the current dashboard workflow.
 - Uploaded tables are limited to 1,000 candidate model features (5,000 columns). Wider omics data go into the Markers tab as a separate marker matrix; the ML and DL panels keep the 1,000-feature limit.
 - Standard unpenalized Cox PH is not the right tool for very wide `p >> n` settings. Use the ML-panel `LASSO-Cox` path for penalized predictive screening instead of forcing a classical Cox PH fit.
-- External-cohort validation in the web interface covers the locked marker model (Markers tab, Validate in another cohort; the file needs the same column names). For Cox and prediction models, load the separate cohort, reproduce the endpoint and covariate specification, and rerun the analysis. From Python, `validate_locked_recipe` validates a locked marker model (see Prognostic Marker Evaluation).
+- External-cohort validation in the web interface covers the locked marker model (Markers tab, Validate in another cohort; the file needs the same column names). Refitting Cox or ML/DL on a separate cohort is a new analysis, not external validation of the original fitted model. The general ML/DL leaderboard has no locked external-cohort scoring workflow. From Python, `validate_locked_recipe` validates a locked marker model (see Prognostic Marker Evaluation).
 - Left truncation and competing risks are outside the current scope. In analysis notes, state explicitly that these workflows assume standard cause-specific survival with independent censoring and do not estimate cumulative incidence under competing events.
 - Martingale residual plots are available as a visual screening aid for continuous covariates, but SurvStudio does not yet implement richer Cox linearity tooling such as spline recommendation or automated term selection.
 
