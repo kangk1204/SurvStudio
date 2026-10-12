@@ -894,7 +894,7 @@
           <div class="card-head">
             <div class="card-head-left">
               <h2>Prediction models</h2>
-              <p class="card-subtitle">Machine-learning and deep-learning survival models, compared on the same patient splits</p>
+              <p class="card-subtitle">Combine clinical and molecular inputs to predict patient risk. Compare models on patients kept out of fitting.</p>
             </div>
           </div>
           <div class="benchmark-action-card" id="benchmarkActionCard">
@@ -927,6 +927,7 @@
           </div>
           <details class="table-card full-width predictor-pattern-card" id="predictorPatternCard">
             <summary><strong>Do added predictors help?</strong> Compare clinical inputs with genes or other added predictors.</summary>
+            <p><strong>What do prediction models tell me?</strong> KM and log-rank compare existing groups. Models combine predictors into a risk score for each patient; held-out C-index evaluates how well those scores rank risk.</p>
             <p>Use the same held-out patients for both models, then explore how predicted risk changes across groups.</p>
             <div class="button-row"><button class="button ghost" id="patternDemo" type="button">Try molecular demo</button><span>Synthetic genes and clinical stage; replaces the loaded dataset.</span></div>
             <div class="pattern-input-grid">
@@ -946,10 +947,12 @@
               <label class="toolbar-field"><span>DL epochs</span><input id="patternEpochs" type="number" min="10" max="1000" value="100"></label>
               <label class="toolbar-field"><span>Bootstrap draws</span><input id="patternBootstrap" type="number" min="100" max="5000" value="1000"></label>
             </div></details>
-            <div class="button-row"><button class="button primary" id="patternRun" type="button">Compare predictor sets</button><button class="button ghost" id="patternJson" type="button" disabled>Save results (JSON)</button><button class="button ghost" id="patternCsv" type="button" disabled>Save curves (CSV)</button></div>
+            <div class="button-row"><button class="button primary" id="patternRun" type="button">Compare predictor sets</button><button class="button ghost" id="patternJson" type="button" disabled>Save results (JSON)</button><button class="button ghost" id="patternCsv" type="button" disabled>Save curves (CSV)</button><button class="button ghost" id="patternRiskCsv" type="button" disabled>Save patient risk scores (CSV)</button></div>
             <p id="patternStatus" role="status" aria-live="polite">Load data and choose two separate predictor sets.</p>
             <div id="patternResults" class="hidden">
               <h3>Do the added predictors improve risk ranking?</h3><p id="patternInterpretation"></p><div class="plot-shell" id="patternComparisonPlot"></div>
+              <h3>How do the predicted risk groups survive?</h3><p id="patternRiskNote"></p><div class="plot-shell" id="patternRiskPlot"></div>
+              <h3>Patient risk scores</h3><p>Higher scores mean higher predicted risk. These are relative scores, not survival probabilities.</p><div class="table-shell" id="patternRiskTable"></div>
               <h3>How does predicted risk change across groups?</h3><div class="plot-shell" id="patternCurvePlot"></div><p id="patternCurveNote"></p>
               <p>Exploratory model predictions. Risk scores are not survival probabilities or causal effects. Repeated choices on the same test patients need independent validation.</p>
             </div>

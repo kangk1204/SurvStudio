@@ -4898,6 +4898,7 @@ class PDPRequest(_FeatureSelectionRequestModel):
 
 
 class PredictorPatternRequest(_EventPositiveValueRequestModel):
+    time_unit_label: str = Field(default="dataset units", min_length=1, max_length=64)
     dataset_id: str
     time_column: str
     event_column: str
@@ -4953,7 +4954,7 @@ async def load_molecular_demo() -> dict[str, Any]:
 async def predictor_patterns(request_model: PredictorPatternRequest, request: Request) -> dict[str, Any]:
     try:
         from survival_toolkit.predictor_patterns import compare_predictor_sets
-        from survival_toolkit.plots import build_predictor_comparison_figure, build_predictor_pattern_figure
+        from survival_toolkit.plots import build_predictor_comparison_figure, build_predictor_pattern_figure, build_km_figure
         stored = _get_stored_dataset(request_model.dataset_id)
         config = request_model.model_dump()
 
@@ -4966,11 +4967,12 @@ async def predictor_patterns(request_model: PredictorPatternRequest, request: Re
             _reject_outcome_informed_columns(stored, features, context="added-predictor comparison")
             _reject_oversized_design(stored, features, request_model.categorical_features,
                                     context="added-predictor comparison")
-            result = compare_predictor_sets(stored.dataframe, **{k: v for k, v in config.items() if k != "dataset_id"})
+            result = compare_predictor_sets(stored.dataframe, **{k: v for k, v in config.items() if k not in {"dataset_id", "time_unit_label"}})
             analysis = {k: v for k, v in result.items() if not k.startswith("_")}
             return _attach_dataset_hash({"analysis": analysis, "request_config": config,
                 "comparison_figure": build_predictor_comparison_figure(analysis),
-                "pattern_figure": build_predictor_pattern_figure(analysis["pattern"]) if analysis["pattern"] else None}, stored)
+                "pattern_figure": build_predictor_pattern_figure(analysis["pattern"]) if analysis["pattern"] else None,
+                "risk_group_figure": build_km_figure(analysis["risk_display"]["km"], time_unit_label=request_model.time_unit_label) if analysis["risk_display"]["km"] else None}, stored)
 
         return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
     except Exception as exc:

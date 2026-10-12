@@ -107,6 +107,7 @@ def test_missing_outcomes_and_nondefault_event_code_preserve_source_alignment():
     assert r['excluded_missing_outcome_rows']==1
     assert '3' not in r['test_predictions']['row_ids']
     assert set(r['test_predictions']['event']) <= {0,1}
+    assert {x['source_row'] for x in r['risk_display']['rows']} == set(r['test_predictions']['row_ids'])
 
 
 def test_constant_target_has_explicit_curve_error_and_keeps_completed_comparison():
@@ -146,7 +147,7 @@ def test_api_completed_comparison_keeps_curves_settings_and_hash_without_private
     from survival_toolkit.app import app
     client=TestClient(app,base_url='http://127.0.0.1')
     dataset=client.post('/api/load-molecular-demo').json()
-    body=config();body['dataset_id']=dataset['dataset_id']
+    body=config();body['dataset_id']=dataset['dataset_id'];body['time_unit_label']='Years'
     response=client.post('/api/predictor-patterns',json=body)
     assert response.status_code==200,response.text
     result=response.json()
@@ -154,5 +155,8 @@ def test_api_completed_comparison_keeps_curves_settings_and_hash_without_private
     assert result['analysis']['method_version']=='predictor-patterns/1'
     assert result['analysis']['test_patients']==144
     assert result['comparison_figure']['data'] and result['pattern_figure']['data']
+    assert result['risk_group_figure']['data']
+    assert 'Years' in str(result['risk_group_figure']['layout'])
+    assert len(result['analysis']['risk_display']['rows']) == result['analysis']['test_patients']
     assert all(not k.startswith('_') for k in result['analysis'])
     assert len(result['analysis']['transform_hashes'])==2

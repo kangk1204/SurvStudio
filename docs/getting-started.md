@@ -145,6 +145,25 @@ Do not select genes or tune settings using outcomes from the full cohort before 
 ML and DL learn to rank patients by predicted event risk. They do not establish which treatment
 causes a better outcome, and a more complex model is not automatically more accurate.
 
+| Your question | Use | Information you get |
+|---|---|---|
+| Do predefined groups have different survival? | KM curves and log-rank | Observed group survival and evidence of a difference. |
+| How do several inputs jointly predict risk? | ML/DL | A relative risk score for each patient. |
+| Does that prediction work in patients kept out of fitting? | Held-out C-index | Risk-ranking performance, with uncertainty. |
+| Do genes add useful prediction beyond clinical variables? | **Do added predictors help?** | Change in held-out C between clinical-only and augmented inputs. |
+
+Open **Compare models → Do added predictors help?**, then **Try molecular demo**.
+This replaces the loaded data with synthetic genes and stage. Click **Compare predictor sets**
+to see the C-index comparison, KM curves for predicted risk groups, patient scores and stage-specific
+model predictions. Use **Save patient risk scores (CSV)** for every held-out patient; the table
+shows the ten highest scores and the source row for tracing them to your data.
+
+The risk-group cutoff is the fitted model's median score on training patients. Test outcomes do not
+set this cutoff. A separated KM plot can describe model-defined groups, but does not establish
+accurate individual prediction or a clinical decision threshold. Read the held-out C-index and
+the paired difference interval as well. Relative risk scores are not survival probabilities, and
+their raw values cannot be compared across different model types.
+
 | Output | How to read it |
 |---|---|
 | C-index | Higher means better ranking of comparable patient pairs. `0.65` is roughly 65% correctly ranked pairs, not 65% prediction accuracy or a survival probability. |

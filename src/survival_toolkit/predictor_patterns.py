@@ -232,6 +232,11 @@ def compare_predictor_sets(
     interval_seed = int(bootstrap_seed if bootstrap_seed is not None else (random_seed + 1) % 2**32)
     comparison = _paired_intervals(time, event, risk, n_bootstrap=n_bootstrap, seed=interval_seed)
     draws = comparison.pop("_bootstrap")
+    from survival_toolkit.risk_display import describe_heldout_risk
+    risk_display = describe_heldout_risk(
+        training_risk=results[1]["predict"](results[1]["training"]), test_risk=risk[:, 1],
+        time=time, event=event, source_rows=[source_rows[i] for i in test_idx],
+    )
     pattern = None
     pattern_error = None
     # An unestimable descriptive curve does not invalidate the separately completed paired comparison.
@@ -251,7 +256,7 @@ def compare_predictor_sets(
             "bootstrap_seed": interval_seed, "comparison": comparison, "interpretation": interpretation,
             "transform_hashes": [r["transform_hash"] for r in results],
             "model_settings": [r["settings"] for r in results],
-            "pattern": pattern, "pattern_error": pattern_error,
+            "pattern": pattern, "pattern_error": pattern_error, "risk_display": risk_display,
             "scope": "Exploratory added-predictor comparison; repeated choices on these test patients are not independent validation",
             "test_predictions": {"row_ids": [str(source_rows[i]) for i in test_idx], "time": time.tolist(),
                                  "event": event.tolist(), "risks": {"Clinical only": risk[:, 0].tolist(),

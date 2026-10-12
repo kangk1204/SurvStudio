@@ -1,7 +1,7 @@
 // Explicit clinical-versus-added comparison; never reuses a leaderboard fit or its selection.
 const patternRefs = Object.fromEntries([
   "Clinical", "Added", "Categorical", "Model", "Target", "Group", "Seed", "Trees", "Depth", "Epochs", "Bootstrap",
-  "Demo", "Run", "Json", "Csv", "Status", "Results", "Interpretation", "ComparisonPlot", "CurvePlot", "CurveNote",
+  "Demo", "Run", "Json", "Csv", "RiskCsv", "RiskNote", "RiskPlot", "RiskTable", "Status", "Results", "Interpretation", "ComparisonPlot", "CurvePlot", "CurveNote",
 ].map((name) => [name, document.getElementById(`pattern${name}`)]));
 const predictorPatternState = { payload: null, signature: null, controller: null, sequence: 0 };
 
@@ -9,7 +9,7 @@ function patternConfig() {
   const base = currentBaseConfig();
   return {
     dataset_id: base.dataset_id, time_column: base.time_column, event_column: base.event_column,
-    event_positive_value: base.event_positive_value,
+    event_positive_value: base.event_positive_value, time_unit_label: base.time_unit_label,
     clinical_features: selectedCheckboxValues(patternRefs.Clinical),
     added_features: selectedCheckboxValues(patternRefs.Added),
     categorical_features: selectedCheckboxValues(patternRefs.Categorical),
@@ -32,8 +32,9 @@ function clearPredictorPatterns() {
   patternRefs.Status.textContent = "Load data and choose two separate predictor sets.";
   patternRefs.Status.dataset.stale = "false";
   patternRefs.Run.disabled = false;
-  patternRefs.Json.disabled = patternRefs.Csv.disabled = true;
-  [patternRefs.ComparisonPlot, patternRefs.CurvePlot].forEach((el) => { Plotly.purge(el); el.replaceChildren(); });
+  patternRefs.Json.disabled = patternRefs.Csv.disabled = patternRefs.RiskCsv.disabled = true;
+  patternRefs.RiskTable.replaceChildren();
+  [patternRefs.ComparisonPlot, patternRefs.CurvePlot, patternRefs.RiskPlot].forEach((el) => { Plotly.purge(el); el.replaceChildren(); });
 }
 function syncPatternCurrency() {
   const current = currentPatternSignature();
@@ -41,6 +42,7 @@ function syncPatternCurrency() {
   const ready = Boolean(predictorPatternState.payload) && current === predictorPatternState.signature;
   patternRefs.Json.disabled = !ready;
   patternRefs.Csv.disabled = !ready || !predictorPatternState.payload?.analysis.pattern;
+  patternRefs.RiskCsv.disabled = !ready || !predictorPatternState.payload?.analysis.risk_display;
   if (predictorPatternState.payload && !ready) {
     clearPredictorPatterns();
     patternRefs.Status.textContent = "Inputs changed. Run again to show results for these settings.";
@@ -100,6 +102,29 @@ async function runPredictorPatterns() {
     const range = interval[0] === null ? "not estimable" : `${interval[0].toFixed(3)} to ${interval[1].toFixed(3)}`;
     patternRefs.Interpretation.textContent = `Change in C-index: ${a.comparison.delta_c.toFixed(3)} (95% paired interval: ${range}). ${a.interpretation} The interval describes test-patient uncertainty for these fitted models.`;
     await Plotly.newPlot(patternRefs.ComparisonPlot, payload.comparison_figure.data, plotLayoutConfig(payload.comparison_figure.layout, "predictor_comparison"), plotConfig("predictor_comparison"));
+    const display = a.risk_display;
+    if (payload.risk_group_figure) {
+      const layout = { ...payload.risk_group_figure.layout, title: { ...payload.risk_group_figure.layout.title, text: "Observed survival in predicted risk groups" } };
+      await Plotly.newPlot(patternRefs.RiskPlot, payload.risk_group_figure.data, plotLayoutConfig(layout, "predicted_risk_groups"), plotConfig("predicted_risk_groups"));
+      patternRefs.RiskNote.textContent = "Groups use the training risk median. Curves show observed survival in held-out patients; C-index assesses prediction. The cutoff is not a clinical decision threshold.";
+    } else {
+      patternRefs.RiskPlot.replaceChildren();
+      patternRefs.RiskNote.textContent = display?.curve_error || "Risk-group curves are unavailable in this saved result.";
+    }
+    patternRefs.RiskTable.replaceChildren();
+    if (display) {
+      const table = document.createElement("table");
+      const head = document.createElement("thead"); const header = document.createElement("tr");
+      ["Source row (0-based)", "Relative risk score", "Rank in test patients", "Predicted group"].forEach((label) => { const cell = document.createElement("th"); cell.textContent = label; header.appendChild(cell); });
+      head.appendChild(header); table.appendChild(head); const body = document.createElement("tbody");
+      display.rows.slice(0, 10).forEach((row) => {
+        const tr = document.createElement("tr");
+        [row.source_row, row.risk_score.toFixed(3), row.test_risk_rank, row.predicted_risk_group].forEach((value) => { const td = document.createElement("td"); td.textContent = value; tr.appendChild(td); });
+        body.appendChild(tr);
+      });
+      table.appendChild(body); patternRefs.RiskTable.appendChild(table);
+      const note = document.createElement("p"); note.textContent = `Showing the ten highest scores. Save patient risk scores for all ${display.rows.length} held-out patients; source rows trace to the loaded table.`; patternRefs.RiskTable.appendChild(note);
+    }
     if (payload.pattern_figure) {
       await Plotly.newPlot(patternRefs.CurvePlot, payload.pattern_figure.data, plotLayoutConfig(payload.pattern_figure.layout, "predictor_pattern"), plotConfig("predictor_pattern"));
       patternRefs.CurveNote.textContent = "The fitted model is fixed. Curves use the same training background; gaps mark values without enough observed training support in that group. They do not confirm a biological interaction.";
@@ -123,7 +148,7 @@ async function runPredictorPatterns() {
 }
 function initPredictorPatterns() {
   [patternRefs.Clinical, patternRefs.Added, patternRefs.Categorical].forEach((el) => el.addEventListener("change", () => { refreshPatternMenus(); syncPatternCurrency(); }));
-  [patternRefs.Model, patternRefs.Target, patternRefs.Group, patternRefs.Seed, patternRefs.Trees, patternRefs.Depth, patternRefs.Epochs, patternRefs.Bootstrap, refs.timeColumn, refs.eventColumn, refs.eventPositiveValue].forEach((el) => {
+  [patternRefs.Model, patternRefs.Target, patternRefs.Group, patternRefs.Seed, patternRefs.Trees, patternRefs.Depth, patternRefs.Epochs, patternRefs.Bootstrap, refs.timeColumn, refs.eventColumn, refs.eventPositiveValue, refs.timeUnitLabel].forEach((el) => {
     el.addEventListener("change", syncPatternCurrency);
     if (el.tagName === "INPUT") el.addEventListener("input", syncPatternCurrency);
   });
@@ -141,6 +166,12 @@ function initPredictorPatterns() {
   patternRefs.Json.addEventListener("click", () => {
     syncPatternCurrency();
     if (!patternRefs.Json.disabled) downloadHelpers.downloadText({ filename: "predictor_comparison.json", text: JSON.stringify(predictorPatternState.payload, null, 2), mimeType: "application/json;charset=utf-8;" });
+  });
+  patternRefs.RiskCsv.addEventListener("click", () => {
+    syncPatternCurrency(); if (patternRefs.RiskCsv.disabled) return;
+    const p = predictorPatternState.payload;
+    downloadHelpers.downloadCsv({ filename: "heldout_patient_risk_scores.csv", rows: p.analysis.risk_display.rows,
+      showToast, caption: "Fixed-model held-out risk scores", notes: [p.analysis.risk_display.risk_score_interpretation, p.analysis.risk_display.cutoff_source, p.analysis.risk_display.group_interpretation, JSON.stringify(p.request_config)] });
   });
   patternRefs.Csv.addEventListener("click", () => {
     syncPatternCurrency();
