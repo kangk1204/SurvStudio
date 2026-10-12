@@ -6,6 +6,67 @@
 
 // A run records its result mode (runtime.resultPreference) only once its result is in: a run that fails or
 // is cancelled leaves the result of the other mode current and shown (preferredResultMode).
+function resetOutcomeProxyReview() {
+  refs.outcomeProxyReviewPanel?.classList.add("hidden");
+  if (refs.outcomeProxyReviewConfirmed) refs.outcomeProxyReviewConfirmed.checked = false;
+  if (refs.outcomeProxyReviewReason) refs.outcomeProxyReviewReason.value = "";
+}
+
+function outcomeProxyInputContext(scope = "models") {
+  if (scope === "patterns") return currentPatternSignature();
+  const base = currentBaseConfig();
+  const selected = currentSharedModelSelections("ml");
+  return JSON.stringify([base.dataset_id, base.time_column, base.event_column,
+    base.event_positive_value, selected.features, selected.categoricalFeatures]);
+}
+
+function outcomeProxyRequestContext(config, scope) {
+  if (scope === "patterns") {
+    const values = { ...config }; delete values.outcome_proxy_review;
+    return JSON.stringify(values);
+  }
+  return JSON.stringify([config.dataset_id, config.time_column, config.event_column,
+    config.event_positive_value, config.features, config.categorical_features || []]);
+}
+
+function renderOutcomeProxyPause(detail, scope = "models", config = null) {
+  if (!refs.outcomeProxyReviewPanel) return;
+  if (config && outcomeProxyRequestContext(config, scope) !== outcomeProxyInputContext(scope)) return;
+  refs.outcomeProxyReviewPanel.classList.remove("hidden");
+  refs.outcomeProxyReviewPanel.querySelector("h3").textContent = "Check your predictors before training";
+  refs.outcomeProxyReviewPanel.dataset.inputContext = outcomeProxyInputContext(scope);
+  refs.outcomeProxyReviewPanel.dataset.inputScope = scope;
+  refs.outcomeProxyReviewMessage.textContent = detail.message;
+  refs.outcomeProxyReviewDetails.textContent = JSON.stringify(detail.outcome_proxy, null, 2);
+  const failed = detail.outcome_proxy?.status === "screen_failed";
+  refs.outcomeProxyReviewControls.classList.toggle("hidden", failed);
+  refs.outcomeProxyReviewConfirmed.checked = false;
+  refs.outcomeProxyReviewReason.value = "";
+  refs.outcomeProxyReviewPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function renderOutcomeProxyCompletion(audit, scope, config) {
+  if (!audit || refs.outcomeProxyReviewPanel?.classList.contains("hidden")) return;
+  if (scope !== refs.outcomeProxyReviewPanel.dataset.inputScope
+      || outcomeProxyRequestContext(config, scope) !== outcomeProxyInputContext(scope)) return;
+  if (audit.status === "reviewed_by_user") {
+    refs.outcomeProxyReviewPanel.querySelector("h3").textContent = "Predictor review recorded";
+    refs.outcomeProxyReviewMessage.textContent = "Analysis completed after your review. The findings and your explanation remain in saved results; this does not certify the predictors are free of outcome information.";
+    refs.outcomeProxyReviewDetails.textContent = JSON.stringify(audit, null, 2);
+  }
+}
+
+function outcomeProxyReviewFields(scope = "models") {
+  if (!refs.outcomeProxyReviewConfirmed?.checked) return {};
+  if (refs.outcomeProxyReviewPanel?.dataset.inputScope !== scope || refs.outcomeProxyReviewPanel?.dataset.inputContext !== outcomeProxyInputContext(scope)) {
+    refs.outcomeProxyReviewConfirmed.checked = false;
+    return {};
+  }
+  const reason = refs.outcomeProxyReviewReason.value.trim();
+  if (reason.length < 20) throw new Error("Describe predictor timing and source in at least 20 characters before continuing.");
+  return { outcome_proxy_review: reason };
+}
+
 async function runMlModel() {
   if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {
     throw new Error("Run Analysis uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.");
@@ -39,6 +100,8 @@ async function runMlModel() {
         dataset_id: base.dataset_id, time_column: base.time_column,
         event_column: base.event_column, event_positive_value: base.event_positive_value,
         features, categorical_features: categoricalFeatures,
+        predictor_availability_confirmed: refs.predictorAvailabilityConfirmed?.checked ? true : null,
+        ...outcomeProxyReviewFields(),
         model_type: selectedModelType,
         ...mlModelRequestFields(selectedModelType),
         compute_shap: computeShap,
@@ -167,6 +230,8 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
           event_column: base.event_column, event_positive_value: base.event_positive_value,
           features,
           categorical_features: categoricalFeatures,
+          predictor_availability_confirmed: refs.predictorAvailabilityConfirmed?.checked ? true : null,
+          ...outcomeProxyReviewFields(),
           model_type: "compare",
           ...mlModelRequestFields("compare"),
           evaluation_strategy: evaluationStrategy,
@@ -380,6 +445,8 @@ async function runDlModel() {
           dataset_id: base.dataset_id, time_column: base.time_column,
           event_column: base.event_column, event_positive_value: base.event_positive_value,
           features, categorical_features: categoricalFeatures,
+        predictor_availability_confirmed: refs.predictorAvailabilityConfirmed?.checked ? true : null,
+        ...outcomeProxyReviewFields(),
           model_type: modelType,
           ...dlArchitectureRequestFields(modelType),
           locked_test_fraction: null,
@@ -526,6 +593,8 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
           event_positive_value: base.event_positive_value,
           features,
           categorical_features: categoricalFeatures,
+          predictor_availability_confirmed: refs.predictorAvailabilityConfirmed?.checked ? true : null,
+          ...outcomeProxyReviewFields(),
           model_type: "compare",
           ...dlArchitectureRequestFields("compare"),
           locked_test_fraction: evaluationStrategy === "repeated_cv" ? currentLockedTestFraction("dl") : null,

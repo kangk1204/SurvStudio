@@ -38,6 +38,8 @@ function clearPredictorPatterns() {
 }
 function syncPatternCurrency() {
   const current = currentPatternSignature();
+  if (refs.outcomeProxyReviewPanel?.dataset.inputScope === "patterns"
+      && refs.outcomeProxyReviewPanel.dataset.inputContext !== current) resetOutcomeProxyReview();
   if (predictorPatternState.controller && current !== predictorPatternState.signature) clearPredictorPatterns();
   const ready = Boolean(predictorPatternState.payload) && current === predictorPatternState.signature;
   patternRefs.Json.disabled = !ready;
@@ -92,12 +94,19 @@ async function runPredictorPatterns() {
   patternRefs.Run.disabled = true;
   patternRefs.Status.textContent = "Fitting two models on a shared training split, then comparing the same test patients…";
   try {
-    const payload = await fetchJSON("/api/predictor-patterns", { method: "POST", body: signature, signal: controller.signal });
+    const payload = await fetchJSON("/api/predictor-patterns", { method: "POST", body: JSON.stringify({ ...config, ...outcomeProxyReviewFields("patterns") }), signal: controller.signal });
     if (sequence !== predictorPatternState.sequence || signature !== currentPatternSignature()) return;
     predictorPatternState.payload = payload;
     const a = payload.analysis;
     patternRefs.Results.classList.remove("hidden");
     patternRefs.Status.textContent = `${a.training_patients} training patients; ${a.test_patients} shared test patients (${a.test_events} events). ${a.excluded_missing_outcome_rows} rows excluded for missing outcomes. ${a.comparison.n_bootstrap_valid}/${a.comparison.n_bootstrap_requested} paired bootstrap draws defined.`;
+    const audit = a.input_audit?.outcome_proxy;
+    if (audit) {
+      const label = audit.status === "reviewed_by_user" ? "Predictor timing and source reviewed; findings retained."
+        : audit.status === "no_pattern_detected" ? "No near-exact outcome pattern detected in training data."
+        : "Outcome-pattern screening has limited coverage.";
+      patternRefs.Status.textContent += ` ${label} This does not certify that every predictor is safe.`;
+    }
     const interval = a.comparison.delta_ci;
     const range = interval[0] === null ? "not estimable" : `${interval[0].toFixed(3)} to ${interval[1].toFixed(3)}`;
     patternRefs.Interpretation.textContent = `Change in C-index: ${a.comparison.delta_c.toFixed(3)} (95% paired interval: ${range}). ${a.interpretation} The interval describes test-patient uncertainty for these fitted models.`;
@@ -171,13 +180,13 @@ function initPredictorPatterns() {
     syncPatternCurrency(); if (patternRefs.RiskCsv.disabled) return;
     const p = predictorPatternState.payload;
     downloadHelpers.downloadCsv({ filename: "heldout_patient_risk_scores.csv", rows: p.analysis.risk_display.rows,
-      showToast, caption: "Fixed-model held-out risk scores", notes: [p.analysis.risk_display.risk_score_interpretation, p.analysis.risk_display.cutoff_source, p.analysis.risk_display.group_interpretation, JSON.stringify(p.request_config)] });
+      showToast, caption: "Fixed-model held-out risk scores", notes: [p.analysis.risk_display.risk_score_interpretation, p.analysis.risk_display.cutoff_source, p.analysis.risk_display.group_interpretation, ...(p.analysis.input_audit?.notes || []), `Outcome-pattern status: ${p.analysis.input_audit?.outcome_proxy?.status || "not_assessed"}`, JSON.stringify(p.request_config)] });
   });
   patternRefs.Csv.addEventListener("click", () => {
     syncPatternCurrency();
     if (patternRefs.Csv.disabled) return;
     const p = predictorPatternState.payload;
     const rows = p.analysis.pattern.rows.map((row) => ({ ...row, model: p.analysis.model_type, target: p.analysis.pattern.target_feature, group_variable: p.analysis.pattern.group_feature, split_fingerprint: p.analysis.evaluation_split_fingerprint }));
-    downloadHelpers.downloadCsv({ filename: "predictor_patterns.csv", rows, showToast, caption: "Exploratory fixed-model predictions", notes: [p.analysis.pattern.interpretation, p.analysis.pattern.scope, JSON.stringify(p.request_config)] });
+    downloadHelpers.downloadCsv({ filename: "predictor_patterns.csv", rows, showToast, caption: "Exploratory fixed-model predictions", notes: [p.analysis.pattern.interpretation, p.analysis.pattern.scope, ...(p.analysis.input_audit?.notes || []), `Outcome-pattern status: ${p.analysis.input_audit?.outcome_proxy?.status || "not_assessed"}`, JSON.stringify(p.request_config)] });
   });
 }

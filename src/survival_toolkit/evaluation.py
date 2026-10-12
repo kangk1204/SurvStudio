@@ -42,6 +42,8 @@ def stratified_holdout_indices(
     Positions index the cleaned analysis frame. ``mode`` is ``"holdout"`` for a
     real split and ``"apparent"`` when the cohort is too small or an outcome
     stratum is too sparse, in which case both position arrays cover every row.
+    A sufficiently large all-event cohort remains eligible: censoring is not
+    required to estimate survival or evaluate event-time ranking.
     """
     from sklearn.model_selection import train_test_split
 
@@ -51,7 +53,8 @@ def stratified_holdout_indices(
     if n_samples < min_samples:
         return all_positions, all_positions, "apparent"
     unique, counts = np.unique(event_array, return_counts=True)
-    if unique.size < 2 or int(counts.min()) < min_stratum:
+    all_events = unique.size == 1 and unique[0] == 1
+    if (unique.size < 2 and not all_events) or int(counts.min()) < min_stratum:
         return all_positions, all_positions, "apparent"
     try:
         train_positions, eval_positions = train_test_split(

@@ -16,6 +16,7 @@ from survival_toolkit.encoding import canonical_category_values, transform_featu
 from survival_toolkit.errors import InternalAnalysisError, UserInputError, user_input_boundary
 from survival_toolkit.evaluation import evaluation_split_fingerprint, stratified_holdout_indices
 from survival_toolkit.marker_screen import harrell_c_many
+from survival_toolkit.prediction_guard import guarded_prediction_inputs, check_training_outcome_proxies
 
 
 def _paired_intervals(time, event, risks, *, n_bootstrap, seed):
@@ -50,6 +51,7 @@ def _paired_intervals(time, event, risks, *, n_bootstrap, seed):
 def _fit(frame, *, time_column, event_column, features, categorical_features,
          model_type, train_idx, test_idx, seed, n_estimators, max_depth, epochs):
     train = frame.iloc[train_idx].copy()
+    check_training_outcome_proxies(train, time_column, event_column, features, categorical_features)
     if model_type == "deepsurv":
         from survival_toolkit.deep_models import (
             _fit_deep_encoder, _transform_deep_frame, train_deepsurv,
@@ -187,12 +189,14 @@ def describe_pattern(fitted, *, target_feature, group_feature, seed, n_points=25
 
 
 @user_input_boundary
+@guarded_prediction_inputs
 def compare_predictor_sets(
     df: pd.DataFrame, *, time_column: str, event_column: str, event_positive_value: Any,
     clinical_features: Sequence[str], added_features: Sequence[str], categorical_features: Sequence[str],
     target_feature: str, group_feature: str, model_type: str = "gbs", random_seed: int = 42,
     n_estimators: int = 100, max_depth: int | None = 3, epochs: int = 100,
     n_bootstrap: int = 1000, bootstrap_seed: int | None = None,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     clinical, added = list(clinical_features), list(added_features)
     if not clinical or not added or set(clinical) & set(added):
@@ -219,6 +223,10 @@ def compare_predictor_sets(
     if mode != "holdout":
         raise UserInputError("Not enough patients or events for a real holdout; no apparent fallback is used.")
     fingerprint = evaluation_split_fingerprint(source_rows, [(train_idx, test_idx)], kind="holdout")
+    # Review both planned predictor sets before fitting either survival model.
+    for selected in [clinical, features]:
+        check_training_outcome_proxies(frame.iloc[train_idx], time_column, event_column,
+                                       selected, [c for c in categorical_features if c in selected])
     results = []
     for selected in [clinical, features]:
         raise_if_cancelled()

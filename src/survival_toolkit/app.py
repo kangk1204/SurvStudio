@@ -1115,6 +1115,9 @@ class SignatureSearchRequest(_EventPositiveValueRequestModel):
 
 
 class MLModelRequest(_FeatureSelectionRequestModel):
+    # This records a user declaration; it is not an automatic leakage certificate.
+    predictor_availability_confirmed: Literal[True] | None = None
+    outcome_proxy_review: str | None = Field(default=None, min_length=20, max_length=1000)
     dataset_id: str
     time_column: str
     event_column: str
@@ -1137,6 +1140,9 @@ class MLModelRequest(_FeatureSelectionRequestModel):
 
 
 class DeepModelRequest(_FeatureSelectionRequestModel):
+    # This records a user declaration; it is not an automatic leakage certificate.
+    predictor_availability_confirmed: Literal[True] | None = None
+    outcome_proxy_review: str | None = Field(default=None, min_length=20, max_length=1000)
     dataset_id: str
     time_column: str
     event_column: str
@@ -1683,6 +1689,18 @@ def dataset_response(dataset_id: str) -> dict[str, Any]:
 
 def _attach_dataset_hash(payload: dict[str, Any], stored: Any) -> dict[str, Any]:
     payload["dataset_hash"] = str(stored.metadata.get("dataset_hash") or "")
+    analysis = payload.get("analysis") or {}
+    audit = analysis.get("input_audit")
+    if isinstance(audit, dict) and (payload.get("request_config") or {}).get("predictor_availability_confirmed") is True:
+        audit["predictor_availability"] = "user_confirmed"
+        note = "The user confirmed that the selected predictors were available at the intended prediction time; hidden outcome proxies still require review."
+        audit["notes"].append(note)
+        if isinstance(analysis.get("scientific_summary"), dict):
+            analysis["scientific_summary"].setdefault("cautions", []).append(note)
+        if isinstance(analysis.get("manuscript_tables"), dict):
+            analysis["manuscript_tables"].setdefault("table_notes", []).append(note)
+        for row in analysis.get("comparison_table", []):
+            row["input_notes"] = " ".join(audit["notes"])
     return payload
 
 
@@ -2885,6 +2903,12 @@ def fail_bad_request(exc: Exception) -> NoReturn:
         # 499 (client closed request): the page abandoned this request, nobody reads the body.
         logger.info("Request cancelled by its client: %s", exc)
         raise HTTPException(status_code=499, detail=_json_safe_text(str(exc))) from exc
+    from survival_toolkit.errors import OutcomeProxyError
+    if isinstance(exc, OutcomeProxyError):
+        raise HTTPException(status_code=400, detail={
+            "code": "outcome_proxy_review_required", "message": _json_safe_text(str(exc)),
+            "outcome_proxy": exc.audit,
+        }) from exc
     if isinstance(exc, UserInputError):
         # Messages can quote request text (a column name), which may hold an unpaired surrogate.
         status_code = 404 if isinstance(exc, NotFoundError) else 400
@@ -4498,6 +4522,7 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                         cv_folds=request_model.cv_folds,
                         cv_repeats=request_model.cv_repeats,
                         random_state=request_model.random_state,
+                        outcome_proxy_review=request_model.outcome_proxy_review,
                         locked_test_fraction=request_model.locked_test_fraction,
                     )
                 else:
@@ -4512,6 +4537,7 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                         max_depth=request_model.max_depth,
                         learning_rate=request_model.learning_rate,
                         random_state=request_model.random_state,
+                        outcome_proxy_review=request_model.outcome_proxy_review,
                     )
                 _attach_manuscript_notes(
                     comparison,
@@ -4542,6 +4568,7 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                     categorical_features=list(categorical_features),
                     event_positive_value=request_model.event_positive_value,
                     random_state=request_model.random_state,
+                    outcome_proxy_review=request_model.outcome_proxy_review,
                 )
                 if request_model.model_type == "gbs":
                     common_ml["n_estimators"] = request_model.n_estimators
@@ -4716,6 +4743,7 @@ async def deep_model(request_model: DeepModelRequest, request: Request) -> dict[
                 random_seed=request_model.random_seed,
                 early_stopping_patience=request_model.early_stopping_patience,
                 early_stopping_min_delta=request_model.early_stopping_min_delta,
+                outcome_proxy_review=request_model.outcome_proxy_review,
             )
 
             if request_model.model_type == "compare":
@@ -4898,6 +4926,7 @@ class PDPRequest(_FeatureSelectionRequestModel):
 
 
 class PredictorPatternRequest(_EventPositiveValueRequestModel):
+    outcome_proxy_review: str | None = Field(default=None, min_length=20, max_length=1000)
     time_unit_label: str = Field(default="dataset units", min_length=1, max_length=64)
     dataset_id: str
     time_column: str

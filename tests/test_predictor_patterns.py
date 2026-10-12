@@ -9,12 +9,79 @@ from survival_toolkit.sample_data import make_molecular_demo
 from survival_toolkit.evaluation import stratified_holdout_indices
 
 
+def test_added_outcome_copy_pauses_before_either_survival_model_fits(monkeypatch):
+    from survival_toolkit.errors import OutcomeProxyError
+    import survival_toolkit.predictor_patterns as patterns
+    frame = make_molecular_demo(n_patients=240)
+    frame['gene_A'] = 13 - 7 * frame.os_event
+    fitted = []
+    monkeypatch.setattr(patterns, '_fit', lambda *args, **kwargs: fitted.append(True))
+    with pytest.raises(OutcomeProxyError) as caught:
+        patterns.compare_predictor_sets(frame, **config())
+    assert not fitted
+    assert caught.value.audit['status'] == 'review_required'
+    assert caught.value.audit['training_rows'] == 168
+
+
+def test_predictor_comparison_retains_review_and_findings_in_saved_rows():
+    pytest.importorskip('sksurv')
+    frame = make_molecular_demo(n_patients=120)
+    # A deterministic baseline predictor is indistinguishable from a copied event
+    # column by association alone; a recorded provenance review must stay visible.
+    frame['gene_A'] = (frame.gene_A > 0).astype(int)
+    frame['os_event'] = frame.gene_A
+    frame['os_months'] = np.where(frame.os_event == 1, 1., 10.)
+    reason = 'Baseline gene assay measured at enrollment; source and timing checked.'
+    result = compare_predictor_sets(frame, **config(), outcome_proxy_review=reason)
+    audit = result['input_audit']['outcome_proxy']
+    assert audit['status'] == 'reviewed_by_user'
+    assert any(p['findings'] for p in audit['partitions'])
+    assert audit['review_reason'] == reason
+    assert all(row['outcome_proxy_review'] == reason for row in result['comparison']['rows'])
+    assert all(row['outcome_proxy_status'] == 'reviewed_by_user' for row in result['comparison']['rows'])
+    assert result['risk_display']['rows']
+
+
+def test_pattern_api_keeps_review_separate_from_ordinary_predictor_checkbox():
+    from fastapi.testclient import TestClient
+    from survival_toolkit.app import app, store
+    frame = make_molecular_demo(n_patients=240)
+    frame['gene_A'] = frame.os_event + .03 * frame.gene_A
+    stored = store.create(frame, filename='test.csv', source='upload')
+    response = TestClient(app, base_url='http://127.0.0.1').post(
+        '/api/predictor-patterns', json={'dataset_id': stored.dataset_id, **config()})
+    assert response.status_code == 400
+    detail = response.json()['detail']
+    assert detail['code'] == 'outcome_proxy_review_required'
+    assert detail['outcome_proxy']['findings']
+
+
 def config(**updates):
     return dict(time_column='os_months', event_column='os_event', event_positive_value=1,
                 clinical_features=['age', 'stage'], added_features=['gene_A', 'gene_B'],
                 categorical_features=['stage'], target_feature='gene_A', group_feature='stage',
                 model_type='gbs', random_seed=17, n_estimators=10, max_depth=2, epochs=10,
                 n_bootstrap=100, **updates)
+
+
+def test_all_event_input_keeps_real_holdout_but_all_censored_does_not():
+    train, test, mode = stratified_holdout_indices(np.ones(100), random_state=42)
+    assert mode == 'holdout'
+    assert len(train) == 70 and len(test) == 30
+    assert set(train).isdisjoint(test)
+    assert set(train) | set(test) == set(range(100))
+    assert stratified_holdout_indices(np.zeros(100), random_state=42)[2] == 'apparent'
+    assert stratified_holdout_indices(np.ones(10), random_state=42)[2] == 'apparent'
+
+
+def test_all_event_baseline_inputs_are_not_rejected_for_absent_censoring():
+    pytest.importorskip('sksurv')
+    frame = make_molecular_demo(n_patients=120)
+    frame['os_event'] = 1
+    result = compare_predictor_sets(frame, **config())
+    assert result['evaluation_mode'] == 'holdout'
+    assert result['test_patients'] == result['test_events'] == 36
+    assert result['input_audit']['outcome_proxy']['status'] == 'partially_assessed'
 
 
 @pytest.mark.parametrize('model', ['gbs', 'rsf', 'deepsurv'])

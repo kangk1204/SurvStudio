@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, NamedTuple, 
 
 import numpy as np
 import pandas as pd
+
+from survival_toolkit.prediction_guard import guarded_prediction_inputs, check_training_outcome_proxies
 from pandas.api.types import is_numeric_dtype
 
 from survival_toolkit.encoding import (
@@ -263,6 +265,7 @@ def _run_deep_compare_task(task: dict[str, Any]) -> dict[str, Any]:
         monitor_indices=task["monitor_indices"],
         early_stopping_patience=task["early_stopping_patience"],
         early_stopping_min_delta=task["early_stopping_min_delta"],
+        outcome_proxy_review=task.get("outcome_proxy_review"),
         **task["extra_kwargs"],
     )
     evaluation_mode = str(result.get("evaluation_mode", "unknown"))
@@ -330,6 +333,7 @@ def _run_deep_compare_fold_task(task: dict[str, Any]) -> dict[str, Any]:
                         "batch_size": task["batch_size"],
                         "early_stopping_patience": task["early_stopping_patience"],
                         "early_stopping_min_delta": task["early_stopping_min_delta"],
+                        "outcome_proxy_review": task.get("outcome_proxy_review"),
                         "prepared_data": task["prepared_data"],
                         "evaluation_split": task["evaluation_split"],
                         "monitor_indices": task["monitor_indices"],
@@ -706,6 +710,7 @@ def _prepare_deep_split_data(
         event_already_coded=True,
     )
     encoder = _fit_deep_encoder(train_frame, features, categorical_features)
+    check_training_outcome_proxies(train_frame, time_column, event_column, features, categorical_features)
     train_data = _transform_deep_frame(
         train_frame,
         time_column=time_column,
@@ -1205,6 +1210,13 @@ def _prepare_deep_training_inputs(
                 "prepared_data must be passed together with the evaluation_split it was prepared for."
             )
         _reject_leaky_evaluation_split(evaluation_split, n_samples=int(prepared_data["X_tensor"].shape[0]))
+        rows = np.asarray(evaluation_split["train_idx"], dtype=int)
+        x = prepared_data["X_tensor"].detach().cpu().numpy()[rows]
+        names = [f"encoded_{index}" for index in range(x.shape[1])]
+        prepared_frame = pd.DataFrame(x, columns=names)
+        prepared_frame["__proxy_time"] = prepared_data["time_tensor"].detach().cpu().numpy().reshape(-1)[rows]
+        prepared_frame["__proxy_event"] = prepared_data["event_tensor"].detach().cpu().numpy().reshape(-1)[rows]
+        check_training_outcome_proxies(prepared_frame, "__proxy_time", "__proxy_event", names)
         return prepared_data, evaluation_split
     if df is None:
         raise ValueError("Raw dataframe input is required when prepared_data is not provided.")
@@ -1277,6 +1289,7 @@ def _prepare_deep_training_inputs(
             }
 
     encoder = _fit_deep_encoder(clean_frame, features, categorical_features)
+    check_training_outcome_proxies(clean_frame, time_column, event_column, features, categorical_features)
     full_data = _transform_deep_frame(
         clean_frame,
         time_column=time_column,
@@ -2465,6 +2478,8 @@ class _DeepRunSettings(NamedTuple):
     early_stopping_patience: int | None
     early_stopping_min_delta: float
 
+    outcome_proxy_review: str | None = None
+
     def task_fields(self) -> dict[str, Any]:
         return {
             "time_column": self.time_column,
@@ -2477,6 +2492,7 @@ class _DeepRunSettings(NamedTuple):
             "batch_size": self.batch_size,
             "early_stopping_patience": self.early_stopping_patience,
             "early_stopping_min_delta": self.early_stopping_min_delta,
+            "outcome_proxy_review": self.outcome_proxy_review,
         }
 
 
@@ -2505,6 +2521,7 @@ def _record_fold_error(errors: list[dict[str, Any]], model_name: str, repeat: An
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def compare_deep_survival_models(
     df: pd.DataFrame,
     time_column: str,
@@ -2532,6 +2549,7 @@ def compare_deep_survival_models(
     parallel_jobs: int = 1,
     included_models: Sequence[str] | None = None,
     locked_test_fraction: float | None = None,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Train the bundled deep survival models on one feature set and rank them.
 
@@ -2582,6 +2600,7 @@ def compare_deep_survival_models(
         batch_size=batch_size,
         early_stopping_patience=early_stopping_patience,
         early_stopping_min_delta=early_stopping_min_delta,
+        outcome_proxy_review=outcome_proxy_review,
     )
     if evaluation_strategy == "repeated_cv":
         return _deep_repeated_cv_comparison(
@@ -2637,6 +2656,7 @@ def _deep_holdout_comparison(
                 batch_size=settings.batch_size,
                 random_seed=random_seed,
                 prepared_data=shared_data,
+                outcome_proxy_review=settings.outcome_proxy_review,
                 evaluation_split=shared_eval_split,
                 monitor_indices=shared_monitor_indices,
                 early_stopping_patience=settings.early_stopping_patience,
@@ -3800,6 +3820,7 @@ def evaluate_single_deep_survival_model(
     early_stopping_min_delta: float = 1e-4,
     parallel_jobs: int = 1,
     locked_test_fraction: float | None = None,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate one deep model with either holdout or repeated CV semantics.
 
@@ -3825,6 +3846,7 @@ def evaluate_single_deep_survival_model(
             epochs=epochs,
             batch_size=batch_size,
             random_seed=random_seed,
+            outcome_proxy_review=outcome_proxy_review,
             num_time_bins=num_time_bins,
             n_heads=n_heads,
             d_model=d_model,
@@ -3920,6 +3942,7 @@ def evaluate_single_deep_survival_model(
             "manuscript_tables": compare_result.get("manuscript_tables"),
             "scientific_summary": summary,
             "insight_board": summary,
+            "input_audit": compare_result.get("input_audit"),
         }
         for key in (
             "n_skipped_folds",
@@ -3955,6 +3978,7 @@ def evaluate_single_deep_survival_model(
         "random_seed": random_seed,
         "early_stopping_patience": early_stopping_patience,
         "early_stopping_min_delta": early_stopping_min_delta,
+        "outcome_proxy_review": outcome_proxy_review,
     }
     trainer_map: dict[str, Callable[[], dict[str, Any]]] = {
         "deepsurv": lambda: train_deepsurv(df, hidden_layers=hidden_layers, **shared_kwargs),
@@ -4054,6 +4078,7 @@ class DeepSurvNet(_TorchModuleBase):
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def train_deepsurv(
     df: pd.DataFrame | None,
     time_column: str,
@@ -4074,6 +4099,7 @@ def train_deepsurv(
     early_stopping_min_delta: float = 1e-4,
     refit_on_training_partition: bool = True,
     _return_fitted_model: bool = False,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Train a DeepSurv (Neural Cox PH) model.
 
@@ -4382,6 +4408,7 @@ def _deephit_loss(
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def train_deephit(
     df: pd.DataFrame | None,
     time_column: str,
@@ -4403,6 +4430,7 @@ def train_deephit(
     early_stopping_patience: int | None = 10,
     early_stopping_min_delta: float = 1e-4,
     refit_on_training_partition: bool = True,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Train a DeepHit model for discrete-time survival prediction.
 
@@ -4694,6 +4722,7 @@ def _mtlr_loss(
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def train_neural_mtlr(
     df: pd.DataFrame | None,
     time_column: str,
@@ -4714,6 +4743,7 @@ def train_neural_mtlr(
     early_stopping_patience: int | None = 10,
     early_stopping_min_delta: float = 1e-4,
     refit_on_training_partition: bool = True,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Train a Neural MTLR model.
 
@@ -5096,6 +5126,7 @@ class SurvivalTransformerNet(_TorchModuleBase):
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def train_survival_transformer(
     df: pd.DataFrame | None,
     time_column: str,
@@ -5117,6 +5148,7 @@ def train_survival_transformer(
     early_stopping_patience: int | None = 10,
     early_stopping_min_delta: float = 1e-4,
     refit_on_training_partition: bool = True,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Train a Survival Transformer model.
 
@@ -5540,6 +5572,7 @@ def _simple_kmeans(data: np.ndarray, n_clusters: int, max_iter: int = 100, seed:
 
 @user_input_boundary
 @_serialized_torch_training
+@guarded_prediction_inputs
 def train_survival_vae(
     df: pd.DataFrame | None,
     time_column: str,
@@ -5562,6 +5595,7 @@ def train_survival_vae(
     early_stopping_patience: int | None = 10,
     early_stopping_min_delta: float = 1e-4,
     refit_on_training_partition: bool = True,
+    outcome_proxy_review: str | None = None,
 ) -> dict[str, Any]:
     """Train a Survival VAE model.
 

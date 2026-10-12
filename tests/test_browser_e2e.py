@@ -111,6 +111,235 @@ def _open_predictive_workbench(page, model_key: str | None = None) -> None:
         )
 
 
+def test_browser_beginner_guidance_refreshes_when_cohort_changes(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page()
+        page.goto(browser_server)
+        page.locator("#loadGbsg2Button").click()
+        _wait_for_workspace(page)
+        assert page.locator("#groupColumn").input_value() == "horTh"
+        assert "horTh" in page.locator("#deriveButton").get_attribute("title")
+        assert "stage" not in page.locator("#deriveButton").get_attribute("title")
+        assert "Draw curves" in page.locator("#kmPlot").inner_text()
+        assert "Run Analysis" not in page.locator("#kmPlot").inner_text()
+
+        page.locator("#brandHome").click()
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        assert page.locator("#groupColumn").input_value() == ""
+        assert page.locator("#deriveButton").get_attribute("title") == ""
+        page.locator("#groupColumn").select_option("stage")
+        assert "stage" in page.locator("#deriveButton").get_attribute("title")
+        assert "horTh" not in page.locator("#deriveButton").get_attribute("title")
+        page.locator('[data-tab="cox"]').click()
+        assert page.locator("#runCoxButton").inner_text().strip() == "Run Cox model"
+        assert "Run Cox model" in page.locator("#coxPlot").inner_text()
+        browser.close()
+
+
+def test_browser_cox_text_fits_small_screens_and_keeps_estimates(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 1280, "height": 1000})
+        page.goto(browser_server)
+        page.locator("#loadGbsg2Button").click()
+        _wait_for_workspace(page)
+        page.locator('[data-tab="cox"]').click()
+        page.locator("#runCoxButton").click()
+        page.wait_for_function("document.getElementById('coxPlot').data?.length > 0")
+        estimates = page.locator("#coxPlot").evaluate("el => JSON.stringify(el.data)")
+        table = page.locator("#coxResultsShell").inner_text()
+        for width in [360, 440, 768, 1280]:
+            page.set_viewport_size({"width": width, "height": 1000})
+            try:
+                page.wait_for_function(
+                    """() => {
+                      const plot = document.getElementById('coxPlot');
+                      const svg = plot.querySelector('.main-svg');
+                      if (!svg) return false;
+                      const bounds = svg.getBoundingClientRect();
+                      if (Math.abs(bounds.width - parseFloat(getComputedStyle(plot).width)) > 2) return false;
+                      return [...plot.querySelectorAll('.xtitle, .ytick text, .xtick text, .annotation-text')].every(el => {
+                        const r = el.getBoundingClientRect();
+                        return r.left >= bounds.left - 2 && r.right <= bounds.right + 2
+                          && r.top >= bounds.top - 2 && r.bottom <= bounds.bottom + 2;
+                      });
+                    }""",
+                    timeout=10000,
+                )
+            except Exception as exc:
+                details = page.locator("#coxPlot").evaluate("""el => ({
+                  viewport: innerWidth, width: getComputedStyle(el).width,
+                  cachedWidth: el.__responsiveWidth, margin: el.layout?.margin,
+                  ticks: el.layout?.yaxis?.ticktext, sourceTicks: el.__responsiveSourceLayout?.yaxis?.tickvals,
+                  labels: [...el.querySelectorAll('.ytick text,.xtitle,.annotation-text')].map(x => ({text:x.textContent, x:x.getBoundingClientRect().x, width:x.getBoundingClientRect().width})),
+                })""")
+                pytest.fail(f"Cox text did not fit at viewport {width}: {details}; {exc}")
+            assert page.locator("#coxPlot").evaluate("el => JSON.stringify(el.data)") == estimates
+            assert page.locator("#coxResultsShell").inner_text() == table
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        browser.close()
+
+
+def test_browser_km_graph_fits_small_screen_and_result_clears_header(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 360, "height": 1000})
+        page.goto(browser_server)
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        assert page.locator("#timeColumn").bounding_box()["width"] > 250
+        assert page.locator("#eventColumn").bounding_box()["width"] > 250
+        page.locator("#groupColumn").select_option("stage")
+        page.locator("#runKmButton").click()
+        page.wait_for_function("document.getElementById('kmPlot').data?.length > 0")
+        page.wait_for_function("""() => {
+          const plot = document.getElementById('kmPlot');
+          const header = document.querySelector('.shell-header').getBoundingClientRect();
+          const bounds = plot.querySelector('.main-svg')?.getBoundingClientRect();
+          if (!bounds || bounds.top < header.bottom + 8) return false;
+          return [...plot.querySelectorAll('.gtitle,.xtitle,.ytitle,.annotation-text,.legendtext')].every(el => {
+            const r = el.getBoundingClientRect();
+            return r.left >= bounds.left - 2 && r.right <= bounds.right + 2
+              && r.top >= bounds.top - 2 && r.bottom <= bounds.bottom + 2;
+          });
+        }""")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        page.locator('[data-tab="benchmark"]').click()
+        page.locator("#saveResultsButton").click()
+        _assert_tab_active(page, "km")
+        assert page.locator('#panel-km .export-menu[open]').count() == 1
+        browser.close()
+
+
+def test_browser_comparison_input_summary_tracks_evaluation_settings(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page()
+        page.goto(browser_server)
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        page.locator('[data-tab="benchmark"]').click()
+        summary = page.locator("#predictiveInputSummary")
+        assert summary.is_visible()
+        assert "variables:" in summary.inner_text()
+        assert "Holdout" in summary.inner_text()
+        assert "seed 42" in summary.inner_text()
+        assert "0.50 is chance" in page.locator(".predictive-metric-guide").inner_text()
+        _open_predictive_workbench(page)
+        page.locator("#mlRandomSeed").fill("123")
+        page.wait_for_function("document.getElementById('predictiveInputSummary').textContent.includes('seed 123')")
+        page.locator("#mlEvaluationStrategy").select_option("repeated_cv")
+        page.wait_for_function("document.getElementById('predictiveInputSummary').textContent.includes('5-fold cross-validation')")
+        assert "locked test 30%" in summary.inner_text()
+        page.locator("#mlEvaluationStrategy").select_option("holdout")
+        page.wait_for_function("document.getElementById('predictiveInputSummary').textContent.includes('Holdout')")
+        assert "locked test" not in summary.inner_text()
+        browser.close()
+
+
+def test_browser_outcome_pattern_pause_requires_separate_review(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    requests = []
+    def pause(route):
+        requests.append(json.loads(route.request.post_data or "{}"))
+        route.fulfill(status=400, content_type="application/json", body=json.dumps({"detail": {
+            "code": "outcome_proxy_review_required", "message": "Model training paused: check hidden outcome information.",
+            "outcome_proxy": {"status": "review_required", "findings": [{"features": ["marker"]}]},
+        }}))
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.route("**/api/ml-model", pause)
+        page.goto(browser_server)
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        page.locator('[data-tab="benchmark"]').click()
+        page.locator("#predictorAvailabilityConfirmed").check()
+        page.locator("#runPredictiveCompareAllButton").click()
+        page.locator("#outcomeProxyReviewPanel").wait_for(state="visible")
+        assert "paused" in page.locator("#outcomeProxyReviewMessage").inner_text()
+        assert "outcome_proxy_review" not in requests[0]
+        assert not page.locator("#outcomeProxyReviewConfirmed").is_checked()
+        reason = "Baseline values recorded at enrollment; reviewed against the original source."
+        page.locator("#outcomeProxyReviewReason").fill(reason)
+        page.locator("#outcomeProxyReviewConfirmed").check()
+        page.locator("#runPredictiveCompareAllButton").click()
+        page.wait_for_function("document.getElementById('outcomeProxyReviewReason').value === ''")
+        assert requests[-1]["outcome_proxy_review"] == reason
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        _open_predictive_workbench(page)
+        page.locator("#modelFeatureChecklist input[type=checkbox]").first.uncheck()
+        assert page.locator("#outcomeProxyReviewPanel").is_hidden()
+        browser.close()
+
+
+def test_browser_added_predictor_review_is_scoped_and_invalidated(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    requests = []
+
+    def pause(route):
+        requests.append(json.loads(route.request.post_data or "{}"))
+        route.fulfill(status=400, content_type="application/json", body=json.dumps({"detail": {
+            "code": "outcome_proxy_review_required", "message": "Model training paused: review gene_A.",
+            "outcome_proxy": {"status": "review_required", "findings": [{"features": ["gene_A"]}]},
+        }}))
+
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.route("**/api/predictor-patterns", pause)
+        page.goto(browser_server)
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        page.locator('[data-tab="benchmark"]').click()
+        page.locator("#predictorPatternCard summary").first.click()
+        page.locator("#patternDemo").click()
+        page.wait_for_function("document.getElementById('patternTarget').value === 'gene_A'")
+        page.locator("#patternRun").click()
+        page.locator("#outcomeProxyReviewPanel").wait_for(state="visible")
+        assert "outcome_proxy_review" not in requests[0]
+        reason = "Baseline assay collected at enrollment; checked source and acquisition time."
+        page.locator("#outcomeProxyReviewReason").fill(reason)
+        page.locator("#outcomeProxyReviewConfirmed").check()
+        assert page.evaluate("outcomeProxyReviewFields('models')") == {}
+        page.locator("#outcomeProxyReviewConfirmed").check()
+        page.locator("#patternRun").click()
+        page.wait_for_function("document.getElementById('outcomeProxyReviewReason').value === ''")
+        assert requests[-1]["outcome_proxy_review"] == reason
+        page.locator("#patternAdded input[value='gene_B']").uncheck()
+        assert page.locator("#outcomeProxyReviewPanel").is_hidden()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+        browser.close()
+
+
+def test_browser_predictor_review_resets_when_feature_selection_changes(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.goto(browser_server)
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        page.locator('[data-tab="benchmark"]').click()
+        declaration = page.locator("#predictorAvailabilityConfirmed")
+        assert declaration.is_visible() and not declaration.is_checked()
+        dimensions = declaration.bounding_box()
+        assert dimensions is not None and 12 <= dimensions["width"] <= 20
+        assert 12 <= dimensions["height"] <= 20
+        assert "every hidden outcome proxy" in page.locator(".predictor-availability-note").first.inner_text()
+        declaration.check()
+        _open_predictive_workbench(page)
+        page.locator("#modelFeatureChecklist input[type=checkbox]").first.uncheck()
+        assert not declaration.is_checked()
+        browser.close()
+
+
 @pytest.fixture
 def browser_server() -> str:
     project_root = Path(__file__).resolve().parents[1]
@@ -1315,12 +1544,21 @@ def test_browser_risk_table_ticks_change_columns_and_flash_table(browser_server:
 
             page.locator("#panel-km .curve-options > summary").click()
             page.locator("#riskTablePoints").fill("10")
+            page.evaluate("""() => {
+                const shell = document.getElementById('kmRiskShell');
+                window.riskTableUpdateFlashed = false;
+                new MutationObserver(() => {
+                    if (shell.classList.contains('preset-applied-flash')) {
+                        window.riskTableUpdateFlashed = true;
+                    }
+                }).observe(shell, {attributes: true, attributeFilter: ['class']});
+            }""")
             page.locator("#runKmButton").click()
             page.wait_for_function(
                 f"document.querySelectorAll('#kmRiskShell thead th').length > {default_columns}"
             )
             page.wait_for_function(
-                "document.getElementById('kmRiskShell').classList.contains('preset-applied-flash')"
+                "window.riskTableUpdateFlashed === true"
             )
             updated_columns = page.locator("#kmRiskShell thead th").count()
             assert updated_columns > default_columns
