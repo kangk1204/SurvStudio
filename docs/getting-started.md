@@ -208,3 +208,26 @@ Single-model **DL** supports holdout or CV, but the locked test option applies t
 For detailed controls and limits, see [ML](user-guide.md#machine-learning),
 [DL](user-guide.md#deep-learning) and the [evaluation contract](user-guide.md#evaluation-contract).
 For startup, file or package errors, see [troubleshooting](installation.md#common-problems).
+
+
+## Compare clinical inputs with added predictors
+
+In **Prediction models**, open **Do added predictors help?**. Choose separate clinical and added
+predictor sets, mark categorical variables, and choose one added predictor and a clinical group.
+For a ready example, click **Try molecular demo**: it loads 480 simulated patients with age,
+stage and two synthetic genes. This replaces the loaded dataset.
+
+Click **Compare predictor sets**. Gradient boosting, survival forests and DeepSurv are available
+in this explorer; the existing model board still compares all supported models. Both feature sets
+use the same training and test patients. Positive change in C-index means better risk ranking in
+that holdout; an interval crossing zero leaves the improvement uncertain. More inputs or a neural
+model need not improve prediction.
+
+The lower plot shows how the fixed model's predicted risk changes across categorical groups.
+It uses training data as its reference and leaves unsupported combinations blank. The score is
+in training standard deviations, not a survival probability. A curved or different group pattern
+describes the fitted model; it does not establish a biological interaction or a causal effect.
+
+**Save results (JSON)** retains both comparisons, settings and curves. **Save curves (CSV)** keeps
+unsupported values blank. Changing inputs disables old exports and requires a new run. Repeated
+choices on these test patients need validation in independent data.

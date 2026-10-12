@@ -19,6 +19,7 @@
     <script src="../static/app_analyses.js?v={{ static_version }}" defer></script>
     <script src="../static/app_models.js?v={{ static_version }}" defer></script>
     <script src="../static/app_markers.js?v={{ static_version }}" defer></script>
+    <script src="../static/app_patterns.js?v={{ static_version }}" defer></script>
     <script src="../static/app.js?v={{ static_version }}" defer></script>
   </head>
   <body class="simple-view"{% if api_base %} data-api-base="{{ api_base }}"{% endif %}>
@@ -924,6 +925,35 @@
               <button class="button ghost hidden" id="runPredictiveSelectedButton" type="button">Test Selected Model</button>
             </div>
           </div>
+          <details class="table-card full-width predictor-pattern-card" id="predictorPatternCard">
+            <summary><strong>Do added predictors help?</strong> Compare clinical inputs with genes or other added predictors.</summary>
+            <p>Use the same held-out patients for both models, then explore how predicted risk changes across groups.</p>
+            <div class="button-row"><button class="button ghost" id="patternDemo" type="button">Try molecular demo</button><span>Synthetic genes and clinical stage; replaces the loaded dataset.</span></div>
+            <div class="pattern-input-grid">
+              <div><h4>1. Clinical predictors</h4><div class="checklist" id="patternClinical"></div></div>
+              <div><h4>2. Added predictors</h4><div class="checklist" id="patternAdded"></div></div>
+              <div><h4>3. Categorical predictors</h4><div class="checklist" id="patternCategorical"></div></div>
+            </div>
+            <div class="pattern-input-grid">
+              <label class="toolbar-field"><span>Model</span><select id="patternModel"><option value="gbs">Gradient Boosted Survival (ML)</option><option value="rsf">Random Survival Forest (ML)</option><option value="deepsurv">DeepSurv (DL)</option></select></label>
+              <label class="toolbar-field"><span>Explore added predictor</span><select id="patternTarget"></select></label>
+              <label class="toolbar-field"><span>Compare categorical groups</span><select id="patternGroup"></select></label>
+            </div>
+            <details><summary>Run settings</summary><div class="pattern-input-grid">
+              <label class="toolbar-field"><span>Random seed</span><input id="patternSeed" type="number" min="0" max="4294967295" value="42"></label>
+              <label class="toolbar-field"><span>Trees / boosting iterations</span><input id="patternTrees" type="number" min="10" max="1000" value="100"></label>
+              <label class="toolbar-field"><span>Maximum tree depth</span><input id="patternDepth" type="number" min="1" max="64" value="3"></label>
+              <label class="toolbar-field"><span>DL epochs</span><input id="patternEpochs" type="number" min="10" max="1000" value="100"></label>
+              <label class="toolbar-field"><span>Bootstrap draws</span><input id="patternBootstrap" type="number" min="100" max="5000" value="1000"></label>
+            </div></details>
+            <div class="button-row"><button class="button primary" id="patternRun" type="button">Compare predictor sets</button><button class="button ghost" id="patternJson" type="button" disabled>Save results (JSON)</button><button class="button ghost" id="patternCsv" type="button" disabled>Save curves (CSV)</button></div>
+            <p id="patternStatus" role="status" aria-live="polite">Load data and choose two separate predictor sets.</p>
+            <div id="patternResults" class="hidden">
+              <h3>Do the added predictors improve risk ranking?</h3><p id="patternInterpretation"></p><div class="plot-shell" id="patternComparisonPlot"></div>
+              <h3>How does predicted risk change across groups?</h3><div class="plot-shell" id="patternCurvePlot"></div><p id="patternCurveNote"></p>
+              <p>Exploratory model predictions. Risk scores are not survival probabilities or causal effects. Repeated choices on the same test patients need independent validation.</p>
+            </div>
+          </details>
           <div class="benchmark-summary-grid" id="benchmarkSummaryGrid">
             <div class="empty-state">Run ML or DL to see the latest predictive summary here.</div>
           </div>

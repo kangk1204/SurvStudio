@@ -1352,6 +1352,42 @@ def build_time_dependent_importance_figure(
 # ── XAI: Partial Dependence Plot ──────────────────────────────
 
 
+def build_predictor_comparison_figure(analysis: dict[str, Any]) -> dict[str, Any]:
+    """Paired feature-set performance, never a ranking of differently evaluated patients."""
+    fig = go.Figure()
+    for i, row in enumerate(analysis["comparison"]["rows"]):
+        lo, hi = row["c_index_ci"]
+        value = row["c_index"]
+        error = None if lo is None or hi is None else {
+            "type": "data", "symmetric": False, "array": [hi - value], "arrayminus": [value - lo]}
+        fig.add_trace(go.Scatter(x=[value], y=[row["feature_set"]], mode="markers",
+                                error_x=error, showlegend=False,
+                                marker={"size": 11, "color": [SLATE, SAGE][i]}))
+    fig.update_layout(**_COMMON_LAYOUT, height=280, margin={"l": 180, "r": 25, "t": 20, "b": 55},
+                      xaxis={"title": "C-index (risk ranking)", "range": [0, 1]},
+                      yaxis={"autorange": "reversed"})
+    return figure_to_json(fig)
+
+
+def build_predictor_pattern_figure(pattern: dict[str, Any]) -> dict[str, Any]:
+    """Fixed-model risk curves on observed training support; nulls are not zero."""
+    fig = go.Figure()
+    for i, support in enumerate(pattern["support"]):
+        rows = [r for r in pattern["rows"] if r["group"] == support["group"]]
+        fig.add_trace(go.Scatter(
+            x=[r["value"] for r in rows], y=[r["risk_score"] for r in rows],
+            name=f'{escape_plotly_text(support["group"])} (n={support["training_patients"]})',
+            mode="markers" if pattern["target_type"] == "categorical" else "lines",
+            line={"color": PALETTE[i % len(PALETTE)], "width": 2.5,
+                  "dash": "solid" if i < len(PALETTE) else "dash"},
+            marker={"size": 9, "color": PALETTE[i % len(PALETTE)]}, connectgaps=False))
+    fig.update_layout(**_COMMON_LAYOUT, height=380, margin={"l": 80, "r": 20, "t": 20, "b": 70},
+                      xaxis={"title": escape_plotly_text(pattern["target_feature"])},
+                      yaxis={"title": "Model risk score (training SD)"},
+                      legend={"orientation": "h", "y": 1.08})
+    return figure_to_json(fig)
+
+
 def build_pdp_figure(pdp_data: dict[str, Any]) -> dict[str, Any]:
     """Line plot showing how risk score changes as a feature value varies.
 

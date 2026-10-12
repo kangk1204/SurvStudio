@@ -4897,6 +4897,86 @@ class PDPRequest(_FeatureSelectionRequestModel):
         return self
 
 
+class PredictorPatternRequest(_EventPositiveValueRequestModel):
+    dataset_id: str
+    time_column: str
+    event_column: str
+    event_positive_value: Any = 1
+    clinical_features: list[str] = Field(min_length=1, max_length=1000)
+    added_features: list[str] = Field(min_length=1, max_length=1000)
+    categorical_features: list[str] = Field(default_factory=list, max_length=1000)
+    target_feature: str = Field(min_length=1, max_length=512)
+    group_feature: str = Field(min_length=1, max_length=512)
+    model_type: Literal["gbs", "rsf", "deepsurv"] = "gbs"
+    random_seed: int = Field(default=42, ge=0, le=2**32 - 1)
+    n_estimators: int = Field(default=100, ge=10, le=1000)
+    max_depth: int | None = Field(default=3, ge=1, le=64)
+    epochs: int = Field(default=100, ge=10, le=1000)
+    n_bootstrap: int = Field(default=1000, ge=100, le=5000)
+    bootstrap_seed: int | None = Field(default=None, ge=0, le=2**32 - 1)
+
+    @field_validator("clinical_features", "added_features", "categorical_features", mode="before")
+    @classmethod
+    def validate_names(cls, value: Any, info: Any) -> list[str]:
+        return _normalize_unique_name_list(value, field_name=info.field_name)
+
+    @field_validator("random_seed", "n_estimators", "max_depth", "epochs", "n_bootstrap", "bootstrap_seed", mode="before")
+    @classmethod
+    def reject_boolean_numbers(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("Use a number, not true or false.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_roles(self) -> "PredictorPatternRequest":
+        if set(self.clinical_features) & set(self.added_features):
+            raise ValueError("Clinical and added predictor sets must be separate.")
+        all_features = self.clinical_features + self.added_features
+        if len(all_features) > 1000:
+            raise ValueError("At most 1,000 combined predictors can be used.")
+        _validate_subset_names(self.categorical_features, all_features,
+                               subset_name="categorical_features", superset_name="selected predictors")
+        _validate_subset_names([self.target_feature], self.added_features,
+                               subset_name="target_feature", superset_name="added_features")
+        _validate_subset_names([self.group_feature], self.clinical_features,
+                               subset_name="group_feature", superset_name="clinical_features")
+        return self
+
+
+@app.post("/api/load-molecular-demo")
+async def load_molecular_demo() -> dict[str, Any]:
+    from survival_toolkit.sample_data import make_molecular_demo
+    return await _load_builtin_dataset_response(make_molecular_demo, filename="synthetic_molecular_demo")
+
+
+@app.post("/api/predictor-patterns")
+async def predictor_patterns(request_model: PredictorPatternRequest, request: Request) -> dict[str, Any]:
+    try:
+        from survival_toolkit.predictor_patterns import compare_predictor_sets
+        from survival_toolkit.plots import build_predictor_comparison_figure, build_predictor_pattern_figure
+        stored = _get_stored_dataset(request_model.dataset_id)
+        config = request_model.model_dump()
+
+        def _run() -> dict[str, Any]:
+            features = request_model.clinical_features + request_model.added_features
+            _reject_survival_outcome_feature_columns(
+                stored, features, time_column=request_model.time_column,
+                event_column=request_model.event_column, event_positive_value=request_model.event_positive_value,
+                context="added-predictor comparison")
+            _reject_outcome_informed_columns(stored, features, context="added-predictor comparison")
+            _reject_oversized_design(stored, features, request_model.categorical_features,
+                                    context="added-predictor comparison")
+            result = compare_predictor_sets(stored.dataframe, **{k: v for k, v in config.items() if k != "dataset_id"})
+            analysis = {k: v for k, v in result.items() if not k.startswith("_")}
+            return _attach_dataset_hash({"analysis": analysis, "request_config": config,
+                "comparison_figure": build_predictor_comparison_figure(analysis),
+                "pattern_figure": build_predictor_pattern_figure(analysis["pattern"]) if analysis["pattern"] else None}, stored)
+
+        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
 @app.post("/api/time-dependent-importance")
 async def time_dependent_importance(request_model: TimeDependentImportanceRequest, request: Request) -> dict[str, Any]:
     try:

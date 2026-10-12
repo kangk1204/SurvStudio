@@ -4073,6 +4073,7 @@ def train_deepsurv(
     early_stopping_patience: int | None = 10,
     early_stopping_min_delta: float = 1e-4,
     refit_on_training_partition: bool = True,
+    _return_fitted_model: bool = False,
 ) -> dict[str, Any]:
     """Train a DeepSurv (Neural Cox PH) model.
 
@@ -4262,6 +4263,8 @@ def train_deepsurv(
         "insight_board": insight,
         "scientific_summary": insight,
         **batching_meta,
+        # Internal opt-in for fixed-model prediction utilities; never enabled by the public trainer API.
+        **({"_fitted_model": model} if _return_fitted_model else {}),
     }
 
 

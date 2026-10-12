@@ -69,6 +69,7 @@ P003,7.2,1,72,IV
 use a full cohort to fit models. Keep time units consistent and use only information available when
 making the prediction. Do not select patient IDs, follow-up time or outcome-derived fields as predictors.
 
+[Mode settings and how to read results](docs/user-guide.md#main-analyses) ·
 [Data preparation, missing values and common mistakes](docs/getting-started.md#prepare-your-own-file)
 
 ## 4. Choose a mode

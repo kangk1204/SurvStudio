@@ -47,6 +47,7 @@ _APP_JS_PARTS = (
     "app_analyses.js",
     "app_models.js",
     "app_markers.js",
+    "app_patterns.js",
     "app.js",
 )
 

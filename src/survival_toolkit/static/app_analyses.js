@@ -396,6 +396,7 @@ function updateControlsFromDataset({ scrollToTop = false } = {}) {
   renderSharedFeatureSummary();
   renderDatasetPreview();
   applyBundledPresets();
+  refreshPatternControls();
   refs.downloadSignatureButton.disabled = true;
   showWorkspace();
   if (scrollToTop) scrollWorkspaceEntryToTop();
@@ -426,6 +427,7 @@ function clearOutcomeInformedGroupingOutputs() {
 }
 
 function clearAnalysisOutputs() {
+  clearPredictorPatterns();
   invalidateRequestTokens(["km", "cox", "tables", "signature", "ml", "dl"]);
   invalidateRequestTokens(["markers", "markerValidation"]);
   // A grouping being created is cancelled too: an optimal cutpoint is optimised for the endpoint of its request.

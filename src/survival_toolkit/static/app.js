@@ -1193,6 +1193,7 @@ function initExportMenus() {
 }
 
 initListeners();
+initPredictorPatterns();
 initDragDrop();
 initKeyboardShortcuts();
 initTooltips();

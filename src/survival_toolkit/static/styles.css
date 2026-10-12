@@ -3297,3 +3297,13 @@ tbody tr:hover td {
   overflow-y: auto;
   overflow-x: hidden;
 }
+
+/* Added-predictor explorer uses independent, explicit feature roles. */
+.predictor-pattern-card > summary { cursor: pointer; padding: 8px 0; }
+.pattern-input-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
+.pattern-input-grid > * { min-width: 0; }
+.pattern-input-grid .checklist { max-height: 180px; overflow: auto; }
+.pattern-input-grid input[type="number"], .pattern-input-grid select { width: 100%; max-width: 100%; }
+.predictor-pattern-card .plot-shell { width: 100%; min-width: 0; overflow: hidden; }
+#patternStatus[data-stale="true"] { color: #984d1a; }
+@media (max-width: 700px) { .pattern-input-grid { grid-template-columns: 1fr; } }

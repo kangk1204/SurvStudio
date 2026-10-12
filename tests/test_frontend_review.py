@@ -39,7 +39,7 @@ const vm = require("vm");
 const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 const SCRIPT_ORDER = [
   "app_shell.js", "app_downloads.js", "app_benchmark.js", "app_core.js", "app_workspace.js", "app_columns.js",
-  "app_render.js", "app_predictive.js", "app_analyses.js", "app_models.js", "app_markers.js", "app.js",
+  "app_render.js", "app_predictive.js", "app_analyses.js", "app_models.js", "app_markers.js", "app_patterns.js", "app.js",
 ];
 
 function decodeEntities(text) {
