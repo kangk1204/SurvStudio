@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 
 from survival_toolkit.prediction_guard import guarded_prediction_inputs, check_training_outcome_proxies
+from survival_toolkit.lasso_numerics import polish_lasso_coefficients
 from scipy import stats
 from scipy.linalg import qr as scipy_qr
 from statsmodels.duration.hazard_regression import PHReg
@@ -80,6 +81,7 @@ try:
         RandomSurvivalForest,
     )
     from sksurv.linear_model import CoxnetSurvivalAnalysis
+    from sksurv.linear_model.coxph import BreslowEstimator
     from sksurv.metrics import concordance_index_censored
 
     SKSURV_AVAILABLE = True
@@ -87,6 +89,7 @@ except ImportError:
     GradientBoostingSurvivalAnalysis = None
     RandomSurvivalForest = None
     CoxnetSurvivalAnalysis = None
+    BreslowEstimator = None
     concordance_index_censored = None
     SKSURV_AVAILABLE = False
 
@@ -1642,7 +1645,37 @@ def _fit_selected_lasso(
         raise _LassoNumericalError(
             "LASSO-Cox did not meet the numerical convergence check; no coefficients or model results were saved."
         )
+    try:
+        coefficients, precision = polish_lasso_coefficients(
+            design, outcome, _coerce_coxnet_coef_vector(model), float(alpha_meta["alpha"]), model.penalty_factor_)
+        model.coef_[:, -1] = coefficients
+        model.offset_[-1] = np.asarray(design, dtype=float).mean(axis=0) @ coefficients
+        # Preserve Coxnet's null-deviance definition and original penalty path.
+        # Only the selected fit's numerical values are refined.
+        order = np.argsort(-outcome["time"], kind="stable")
+        null_loss = np.log(np.arange(1, len(outcome) + 1))[outcome["event"][order]].sum()
+        if not np.isfinite(null_loss) or null_loss <= 0:
+            raise ValueError("The selected Cox fit has undefined null deviance.")
+        model.deviance_ratio_[-1] = 1 - precision["partial_likelihood_loss"] * len(outcome) / null_loss
+        risk = _checked_lasso_risk(model, design)
+        if model.fit_baseline_model:
+            baselines = list(model._baseline_models)
+            baselines[-1] = BreslowEstimator().fit(risk, outcome["event"], outcome["time"])
+            model._baseline_models = tuple(baselines)
+            baseline = _breslow_baseline_survival_function(model, float(alpha_meta["alpha"]))
+            if (baseline is None or not np.isfinite(baseline.y).all()
+                    or np.any(baseline.y < 0) or np.any(baseline.y > 1) or np.any(np.diff(baseline.y) > 1e-12)):
+                raise ValueError("The refined Cox fit has an invalid baseline.")
+        residual = _lasso_kkt_residual(design, outcome, coefficients,
+                                       float(alpha_meta["alpha"]), model.penalty_factor_)
+        if residual > _LASSO_KKT_TOL:
+            raise ValueError("The refined Cox fit failed its numerical check.")
+    except (ValueError, ArithmeticError, np.linalg.LinAlgError) as exc:
+        raise _LassoNumericalError(
+            "LASSO-Cox could not obtain stable numerical coefficients; no coefficients or model results were saved."
+        ) from exc
     model._survstudio_kkt_residual = residual
+    model._survstudio_precision = precision
     return model
 
 
@@ -2759,6 +2792,9 @@ def train_lasso_cox(
             "fit_max_iterations": model.max_iter,
             "fit_kkt_max_residual": model._survstudio_kkt_residual,
             "fit_kkt_tolerance": _LASSO_KKT_TOL,
+            "fit_precision_method": "training-only active-orthant Newton refinement of the selected Breslow L1 fit",
+            "fit_precision_iterations": model._survstudio_precision["iterations"],
+            "fit_precision_gradient_tolerance": model._survstudio_precision["gradient_tolerance"],
             "alpha_selection_mode": alpha_meta["selection_mode"],
             "alpha_selection_rule": alpha_meta.get("selection_rule"),
             "alpha_selection_c_index": _safe_float(alpha_meta["inner_selection_c_index"]),

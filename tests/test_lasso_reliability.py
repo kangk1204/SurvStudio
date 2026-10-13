@@ -26,19 +26,26 @@ def _wide_design():
     return x, y
 
 
-def test_wide_selected_fit_matches_reference_path_coefficients_risk_and_survival():
+def test_wide_selected_fit_preserves_reference_path_before_precision_refinement(monkeypatch):
     x, y = _wide_design()
     reference = ml._make_lasso_coxnet_model().set_params(
         alpha_min_ratio=.15, tol=ml._LASSO_REFIT_TOL, max_iter=ml._LASSO_REFIT_MAX_ITER).fit(x, y)
     index = 18
     alpha = float(reference.alphas_[index])
+    original = ml.polish_lasso_coefficients
+    initial = []
+    def record_initial(*args, **kwargs):
+        initial.append(np.asarray(args[2]).copy())
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ml, "polish_lasso_coefficients", record_initial)
     selected = ml._fit_selected_lasso(x, y, {"alpha": alpha, "alpha_path": reference.alphas_[:index+1].tolist()})
     assert selected.alphas_[-1] == alpha
-    np.testing.assert_allclose(ml._coerce_coxnet_coef_vector(selected), reference.coef_[:, index], atol=1e-12, rtol=0)
-    np.testing.assert_allclose(selected.predict(x), reference.predict(x, alpha=alpha), atol=1e-12, rtol=0)
+    np.testing.assert_allclose(initial[0], reference.coef_[:, index], atol=1e-12, rtol=0)
+    np.testing.assert_allclose(ml._coerce_coxnet_coef_vector(selected), reference.coef_[:, index], atol=1e-6, rtol=0)
+    np.testing.assert_allclose(selected.predict(x), reference.predict(x, alpha=alpha), atol=1e-6, rtol=0)
     np.testing.assert_allclose(selected.predict_survival_function(x, return_array=True),
-                               reference.predict_survival_function(x, alpha=alpha, return_array=True), atol=1e-12, rtol=0)
-    assert selected._survstudio_kkt_residual <= 1e-6
+                               reference.predict_survival_function(x, alpha=alpha, return_array=True), atol=1e-6, rtol=0)
+    assert selected._survstudio_kkt_residual <= 1e-12
 
 
 def test_training_only_alpha_rule_and_prefix_are_preserved():

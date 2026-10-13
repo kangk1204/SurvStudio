@@ -17,6 +17,7 @@ import re
 import socket
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 import signal
@@ -416,10 +417,31 @@ class _SurrogateSafeJSONResponse(JSONResponse):
         return text.encode("utf-8", "backslashreplace")
 
 
+@asynccontextmanager
+async def _workspace_lifespan(application):
+    # Opt-in operator restore runs before requests are admitted. Checkpoints
+    # remain trusted local files and are never accepted by the upload API.
+    checkpoint = os.environ.get("SURVSTUDIO_WORKSPACE_RESTORE", "")
+    if checkpoint:
+        from survival_toolkit.workspace_state import restore_workspace_state, write_workspace_receipt
+        owner = os.environ.get("SURVSTUDIO_WORKSPACE_OWNER", "") or os.environ.get("SURVSTUDIO_SITE_LOGIN", "")
+        receipt = restore_workspace_state(
+            checkpoint, dataset_store=store, artifact_cache=_ml_artifact_cache, marker_store=marker_matrices,
+            owner_scope=owner, idle_policy=os.environ.get("SURVSTUDIO_WORKSPACE_IDLE_POLICY", "preserve"),
+            quiescence_check=lambda: {"admission_paused": True, "active_requests": 0,
+                                     "active_jobs": 0, "queued_jobs": 0, "active_uploads": 0})
+        application.state.workspace_restore_receipt = receipt
+        receipt_path = os.environ.get("SURVSTUDIO_WORKSPACE_RESTORE_RECEIPT", "")
+        if receipt_path:
+            write_workspace_receipt(receipt_path, receipt)
+    yield
+
+
 app = FastAPI(
     title="SurvStudio",
     description="Local survival analysis dashboard for exploratory and validation-oriented cohort work.",
     default_response_class=_SurrogateSafeJSONResponse,
+    lifespan=_workspace_lifespan,
 )
 app.add_middleware(UploadSizeLimitMiddleware)
 app.add_middleware(
