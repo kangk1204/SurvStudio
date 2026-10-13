@@ -61,10 +61,12 @@ from survival_toolkit.evaluation import (
 from survival_toolkit.evaluation import metric_name_for_evaluation as _metric_name_for_evaluation
 
 try:
+    from sklearn.exceptions import ConvergenceWarning
     from sklearn.model_selection import StratifiedKFold
 
     _SKLEARN_AVAILABLE = True
 except ImportError:
+    ConvergenceWarning = None
     StratifiedKFold = None
     _SKLEARN_AVAILABLE = False
 
@@ -875,6 +877,17 @@ def _sksurv_step_positions(step_times: np.ndarray, eval_times: np.ndarray) -> np
     return positions
 
 
+def _resolve_coxnet_prediction_alpha(model: Any, alpha: float | None) -> float | None:
+    # Coxnet's explicit-alpha baseline lookup uses the first np.isclose match.
+    # A selected path ends at this exact alpha, so None unambiguously selects
+    # the last coefficients and baseline even for neighboring tiny penalties.
+    if alpha is not None and CoxnetSurvivalAnalysis is not None and isinstance(model, CoxnetSurvivalAnalysis):
+        alphas = np.asarray(getattr(model, "alphas_", []), dtype=float)
+        if alphas.size and float(alpha) == float(alphas[-1]):
+            return None
+    return alpha
+
+
 def _breslow_baseline_survival_function(model: Any, alpha: float | None) -> Any:
     """Breslow baseline survival step function of a fitted Cox-type scikit-survival model.
 
@@ -889,7 +902,7 @@ def _breslow_baseline_survival_function(model: Any, alpha: float | None) -> Any:
     if not (is_coxnet or is_boosting):
         return None
     try:
-        baseline_model = getter(alpha) if is_coxnet else getter()
+        baseline_model = getter(_resolve_coxnet_prediction_alpha(model, alpha)) if is_coxnet else getter()
     except (TypeError, ValueError):
         return None
     baseline_survival = getattr(baseline_model, "baseline_survival_", None)
@@ -906,6 +919,7 @@ def _sksurv_survival_predictor(model: Any, X: pd.DataFrame, *, alpha: float | No
     ``predict_survival_function`` does), and a Random Survival Forest predicts in row chunks.
     """
     X_array = X.to_numpy() if isinstance(X, pd.DataFrame) else np.asarray(X)
+    alpha = _resolve_coxnet_prediction_alpha(model, alpha)
     baseline_survival = _breslow_baseline_survival_function(model, alpha)
     if baseline_survival is not None:
         if CoxnetSurvivalAnalysis is not None and isinstance(model, CoxnetSurvivalAnalysis):
@@ -1465,7 +1479,9 @@ def _standardize_encoded_matrices(
     }
 
 
-def _make_lasso_coxnet_model(*, alpha: float | None = None) -> CoxnetSurvivalAnalysis:
+def _make_lasso_coxnet_model(
+    *, alpha: float | None = None, alpha_path: Sequence[float] | None = None,
+) -> CoxnetSurvivalAnalysis:
     kwargs: dict[str, Any] = {
         "l1_ratio": 1.0,
         "normalize": False,
@@ -1473,11 +1489,161 @@ def _make_lasso_coxnet_model(*, alpha: float | None = None) -> CoxnetSurvivalAna
         "max_iter": 100000,
         "fit_baseline_model": True,
     }
-    if alpha is None:
+    if alpha_path is not None:
+        path = np.asarray(alpha_path, dtype=float)
+        if (path.ndim != 1 or not path.size or not np.isfinite(path).all()
+                or np.any(path <= 0) or np.any(np.diff(path) >= 0)):
+            raise ValueError("LASSO-Cox needs a finite, positive, descending training penalty path.")
+        if alpha is None or path[-1] != float(alpha):
+            raise ValueError("The LASSO-Cox training path must end at the selected penalty.")
+        kwargs["alphas"] = path
+    elif alpha is None:
         kwargs.update({"n_alphas": 40, "alpha_min_ratio": "auto"})
     else:
         kwargs["alphas"] = [float(alpha)]
     return CoxnetSurvivalAnalysis(**kwargs)
+
+
+class _LassoNumericalError(ValueError):
+    """A failed numerical fit must not become a ranked model or a CV fallback."""
+
+
+_LASSO_REFIT_TOL = 1e-14
+_LASSO_REFIT_MAX_ITER = 1000000
+_LASSO_KKT_TOL = 1e-6
+
+
+def _lasso_kkt_residual(
+    design: np.ndarray, outcome: np.ndarray, coefficients: np.ndarray,
+    alpha: float, penalty_factor: np.ndarray | None = None,
+) -> float:
+    """Maximum first-order residual of the training Breslow partial likelihood plus L1 penalty.
+
+    Risk sets include events and censoring rows tied at the same time. Feature
+    chunks bound additional memory independently of the number of predictors.
+    This is a numerical check, not an inference or model-quality certificate.
+    """
+    x = np.asarray(design, dtype=float)
+    beta = np.asarray(coefficients, dtype=float)
+    if (x.ndim != 2 or not x.shape[0] or not x.shape[1] or beta.shape != (x.shape[1],)
+            or not np.isfinite(x).all() or not np.isfinite(beta).all()):
+        raise _LassoNumericalError("LASSO-Cox could not check numerical convergence on the training design.")
+    factors = np.ones(len(beta)) if penalty_factor is None else np.asarray(penalty_factor, dtype=float)
+    if factors.shape != beta.shape or not np.isfinite(factors).all() or np.any(factors < 0):
+        raise _LassoNumericalError("LASSO-Cox produced invalid penalty factors.")
+    if not np.isfinite(alpha) or float(alpha) <= 0:
+        raise _LassoNumericalError("LASSO-Cox produced an invalid selected penalty.")
+    times = np.asarray(outcome["time"], dtype=float)
+    events = np.asarray(outcome["event"], dtype=bool)
+    if (times.shape != (len(x),) or events.shape != times.shape or not events.any()
+            or not np.isfinite(times).all()):
+        raise _LassoNumericalError("LASSO-Cox could not check numerical convergence on the training outcomes.")
+    order = np.argsort(times, kind="stable")
+    times, events = times[order], events[order]
+    lp = (x @ beta)[order]
+    if not np.isfinite(lp).all():
+        raise _LassoNumericalError("LASSO-Cox produced non-finite training scores.")
+    with np.errstate(under="ignore"):
+        weights = np.exp(lp - np.max(lp))
+    _, starts = np.unique(times, return_index=True)
+    deaths = np.add.reduceat(events.astype(float), starts)
+    starts, deaths = starts[deaths > 0], deaths[deaths > 0]
+    risk_sums = np.cumsum(weights[::-1])[::-1][starts]
+    if not np.isfinite(risk_sums).all() or np.any(risk_sums <= 0):
+        raise _LassoNumericalError("LASSO-Cox risk weights could not be evaluated reliably; no results were saved.")
+    gradient = np.empty(len(beta))
+    for first in range(0, len(beta), 128):
+        raise_if_cancelled()
+        last = min(first + 128, len(beta))
+        chunk = x[order, first:last]
+        cumulative = np.cumsum((chunk * weights[:, None])[::-1], axis=0)[::-1]
+        gradient[first:last] = (
+            np.sum(cumulative[starts] * (deaths / risk_sums)[:, None], axis=0)
+            - np.sum(chunk[events], axis=0)
+        ) / len(x)
+    if not np.isfinite(gradient).all():
+        raise _LassoNumericalError("LASSO-Cox produced a non-finite numerical convergence residual.")
+    active = beta != 0
+    with np.errstate(over="ignore", invalid="ignore"):
+        penalties = float(alpha) * factors
+        residual = np.where(active, np.abs(gradient + penalties * np.sign(beta)),
+                            np.maximum(np.abs(gradient) - penalties, 0))
+    if not np.isfinite(residual).all():
+        raise _LassoNumericalError("LASSO-Cox produced a non-finite numerical convergence residual.")
+    return float(np.max(residual))
+
+
+def _checked_lasso_risk(model: Any, design: np.ndarray) -> np.ndarray:
+    risk = np.asarray(model.predict(design), dtype=float)
+    if risk.shape != (len(design),) or not np.isfinite(risk).all():
+        raise _LassoNumericalError("LASSO-Cox produced non-finite risk scores; no results were saved.")
+    try:
+        with np.errstate(over="raise", invalid="raise", under="ignore"):
+            np.exp(risk)
+    except FloatingPointError as exc:
+        raise _LassoNumericalError(
+            "LASSO-Cox produced risk scores too large for valid survival predictions; no results were saved."
+        ) from exc
+    return risk
+
+
+def _fit_checked_lasso(model: Any, design: np.ndarray, outcome: np.ndarray) -> Any:
+    """Reject incomplete fits before coefficients, rankings or predictions leave the fitter."""
+    _require_sklearn()
+    raise_if_cancelled()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ConvergenceWarning)
+            model.fit(design, outcome)
+    except ConvergenceWarning as exc:
+        raise _LassoNumericalError(
+            "LASSO-Cox did not converge. No coefficients or model results were saved; "
+            "review the predictors and sample size before trying again."
+        ) from exc
+    except (ValueError, ArithmeticError) as exc:
+        raise _LassoNumericalError(
+            "LASSO-Cox could not obtain a numerically valid fit; no coefficients or model results were saved."
+        ) from exc
+    for name in ("coef_", "offset_", "deviance_ratio_", "alphas_"):
+        values = np.asarray(getattr(model, name), dtype=float)
+        if not values.size or not np.isfinite(values).all():
+            raise _LassoNumericalError("LASSO-Cox produced non-finite fitted values; no results were saved.")
+    _checked_lasso_risk(model, design)
+    if model.fit_baseline_model:
+        baseline = _breslow_baseline_survival_function(model, float(model.alphas_[-1]))
+        if baseline is None:
+            raise _LassoNumericalError("LASSO-Cox did not produce a usable baseline survival curve.")
+        times = np.asarray(baseline.x, dtype=float)
+        values = np.asarray(baseline.y, dtype=float)
+        if (times.ndim != 1 or not times.size or values.shape != times.shape
+                or not np.isfinite(times).all() or not np.isfinite(values).all()
+                or np.any(np.diff(times) <= 0) or np.any(values < 0) or np.any(values > 1)
+                or np.any(np.diff(values) > 1e-12)):
+            raise _LassoNumericalError("LASSO-Cox produced an invalid baseline survival curve; no results were saved.")
+    return model
+
+
+def _fit_selected_lasso(
+    design: np.ndarray, outcome: np.ndarray, alpha_meta: dict[str, Any],
+) -> CoxnetSurvivalAnalysis:
+    # Default predict() and coefficient consumers use the last alpha. Ending the
+    # original training path at the selected alpha preserves warm-start state and
+    # makes every consumer use that alpha, without changing the selection rule.
+    model = _make_lasso_coxnet_model(alpha=alpha_meta["alpha"], alpha_path=alpha_meta["alpha_path"])
+    # Refine only the selected training fit. The original grid and inner-CV
+    # computation remain unchanged; no alpha or predictor is substituted.
+    model.set_params(tol=_LASSO_REFIT_TOL, max_iter=_LASSO_REFIT_MAX_ITER)
+    _fit_checked_lasso(model, design, outcome)
+    if float(model.alphas_[-1]) != float(alpha_meta["alpha"]):
+        raise _LassoNumericalError("LASSO-Cox stopped before the selected training penalty; no results were saved.")
+    residual = _lasso_kkt_residual(design, outcome, _coerce_coxnet_coef_vector(model),
+                                   float(alpha_meta["alpha"]), model.penalty_factor_)
+    if residual > _LASSO_KKT_TOL:
+        raise _LassoNumericalError(
+            "LASSO-Cox did not meet the numerical convergence check; no coefficients or model results were saved."
+        )
+    model._survstudio_kkt_residual = residual
+    return model
 
 
 def _coerce_coxnet_coef_vector(model: CoxnetSurvivalAnalysis) -> np.ndarray:
@@ -1519,8 +1685,10 @@ def _select_lasso_alpha(
 
     full_encoded, _ = _drop_constant_train_columns(train_encoded, train_encoded, model_label="LASSO-Cox")
     full_scaled, _, _, _ = _standardize_encoded_matrices(full_encoded, full_encoded)
-    path_model = _make_lasso_coxnet_model()
-    path_model.fit(full_scaled.to_numpy(), y_train)
+    # Inner selection scores linear predictors only. Do not construct or
+    # certify survival baselines for unselected points on this grid.
+    path_model = _make_lasso_coxnet_model().set_params(fit_baseline_model=False)
+    _fit_checked_lasso(path_model, full_scaled.to_numpy(), y_train)
     alphas = np.asarray(path_model.alphas_, dtype=float)
     coef_path = np.asarray(path_model.coef_, dtype=float)
     if coef_path.ndim == 1:
@@ -1559,7 +1727,8 @@ def _select_lasso_alpha(
                     tol=1e-7,
                     max_iter=100000,
                 )
-                fold_model.fit(
+                _fit_checked_lasso(
+                    fold_model,
                     inner_train_scaled.to_numpy(),
                     _prepare_sksurv_data(
                         inner_train_frame,
@@ -1567,6 +1736,8 @@ def _select_lasso_alpha(
                         event_column,
                     ),
                 )
+            except _LassoNumericalError:
+                raise
             except (ValueError, ArithmeticError):
                 # Degenerate inner fold (for example a singular design or too few events).
                 continue
@@ -1619,8 +1790,10 @@ def _select_lasso_alpha(
         search_rows,
         key=lambda row: (round(float(row["c_index"]), 12), float(row["alpha"])),
     )
+    selected_index = int(np.flatnonzero(alphas == best["alpha"])[0])
     return {
         "alpha": float(best["alpha"]),
+        "alpha_path": alphas[:selected_index + 1].tolist(),
         "selection_mode": selection_mode,
         "selection_rule": "inner_cv_max_mean_c_index" if selection_mode == "inner_cv" else "apparent_max_c_index",
         "selection_threshold_c_index": float(best["c_index"]),
@@ -2515,8 +2688,7 @@ def train_lasso_cox(
     )
 
     t_start = time.monotonic()
-    model = _make_lasso_coxnet_model(alpha=alpha_meta["alpha"])
-    model.fit(matrices["train_encoded"].to_numpy(), matrices["y_train"])
+    model = _fit_selected_lasso(matrices["train_encoded"].to_numpy(), matrices["y_train"], alpha_meta)
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
 
     coef_vector = _coerce_coxnet_coef_vector(model)
@@ -2569,8 +2741,8 @@ def train_lasso_cox(
         model=model,
         matrices=matrices,
         event_column=event_column,
-        evaluation_risk_scores=np.asarray(model.predict(matrices["eval_encoded"].to_numpy()), dtype=float),
-        risk_scores=np.asarray(model.predict(matrices["full_encoded"].to_numpy()), dtype=float),
+        evaluation_risk_scores=_checked_lasso_risk(model, matrices["eval_encoded"].to_numpy()),
+        risk_scores=_checked_lasso_risk(model, matrices["full_encoded"].to_numpy()),
         importance_records=importance_records,
         importance_method="Absolute LASSO-Cox coefficient on the standardized encoded design (one row per encoded column).",
         brier_result=_holdout_brier_metrics(
@@ -2582,6 +2754,11 @@ def train_lasso_cox(
         ),
         model_settings={
             "alpha": _safe_float(alpha_meta["alpha"]),
+            "alpha_path_length": len(alpha_meta["alpha_path"]),
+            "fit_tolerance": model.tol,
+            "fit_max_iterations": model.max_iter,
+            "fit_kkt_max_residual": model._survstudio_kkt_residual,
+            "fit_kkt_tolerance": _LASSO_KKT_TOL,
             "alpha_selection_mode": alpha_meta["selection_mode"],
             "alpha_selection_rule": alpha_meta.get("selection_rule"),
             "alpha_selection_c_index": _safe_float(alpha_meta["inner_selection_c_index"]),
@@ -3049,10 +3226,9 @@ def _fit_evaluate_lasso_cox_split(
     y_train = _prepare_sksurv_data(train_eval, time_column, event_column)
 
     t_start = time.monotonic()
-    model = _make_lasso_coxnet_model(alpha=alpha_meta["alpha"])
-    model.fit(train_encoded.to_numpy(), y_train)
+    model = _fit_selected_lasso(train_encoded.to_numpy(), y_train, alpha_meta)
     training_time_ms = round((time.monotonic() - t_start) * 1000, 1)
-    risk_score = np.asarray(model.predict(test_encoded.to_numpy()), dtype=float)
+    risk_score = _checked_lasso_risk(model, test_encoded.to_numpy())
     coef_vector = _coerce_coxnet_coef_vector(model)
 
     y_test = _prepare_sksurv_data(test_eval, time_column, event_column)
