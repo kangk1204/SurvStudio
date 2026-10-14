@@ -145,6 +145,25 @@ Do not select genes or tune settings using outcomes from the full cohort before 
 ML and DL learn to rank patients by predicted event risk. They do not establish which treatment
 causes a better outcome, and a more complex model is not automatically more accurate.
 
+| Your question | Use | Information you get |
+|---|---|---|
+| Do predefined groups have different survival? | KM curves and log-rank | Observed group survival and evidence of a difference. |
+| How do several inputs jointly predict risk? | ML/DL | A relative risk score for each patient. |
+| Does that prediction work in patients kept out of fitting? | Held-out C-index | Risk-ranking performance, with uncertainty. |
+| Do genes add useful prediction beyond clinical variables? | **Do added predictors help?** | Change in held-out C between clinical-only and augmented inputs. |
+
+Open **Compare models → Do added predictors help?**, then **Try molecular demo**.
+This replaces the loaded data with synthetic genes and stage. Click **Compare predictor sets**
+to see the C-index comparison, KM curves for predicted risk groups, patient scores and stage-specific
+model predictions. Use **Save patient risk scores (CSV)** for every held-out patient; the table
+shows the ten highest scores and the source row for tracing them to your data.
+
+The risk-group cutoff is the fitted model's median score on training patients. Test outcomes do not
+set this cutoff. A separated KM plot can describe model-defined groups, but does not establish
+accurate individual prediction or a clinical decision threshold. Read the held-out C-index and
+the paired difference interval as well. Relative risk scores are not survival probabilities, and
+their raw values cannot be compared across different model types.
+
 | Output | How to read it |
 |---|---|
 | C-index | Higher means better ranking of comparable patient pairs. `0.65` is roughly 65% correctly ranked pairs, not 65% prediction accuracy or a survival probability. |
@@ -208,3 +227,26 @@ Single-model **DL** supports holdout or CV, but the locked test option applies t
 For detailed controls and limits, see [ML](user-guide.md#machine-learning),
 [DL](user-guide.md#deep-learning) and the [evaluation contract](user-guide.md#evaluation-contract).
 For startup, file or package errors, see [troubleshooting](installation.md#common-problems).
+
+
+## Compare clinical inputs with added predictors
+
+In **Prediction models**, open **Do added predictors help?**. Choose separate clinical and added
+predictor sets, mark categorical variables, and choose one added predictor and a clinical group.
+For a ready example, click **Try molecular demo**: it loads 480 simulated patients with age,
+stage and two synthetic genes. This replaces the loaded dataset.
+
+Click **Compare predictor sets**. Gradient boosting, survival forests and DeepSurv are available
+in this explorer; the existing model board still compares all supported models. Both feature sets
+use the same training and test patients. Positive change in C-index means better risk ranking in
+that holdout; an interval crossing zero leaves the improvement uncertain. More inputs or a neural
+model need not improve prediction.
+
+The lower plot shows how the fixed model's predicted risk changes across categorical groups.
+It uses training data as its reference and leaves unsupported combinations blank. The score is
+in training standard deviations, not a survival probability. A curved or different group pattern
+describes the fitted model; it does not establish a biological interaction or a causal effect.
+
+**Save results (JSON)** retains both comparisons, settings and curves. **Save curves (CSV)** keeps
+unsupported values blank. Changing inputs disables old exports and requires a new run. Repeated
+choices on these test patients need validation in independent data.

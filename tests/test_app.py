@@ -47,6 +47,7 @@ _APP_JS_PARTS = (
     "app_analyses.js",
     "app_models.js",
     "app_markers.js",
+    "app_patterns.js",
     "app.js",
 )
 
@@ -4898,7 +4899,7 @@ def test_review_shared_features_opens_the_model_editor() -> None:
 
     focus_body = app_js.split('function focusModelFeatureEditor(tabName = "ml") {', 1)[1].split("\nfunction ", 1)[0]
     assert "activateTab(tabName);" in focus_body
-    assert '(featureCard || featureSummaryCard)?.scrollIntoView({ behavior: "smooth", block: "start" });' in focus_body
+    assert "scrollWorkspaceTargetIntoView(featureCard || featureSummaryCard);" in focus_body
 
 
 def test_benchmark_board_offers_a_starter_action_before_any_result() -> None:

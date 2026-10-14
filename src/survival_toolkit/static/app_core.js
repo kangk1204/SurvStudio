@@ -361,6 +361,14 @@ const refs = {
   runPredictiveSelectedButton: document.getElementById("runPredictiveSelectedButton"),
   runPredictiveWorkbenchButton: document.getElementById("runPredictiveWorkbenchButton"),
   predictiveActionStatusText: document.getElementById("predictiveActionStatusText"),
+  predictiveInputSummary: document.getElementById("predictiveInputSummary"),
+  predictorAvailabilityConfirmed: document.getElementById("predictorAvailabilityConfirmed"),
+  outcomeProxyReviewPanel: document.getElementById("outcomeProxyReviewPanel"),
+  outcomeProxyReviewMessage: document.getElementById("outcomeProxyReviewMessage"),
+  outcomeProxyReviewControls: document.getElementById("outcomeProxyReviewControls"),
+  outcomeProxyReviewReason: document.getElementById("outcomeProxyReviewReason"),
+  outcomeProxyReviewConfirmed: document.getElementById("outcomeProxyReviewConfirmed"),
+  outcomeProxyReviewDetails: document.getElementById("outcomeProxyReviewDetails"),
   benchmarkActionCard: document.getElementById("benchmarkActionCard"),
   benchmarkSummaryGrid: document.getElementById("benchmarkSummaryGrid"),
   benchmarkComparisonPlot: document.getElementById("benchmarkComparisonPlot"),
@@ -569,8 +577,17 @@ async function fetchJSON(url, options = {}) {
       throw httpError(genericMessage, response.status);
     }
   }
+  if (options.signal?.aborted) throw new SupersededRequestError();
+  const proxyScope = url === "/api/predictor-patterns" ? "patterns" : "models";
+  let proxyConfig = null;
+  if (typeof options.body === "string") {
+    try { proxyConfig = JSON.parse(options.body); } catch { /* Non-JSON requests have no model review. */ }
+  }
   if (!response.ok) {
     const message = extractErrorMessage(payload, rawText);
+    if (payload?.detail?.code === "outcome_proxy_review_required" && typeof renderOutcomeProxyPause === "function") {
+      renderOutcomeProxyPause(payload.detail, proxyScope, proxyConfig);
+    }
     // Only the loss of the loaded cohort itself ends the workspace; a 404 for another dataset (an older
     // snapshot, an external validation cohort, a history entry) is an ordinary error.
     const missingDatasetId = response.status === 404 ? /Unknown dataset id:\s*([\w-]+)/i.exec(message)?.[1] : null;
@@ -582,12 +599,16 @@ async function fetchJSON(url, options = {}) {
     }
     throw httpError(message, response.status);
   }
+  if (proxyConfig && typeof renderOutcomeProxyCompletion === "function") {
+    renderOutcomeProxyCompletion(payload.analysis?.input_audit?.outcome_proxy, proxyScope, proxyConfig);
+  }
   return payload;
 }
 
 function extractErrorMessage(payload, fallbackText = "") {
   const detail = payload?.detail;
   if (typeof detail === "string" && detail.trim()) return detail;
+  if (detail && typeof detail.message === "string" && detail.message.trim()) return detail.message;
   if (Array.isArray(detail) && detail.length) {
     return detail.map((item) => {
       const path = Array.isArray(item?.loc)

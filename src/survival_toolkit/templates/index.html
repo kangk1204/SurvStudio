@@ -19,6 +19,7 @@
     <script src="../static/app_analyses.js?v={{ static_version }}" defer></script>
     <script src="../static/app_models.js?v={{ static_version }}" defer></script>
     <script src="../static/app_markers.js?v={{ static_version }}" defer></script>
+    <script src="../static/app_patterns.js?v={{ static_version }}" defer></script>
     <script src="../static/app.js?v={{ static_version }}" defer></script>
   </head>
   <body class="simple-view"{% if api_base %} data-api-base="{{ api_base }}"{% endif %}>
@@ -392,7 +393,7 @@
               <span class="run-status hidden" data-run-status="cox" aria-live="polite"></span>
               <button class="button primary" id="runCoxButton">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                Run Analysis
+                Run Cox model
               </button>
               <details class="export-menu">
                 <summary class="button ghost">Save files</summary>
@@ -446,12 +447,12 @@
             <h3>Hazard ratios</h3>
             <div class="diagnostic-copy" id="coxForestCopy">
               <span>Red: p &lt; 0.05. Blue: p ≥ 0.05.</span>
-              <span class="diagnostic-copy-note" id="coxMetaBanner">Select covariates above, then click Run Analysis.</span>
+              <span class="diagnostic-copy-note" id="coxMetaBanner">Choose variables above, then click Run Cox model.</span>
             </div>
             <div class="plot-shell" id="coxPlot">
               <div class="empty-state plot-empty">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                <span>Choose covariates and click <strong>Run Analysis</strong>.</span>
+                <span>Choose variables and click <strong>Run Cox model</strong>.</span>
               </div>
             </div>
           </div>
@@ -893,7 +894,7 @@
           <div class="card-head">
             <div class="card-head-left">
               <h2>Prediction models</h2>
-              <p class="card-subtitle">Machine-learning and deep-learning survival models, compared on the same patient splits</p>
+              <p class="card-subtitle">Combine clinical and molecular inputs to predict patient risk. Compare models on patients kept out of fitting.</p>
             </div>
           </div>
           <div class="benchmark-action-card" id="benchmarkActionCard">
@@ -924,6 +925,53 @@
               <button class="button ghost hidden" id="runPredictiveSelectedButton" type="button">Test Selected Model</button>
             </div>
           </div>
+          <details class="table-card full-width predictor-pattern-card" id="predictorPatternCard">
+            <summary><strong>Do added predictors help?</strong> Compare clinical inputs with genes or other added predictors.</summary>
+            <p><strong>What do prediction models tell me?</strong> KM and log-rank compare existing groups. Models combine predictors into a risk score for each patient; held-out C-index evaluates how well those scores rank risk.</p>
+            <p>Use the same held-out patients for both models, then explore how predicted risk changes across groups.</p>
+            <div class="button-row"><button class="button ghost" id="patternDemo" type="button">Try molecular demo</button><span>Synthetic genes and clinical stage; replaces the loaded dataset.</span></div>
+            <div class="pattern-input-grid">
+              <div><h4>1. Clinical predictors</h4><div class="checklist" id="patternClinical"></div></div>
+              <div><h4>2. Added predictors</h4><div class="checklist" id="patternAdded"></div></div>
+              <div><h4>3. Categorical predictors</h4><div class="checklist" id="patternCategorical"></div></div>
+            </div>
+            <div class="pattern-input-grid">
+              <label class="toolbar-field"><span>Model</span><select id="patternModel"><option value="gbs">Gradient Boosted Survival (ML)</option><option value="rsf">Random Survival Forest (ML)</option><option value="deepsurv">DeepSurv (DL)</option></select></label>
+              <label class="toolbar-field"><span>Explore added predictor</span><select id="patternTarget"></select></label>
+              <label class="toolbar-field"><span>Compare categorical groups</span><select id="patternGroup"></select></label>
+            </div>
+            <details><summary>Run settings</summary><div class="pattern-input-grid">
+              <label class="toolbar-field"><span>Random seed</span><input id="patternSeed" type="number" min="0" max="4294967295" value="42"></label>
+              <label class="toolbar-field"><span>Trees / boosting iterations</span><input id="patternTrees" type="number" min="10" max="1000" value="100"></label>
+              <label class="toolbar-field"><span>Maximum tree depth</span><input id="patternDepth" type="number" min="1" max="64" value="3"></label>
+              <label class="toolbar-field"><span>DL epochs</span><input id="patternEpochs" type="number" min="10" max="1000" value="100"></label>
+              <label class="toolbar-field"><span>Bootstrap draws</span><input id="patternBootstrap" type="number" min="100" max="5000" value="1000"></label>
+            </div></details>
+            <div class="button-row"><button class="button primary" id="patternRun" type="button">Compare predictor sets</button><button class="button ghost" id="patternJson" type="button" disabled>Save results (JSON)</button><button class="button ghost" id="patternCsv" type="button" disabled>Save curves (CSV)</button><button class="button ghost" id="patternRiskCsv" type="button" disabled>Save patient risk scores (CSV)</button></div>
+            <p id="patternStatus" role="status" aria-live="polite">Load data and choose two separate predictor sets.</p>
+            <div id="patternResults" class="hidden">
+              <h3>Do the added predictors improve risk ranking?</h3><p id="patternInterpretation"></p><div class="plot-shell" id="patternComparisonPlot"></div>
+              <h3>How do the predicted risk groups survive?</h3><p id="patternRiskNote"></p><div class="plot-shell" id="patternRiskPlot"></div>
+              <h3>Patient risk scores</h3><p>Higher scores mean higher predicted risk. These are relative scores, not survival probabilities.</p><div class="table-shell" id="patternRiskTable"></div>
+              <h3>How does predicted risk change across groups?</h3><div class="plot-shell" id="patternCurvePlot"></div><p id="patternCurveNote"></p>
+              <p>Exploratory model predictions. Risk scores are not survival probabilities or causal effects. Repeated choices on the same test patients need independent validation.</p>
+            </div>
+          </details>
+          <p class="predictive-input-summary" id="predictiveInputSummary" aria-live="polite">Load data to review the variables and evaluation settings.</p>
+          <p class="predictor-availability-note"><strong>Check your predictors:</strong> use only information known at the time you intend to predict risk. Remove values collected after the outcome. Automatic checks cannot find every hidden outcome proxy.</p>
+          <label class="predictor-availability-note predictor-availability-review"><input type="checkbox" id="predictorAvailabilityConfirmed"><span>I checked: the selected predictors were known at the intended prediction time. This records my review in the saved results.</span></label>
+          <p class="predictor-availability-note">Before fitting, a tree model and a small neural network check training data for hidden outcome patterns. A suspect pattern pauses training for review; it does not prove that a predictor is wrong.</p>
+          <div id="outcomeProxyReviewPanel" class="table-card full-width hidden" role="alert">
+            <h3>Check your predictors before training</h3>
+            <p id="outcomeProxyReviewMessage"></p>
+            <div id="outcomeProxyReviewControls">
+              <label>Predictor timing and source<textarea id="outcomeProxyReviewReason" rows="3" minlength="20" maxlength="1000" placeholder="Explain when these predictors were measured and how they were obtained."></textarea></label>
+              <label class="predictor-availability-review"><input type="checkbox" id="outcomeProxyReviewConfirmed"><span>I reviewed this finding and confirmed that these predictors were available before the outcome at the intended prediction time.</span></label>
+              <p>Remove the suspect predictors, or record your review above and run the model again. Your review and the finding stay in the saved results.</p>
+            </div>
+            <details><summary>Pattern check details</summary><pre id="outcomeProxyReviewDetails"></pre></details>
+          </div>
+          <p class="predictive-metric-guide">C-index measures how well predicted risk ranks event times. About 0.50 is chance; higher is better. It does not measure how accurately survival probabilities are predicted.</p>
           <div class="benchmark-summary-grid" id="benchmarkSummaryGrid">
             <div class="empty-state">Run ML or DL to see the latest predictive summary here.</div>
           </div>

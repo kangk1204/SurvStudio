@@ -80,6 +80,24 @@ def make_example_dataset(seed: int = 42, n_patients: int = 360) -> pd.DataFrame:
     return df
 
 
+def make_molecular_demo(seed: int = 2026101221, n_patients: int = 480) -> pd.DataFrame:
+    """Synthetic named predictors with specified nonlinear effects; not patient measurements."""
+    rng = np.random.default_rng(seed)
+    age = np.clip(rng.normal(60, 10, n_patients), 30, 85)
+    stage = rng.choice(["I", "II", "III", "IV"], n_patients)
+    gene_a, gene_b = rng.normal(size=(2, n_patients))
+    stage_effect = pd.Series(stage).map({"I": 0.0, "II": .3, "III": .7, "IV": 1.1}).to_numpy()
+    log_hazard = (.025 * (age - 60) + stage_effect
+                  + (.35 + .6 * np.isin(stage, ["III", "IV"])) * np.tanh(1.8 * gene_a)
+                  + .4 * gene_b + .3 * gene_a * gene_b)
+    event_time = rng.exponential(1 / (.045 * np.exp(log_hazard)))
+    censor_time = rng.exponential(1 / .03, n_patients)
+    return pd.DataFrame({"patient_id": [f"DEMO-{i:04d}" for i in range(n_patients)],
+                         "os_months": np.minimum(event_time, censor_time),
+                         "os_event": (event_time <= censor_time).astype(int),
+                         "age": age, "stage": stage, "gene_A": gene_a, "gene_B": gene_b})
+
+
 def load_tcga_luad_example_dataset() -> pd.DataFrame:
     dataset_path = DATA_DIR / "tcga_luad_xena_example.csv"
     if not dataset_path.exists():

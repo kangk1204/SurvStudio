@@ -83,10 +83,16 @@ def test_a_time_column_missing_for_one_outcome_is_refused() -> None:
         dm.train_deepsurv(df, "days_to_death", "vital_status", ["age"], **TINY)
 
 
-def test_a_cleaning_that_removes_every_censored_row_is_refused() -> None:
+@pytest.mark.parametrize(
+    ("invalid_time", "message"),
+    [(-1.0, "negative follow-up time"), (np.inf, "censored rows were removed")],
+)
+def test_a_cleaning_that_removes_every_censored_row_is_refused(invalid_time: float, message: str) -> None:
     df = make_example_dataset(seed=3, n_patients=80)
-    df.loc[df["os_event"] == 0, "os_months"] = -1.0
-    with pytest.raises(UserInputError, match="censored rows were removed"):
+    # Negative times stop before cleaning; non-finite times exercise the
+    # separate guard against silently losing the entire censored group.
+    df.loc[df["os_event"] == 0, "os_months"] = invalid_time
+    with pytest.raises(UserInputError, match=message):
         dm.compare_deep_survival_models(df, "os_months", "os_event", FEATURES, epochs=1, hidden_layers=[4], included_models=["DeepSurv"])
 
 
