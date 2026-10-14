@@ -142,6 +142,32 @@ def test_browser_single_model_picker_stays_with_training_controls(browser_server
         browser.close()
 
 
+def test_browser_pattern_variable_selection_tracks_categories_and_outcomes(browser_server: str, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.goto(browser_server)
+        page.locator("#loadGbsg2Button").click()
+        _wait_for_workspace(page)
+        page.locator('[data-tab="benchmark"]').click()
+        page.locator("#predictorPatternCard summary").first.click()
+        page.locator('#patternClinical input[value="horTh"]').check()
+        assert page.locator('#patternCategorical input[value="horTh"]').is_checked()
+        assert page.locator('#patternGroup option[value="horTh"]').count() == 1
+        page.locator("#predictorPatternCard").screenshot(path=str(tmp_path / "pattern-category.png"))
+        page.locator('#patternCategorical input[value="horTh"]').uncheck()
+        page.locator('#patternAdded input[value="age"]').check()
+        assert not page.locator('#patternCategorical input[value="horTh"]').is_checked()
+        page.locator(".column-options > summary").click()
+        page.locator("#showAllTimeColumns").check()
+        page.locator("#timeColumn").select_option("age")
+        assert page.locator('#patternAdded input[value="age"]').count() == 0
+        assert page.locator('#patternClinical input[value="horTh"]').is_checked()
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
+        browser.close()
+
+
 def test_browser_beginner_guidance_refreshes_when_cohort_changes(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as api:

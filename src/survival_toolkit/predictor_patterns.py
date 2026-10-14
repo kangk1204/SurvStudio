@@ -16,7 +16,7 @@ from survival_toolkit.encoding import canonical_category_values, transform_featu
 from survival_toolkit.errors import InternalAnalysisError, UserInputError, user_input_boundary
 from survival_toolkit.evaluation import evaluation_split_fingerprint, stratified_holdout_indices
 from survival_toolkit.marker_screen import harrell_c_many
-from survival_toolkit.prediction_guard import guarded_prediction_inputs, check_training_outcome_proxies
+from survival_toolkit.prediction_guard import guarded_prediction_inputs, check_training_outcome_proxies, checked_prediction_cohort
 
 
 def _paired_intervals(time, event, risks, *, n_bootstrap, seed):
@@ -128,7 +128,7 @@ def describe_pattern(fitted, *, target_feature, group_feature, seed, n_points=25
     encoder = fitted["encoder"]
     categorical = set(encoder.get("categorical_features", []))
     if group_feature not in categorical:
-        raise UserInputError("The grouping variable must be categorical; mark stage as categorical.")
+        raise UserInputError(f"The grouping variable '{group_feature}' must be categorical; mark '{group_feature}' as categorical.")
     levels = _levels(train[group_feature])
     if not 1 <= len(levels) <= 8:
         raise UserInputError("Choose a grouping variable with one to eight training categories.")
@@ -228,12 +228,13 @@ def compare_predictor_sets(
         check_training_outcome_proxies(frame.iloc[train_idx], time_column, event_column,
                                        selected, [c for c in categorical_features if c in selected])
     results = []
-    for selected in [clinical, features]:
-        raise_if_cancelled()
-        results.append(_fit(frame, time_column=time_column, event_column=event_column,
-                            features=selected, categorical_features=[c for c in categorical_features if c in selected],
-                            model_type=model_type, train_idx=train_idx, test_idx=test_idx, seed=random_seed,
-                            n_estimators=n_estimators, max_depth=max_depth, epochs=epochs))
+    with checked_prediction_cohort(frame, time_column, event_column, features):
+        for selected in [clinical, features]:
+            raise_if_cancelled()
+            results.append(_fit(frame, time_column=time_column, event_column=event_column,
+                                features=selected, categorical_features=[c for c in categorical_features if c in selected],
+                                model_type=model_type, train_idx=train_idx, test_idx=test_idx, seed=random_seed,
+                                n_estimators=n_estimators, max_depth=max_depth, epochs=epochs))
     risk = np.column_stack([r["test_risk"] for r in results])
     time = frame.iloc[test_idx][time_column].to_numpy(dtype=float)
     event = frame.iloc[test_idx][event_column].to_numpy(dtype=int)

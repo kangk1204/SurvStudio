@@ -741,6 +741,33 @@ def marker_payloads(example_dataset) -> dict:
 # ── Result currency and requests ────────────────────────────────
 
 
+def test_pattern_categories_auto_select_new_choices_but_preserve_user_unchecking(tmp_path, example_dataset):
+    dataset = {**example_dataset, "filename": "uploaded.csv"}
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.run("setCheckedValues(patternRefs.Clinical, ['stage'])"); page.change("#patternClinical");
+      const first = page.run("({categories: selectedCheckboxValues(patternRefs.Categorical), groups: [...patternRefs.Group.options].map(o => o.value)})");
+      page.run("setCheckedValues(patternRefs.Categorical, [])"); page.change("#patternCategorical");
+      page.run("setCheckedValues(patternRefs.Added, ['age'])"); page.change("#patternAdded");
+      const second = page.run("selectedCheckboxValues(patternRefs.Categorical)");
+      return {first, second};
+    """, dataset=dataset)
+    assert "stage" in result["first"]["categories"] and "stage" in result["first"]["groups"]
+    assert "stage" not in result["second"]
+
+
+def test_pattern_candidates_refresh_on_outcome_change_and_keep_other_choices(tmp_path, example_dataset):
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      page.run("setCheckedValues(patternRefs.Clinical, ['age', 'stage']); setCheckedValues(patternRefs.Added, ['biomarker_score']); refreshPatternMenus({autoSelectNew: true})");
+      page.change("#showAllTimeColumns", true); page.change("#timeColumn", "age");
+      return page.run("({clinical: selectedCheckboxValues(patternRefs.Clinical), added: selectedCheckboxValues(patternRefs.Added), options: [...patternRefs.Clinical.querySelectorAll('input')].map(el => el.value)})");
+    """, dataset=example_dataset)
+    assert result["clinical"] == ["stage"]
+    assert result["added"] == ["biomarker_score"]
+    assert "age" not in result["options"] and "os_event" not in result["options"]
+
+
 def test_trimmed_event_value_and_time_unit_keep_a_result_current(tmp_path: Path, example_dataset: dict) -> None:
     """H1: the server trims text settings when it echoes them; the page must not call the result stale."""
     result = _run_page(tmp_path, r"""

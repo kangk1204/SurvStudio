@@ -51,31 +51,42 @@ function syncPatternCurrency() {
     patternRefs.Status.dataset.stale = "true";
   }
 }
-function refreshPatternMenus() {
+function refreshPatternMenus({ autoSelectNew = false } = {}) {
   const clinical = selectedCheckboxValues(patternRefs.Clinical);
   const added = selectedCheckboxValues(patternRefs.Added);
   const selectedCategories = selectedCheckboxValues(patternRefs.Categorical);
+  const previousOptions = new Set([...patternRefs.Categorical.querySelectorAll('input[type="checkbox"]')].map((el) => el.value));
   const selected = [...new Set([...clinical, ...added])];
   const categorical = selectedCategories.filter((c) => selected.includes(c));
+  if (autoSelectNew) {
+    const candidates = new Set(sharedModelCategoricalCandidates());
+    selected.forEach((c) => {
+      if (!previousOptions.has(c) && candidates.has(c) && !categorical.includes(c)) categorical.push(c);
+    });
+  }
   renderChecklist(patternRefs.Categorical, selected, categorical);
   renderSelect(patternRefs.Target, added, { selected: patternRefs.Target.value, includeBlank: true, blankLabel: "Choose added predictor" });
   renderSelect(patternRefs.Group, clinical.filter((c) => categorical.includes(c)), { selected: patternRefs.Group.value, includeBlank: true, blankLabel: "Choose categorical group" });
 }
-function refreshPatternControls() {
-  const columns = (state.dataset?.columns || []).map((c) => c.name)
-    .filter((c) => c !== refs.timeColumn.value && c !== refs.eventColumn.value && !/(^|_)(id|barcode)$/i.test(c));
+function refreshPatternControls({ useDefaults = true } = {}) {
+  const columns = modelFeatureCandidateColumns();
   // Named demo presets are transparent defaults, not selected from an outcome or model score.
   const molecular = columns.includes("gene_A") && columns.includes("gene_B") && columns.includes("stage");
   const tcga = state.dataset?.filename?.includes("tcga_luad");
-  const clinical = molecular ? ["age", "stage"] : tcga ? ["age", "sex", "stage_group"] : [];
-  const added = molecular ? ["gene_A", "gene_B"] : tcga ? ["kras_status", "egfr_status"] : [];
-  const categorical = molecular ? ["stage"] : tcga ? ["sex", "stage_group", "kras_status", "egfr_status"] : [];
+  const clinical = useDefaults ? (molecular ? ["age", "stage"] : tcga ? ["age", "sex", "stage_group"] : [])
+    : selectedCheckboxValues(patternRefs.Clinical).filter((c) => columns.includes(c));
+  const added = useDefaults ? (molecular ? ["gene_A", "gene_B"] : tcga ? ["kras_status", "egfr_status"] : [])
+    : selectedCheckboxValues(patternRefs.Added).filter((c) => columns.includes(c));
+  const categorical = useDefaults ? (molecular ? ["stage"] : tcga ? ["sex", "stage_group", "kras_status", "egfr_status"] : [])
+    : selectedCheckboxValues(patternRefs.Categorical).filter((c) => columns.includes(c));
   renderChecklist(patternRefs.Clinical, columns, clinical);
   renderChecklist(patternRefs.Added, columns, added);
-  renderChecklist(patternRefs.Categorical, columns, categorical);
+  renderChecklist(patternRefs.Categorical, [...new Set([...clinical, ...added])], categorical);
   refreshPatternMenus();
-  patternRefs.Target.value = molecular ? "gene_A" : tcga ? "egfr_status" : "";
-  patternRefs.Group.value = molecular ? "stage" : tcga ? "stage_group" : "";
+  if (useDefaults) {
+    patternRefs.Target.value = molecular ? "gene_A" : tcga ? "egfr_status" : "";
+    patternRefs.Group.value = molecular ? "stage" : tcga ? "stage_group" : "";
+  }
 }
 async function runPredictorPatterns() {
   const config = patternConfig();
@@ -156,8 +167,11 @@ async function runPredictorPatterns() {
   }
 }
 function initPredictorPatterns() {
-  [patternRefs.Clinical, patternRefs.Added, patternRefs.Categorical].forEach((el) => el.addEventListener("change", () => { refreshPatternMenus(); syncPatternCurrency(); }));
-  [patternRefs.Model, patternRefs.Target, patternRefs.Group, patternRefs.Seed, patternRefs.Trees, patternRefs.Depth, patternRefs.Epochs, patternRefs.Bootstrap, refs.timeColumn, refs.eventColumn, refs.eventPositiveValue, refs.timeUnitLabel].forEach((el) => {
+  [patternRefs.Clinical, patternRefs.Added, patternRefs.Categorical].forEach((el) => el.addEventListener("change", () => { refreshPatternMenus({ autoSelectNew: el !== patternRefs.Categorical }); syncPatternCurrency(); }));
+  [refs.timeColumn, refs.eventColumn].forEach((el) => el.addEventListener("change", () => {
+    refreshPatternControls({ useDefaults: false }); syncPatternCurrency();
+  }));
+  [patternRefs.Model, patternRefs.Target, patternRefs.Group, patternRefs.Seed, patternRefs.Trees, patternRefs.Depth, patternRefs.Epochs, patternRefs.Bootstrap, refs.eventPositiveValue, refs.timeUnitLabel].forEach((el) => {
     el.addEventListener("change", syncPatternCurrency);
     if (el.tagName === "INPUT") el.addEventListener("input", syncPatternCurrency);
   });

@@ -318,6 +318,7 @@ def c_index_intervals(
         if event[rows].any():
             draws.append(harrell_c_many(time[rows], event[rows], matrix[rows]))
     samples = np.asarray(draws, dtype=float).reshape(-1, len(names))
+    valid_draws = int(np.isfinite(samples).all(axis=1).sum())
     tail = (1.0 - float(level)) / 2.0
 
     def interval(values: np.ndarray) -> list[float | None]:
@@ -343,7 +344,10 @@ def c_index_intervals(
         "n": int(time.shape[0]),
         "events": int(event.sum()),
         "reference": names[reference_index] if reference_index is not None else None,
-        "n_bootstrap": int(samples.shape[0]),
+        "n_bootstrap": valid_draws,
+        "n_bootstrap_requested": int(n_bootstrap),
+        "n_bootstrap_valid": valid_draws,
+        "n_bootstrap_undefined": int(n_bootstrap) - valid_draws,
         "level": float(level),
         "rows": rows_out,
     }
