@@ -811,6 +811,62 @@ function benchmarkGoalMeta(goal) {
     : { label: "Deep Learning", tab: "dl", panel: refs.dlPanel, reviewLabel: "Open model" };
 }
 
+function preparePredictiveWorkflowLayout() {
+  const actionCard = refs.benchmarkActionCard;
+  const workbenchHead = refs.benchmarkWorkbench?.querySelector(".benchmark-workspace-head");
+  const picker = refs.predictiveModelSelector?.closest(".predictive-model-picker");
+  if (picker && workbenchHead && picker.parentElement !== workbenchHead.firstElementChild) {
+    workbenchHead.firstElementChild.appendChild(picker);
+    picker.querySelector("span").textContent = "Model";
+    workbenchHead.querySelector("h3").textContent = "Train one model";
+  }
+  if (actionCard && refs.predictiveInputSummary && refs.predictiveInputSummary.nextElementSibling !== actionCard) {
+    actionCard.parentElement.insertBefore(refs.predictiveInputSummary, actionCard);
+  }
+  const article = actionCard?.closest("article");
+  if (article && !article.querySelector(".predictive-guidance")) {
+    const notes = article.querySelectorAll(".predictor-availability-note");
+    notes[0].innerHTML = "<strong>Check your predictors:</strong> use information available at the intended prediction time. Automatic checks cannot find every hidden outcome proxy.";
+    const reviewText = refs.predictorAvailabilityConfirmed?.nextElementSibling;
+    if (reviewText) reviewText.textContent = "I checked: these predictors were available at the intended prediction time. My review stays in saved results.";
+    const details = document.createElement("details");
+    details.className = "predictive-guidance";
+    const summary = document.createElement("summary");
+    summary.textContent = "How prediction and input checks work";
+    details.appendChild(summary);
+    notes[2].parentElement.insertBefore(details, notes[2]);
+    details.appendChild(notes[2]);
+    const metricGuide = article.querySelector(".predictive-metric-guide");
+    if (metricGuide) details.appendChild(metricGuide);
+  }
+  const menu = refs.downloadTripodDocxButton?.closest(".export-menu");
+  if (menu && !menu.querySelector("[data-comparison-download]")) {
+    menu.querySelector("summary").textContent = "Save comparison";
+    const items = menu.querySelector(".export-menu-items");
+    for (const [goal, label, target] of [
+      ["ml", "ML comparison table (CSV)", refs.downloadMlComparisonButton],
+      ["dl", "DL comparison table (CSV)", refs.downloadDlComparisonButton],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "button ghost";
+      button.dataset.comparisonDownload = goal;
+      button.textContent = label;
+      button.addEventListener("click", () => { if (!target.disabled) target.click(); });
+      items.insertBefore(button, refs.downloadTripodDocxButton);
+    }
+    const note = document.createElement("p");
+    note.className = "export-menu-note";
+    note.textContent = "Reporting templates: complete the remaining study details yourself.";
+    items.insertBefore(note, refs.downloadTripodDocxButton);
+    menu.addEventListener("toggle", () => preparePredictiveWorkflowLayout());
+  }
+  menu?.querySelectorAll("[data-comparison-download]").forEach((button) => {
+    const target = button.dataset.comparisonDownload === "ml" ? refs.downloadMlComparisonButton : refs.downloadDlComparisonButton;
+    button.disabled = !target || target.disabled;
+  });
+}
+
 function syncBenchmarkWorkbenchVisibility() {
   const workbenchOpen = Boolean(runtime.workbenchRevealed);
   refs.benchmarkSummaryGrid?.classList.toggle("hidden", workbenchOpen);
@@ -830,9 +886,11 @@ function syncBenchmarkWorkbenchVisibility() {
   refs.predictiveModelSelector?.closest(".predictive-model-picker")?.classList.toggle("hidden", !workbenchOpen);
   refs.runPredictiveSelectedButton?.classList.add("hidden");
   refs.runPredictiveWorkbenchButton?.classList.toggle("hidden", !workbenchOpen);
+  refs.benchmarkActionCard?.classList.toggle("hidden", workbenchOpen);
 }
 
 function renderPredictiveWorkbench() {
+  preparePredictiveWorkflowLayout();
   const family = normalizedPredictiveFamily(runtime.predictiveFamily);
   const selectedModel = predictiveModelMeta(currentPredictiveModelKey());
   const familyMode = preferredResultMode(family);
@@ -848,7 +906,7 @@ function renderPredictiveWorkbench() {
 
   if (refs.benchmarkWorkbenchCaption) {
     refs.benchmarkWorkbenchCaption.textContent = runtime.workbenchRevealed
-      ? `${selectedModel.label} is selected. Train this model directly with the controls below.`
+      ? "Choose a model, adjust its settings, then train."
       : (unifiedWorkspaceActive && familyMode === "compare"
         ? `${selectedModel.label} is selected. Cross-family Compare All results stay in the unified chart and leaderboard above. Use Test ${selectedModel.label} when you want model-specific outputs below.`
         : `${selectedModel.label} is selected. The workbench below shows the exact controls for the ${family === "ml" ? "classical ML" : "deep-learning"} family.`);
@@ -876,6 +934,7 @@ function renderPredictiveWorkbench() {
   if (refs.runPredictiveWorkbenchButton) {
     refs.runPredictiveWorkbenchButton.textContent = `Train ${selectedModel.label}`;
   }
+  if (refs.closePredictiveWorkbenchButton) refs.closePredictiveWorkbenchButton.textContent = "Back to comparison";
   syncPredictiveWorkbenchCompareVisibility();
   syncPredictiveWorkbenchSingleResultVisibility();
 }

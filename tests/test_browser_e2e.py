@@ -111,6 +111,37 @@ def _open_predictive_workbench(page, model_key: str | None = None) -> None:
         )
 
 
+def test_browser_single_model_picker_stays_with_training_controls(browser_server: str) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 1000, "height": 800})
+        page.goto(browser_server, wait_until="networkidle")
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        page.locator('[data-tab="benchmark"]').click()
+        page.locator("#openPredictiveWorkbenchButton").click()
+        picker = page.locator("#benchmarkWorkbench #predictiveModelSelector")
+        assert picker.is_visible()
+        page.wait_for_function("document.activeElement?.id === 'predictiveModelSelector'")
+        assert page.locator("#benchmarkActionCard").is_hidden()
+        assert "Train one model" in page.locator(".benchmark-workspace-head").inner_text()
+        for key, family, label in [("deepsurv", "dl", "DeepSurv"), ("rsf", "ml", "Random Survival Forest")]:
+            picker.select_option(key)
+            assert page.locator("#benchmarkWorkbench").get_attribute("data-active-family") == family
+            assert page.locator("#runPredictiveWorkbenchButton").inner_text() == f"Train {label}"
+            assert picker.is_visible()
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"), page.evaluate("""[...document.querySelectorAll('#panel-benchmark *')].filter(e => e.getBoundingClientRect().right > innerWidth+1).map(e => ({tag:e.tagName,id:e.id,class:e.className,right:e.getBoundingClientRect().right})).slice(0,15)""")
+        assert picker.bounding_box()["width"] <= 390
+        page.locator("#closePredictiveWorkbenchButton").click()
+        assert page.locator("#benchmarkActionCard").is_visible()
+        assert page.locator("#benchmarkWorkbench").is_hidden()
+        assert page.locator("#predictorAvailabilityConfirmed").is_visible()
+        assert page.locator(".predictive-guidance").get_attribute("open") is None
+        browser.close()
+
+
 def test_browser_beginner_guidance_refreshes_when_cohort_changes(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as api:
@@ -230,6 +261,7 @@ def test_browser_comparison_input_summary_tracks_evaluation_settings(browser_ser
         assert "variables:" in summary.inner_text()
         assert "Holdout" in summary.inner_text()
         assert "seed 42" in summary.inner_text()
+        page.locator(".predictive-guidance > summary").click()
         assert "0.50 is chance" in page.locator(".predictive-metric-guide").inner_text()
         _open_predictive_workbench(page)
         page.locator("#mlRandomSeed").fill("123")
@@ -580,6 +612,14 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
             assert "Deep Learning" in first_row_text
 
             leaderboard_card = page.locator("#benchmarkComparisonShell").locator("xpath=ancestor::div[contains(@class,'table-card')]")
+            leaderboard_card.locator(".export-menu > summary").click()
+            assert leaderboard_card.locator(".export-menu > summary").inner_text() == "Save comparison"
+            assert leaderboard_card.locator('[data-comparison-download="ml"]').is_enabled()
+            with page.expect_download() as comparison_info:
+                leaderboard_card.locator('[data-comparison-download="ml"]').click()
+            comparison_path = tmp_path / comparison_info.value.suggested_filename
+            comparison_info.value.save_as(comparison_path)
+            assert "Random Survival Forest" in comparison_path.read_text(encoding="utf-8-sig")
             leaderboard_card.locator(".export-menu > summary").click()
             with page.expect_download() as tripod_info:
                 page.locator("#downloadTripodMarkdownButton").click()
