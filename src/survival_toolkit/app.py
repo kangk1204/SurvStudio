@@ -78,6 +78,7 @@ from survival_toolkit.errors import (
     user_input_boundary,
 )
 from survival_toolkit.evaluation import c_index_intervals, merge_prediction_blocks
+from survival_toolkit.event_guard import event_coding_warning, reject_ambiguous_censor_event_column
 from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
 from survival_toolkit.marker_screen import _PAIRWISE_LIMIT as _C_INDEX_PAIRWISE_LIMIT
 from survival_toolkit.marker_matrix import (
@@ -952,6 +953,7 @@ async def _run_dataset_job(
     *,
     request: Request | None = None,
     heavy: bool = False,
+    event_column: str | None = None,
 ) -> _T:
     """Run an analysis job (see :func:`_run_job`) while leasing its dataset.
 
@@ -960,7 +962,13 @@ async def _run_dataset_job(
     """
 
     with store.lease(dataset_id):
-        return await _run_job(job, request=request, heavy=heavy)
+        def guarded_job():
+            raise_if_cancelled()
+            if event_column:
+                reject_ambiguous_censor_event_column(_get_stored_dataset(dataset_id).dataframe, event_column)
+            return job()
+
+        return await _run_job(guarded_job, request=request, heavy=heavy)
 
 
 # ── Request models ──────────────────────────────────────────────
@@ -1701,6 +1709,11 @@ def _resolved_dataset_profile_payload(stored: Any) -> dict[str, Any]:
 def dataset_response(dataset_id: str) -> dict[str, Any]:
     stored = store.get(dataset_id, copy_dataframe=False)
     payload = _resolved_dataset_profile_payload(stored)
+    # Filter the product suggestions without rewriting stored/cached profiles.
+    suggestions = dict(payload.get("suggestions") or {})
+    suggestions["event_columns"] = [column for column in suggestions.get("event_columns", [])
+                                     if event_coding_warning(stored.dataframe, column) is None]
+    payload["suggestions"] = suggestions
     payload["dataset_source"] = stored.source
     payload["preset_eligible"] = stored.source == "builtin_demo"
     payload["preset_name"] = str(stored.metadata.get("preset_name")) if stored.metadata.get("preset_name") else None
@@ -1790,6 +1803,7 @@ def _reject_survival_outcome_feature_columns(
     event_positive_value: Any = None,
     context: str,
 ) -> None:
+    reject_ambiguous_censor_event_column(stored.dataframe, event_column)
     forbidden = {str(time_column), str(event_column)}
     forbidden.update(str(column) for column in _survival_outcome_like_columns(stored.dataframe))
     forbidden.update(
@@ -4109,7 +4123,7 @@ async def derive_group(request_model: DeriveGroupRequest, request: Request) -> d
                 payload["cutpoint_figure"] = build_cutpoint_scan_figure(summary, variable_name=request_model.source_column)
             return payload
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=request_model.method == "optimal_cutpoint")
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=request_model.method == "optimal_cutpoint")
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -4164,7 +4178,7 @@ async def kaplan_meier(request_model: KaplanMeierRequest, request: Request) -> d
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -4230,7 +4244,7 @@ async def cox(request_model: CoxRequest, request: Request) -> dict[str, Any]:
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -4278,7 +4292,7 @@ async def cox_preview(request_model: CoxRequest, request: Request) -> dict[str, 
             )
             return _attach_dataset_hash({"preview": preview, "request_config": request_config}, stored)
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -4369,7 +4383,7 @@ async def cohort_table(request_model: CohortTableRequest, request: Request) -> d
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -4442,7 +4456,7 @@ async def discover_signature(request_model: SignatureSearchRequest, request: Req
             # with the parent dataset's hash.
             return payload
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -4482,7 +4496,7 @@ async def optimal_cutpoint(request_model: OptimalCutpointRequest, request: Reque
             figure = build_cutpoint_scan_figure(result, variable_name=request_model.variable)
             return _attach_dataset_hash({"result": result, "figure": figure, "request_config": request_config}, stored)
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -4712,7 +4726,7 @@ async def ml_model(request_model: MLModelRequest, request: Request) -> dict[str,
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -4855,7 +4869,7 @@ async def deep_model(request_model: DeepModelRequest, request: Request) -> dict[
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -5025,7 +5039,7 @@ async def predictor_patterns(request_model: PredictorPatternRequest, request: Re
                 "pattern_figure": build_predictor_pattern_figure(analysis["pattern"]) if analysis["pattern"] else None,
                 "risk_group_figure": build_km_figure(analysis["risk_display"]["km"], time_unit_label=request_model.time_unit_label) if analysis["risk_display"]["km"] else None}, stored)
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -5076,7 +5090,7 @@ async def time_dependent_importance(request_model: TimeDependentImportanceReques
             figure = build_time_dependent_importance_figure(result)
             return _attach_dataset_hash({"analysis": result, "figure": figure}, stored)
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -5139,7 +5153,7 @@ async def counterfactual(request_model: CounterfactualRequest, request: Request)
             )
             return _attach_dataset_hash({"analysis": analysis, "request_config": request_config}, stored)
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -5232,7 +5246,7 @@ async def pdp(request_model: PDPRequest, request: Request) -> dict[str, Any]:
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -5493,7 +5507,7 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
                 payload["marker_matrix"] = matrix_info
             return _attach_dataset_hash(payload, stored)
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 
@@ -5557,7 +5571,7 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
                 stored,
             )
 
-        return await _run_dataset_job(request_model.dataset_id, _run, request=request, heavy=True)
+        return await _run_dataset_job(request_model.dataset_id, _run, event_column=getattr(request_model, "event_column", None), request=request, heavy=True)
     except Exception as exc:
         fail_bad_request(exc)
 

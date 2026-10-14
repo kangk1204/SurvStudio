@@ -310,7 +310,7 @@ const EVENT_NAME_OVERRIDE_TOKENS = new Set(["event", "death", "dead", "died"]);
 const GENERIC_BINARY_CODE_TOKENS = new Set(["0", "1", "yes", "no", "y", "n", "true", "false", "t", "f"]);
 
 function looksLikeCensoringIndicatorName(columnName) {
-  const tokens = columnNameTokens(columnName);
+  const tokens = columnNameTokens(String(columnName).replace(/([A-Z])([A-Z][a-z])/g, "$1_$2"));
   return tokens.some((token) => CENSORING_NAME_TOKENS.has(token))
     && !tokens.some((token) => EVENT_NAME_OVERRIDE_TOKENS.has(token));
 }

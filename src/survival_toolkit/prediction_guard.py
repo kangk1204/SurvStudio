@@ -203,6 +203,8 @@ def prediction_input_audit(df: pd.DataFrame, time_column: str, event_column: str
     )
 
     _require_dataframe_columns(df, [time_column, event_column, *features])
+    from survival_toolkit.event_guard import reject_ambiguous_censor_event_column
+    reject_ambiguous_censor_event_column(df, event_column)
     overlapping = sorted(set(features) & {time_column, event_column})
     if overlapping:
         raise ValueError("Survival outcome columns cannot be used as ML/DL model features: "

@@ -2353,10 +2353,7 @@ def _validate_time_column_choice(df: pd.DataFrame, time_column: str) -> str | No
 
 
 _CENSORING_NAME_TOKENS = {"censor", "censored", "cens", "censoring"}
-_EVENT_NAME_OVERRIDE_TOKENS = {"event", "death", "dead", "died"}
-# A generic status word does not change the meaning of a censoring flag:
-# "OS_censor_status" still needs explicit event recoding. Actual outcome labels
-# (Dead/Alive) and explicitly event/death-named columns retain their existing use.
+_EVENT_NAME_OVERRIDE_TOKENS = {"event", "death", "dead", "died", "status", "vital"}
 # Codes that carry no event meaning of their own: under a "censored" name, 1/Yes/True means censored.
 _GENERIC_BINARY_CODE_TOKENS = {"0", "1", "yes", "no", "y", "n", "true", "false", "t", "f"}
 
