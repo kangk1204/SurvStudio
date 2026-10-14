@@ -6,14 +6,17 @@ Predicting observed follow-up/censoring is different from predicting survival ri
 from __future__ import annotations
 
 import hashlib
+import json
 import warnings
 from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
 
-PROXY_VERSION = "outcome-proxy/1"
+PROXY_VERSION = "outcome-proxy/2"
 MIN_ROWS = 48
+STRUCTURAL_MIN_ROWS = 24
+STRUCTURAL_EVENT_MIN_PER_LEVEL = 6
 MAX_ROWS = 1200
 INNER_FOLDS = 3
 SCREEN_SEED = 2026101101
@@ -23,21 +26,50 @@ LIMITATION = (
 )
 
 
-def training_fingerprint(frame: pd.DataFrame) -> str:
+def training_fingerprint(frame: pd.DataFrame, categorical_features: Sequence[str] = ()) -> str:
     digest = hashlib.sha256()
-    digest.update(repr(list(frame.columns)).encode("utf-8", errors="replace"))
+    schema = {
+        "columns": [repr(column) for column in frame.columns],
+        "dtypes": [str(dtype) for dtype in frame.dtypes],
+        "category_levels": [
+            {"levels": [repr(level) for level in dtype.categories], "ordered": dtype.ordered}
+            if isinstance(dtype, pd.CategoricalDtype) else None for dtype in frame.dtypes
+        ],
+        "categorical_features": list(map(str, categorical_features)),
+    }
+    digest.update(json.dumps(schema, sort_keys=True).encode("utf-8", errors="replace"))
     digest.update(pd.util.hash_pandas_object(frame, index=False).to_numpy().tobytes())
     return digest.hexdigest()
 
 
 def _structural_findings(frame, time_column, event_column, features):
+    from survival_toolkit.concurrency import raise_if_cancelled
+
     findings = []
     times = frame[time_column].to_numpy(dtype=float)
     events = frame[event_column].to_numpy(dtype=int)
-    for feature in features:
-        values = pd.to_numeric(frame[feature], errors="coerce").to_numpy(dtype=float)
+    for position, feature in enumerate(features):
+        if position % 32 == 0:
+            raise_if_cancelled()
+        # A string category can be a renamed event indicator too. Two levels
+        # must map exactly to the two event states, with support in both states.
+        # This requests source/timing review; it does not establish leakage.
+        if not pd.api.types.is_numeric_dtype(frame[feature]):
+            labels = frame[feature].astype("string").str.strip()
+            usable = (labels.notna() & labels.ne("")).to_numpy(dtype=bool, na_value=False)
+            n_usable = int(usable.sum())
+            if n_usable >= STRUCTURAL_MIN_ROWS and labels[usable].nunique() == 2:
+                states, counts = np.unique(events[usable], return_counts=True)
+                if len(states) == 2 and counts.min() >= STRUCTURAL_EVENT_MIN_PER_LEVEL:
+                    groups = pd.DataFrame({"label": labels[usable].to_numpy(), "event": events[usable]})
+                    if groups.groupby("label", observed=True)["event"].nunique().eq(1).all():
+                        findings.append({"kind": "exact_categorical_event_pattern", "target": "event",
+                            "features": [str(feature)], "score": 1.0, "rows_checked": n_usable,
+                            "training_rows": int(len(frame)), "missing_predictor_rows": int(len(frame) - n_usable)})
+        values = pd.to_numeric(frame[feature], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
         finite = np.isfinite(values)
-        if finite.sum() < MIN_ROWS or np.unique(values[finite]).size < 2:
+        n_finite = int(finite.sum())
+        if n_finite < STRUCTURAL_MIN_ROWS or np.unique(values[finite]).size < 2:
             continue
         x = values[finite]
         centered = x - x.mean()
@@ -46,6 +78,12 @@ def _structural_findings(frame, time_column, event_column, features):
             continue
         x = centered / norm
         for target_name, target in (("event", events[finite]), ("follow_up", times[finite])):
+            if target_name == "event":
+                states, counts = np.unique(target, return_counts=True)
+                if len(states) != 2 or counts.min() < STRUCTURAL_EVENT_MIN_PER_LEVEL:
+                    continue
+                if any(f["features"] == [str(feature)] and f["target"] == "event" for f in findings):
+                    continue
             y = target - target.mean()
             y_norm = np.linalg.norm(y)
             if y_norm == 0:
@@ -53,7 +91,8 @@ def _structural_findings(frame, time_column, event_column, features):
             r2 = float(np.clip(np.dot(x, y / y_norm) ** 2, 0, 1))
             if r2 >= 1 - 1e-12:
                 findings.append({"kind": "exact_affine_outcome_pattern", "target": target_name,
-                                 "features": [str(feature)], "score": r2})
+                                 "features": [str(feature)], "score": r2, "rows_checked": n_finite,
+                                 "training_rows": int(len(frame)), "missing_predictor_rows": int(len(frame) - n_finite)})
         # Rank equality also catches renamed log, square and reciprocal time columns.
         if np.unique(times[finite]).size >= 12:
             ranks_x = pd.Series(values[finite]).rank().to_numpy()
@@ -63,7 +102,8 @@ def _structural_findings(frame, time_column, event_column, features):
                 f["features"] == [str(feature)] and f["target"] == "follow_up" for f in findings
             ):
                 findings.append({"kind": "exact_monotone_follow_up_pattern", "target": "follow_up",
-                                 "features": [str(feature)], "score": abs(rho)})
+                                 "features": [str(feature)], "score": abs(rho), "rows_checked": n_finite,
+                                 "training_rows": int(len(frame)), "missing_predictor_rows": int(len(frame) - n_finite)})
     return findings
 
 
@@ -110,25 +150,31 @@ def screen_training_outcomes(frame: pd.DataFrame, time_column: str, event_column
     audit = {"version": PROXY_VERSION, "scope": "training_partition_only",
              "qualification": "engineering_screen_not_leakage_certificate", "coverage": "limited",
              "training_rows": int(len(frame)), "training_hash": training_fingerprint(
-                 frame[[time_column, event_column, *features]]),
+                 frame[[time_column, event_column, *features]], categorical_features),
              "status": "not_assessed", "findings": [], "scores": [], "notes": [LIMITATION],
              "settings": {"seed": SCREEN_SEED, "inner_folds": INNER_FOLDS, "min_rows": MIN_ROWS,
+                          "structural_min_rows": STRUCTURAL_MIN_ROWS,
+                          "structural_event_min_per_level": STRUCTURAL_EVENT_MIN_PER_LEVEL,
                           "max_rows": MAX_ROWS, "event_auc": 0.995, "event_balanced_accuracy": 0.98,
                           "log_follow_up_r2": 0.995, "tree_count": 48, "tree_depth": 6,
                           "neural_layers": [16, 8], "neural_max_iter": 150,
-                          "neural_max_features": 64, "joint_max_features": 256}}
+                          "neural_max_features": 64, "joint_max_features": 256, "category_budget": 32}}
+    findings = _structural_findings(frame, time_column, event_column, features)
+    audit["findings"] = findings
+    if findings:
+        audit["status"] = "review_required"
+        audit["notes"].append("An exact outcome pattern was found in the recorded complete training rows; learned screening was not needed.")
+        if len(frame) >= MIN_ROWS:
+            audit["coverage"] = "screened"
+        else:
+            audit["notes"].append(f"Structural checks ran, but learned screening needs at least {MIN_ROWS} training rows and was not assessed.")
+        return audit
     if len(frame) < MIN_ROWS or not features:
         audit["notes"].append(f"Pattern screening needs at least {MIN_ROWS} training rows and one predictor; it was not assessed.")
         return audit
     import sklearn
     audit["environment"] = {"sklearn": sklearn.__version__, "numpy": np.__version__}
     audit["coverage"] = "screened"
-    findings = _structural_findings(frame, time_column, event_column, features)
-    audit["findings"] = findings
-    if findings:
-        audit["status"] = "review_required"
-        audit["notes"].append("An exact outcome pattern was found; learned screening was not needed.")
-        return audit
     from sklearn.ensemble import RandomForestClassifier, ExtraTreesRegressor
     from sklearn.exceptions import ConvergenceWarning
     from sklearn.feature_selection import f_classif, f_regression
@@ -145,6 +191,14 @@ def screen_training_outcomes(frame: pd.DataFrame, time_column: str, event_column
         audit["notes"].append(f"Learned screening used {MAX_ROWS} training rows; structural checks used all training rows.")
         audit["coverage"] = "limited"
     audit["screened_rows"] = int(len(work))
+    categories = [feature for feature in features if feature in categorical_features
+                  or not pd.api.types.is_numeric_dtype(frame[feature])]
+    budgeted_categories = [str(feature) for feature in categories
+                           if frame[feature].nunique(dropna=False) > 32]
+    if budgeted_categories:
+        audit["coverage"] = "limited"
+        audit["category_budget_columns"] = budgeted_categories
+        audit["notes"].append("Learned screening groups rare categories beyond the 32-category budget; categorical coverage is limited.")
     event = work[event_column].to_numpy(dtype=int)
     times = np.log1p(work[time_column].to_numpy(dtype=float))
     audit["status"] = "partially_assessed" if audit["coverage"] == "limited" else "no_pattern_detected"

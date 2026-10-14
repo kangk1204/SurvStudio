@@ -302,15 +302,15 @@ function looksLikeBaselineStatusColumn(columnName) {
   return hasBaselineStatusName(columnName) && !nameHasStrongEventWord(columnName);
 }
 
-// Names the server reads as censoring flags ("censored", "cens", "isCensored") unless they also name the event
-// or its status ("censor_status", "death_censored").
+// Generic status words do not change a censoring flag into an event indicator.
+// Explicit event/death names and literal outcome labels keep their existing use.
 const CENSORING_NAME_TOKENS = new Set(["censor", "censored", "cens", "censoring"]);
-const EVENT_NAME_OVERRIDE_TOKENS = new Set(["event", "death", "dead", "died", "status", "vital"]);
+const EVENT_NAME_OVERRIDE_TOKENS = new Set(["event", "death", "dead", "died"]);
 // Codes without an event meaning of their own: under a censoring name, 1/Yes/True means censored.
 const GENERIC_BINARY_CODE_TOKENS = new Set(["0", "1", "yes", "no", "y", "n", "true", "false", "t", "f"]);
 
 function looksLikeCensoringIndicatorName(columnName) {
-  const tokens = columnNameTokens(columnName);
+  const tokens = columnNameTokens(String(columnName).replace(/([A-Z])([A-Z][a-z])/g, "$1_$2"));
   return tokens.some((token) => CENSORING_NAME_TOKENS.has(token))
     && !tokens.some((token) => EVENT_NAME_OVERRIDE_TOKENS.has(token));
 }
