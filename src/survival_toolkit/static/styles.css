@@ -2184,6 +2184,53 @@ h3 {
   gap: 16px;
 }
 
+.benchmark-workspace-head > div:first-child {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.benchmark-workspace-head .predictive-model-picker {
+  min-width: 0;
+  width: min(100%, 420px);
+}
+
+.predictive-guidance {
+  margin: 10px 0 16px;
+  color: var(--muted);
+}
+
+.predictive-guidance summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.export-menu-note {
+  margin: 6px 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 700px) {
+  .benchmark-workspace-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .benchmark-workspace-head .predictive-model-picker {
+    width: 100%;
+  }
+  .benchmark-workspace-actions {
+    justify-content: flex-start;
+  }
+  .benchmark-workspace-shell .ml-fast-toggle {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+  }
+}
+
 .benchmark-workspace-actions {
   justify-content: flex-end;
   flex-wrap: wrap;

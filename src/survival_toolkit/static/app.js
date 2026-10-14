@@ -401,12 +401,13 @@ function activeRunTarget() {
   return null;
 }
 
-// The family's workbench mount always exists (a required ref), so it is where the view scrolls.
+// Keep the model picker and training controls together when entering the workbench.
 function reviewBenchmarkSourceTab(tabName) {
   setPredictiveWorkbenchFamily(tabName, { syncHistory: false });
   activateTab("benchmark", { historyMode: "push" });
   requestAnimationFrame(() => {
-    scrollWorkspaceTargetIntoView(tabName === "ml" ? refs.benchmarkMlMount : refs.benchmarkDlMount);
+    scrollWorkspaceTargetIntoView(refs.benchmarkWorkbench);
+    refs.predictiveModelSelector?.focus({ preventScroll: true });
   });
 }
 

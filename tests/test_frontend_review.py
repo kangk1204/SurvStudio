@@ -122,6 +122,10 @@ class FakeElement {
   get clientWidth() { return 100; }
   get firstChild() { return this.childNodes[0] || null; }
   get firstElementChild() { return this.children[0] || null; }
+  get nextElementSibling() {
+    const siblings = this.parentElement?.children || [];
+    return siblings[siblings.indexOf(this) + 1] || null;
+  }
 
   get options() { return this.querySelectorAll("option"); }
   get selectedIndex() { return this._selectedIndex; }
@@ -202,6 +206,16 @@ class FakeElement {
     return node;
   }
   append(...nodes) { nodes.forEach((node) => this.appendChild(typeof node === "string" ? new FakeText(node) : node)); }
+  insertBefore(node, reference) {
+    if (reference === null) return this.appendChild(node);
+    if (reference.parentElement !== this) throw new Error("Reference is not a child");
+    if (node === reference) return node;
+    if (node.parentElement) node.parentElement.removeChild(node);
+    node.parentElement = this;
+    this.childNodes.splice(this.childNodes.indexOf(reference), 0, node);
+    this.children = this.childNodes.filter((child) => child.nodeType === 1);
+    return node;
+  }
   prepend(...nodes) {
     [...nodes].reverse().forEach((node) => {
       const child = typeof node === "string" ? new FakeText(node) : node;
