@@ -8,6 +8,16 @@ from survival_toolkit.errors import UserInputError
 
 _CENSOR_TOKENS = {"censor", "censored", "cens", "censoring"}
 _EXPLICIT_EVENT_TOKENS = {"event", "death", "dead", "died"}
+_CENSOR_NAME_AFFIXES = {
+    "", "os", "pfs", "rfs", "dfs", "dss", "dmfs", "ttp", "efs", "tts", "tte", "css", "mfs",
+    "pfi", "dfi", "ttf", "ttr", "ttnt", "ffs", "lrfs", "drfs", "status", "indicator", "ind", "flag",
+}
+_COMPACT_CENSOR_NAMES = {
+    prefix + role + suffix
+    for prefix in _CENSOR_NAME_AFFIXES
+    for role in _CENSOR_TOKENS
+    for suffix in _CENSOR_NAME_AFFIXES
+}
 
 
 def event_coding_warning(frame: pd.DataFrame, event_column: str | None) -> str | None:
@@ -22,7 +32,8 @@ def event_coding_warning(frame: pd.DataFrame, event_column: str | None) -> str |
 
     name = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", str(event_column))
     tokens = set(_column_name_tokens(name))
-    if not tokens & _CENSOR_TOKENS or tokens & _EXPLICIT_EVENT_TOKENS:
+    censor_name = bool(tokens & _CENSOR_TOKENS) or "".join(_column_name_tokens(name)) in _COMPACT_CENSOR_NAMES
+    if not censor_name or tokens & _EXPLICIT_EVENT_TOKENS:
         return None
     if event_column not in frame.columns or not _has_only_generic_binary_codes(frame[event_column]):
         return None

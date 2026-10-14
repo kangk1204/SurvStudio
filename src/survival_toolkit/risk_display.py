@@ -16,7 +16,9 @@ def describe_heldout_risk(*, training_risk, test_risk, time, event, source_rows)
     if not (len(risk) == len(time) == len(event) == len(source_rows)):
         raise UserInputError("Every test score must match one held-out patient and outcome.")
     cutoff = float(np.median(training))
-    groups = np.where(risk >= cutoff, "Higher predicted risk", "Lower predicted risk")
+    constant_training = float(np.std(training)) <= 1e-12
+    groups = (np.full(len(risk), "Risk group not estimable") if constant_training else
+              np.where(risk >= cutoff, "Higher predicted risk", "Lower predicted risk"))
     ranks = pd.Series(risk).rank(method="min", ascending=False).astype(int).to_numpy()
     rows = [{"source_row": str(source_rows[i]), "risk_score": float(risk[i]),
              "test_risk_rank": int(ranks[i]), "predicted_risk_group": str(groups[i])}
@@ -30,6 +32,11 @@ def describe_heldout_risk(*, training_risk, test_risk, time, event, source_rows)
               "logrank_reported": False,
               "logrank_policy": "Use held-out C-index and paired feature-set intervals to assess prediction; group curves are descriptive.",
               "km": None, "curve_error": None}
+    if constant_training:
+        result["cutoff"] = None
+        result["cutoff_rule"] = "No risk groups: fitted training risk is constant"
+        result["curve_error"] = "The fitted training risk is constant; risk-group curves are not estimable. Patient scores are retained."
+        return result
     if len(np.unique(groups)) < 2:
         result["curve_error"] = "Only one predicted risk group occurs in the test patients; two-group curves are unavailable."
         return result

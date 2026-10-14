@@ -60,11 +60,13 @@ formats = [
 ]
 ml = [
   "scikit-learn>=1.4.0",
+  "threadpoolctl>=3.1",
   "scikit-survival>=0.23.0",
   "shap>=0.45.0",
 ]
 dl = [
   "scikit-learn>=1.4.0",
+  "threadpoolctl>=3.1",
   "torch>=2.0.0",
 ]
 # Reference packages for validation/agreement/run_agreement.py (R survival is also needed).
@@ -78,6 +80,7 @@ e2e = [
 # Every runtime feature (formats, ML, DL, and kaleido for rendering figures to PNG/SVG
 # from Python). Test tools live in dev / e2e.
 all = [
+  "threadpoolctl>=3.1",
   "openpyxl>=3.1.5",
   "pyarrow>=17.0.0",
   "xlrd>=2.0.1",
@@ -88,6 +91,8 @@ all = [
   "kaleido>=0.2.1",
 ]
 dev = [
+  "scikit-learn>=1.4.0",
+  "threadpoolctl>=3.1",
   "httpx>=0.28.1",
   "kaleido>=0.2.1",
   "openpyxl>=3.1.5",

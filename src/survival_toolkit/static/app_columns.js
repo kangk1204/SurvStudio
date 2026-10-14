@@ -305,13 +305,17 @@ function looksLikeBaselineStatusColumn(columnName) {
 // Generic status words do not change a censoring flag into an event indicator.
 // Explicit event/death names and literal outcome labels keep their existing use.
 const CENSORING_NAME_TOKENS = new Set(["censor", "censored", "cens", "censoring"]);
+const CENSORING_NAME_AFFIXES = ["", "os", "pfs", "rfs", "dfs", "dss", "dmfs", "ttp", "efs", "tts", "tte", "css", "mfs",
+  "pfi", "dfi", "ttf", "ttr", "ttnt", "ffs", "lrfs", "drfs", "status", "indicator", "ind", "flag"];
+const COMPACT_CENSORING_NAMES = new Set(CENSORING_NAME_AFFIXES.flatMap((prefix) =>
+  [...CENSORING_NAME_TOKENS].flatMap((role) => CENSORING_NAME_AFFIXES.map((suffix) => prefix + role + suffix))));
 const EVENT_NAME_OVERRIDE_TOKENS = new Set(["event", "death", "dead", "died"]);
 // Codes without an event meaning of their own: under a censoring name, 1/Yes/True means censored.
 const GENERIC_BINARY_CODE_TOKENS = new Set(["0", "1", "yes", "no", "y", "n", "true", "false", "t", "f"]);
 
 function looksLikeCensoringIndicatorName(columnName) {
   const tokens = columnNameTokens(String(columnName).replace(/([A-Z])([A-Z][a-z])/g, "$1_$2"));
-  return tokens.some((token) => CENSORING_NAME_TOKENS.has(token))
+  return (tokens.some((token) => CENSORING_NAME_TOKENS.has(token)) || COMPACT_CENSORING_NAMES.has(tokens.join("")))
     && !tokens.some((token) => EVENT_NAME_OVERRIDE_TOKENS.has(token));
 }
 

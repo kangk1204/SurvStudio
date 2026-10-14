@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from functools import wraps
 from contextvars import ContextVar
+from contextlib import contextmanager
+from copy import deepcopy
 import inspect
 from typing import Any
 
@@ -280,6 +282,29 @@ def prediction_input_audit(df: pd.DataFrame, time_column: str, event_column: str
     }
 
 
+@contextmanager
+def checked_prediction_cohort(frame, time_column, event_column, features):
+    """Reuse raw preflight only within an explicitly prepared internal cohort.
+
+    The caller has already applied outcome coding and row exclusions. Reuse is
+    bound to this frame object, the same outcome columns, event code 1, and a
+    subset of the audited predictors. Each training partition is still screened.
+    No dataframe attributes or request fields can activate this internal path.
+    """
+    parent = _PROXY_CONTEXT.get()
+    if parent is None or "raw_input_audit" not in parent:
+        yield
+        return
+    if not set(features) <= set(parent["raw_input_features"]):
+        raise ValueError("Prepared predictors must have passed the raw input audit.")
+    context = {**parent, "checked_cohort": (frame, time_column, event_column, frozenset(features))}
+    token = _PROXY_CONTEXT.set(context)
+    try:
+        yield
+    finally:
+        _PROXY_CONTEXT.reset(token)
+
+
 def guarded_prediction_inputs(function):
     """Check raw input before fitting; carry the audit into results and table exports.
 
@@ -297,7 +322,11 @@ def guarded_prediction_inputs(function):
         if review is not None and (not isinstance(review, str) or not 20 <= len(review.strip()) <= 1000):
             raise ValueError("Outcome-pattern review needs 20–1000 characters explaining predictor timing and source.")
         parent = _PROXY_CONTEXT.get()
-        context = parent if parent is not None else {"partitions": {}, "review": review.strip() if review else None}
+        reason = review.strip() if review else None
+        context = {"partitions": {}, "review": reason} if parent is None else {**parent, "review": reason or parent.get("review")}
+        if parent is not None and context["review"] != parent.get("review"):
+            # An explicit child review must not clear findings in its parent or sibling.
+            context["partitions"] = deepcopy(parent["partitions"])
         token = _PROXY_CONTEXT.set(context)
         try:
             return _run_checked(args, kwargs, values, context)
@@ -321,8 +350,16 @@ def guarded_prediction_inputs(function):
             features = values.get("features")
             if features is None:
                 features = [*values.get("clinical_features", []), *values.get("added_features", [])]
-            audit = prediction_input_audit(values["df"], values["time_column"], values["event_column"],
-                                       list(features), values.get("event_positive_value"))
+            prepared = context.get("checked_cohort")
+            if (prepared is not None and values["df"] is prepared[0]
+                    and (values["time_column"], values["event_column"]) == prepared[1:3]
+                    and values.get("event_positive_value") == 1 and set(features) <= prepared[3]):
+                audit = deepcopy(context["raw_input_audit"])
+            else:
+                audit = prediction_input_audit(values["df"], values["time_column"], values["event_column"],
+                                              list(features), values.get("event_positive_value"))
+            context["raw_input_audit"] = audit
+            context["raw_input_features"] = tuple(features)
             result = function(*args, **kwargs)
         audit["outcome_proxy"] = _proxy_summary(context)
         audit["notes"] = list(dict.fromkeys([*audit["notes"], *audit["outcome_proxy"]["notes"]]))

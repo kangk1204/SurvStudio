@@ -110,6 +110,6 @@ def test_browser_censor_status_rule_matches_backend(tmp_path):
     from test_frontend_review import _run_page
 
     result = _run_page(tmp_path, r"""
-      return page.run("['OS_censor_status', 'CensorStatus', 'OSCensorStatus', 'censored_vital_status', 'death_from_censor', 'vital_status'].map(looksLikeCensoringIndicatorName)");
+      return page.run("['OS_censor_status', 'CensorStatus', 'OSCensorStatus', 'censored_vital_status', 'death_from_censor', 'vital_status', 'OSCENSOR', 'RFSCENSOR', 'CENSOROS', 'CENSORSTATUS', 'censorship', 'mycensorprotein'].map(looksLikeCensoringIndicatorName)");
     """)
-    assert result == [True, True, True, True, False, False]
+    assert result == [True, True, True, True, False, False, True, True, True, True, False, False]
