@@ -1021,7 +1021,7 @@
           <div class="card-head">
             <div class="card-head-left">
               <h2>Marker evaluation</h2>
-              <p class="card-subtitle">Which candidate markers hold up: family-wise error control, stability across subsamples and added value over clinical covariates</p>
+              <p class="card-subtitle">Find stable marker candidates and check whether they improve prediction beyond clinical information.</p>
             </div>
             <div class="button-row compact">
               <span class="run-status hidden" data-run-status="markers" aria-live="polite"></span>
@@ -1093,6 +1093,7 @@
             </div>
           </div>
           <p class="cox-preview-line" id="markerSelectionLine" aria-live="polite"></p>
+          <p class="marker-demo-note hidden" id="markerDemoNote">Synthetic demo: biomarker_score is a simulated marker, not a score calculated from genes. Its effect was built into the example; this is not a biological discovery.</p>
           <details class="options-details">
             <summary>More options</summary>
             <div class="toolbar-grid">
@@ -1109,13 +1110,15 @@
             </div>
           </details>
 
-          <!-- At a glance first (figure, key numbers, verdict), then the per-marker detail. -->
+          <div class="insight-board marker-overview" id="markersInsightBoard" aria-live="polite"><div class="empty-state">Run the evaluation to see stable candidates and the internal prediction comparison.</div></div>
+          <details class="marker-result-details hidden" id="markersResultDetails">
+            <summary>More detail: scores, diagnostics and marker statistics</summary>
+          <div class="insight-board" id="markersDetailedInsightBoard"></div>
           <div class="plot-shell" id="markersSummaryPlot"></div>
           <div class="analysis-banner" id="markersMetaBanner"></div>
           <details id="markersDiagnostics"><summary>Model and residual diagnostics</summary>
             <p id="markersInferenceNote"></p><div class="table-shell" id="markersDiagnosticsTable"></div>
           </details>
-          <div class="insight-board" id="markersInsightBoard"><div class="empty-state">Run the evaluation to see which markers hold up.</div></div>
           <div class="plot-shell" id="markersStabilityPlot">
             <div class="empty-state plot-empty"><span>Choose markers and click <strong>Run Analysis</strong>.</span></div>
           </div>
@@ -1127,6 +1130,7 @@
             </div>
             <div class="table-shell" id="markersTableShell"><div class="empty-state">Run the evaluation to fill the marker table.</div></div>
           </div>
+          </details>
 
           <section class="marker-validation-section hidden" id="markerValidationSection">
             <h3>Validate in another cohort</h3>

@@ -2971,6 +2971,29 @@ tbody tr:hover td {
 
 /* ─── Markers tab ─── */
 
+.marker-overview .insight-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.marker-overview .metric-pill { min-width: 0; }
+.marker-overview .metric-pill span { text-transform: none; letter-spacing: normal; }
+.marker-overview .metric-pill strong { font-size: 1.25rem; }
+.marker-overview-note, .marker-demo-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.marker-demo-note { margin-bottom: 12px; }
+.marker-result-details { margin: 16px 0; }
+.marker-result-details > summary { cursor: pointer; color: var(--teal); font-weight: 600; padding: 10px 0; }
+.marker-result-details > .insight-board { margin-top: 12px; }
+
+@media (max-width: 700px) {
+  .marker-overview .insight-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .options-details {
   margin: 0 0 16px;
 }

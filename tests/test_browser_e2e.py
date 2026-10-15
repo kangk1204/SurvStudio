@@ -696,6 +696,7 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
 
 def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
+    pending_dl = []
 
     def _mock_ml_compare(route) -> None:
         body = json.loads(route.request.post_data or "{}")
@@ -717,8 +718,12 @@ def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(br
         )
 
     def _mock_dl_compare(route) -> None:
+        # Keep the response pending until the partial-board assertion has observed it.
+        # A fixed sleep can finish before a busy runner gets to the assertion.
+        pending_dl.append(route)
+
+    def _finish_dl_compare(route) -> None:
         body = json.loads(route.request.post_data or "{}")
-        time.sleep(2.5)
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -758,6 +763,9 @@ def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(br
             page.wait_for_function(
                 "document.getElementById('mlMetaBanner').textContent.includes('Screening top model=')"
             )
+            assert len(pending_dl) == 1
+            assert page.locator("#benchmarkComparisonShell tbody tr").count() == 0
+            _finish_dl_compare(pending_dl.pop())
             page.wait_for_function(
                 "document.getElementById('dlMetaBanner').textContent.includes('Screening top model=')"
             )
@@ -2063,6 +2071,17 @@ def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str, 
             page.locator("#runMarkersButton").click()
             page.wait_for_function("!document.getElementById('downloadMarkersCsvButton').disabled", timeout=120000)
 
+            overview = page.locator("#markersInsightBoard")
+            assert overview.is_visible()
+            assert "stable candidate" in overview.inner_text()
+            assert "Clinical only" in overview.inner_text() and "Marker procedure" in overview.inner_text()
+            assert "gap-adjusted" not in overview.inner_text()
+            assert "Synthetic demo" in page.locator("#markerDemoNote").inner_text()
+            assert not page.locator("#markersResultDetails").evaluate("el => el.open")
+            assert page.locator("#markersSummaryPlot").is_hidden()
+            assert page.locator("#markersTableShell").is_hidden()
+            page.locator("#markersResultDetails > summary").click()
+            page.wait_for_function("document.getElementById('markersSummaryPlot').getBoundingClientRect().width > 0")
             assert "biomarker_score" in page.locator("#markersTableShell").inner_text()
             assert page.locator('[data-run-status="markers"]').inner_text() == "Up to date"
             assert page.locator("#markerValidationSection").is_visible()
@@ -2178,6 +2197,7 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             page.locator("#runMarkersButton").click()
             page.wait_for_function("!document.getElementById('downloadMarkersCsvButton').disabled", timeout=120000)
 
+            page.locator("#markersResultDetails > summary").click()
             assert "markers from expression.tsv" in page.locator("#markersMetaBanner").inner_text()
             assert "SIGNAL" in page.locator("#markersTableShell tbody tr").nth(0).inner_text()
 

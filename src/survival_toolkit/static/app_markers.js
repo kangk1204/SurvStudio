@@ -159,6 +159,7 @@ function renderMarkerSelectionLine() {
   if (typeof syncAnalysisRunButtonAvailability === "function") syncAnalysisRunButtonAvailability();
   if (!refs.markerSelectionLine) return;
   const { markers, clinical } = currentMarkerSelections();
+  if (refs.markerDemoNote) refs.markerDemoNote.classList.toggle("hidden", state.dataset?.filename !== "example_survival_cohort" || markerMatrixAttached());
   if (!state.dataset) {
     refs.markerSelectionLine.textContent = "";
     return;
@@ -469,6 +470,65 @@ function markerLeftOutComparison(signature, addedValue) {
   };
 }
 
+// A short reading of the existing result. Statistical calculations and export payloads stay unchanged.
+function markerOverviewSummary(payload) {
+  const detail = markerSummary(payload);
+  const analysis = payload?.analysis || {};
+  const inference = analysis.inference;
+  if (inference?.status === "withheld" || inference?.allowed === false) {
+    return { ...detail, headline: "Added-value inference is withheld. Review the diagnostics before interpreting candidates.",
+      metrics: [{ label: "Stable candidates", value: "Not assessed" }, { label: "Prediction improvement", value: "Unavailable" }],
+      strengths: [], next_steps: [] };
+  }
+  const cohort = analysis.cohort || {};
+  const signature = analysis.signature || {};
+  const resampling = analysis.resampling || {};
+  const tested = analysis.null?.n_permutations == null || Number(analysis.null.n_permutations) > 0;
+  const stabilityAssessed = tested && (resampling.stability_assessed ?? (resampling.n_valid == null || Number(resampling.n_valid) > 0));
+  const stable = stabilityAssessed ? Number(analysis.tier_counts?.robust || 0) : 0;
+  const total = Number(cohort.n_markers_evaluated || 0);
+  const names = (payload?.display_table || []).filter((row) => row.Tier === "robust").map((row) => String(row.Marker));
+  const cautions = [];
+  if (stable && names.length) cautions.push(`Stable candidate${stable === 1 ? "" : "s"}: ${names.slice(0, 5).join(", ")}${names.length > 5 ? "; see the detailed table for the rest" : ""}.`);
+  if (!tested) cautions.push("No permutation tests were run, so no stable candidate can be identified.");
+  else if (!stabilityAssessed) cautions.push("No usable subsamples were evaluated, so candidate stability is not assessed.");
+  const addedValue = analysis.primary_lens === "added_value";
+  const leftOut = markerLeftOutComparison(signature, addedValue);
+  const finite = (value) => typeof value === "number" && Number.isFinite(value);
+  const paired = leftOut && finite(signature.signature_c_left_out) && finite(signature.clinical_c_left_out);
+  const metrics = [{ label: "Stable candidates (internal)", value: stabilityAssessed ? `${formatCount(stable)} of ${formatCount(total)}` : "Not assessed" }];
+  if (paired) {
+    metrics.push(
+      { label: "Clinical only · C-index", value: formatCIndexValue(signature.clinical_c_left_out) },
+      { label: "Marker procedure · C-index", value: formatCIndexValue(signature.signature_c_left_out) },
+      { label: "Change in C-index", value: `${leftOut.gain >= 0 ? "+" : ""}${leftOut.gain.toFixed(3)}` },
+    );
+    const interval = markerGainInterval(signature);
+    const uncertainty = interval ? `95% CI ${interval[0].toFixed(3)} to ${interval[1].toFixed(3)}.` : "No uncertainty interval is available; improvement is not established.";
+    const verdict = !interval ? "" : interval[1] < 0 ? "Risk ranking was worse in this internal evaluation." : leftOut.verdict === "adds"
+      ? "Internal resampling suggests improved risk ranking."
+      : leftOut.verdict === "little" ? "The interval stays below the display threshold of +0.020; this does not prove no benefit."
+      : "Prediction improvement is uncertain.";
+    cautions.push(`${uncertainty} ${verdict}`.trim());
+    cautions.push("Both C-indices use patients left out of training, with marker selection and fitting repeated in each subsample. Higher is better; C-index is risk ranking, not percent correct.");
+  } else {
+    metrics.push({ label: "Prediction improvement", value: "Unavailable" });
+    cautions.push(addedValue ? "A paired comparison on patients left out of training is unavailable. Open More detail to review the available scores."
+      : "No clinical variables were selected. This evaluates marker association; improvement over clinical information was not assessed.");
+  }
+  if (markerModelIsClinicalOnly(signature)) cautions.push("No marker was selected in the full dataset; the final locked model uses clinical information only.");
+  const repeated = markerDuplicateCaution(analysis.duplicates);
+  if (repeated) cautions.unshift(repeated);
+  if ((cohort.dropped_markers || []).length) cautions.push(markerDroppedCaution(cohort.dropped_markers));
+  (cohort.notes || []).forEach((note) => { if (String(note || "").trim()) cautions.push(String(note)); });
+  cautions.push(inference ? "These are internal findings under model and permutation assumptions. Independent external validation is needed."
+    : "Diagnostics were not assessed in this saved result. Treat candidates and scores as exploratory; independent external validation is needed.");
+  return { status: repeated || !inference ? "review" : detail.status,
+    headline: !tested || !stabilityAssessed ? "Candidate stability was not assessed."
+      : `${formatCount(stable)} stable candidate${stable === 1 ? "" : "s"} among ${formatCount(total)} markers${repeated ? "; repeated patients need review" : ""}.`,
+    metrics, cautions, strengths: [], next_steps: [], };
+}
+
 function markerMetaBanner(payload) {
   const analysis = payload?.analysis || {};
   const cohort = analysis.cohort || {};
@@ -505,7 +565,18 @@ async function renderMarkerPlot(plot, figure, name, payload) {
 }
 
 async function renderMarkerResults(payload) {
-  renderInsightBoard(refs.markersInsightBoard, markerSummary(payload), "Run the evaluation to see which markers hold up.");
+  const overview = markerOverviewSummary(payload);
+  // Keep the short interpretation together; renderInsightBoard otherwise folds after two cautions.
+  renderInsightBoard(refs.markersInsightBoard, { ...overview, cautions: overview.cautions.slice(0, 2) }, "Run the evaluation to see which markers hold up.");
+  const card = refs.markersInsightBoard?.querySelector(".insight-card");
+  if (card && overview.cautions.length > 2) {
+    const note = document.createElement("p");
+    note.className = "marker-overview-note";
+    note.textContent = overview.cautions.slice(2).join(" ");
+    card.appendChild(note);
+  }
+  renderInsightBoard(refs.markersDetailedInsightBoard, markerSummary(payload), "");
+  refs.markersResultDetails?.classList.remove("hidden");
   refs.markersMetaBanner.textContent = markerMetaBanner(payload);
   const inference = payload?.analysis?.inference;
   const bootstrap = inference?.bootstrap;
@@ -561,6 +632,8 @@ function clearMarkerOutputs() {
   state.markers = null;
   state.markerValidation = null;
   if (refs.markersInsightBoard) refs.markersInsightBoard.innerHTML = '<div class="empty-state">Run the evaluation to see which markers hold up.</div>';
+  if (refs.markersDetailedInsightBoard) refs.markersDetailedInsightBoard.innerHTML = "";
+  if (refs.markersResultDetails) { refs.markersResultDetails.open = false; refs.markersResultDetails.classList.add("hidden"); }
   if (refs.markersMetaBanner) refs.markersMetaBanner.textContent = "";
   if (refs.markersInferenceNote) refs.markersInferenceNote.textContent = "";
   if (refs.markersDiagnosticsTable) refs.markersDiagnosticsTable.innerHTML = "";
@@ -752,6 +825,7 @@ function syncMarkerDownloadButtons() {
 }
 
 function wireMarkerControls() {
+  refs.markersResultDetails?.addEventListener("toggle", () => { if (refs.markersResultDetails.open) scheduleVisiblePlotResize(40); });
   refs.runMarkersButton?.addEventListener("click", () => withLoading(refs.runMarkersButton, runMarkerEvaluation, "markers"));
   refs.runMarkerValidationButton?.addEventListener("click", () => withLoading(refs.runMarkerValidationButton, runMarkerValidation));
   refs.markerChecklist?.addEventListener("change", () => { renderMarkerSelectionLine(); scheduleResultCurrencySync(); queueHistorySync(); });
