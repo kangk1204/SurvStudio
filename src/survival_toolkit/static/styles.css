@@ -520,6 +520,7 @@ body {
 
 .landing-pane {
   display: grid;
+  grid-template-rows: auto 1fr;
   gap: var(--space-4);
   padding: var(--space-5);
   border-radius: var(--radius);
@@ -630,15 +631,18 @@ body {
 
 .landing-actions {
   display: grid;
+  grid-auto-rows: 1fr;
   gap: var(--space-3);
 }
 
 .landing-actions .button {
   display: inline-flex;
   align-items: flex-start;
+  justify-content: flex-start;
   gap: 8px;
   width: 100%;
   min-width: 0;
+  padding-block: var(--space-3);
   text-align: left;
 }
 
@@ -650,6 +654,8 @@ body {
 
 .landing-action-copy {
   display: flex;
+  flex: 1;
+  min-width: 0;
   flex-direction: column;
   gap: 2px;
 }
