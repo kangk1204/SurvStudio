@@ -828,7 +828,8 @@ function preparePredictiveWorkflowLayout() {
     const notes = article.querySelectorAll(".predictor-availability-note");
     notes[0].innerHTML = "<strong>Check your predictors:</strong> use information available at the intended prediction time. Automatic checks cannot find every hidden outcome proxy.";
     const reviewText = refs.predictorAvailabilityConfirmed?.nextElementSibling;
-    if (reviewText) reviewText.textContent = "I checked: these predictors were available at the intended prediction time. My review stays in saved results.";
+    if (reviewText) reviewText.textContent = "Optional: I checked these predictors were available at prediction time. Save this review with the next run.";
+    if (refs.predictorAvailabilityConfirmed) refs.predictorAvailabilityConfirmed.title = "Records your review for the next run. Automatic input checks stay on, checked or not.";
     const details = document.createElement("details");
     details.className = "predictive-guidance";
     const summary = document.createElement("summary");

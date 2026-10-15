@@ -606,11 +606,15 @@
           text: intervals ? `${metricLabel}, with 95% bootstrap intervals` : metricLabel,
           x: 0.02,
           xanchor: "left",
+          y: 0.97,
+          yanchor: "top",
           font: { family: "Source Serif 4, serif", size: 20, color: "#1a2332" },
         },
         font: { family: "Sora, sans-serif", size: 13, color: "#1a2332" },
-        height: Math.max(300, 120 + 34 * ordered.length),
-        margin: { l: 24, r: 24, t: 70, b: 56 },
+        // Reserve separate bands for the title, family legend and reference labels.
+        // Grow the shell by the same amount so the model rows keep their spacing.
+        height: Math.max(356, 176 + 34 * ordered.length),
+        margin: { l: 24, r: 24, t: 126, b: 56 },
         paper_bgcolor: "#ffffff",
         plot_bgcolor: "#ffffff",
         xaxis: {
@@ -625,7 +629,7 @@
         shapes,
         annotations,
         showlegend: true,
-        legend: { orientation: "h", x: 1, xanchor: "right", y: 1.02, yanchor: "bottom" },
+        legend: { orientation: "h", x: 1, xanchor: "right", y: 1.14, yanchor: "bottom" },
       };
 
       refs.benchmarkComparisonPlot.classList.remove("hidden");
