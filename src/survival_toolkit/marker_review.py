@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import copy
+import numpy as np
+
 
 def marker_diagnostic_review(result: dict[str, Any]) -> dict[str, Any]:
     inference = result.get("inference") or {}
@@ -62,3 +65,59 @@ def marker_diagnostic_review(result: dict[str, Any]) -> dict[str, Any]:
         ] if withheld else [],
         "decision_changed": False,
     }
+
+
+def review_external_horizon(validation: dict[str, Any], frame: Any, recipe: dict[str, Any], *,
+                            column_mapping: dict[str, str] | None = None,
+                            event_positive_value: Any = None) -> dict[str, Any]:
+    """Withhold horizon-specific evaluation beyond the scored cohort's follow-up.
+
+    A model can predict beyond these observations, but that prediction cannot be
+    evaluated here. Ranking, the all-time calibration slope and marker inference
+    are unchanged. The frozen numerical calculation and recipe remain untouched.
+    """
+    from survival_toolkit.analysis import _cohort_frame
+    from survival_toolkit.marker_evaluation import _clinical_columns_behind, _unique_rows
+
+    result = copy.deepcopy(validation)
+    metrics = result.get("metrics") or {}
+    horizon = metrics.get("horizon")
+    if horizon is None:
+        return result
+    mapping = column_mapping or {}
+    def external(name: str) -> str:
+        return mapping.get(name, name)
+    outcome = recipe["outcome"]
+    time_column, event_column = external(outcome["time_column"]), external(outcome["event_column"])
+    positive = outcome["event_positive_value"] if event_positive_value is None else event_positive_value
+    columns = recipe["clinical"]["columns"]
+    terms = {*recipe["model"]["terms"], *((recipe.get("clinical_only_model") or {}).get("terms") or [])}
+    used = _clinical_columns_behind(recipe["clinical"]["encoder"], columns, terms)
+    strata = recipe.get("strata_columns") or []
+    extra = strata if recipe.get("recipe_version", 1) >= 3 else [*used, *strata]
+    scored = _cohort_frame(_unique_rows(frame), time_column=time_column, event_column=event_column,
+                           event_positive_value=positive, extra_columns=[external(c) for c in extra])
+    cohort = result.get("cohort") or {}
+    if len(scored) != cohort.get("n") or scored.attrs.get("row_mask_hash") != cohort.get("row_mask_hash"):
+        raise RuntimeError("The follow-up review does not match the scored validation cohort.")
+    times = scored[time_column].to_numpy(dtype=float)
+    maximum = float(np.max(times))
+    supported = float(horizon) <= maximum
+    result["absolute_risk_review"] = {
+        "status": "within_observed_followup" if supported else "beyond_validation_followup",
+        "horizon": horizon, "maximum_followup": maximum,
+        "n_at_or_beyond_horizon": int(np.sum(times >= float(horizon))),
+        "interpretation": "Follow-up coverage is necessary but does not establish calibration or reliable censoring weights.",
+    }
+    if not supported:
+        keys = ("observed_risk", "expected_risk", "observed_expected_ratio", "brier", "brier_skill")
+        result["exploratory_horizon_metrics"] = {key: metrics[key] for key in keys if key in metrics}
+        for key in keys:
+            if key in metrics:
+                metrics[key] = None
+        result.setdefault("notes", []).append(
+            f"The requested horizon ({float(horizon):g}) exceeds the longest validation follow-up ({maximum:g}). "
+            "Absolute-risk calibration and Brier evaluation at this horizon are unavailable. "
+            "Raw calculations are retained separately; C-index and the all-time calibration slope are unchanged."
+        )
+    return result

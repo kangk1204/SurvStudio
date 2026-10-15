@@ -111,6 +111,19 @@ def test_unassessed_stability_and_marginal_results_are_not_promoted(tmp_path: Pa
     assert "improvement over clinical information was not assessed" in " ".join(result["marginal"]["cautions"])
 
 
+def test_external_horizon_warning_never_promotes_raw_calibration_scores(tmp_path: Path):
+    rows = _run_page(tmp_path, r"""
+      page.context.__validation = {metrics: {c_index: 0.63, calibration_slope: 0.91,
+        horizon: 5, observed_expected_ratio: 0.9, brier_skill: 0.4},
+        absolute_risk_review: {status: 'beyond_validation_followup'}};
+      return page.run('markerValidationMetrics(__validation)');
+    """)
+    assert any(row["label"] == "Absolute-risk evaluation" and "Unavailable" in row["value"] for row in rows)
+    assert any(row["label"] == "C-index" for row in rows)
+    assert any(row["label"] == "Calibration slope" for row in rows)
+    assert not any("Observed/expected" in row["label"] or "Brier" in row["label"] for row in rows)
+
+
 def test_uncertainty_repeated_patients_and_legacy_diagnostics_stay_visible(tmp_path: Path):
     result = _run_page(tmp_path, _PAYLOAD + r"""
       payload.analysis.signature.signature_gain_left_out_ci = [-0.01, 0.052];
