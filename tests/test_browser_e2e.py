@@ -2063,6 +2063,17 @@ def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str, 
             page.locator("#runMarkersButton").click()
             page.wait_for_function("!document.getElementById('downloadMarkersCsvButton').disabled", timeout=120000)
 
+            overview = page.locator("#markersInsightBoard")
+            assert overview.is_visible()
+            assert "stable candidate" in overview.inner_text()
+            assert "Clinical only" in overview.inner_text() and "Marker procedure" in overview.inner_text()
+            assert "gap-adjusted" not in overview.inner_text()
+            assert "Synthetic demo" in page.locator("#markerDemoNote").inner_text()
+            assert not page.locator("#markersResultDetails").evaluate("el => el.open")
+            assert page.locator("#markersSummaryPlot").is_hidden()
+            assert page.locator("#markersTableShell").is_hidden()
+            page.locator("#markersResultDetails > summary").click()
+            page.wait_for_function("document.getElementById('markersSummaryPlot').getBoundingClientRect().width > 0")
             assert "biomarker_score" in page.locator("#markersTableShell").inner_text()
             assert page.locator('[data-run-status="markers"]').inner_text() == "Up to date"
             assert page.locator("#markerValidationSection").is_visible()
@@ -2179,6 +2190,7 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             page.wait_for_function("!document.getElementById('downloadMarkersCsvButton').disabled", timeout=120000)
 
             assert "markers from expression.tsv" in page.locator("#markersMetaBanner").inner_text()
+            page.locator("#markersResultDetails > summary").click()
             assert "SIGNAL" in page.locator("#markersTableShell tbody tr").nth(0).inner_text()
 
             page.locator("#removeMarkerMatrixButton").click()

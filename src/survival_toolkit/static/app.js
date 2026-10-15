@@ -552,7 +552,7 @@ function resultAnchorFor(tabName, { mode = "single" } = {}) {
     tables: [refs.cohortTableShell],
     markers: mode === "signature"
       ? [refs.signatureSummary?.closest(".table-card"), refs.signatureShell]
-      : [refs.markersSummaryPlot, refs.markersStabilityPlot, refs.markersInsightBoard],
+      : [refs.markersInsightBoard, refs.markersSummaryPlot, refs.markersStabilityPlot],
     ml: mode === "compare"
       ? [refs.mlComparisonPlot, refs.mlComparisonShell, refs.mlMetaBanner]
       : [refs.mlImportancePlot, refs.mlMetaBanner, refs.mlInsightBoard],

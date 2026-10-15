@@ -73,6 +73,8 @@ def test_browser_spline_choice_currency_and_withheld_exports(browser_server,tmp_
         page.locator("#markerClinicalBasis").select_option("linear")
         page.wait_for_function("document.querySelector('[data-run-status=markers]').textContent === 'Up to date'")
         assert "inference is withheld" in page.locator("#markersInsightBoard").inner_text()
+        assert "Unavailable" in page.locator("#markersInsightBoard").inner_text()
+        page.locator("#markersResultDetails > summary").click()
         assert "inference status" in page.locator("#markersTableShell").inner_text().lower()
         assert "assumptions" in page.locator("#markersInferenceNote").text_content()
         assert page.locator("#markersTableShell").get_by_text("withheld",exact=True).count()>0
