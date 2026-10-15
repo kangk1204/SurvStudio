@@ -2189,8 +2189,8 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             page.locator("#runMarkersButton").click()
             page.wait_for_function("!document.getElementById('downloadMarkersCsvButton').disabled", timeout=120000)
 
-            assert "markers from expression.tsv" in page.locator("#markersMetaBanner").inner_text()
             page.locator("#markersResultDetails > summary").click()
+            assert "markers from expression.tsv" in page.locator("#markersMetaBanner").inner_text()
             assert "SIGNAL" in page.locator("#markersTableShell tbody tr").nth(0).inner_text()
 
             page.locator("#removeMarkerMatrixButton").click()
