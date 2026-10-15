@@ -696,6 +696,7 @@ def test_browser_benchmark_tab_combines_latest_ml_and_dl_compare_outputs(browser
 
 def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
+    pending_dl = []
 
     def _mock_ml_compare(route) -> None:
         body = json.loads(route.request.post_data or "{}")
@@ -717,8 +718,12 @@ def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(br
         )
 
     def _mock_dl_compare(route) -> None:
+        # Keep the response pending until the partial-board assertion has observed it.
+        # A fixed sleep can finish before a busy runner gets to the assertion.
+        pending_dl.append(route)
+
+    def _finish_dl_compare(route) -> None:
         body = json.loads(route.request.post_data or "{}")
-        time.sleep(2.5)
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -758,6 +763,9 @@ def test_browser_benchmark_hides_partial_board_until_unified_compare_finishes(br
             page.wait_for_function(
                 "document.getElementById('mlMetaBanner').textContent.includes('Screening top model=')"
             )
+            assert len(pending_dl) == 1
+            assert page.locator("#benchmarkComparisonShell tbody tr").count() == 0
+            _finish_dl_compare(pending_dl.pop())
             page.wait_for_function(
                 "document.getElementById('dlMetaBanner').textContent.includes('Screening top model=')"
             )
