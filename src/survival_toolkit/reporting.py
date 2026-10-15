@@ -427,7 +427,10 @@ def marker_results_paragraph(result: dict[str, Any]) -> str:
     gate = inference.get("engineering_qualification") or {}
     qualification_limits = " ".join(str(gate[key]) for key in ("claim_boundary", "extension_limitations") if gate.get(key))
     if inference.get("status") == "withheld":
+        from survival_toolkit.marker_review import marker_diagnostic_review
+        review = marker_diagnostic_review(result)
         return ("Added-value inference and robust marker claims were withheld. "
+                + " ".join(review["messages"]) + " " + review["interpretation"] + " "
                 + "Reasons: " + "; ".join(inference.get("reasons") or []) + ". "
                 + "Standard inferential p/q values are unavailable, rather than zero; raw computations are retained separately for exploration. "
                 + "Any fitted prediction model and its performance estimates are exploratory. "

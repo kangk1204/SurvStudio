@@ -5509,6 +5509,8 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
             )
             from survival_toolkit.marker_qualification import qualify_marker_result
             result = qualify_marker_result(result)
+            from survival_toolkit.marker_review import marker_diagnostic_review
+            result["diagnostic_review"] = marker_diagnostic_review(result)
             report_dataset = {**_report_dataset(stored), "marker_matrix": matrix_info} if matrix_info else _report_dataset(stored)
             payload = {
                 "analysis": _trim_marker_table(result),
@@ -5577,6 +5579,11 @@ async def marker_validation(request_model: MarkerValidationRequest, request: Req
                 raise UserInputError("The recipe is malformed; export it again from a marker evaluation.") from exc
             from survival_toolkit.marker_qualification import qualify_external_result
             validation = qualify_external_result(validation, recipe)
+            from survival_toolkit.marker_review import review_external_horizon
+            validation = review_external_horizon(
+                validation, stored.dataframe, recipe, column_mapping=request_model.column_mapping,
+                event_positive_value=request_model.event_positive_value,
+            )
             if bootstrap_note and isinstance(validation.get("notes"), list):
                 validation["notes"].append(bootstrap_note)
             return _attach_dataset_hash(

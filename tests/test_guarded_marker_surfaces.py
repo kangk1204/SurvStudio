@@ -35,6 +35,11 @@ def test_api_returns_consistent_withheld_display_report_and_figures():
         assert response.status_code==200,response.text
         payload=response.json()
         assert payload["analysis"]["inference"]["status"]=="withheld"
+        review=payload['analysis']['diagnostic_review']
+        assert review['version']=='marker-review/1' and review['decision_changed'] is False
+        assert review['flagged_mean_markers'] and 'nonlinear expression pattern' in ' '.join(review['messages'])
+        assert review['raw_reasons']==payload['analysis']['inference']['reasons']
+        assert 'diagnostic_review' not in payload['analysis']['locked_recipe']
         assert all(row["P value"] is None and row["Family-wise P"] is None and row["Inference status"]=="withheld"
                    for row in payload["display_table"])
         assert payload['analysis']['method_version']=='marker-inference/2'
@@ -74,6 +79,8 @@ def test_browser_spline_choice_currency_and_withheld_exports(browser_server,tmp_
         page.wait_for_function("document.querySelector('[data-run-status=markers]').textContent === 'Up to date'")
         assert "inference is withheld" in page.locator("#markersInsightBoard").inner_text()
         assert "Unavailable" in page.locator("#markersInsightBoard").inner_text()
+        assert "nonlinear expression pattern" in page.locator("#markersInsightBoard").inner_text()
+        assert "do not prove that the input is wrong" in page.locator("#markersInsightBoard").inner_text()
         page.locator("#markersResultDetails > summary").click()
         assert "inference status" in page.locator("#markersTableShell").inner_text().lower()
         assert "assumptions" in page.locator("#markersInferenceNote").text_content()

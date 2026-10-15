@@ -476,9 +476,15 @@ function markerOverviewSummary(payload) {
   const analysis = payload?.analysis || {};
   const inference = analysis.inference;
   if (inference?.status === "withheld" || inference?.allowed === false) {
+    const review = analysis.diagnostic_review;
+    const rawReasons = new Set(Array.isArray(review?.raw_reasons) ? review.raw_reasons : []);
+    const cautions = review ? [
+      ...(detail.cautions || []).filter((text) => !rawReasons.has(text) && text !== inference.interpretation),
+      ...(review.messages || []), review.interpretation,
+    ].filter(Boolean) : detail.cautions;
     return { ...detail, headline: "Added-value inference is withheld. Review the diagnostics before interpreting candidates.",
       metrics: [{ label: "Stable candidates", value: "Not assessed" }, { label: "Prediction improvement", value: "Unavailable" }],
-      strengths: [], next_steps: [] };
+      strengths: [], cautions, next_steps: review?.next_steps || [] };
   }
   const cohort = analysis.cohort || {};
   const signature = analysis.signature || {};
@@ -704,6 +710,7 @@ function markerHorizonUnit(timeColumn = "") {
 
 function markerValidationMetrics(validation, { timeColumn = "" } = {}) {
   const metrics = validation?.metrics || {};
+  const beyondFollowup = validation?.absolute_risk_review?.status === "beyond_validation_followup";
   const interval = (values) => (Array.isArray(values) && values[0] != null ? ` (${formatValue(values[0])} to ${formatValue(values[1])})` : "");
   const rows = [
     { label: "C-index", value: `${formatValue(metrics.c_index)}${interval(metrics.c_index_ci)}` },
@@ -713,11 +720,12 @@ function markerValidationMetrics(validation, { timeColumn = "" } = {}) {
     rows.push({ label: "Clinical-only C-index", value: `${formatValue(metrics.clinical_only_c_index)}${interval(metrics.clinical_only_c_index_ci)}` });
   }
   if (metrics.delta_c_index != null) rows.push({ label: "C gain over clinical", value: `${formatValue(metrics.delta_c_index)}${interval(metrics.delta_c_index_ci)}` });
-  if (metrics.observed_expected_ratio != null) {
+  if (beyondFollowup) rows.push({ label: "Absolute-risk evaluation", value: "Unavailable at this horizon" });
+  if (!beyondFollowup && metrics.observed_expected_ratio != null) {
     const unit = markerHorizonUnit(timeColumn);
     rows.push({ label: `Observed/expected at ${formatValue(metrics.horizon)}${unit ? ` ${unit}` : ""}`, value: formatValue(metrics.observed_expected_ratio) });
   }
-  if (metrics.brier_skill != null) rows.push({ label: "Brier skill", value: formatValue(metrics.brier_skill) });
+  if (!beyondFollowup && metrics.brier_skill != null) rows.push({ label: "Brier skill", value: formatValue(metrics.brier_skill) });
   if (metrics.marker_weight_available != null && Number(metrics.marker_weight_available) < 1) {
     rows.push({ label: "Marker weight measured", value: `${Math.round(100 * Number(metrics.marker_weight_available))}%` });
   }
