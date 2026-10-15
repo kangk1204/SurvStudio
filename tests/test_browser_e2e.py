@@ -2284,6 +2284,16 @@ def test_browser_leaderboard_keeps_its_intervals_after_switching_tabs(browser_se
             page.wait_for_function(
                 "() => document.getElementById('benchmarkComparisonPlot').layout?.title?.text === 'C-index on the same test patients, with 95% bootstrap intervals'"
             )
+            # A legend row must fit between the title and reference labels.
+            page.wait_for_function("""() => {
+                const plot = document.getElementById('benchmarkComparisonPlot');
+                const title = plot.querySelector('.gtitle')?.getBoundingClientRect();
+                const legend = [...plot.querySelectorAll('.legendtext')].map(node => node.getBoundingClientRect());
+                const labels = [...plot.querySelectorAll('.annotation-text')].map(node => node.getBoundingClientRect());
+                return title && legend.length && labels.length
+                    && Math.min(...legend.map(box => box.top)) - title.bottom >= 10
+                    && Math.min(...labels.map(box => box.top)) - Math.max(...legend.map(box => box.bottom)) >= 8;
+            }""")
 
             page.locator('[data-tab="km"]').click()
             page.locator('[data-tab="benchmark"]').click()
