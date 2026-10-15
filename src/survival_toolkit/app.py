@@ -5509,6 +5509,8 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
             )
             from survival_toolkit.marker_qualification import qualify_marker_result
             result = qualify_marker_result(result)
+            from survival_toolkit.marker_review import marker_diagnostic_review
+            result["diagnostic_review"] = marker_diagnostic_review(result)
             report_dataset = {**_report_dataset(stored), "marker_matrix": matrix_info} if matrix_info else _report_dataset(stored)
             payload = {
                 "analysis": _trim_marker_table(result),

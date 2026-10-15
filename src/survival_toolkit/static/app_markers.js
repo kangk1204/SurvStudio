@@ -476,9 +476,15 @@ function markerOverviewSummary(payload) {
   const analysis = payload?.analysis || {};
   const inference = analysis.inference;
   if (inference?.status === "withheld" || inference?.allowed === false) {
+    const review = analysis.diagnostic_review;
+    const rawReasons = new Set(Array.isArray(review?.raw_reasons) ? review.raw_reasons : []);
+    const cautions = review ? [
+      ...(detail.cautions || []).filter((text) => !rawReasons.has(text) && text !== inference.interpretation),
+      ...(review.messages || []), review.interpretation,
+    ].filter(Boolean) : detail.cautions;
     return { ...detail, headline: "Added-value inference is withheld. Review the diagnostics before interpreting candidates.",
       metrics: [{ label: "Stable candidates", value: "Not assessed" }, { label: "Prediction improvement", value: "Unavailable" }],
-      strengths: [], next_steps: [] };
+      strengths: [], cautions, next_steps: review?.next_steps || [] };
   }
   const cohort = analysis.cohort || {};
   const signature = analysis.signature || {};

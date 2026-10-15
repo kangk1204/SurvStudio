@@ -69,6 +69,31 @@ def test_missing_scores_and_zero_scores_remain_distinct(tmp_path: Path):
     assert "No uncertainty interval" in " ".join(result["zero"]["cautions"])
 
 
+def test_withheld_review_explains_spread_without_hiding_unknown_reasons(tmp_path: Path):
+    result = _run_page(tmp_path, _PAYLOAD + r"""
+      payload.analysis.inference = {status: 'withheld', allowed: false,
+        reasons: ['residual_misspecification: gene_A/variance', 'unmapped finding'],
+        interpretation: 'Original interpretation.'};
+      payload.analysis.diagnostic_review = {
+        raw_reasons: ['residual_misspecification: gene_A/variance'],
+        messages: ['Residual spread changes with clinical information for 1 marker.'],
+        interpretation: 'This does not prove that the input is wrong.',
+        next_steps: ['Review the source and record the revised analysis first.'],
+      };
+      page.context.__payload = payload;
+      const before = JSON.stringify(payload);
+      const overview = page.run('markerOverviewSummary(__payload)');
+      return {overview, unchanged: before === JSON.stringify(payload)};
+    """)
+    overview = result["overview"]
+    assert result["unchanged"]
+    assert [row["value"] for row in overview["metrics"]] == ["Not assessed", "Unavailable"]
+    assert "unmapped finding" in overview["cautions"]
+    assert "residual_misspecification: gene_A/variance" not in overview["cautions"]
+    assert "does not prove" in " ".join(overview["cautions"])
+    assert overview["next_steps"] == ["Review the source and record the revised analysis first."]
+
+
 def test_unassessed_stability_and_marginal_results_are_not_promoted(tmp_path: Path):
     result = _run_page(tmp_path, _PAYLOAD + r"""
       page.context.__payload = payload;
