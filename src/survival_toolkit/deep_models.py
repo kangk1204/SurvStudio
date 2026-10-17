@@ -657,6 +657,9 @@ def _transform_deep_frame(
         "X_tensor": torch.from_numpy(np.ascontiguousarray(x_array)),
         "time_tensor": torch.from_numpy(frame[time_column].values.astype(np.float32)),
         "event_tensor": torch.from_numpy(frame[event_column].values.astype(np.float32)),
+        # Evaluation/export retain the input ordering and ties. Training losses,
+        # time bins and early-stopping monitors continue to use time_tensor.
+        "outcome_time_values": frame[time_column].to_numpy(dtype=np.float64, copy=True),
         "feature_names": list(encoder["feature_names"]),
         "scaler_params": dict(encoder["scaler_params"]),
         # Input columns the encoder one-hot codes (declared plus auto-coded), for reporting.
@@ -726,6 +729,7 @@ def _prepare_deep_split_data(
     combined_x = torch.cat([train_data["X_tensor"], eval_data["X_tensor"]], dim=0)
     combined_t = torch.cat([train_data["time_tensor"], eval_data["time_tensor"]], dim=0)
     combined_e = torch.cat([train_data["event_tensor"], eval_data["event_tensor"]], dim=0)
+    combined_outcome_times = np.concatenate([train_data["outcome_time_values"], eval_data["outcome_time_values"]])
     train_n = int(train_data["n_samples"])
     eval_n = int(eval_data["n_samples"])
     feature_meta = {
@@ -755,6 +759,7 @@ def _prepare_deep_split_data(
             "X_tensor": combined_x,
             "time_tensor": combined_t,
             "event_tensor": combined_e,
+            "outcome_time_values": combined_outcome_times,
             **feature_meta,
             "n_samples": train_n + eval_n,
             "n_features": int(combined_x.shape[1]),
@@ -1351,11 +1356,11 @@ def _has_comparable_pair(times: Any, events: Any) -> bool:
 
     A pair is comparable when an event is followed by a longer follow-up (or by a censoring at
     the same time); without one, every model's C-index is undefined. Times are compared as the
-    float32 values the deep models score, as in the ML module's check.
+    original cleaned outcome values, as in final evaluation and the ML module's check.
     """
     from survival_toolkit.analysis import _harrell_c_index
 
-    time_values = np.asarray(times, dtype=np.float32).astype(float).reshape(-1)
+    time_values = np.asarray(times, dtype=float).reshape(-1)
     event_values = np.asarray(events, dtype=float).reshape(-1)
     return _harrell_c_index(time_values, event_values, np.zeros(time_values.size, dtype=float)) is not None
 
@@ -2377,6 +2382,32 @@ def _reported_loss_history(
     return list(first.loss_history[: max(int(reported_epochs), 0)])
 
 
+def _evaluation_time_values(data: dict[str, Any]) -> np.ndarray:
+    """Original outcome times, aligned with the tensors but never used for training.
+
+    Legacy caller-prepared data can only retain the precision of its time tensor.
+    Native preprocessing always supplies the separate float64 outcome array.
+    """
+    values = data.get("outcome_time_values")
+    if values is None:
+        values = data["time_tensor"].detach().cpu().numpy()
+    times = np.asarray(values, dtype=np.float64).reshape(-1)
+    if times.size != int(data["time_tensor"].numel()) or not np.isfinite(times).all() or (times < 0).any():
+        raise ValueError("Evaluation outcome time values must be finite, non-negative and aligned with the training tensors.")
+    return times
+
+
+def _compute_evaluation_c_index(
+    risk_scores: torch.Tensor,
+    times: torch.Tensor,
+    events: torch.Tensor,
+) -> float | None:
+    """Normalize undefined final C to None without changing monitor semantics."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        value = _compute_c_index_torch(risk_scores, times, events)
+    return float(value) if value is not None and np.isfinite(value) else None
+
+
 def _holdout_and_apparent_c_index(
     context: _DeepTrainingContext,
     risk_scores: Any,
@@ -2386,14 +2417,17 @@ def _holdout_and_apparent_c_index(
     The last value is the evaluation rows' risk scores when the C-index is a holdout
     estimate, for paired comparisons with other models; comparisons remove it.
     """
+    # Only final reporting uses the original times. context.t_all and every
+    # optimizer/monitor/time-bin path remain on the existing float32 tensors.
+    evaluation_times = torch.from_numpy(_evaluation_time_values(context.data))
     # Apparent = resubstitution on the training partition only.
-    apparent_c_index = _compute_c_index_torch(
-        risk_scores[context.train_idx], context.t_all[context.train_idx], context.e_all[context.train_idx]
+    apparent_c_index = _compute_evaluation_c_index(
+        risk_scores[context.train_idx], evaluation_times[context.train_idx], context.e_all[context.train_idx]
     )
     # In apparent mode the evaluation rows are the training rows, so there is no holdout estimate.
     holdout_c_index = (
-        _compute_c_index_torch(
-            risk_scores[context.eval_idx], context.t_all[context.eval_idx], context.e_all[context.eval_idx]
+        _compute_evaluation_c_index(
+            risk_scores[context.eval_idx], evaluation_times[context.eval_idx], context.e_all[context.eval_idx]
         )
         if context.evaluation_mode == "holdout"
         else None
@@ -2742,7 +2776,7 @@ def _deep_prediction_block(
     eval_idx = np.asarray(split["eval_idx"], dtype=int)
     return prediction_block(
         row_ids,
-        data["time_tensor"].detach().cpu().numpy().reshape(-1)[eval_idx],
+        _evaluation_time_values(data)[eval_idx],
         data["event_tensor"].detach().cpu().numpy().reshape(-1)[eval_idx].astype(int),
         risks,
     )
