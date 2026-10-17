@@ -465,131 +465,28 @@ grouping, `Overall` refers to the grouped, non-missing subset used in that table
 
 ### 6.5 Marker evaluation (Markers tab)
 
-Use this when you screen many candidate markers (for example gene-expression values) for association with
-survival and want the claim checked the way a careful reviewer would check it. It runs in the Markers tab and from
-Python.
+Markers screens supplied candidates for survival association, evaluates selection stability and supports
+external evaluation of a locked model. A selected candidate is not an independently validated biomarker.
 
-**Markers.** Markers are numeric columns of the uploaded table or, for omics data, a separate marker file. Open
-`Markers in a separate file (omics)`, choose the dataset's patient ID column and attach a CSV, TSV, TXT or Parquet
-file with one row per marker and one column per patient (as GEO and TCGA distribute expression) or one row per
-patient; the layout is detected from the IDs. Text files may be gzip-compressed, so a UCSC Xena download such as
-`HiSeqV2.gz` attaches as it is. The file can hold up to 60,000 markers and 30 million values. Its patient IDs must
-be written exactly as in the ID column, except that TCGA sample barcodes (`TCGA-05-4244-01`) are matched to
-patient barcodes (`TCGA-05-4244`), one tumour sample per patient with normal tissue left out; patients without
-values are left out of the evaluation. The clinical table stays small, so the other tabs are unaffected.
+The [marker user guide](user-guide.md#prognostic-marker-evaluation) is the maintained walkthrough for marker
+files, filters, evidence tiers, Python examples, result navigation and exports. The
+[diagnostic policy](guarded-marker-inference.md) specifies clinical adjustment, residual diagnostics,
+withholding and recipe compatibility. Outcome-independent filtering alone does not establish error control;
+residual-permutation inference remains dependent on the model and exchangeability assumptions.
 
-**Outcome leakage.** A marker that is really an outcome column is refused: a follow-up time or event column named
-as clinical tables name them (`os_months`, `OS.time`, `time`), and any 0/1 marker that codes the same events as
-the event column, whatever its name. Names written like gene symbols (upper-case letters and digits, such as
-`EFS`, `TTR` or `DIO3OS`) are judged by their values only, so genome-wide expression files are accepted.
+The subsample gap-adjusted C-index subtracts the mean difference between the procedure's in-subsample and
+left-out C-indices from its apparent C-index. This heuristic includes training-size effects and is not
+Harrell's bootstrap optimism correction. Standard internal performance is unavailable when inference is
+withheld; estimable raw calculations remain separate as exploratory outputs.
 
-**Filter.** Markers with more than 20% missing values, a single value, or more than 90% of patients at one value
-(`max_mode_fraction`) are left out before testing. A gene expressed in a handful of patients has a heavy-tailed
-test statistic; in the TCGA-LUAD RNA-seq data such genes made the permutation maximum (its 95% point was
-chi-square 239 instead of about 25), so no gene could pass family-wise control. The filter does not look at the
-outcome, so the error control holds.
+`evaluate_markers` and `validate_locked_recipe` are available from `survival_toolkit.marker_evaluation`.
+API routes are `POST /api/marker-evaluation` and `POST /api/marker-validation`. The result records the method
+version, settings, cohort eligibility, diagnostic state and recipe hash. Required failures retain the withheld
+state through exports and external evaluation; a favorable score does not clear it.
 
-**Tests.** For every marker the evaluation reports:
-
-- two Cox score-test lenses: marginal association, and added value over the clinical covariates you name (the
-  primary lens whenever clinical covariates are given)
-- Westfall-Young step-down permutation p-values (family-wise error over all markers) and permutation FDR q-values.
-  The added-value null permutes the residuals of each marker after regression on the clinical covariates (the
-  Smith method; Winkler et al., NeuroImage 2014;92:381-397), so a marker that merely tracks a clinical factor is not
-  called prognostic
-- the whole procedure rerun on event-stratified subsamples of 63.2% of the patients: selection frequency, rank
-  interval and direction consistency
-- a tier from pre-declared rules:
-  - `robust`: Westfall-Young p ≤ 0.05, selected in at least 50% of subsamples, same direction in at least 90%
-  - `suggestive`: Westfall-Young p ≤ 0.05 or permutation q ≤ 0.10, but not stable enough to be robust
-  - `marginal only`: associated on its own but not beyond the clinical covariates
-  - `not supported`
-
-**Repeated samples.** The patients are screened for repeated samples: public expression cohorts often hold the
-same tumour twice, and a patient in the data twice can sit on both sides of a subsample split and flatter the
-internal estimates. On panels of at least 200 markers, two patients are flagged when their profiles over the 5,000
-most variable markers are each other's best match, correlate at least 0.7 and stand 0.2 above either one's
-next-best match. Patients with identical values on every marker are flagged too, on panels of at least 20 markers
-that take many distinct values (on binary panels such as mutation calls, patients share profiles by chance).
-Cohorts of more than 6,000 patients are not screened. Flagged pairs lead the cautions, named by the patient ID
-column, and the verdict stays at Needs review until one sample per patient is kept. On 17 public breast and lung
-cancer cohorts (5,955 patients), the screen found 15 of 21 confirmed repeated tumours and flagged no pair of
-different patients.
-
-**Model and C-index.** A Cox model of the clinical covariates and the selected markers (at most the 10 strongest)
-is fitted. The evaluation reports its apparent C-index; a subsample gap-adjusted C-index (the apparent value minus
-the mean difference between the whole procedure's C-index in each subsample and in the patients left out of it; this heuristic includes training-size effects and is not Harrell's bootstrap optimism correction);
-the C-index in the left-out patients next to that of the clinical covariates alone, paired subsample by
-subsample, and their mean difference, the gain, with a 95% interval (the corrected resampled t interval of
-Nadeau and Bengio, which allows for the overlap between subsamples: `signature_gain_left_out_ci`, with
-`signature_gain_left_out_sd` and the same interval for the left-out C-index, `signature_c_left_out_ci`); and how much the top marker's effect shrinks outside the rows that selected it (the winner's curse of
-picking the strongest marker).
-
-**Summary figure and verdict.** The Markers tab opens its results with one figure: the number of markers that clear
-each bar (supplied, tested, p < 0.05, FDR q ≤ 0.05, family-wise p ≤ 0.05, robust; log scale for genome-wide
-panels) and the model's C-index from apparent to subsample gap-adjusted to the left-out patients, beside the clinical
-covariates alone, with the gain and its interval under the C-index ladder. The verdict card follows: Robust when
-at least one marker is robust and no repeated patients were flagged, otherwise Needs review. On added value it
-follows the gain's interval: little discrimination when the interval lies below 0.02, added discrimination when
-it lies above 0, and an uncertain gain otherwise; results saved without an interval are judged on the mean gain
-against 0.02. The card gives the key numbers and the first two cautions (the rest under More
-detail). Then come the stability and rank plots and the marker table.
-`survival_toolkit.plots.build_marker_summary_figure(result)` draws the figure from Python.
-
-**Locked model and external validation.** The model is locked into a recipe (encoders, coefficients, baseline
-survival and a SHA-256 hash) that is applied unchanged to another cohort, in the tab (`Validate in another
-cohort`; the file needs the same column names) or from Python:
-
-```python
-import pandas as pd
-from survival_toolkit.marker_evaluation import MarkerSettings, evaluate_markers, validate_locked_recipe
-
-development = pd.read_csv("development.csv")
-genes = [column for column in development.columns if column.startswith("gene_")]
-result = evaluate_markers(
-    development,
-    time_column="os_months",
-    event_column="os_event",
-    marker_columns=genes,
-    clinical_columns=["age", "stage"],
-    categorical_clinical=["stage"],
-    settings=MarkerSettings(n_permutations=1000, n_resamples=200),
-)
-robust = [row["marker"] for row in result["marker_table"] if row["tier"] == "robust"]
-
-external = pd.read_csv("external.csv")
-report = validate_locked_recipe(external, result["locked_recipe"], horizon=60)
-print(report["metrics"]["c_index"])
-```
-
-External validation reports Harrell's C with a bootstrap interval, the C-index gain over the locked clinical-only
-model, the calibration slope, observed/expected risk, the Brier score and Brier skill at the horizon, and each
-marker's external hazard ratio with a Holm-adjusted one-sided replication test. A recipe that was edited after it
-was locked is rejected.
-
-For a cohort measured on another platform (for example microarrays against an RNA-seq development set), choose
-`Another platform (rescale within cohort)` or pass `marker_scaling="within_cohort"`: each marker is mapped onto its
-development mean and SD by its z-score within the external cohort, so the model's relative weights hold;
-discrimination is then comparable, absolute risks only roughly. Locked markers the external cohort does not
-measure are held at their development median, and the report gives the share of the model's marker weight
-(|coefficient| × development SD) that was measured; below half, validation stops.
-
-**REMARK checklist.** `Export → REMARK checklist` (Word or Markdown) holds the methods and results paragraphs of
-the run and the 20 REMARK items, each marked as filled in by SurvStudio, partly filled in, or for the authors to
-complete (study design, specimens, assay, interpretation). From Python, `survival_toolkit.reporting.remark_checklist(result)`
-returns the same checklist.
-
-Notes:
-
-- Every threshold used for a tier is a field of `MarkerSettings`; fix them before looking at results, not after.
-- The robust-tier thresholds (50% selection, 90% direction) come from a simulation pilot in which a stricter
-  selection frequency (80%) kept only 6% of true markers robust instead of 21%, with the robust tier's family-wise
-  error at or below 1% either way; 90% against 95% direction made no difference.
-- `nonlinear_lens="gbs"` or `"rsf"` (More options → Non-linear check) adds a descriptive tree-model
-  permutation-importance check, shown as `N+` / `N·` in each marker's evidence pattern; it does not change the
-  tiers.
-- The Cox score screen reproduces R `survival::coxph` score tests (Efron and Breslow ties, with and without
-  strata) to a relative tolerance of 1e-6 or better.
+Cross-platform within-cohort rescaling uses external predictor distributions and is a separate sensitivity
+analysis. It does not preserve strictly development-only transforms or certify cross-platform comparability.
+See the user guide for missing-marker handling and the horizon checks on absolute-risk metrics.
 
 ### 6.6 Exploratory cut-point combinations
 

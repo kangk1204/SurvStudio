@@ -80,7 +80,7 @@ making the prediction. Do not select patient IDs, follow-up time or outcome-deri
 | **Risk factors (Cox)** | Examine risk factors together | Hazard ratios, confidence intervals, model checks |
 | **Compare models — ML** | Learn and compare risk predictions | Cox baseline, LASSO-Cox, survival forests and boosting; held-out C-index |
 | **Compare models — DL** | Evaluate neural survival models | DeepSurv, DeepHit, MTLR; Transformer/VAE are experimental |
-| **Markers** | Evaluate candidate markers beyond clinical factors | Adjusted evidence, stability and analysis status |
+| **Markers** | Screen prognostic candidates beyond clinical factors | Adjusted evidence, selection stability and analysis status |
 | **Table 1** | Describe the patients | Overall or grouped summary table |
 
 Use **Save results** to export the current result. **More analyses** opens Markers and Table 1.
@@ -99,6 +99,8 @@ Earlier interfaces use **Cox model**, **Prediction models** and an **Export** me
 
 ML/DL compares **risk prediction**, while Cox reports **adjusted associations**. DL is not automatically
 better than ML. Compare the same inputs and evaluation splits; small score differences do not establish a winner.
+Markers supports candidate assessment and locked external evaluation; an internally stable candidate
+is not an independently validated biomarker.
 
 [ML/DL interpretation](docs/getting-started.md#understand-mldl-results) ·
 [Common option combinations](docs/getting-started.md#choose-an-option-combination)
