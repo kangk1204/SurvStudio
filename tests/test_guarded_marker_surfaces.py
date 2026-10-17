@@ -36,7 +36,8 @@ def test_api_returns_consistent_withheld_display_report_and_figures():
         payload=response.json()
         assert payload["analysis"]["inference"]["status"]=="withheld"
         review=payload['analysis']['diagnostic_review']
-        assert review['version']=='marker-review/1' and review['decision_changed'] is False
+        assert review['version']=='marker-review/2' and review['decision_changed'] is False
+        assert review['hold_scope']=='entire_marker_family'
         assert review['flagged_mean_markers'] and 'nonlinear expression pattern' in ' '.join(review['messages'])
         assert review['raw_reasons']==payload['analysis']['inference']['reasons']
         assert 'diagnostic_review' not in payload['analysis']['locked_recipe']

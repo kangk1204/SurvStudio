@@ -1,12 +1,37 @@
 """The short marker interpretation must retain uncertainty and safety stops."""
 from pathlib import Path
+import json
 import shutil
 
 import pytest
 
 from test_frontend_review import _run_page
+from survival_toolkit.marker_review import marker_diagnostic_review
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed for the front-end tests")
+
+
+def test_family_hold_overview_separates_residual_findings_from_exploratory_ranks(tmp_path: Path):
+    analysis = {"primary_lens": "added_value", "inference": {"status": "withheld", "allowed": False,
+        "reasons": ["residual_misspecification: gene_A/variance", "residual_misspecification: gene_B/variance"]},
+        "cohort": {"n": 80, "n_markers_evaluated": 100},
+        "resampling": {"n_valid": 20, "n_withheld": 20, "stability_assessed": True}}
+    analysis["diagnostic_review"] = marker_diagnostic_review(analysis)
+    script = "const payload = " + json.dumps({"analysis": analysis}) + ";" + r"""
+      page.context.__payload = payload;
+      const before = JSON.stringify(payload);
+      const overview = page.run('markerOverviewSummary(__payload)');
+      return {overview, unchanged: before === JSON.stringify(payload)};
+    """
+    result = _run_page(tmp_path, script)
+    overview = result["overview"]
+    assert result["unchanged"]
+    assert "family" in overview["headline"] and "exploratory" in overview["headline"]
+    metrics = {v["label"]: v["value"] for v in overview["metrics"]}
+    assert metrics["Markers with residual findings"] == "2 of 100"
+    assert metrics["Stable candidates"] == "Not assessed"
+    assert "not evidence" in " ".join(overview["cautions"])
+    assert not overview["strengths"]
 
 
 _PAYLOAD = r"""

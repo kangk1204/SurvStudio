@@ -482,8 +482,14 @@ function markerOverviewSummary(payload) {
       ...(detail.cautions || []).filter((text) => !rawReasons.has(text) && text !== inference.interpretation),
       ...(review.messages || []), review.interpretation,
     ].filter(Boolean) : detail.cautions;
-    return { ...detail, headline: "Added-value inference is withheld. Review the diagnostics before interpreting candidates.",
-      metrics: [{ label: "Stable candidates", value: "Not assessed" }, { label: "Prediction improvement", value: "Unavailable" }],
+    const residualCount = review?.n_markers_with_residual_findings;
+    const holdMetrics = [{ label: "Stable candidates", value: "Not assessed" }, { label: "Prediction improvement", value: "Unavailable" }];
+    const familySize = analysis.cohort?.n_markers_evaluated;
+    if (Number.isInteger(residualCount) && residualCount > 0 && Number.isInteger(familySize) && familySize > 0) {
+      holdMetrics.push({ label: "Markers with residual findings", value: `${formatCount(residualCount)} of ${formatCount(familySize)}` });
+    }
+    return { ...detail, headline: "Added-value inference is withheld for this marker family. Rankings are exploratory.",
+      metrics: holdMetrics,
       strengths: [], cautions, next_steps: review?.next_steps || [] };
   }
   const cohort = analysis.cohort || {};
@@ -611,6 +617,9 @@ async function renderMarkerResults(payload) {
     const order = rows.length > MARKER_TABLE_DISPLAY_LIMIT
       ? `Showing the first ${formatValue(MARKER_TABLE_DISPLAY_LIMIT)} of ${formatValue(rows.length)} markers, strongest first. Export the table for all of them.`
       : "Strongest markers first.";
+    const rankNote = payload?.analysis?.inference?.status === "withheld"
+      ? "Exploratory full-cohort score rank orders the held results; it is not a validated-candidate rank. Median rank summarizes the separate training subsamples."
+      : "Full-cohort score rank and median rank across training subsamples describe different rankings.";
     // The HR column comes from the model of the primary lens: with the clinical covariates, or the marker alone.
     const hazardRatio = addedValue
       ? "HR per unit of the marker, from a Cox model with the clinical covariates."
@@ -618,7 +627,7 @@ async function renderMarkerResults(payload) {
     const evidence = addedValue
       ? "Evidence: M marginal association and A added value over the clinical covariates, each + or − when family-wise significant (higher or lower hazard) and · when not; N+ when the non-linear check agrees."
       : "Evidence: M marginal association, + or − when family-wise significant (higher or lower hazard) and · when not; N+ when the non-linear check agrees.";
-    refs.markersTableNote.textContent = `${order} ${hazardRatio} ${evidence}`;
+    refs.markersTableNote.textContent = `${order} ${rankNote} ${hazardRatio} ${evidence}`;
   }
   if (refs.markerValidationSection) refs.markerValidationSection.classList.remove("hidden");
   updateResultVisibility();
