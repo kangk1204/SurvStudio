@@ -34,6 +34,25 @@ def test_family_hold_overview_separates_residual_findings_from_exploratory_ranks
     assert not overview["strengths"]
 
 
+def test_wide_diagnostic_table_prioritizes_findings_without_truncating_saved_tests(tmp_path: Path):
+    result = _run_page(tmp_path, r"""
+      const inference = { threshold: 0.01, clinical_tests: [{name: 'PH', p_value: 0.2, p_holm: 0.5}],
+        residual_tests: Array.from({length: 600}, (_, i) => ({marker: `gene_${i}`, diagnostic: 'variance',
+          status: i === 599 ? 'failed' : 'calculated', p_value: i >= 579 ? 0.000001 : 0.8,
+          p_holm: i >= 579 ? 0.001 : 1.0})) };
+      page.context.__inference = inference;
+      const before = JSON.stringify(inference);
+      const selected = page.run('markerDiagnosticTableTests(__inference)');
+      return {selected, unchanged: before === JSON.stringify(inference)};
+    """)
+    assert result["unchanged"]
+    selected = result["selected"]
+    assert selected["total"] == 601 and len(selected["visible"]) == 300
+    names = {row.get("marker") for row in selected["visible"]}
+    assert {f"gene_{i}" for i in range(579, 600)} <= names
+    assert any(row.get("name") == "PH" for row in selected["visible"])
+
+
 _PAYLOAD = r"""
   const payload = { analysis: {
     primary_lens: 'added_value', inference: {status: 'assumption_dependent', allowed: true},

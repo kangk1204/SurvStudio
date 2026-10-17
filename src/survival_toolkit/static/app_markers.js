@@ -596,8 +596,9 @@ async function renderMarkerResults(payload) {
   if (refs.markersInferenceNote) refs.markersInferenceNote.textContent = inference
     ? `${inference.status}. ${inference.interpretation} ${bootstrapNote} ${(inference.reasons || []).join("; ")} ${inference.engineering_qualification?.claim_boundary || ""} ${inference.engineering_qualification?.extension_limitations || ""}`
     : "Diagnostics were not assessed in this saved result.";
-  if (refs.markersDiagnosticsTable) renderTable(refs.markersDiagnosticsTable,
-    [...(inference?.clinical_tests || []), ...(inference?.residual_tests || [])].map((test) => ({
+  if (refs.markersDiagnosticsTable) {
+    const tests = markerDiagnosticTableTests(inference);
+    renderTable(refs.markersDiagnosticsTable, tests.visible.map((test) => ({
       Marker: test.marker || "Clinical model", Diagnostic: test.name || test.diagnostic,
       Method: test.method || "", Status: test.status || (test.p_value == null ? "failed" : "calculated"),
       "Raw P": test.p_value, "Holm P": test.p_holm ?? test.p_holm_v2,
@@ -605,6 +606,13 @@ async function renderMarkerResults(payload) {
       "Withhold threshold": inference.threshold,
       Reason: test.reason || ""
     })));
+    if (tests.total > tests.visible.length) {
+      const note = document.createElement("p");
+      note.className = "muted";
+      note.textContent = `Showing ${formatCount(tests.visible.length)} of ${formatCount(tests.total)} checks: calculation failures and small adjusted P values first, then clinical checks. All checks remain in the saved analysis JSON. This display limit does not change the diagnostic decision.`;
+      refs.markersDiagnosticsTable.prepend(note);
+    }
+  }
   // Results saved before the summary figure existed simply leave its shell hidden.
   if (payload.summary_figure?.data?.length) await renderMarkerPlot(refs.markersSummaryPlot, payload.summary_figure, "marker_summary", payload);
   else clearPlotShell(refs.markersSummaryPlot, "", { state: "placeholder" });
@@ -631,6 +639,17 @@ async function renderMarkerResults(payload) {
   }
   if (refs.markerValidationSection) refs.markerValidationSection.classList.remove("hidden");
   updateResultVisibility();
+}
+
+function markerDiagnosticTableTests(inference) {
+  const all = [...(inference?.clinical_tests || []), ...(inference?.residual_tests || [])];
+  if (all.length <= 300) return { total: all.length, visible: all };
+  const threshold = inference?.threshold ?? 0.01;
+  const adjusted = (test) => test.p_maxT ?? test.p_holm ?? test.p_holm_v2;
+  const priority = (test) => test.status === "failed" || test.p_value == null
+    || (typeof adjusted(test) === "number" && adjusted(test) <= threshold) ? 0 : !test.marker ? 1 : 2;
+  all.sort((a, b) => priority(a) - priority(b) || (adjusted(a) ?? 1) - (adjusted(b) ?? 1));
+  return { total: all.length, visible: all.slice(0, 300) };
 }
 
 // The marker table as shown and exported. A rank interval reads "1 to 3", because a spreadsheet opens
