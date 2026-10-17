@@ -196,6 +196,7 @@ const refs = {
   coxPreviewLine: document.getElementById("coxPreviewLine"),
   runMarkersButton: document.getElementById("runMarkersButton"),
   downloadMarkersCsvButton: document.getElementById("downloadMarkersCsvButton"),
+  downloadMarkerDiagnosticsButton: document.getElementById("downloadMarkerDiagnosticsButton"),
   downloadMarkerRecipeButton: document.getElementById("downloadMarkerRecipeButton"),
   downloadMarkerRemarkDocxButton: document.getElementById("downloadMarkerRemarkDocxButton"),
   downloadMarkerRemarkMarkdownButton: document.getElementById("downloadMarkerRemarkMarkdownButton"),

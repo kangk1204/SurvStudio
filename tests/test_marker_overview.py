@@ -43,7 +43,8 @@ def test_wide_diagnostic_table_prioritizes_findings_without_truncating_saved_tes
       page.context.__inference = inference;
       const before = JSON.stringify(inference);
       const selected = page.run('markerDiagnosticTableTests(__inference)');
-      return {selected, unchanged: before === JSON.stringify(inference)};
+      const exported = page.run('markerDiagnosticRows(__inference)');
+      return {selected, exported, unchanged: before === JSON.stringify(inference)};
     """)
     assert result["unchanged"]
     selected = result["selected"]
@@ -51,6 +52,9 @@ def test_wide_diagnostic_table_prioritizes_findings_without_truncating_saved_tes
     names = {row.get("marker") for row in selected["visible"]}
     assert {f"gene_{i}" for i in range(579, 600)} <= names
     assert any(row.get("name") == "PH" for row in selected["visible"])
+    assert len(result["exported"]) == 601
+    assert result["exported"][-1]["Status"] == "failed"
+    assert all(row["Withhold threshold"] == 0.01 for row in result["exported"])
 
 
 _PAYLOAD = r"""

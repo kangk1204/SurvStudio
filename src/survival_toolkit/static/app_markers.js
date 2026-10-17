@@ -598,18 +598,11 @@ async function renderMarkerResults(payload) {
     : "Diagnostics were not assessed in this saved result.";
   if (refs.markersDiagnosticsTable) {
     const tests = markerDiagnosticTableTests(inference);
-    renderTable(refs.markersDiagnosticsTable, tests.visible.map((test) => ({
-      Marker: test.marker || "Clinical model", Diagnostic: test.name || test.diagnostic,
-      Method: test.method || "", Status: test.status || (test.p_value == null ? "failed" : "calculated"),
-      "Raw P": test.p_value, "Holm P": test.p_holm ?? test.p_holm_v2,
-      ...(bootstrap ? {"Joint bootstrap P": test.p_maxT, "Adjusted family": test.marker ? "v3 maxT; Holm retained for comparison" : "clinical Holm"} : {}),
-      "Withhold threshold": inference.threshold,
-      Reason: test.reason || ""
-    })));
+    renderTable(refs.markersDiagnosticsTable, markerDiagnosticRows(inference, tests.visible));
     if (tests.total > tests.visible.length) {
       const note = document.createElement("p");
       note.className = "muted";
-      note.textContent = `Showing ${formatCount(tests.visible.length)} of ${formatCount(tests.total)} checks: calculation failures and small adjusted P values first, then clinical checks. All checks remain in the saved analysis JSON. This display limit does not change the diagnostic decision.`;
+      note.textContent = `Showing ${formatCount(tests.visible.length)} of ${formatCount(tests.total)} checks: calculation failures and small adjusted P values first, then clinical checks. Save files → Diagnostic checks (CSV) includes all checks. This display limit does not change the diagnostic decision.`;
       refs.markersDiagnosticsTable.prepend(note);
     }
   }
@@ -650,6 +643,17 @@ function markerDiagnosticTableTests(inference) {
     || (typeof adjusted(test) === "number" && adjusted(test) <= threshold) ? 0 : !test.marker ? 1 : 2;
   all.sort((a, b) => priority(a) - priority(b) || (adjusted(a) ?? 1) - (adjusted(b) ?? 1));
   return { total: all.length, visible: all.slice(0, 300) };
+}
+
+function markerDiagnosticRows(inference, tests = null) {
+  return (tests || [...(inference?.clinical_tests || []), ...(inference?.residual_tests || [])]).map((test) => ({
+    Marker: test.marker || "Clinical model", Diagnostic: test.name || test.diagnostic,
+    "Overall inference": inference?.status || "not_assessed",
+    Method: test.method || "", Status: test.status || (test.p_value == null ? "failed" : "calculated"),
+    "Raw P": test.p_value, "Holm P": test.p_holm ?? test.p_holm_v2,
+    ...(inference?.bootstrap ? {"Joint bootstrap P": test.p_maxT, "Adjusted family": test.marker ? "v3 maxT; Holm retained for comparison" : "clinical Holm"} : {}),
+    "Withhold threshold": inference?.threshold, Reason: test.reason || ""
+  }));
 }
 
 // The marker table as shown and exported. A rank interval reads "1 to 3", because a spreadsheet opens
@@ -835,6 +839,15 @@ function downloadMarkerTable() {
   });
 }
 
+function downloadMarkerDiagnostics() {
+  const payload = currentGoalResult("markers");
+  if (!requireCurrentResultForExport("markers", { payload })) return;
+  downloadCsv(buildDownloadFilename("marker_diagnostics", "csv"), markerDiagnosticRows(payload.analysis?.inference), null, {
+    caption: "All marker diagnostic checks",
+    notes: ["Calculated describes a computed diagnostic, not permission to release marker inference."]
+  });
+}
+
 function downloadMarkerChecklist(format) {
   const payload = currentGoalResult("markers");
   if (!requireCurrentResultForExport("markers", { payload })) return;
@@ -848,6 +861,7 @@ function downloadMarkerChecklist(format) {
 function syncMarkerDownloadButtons() {
   const current = currentGoalResult("markers");
   if (refs.downloadMarkersCsvButton) refs.downloadMarkersCsvButton.disabled = !current;
+  if (refs.downloadMarkerDiagnosticsButton) refs.downloadMarkerDiagnosticsButton.disabled = !current?.analysis?.inference;
   if (refs.downloadMarkerRecipeButton) refs.downloadMarkerRecipeButton.disabled = !current?.analysis?.locked_recipe;
   if (refs.downloadMarkerRemarkDocxButton) refs.downloadMarkerRemarkDocxButton.disabled = !current?.report;
   if (refs.downloadMarkerRemarkMarkdownButton) refs.downloadMarkerRemarkMarkdownButton.disabled = !current?.report;
@@ -890,6 +904,7 @@ function wireMarkerControls() {
   });
   refs.removeMarkerMatrixButton?.addEventListener("click", removeMarkerMatrix);
   refs.downloadMarkersCsvButton?.addEventListener("click", downloadMarkerTable);
+  refs.downloadMarkerDiagnosticsButton?.addEventListener("click", downloadMarkerDiagnostics);
   refs.downloadMarkerRecipeButton?.addEventListener("click", downloadMarkerRecipe);
   refs.downloadMarkerRemarkDocxButton?.addEventListener("click", () => downloadMarkerChecklist("docx"));
   refs.downloadMarkerRemarkMarkdownButton?.addEventListener("click", () => downloadMarkerChecklist("markdown"));
