@@ -108,6 +108,17 @@ async function downloadTripodChecklist(format) {
 // ── Downloads ──────────────────────────────────────────────────
 
 function wireDownloads() {
+  ["ml", "dl"].forEach((goal) => {
+    predictiveSingleDownloadButton(goal)?.addEventListener("click", () => {
+      if (isScopeBusy("predictive")) {
+        showToast("Wait for the current run to finish before exporting this result.", "warning", 3200);
+        return;
+      }
+      const payload = selectedPredictiveSingleResult(goal);
+      if (!requireCurrentResultForExport(goal, { payload })) return;
+      downloadText(buildDownloadFilename(`${goal}_model_result`, "json"), `${JSON.stringify(payload, null, 2)}\n`, "application/json;charset=utf-8;");
+    });
+  });
   refs.downloadTripodDocxButton.addEventListener("click", () => downloadTripodChecklist("docx"));
   refs.downloadTripodMarkdownButton.addEventListener("click", () => downloadTripodChecklist("markdown"));
   refs.downloadKmSummaryButton.addEventListener("click", () => {
@@ -386,13 +397,16 @@ function initializeRuntime() {
 
 // The Run button of the active tab and the action it starts, for Ctrl+Enter. The ML and DL tabs open the
 // Prediction models tab, so "benchmark" covers both families.
-function activeRunTarget() {
+function activeRunTarget(context = document.activeElement) {
   const tab = activeTabName();
   if (tab === "km") return { button: refs.runKmButton, action: runKaplanMeier };
   if (tab === "cox") return { button: refs.runCoxButton, action: runCox };
   if (tab === "tables") return { button: refs.runCohortTableButton, action: runCohortTable };
   if (tab === "markers") return { button: refs.runMarkersButton, action: runMarkerEvaluation };
   if (tab === "benchmark") {
+    if (context instanceof Element && context.closest("#predictorPatternCard")) {
+      return { button: patternRefs.Run, action: runPredictorPatterns, managesLoading: true };
+    }
     if (!runtime.workbenchRevealed) return { button: refs.runPredictiveCompareAllButton, action: runUnifiedPredictiveComparison };
     if (!refs.runPredictiveWorkbenchButton.classList.contains("hidden")) {
       return { button: refs.runPredictiveWorkbenchButton, action: runPredictiveSelectedModel };
@@ -694,9 +708,12 @@ function initKeyboardShortcuts() {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       if (!state.dataset) return;
-      const target = activeRunTarget();
+      const target = activeRunTarget(e.target instanceof Element ? e.target : document.activeElement);
       // withLoading takes the button's busy scope, exactly as a click does.
-      if (target?.button && !target.button.disabled) withLoading(target.button, target.action);
+      if (target?.button && !target.button.disabled) {
+        if (target.managesLoading) target.action().catch(showError);
+        else withLoading(target.button, target.action);
+      }
     }
   });
 }
@@ -705,6 +722,7 @@ function goHome({ syncHistory = true, historyMode = "replace" } = {}) {
   // Leaving the workspace makes every pending request obsolete: dataset loads, derives, and runs of any
   // kind (a running ML or DL job would otherwise finish into an empty workspace).
   invalidateRequestTokens(Object.keys(runtime.requestTokens));
+  clearPredictorPatterns();
   runtime.benchmarkIntervals = null;
   setAnalysisConsistencyBanner("");
   const result = shellHelpers.goHome({
@@ -735,7 +753,23 @@ function initListeners() {
     const availableMenu = (panel, visibleOnly = true) => Array.from(panel?.querySelectorAll(".export-menu") || []).find(
       (item) => (!visibleOnly || item.offsetParent !== null) && item.querySelector("button:not([disabled])"),
     );
-    let menu = availableMenu(document.getElementById(`panel-${activeTabName()}`));
+    const singleGoal = predictiveModelMeta().family;
+    const singleButton = predictiveSingleDownloadButton(singleGoal);
+    const singleReady = selectedPredictiveSingleResult(singleGoal) && singleButton && !singleButton.disabled
+      && !isScopeBusy(singleGoal) && !isScopeBusy("predictive");
+    const workbenchVisible = activeTabName() === "benchmark" && runtime.workbenchRevealed
+      && !refs.benchmarkWorkbench.classList.contains("hidden");
+    let menu = singleReady && workbenchVisible ? singleButton.closest(".export-menu") : null;
+    if (!menu) menu = availableMenu(document.getElementById(`panel-${activeTabName()}`));
+    if (!menu && currentPredictorPatternResult()) {
+      activateTab("benchmark");
+      document.getElementById("predictorPatternCard").open = true;
+      menu = document.getElementById("patternExportMenu");
+    }
+    if (!menu && singleReady) {
+      reviewBenchmarkModel(currentPredictiveModelKey());
+      menu = singleButton.closest(".export-menu");
+    }
     if (!menu && hasCompletedResults()) {
       for (const tabName of ["km", "cox", "benchmark", "markers", "tables"]) {
         const panel = document.getElementById(`panel-${tabName}`);

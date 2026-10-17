@@ -117,7 +117,18 @@ class FakeElement {
     while (node.parentElement) node = node.parentElement;
     return node === this.ownerDocument?.documentElement;
   }
-  get offsetParent() { return this.isConnected ? this.parentElement : null; }
+  get offsetParent() {
+    if (!this.isConnected) return null;
+    for (let node = this; node; node = node.parentElement) {
+      if (node.classList.contains('hidden') || node.classList.contains('result-hidden')) return null;
+      if (node.classList.contains('tab-panel') && !node.classList.contains('active')) return null;
+      if (node !== this && node.tagName === 'DETAILS' && !node.open) {
+        const summary = node.children.find(child => child.tagName === 'SUMMARY');
+        if (!summary?.contains(this)) return null;
+      }
+    }
+    return this.parentElement;
+  }
   get offsetWidth() { return 100; }
   get clientWidth() { return 100; }
   get firstChild() { return this.childNodes[0] || null; }
@@ -294,6 +305,16 @@ class FakeElement {
   }
   focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
   blur() {}
+  checkValidity() {
+    if (this.type !== "number" || this.value === "") return true;
+    const value = Number(this.value);
+    const min = this.getAttribute("min");
+    const max = this.getAttribute("max");
+    const step = this.getAttribute("step") || "1";
+    if (!Number.isFinite(value) || (min !== null && value < Number(min)) || (max !== null && value > Number(max))) return false;
+    const steps = (value - Number(min || 0)) / Number(step);
+    return step === "any" || Math.abs(steps - Math.round(steps)) < 1e-8;
+  }
   scrollIntoView() {}
   getBoundingClientRect() { return { top: 0, bottom: 0, left: 0, right: 0, width: 100, height: 100 }; }
 }
@@ -371,7 +392,9 @@ function parseCompound(text) {
 }
 
 function matchesCompound(element, compound, scope) {
-  return parseCompound(compound).every((part) => {
+  const negatives = [...compound.matchAll(/:not\(([^()]*)\)/g)];
+  if (negatives.some(match => matchesCompound(element, match[1], scope))) return false;
+  return parseCompound(compound.replace(/:not\(([^()]*)\)/g, '')).every((part) => {
     if (part[0] === "#") return element.id === part.slice(1);
     if (part[0] === ".") return element.classList.contains(part.slice(1));
     if (part === ":checked") return Boolean(element.checked || (element.tagName === "OPTION" && element.selected));
@@ -381,6 +404,7 @@ function matchesCompound(element, compound, scope) {
       const attr = /^\[\s*([\w-]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]+)))?\s*\]$/.exec(part);
       if (!attr) return false;
       const name = attr[1];
+      if (name === 'disabled' && attr[2] === undefined && attr[3] === undefined && attr[4] === undefined) return element.disabled;
       const actual = name === "type" ? element.type : (name === "value" ? element.value : element.getAttribute(name));
       if (attr[2] === undefined && attr[3] === undefined && attr[4] === undefined) return actual !== null && actual !== undefined && actual !== "";
       return String(actual) === (attr[2] ?? attr[3] ?? attr[4]);
@@ -741,6 +765,152 @@ def marker_payloads(example_dataset) -> dict:
 # ── Result currency and requests ────────────────────────────────
 
 
+def _pattern_run_script(extra: str) -> str:
+    return r"""
+      await loadDataset(page, fixtures.dataset);
+      page.run("activateTab('benchmark'); document.getElementById('predictorPatternCard').open = true; setCheckedValues(patternRefs.Clinical, ['age','stage']); setCheckedValues(patternRefs.Added, ['biomarker_score']); refreshPatternMenus({autoSelectNew: true}); setCheckedValues(patternRefs.Categorical, ['stage']); refreshPatternMenus(); patternRefs.Target.value = 'biomarker_score'; patternRefs.Group.value = 'stage'");
+      const patternReply = (request) => ({ status: 200, body: {
+        request_config: request.json(), analysis: { training_patients: 70, test_patients: 30, test_events: 12,
+          excluded_missing_outcome_rows: 0, comparison: { delta_c: 0.02, delta_ci: [-0.01,0.04], n_bootstrap_valid: 1000, n_bootstrap_requested: 1000 },
+          interpretation: 'Exploratory comparison.', pattern: null, pattern_error: 'Insufficient support', risk_display: null },
+        comparison_figure: { data: [], layout: {} }, pattern_figure: null, risk_group_figure: null
+      } });
+      page.fetchHandler = (request) => request.url.endsWith('/api/predictor-patterns') ? patternReply(request) : { status: 200, body: {} };
+    """ + extra
+
+
+def test_pattern_only_results_use_main_save_and_leave_protection_then_invalidate(tmp_path: Path, example_dataset: dict) -> None:
+    result = _run_page(tmp_path, _pattern_run_script(r"""
+      page.run("patternRefs.Run.click()"); await page.settle();
+      page.run("document.getElementById('predictorPatternCard').open = false; document.getElementById('saveResultsButton').click()");
+      const ready = page.run("({completed: hasCompletedResults(), current: Boolean(currentPredictorPatternResult()), menuOpen: document.getElementById('patternExportMenu').open, exportEnabled: !patternRefs.Json.disabled})");
+      let warned = false; page.context.__leave = {preventDefault() {warned = true;}};
+      page.run("confirmLeavingWithResults(__leave)");
+      page.change('#patternSeed', '43'); await page.settle();
+      return {ready, warned, after: page.run("({completed: hasCompletedResults(), current: Boolean(currentPredictorPatternResult()), exportDisabled: patternRefs.Json.disabled, hidden: patternRefs.Results.classList.contains('hidden')})")};
+    """), dataset=example_dataset)
+    assert result["ready"] == {"completed": True, "current": True, "menuOpen": True, "exportEnabled": True}
+    assert result["warned"] is True
+    assert result["after"] == {"completed": False, "current": False, "exportDisabled": True, "hidden": True}
+
+
+@pytest.mark.parametrize(("family", "model", "endpoint", "other_model"), [
+    ("ml", "gbs", "/api/ml-model", "rsf"),
+    ("dl", "deepsurv", "/api/deep-model", "deephit"),
+])
+def test_main_save_prefers_visible_single_model_workbench_over_completed_pattern(
+    tmp_path: Path, example_dataset: dict, family: str, model: str, endpoint: str, other_model: str,
+) -> None:
+    result = _run_page(tmp_path, _pattern_run_script(r"""
+      page.fetchHandler = request => {
+        const reply = patternReply(request);
+        reply.body.analysis.input_audit = {outcome_proxy:{status:'no_pattern_detected'},notes:['Fixture audit']};
+        return reply;
+      };
+      page.run("patternRefs.Run.click()"); await page.settle();
+      page.fetchHandler = request => request.url.endsWith(fixtures.endpoint) ? ({status:200,body:{request_config:request.json(),dataset_hash:'fixture-hash',
+        analysis:{c_index:0.695,evaluation_mode:'holdout',n_patients:360,n_features:4,
+          model_stats:{c_index:0.695,evaluation_mode:'holdout',n_patients:360,n_features:4}},figures:{}}}) : ({status:500,body:{detail:'unexpected'}});
+      page.context.__model=fixtures.model; page.context.__family=fixtures.family;
+      page.run("reviewBenchmarkModel(__model); refs.runPredictiveWorkbenchButton.click()"); await page.settle();
+      const button=page.run("predictiveSingleDownloadButton(__family)");
+      const menu=button.closest('.export-menu');
+      page.run("document.getElementById('saveResultsButton').click()");
+      const currentMenu={singleOpen:menu.open,patternOpen:page.run("document.getElementById('patternExportMenu').open"),
+        insideWorkbench:Boolean(button.closest('#benchmarkWorkbench')),menuInsideWorkbench:Boolean(menu.closest('#benchmarkWorkbench'))};
+      button.click(); await page.settle();
+      const single=JSON.parse((await page.csvDownloads())[0]);
+      page.change('#predictiveModelSelector',fixtures.other_model); await page.settle();
+      const oldModelDisabled=button.disabled;
+      button.dispatchEvent({type:'click'});
+      page.run("document.getElementById('saveResultsButton').click()");
+      const changedModelUsesPattern=page.run("document.getElementById('patternExportMenu').open") && !menu.open;
+      page.change('#predictiveModelSelector',fixtures.model); await page.settle();
+      page.run("setScopeBusy(__family,true,refs.runPredictiveWorkbenchButton); document.getElementById('saveResultsButton').click()");
+      const busyUsesPattern=page.run("document.getElementById('patternExportMenu').open") && !menu.open && button.disabled;
+      page.run("setScopeBusy(__family,false,refs.runPredictiveWorkbenchButton); closePredictiveWorkbench(); document.getElementById('saveResultsButton').click()");
+      const closedUsesPattern=page.run("document.getElementById('patternExportMenu').open") && !menu.open;
+      page.run("patternRefs.Json.click()"); await page.settle();
+      const pattern=JSON.parse((await page.csvDownloads())[1]);
+      return {currentMenu,modelSaved:single.request_config.model_type,oldModelDisabled,changedModelUsesPattern,busyUsesPattern,closedUsesPattern,
+        requestRetained:pattern.request_config.random_seed===42 && pattern.request_config.clinical_features.includes('age'),
+        statusRetained:pattern.analysis.input_audit.outcome_proxy.status,downloadCount:page.downloads.filter(item=>item.kind==='blob').length};
+    """), dataset=example_dataset, family=family, model=model, endpoint=endpoint, other_model=other_model)
+    assert result == {"currentMenu":{"singleOpen":True,"patternOpen":False,"insideWorkbench":True,"menuInsideWorkbench":True},
+                      "modelSaved":model,"oldModelDisabled":True,"changedModelUsesPattern":True,"busyUsesPattern":True,
+                      "closedUsesPattern":True,"requestRetained":True,"statusRetained":"no_pattern_detected","downloadCount":2}
+
+
+@pytest.mark.parametrize("modifier", ["ctrlKey", "metaKey"])
+def test_pattern_shortcut_uses_focused_card_and_keeps_compare_all_elsewhere(tmp_path: Path, example_dataset: dict, modifier: str) -> None:
+    result = _run_page(tmp_path, _pattern_run_script(r"""
+      const target = page.document.querySelector('#patternSeed'); target.focus();
+      page.keydown({key: 'Enter', ...fixtures.modifier, target}); await page.settle();
+      return {calls: page.requests.filter(r => r.url.endsWith('/api/predictor-patterns')).length,
+        models: page.requests.filter(r => /\/api\/(ml-model|deep-model)$/.test(r.url)).length,
+        elsewhere: page.run("activeRunTarget(refs.runPredictiveCompareAllButton).action.name")};
+    """), dataset=example_dataset, modifier={modifier: True})
+    assert result == {"calls": 1, "models": 0, "elsewhere": "runUnifiedPredictiveComparison"}
+
+
+@pytest.mark.parametrize("change", ["home", "settings"])
+def test_pattern_request_is_aborted_without_late_result_on_home_or_edit(tmp_path: Path, example_dataset: dict, change: str) -> None:
+    result = _run_page(tmp_path, _pattern_run_script(r"""
+      const hold = deferred(); page.fetchHandler = () => hold.promise;
+      page.run("patternRefs.Run.click()"); await page.settle(3);
+      const request = page.requests.find(r => r.url.endsWith('/api/predictor-patterns'));
+      if (fixtures.change === 'home') page.run("goHome()"); else page.change('#patternSeed','43');
+      hold.resolve(patternReply(request)); await page.settle();
+      return {aborted: request.signal.aborted, payload: page.run("predictorPatternState.payload"),
+        hidden: page.run("patternRefs.Results.classList.contains('hidden')"), disabled: page.run("patternRefs.Json.disabled")};
+    """), dataset=example_dataset, change=change)
+    assert result == {"aborted": True, "payload": None, "hidden": True, "disabled": True}
+
+
+def test_obsolete_pattern_plot_cannot_overwrite_a_completed_new_run(tmp_path: Path, example_dataset: dict) -> None:
+    result = _run_page(tmp_path, _pattern_run_script(r"""
+      const held = deferred(); const originalPlot = page.context.Plotly.newPlot;
+      const observed = new Set(); page.context.__observer = {observe(plot) {observed.add(plot);}, unobserve(plot) {observed.delete(plot);}};
+      page.run("runtime.plotResizeObserver = __observer");
+      let oldTarget = null;
+      page.context.Plotly.newPlot = (el,...args) => {
+        if (el.id === 'patternComparisonPlot' && !oldTarget) { oldTarget = el; return held.promise.then(() => originalPlot(el,...args)); }
+        return originalPlot(el,...args);
+      };
+      page.fetchHandler = request => {
+        const reply = patternReply(request); const row = request.json().random_seed === 42 ? 111 : 222;
+        reply.body.analysis.risk_display = {rows:[{source_row:String(row),risk_score:2,test_risk_rank:1,predicted_risk_group:'Higher'}]};
+        reply.body.analysis.pattern = {rows:[]};
+        for (const name of ['comparison_figure','risk_group_figure','pattern_figure']) reply.body[name] = {data:[{x:[1],y:[row]}],layout:{title:{text:'Synthetic'}}};
+        return reply;
+      };
+      page.run("patternRefs.Run.click()"); await page.settle(3);
+      page.change('#patternSeed','43'); page.run("patternRefs.Run.click()"); await page.settle();
+      held.resolve(); await page.settle();
+      return {oldDetached:!oldTarget.isConnected, table:page.run("patternRefs.RiskTable.textContent"),
+        plots:page.run("[patternRefs.ComparisonPlot,patternRefs.RiskPlot,patternRefs.CurvePlot].map(plot => plot.data[0].y[0])"),
+        savedRow:page.run("currentPredictorPatternResult().analysis.risk_display.rows[0].source_row"), hidden:page.run("patternRefs.Results.classList.contains('hidden')"),
+        observedCount:observed.size, allObservedConnected:[...observed].every(plot => plot.isConnected),
+        currentObserved:page.run("[patternRefs.ComparisonPlot,patternRefs.RiskPlot,patternRefs.CurvePlot]").every(plot => observed.has(plot)),
+        resizeTargets:page.run("[patternRefs.ComparisonPlot,patternRefs.RiskPlot,patternRefs.CurvePlot].every(plot => allPlotRefs().includes(plot))")};
+    """), dataset=example_dataset)
+    assert result["oldDetached"] is True
+    assert "222" in result["table"] and "111" not in result["table"]
+    assert result["plots"] == [222, 222, 222]
+    assert result["savedRow"] == "222" and result["hidden"] is False
+    assert result["observedCount"] == 3
+    assert result["allObservedConnected"] and result["currentObserved"] and result["resizeTargets"]
+
+
+def test_shared_evaluation_settings_are_accessible_without_single_model_workbench(tmp_path: Path, example_dataset: dict) -> None:
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset); page.run("activateTab('benchmark')");
+      page.change('#mlEvaluationStrategy','repeated_cv'); page.change('#mlRandomSeed','123');
+      return page.run("({workbench: runtime.workbenchRevealed, common: Boolean(refs.mlEvaluationStrategy.closest('#comparisonSettings')), dlMode: refs.dlEvaluationStrategy.value, dlSeed: refs.dlRandomSeed.value, locked: refs.mlLockedTestToggle.checked, fraction: refs.mlLockedTestFraction.value})");
+    """, dataset=example_dataset)
+    assert result == {"workbench": False, "common": True, "dlMode": "repeated_cv", "dlSeed": "123", "locked": True, "fraction": "30"}
+
+
 def test_pattern_categories_auto_select_new_choices_but_preserve_user_unchecking(tmp_path, example_dataset):
     dataset = {**example_dataset, "filename": "uploaded.csv"}
     result = _run_page(tmp_path, r"""
@@ -1077,6 +1247,66 @@ def _ml_single_handler() -> str:
         } };
       };
     """
+
+
+@pytest.mark.parametrize(("family", "model", "endpoint", "setting", "changed"), [
+    ("ml", "gbs", "/api/ml-model", "#mlNEstimators", "110"),
+    ("dl", "deepsurv", "/api/deep-model", "#dlEpochs", "110"),
+])
+def test_single_model_json_save_preserves_payload_and_guards_currency(
+    tmp_path: Path, example_dataset: dict, family: str, model: str, endpoint: str, setting: str, changed: str,
+) -> None:
+    """A finished single fit has a save route; stale, busy and comparison-only views cannot export it."""
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      let expectedPayload;
+      page.fetchHandler = (request) => {
+        if (!request.url.endsWith(fixtures.endpoint)) return {status:500,body:{detail:'unexpected'}};
+        expectedPayload = {request_config:request.json(), dataset_hash:'synthetic-dataset-hash',
+          provenance:{model_version:'fixture',nested:{seed:42}}, limitations:['Fixture limitation'],
+          analysis:{c_index:0.695,evaluation_mode:'holdout',n_patients:360,n_features:4,
+            model_stats:{c_index:0.695,evaluation_mode:'holdout',n_patients:360,n_features:4},
+            scientific_summary:{headline:'Fixture model',strengths:[],cautions:['Keep this'],next_steps:[]}},
+          importance_figure:{data:[],layout:{}}, figures:{}};
+        return {status:200,body:expectedPayload};
+      };
+      page.context.__model = fixtures.model; page.context.__family = fixtures.family;
+      page.run("activateTab('benchmark'); reviewBenchmarkModel(__model)");
+      const button = page.run("predictiveSingleDownloadButton(__family)");
+      const beforeRun = button.disabled;
+      page.run("refs.runPredictiveWorkbenchButton.click()"); await page.settle();
+      const ready = !button.disabled;
+      page.run("closePredictiveWorkbench(); document.getElementById('saveResultsButton').click()"); await page.settle();
+      const saveRoute = page.run("runtime.workbenchRevealed") && button.closest('.export-menu').open;
+      button.click(); await page.settle();
+      const saved = JSON.parse((await page.csvDownloads())[0]);
+      const exactPayload = JSON.stringify(saved) === JSON.stringify(expectedPayload);
+      const mime = page.downloads.find(item => item.kind === 'blob').blob.type;
+      const pending = deferred();
+      page.fetchHandler = () => pending.promise.then(() => ({status:500,body:{detail:'Fixture stopped'}}));
+      page.run("refs.runPredictiveWorkbenchButton.click()"); await page.settle(3);
+      const whileBusy = button.disabled;
+      button.dispatchEvent({type:'click'});
+      const countWhileBusy = page.downloads.filter(item => item.kind === 'blob').length;
+      pending.resolve(); await page.settle();
+      const afterFailure = !button.disabled;
+      const original = page.document.querySelector(fixtures.setting).value;
+      page.change(fixtures.setting,fixtures.changed); await page.settle();
+      const stale = button.disabled;
+      button.dispatchEvent({type:'click'});
+      page.change(fixtures.setting,original); await page.settle();
+      const restored = !button.disabled;
+      page.run("state[__family] = {...state[__family], request_config:{...state[__family].request_config,model_type:'compare'}}; syncDownloadButtonAvailability()");
+      const compareOnly = button.disabled;
+      button.dispatchEvent({type:'click'});
+      return {beforeRun,ready,saveRoute,exactPayload,mime,whileBusy,countWhileBusy,afterFailure,stale,restored,compareOnly,
+        downloadCount:page.downloads.filter(item => item.kind === 'blob').length,
+        otherDisabled:page.run("predictiveSingleDownloadButton(__family === 'ml' ? 'dl' : 'ml').disabled")};
+    """, dataset=example_dataset, family=family, model=model, endpoint=endpoint, setting=setting, changed=changed)
+    assert result == {"beforeRun": True, "ready": True, "saveRoute": True, "exactPayload": True,
+                      "mime": "application/json;charset=utf-8;", "whileBusy": True, "countWhileBusy": 1,
+                      "afterFailure": True, "stale": True, "restored": True, "compareOnly": True,
+                      "downloadCount": 1, "otherDisabled": True}
 
 
 def test_ml_plots_are_marked_stale_not_deleted_while_settings_differ(tmp_path: Path, example_dataset: dict) -> None:
@@ -1544,6 +1774,181 @@ def _marker_run_script(payload_key: str, extra: str) -> str:
       page.run("activateTab('markers'); refs.runMarkersButton.click()");
       await page.settle();
     """ + extra
+
+
+def test_marker_result_json_preserves_full_payload_and_blocks_stale_or_busy_export(
+    tmp_path: Path, example_dataset: dict, marker_payloads: dict,
+) -> None:
+    result = _run_page(tmp_path, r"""
+      await loadDataset(page, fixtures.dataset);
+      const button=page.document.getElementById('downloadMarkerResultJsonButton');
+      const beforeRun=button.disabled;
+      page.change('#markerPermutations','2000'); page.change('#markerResamples','100');
+      page.change('#markerRandomSeed','2026101504'); page.change('#markerMaxSignatureMarkers','5');
+      let expectedPayload;
+      page.fetchHandler = request => {
+        if (!request.url.endsWith('/api/marker-evaluation')) return {status:500,body:{detail:'unexpected'}};
+        const config=request.json();
+        expectedPayload={...structuredClone(fixtures.markers.added),request_config:config};
+        expectedPayload.analysis.settings={...expectedPayload.analysis.settings,n_permutations:config.n_permutations,
+          n_resamples:config.n_resamples,random_seed:config.random_seed,max_signature_markers:config.max_signature_markers};
+        return {status:200,body:expectedPayload};
+      };
+      page.run("activateTab('markers'); refs.runMarkersButton.click()"); await page.settle();
+      const ready=!button.disabled;
+      page.run("document.getElementById('saveResultsButton').click()");
+      const menuOpen=button.closest('.export-menu').open;
+      button.click(); await page.settle();
+      const saved=JSON.parse((await page.csvDownloads())[0]);
+      const exactPayload=JSON.stringify(saved)===JSON.stringify(expectedPayload);
+      page.run("refs.downloadMarkerRecipeButton.click()"); await page.settle();
+      const recipe=JSON.parse((await page.csvDownloads())[1]);
+      const recipeUnchanged=JSON.stringify(recipe)===JSON.stringify(saved.analysis.locked_recipe);
+      page.change('#markerRandomSeed','2026101505'); await page.settle();
+      const stale=button.disabled;
+      button.dispatchEvent({type:'click'});
+      page.change('#markerRandomSeed','2026101504'); await page.settle();
+      const restored=!button.disabled;
+      const hold=deferred();
+      page.fetchHandler=() => hold.promise.then(() => ({status:500,body:{detail:'Fixture stopped'}}));
+      page.run("refs.runMarkersButton.click()"); await page.settle(3);
+      const busy=button.disabled;
+      button.dispatchEvent({type:'click'});
+      hold.resolve(); await page.settle();
+      return {beforeRun,ready,menuOpen,exactPayload,recipeUnchanged,stale,restored,busy,afterFailure:!button.disabled,
+        seed:saved.request_config.random_seed,permutations:saved.request_config.n_permutations,
+        subsamples:saved.request_config.n_resamples,maxMarkers:saved.request_config.max_signature_markers,
+        settingsPreserved:saved.analysis.settings.random_seed===2026101504,
+        statusPreserved:saved.analysis.inference.status===expectedPayload.analysis.inference.status,
+        mime:page.downloads.find(item=>item.kind==='blob').blob.type,downloadCount:page.downloads.filter(item=>item.kind==='blob').length};
+    """, dataset=example_dataset, markers=marker_payloads)
+    assert result == {"beforeRun":True,"ready":True,"menuOpen":True,"exactPayload":True,"recipeUnchanged":True,
+                      "stale":True,"restored":True,"busy":True,"afterFailure":True,"seed":2026101504,
+                      "permutations":2000,"subsamples":100,"maxMarkers":5,"settingsPreserved":True,
+                      "statusPreserved":True,"mime":"application/json;charset=utf-8;","downloadCount":2}
+
+
+def test_marker_signature_limit_serializes_defaults_changes_history_and_stale_state(tmp_path: Path, example_dataset: dict, marker_payloads: dict) -> None:
+    result = _run_page(tmp_path, _marker_run_script("added", r"""
+      const defaultLimit = page.requests.find(r => r.url.endsWith('/api/marker-evaluation')).json().max_signature_markers;
+      page.change('#markerMaxSignatureMarkers','5'); await page.settle();
+      const stale = page.run("!currentGoalResult('markers') && refs.downloadMarkerRecipeButton.disabled");
+      page.run("refs.runMarkersButton.click()"); await page.settle();
+      const sent = page.requests.filter(r => r.url.endsWith('/api/marker-evaluation')).at(-1).json().max_signature_markers;
+      const snapshot = page.run("captureControlSnapshot()");
+      page.change('#markerMaxSignatureMarkers','10'); page.context.__snapshot = snapshot; page.run("applyControlSnapshot(__snapshot)");
+      page.change('#markerMaxSignatureMarkers',''); await page.settle();
+      return {defaultLimit, stale, sent, snapshotLimit: snapshot.markerMaxSignatureMarkers,
+        blankDefault: page.run("markerRequestFields().max_signature_markers")};
+    """), dataset=example_dataset, markers=marker_payloads)
+    assert result == {"defaultLimit": 10, "stale": True, "sent": 5, "snapshotLimit": "5", "blankDefault": 10}
+
+
+def test_marker_signature_limit_rejects_invalid_values_before_request(tmp_path: Path, example_dataset: dict, marker_payloads: dict) -> None:
+    result = _run_page(tmp_path, _marker_run_script("added", r"""
+      const before = page.requests.filter(r => r.url.endsWith('/api/marker-evaluation')).length;
+      for (const value of ['0','51','1.5']) {
+        page.change('#markerMaxSignatureMarkers',value); page.run("refs.runMarkersButton.click()"); await page.settle();
+      }
+      return {extraRequests: page.requests.filter(r => r.url.endsWith('/api/marker-evaluation')).length - before,
+        toasts: page.toasts(), current: page.run("Boolean(currentGoalResult('markers'))")};
+    """), dataset=example_dataset, markers=marker_payloads)
+    assert result["extraRequests"] == 0
+    assert result["current"] is False
+    assert any("Maximum markers in the signature must be a whole number from 1 to 50" in value for value in result["toasts"])
+
+
+def test_external_advanced_settings_serialize_and_invalidate_previous_validation(tmp_path: Path, example_dataset: dict, marker_payloads: dict) -> None:
+    result = _run_page(tmp_path, _marker_run_script("added", r"""
+      page.fetchHandler = (request) => {
+        if (request.url.endsWith('/api/upload')) return {status:200,body:{dataset_id:'external-advanced'}};
+        if (request.url.endsWith('/api/marker-validation')) return {status:200,body:{request_config:request.json(),validation:{cohort:{n:10,events:4},metrics:{c_index:0.7},markers:[]},figure:null}};
+        return {status:200,body:{}};
+      };
+      page.run("refs.markerValidationFile.files = [{name:'external.csv'}]; refs.runMarkerValidationButton.click()"); await page.settle();
+      const pick = request => (({horizon,n_bootstrap,random_seed}) => ({horizon,n_bootstrap,random_seed}))(request.json());
+      const defaults = pick(page.requests.find(r => r.url.endsWith('/api/marker-validation')));
+      page.change('#markerValidationHorizon','1825'); page.change('#markerValidationBootstrap','2000'); page.change('#markerValidationSeed','2026101504');
+      const cleared = page.run("state.markerValidation === null && refs.markerValidationSummary.textContent === ''");
+      page.run("refs.runMarkerValidationButton.click()"); await page.settle();
+      const sent = pick(page.requests.filter(r => r.url.endsWith('/api/marker-validation')).at(-1));
+      const saved = page.run("state.markerValidation.request_config");
+      const snapshot = page.run("captureControlSnapshot()");
+      const hold = deferred(); page.fetchHandler = request => request.url.endsWith('/api/upload') ? {status:200,body:{dataset_id:'external-running'}} : (request.method === 'DELETE' ? {status:200,body:{}} : hold.promise);
+      page.run("refs.runMarkerValidationButton.click()"); await page.settle(3);
+      const running = page.requests.filter(r => r.url.endsWith('/api/marker-validation')).at(-1);
+      page.change('#markerValidationBootstrap','0'); await page.settle();
+      return {defaults, cleared, sent, savedHorizon:saved.horizon, savedBootstrap:saved.n_bootstrap, savedSeed:saved.random_seed,
+        snapshot:{horizon:snapshot.markerValidationHorizon,bootstrap:snapshot.markerValidationBootstrap,seed:snapshot.markerValidationSeed},
+        aborted:running.signal.aborted, noStaleResult:page.run("state.markerValidation === null")};
+    """), dataset=example_dataset, markers=marker_payloads)
+    assert result["defaults"] == {"horizon": None, "n_bootstrap": 200, "random_seed": 20260926}
+    assert result["sent"] == {"horizon": 1825, "n_bootstrap": 2000, "random_seed": 2026101504}
+    assert result["savedHorizon"] == 1825 and result["savedBootstrap"] == 2000 and result["savedSeed"] == 2026101504
+    assert result["snapshot"] == {"horizon": "1825", "bootstrap": "2000", "seed": "2026101504"}
+    assert result["cleared"] and result["aborted"] and result["noStaleResult"]
+
+
+def test_external_advanced_invalid_inputs_never_upload_and_blank_defaults_are_preserved(tmp_path: Path, example_dataset: dict, marker_payloads: dict) -> None:
+    result = _run_page(tmp_path, _marker_run_script("added", r"""
+      page.run("refs.markerValidationFile.files = [{name:'external.csv'}]");
+      for (const [selector,value] of [['#markerValidationHorizon','0'],['#markerValidationBootstrap','2001'],['#markerValidationBootstrap','1.5'],['#markerValidationSeed','4294967296']]) {
+        page.change('#markerValidationHorizon',''); page.change('#markerValidationBootstrap','200'); page.change('#markerValidationSeed','20260926');
+        page.change(selector,value); page.run("refs.runMarkerValidationButton.click()"); await page.settle();
+      }
+      for (const selector of ['#markerValidationHorizon','#markerValidationBootstrap','#markerValidationSeed']) page.change(selector,'');
+      page.run("markerAdvancedRefs.ValidationBootstrap.validity = {badInput:true}; refs.runMarkerValidationButton.click()"); await page.settle();
+      page.run("markerAdvancedRefs.ValidationBootstrap.validity = {badInput:false}");
+      return {uploads:page.requests.filter(r => r.url.endsWith('/api/upload')).length, defaults:page.run("markerValidationRequestFields()"), toasts:page.toasts()};
+    """), dataset=example_dataset, markers=marker_payloads)
+    assert result["uploads"] == 0
+    assert result["defaults"] == {"marker_scaling": "as_measured", "horizon": None, "n_bootstrap": 200, "random_seed": 20260926}
+    assert any("Prediction horizon must be a positive number" in value for value in result["toasts"])
+    assert any("Bootstrap draws must be a whole number from 0 to 2000" in value for value in result["toasts"])
+    assert any("Validation random seed must be a whole number from 0 to 4294967295" in value for value in result["toasts"])
+
+
+def test_external_advanced_edit_during_plot_render_cannot_restore_stale_rows(tmp_path: Path, example_dataset: dict, marker_payloads: dict) -> None:
+    result = _run_page(tmp_path, _marker_run_script("added", r"""
+      const rendering = deferred(); const originalPlot = page.context.Plotly.newPlot;
+      page.context.Plotly.newPlot = (el,...args) => el.id === 'markerValidationPlot' ? rendering.promise.then(() => originalPlot(el,...args)) : originalPlot(el,...args);
+      page.fetchHandler = request => request.url.endsWith('/api/upload') ? {status:200,body:{dataset_id:'external-render'}} : (request.method === 'DELETE' ? {status:200,body:{}} : {status:200,body:{validation:{cohort:{n:10,events:4},metrics:{c_index:0.7},markers:[{marker:'stale'}]},figure:{data:[{x:[1],y:[1]}],layout:{}}}});
+      page.run("refs.markerValidationFile.files = [{name:'external.csv'}]; refs.runMarkerValidationButton.click()"); await page.settle(3);
+      page.change('#markerValidationSeed','2026101504'); rendering.resolve(); await page.settle();
+      return {cleared:page.run("state.markerValidation === null"), rows:page.run("refs.markerValidationShell.textContent"),
+        plotHidden:page.run("refs.markerValidationPlot.classList.contains('hidden')"), success:page.toasts().some(text => text.includes('Locked model applied'))};
+    """), dataset=example_dataset, markers=marker_payloads)
+    assert result == {"cleared": True, "rows": "", "plotHidden": True, "success": False}
+
+
+def test_old_external_plot_cannot_overwrite_a_new_validation(tmp_path: Path, example_dataset: dict, marker_payloads: dict) -> None:
+    """Direct overlapping calls must retain the newer plot as well as its table."""
+    result = _run_page(tmp_path, _marker_run_script("added", r"""
+      const held = deferred(); const originalPlot = page.context.Plotly.newPlot; let oldTarget = null;
+      const observed = new Set(); page.context.__observer = {observe(plot) {observed.add(plot);}, unobserve(plot) {observed.delete(plot);}};
+      page.run("runtime.plotResizeObserver = __observer");
+      page.context.Plotly.newPlot = (el,...args) => {
+        if (el.id === 'markerValidationPlot' && !oldTarget) {oldTarget=el; return held.promise.then(() => originalPlot(el,...args));}
+        return originalPlot(el,...args);
+      };
+      let uploads = 0;
+      page.fetchHandler = request => {
+        if (request.url.endsWith('/api/upload')) return {status:200,body:{dataset_id:'external-overlap-'+(++uploads)}};
+        if (request.method === 'DELETE') return {status:200,body:{}};
+        const row = request.json().random_seed === 20260926 ? 111 : 222;
+        return {status:200,body:{request_config:request.json(),validation:{cohort:{n:10,events:4},metrics:{c_index:0.7},markers:[{marker:'row'+row}]},figure:{data:[{x:[1],y:[row]}],layout:{}}}};
+      };
+      page.run("refs.markerValidationFile.files = [{name:'external.csv'}]; runMarkerValidation()"); await page.settle(3);
+      page.change('#markerValidationSeed','2026101504'); page.run("runMarkerValidation()"); await page.settle();
+      held.resolve(); await page.settle();
+      return {oldDetached:!oldTarget.isConnected, plot:page.run("refs.markerValidationPlot.data[0].y[0]"),
+        table:page.run("refs.markerValidationShell.textContent"), savedSeed:page.run("state.markerValidation.request_config.random_seed"),
+        resizeObservesCurrent:observed.has(page.run("refs.markerValidationPlot")), detachedObserved:[...observed].some(plot => !plot.isConnected)};
+    """), dataset=example_dataset, markers=marker_payloads)
+    assert result["oldDetached"] is True and result["plot"] == 222
+    assert "row222" in result["table"] and "row111" not in result["table"]
+    assert result["savedSeed"] == 2026101504
+    assert result["resizeObservesCurrent"] is True and result["detachedObserved"] is False
 
 
 def test_marker_table_rank_interval_and_note_are_spreadsheet_and_lens_safe(tmp_path: Path, example_dataset: dict, marker_payloads: dict) -> None:

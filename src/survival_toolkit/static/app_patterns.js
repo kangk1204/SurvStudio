@@ -22,6 +22,10 @@ function patternConfig() {
 function currentPatternSignature() {
   try { return JSON.stringify(patternConfig()); } catch { return null; }
 }
+function currentPredictorPatternResult() {
+  return predictorPatternState.payload && predictorPatternState.signature === currentPatternSignature()
+    ? predictorPatternState.payload : null;
+}
 function clearPredictorPatterns() {
   predictorPatternState.sequence += 1;
   predictorPatternState.controller?.abort();
@@ -31,10 +35,23 @@ function clearPredictorPatterns() {
   patternRefs.Results.classList.add("hidden");
   patternRefs.Status.textContent = "Load data and choose two separate predictor sets.";
   patternRefs.Status.dataset.stale = "false";
-  patternRefs.Run.disabled = false;
+  setButtonLoading(patternRefs.Run, false);
   patternRefs.Json.disabled = patternRefs.Csv.disabled = patternRefs.RiskCsv.disabled = true;
   patternRefs.RiskTable.replaceChildren();
-  [patternRefs.ComparisonPlot, patternRefs.CurvePlot, patternRefs.RiskPlot].forEach((el) => { Plotly.purge(el); el.replaceChildren(); });
+  // A Plotly promise may finish after cancellation. Give the next run fresh nodes,
+  // so an obsolete render can only finish into its detached plot containers.
+  ["ComparisonPlot", "CurvePlot", "RiskPlot"].forEach((name) => {
+    const previous = patternRefs[name];
+    runtime.plotResizeObserver?.unobserve?.(previous);
+    Plotly.purge(previous);
+    const replacement = document.createElement("div");
+    replacement.id = previous.id;
+    replacement.className = "plot-shell";
+    previous.parentElement.insertBefore(replacement, previous);
+    previous.remove();
+    patternRefs[name] = replacement;
+    runtime.plotResizeObserver?.observe?.(replacement);
+  });
 }
 function syncPatternCurrency() {
   const current = currentPatternSignature();
@@ -102,11 +119,13 @@ async function runPredictorPatterns() {
   const controller = new AbortController();
   predictorPatternState.controller = controller;
   predictorPatternState.signature = signature;
-  patternRefs.Run.disabled = true;
+  const isCurrent = () => sequence === predictorPatternState.sequence && signature === currentPatternSignature();
+  const plots = { comparison: patternRefs.ComparisonPlot, risk: patternRefs.RiskPlot, curve: patternRefs.CurvePlot };
+  setButtonLoading(patternRefs.Run, true);
   patternRefs.Status.textContent = "Fitting two models on a shared training split, then comparing the same test patients…";
   try {
     const payload = await fetchJSON("/api/predictor-patterns", { method: "POST", body: JSON.stringify({ ...config, ...outcomeProxyReviewFields("patterns") }), signal: controller.signal });
-    if (sequence !== predictorPatternState.sequence || signature !== currentPatternSignature()) return;
+    if (!isCurrent()) return;
     predictorPatternState.payload = payload;
     const a = payload.analysis;
     patternRefs.Results.classList.remove("hidden");
@@ -121,11 +140,13 @@ async function runPredictorPatterns() {
     const interval = a.comparison.delta_ci;
     const range = interval[0] === null ? "not estimable" : `${interval[0].toFixed(3)} to ${interval[1].toFixed(3)}`;
     patternRefs.Interpretation.textContent = `Change in C-index: ${a.comparison.delta_c.toFixed(3)} (95% paired interval: ${range}). ${a.interpretation} The interval describes test-patient uncertainty for these fitted models.`;
-    await Plotly.newPlot(patternRefs.ComparisonPlot, payload.comparison_figure.data, plotLayoutConfig(payload.comparison_figure.layout, "predictor_comparison"), plotConfig("predictor_comparison"));
+    await Plotly.newPlot(plots.comparison, payload.comparison_figure.data, plotLayoutConfig(payload.comparison_figure.layout, "predictor_comparison"), plotConfig("predictor_comparison"));
+    if (!isCurrent()) return;
     const display = a.risk_display;
     if (payload.risk_group_figure) {
       const layout = { ...payload.risk_group_figure.layout, title: { ...payload.risk_group_figure.layout.title, text: "Observed survival in predicted risk groups" } };
-      await Plotly.newPlot(patternRefs.RiskPlot, payload.risk_group_figure.data, plotLayoutConfig(layout, "predicted_risk_groups"), plotConfig("predicted_risk_groups"));
+      await Plotly.newPlot(plots.risk, payload.risk_group_figure.data, plotLayoutConfig(layout, "predicted_risk_groups"), plotConfig("predicted_risk_groups"));
+      if (!isCurrent()) return;
       patternRefs.RiskNote.textContent = "Groups use the training risk median. Curves show observed survival in held-out patients; C-index assesses prediction. The cutoff is not a clinical decision threshold.";
     } else {
       patternRefs.RiskPlot.replaceChildren();
@@ -146,13 +167,14 @@ async function runPredictorPatterns() {
       const note = document.createElement("p"); note.textContent = `Showing the ten highest scores. Save patient risk scores for all ${display.rows.length} held-out patients; source rows trace to the loaded table.`; patternRefs.RiskTable.appendChild(note);
     }
     if (payload.pattern_figure) {
-      await Plotly.newPlot(patternRefs.CurvePlot, payload.pattern_figure.data, plotLayoutConfig(payload.pattern_figure.layout, "predictor_pattern"), plotConfig("predictor_pattern"));
+      await Plotly.newPlot(plots.curve, payload.pattern_figure.data, plotLayoutConfig(payload.pattern_figure.layout, "predictor_pattern"), plotConfig("predictor_pattern"));
+      if (!isCurrent()) return;
       patternRefs.CurveNote.textContent = "The fitted model is fixed. Curves use the same training background; gaps mark values without enough observed training support in that group. They do not confirm a biological interaction.";
     } else {
       patternRefs.CurvePlot.replaceChildren();
       patternRefs.CurveNote.textContent = `Curve unavailable: ${a.pattern_error}. The predictor-set comparison above was completed.`;
     }
-    if (sequence !== predictorPatternState.sequence || signature !== currentPatternSignature()) return;
+    if (!isCurrent()) return;
     syncPatternCurrency();
   } catch (error) {
     if (sequence === predictorPatternState.sequence && !isSupersededRequestError(error)) {
@@ -162,7 +184,7 @@ async function runPredictorPatterns() {
   } finally {
     if (sequence === predictorPatternState.sequence) {
       predictorPatternState.controller = null;
-      patternRefs.Run.disabled = false;
+      setButtonLoading(patternRefs.Run, false);
     }
   }
 }

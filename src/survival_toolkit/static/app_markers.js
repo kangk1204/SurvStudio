@@ -3,6 +3,22 @@
 // app_*.js parts, and only app.js (loaded last) runs startup code.
 
 const MARKER_TABLE_DISPLAY_LIMIT = 300;
+const markerAdvancedRefs = Object.fromEntries([
+  "MaxSignatureMarkers", "ValidationHorizon", "ValidationBootstrap", "ValidationSeed",
+].map((name) => [name, document.getElementById(`marker${name}`)]));
+
+const markerResultJsonButton = document.getElementById("downloadMarkerResultJsonButton");
+
+function markerAdvancedNumber(control, fallback, { label, min, max = Infinity, integer = true, positive = false }) {
+  const text = String(control?.value ?? "").trim();
+  if (!text && !control?.validity?.badInput) return fallback;
+  const value = Number(text);
+  if (control?.validity?.badInput || !Number.isFinite(value) || (integer && !Number.isInteger(value)) || value < min || value > max || (positive && value <= 0)) {
+    const range = positive ? "a positive number" : `a whole number from ${min} to ${max}`;
+    throw new Error(`${label} must be ${range}.`);
+  }
+  return value;
+}
 
 // An attached marker matrix (omics, POST /api/marker-matrix) replaces the marker checklist; the server
 // matches its patients to the dataset through the chosen ID column at every run.
@@ -194,6 +210,7 @@ function markerRequestFields() {
     categorical_clinical: categorical,
     n_permutations: numericControlValue(refs.markerPermutations, defaults.n_permutations),
     n_resamples: numericControlValue(refs.markerResamples, defaults.n_resamples),
+    max_signature_markers: markerAdvancedNumber(markerAdvancedRefs.MaxSignatureMarkers, 10, { label: "Maximum markers in the signature", min: 1, max: 50 }),
     random_seed: numericControlValue(refs.markerRandomSeed, defaults.random_seed),
     clinical_basis: refs.markerClinicalBasis?.value || "linear",
     diagnostic_policy: refs.markerDiagnosticPolicy?.value || "v2_holm",
@@ -686,8 +703,53 @@ function clearMarkerOutputs() {
 function clearMarkerValidationOutput() {
   if (refs.markerValidationSummary) refs.markerValidationSummary.innerHTML = "";
   if (refs.markerValidationShell) refs.markerValidationShell.innerHTML = "";
-  clearPlotShell(refs.markerValidationPlot, "", { state: "placeholder" });
-  refs.markerValidationPlot?.classList.add("hidden");
+  replaceMarkerValidationPlot();
+}
+
+function replaceMarkerValidationPlot() {
+  const previous = refs.markerValidationPlot;
+  if (!previous) return null;
+  runtime.plotResizeObserver?.unobserve?.(previous);
+  clearPlotShell(previous, "", { state: "placeholder" });
+  const replacement = document.createElement("div");
+  replacement.id = previous.id;
+  replacement.className = "plot-shell hidden";
+  previous.parentElement.insertBefore(replacement, previous);
+  previous.remove();
+  refs.markerValidationPlot = replacement;
+  runtime.plotResizeObserver?.observe?.(replacement);
+  return replacement;
+}
+
+function markerValidationRequestFields() {
+  return {
+    marker_scaling: refs.markerValidationScaling?.value || "as_measured",
+    horizon: markerAdvancedNumber(markerAdvancedRefs.ValidationHorizon, null, { label: "Prediction horizon", min: 0, integer: false, positive: true }),
+    n_bootstrap: markerAdvancedNumber(markerAdvancedRefs.ValidationBootstrap, 200, { label: "Bootstrap draws", min: 0, max: 2000 }),
+    random_seed: markerAdvancedNumber(markerAdvancedRefs.ValidationSeed, 20260926, { label: "Validation random seed", min: 0, max: 4294967295 }),
+  };
+}
+
+function currentMarkerValidationSignature() {
+  try {
+    const recipe = currentGoalResult("markers")?.analysis?.locked_recipe;
+    if (!recipe) return null;
+    const file = refs.markerValidationFile?.files?.[0];
+    return JSON.stringify({ dataset_id: state.dataset?.dataset_id, recipe_hash: recipe.recipe_hash,
+      file: file ? [file.name, file.size ?? null, file.lastModified ?? null] : null,
+      ...markerValidationRequestFields() });
+  } catch { return null; }
+}
+
+function syncMarkerValidationCurrency() {
+  const signature = currentMarkerValidationSignature();
+  if ((runtime.markerValidationSignature && runtime.markerValidationSignature !== signature)
+      || (state.markerValidation?.input_signature && state.markerValidation.input_signature !== signature)) {
+    invalidateRequestTokens(["markerValidation"]);
+    runtime.markerValidationSignature = null;
+    state.markerValidation = null;
+    clearMarkerValidationOutput();
+  }
 }
 
 // The external cohort is uploaded as its own dataset so the workspace keeps the development cohort.
@@ -697,6 +759,9 @@ async function runMarkerValidation() {
   if (!currentGoalResult("markers")) throw new Error("Settings changed since the evaluation. Run it again before validating.");
   const file = refs.markerValidationFile?.files?.[0];
   if (!file) throw new Error("Choose the external cohort file first.");
+  const fields = markerValidationRequestFields();
+  const inputSignature = currentMarkerValidationSignature();
+  runtime.markerValidationSignature = inputSignature;
   const requestToken = beginRequestToken("markerValidation");
   const sourceDatasetId = state.dataset?.dataset_id;
   const recipeHash = recipe.recipe_hash;
@@ -713,16 +778,21 @@ async function runMarkerValidation() {
     const payload = await fetchJSON("/api/marker-validation", {
       signal: requestSignal("markerValidation"),
       method: "POST",
-      body: JSON.stringify({ dataset_id: external.dataset_id, recipe, marker_scaling: refs.markerValidationScaling?.value || "as_measured" }),
+      body: JSON.stringify({ dataset_id: external.dataset_id, recipe, ...fields }),
     });
     if (!requestTokenMatches("markerValidation", requestToken) || state.dataset?.dataset_id !== sourceDatasetId) return;
     // Shown only under the evaluation whose locked model it validated.
-    if (state.markers?.analysis?.locked_recipe?.recipe_hash !== recipeHash) return;
-    state.markerValidation = { ...payload, external_filename: file.name };
-    await renderMarkerValidation(state.markerValidation);
+    if (state.markers?.analysis?.locked_recipe?.recipe_hash !== recipeHash || currentMarkerValidationSignature() !== inputSignature) return;
+    const completed = { ...payload, external_filename: file.name, input_signature: inputSignature };
+    state.markerValidation = completed;
+    const isCurrent = () => requestTokenMatches("markerValidation", requestToken)
+      && state.markerValidation === completed && state.dataset?.dataset_id === sourceDatasetId
+      && currentMarkerValidationSignature() === inputSignature;
+    if (!await renderMarkerValidation(completed, { isCurrent }) || !isCurrent()) return;
     syncDownloadButtonAvailability();
     showToast(`Locked model applied to ${file.name}.`, "success", 3200);
   } finally {
+    if (runtime.markerValidationSignature === inputSignature) runtime.markerValidationSignature = null;
     releaseRuntimeBanner(runBanner);
     // The external cohort was stored only for this validation; free it so it cannot crowd out the
     // development dataset in the server's store.
@@ -765,7 +835,10 @@ function markerValidationMetrics(validation, { timeColumn = "" } = {}) {
   return rows;
 }
 
-async function renderMarkerValidation(payload) {
+async function renderMarkerValidation(payload, { isCurrent = () => true } = {}) {
+  if (!isCurrent()) return false;
+  // Retain this render's node across await; a later result gets a fresh node.
+  const plot = replaceMarkerValidationPlot();
   const validation = payload?.validation || {};
   const cohort = validation.cohort || {};
   const replicated = (validation.markers || []).filter((row) => row.replicated).length;
@@ -781,17 +854,22 @@ async function renderMarkerValidation(payload) {
       ${(validation.notes || []).length ? `<ul class="insight-cautions">${validation.notes.map(escapeListItem).join("")}</ul>` : ""}
     `;
   }
-  if (refs.markerValidationPlot && payload.figure?.data?.length) {
-    refs.markerValidationPlot.classList.remove("hidden");
-    resetPlotElement(refs.markerValidationPlot);
-    await Plotly.newPlot(refs.markerValidationPlot, payload.figure.data, plotLayoutConfig(payload.figure.layout || {}, "marker_replication"), plotConfig("marker_replication"));
-    stabilizePlotShellHeight(refs.markerValidationPlot);
-  } else if (refs.markerValidationPlot) {
+  if (plot && payload.figure?.data?.length) {
+    plot.classList.remove("hidden");
+    resetPlotElement(plot);
+    await Plotly.newPlot(plot, payload.figure.data, plotLayoutConfig(payload.figure.layout || {}, "marker_replication"), plotConfig("marker_replication"));
+    if (!isCurrent()) {
+      if (!state.markerValidation) clearMarkerValidationOutput();
+      return false;
+    }
+    stabilizePlotShellHeight(plot);
+  } else if (plot) {
     // A validation without a replication figure must not show the plot of an earlier one.
-    clearPlotShell(refs.markerValidationPlot, "", { state: "placeholder" });
-    refs.markerValidationPlot.classList.add("hidden");
+    clearPlotShell(plot, "", { state: "placeholder" });
+    plot.classList.add("hidden");
   }
   renderTable(refs.markerValidationShell, markerValidationRows(validation), null, { pValueColumns: ["Replication P (Holm)"] });
+  return true;
 }
 
 // One row per locked marker. `tested` names the fit its replication used ("added_value" with the clinical
@@ -817,6 +895,12 @@ function markerValidationRows(validation) {
       Replicated: status(row.replicated ? "yes" : "no"),
     };
   });
+}
+
+function downloadMarkerResult() {
+  const payload = currentGoalResult("markers");
+  if (!requireCurrentResultForExport("markers", { payload })) return;
+  downloadText(buildDownloadFilename("marker_analysis_result", "json"), `${JSON.stringify(payload, null, 2)}\n`, "application/json;charset=utf-8;");
 }
 
 function downloadMarkerRecipe() {
@@ -859,7 +943,9 @@ function downloadMarkerChecklist(format) {
 }
 
 function syncMarkerDownloadButtons() {
+  syncMarkerValidationCurrency();
   const current = currentGoalResult("markers");
+  if (markerResultJsonButton) markerResultJsonButton.disabled = !current || isScopeBusy("markers");
   if (refs.downloadMarkersCsvButton) refs.downloadMarkersCsvButton.disabled = !current;
   if (refs.downloadMarkerDiagnosticsButton) refs.downloadMarkerDiagnosticsButton.disabled = !current?.analysis?.inference;
   if (refs.downloadMarkerRecipeButton) refs.downloadMarkerRecipeButton.disabled = !current?.analysis?.locked_recipe;
@@ -894,8 +980,14 @@ function wireMarkerControls() {
     scheduleResultCurrencySync();
     queueHistorySync();
   });
-  [refs.markerPermutations, refs.markerResamples, refs.markerRandomSeed, refs.markerNonlinearLens, refs.markerClinicalBasis, refs.markerDiagnosticPolicy].filter(Boolean).forEach((control) => {
+  [refs.markerPermutations, refs.markerResamples, refs.markerRandomSeed, refs.markerNonlinearLens, refs.markerClinicalBasis, refs.markerDiagnosticPolicy, markerAdvancedRefs.MaxSignatureMarkers].filter(Boolean).forEach((control) => {
     control.addEventListener("change", () => { scheduleResultCurrencySync(); queueHistorySync(); });
+    if (control === markerAdvancedRefs.MaxSignatureMarkers) control.addEventListener("input", () => { scheduleResultCurrencySync(); queueHistorySync(); });
+  });
+  [refs.markerValidationFile, refs.markerValidationScaling, markerAdvancedRefs.ValidationHorizon, markerAdvancedRefs.ValidationBootstrap, markerAdvancedRefs.ValidationSeed].filter(Boolean).forEach((control) => {
+    const changed = () => { syncMarkerValidationCurrency(); queueHistorySync(); };
+    control.addEventListener("change", changed);
+    if (control.type === "number") control.addEventListener("input", changed);
   });
   refs.attachMarkerMatrixButton?.addEventListener("click", async () => {
     await withLoading(refs.attachMarkerMatrixButton, attachMarkerMatrix);
@@ -903,6 +995,7 @@ function wireMarkerControls() {
     renderMarkerMatrixState();
   });
   refs.removeMarkerMatrixButton?.addEventListener("click", removeMarkerMatrix);
+  markerResultJsonButton?.addEventListener("click", downloadMarkerResult);
   refs.downloadMarkersCsvButton?.addEventListener("click", downloadMarkerTable);
   refs.downloadMarkerDiagnosticsButton?.addEventListener("click", downloadMarkerDiagnostics);
   refs.downloadMarkerRecipeButton?.addEventListener("click", downloadMarkerRecipe);
