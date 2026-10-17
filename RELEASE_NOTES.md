@@ -1,5 +1,13 @@
 # Release Notes
 
+## 0.4.0.dev0 — Unreleased
+
+- Guided browser controls for survival curves, adjusted risk factors and shared ML/DL comparisons, with candidate summaries first and detailed marker statistics under the detail controls.
+- Training-only preprocessing and outcome-pattern review before prediction fitting, with recorded review retained in saved results.
+- Versioned marker diagnostics, linear or restricted cubic spline clinical adjustment and recipe v3. Required diagnostic failures withhold standard marker conclusions and propagate through exports and external evaluation; older recipe predictions remain compatible.
+- External horizon checks withhold horizon-specific risk metrics beyond observed follow-up. Candidate selection and favorable prediction scores do not establish an independently validated biomarker.
+- Hardened censor coding, predictor eligibility and selected LASSO fitting. Numerical kernels and diagnostic thresholds are unchanged by the documentation clarification.
+
 ## 0.3.0 — 2026-09-30 — Prognostic marker evaluation, design check, and a simpler interface
 
 ### Interface
