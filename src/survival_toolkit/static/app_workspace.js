@@ -73,6 +73,7 @@ function normalizedRequestConfig(goal, requestConfig, { expectsCompare = false }
       categorical_clinical: sortedStrings(requestConfig.categorical_clinical || []),
       n_permutations: numberOrDefault(requestConfig.n_permutations, MARKER_NUMERIC_DEFAULTS.n_permutations),
       n_resamples: numberOrDefault(requestConfig.n_resamples, MARKER_NUMERIC_DEFAULTS.n_resamples),
+      max_signature_markers: numberOrDefault(requestConfig.max_signature_markers, 10),
       random_seed: numberOrDefault(requestConfig.random_seed, MARKER_NUMERIC_DEFAULTS.random_seed),
       clinical_basis: String(requestConfig.clinical_basis || "linear"),
       diagnostic_policy: String(requestConfig.diagnostic_policy || "v2_holm"),
@@ -189,7 +190,8 @@ function currentGoalRequestConfig(goal, { expectsCompareOverride = null } = {}) 
   }
 
   if (goal === "markers") {
-    return normalizedRequestConfig(goal, { ...base, ...markerRequestFields() });
+    try { return normalizedRequestConfig(goal, { ...base, ...markerRequestFields() }); }
+    catch { return null; }
   }
 
   if (goal === "cox") {
@@ -540,6 +542,9 @@ function allPlotRefs() {
     refs.dlLossPlot,
     refs.dlComparisonPlot,
     refs.benchmarkComparisonPlot,
+    patternRefs.ComparisonPlot,
+    patternRefs.RiskPlot,
+    patternRefs.CurvePlot,
   ];
 }
 
@@ -671,6 +676,11 @@ function captureControlSnapshot() {
     markerPermutations: refs.markerPermutations?.value || "",
     markerResamples: refs.markerResamples?.value || "",
     markerRandomSeed: refs.markerRandomSeed?.value || "",
+    markerMaxSignatureMarkers: markerAdvancedRefs.MaxSignatureMarkers?.value ?? "",
+    markerValidationHorizon: markerAdvancedRefs.ValidationHorizon?.value ?? "",
+    markerValidationBootstrap: markerAdvancedRefs.ValidationBootstrap?.value ?? "",
+    markerValidationSeed: markerAdvancedRefs.ValidationSeed?.value ?? "",
+    markerValidationScaling: refs.markerValidationScaling?.value || "as_measured",
     markerClinicalBasis: refs.markerClinicalBasis?.value || "linear",
     markerDiagnosticPolicy: refs.markerDiagnosticPolicy?.value || "v2_holm",
     markerNonlinearLens: refs.markerNonlinearLens?.value || "",
@@ -859,6 +869,11 @@ function applyControlSnapshot(snapshot) {
   setInputValue(refs.markerPermutations, snapshot.markerPermutations || undefined);
   setInputValue(refs.markerResamples, snapshot.markerResamples || undefined);
   setInputValue(refs.markerRandomSeed, snapshot.markerRandomSeed || undefined);
+  setInputValue(markerAdvancedRefs.MaxSignatureMarkers, snapshot.markerMaxSignatureMarkers);
+  setInputValue(markerAdvancedRefs.ValidationHorizon, snapshot.markerValidationHorizon);
+  setInputValue(markerAdvancedRefs.ValidationBootstrap, snapshot.markerValidationBootstrap);
+  setInputValue(markerAdvancedRefs.ValidationSeed, snapshot.markerValidationSeed);
+  setSelectValueIfPresent(refs.markerValidationScaling, snapshot.markerValidationScaling);
   setSelectValueIfPresent(refs.markerClinicalBasis, snapshot.markerClinicalBasis || "linear");
   setSelectValueIfPresent(refs.markerDiagnosticPolicy, snapshot.markerDiagnosticPolicy || "v2_holm");
   setSelectValueIfPresent(refs.markerNonlinearLens, snapshot.markerNonlinearLens || undefined);

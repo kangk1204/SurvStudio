@@ -286,6 +286,17 @@ function selectedPredictiveSingleResult(goal) {
   return requestModelType === selectedModel.key ? payload : null;
 }
 
+function predictiveSingleDownloadButton(goal) {
+  return document.getElementById(goal === "ml" ? "downloadMlResultJsonButton" : "downloadDlResultJsonButton");
+}
+
+function syncSingleModelDownloadButtons() {
+  ["ml", "dl"].forEach((goal) => {
+    const button = predictiveSingleDownloadButton(goal);
+    if (button) button.disabled = isScopeBusy("predictive") || isScopeBusy(goal) || !selectedPredictiveSingleResult(goal);
+  });
+}
+
 function syncPredictiveModelSelector() {
   const currentKey = currentPredictiveModelKey();
   if (refs.predictiveModelSelector && refs.predictiveModelSelector.value !== currentKey) {
@@ -592,6 +603,7 @@ function syncDownloadButtonAvailability() {
   if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !dlComparisonPlotCurrent;
   if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !dlComparisonPlotCurrent;
   setDlManuscriptDownloadsEnabled(Boolean(currentDl?.analysis?.manuscript_tables?.model_performance_table?.length));
+  syncSingleModelDownloadButtons();
   syncMarkerDownloadButtons();
 }
 
@@ -715,6 +727,7 @@ function syncAnalysisRunButtonAvailability() {
     ? readyMessage
     : (!hasSharedFeatures ? sharedFeatureMessage : (predictiveBusy ? "Wait for the current predictive run to finish." : ""));
   setActionDisabledState(refs.runPredictiveCompareAllButton, predictiveCompareDisabled, predictiveCompareTitle);
+  syncSingleModelDownloadButtons();
 }
 
 function renderSharedFeatureSummary() {
@@ -803,6 +816,7 @@ function syncStaleSingleResultArtifacts() {
 
   updateResultVisibility();
   syncPredictiveWorkbenchSingleResultVisibility();
+  syncSingleModelDownloadButtons();
 }
 
 function benchmarkGoalMeta(goal) {
@@ -938,6 +952,7 @@ function renderPredictiveWorkbench() {
   if (refs.closePredictiveWorkbenchButton) refs.closePredictiveWorkbenchButton.textContent = "Back to comparison";
   syncPredictiveWorkbenchCompareVisibility();
   syncPredictiveWorkbenchSingleResultVisibility();
+  syncSingleModelDownloadButtons();
 }
 
 function setPredictiveWorkbenchFamily(family, { syncHistory = true, historyMode = "replace", scrollIntoView = false } = {}) {

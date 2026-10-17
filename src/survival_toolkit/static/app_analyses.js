@@ -583,7 +583,7 @@ function updateAfterDerivedDataset(payload, { deferChrome = false } = {}) {
 }
 
 function hasCompletedResults() {
-  return Boolean(state.km || state.cox || state.cohort || state.signature || state.markers || state.ml || state.dl);
+  return Boolean(state.km || state.cox || state.cohort || state.signature || state.markers || state.ml || state.dl || predictorPatternState.payload);
 }
 
 function uploadEncodingNote(payload) {

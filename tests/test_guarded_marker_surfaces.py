@@ -69,7 +69,7 @@ def test_browser_spline_choice_currency_and_withheld_exports(browser_server,tmp_
         for name in ("m0","m1","m2"):
             page.locator(f"#markerChecklist input[value='{name}']").check()
         page.locator("#markerClinicalChecklist input[value='z']").check()
-        page.locator("#panel-markers .options-details > summary").click()
+        page.locator("#markerMoreOptions > summary").click()
         page.locator("#markerPermutations").fill("19");page.locator("#markerResamples").fill("2")
         page.locator("#markerRandomSeed").fill("42")
         page.locator("#runMarkersButton").click()

@@ -259,8 +259,16 @@ def merge_prediction_blocks(blocks: Sequence[Mapping[str, Any]]) -> tuple[np.nda
         block_event = block["event"][order]
         if index == 0:
             time, event = block_time, block_event
+            # Dense ranks encode the full ordering and exact ties in O(n log n)
+            # time and O(n) memory, without an events-by-patients pair matrix.
+            time_order = np.unique(time, return_inverse=True)[1]
         elif not (np.allclose(time, block_time) and np.array_equal(event, block_event)):
             raise UserInputError("The comparisons disagree on the outcome of shared test patients; run them on the same dataset.")
+        elif not np.array_equal(time_order, np.unique(block_time, return_inverse=True)[1]):
+            raise UserInputError(
+                "The comparisons disagree on the ordering or exact ties of shared follow-up times. "
+                "Run both model families again on the same dataset before pairing them."
+            )
         for name, values in block["risk"].items():
             if name not in risks:
                 risks[name] = values[order]

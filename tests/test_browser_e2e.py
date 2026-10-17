@@ -111,6 +111,63 @@ def _open_predictive_workbench(page, model_key: str | None = None) -> None:
         )
 
 
+def _open_comparison_settings(page) -> None:
+    settings = page.locator("#comparisonSettings")
+    if settings.get_attribute("open") is None:
+        settings.locator(":scope > summary").click()
+
+
+def test_browser_predictor_comparison_shortcut_and_main_save_files(browser_server: str, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    requests = []
+
+    def comparison(route):
+        config = json.loads(route.request.post_data or "{}")
+        requests.append(config)
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({
+            "request_config": config,
+            "analysis": {"training_patients": 70, "test_patients": 30, "test_events": 12,
+                         "excluded_missing_outcome_rows": 0,
+                         "comparison": {"delta_c": 0.02, "delta_ci": [-0.01, 0.04], "n_bootstrap_valid": 1000, "n_bootstrap_requested": 1000},
+                         "interpretation": "Exploratory comparison.", "pattern": None,
+                         "pattern_error": "Insufficient support", "risk_display": None},
+            "comparison_figure": {"data": [], "layout": {}}, "pattern_figure": None, "risk_group_figure": None,
+        }))
+
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 1100, "height": 900})
+        page.route("**/api/predictor-patterns", comparison)
+        page.goto(browser_server)
+        page.locator("#loadExampleButton").click()
+        _wait_for_workspace(page)
+        page.locator("#tab-benchmark").click()
+        page.locator("#predictorPatternCard > summary").click()
+        page.locator('#patternClinical input[value="age"]').check()
+        page.locator('#patternClinical input[value="stage"]').check()
+        page.locator('#patternAdded input[value="biomarker_score"]').check()
+        page.locator("#patternTarget").select_option("biomarker_score")
+        page.locator("#patternGroup").select_option("stage")
+        page.locator("#predictorPatternCard > details > summary").click()
+        page.locator("#patternSeed").focus()
+        page.keyboard.press("Control+Enter")
+        page.locator("#patternResults").wait_for(state="visible")
+        assert len(requests) == 1
+        page.locator("#predictorPatternCard > summary").click()
+        page.locator("#saveResultsButton").click()
+        assert page.locator("#predictorPatternCard").get_attribute("open") is not None
+        assert page.locator("#patternExportMenu").get_attribute("open") is not None
+        with page.expect_download() as download:
+            page.locator("#patternJson").click()
+        target = tmp_path / "predictor-comparison.json"
+        download.value.save_as(target)
+        assert json.loads(target.read_text())["request_config"]["added_features"] == ["biomarker_score"]
+        page.locator("#patternSeed").fill("43")
+        assert page.locator("#patternResults").is_hidden()
+        assert page.locator("#patternJson").is_disabled()
+        browser.close()
+
+
 def test_browser_single_model_picker_stays_with_training_controls(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as api:
@@ -289,7 +346,8 @@ def test_browser_comparison_input_summary_tracks_evaluation_settings(browser_ser
         assert "seed 42" in summary.inner_text()
         page.locator(".predictive-guidance > summary").click()
         assert "0.50 is chance" in page.locator(".predictive-metric-guide").inner_text()
-        _open_predictive_workbench(page)
+        _open_comparison_settings(page)
+        assert page.locator("#benchmarkWorkbench").is_hidden()
         page.locator("#mlRandomSeed").fill("123")
         page.wait_for_function("document.getElementById('predictiveInputSummary').textContent.includes('seed 123')")
         page.locator("#mlEvaluationStrategy").select_option("repeated_cv")
@@ -1741,6 +1799,7 @@ def test_browser_unified_board_requires_matching_split_fingerprints_and_reports_
             _wait_for_workspace(page)
             _open_predictive_workbench(page)
 
+            _open_comparison_settings(page)
             page.locator("#mlEvaluationStrategy").select_option("repeated_cv")
             page.locator("#mlRandomSeed").fill("7")
             # Evaluation settings are shared, so DL follows the ML controls.
@@ -2014,7 +2073,7 @@ def test_browser_locked_marker_model_validates_on_an_external_cohort(browser_ser
             _wait_for_workspace(page)
             _open_additional_tab(page, "markers")
             _assert_tab_active(page, "markers")
-            page.locator("#panel-markers .options-details > summary").click()
+            page.locator("#markerMoreOptions > summary").click()
             page.locator("#markerPermutations").fill("99")
             page.locator("#markerResamples").fill("10")
             page.locator("#runMarkersButton").click()
@@ -2065,7 +2124,7 @@ def test_browser_markers_tab_evaluates_the_example_markers(browser_server: str, 
             assert "judged on added value" in page.locator("#markerSelectionLine").inner_text()
             assert page.locator("#markersTableShell").locator("xpath=ancestor::div[contains(@class,'table-card')]").is_hidden()
 
-            page.locator("#panel-markers .options-details > summary").click()
+            page.locator("#markerMoreOptions > summary").click()
             page.locator("#markerPermutations").fill("99")
             page.locator("#markerResamples").fill("10")
             page.locator("#runMarkersButton").click()
@@ -2135,7 +2194,7 @@ def test_browser_markers_tab_warns_about_a_patient_profiled_twice(browser_server
             page.locator("#markerMatrixFile").set_input_files(str(matrix_path))
             page.locator("#attachMarkerMatrixButton").click()
             page.locator("#markerMatrixStatus").wait_for(state="visible")
-            page.locator("#panel-markers .options-details > summary").click()
+            page.locator("#markerMoreOptions > summary").click()
             page.locator("#markerPermutations").fill("49")
             page.locator("#markerResamples").fill("6")
             page.locator("#runMarkersButton").click()
@@ -2191,7 +2250,7 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             assert page.locator("#attachMarkerMatrixButton").is_disabled()
             assert page.locator("#runMarkersButton").is_enabled()
 
-            page.locator("#panel-markers .options-details > summary").click()
+            page.locator("#markerMoreOptions > summary").click()
             page.locator("#markerPermutations").fill("99")
             page.locator("#markerResamples").fill("10")
             page.locator("#runMarkersButton").click()

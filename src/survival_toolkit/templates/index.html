@@ -512,6 +512,7 @@
                 <summary class="button ghost">Save files</summary>
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadMlComparisonButton" type="button" disabled>Comparison (CSV)</button>
+                  <button class="button ghost" id="downloadMlResultJsonButton" type="button" disabled>Model result (JSON)</button>
                   <button class="button ghost" id="downloadMlManuscriptCsvButton" type="button" disabled>Manuscript table (CSV)</button>
                   <button class="button ghost" id="downloadMlManuscriptMarkdownButton" type="button" disabled>Manuscript table (Markdown)</button>
                   <button class="button ghost" id="downloadMlManuscriptLatexButton" type="button" disabled>Manuscript table (LaTeX)</button>
@@ -559,42 +560,6 @@
                   <span>SHAP safe mode (auto-reduce)</span>
                 </label>
               </div>
-            </section>
-            <section class="control-section">
-              <div class="control-section-head">
-                <strong>Evaluation</strong>
-                <span>Evaluation mode, CV design, and the locked test set apply to Compare All screening only; Run Analysis uses its own holdout/apparent path with the same seed.</span>
-              </div>
-              <div class="toolbar-grid expert-parameter-grid">
-                <label class="toolbar-field">
-                  <span>Evaluation Mode</span>
-                  <select id="mlEvaluationStrategy">
-                    <option value="holdout">Deterministic Holdout</option>
-                    <option value="repeated_cv">Repeated Stratified CV</option>
-                  </select>
-                </label>
-                <label class="toolbar-field hidden" id="mlCvFoldsWrap">
-                  <span>CV Folds</span>
-                  <input id="mlCvFolds" type="number" min="2" max="10" step="1" value="5" />
-                </label>
-                <label class="toolbar-field hidden" id="mlCvRepeatsWrap">
-                  <span>CV Repeats</span>
-                  <input id="mlCvRepeats" type="number" min="1" max="20" step="1" value="3" />
-                </label>
-                <label class="toolbar-field" for="mlRandomSeed">
-                  <span>Random Seed <button class="help-dot" type="button" data-tooltip="Shared with Deep Learning. The same seed gives ML and DL the same holdout split and the same repeated-CV folds.">?</button></span>
-                  <input id="mlRandomSeed" type="number" min="0" step="1" value="42" />
-                </label>
-                <label class="toggle control-inline-toggle locked-test-toggle hidden" id="mlLockedTestWrap" title="Hold out a stratified test set before repeated CV. Models are ranked on the development set; the rank-1 model's locked-test C-index is the independent estimate to report.">
-                  <input id="mlLockedTestToggle" type="checkbox" checked />
-                  <span>Reserve a locked independent test set</span>
-                </label>
-                <label class="toolbar-field hidden" id="mlLockedTestFractionWrap">
-                  <span>Locked test %</span>
-                  <input id="mlLockedTestFraction" type="number" min="5" max="50" step="1" value="30" />
-                </label>
-              </div>
-              <p class="control-section-note">Evaluation mode, CV folds/repeats, seed, and the locked test set are shared with Deep Learning so Compare All Models evaluates both families on the same row partitions.</p>
             </section>
           </div>
           <div class="toolbar-note"><strong>Compare All</strong> screens Cox PH, LASSO-Cox, RSF and GBS on one shared evaluation; <strong>Run Analysis</strong> fits one model. <strong>Fast mode</strong> skips SHAP. A C-index of <strong>0.50</strong> is chance; external validation matters more than any threshold.</div>
@@ -681,6 +646,7 @@
                 <summary class="button ghost">Save files</summary>
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadDlComparisonButton" type="button" disabled>Comparison (CSV)</button>
+                  <button class="button ghost" id="downloadDlResultJsonButton" type="button" disabled>Model result (JSON)</button>
                   <button class="button ghost" id="downloadDlManuscriptCsvButton" type="button" disabled>Manuscript table (CSV)</button>
                   <button class="button ghost" id="downloadDlManuscriptMarkdownButton" type="button" disabled>Manuscript table (Markdown)</button>
                   <button class="button ghost" id="downloadDlManuscriptLatexButton" type="button" disabled>Manuscript table (LaTeX)</button>
@@ -758,9 +724,9 @@
                   <span>CV Repeats</span>
                   <input id="dlCvRepeats" type="number" min="1" max="20" step="1" value="3" />
                 </label>
-                <label class="toggle control-inline-toggle locked-test-toggle hidden" id="dlLockedTestWrap" title="Compare All only: hold out a stratified test set before repeated CV. Models are ranked on the development set; the rank-1 model's locked-test C-index is the independent estimate to report.">
+                <label class="toggle control-inline-toggle locked-test-toggle hidden" id="dlLockedTestWrap" title="Compare All only: hold out a stratified internal test set before repeated CV. Models are ranked using development patients only; the selected model's test performance is internal validation.">
                   <input id="dlLockedTestToggle" type="checkbox" checked />
-                  <span>Reserve a locked independent test set</span>
+                  <span>Reserve an internal test set before model selection</span>
                 </label>
                 <label class="toolbar-field hidden" id="dlLockedTestFractionWrap">
                   <span>Locked test %</span>
@@ -925,6 +891,45 @@
               <button class="button ghost hidden" id="runPredictiveSelectedButton" type="button">Test Selected Model</button>
             </div>
           </div>
+          <details class="table-card full-width" id="comparisonSettings">
+            <summary>Comparison settings</summary>
+            <section class="control-section">
+              <div class="control-section-head">
+                <strong>Shared evaluation</strong>
+                <span>Choose how Compare All evaluates both model families. Single-model ML training uses holdout with the same seed. The added-predictor comparison uses its own Run settings.</span>
+              </div>
+              <div class="toolbar-grid expert-parameter-grid">
+                <label class="toolbar-field">
+                  <span>Evaluation Mode</span>
+                  <select id="mlEvaluationStrategy">
+                    <option value="holdout">Deterministic Holdout</option>
+                    <option value="repeated_cv">Repeated Stratified CV</option>
+                  </select>
+                </label>
+                <label class="toolbar-field hidden" id="mlCvFoldsWrap">
+                  <span>CV Folds</span>
+                  <input id="mlCvFolds" type="number" min="2" max="10" step="1" value="5" />
+                </label>
+                <label class="toolbar-field hidden" id="mlCvRepeatsWrap">
+                  <span>CV Repeats</span>
+                  <input id="mlCvRepeats" type="number" min="1" max="20" step="1" value="3" />
+                </label>
+                <label class="toolbar-field" for="mlRandomSeed">
+                  <span>Random Seed <button class="help-dot" type="button" data-tooltip="Shared with Deep Learning. The same seed gives ML and DL the same holdout split and the same repeated-CV folds.">?</button></span>
+                  <input id="mlRandomSeed" type="number" min="0" step="1" value="42" />
+                </label>
+                <label class="toggle control-inline-toggle locked-test-toggle hidden" id="mlLockedTestWrap" title="Hold out a stratified internal test set before repeated CV. Models are ranked using development patients only; the selected model's test performance is internal validation.">
+                  <input id="mlLockedTestToggle" type="checkbox" checked />
+                  <span>Reserve an internal test set before model selection</span>
+                </label>
+                <label class="toolbar-field hidden" id="mlLockedTestFractionWrap">
+                  <span>Locked test %</span>
+                  <input id="mlLockedTestFraction" type="number" min="5" max="50" step="1" value="30" />
+                </label>
+              </div>
+              <p class="control-section-note">Evaluation mode, CV folds/repeats, seed, and the locked test set are shared with Deep Learning so Compare All Models evaluates both families on the same row partitions.</p>
+            </section>
+          </details>
           <details class="table-card full-width predictor-pattern-card" id="predictorPatternCard">
             <summary><strong>Do added predictors help?</strong> Compare clinical inputs with genes or other added predictors.</summary>
             <p><strong>What do prediction models tell me?</strong> KM and log-rank compare existing groups. Models combine predictors into a risk score for each patient; held-out C-index evaluates how well those scores rank risk.</p>
@@ -947,7 +952,17 @@
               <label class="toolbar-field"><span>DL epochs</span><input id="patternEpochs" type="number" min="10" max="1000" value="100"></label>
               <label class="toolbar-field"><span>Bootstrap draws</span><input id="patternBootstrap" type="number" min="100" max="5000" value="1000"></label>
             </div></details>
-            <div class="button-row"><button class="button primary" id="patternRun" type="button">Compare predictor sets</button><button class="button ghost" id="patternJson" type="button" disabled>Save results (JSON)</button><button class="button ghost" id="patternCsv" type="button" disabled>Save curves (CSV)</button><button class="button ghost" id="patternRiskCsv" type="button" disabled>Save patient risk scores (CSV)</button></div>
+            <div class="button-row">
+              <button class="button primary" id="patternRun" type="button">Compare predictor sets</button>
+              <details class="export-menu" id="patternExportMenu">
+                <summary class="button ghost">Save files</summary>
+                <div class="export-menu-items">
+                  <button class="button ghost" id="patternJson" type="button" disabled>Save results (JSON)</button>
+                  <button class="button ghost" id="patternCsv" type="button" disabled>Save curves (CSV)</button>
+                  <button class="button ghost" id="patternRiskCsv" type="button" disabled>Save patient risk scores (CSV)</button>
+                </div>
+              </details>
+            </div>
             <p id="patternStatus" role="status" aria-live="polite">Load data and choose two separate predictor sets.</p>
             <div id="patternResults" class="hidden">
               <h3>Do the added predictors improve risk ranking?</h3><p id="patternInterpretation"></p><div class="plot-shell" id="patternComparisonPlot"></div>
@@ -1033,6 +1048,8 @@
                 <summary class="button ghost">Save files</summary>
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadMarkersCsvButton" type="button" disabled>Marker table (CSV)</button>
+                  <button class="button ghost" id="downloadMarkerResultJsonButton" type="button" disabled>Analysis result (JSON)</button>
+                  <button class="button ghost" id="downloadMarkerValidationJsonButton" type="button" disabled>External validation (JSON)</button>
                   <button class="button ghost" id="downloadMarkerDiagnosticsButton" type="button" disabled>Diagnostic checks (CSV)</button>
                   <button class="button ghost" id="downloadMarkerRecipeButton" type="button" disabled>Locked model (JSON)</button>
                   <button class="button ghost" id="downloadMarkerRemarkDocxButton" type="button" disabled>REMARK checklist (Word)</button>
@@ -1095,7 +1112,7 @@
           </div>
           <p class="cox-preview-line" id="markerSelectionLine" aria-live="polite"></p>
           <p class="marker-demo-note hidden" id="markerDemoNote">Synthetic demo: biomarker_score is a simulated marker, not a score calculated from genes. Its effect was built into the example; this is not a biological discovery.</p>
-          <details class="options-details">
+          <details class="options-details" id="markerMoreOptions">
             <summary>More options</summary>
             <div class="toolbar-grid">
               <label><span>Permutations</span><input id="markerPermutations" type="number" min="0" max="10000" step="100" value="1000" /></label>
@@ -1108,6 +1125,13 @@
                   <option value="rsf">Random survival forest</option>
                 </select>
               </label>
+            </div>
+          </details>
+
+          <details class="options-details" id="markerAdvancedSettings">
+            <summary>Advanced</summary>
+            <div class="toolbar-grid">
+              <label><span>Maximum markers in the signature</span><input id="markerMaxSignatureMarkers" type="number" min="1" max="50" step="1" value="10" /></label>
             </div>
           </details>
 
@@ -1146,6 +1170,14 @@
               </label>
               <button class="button ghost" id="runMarkerValidationButton" type="button" disabled>Validate</button>
             </div>
+            <details class="options-details" id="markerValidationAdvancedSettings">
+              <summary>Advanced</summary>
+              <div class="toolbar-grid">
+                <label><span>Prediction horizon (outcome time units)</span><input id="markerValidationHorizon" type="number" min="0" step="any" placeholder="Use locked model horizon" /></label>
+                <label><span>Bootstrap draws</span><input id="markerValidationBootstrap" type="number" min="0" max="2000" step="1" value="200" /></label>
+                <label><span>Random seed</span><input id="markerValidationSeed" type="number" min="0" max="4294967295" step="1" value="20260926" /></label>
+              </div>
+            </details>
             <div id="markerValidationSummary"></div>
             <div class="plot-shell hidden" id="markerValidationPlot"></div>
             <div class="table-shell" id="markerValidationShell"></div>
