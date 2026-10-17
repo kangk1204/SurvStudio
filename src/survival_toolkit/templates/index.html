@@ -1049,6 +1049,7 @@
                 <div class="export-menu-items">
                   <button class="button ghost" id="downloadMarkersCsvButton" type="button" disabled>Marker table (CSV)</button>
                   <button class="button ghost" id="downloadMarkerResultJsonButton" type="button" disabled>Analysis result (JSON)</button>
+                  <button class="button ghost" id="downloadMarkerValidationJsonButton" type="button" disabled>External validation (JSON)</button>
                   <button class="button ghost" id="downloadMarkerDiagnosticsButton" type="button" disabled>Diagnostic checks (CSV)</button>
                   <button class="button ghost" id="downloadMarkerRecipeButton" type="button" disabled>Locked model (JSON)</button>
                   <button class="button ghost" id="downloadMarkerRemarkDocxButton" type="button" disabled>REMARK checklist (Word)</button>
@@ -1111,7 +1112,7 @@
           </div>
           <p class="cox-preview-line" id="markerSelectionLine" aria-live="polite"></p>
           <p class="marker-demo-note hidden" id="markerDemoNote">Synthetic demo: biomarker_score is a simulated marker, not a score calculated from genes. Its effect was built into the example; this is not a biological discovery.</p>
-          <details class="options-details">
+          <details class="options-details" id="markerMoreOptions">
             <summary>More options</summary>
             <div class="toolbar-grid">
               <label><span>Permutations</span><input id="markerPermutations" type="number" min="0" max="10000" step="100" value="1000" /></label>

@@ -782,14 +782,17 @@ def _pattern_run_script(extra: str) -> str:
 def test_pattern_only_results_use_main_save_and_leave_protection_then_invalidate(tmp_path: Path, example_dataset: dict) -> None:
     result = _run_page(tmp_path, _pattern_run_script(r"""
       page.run("patternRefs.Run.click()"); await page.settle();
+      // Chromium can report an offsetParent for descendants of a closed details card.
+      const menu=page.document.getElementById('patternExportMenu');
+      Object.defineProperty(menu,'offsetParent',{get() {return this.parentElement;}});
       page.run("document.getElementById('predictorPatternCard').open = false; document.getElementById('saveResultsButton').click()");
-      const ready = page.run("({completed: hasCompletedResults(), current: Boolean(currentPredictorPatternResult()), menuOpen: document.getElementById('patternExportMenu').open, exportEnabled: !patternRefs.Json.disabled})");
+      const ready = page.run("({completed: hasCompletedResults(), current: Boolean(currentPredictorPatternResult()), cardOpen:document.getElementById('predictorPatternCard').open, menuOpen: document.getElementById('patternExportMenu').open, exportEnabled: !patternRefs.Json.disabled})");
       let warned = false; page.context.__leave = {preventDefault() {warned = true;}};
       page.run("confirmLeavingWithResults(__leave)");
       page.change('#patternSeed', '43'); await page.settle();
       return {ready, warned, after: page.run("({completed: hasCompletedResults(), current: Boolean(currentPredictorPatternResult()), exportDisabled: patternRefs.Json.disabled, hidden: patternRefs.Results.classList.contains('hidden')})")};
     """), dataset=example_dataset)
-    assert result["ready"] == {"completed": True, "current": True, "menuOpen": True, "exportEnabled": True}
+    assert result["ready"] == {"completed": True, "current": True, "cardOpen": True, "menuOpen": True, "exportEnabled": True}
     assert result["warned"] is True
     assert result["after"] == {"completed": False, "current": False, "exportDisabled": True, "hidden": True}
 
@@ -1856,6 +1859,94 @@ def test_marker_signature_limit_rejects_invalid_values_before_request(tmp_path: 
     assert result["extraRequests"] == 0
     assert result["current"] is False
     assert any("Maximum markers in the signature must be a whole number from 1 to 50" in value for value in result["toasts"])
+
+
+def _external_validation_json_script(extra: str) -> str:
+    return _marker_run_script("added", r"""
+      const validationButton=page.document.getElementById('downloadMarkerValidationJsonButton');
+      const beforeValidation=validationButton.disabled;
+      const recipeBefore=page.run("JSON.stringify(state.markers.analysis.locked_recipe)");
+      page.run("refs.markerValidationFile.files=[{name:'external.csv',size:123,lastModified:456}]");
+      page.change('#markerValidationHorizon','12'); page.change('#markerValidationBootstrap','2000');
+      page.change('#markerValidationSeed','2026101804');
+      let expectedValidationPayload;
+      page.fetchHandler=request => {
+        if (request.url.endsWith('/api/upload')) return {status:200,body:{dataset_id:'external-json'}};
+        if (request.method==='DELETE') return {status:200,body:{status:'deleted'}};
+        if (!request.url.endsWith('/api/marker-validation')) return {status:500,body:{detail:'unexpected'}};
+        const config=request.json();
+        expectedValidationPayload={request_config:config,dataset_hash:'external-fixture-hash',
+          validation:{recipe_hash:config.recipe.recipe_hash,cohort:{n:180,events:100},
+            metrics:{c_index:0.67,horizon:config.horizon,marker_scaling:config.marker_scaling},
+            inference:{status:'withheld',allowed:false,reasons:['development_inference_withheld']},
+            markers:[],notes:['Parent inference remains withheld.']},figure:null};
+        return {status:200,body:expectedValidationPayload};
+      };
+      page.run("refs.runMarkerValidationButton.click()"); await page.settle();
+    """ + extra)
+
+
+def test_external_validation_json_preserves_native_payload_and_last_valid_failed_rerun(
+    tmp_path: Path, example_dataset: dict, marker_payloads: dict,
+) -> None:
+    result = _run_page(tmp_path, _external_validation_json_script(r"""
+      const ready=!validationButton.disabled;
+      page.run("document.getElementById('saveResultsButton').click()");
+      const menuOpen=validationButton.closest('.export-menu').open;
+      validationButton.click(); await page.settle();
+      const saved=JSON.parse((await page.csvDownloads())[0]);
+      const exactPayload=JSON.stringify(saved)===JSON.stringify(expectedValidationPayload);
+      const hold=deferred();
+      page.fetchHandler=request => request.url.endsWith('/api/upload') ? {status:200,body:{dataset_id:'external-json-retry'}}
+        : request.method==='DELETE' ? {status:200,body:{}} : hold.promise;
+      page.run("refs.runMarkerValidationButton.click()"); await page.settle(3);
+      const busy=validationButton.disabled;
+      validationButton.dispatchEvent({type:'click'});
+      hold.resolve({status:500,body:{detail:'Fixture stopped'}}); await page.settle();
+      const lastValidRetained=!validationButton.disabled && Boolean(page.run("currentMarkerValidationResult()"));
+      validationButton.click(); await page.settle();
+      const again=JSON.parse((await page.csvDownloads())[1]);
+      return {beforeValidation,ready,menuOpen,exactPayload,busy,lastValidRetained,
+        identicalAfterFailedRerun:JSON.stringify(again)===JSON.stringify(saved),
+        recipeUnchanged:page.run("JSON.stringify(state.markers.analysis.locked_recipe)")===recipeBefore,
+        horizon:saved.request_config.horizon,bootstrap:saved.request_config.n_bootstrap,seed:saved.request_config.random_seed,
+        status:saved.validation.inference.status,allowed:saved.validation.inference.allowed,
+        downloadCount:page.downloads.filter(item=>item.kind==='blob').length,
+        mime:page.downloads.find(item=>item.kind==='blob').blob.type};
+    """), dataset=example_dataset, markers=marker_payloads)
+    assert result == {"beforeValidation":True,"ready":True,"menuOpen":True,"exactPayload":True,"busy":True,
+                      "lastValidRetained":True,"identicalAfterFailedRerun":True,"recipeUnchanged":True,
+                      "horizon":12,"bootstrap":2000,"seed":2026101804,"status":"withheld","allowed":False,
+                      "downloadCount":2,"mime":"application/json;charset=utf-8;"}
+
+
+@pytest.mark.parametrize("change", ["file", "recipe", "scaling", "horizon", "bootstrap", "seed"])
+def test_external_validation_json_rejects_stale_inputs_and_revalidates_click(
+    tmp_path: Path, example_dataset: dict, marker_payloads: dict, change: str,
+) -> None:
+    result = _run_page(tmp_path, _external_validation_json_script(r"""
+      const completed=page.run("state.markerValidation");
+      if (fixtures.change==='file') {
+        page.run("refs.markerValidationFile.files=[{name:'external.csv',size:124,lastModified:457}]");
+        page.change('#markerValidationFile');
+      } else if (fixtures.change==='recipe') {
+        page.run("state.markers.analysis.locked_recipe={...state.markers.analysis.locked_recipe,recipe_hash:'new-recipe'}; syncMarkerDownloadButtons()");
+      } else {
+        const changes={scaling:['#markerValidationScaling','within_cohort'],horizon:['#markerValidationHorizon','13'],
+          bootstrap:['#markerValidationBootstrap','1999'],seed:['#markerValidationSeed','2026101805']};
+        page.change(...changes[fixtures.change]);
+      }
+      await page.settle();
+      const staleDisabled=validationButton.disabled;
+      // A stale browser button/result cannot bypass the download handler's fresh check.
+      page.context.__oldValidation=completed;
+      page.run("state.markerValidation=__oldValidation; markerValidationJsonButton.disabled=false");
+      validationButton.dispatchEvent({type:'click'}); await page.settle();
+      return {staleDisabled,blockedAgain:validationButton.disabled,
+        noCurrentResult:page.run("currentMarkerValidationResult()===null"),
+        downloadCount:page.downloads.filter(item=>item.kind==='blob').length};
+    """), dataset=example_dataset, markers=marker_payloads, change=change)
+    assert result == {"staleDisabled":True,"blockedAgain":True,"noCurrentResult":True,"downloadCount":0}
 
 
 def test_external_advanced_settings_serialize_and_invalidate_previous_validation(tmp_path: Path, example_dataset: dict, marker_payloads: dict) -> None:

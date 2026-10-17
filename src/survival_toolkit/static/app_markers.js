@@ -8,6 +8,7 @@ const markerAdvancedRefs = Object.fromEntries([
 ].map((name) => [name, document.getElementById(`marker${name}`)]));
 
 const markerResultJsonButton = document.getElementById("downloadMarkerResultJsonButton");
+const markerValidationJsonButton = document.getElementById("downloadMarkerValidationJsonButton");
 
 function markerAdvancedNumber(control, fallback, { label, min, max = Infinity, integer = true, positive = false }) {
   const text = String(control?.value ?? "").trim();
@@ -741,6 +742,16 @@ function currentMarkerValidationSignature() {
   } catch { return null; }
 }
 
+function currentMarkerValidationResult() {
+  const payload = state.markerValidation;
+  const signature = currentMarkerValidationSignature();
+  return payload?.validation && signature && payload.input_signature === signature ? payload : null;
+}
+
+function syncMarkerValidationDownloadButton() {
+  if (markerValidationJsonButton) markerValidationJsonButton.disabled = isScopeBusy("markers") || !currentMarkerValidationResult();
+}
+
 function syncMarkerValidationCurrency() {
   const signature = currentMarkerValidationSignature();
   if ((runtime.markerValidationSignature && runtime.markerValidationSignature !== signature)
@@ -750,6 +761,7 @@ function syncMarkerValidationCurrency() {
     state.markerValidation = null;
     clearMarkerValidationOutput();
   }
+  syncMarkerValidationDownloadButton();
 }
 
 // The external cohort is uploaded as its own dataset so the workspace keeps the development cohort.
@@ -903,6 +915,19 @@ function downloadMarkerResult() {
   downloadText(buildDownloadFilename("marker_analysis_result", "json"), `${JSON.stringify(payload, null, 2)}\n`, "application/json;charset=utf-8;");
 }
 
+function downloadMarkerValidation() {
+  if (!requireCurrentResultForExport("markers", { payload: currentGoalResult("markers") })) return;
+  syncMarkerValidationCurrency();
+  const current = currentMarkerValidationResult();
+  if (!current) {
+    showToast("Validate the locked model with the current external file and settings before exporting.", "warning", 3600);
+    return;
+  }
+  // These two fields describe browser currency; the download keeps the native API payload.
+  const { external_filename, input_signature, ...payload } = current;
+  downloadText(buildDownloadFilename("external_marker_validation", "json"), `${JSON.stringify(payload, null, 2)}\n`, "application/json;charset=utf-8;");
+}
+
 function downloadMarkerRecipe() {
   const payload = currentGoalResult("markers");
   if (!requireCurrentResultForExport("markers", { payload })) return;
@@ -996,6 +1021,7 @@ function wireMarkerControls() {
   });
   refs.removeMarkerMatrixButton?.addEventListener("click", removeMarkerMatrix);
   markerResultJsonButton?.addEventListener("click", downloadMarkerResult);
+  markerValidationJsonButton?.addEventListener("click", downloadMarkerValidation);
   refs.downloadMarkersCsvButton?.addEventListener("click", downloadMarkerTable);
   refs.downloadMarkerDiagnosticsButton?.addEventListener("click", downloadMarkerDiagnostics);
   refs.downloadMarkerRecipeButton?.addEventListener("click", downloadMarkerRecipe);

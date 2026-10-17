@@ -750,8 +750,15 @@ function initListeners() {
     setAdditionalAnalyses(!expanded);
   });
   document.getElementById("saveResultsButton")?.addEventListener("click", (event) => {
+    const menuIsVisible = (item) => {
+      if (item.offsetParent === null) return false;
+      for (let ancestor = item.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (ancestor.tagName === "DETAILS" && !ancestor.open) return false;
+      }
+      return true;
+    };
     const availableMenu = (panel, visibleOnly = true) => Array.from(panel?.querySelectorAll(".export-menu") || []).find(
-      (item) => (!visibleOnly || item.offsetParent !== null) && item.querySelector("button:not([disabled])"),
+      (item) => (!visibleOnly || menuIsVisible(item)) && item.querySelector("button:not([disabled])"),
     );
     const singleGoal = predictiveModelMeta().family;
     const singleButton = predictiveSingleDownloadButton(singleGoal);
@@ -785,6 +792,9 @@ function initListeners() {
     }
     event.stopPropagation();
     document.querySelectorAll(".export-menu").forEach((item) => { item.open = false; });
+    for (let ancestor = menu.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      if (ancestor.tagName === "DETAILS") ancestor.open = true;
+    }
     menu.open = true;
     menu.scrollIntoView({ behavior: "smooth", block: "center" });
     menu.querySelector("summary")?.focus({ preventScroll: true });
