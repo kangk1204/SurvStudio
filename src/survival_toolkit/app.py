@@ -5286,6 +5286,12 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     """The marker table as flat rows on the primary lens, for display and export."""
     primary = result["primary_lens"]
     exact_lens = "adjusted" if primary == "added_value" else "marginal"
+    from survival_toolkit.marker_review import marker_diagnostic_review
+    review = marker_diagnostic_review(result)
+    scored = [row for row in result["marker_table"]
+              if isinstance(row[primary].get("chi2"), (int, float)) and math.isfinite(row[primary]["chi2"])]
+    score_ranks = {row["marker"]: index + 1 for index, row in enumerate(
+        sorted(scored, key=lambda row: (-row[primary]["chi2"], row["marker"])))}
     rows: list[dict[str, Any]] = []
     for row in result["marker_table"]:
         stats = row[primary]
@@ -5293,7 +5299,10 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
         low, high = stats["rank_interval"]
         display = {
             "Marker": row["marker"],
+            "Full-cohort score rank": score_ranks.get(row["marker"]),
             "Inference status": row.get("inference_status", "not_assessed"),
+            "Diagnostic hold scope": review["hold_scope"],
+            "Selection interpretation": review["selection_interpretation"],
             "Withholding reasons": "; ".join(((result.get("inference") or {}).get("reasons") or [])[:3])
                 + (f"; see diagnostics for {len(result['inference']['reasons']) - 3} further findings"
                    if len((result.get("inference") or {}).get("reasons") or []) > 3 else ""),
@@ -5327,6 +5336,9 @@ def _marker_display_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
             display["Unadjusted HR"] = ((row.get("exact") or {}).get("marginal") or {}).get("hazard_ratio")
             display["Unadjusted P"] = row["marginal"]["p_value"]
         rows.append(display)
+    if review["hold_scope"] == "entire_marker_family":
+        rows.sort(key=lambda row: (row["Full-cohort score rank"] is None,
+                                  row["Full-cohort score rank"] or 0, row["Marker"]))
     return rows
 
 

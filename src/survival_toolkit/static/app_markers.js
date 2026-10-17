@@ -482,8 +482,14 @@ function markerOverviewSummary(payload) {
       ...(detail.cautions || []).filter((text) => !rawReasons.has(text) && text !== inference.interpretation),
       ...(review.messages || []), review.interpretation,
     ].filter(Boolean) : detail.cautions;
-    return { ...detail, headline: "Added-value inference is withheld. Review the diagnostics before interpreting candidates.",
-      metrics: [{ label: "Stable candidates", value: "Not assessed" }, { label: "Prediction improvement", value: "Unavailable" }],
+    const residualCount = review?.n_markers_with_residual_findings;
+    const holdMetrics = [{ label: "Stable candidates", value: "Not assessed" }, { label: "Prediction improvement", value: "Unavailable" }];
+    const familySize = analysis.cohort?.n_markers_evaluated;
+    if (Number.isInteger(residualCount) && residualCount > 0 && Number.isInteger(familySize) && familySize > 0) {
+      holdMetrics.push({ label: "Markers with residual findings", value: `${formatCount(residualCount)} of ${formatCount(familySize)}` });
+    }
+    return { ...detail, headline: "Added-value inference is withheld for this marker family. Rankings are exploratory.",
+      metrics: holdMetrics,
       strengths: [], cautions, next_steps: review?.next_steps || [] };
   }
   const cohort = analysis.cohort || {};
@@ -590,15 +596,16 @@ async function renderMarkerResults(payload) {
   if (refs.markersInferenceNote) refs.markersInferenceNote.textContent = inference
     ? `${inference.status}. ${inference.interpretation} ${bootstrapNote} ${(inference.reasons || []).join("; ")} ${inference.engineering_qualification?.claim_boundary || ""} ${inference.engineering_qualification?.extension_limitations || ""}`
     : "Diagnostics were not assessed in this saved result.";
-  if (refs.markersDiagnosticsTable) renderTable(refs.markersDiagnosticsTable,
-    [...(inference?.clinical_tests || []), ...(inference?.residual_tests || [])].map((test) => ({
-      Marker: test.marker || "Clinical model", Diagnostic: test.name || test.diagnostic,
-      Method: test.method || "", Status: test.status || (test.p_value == null ? "failed" : "calculated"),
-      "Raw P": test.p_value, "Holm P": test.p_holm ?? test.p_holm_v2,
-      ...(bootstrap ? {"Joint bootstrap P": test.p_maxT, "Adjusted family": test.marker ? "v3 maxT; Holm retained for comparison" : "clinical Holm"} : {}),
-      "Withhold threshold": inference.threshold,
-      Reason: test.reason || ""
-    })));
+  if (refs.markersDiagnosticsTable) {
+    const tests = markerDiagnosticTableTests(inference);
+    renderTable(refs.markersDiagnosticsTable, markerDiagnosticRows(inference, tests.visible));
+    if (tests.total > tests.visible.length) {
+      const note = document.createElement("p");
+      note.className = "muted";
+      note.textContent = `Showing ${formatCount(tests.visible.length)} of ${formatCount(tests.total)} checks: calculation failures and small adjusted P values first, then clinical checks. Save files → Diagnostic checks (CSV) includes all checks. This display limit does not change the diagnostic decision.`;
+      refs.markersDiagnosticsTable.prepend(note);
+    }
+  }
   // Results saved before the summary figure existed simply leave its shell hidden.
   if (payload.summary_figure?.data?.length) await renderMarkerPlot(refs.markersSummaryPlot, payload.summary_figure, "marker_summary", payload);
   else clearPlotShell(refs.markersSummaryPlot, "", { state: "placeholder" });
@@ -611,6 +618,9 @@ async function renderMarkerResults(payload) {
     const order = rows.length > MARKER_TABLE_DISPLAY_LIMIT
       ? `Showing the first ${formatValue(MARKER_TABLE_DISPLAY_LIMIT)} of ${formatValue(rows.length)} markers, strongest first. Export the table for all of them.`
       : "Strongest markers first.";
+    const rankNote = payload?.analysis?.inference?.status === "withheld"
+      ? "Exploratory full-cohort score rank orders the held results; it is not a validated-candidate rank. Median rank summarizes the separate training subsamples."
+      : "Full-cohort score rank and median rank across training subsamples describe different rankings.";
     // The HR column comes from the model of the primary lens: with the clinical covariates, or the marker alone.
     const hazardRatio = addedValue
       ? "HR per unit of the marker, from a Cox model with the clinical covariates."
@@ -618,10 +628,32 @@ async function renderMarkerResults(payload) {
     const evidence = addedValue
       ? "Evidence: M marginal association and A added value over the clinical covariates, each + or − when family-wise significant (higher or lower hazard) and · when not; N+ when the non-linear check agrees."
       : "Evidence: M marginal association, + or − when family-wise significant (higher or lower hazard) and · when not; N+ when the non-linear check agrees.";
-    refs.markersTableNote.textContent = `${order} ${hazardRatio} ${evidence}`;
+    refs.markersTableNote.textContent = `${order} ${rankNote} ${hazardRatio} ${evidence}`;
   }
   if (refs.markerValidationSection) refs.markerValidationSection.classList.remove("hidden");
   updateResultVisibility();
+}
+
+function markerDiagnosticTableTests(inference) {
+  const all = [...(inference?.clinical_tests || []), ...(inference?.residual_tests || [])];
+  if (all.length <= 300) return { total: all.length, visible: all };
+  const threshold = inference?.threshold ?? 0.01;
+  const adjusted = (test) => test.p_maxT ?? test.p_holm ?? test.p_holm_v2;
+  const priority = (test) => test.status === "failed" || test.p_value == null
+    || (typeof adjusted(test) === "number" && adjusted(test) <= threshold) ? 0 : !test.marker ? 1 : 2;
+  all.sort((a, b) => priority(a) - priority(b) || (adjusted(a) ?? 1) - (adjusted(b) ?? 1));
+  return { total: all.length, visible: all.slice(0, 300) };
+}
+
+function markerDiagnosticRows(inference, tests = null) {
+  return (tests || [...(inference?.clinical_tests || []), ...(inference?.residual_tests || [])]).map((test) => ({
+    Marker: test.marker || "Clinical model", Diagnostic: test.name || test.diagnostic,
+    "Overall inference": inference?.status || "not_assessed",
+    Method: test.method || "", Status: test.status || (test.p_value == null ? "failed" : "calculated"),
+    "Raw P": test.p_value, "Holm P": test.p_holm ?? test.p_holm_v2,
+    ...(inference?.bootstrap ? {"Joint bootstrap P": test.p_maxT, "Adjusted family": test.marker ? "v3 maxT; Holm retained for comparison" : "clinical Holm"} : {}),
+    "Withhold threshold": inference?.threshold, Reason: test.reason || ""
+  }));
 }
 
 // The marker table as shown and exported. A rank interval reads "1 to 3", because a spreadsheet opens
@@ -807,6 +839,15 @@ function downloadMarkerTable() {
   });
 }
 
+function downloadMarkerDiagnostics() {
+  const payload = currentGoalResult("markers");
+  if (!requireCurrentResultForExport("markers", { payload })) return;
+  downloadCsv(buildDownloadFilename("marker_diagnostics", "csv"), markerDiagnosticRows(payload.analysis?.inference), null, {
+    caption: "All marker diagnostic checks",
+    notes: ["Calculated describes a computed diagnostic, not permission to release marker inference."]
+  });
+}
+
 function downloadMarkerChecklist(format) {
   const payload = currentGoalResult("markers");
   if (!requireCurrentResultForExport("markers", { payload })) return;
@@ -820,6 +861,7 @@ function downloadMarkerChecklist(format) {
 function syncMarkerDownloadButtons() {
   const current = currentGoalResult("markers");
   if (refs.downloadMarkersCsvButton) refs.downloadMarkersCsvButton.disabled = !current;
+  if (refs.downloadMarkerDiagnosticsButton) refs.downloadMarkerDiagnosticsButton.disabled = !current?.analysis?.inference;
   if (refs.downloadMarkerRecipeButton) refs.downloadMarkerRecipeButton.disabled = !current?.analysis?.locked_recipe;
   if (refs.downloadMarkerRemarkDocxButton) refs.downloadMarkerRemarkDocxButton.disabled = !current?.report;
   if (refs.downloadMarkerRemarkMarkdownButton) refs.downloadMarkerRemarkMarkdownButton.disabled = !current?.report;
@@ -862,6 +904,7 @@ function wireMarkerControls() {
   });
   refs.removeMarkerMatrixButton?.addEventListener("click", removeMarkerMatrix);
   refs.downloadMarkersCsvButton?.addEventListener("click", downloadMarkerTable);
+  refs.downloadMarkerDiagnosticsButton?.addEventListener("click", downloadMarkerDiagnostics);
   refs.downloadMarkerRecipeButton?.addEventListener("click", downloadMarkerRecipe);
   refs.downloadMarkerRemarkDocxButton?.addEventListener("click", () => downloadMarkerChecklist("docx"));
   refs.downloadMarkerRemarkMarkdownButton?.addEventListener("click", () => downloadMarkerChecklist("markdown"));

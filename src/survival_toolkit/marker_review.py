@@ -48,9 +48,32 @@ def marker_diagnostic_review(result: dict[str, Any]) -> dict[str, Any]:
         messages.append("A required diagnostic could not be calculated, so added-value inference cannot be assessed.")
     messages.extend(unexplained)
     withheld = inference.get("status") == "withheld" or inference.get("allowed") is False
+    affected = list(dict.fromkeys([*variance, *mean]))
+    family_size = (result.get("cohort") or {}).get("n_markers_evaluated")
+    scope = "entire_marker_family" if withheld else "none" if inference.get("allowed") is True else "not_assessed"
+    if withheld and affected:
+        messages.append(
+            f"{len(affected)} marker{'s' if len(affected) != 1 else ''} triggered residual diagnostics. "
+            "The current policy withholds added-value inference for the entire tested marker family; "
+            "it does not mean every marker failed its own diagnostic. "
+            "Score rankings remain exploratory and do not identify validated candidates."
+        )
+    resampling = result.get("resampling") or {}
+    valid, held = resampling.get("n_valid"), resampling.get("n_withheld")
+    all_training_held = isinstance(valid, (int, np.integer)) and valid > 0 and held == valid
+    if withheld and all_training_held:
+        messages.append(
+            f"All {valid} usable training subsamples withheld added-value selection. "
+            "A selection frequency of zero therefore reflects the diagnostic policy; "
+            "it is not evidence that a marker has no survival association."
+        )
     return {
-        "version": "marker-review/1",
+        "version": "marker-review/2",
         "status": inference.get("status", "not_assessed"),
+        "hold_scope": scope,
+        "n_markers_evaluated": family_size,
+        "n_markers_with_residual_findings": len(affected),
+        "selection_interpretation": "all_training_subsamples_withheld" if withheld and all_training_held else "see_resampling",
         "messages": messages,
         "flagged_variance_markers": variance,
         "flagged_mean_markers": mean,
