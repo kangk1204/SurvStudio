@@ -7267,7 +7267,13 @@ def test_marker_frontend_runs_the_evaluation_and_validates_the_locked_model() ->
     assert "async function runMarkerEvaluation() {" in text
     assert 'fetchJSON("/api/marker-evaluation", {' in text
     assert 'fetchJSON("/api/marker-validation", {' in text
-    assert 'body: JSON.stringify({ dataset_id: external.dataset_id, recipe, marker_scaling: refs.markerValidationScaling?.value || "as_measured" }),' in text
+    fields = text.split("function markerValidationRequestFields() {", 1)[1].split("\n}", 1)[0]
+    for field in ("marker_scaling", "horizon", "n_bootstrap", "random_seed"):
+        assert f"{field}:" in fields
+    validation = text.split("async function runMarkerValidation() {", 1)[1].split("\n}\n", 1)[0]
+    assert "const fields = markerValidationRequestFields();" in validation
+    assert "body:JSON.stringify({dataset_id:external.dataset_id,recipe,...fields})" in "".join(validation.split())
+    # Node frontend regressions verify the actual request's defaults, custom values and invalid-input rejection.
     assert 'withLoading(refs.runMarkersButton, runMarkerEvaluation, "markers")' in text
     assert 'if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];' in text
     assert 'if (goal === "markers") {' in text
