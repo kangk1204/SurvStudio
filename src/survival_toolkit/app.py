@@ -30,7 +30,7 @@ from typing import Any, Callable, Literal, NoReturn, Sequence, TypeVar, get_args
 from urllib.parse import urlsplit
 from xml.sax.saxutils import escape as xml_escape
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -2653,7 +2653,7 @@ def _store_loaded_dataframe(
     return dataset_response(stored.dataset_id)
 
 
-def _ingest_uploaded_file(path: Path, filename: str) -> dict[str, Any]:
+def _ingest_uploaded_file(path: Path, filename: str, number_format: str = "auto") -> dict[str, Any]:
     _guard_compressed_upload(path, filename)
     # Text and Excel inputs are checked against the shape limits from their header and a
     # bounded read, so an oversized table is refused before it is fully parsed.
@@ -2662,10 +2662,14 @@ def _ingest_uploaded_file(path: Path, filename: str) -> dict[str, Any]:
         max_rows=_MAX_UPLOAD_ROWS,
         max_columns=_MAX_UPLOAD_COLUMNS,
         max_cells=_MAX_UPLOAD_CELLS,
+        number_format=number_format,
     )
     _clean_column_labels(dataframe)
     # The parsed frame is private to this request, so the store can keep it without a deep copy.
-    return _store_loaded_dataframe(dataframe, filename=filename, source="upload", copy_dataframe=False)
+    return _store_loaded_dataframe(
+        dataframe, filename=filename, source="upload", copy_dataframe=False,
+        metadata={"number_format": number_format},
+    )
 
 
 # Longest table note an export accepts (TableExportRequest.notes). The replay and provenance notes
@@ -3807,7 +3811,10 @@ _ALLOWED_UPLOAD_SUFFIXES = frozenset({".csv", ".txt", ".tsv", ".xlsx", ".xls", "
 
 
 @app.post("/api/upload")
-async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_dataset(
+    file: UploadFile = File(...),
+    number_format: Literal["auto", "decimal_dot", "decimal_comma"] = Query("auto"),
+) -> dict[str, Any]:
     temp_path: Path | None = None
     filename = file.filename or "uploaded_dataset.csv"
     try:
@@ -3833,7 +3840,9 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
                 if total_bytes > _MAX_UPLOAD_BYTES:
                     raise HTTPException(status_code=413, detail=_UPLOAD_TOO_LARGE_DETAIL)
                 temp_file.write(chunk)
-        return await run_in_threadpool(_ingest_uploaded_file, temp_path, filename)
+        if number_format == "auto":
+            return await run_in_threadpool(_ingest_uploaded_file, temp_path, filename)
+        return await run_in_threadpool(_ingest_uploaded_file, temp_path, filename, number_format)
     except HTTPException:
         raise
     except Exception as exc:

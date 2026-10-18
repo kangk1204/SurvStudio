@@ -252,7 +252,8 @@ function renderDatasetIntegrityWarning() {
   const numericReview = Array.isArray(reviews)
     ? reviews.filter((entry) => entry?.action === "numeric_text_review" && Number(entry.count) > 0)
     : [];
-  if (!duplicates.length && !numericMissing.length && !numericReview.length) {
+  const numberFormat = state.dataset?.number_format ?? state.dataset?.profile?.number_format ?? "auto";
+  if (!duplicates.length && !numericMissing.length && !numericReview.length && numberFormat === "auto") {
     banner.textContent = "";
     banner.classList.add("hidden");
     return;
@@ -264,6 +265,11 @@ function renderDatasetIntegrityWarning() {
       + `(${count(entry.n_rows)} rows vs ${count(entry.n_unique)} unique; ${count(entry.n_extra_rows)} extra rows)`;
   });
   const messages = [];
+  if (numberFormat !== "auto") {
+    messages.push(numberFormat === "decimal_dot"
+      ? "You selected decimal points and comma thousands separators (2,361 = 2361). Check the data preview before analysis."
+      : "You selected decimal commas and dot thousands separators (2,361 = 2.361). Check the data preview before analysis.");
+  }
   if (duplicates.length) {
     messages.push(`Possible repeated subjects: ${details.join("; ")}. `
       + "If rows belong to the same subject, survival estimates double-count them and train/test splits can leak the same subject; "
@@ -664,9 +670,12 @@ async function uploadDataset() {
   const uploadBanner = setRuntimeBanner(`Uploading ${selectedFile.name} and preparing a fresh analysis workspace.`, "info", { held: true });
   const formData = new FormData();
   formData.append("file", selectedFile);
+  const numberFormat = refs.uploadNumberFormat?.value || "auto";
+  refs.uploadNumberFormat?.closest("details")?.removeAttribute("open");
+  const uploadUrl = numberFormat === "auto" ? "/api/upload" : `/api/upload?number_format=${encodeURIComponent(numberFormat)}`;
   let payload;
   try {
-    payload = await fetchLatestDatasetPayload((signal) => fetchJSON("/api/upload", { method: "POST", body: formData, signal }));
+    payload = await fetchLatestDatasetPayload((signal) => fetchJSON(uploadUrl, { method: "POST", body: formData, signal }));
   } catch (error) {
     // A rejected file ends the upload; its "Uploading" banner goes with it (a newer load keeps its own).
     releaseRuntimeBanner(uploadBanner);

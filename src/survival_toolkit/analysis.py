@@ -688,6 +688,7 @@ def _read_csv_with_fallback(
     max_rows: int | None = None,
     max_columns: int | None = None,
     max_cells: int | None = None,
+    number_format: str = "auto",
 ) -> pd.DataFrame:
     if hasattr(source, "read"):
         if hasattr(source, "seek"):
@@ -736,6 +737,7 @@ def _read_csv_with_fallback(
                 max_cells=max_cells,
                 layout=layout,
                 extra_fields=extra_fields,
+                number_format=number_format,
             )
         except UnicodeDecodeError as exc:
             # A later part of the file does not fit this encoding; try the next one.
@@ -761,6 +763,7 @@ def _parse_delimited_text(
     max_cells: int | None,
     layout: str = "header",
     extra_fields: int = 0,
+    number_format: str = "auto",
 ) -> pd.DataFrame:
     """Parse a delimited text table with one column per field and a 0..n-1 row index.
 
@@ -815,7 +818,9 @@ def _parse_delimited_text(
     def _read_raw_text(positions: list[int]) -> pd.DataFrame:
         return _read(nrows=nrows, dtype=str, usecols=positions, **read_options)
 
-    frame = _convert_formatted_number_columns(frame, delimiter=delimiter, read_raw_text=_read_raw_text)
+    frame = _convert_formatted_number_columns(
+        frame, delimiter=delimiter, read_raw_text=_read_raw_text, number_format=number_format,
+    )
     if layout == "trailing" and names is not None:
         empty_extras = [
             name
@@ -884,7 +889,9 @@ def _ambiguous_number_message(column: Any, text: pd.Series, mixed_evidence: tupl
     return (
         f'Column "{column}" holds numbers such as "{example}", which read either as {example.replace(separator, ".")} '
         f'or as {example.replace(separator, "")}, and {reason}. Save the file again with one decimal mark and '
-        "without thousands separators, then upload it again."
+        "without thousands separators, then upload it again. Alternatively, select the file's Number format "
+        "under Upload options before choosing the file again. For example, write 2361 for whole days or "
+        "2.361 for fractional days; these values are different."
     )
 
 
@@ -958,6 +965,7 @@ def _convert_formatted_number_columns(
     *,
     delimiter: str,
     read_raw_text: Any = None,
+    number_format: str = "auto",
 ) -> pd.DataFrame:
     """Parse the columns that hold formatted numbers, deciding each column's decimal mark once.
 
@@ -977,6 +985,10 @@ def _convert_formatted_number_columns(
     Dot-decimal columns without "," values and other text (dotted dates such as "01.02.2020")
     are left as read. A column is converted only when every value parses.
     """
+    if number_format not in {"auto", "decimal_dot", "decimal_comma"}:
+        raise ValueError("Number format must be auto, decimal_dot, or decimal_comma.")
+    if number_format != "auto":
+        return _convert_declared_number_format(frame, number_format, read_raw_text)
     shaped: dict[Any, tuple[pd.Series, set[str]]] = {}
     dot_columns: list[Any] = []  # columns whose own values show "." as the decimal mark
     float_candidates: list[Any] = []
@@ -985,6 +997,8 @@ def _convert_formatted_number_columns(
         if is_bool_dtype(series):
             continue
         if _is_text_series(series):
+            if bool(series.dropna().astype(str).str.strip().str.lower().eq("none").any()):
+                continue  # Literal None is a label until its role is explicitly reviewed.
             text = _number_text(series)
             shapes = _number_shapes(text) if not text.empty else None
             if shapes is not None and shapes != {"plain"}:
@@ -1059,6 +1073,41 @@ def _convert_formatted_number_columns(
         _set_parsed_column(frame, column, numbers)
     if ambiguous:
         raise ValueError(_ambiguous_number_message(ambiguous[0], shaped[ambiguous[0]][0], mixed_evidence))
+    return frame
+
+
+def _convert_declared_number_format(frame: pd.DataFrame, number_format: str, read_raw_text: Any) -> pd.DataFrame:
+    """Apply a user-declared text-file convention without guessing or changing mixed categories."""
+    positions = [
+        index for index, column in enumerate(frame.columns)
+        if _is_text_series(frame[column]) or pd.api.types.is_float_dtype(frame[column])
+    ]
+    raw = read_raw_text(positions) if positions and read_raw_text is not None else frame.iloc[:, positions]
+    pattern = _DOT_DECIMAL_NUMBER_PATTERN if number_format == "decimal_dot" else _COMMA_DECIMAL_NUMBER_PATTERN
+    plain_pattern = _NUMBER_SHAPE_PATTERNS[0][1]  # File integers/scientific notation, without a decimal mark.
+    for offset, position in enumerate(positions):
+        column = frame.columns[position]
+        text = raw.iloc[:, offset].dropna().astype(str).str.strip()
+        text = text[text != ""]
+        if text.empty or _number_shapes(text) is None:
+            continue  # Preserve labels and mixed numeric/text columns for explicit review.
+        if not bool(text.str.contains(r"[.,]", regex=True).any()):
+            continue
+        invalid = [value for value in pd.unique(text) if not (
+            plain_pattern.fullmatch(str(value)) or pattern.fullmatch(str(value))
+        )]
+        if invalid:
+            raise ValueError(
+                f'Column "{column}" contains "{invalid[0]}", which does not match the selected Number format '
+                f'({number_format}). Check the source file and choose the matching format under Upload options.'
+            )
+        numbers = (
+            text.str.replace(",", "", regex=False) if number_format == "decimal_dot"
+            else text.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+        )
+        if not _set_parsed_column(frame, column, numbers):
+            raise ValueError(f'Column "{column}" has numbers outside the supported finite range.')
+    frame.attrs["number_format"] = number_format
     return frame
 
 
@@ -1142,11 +1191,18 @@ def _load_dataframe_source(
     max_rows: int | None = None,
     max_columns: int | None = None,
     max_cells: int | None = None,
+    number_format: str = "auto",
 ) -> pd.DataFrame:
     suffix = Path(filename).suffix.lower()
+    if number_format not in {"auto", "decimal_dot", "decimal_comma"}:
+        raise ValueError("Number format must be auto, decimal_dot, or decimal_comma.")
+    if number_format != "auto" and suffix not in {".csv", ".txt", ".tsv"}:
+        raise ValueError("Select Automatic number format for Excel and Parquet files; their numeric cells already store numbers.")
     limits = {"max_rows": max_rows, "max_columns": max_columns, "max_cells": max_cells}
     if suffix in {".csv", ".txt", ".tsv"}:
-        df = _read_csv_with_fallback(source, default_delimiter="\t" if suffix == ".tsv" else ",", **limits)
+        df = _read_csv_with_fallback(
+            source, default_delimiter="\t" if suffix == ".tsv" else ",", number_format=number_format, **limits,
+        )
     elif suffix in {".xlsx", ".xls"}:
         df = _read_excel_limited(source, **limits)
     elif suffix == ".parquet":
@@ -1176,6 +1232,7 @@ def load_dataframe(
     max_rows: int | None = None,
     max_columns: int | None = None,
     max_cells: int | None = None,
+    number_format: str = "auto",
 ) -> pd.DataFrame:
     return _load_dataframe_source(
         io.BytesIO(file_bytes),
@@ -1183,6 +1240,7 @@ def load_dataframe(
         max_rows=max_rows,
         max_columns=max_columns,
         max_cells=max_cells,
+        number_format=number_format,
     )
 
 
@@ -1193,6 +1251,7 @@ def load_dataframe_from_path(
     max_rows: int | None = None,
     max_columns: int | None = None,
     max_cells: int | None = None,
+    number_format: str = "auto",
 ) -> pd.DataFrame:
     """Load a CSV/TSV/Excel/Parquet table.
 
@@ -1211,6 +1270,7 @@ def load_dataframe_from_path(
         max_rows=max_rows,
         max_columns=max_columns,
         max_cells=max_cells,
+        number_format=number_format,
     )
 
 
@@ -1853,6 +1913,25 @@ def _event_tokens_for_label(target: Any, target_token: str, observed_tokens: lis
     observed_family_map = {token: _outcome_status_family_match(token)[0] for token in observed_tokens}
     observed_families = {family for family in observed_family_map.values() if family is not None}
 
+    if "none" in observed_tokens:
+        # Literal "None" may mean no event or not recorded. It is never a global
+        # censoring token: accept it only opposite an explicitly selected, observed
+        # event label in a two-label column.
+        target_family = observed_family_map.get(target_token)
+        if (
+            len(observed_tokens) == 2
+            and target_token != "none"
+            and target_family is not None
+            and target_family.startswith("event_")
+        ):
+            return {target_token}
+        raise ValueError(
+            "The literal label 'None' has no automatic event meaning. "
+            "For a two-label column, select its observed event label only after checking that 'None' means no event. "
+            "Otherwise recode the source as 1 = event, 0 = censored and blank = not recorded; "
+            "do not merge additional or misspelled labels."
+        )
+
     if target_token in TRUE_TOKENS:
         # A standard event label: decode the column with the full token vocabulary.
         _raise_if_unrecognized_event_tokens(observed_family_map)
@@ -1944,6 +2023,19 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
         observed_tokens = sorted(set(value_tokens.loc[valid].astype(str).tolist()))
         event_tokens = _event_tokens_for_label(target, target_token, observed_tokens)
         out.loc[valid] = value_tokens.loc[valid].isin(event_tokens).astype(float)
+        if "none" in observed_tokens:
+            out.attrs["event_coding"] = {
+                "source": "explicit_two_label_selection",
+                "event_positive_value": target,
+                "event_labels": sorted(event_tokens),
+                "censored_labels": ["none"],
+                "literal_none_as_censored": True,
+                "missing_values_remain_missing": True,
+                "note": (
+                    f"Explicit event coding: '{target}' = event (1); literal 'None' = censored (0). "
+                    "Blank or missing cells remain missing. Confirm that this matches the source data definition."
+                ),
+            }
         return out
 
     inferred, inference_error = _try_coerce_binary_event(series)
@@ -1951,7 +2043,19 @@ def coerce_event(series: pd.Series, event_positive_value: Any = None) -> pd.Seri
         return inferred
     if inference_error == "multistate":
         raise ValueError(_MULTIPLE_EVENT_STATES_MESSAGE)
-
+    if "none" in {_explicit_event_token(value) for value in _unique_non_missing_values(series)}:
+        raise ValueError(
+            "Could not infer event coding: literal 'None' is preserved, not assumed to mean censoring or missing. "
+            "For a two-label column, select the observed event label after checking that 'None' means no event, "
+            "or recode as 1 = event, 0 = censored and blank = not recorded."
+        )
+    numeric = pd.to_numeric(series, errors="coerce")
+    if numeric.loc[valid].notna().all() and numeric.loc[valid].nunique() > 2:
+        raise ValueError(
+            "Could not infer event coding: this column has more than two numeric values. "
+            "Choose the event/status column rather than age or follow-up time, or recode a multistate outcome "
+            "as 1 = event and 0 = censored before analysis."
+        )
     raise ValueError(
         "Could not infer event coding. Select the value that represents the event in the dashboard."
     )
@@ -2272,6 +2376,7 @@ def profile_dataframe(df: pd.DataFrame, dataset_id: str, filename: str) -> dict[
         # Text uploads record the encoding used to read them, so a legacy encoding
         # (Korean CP949, Windows-1252) is visible instead of silently guessed.
         "text_encoding": source_encoding,
+        "number_format": df.attrs.get("number_format", "auto"),
         "text_encoding_label": TEXT_ENCODING_LABELS.get(str(source_encoding)) if source_encoding else None,
         "columns": column_profiles,
         "preview": preview_rows(df),
@@ -2641,7 +2746,9 @@ def _cohort_frame(
     frame[time_column] = _coerce_survival_time_values(frame[time_column], time_column)
     if not bool(frame[time_column].notna().any()):
         raise ValueError(f'"{time_column}" has no usable values: every follow-up time is missing.')
-    frame[event_column] = coerce_event(frame[event_column], event_positive_value=event_positive_value)
+    coded_event = coerce_event(frame[event_column], event_positive_value=event_positive_value)
+    event_coding = coded_event.attrs.get("event_coding")
+    frame[event_column] = coded_event
     missing_time_note = _reject_outcome_dependent_missing_time(frame, time_column, event_column)
     time_column_note = " ".join(note for note in (time_column_note, missing_time_note) if note) or None
     raw_censored_rows = int((frame[event_column] == 0).sum())
@@ -2682,6 +2789,8 @@ def _cohort_frame(
     frame.attrs["dropped_nonpositive_time_rows"] = int((~positive_mask).sum())
     frame.attrs["source_row_index"] = source_row_index.tolist()
     frame.attrs["row_mask_hash"] = _row_mask_hash(source_row_index)
+    if event_coding:
+        frame.attrs["event_coding"] = event_coding
     if time_column_note:
         frame.attrs["time_column_note"] = time_column_note
     if frame.empty:
@@ -3955,6 +4064,9 @@ def _km_scientific_summary(
     )
     # Notes that hold for every KM run are shown but do not lower the status; only data-driven cautions do.
     standing_cautions = len(cautions)
+    event_coding_note = str((cohort_summary.get("event_coding") or {}).get("note") or "").strip()
+    if event_coding_note:
+        cautions.append(event_coding_note)
 
     single_group = bool(group_column) and group_count < 2
     if group_column and not outcome_informed_group:
@@ -4264,6 +4376,9 @@ def _cox_input_quality_notes(
     notes: _SummaryNotes,
 ) -> None:
     _, cautions, next_steps = notes
+    event_coding_note = str((model_stats.get("event_coding") or {}).get("note") or "").strip()
+    if event_coding_note:
+        cautions.append(event_coding_note)
     dropped_nonpositive_time_rows = int(model_stats.get("dropped_nonpositive_time_rows") or 0)
     rows_with_infinite_values = int(model_stats.get("rows_with_infinite_values") or 0)
     rows_with_infinite_outcome = int(model_stats.get("rows_with_infinite_outcome_values") or 0)
@@ -6962,6 +7077,7 @@ def _km_cohort_summary(frame: pd.DataFrame, *, time_column: str, event_column: s
         "dropped_nonpositive_time_rows": int(frame.attrs.get("dropped_nonpositive_time_rows", 0)),
         "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_values", 0)),
         "time_column_note": frame.attrs.get("time_column_note"),
+        **({"event_coding": frame.attrs["event_coding"]} if frame.attrs.get("event_coding") else {}),
     }
 
 
@@ -8169,6 +8285,7 @@ def compute_cox_analysis(
         "rows_with_infinite_values": int(frame.attrs.get("rows_with_infinite_extra_values", 0)),
         "rows_with_infinite_outcome_values": int(frame.attrs.get("rows_with_infinite_outcome", 0)),
         "time_column_note": frame.attrs.get("time_column_note"),
+        **({"event_coding": frame.attrs["event_coding"]} if frame.attrs.get("event_coding") else {}),
         "events": n_events,
         "parameters": k_params,
         "events_per_parameter": float(n_events / k_params) if k_params else None,

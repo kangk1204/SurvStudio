@@ -379,6 +379,35 @@ def test_numeric_text_review_preserves_values_and_avoids_automatic_category_sele
         browser.close()
 
 
+def test_upload_options_resolve_comma_numbers_and_preserve_none_labels(browser_server: str, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    source = tmp_path / "days.csv"
+    source.write_text('time,status\n"2,361",Relapse\n580,None\n', encoding="utf-8")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 1280, "height": 1000})
+        page.goto(browser_server, wait_until="networkidle")
+        page.locator(".upload-options > summary").click()
+        page.locator("#uploadNumberFormat").select_option("decimal_dot")
+        page.locator("#datasetFile").set_input_files(str(source))
+        _wait_for_workspace(page)
+        assert page.evaluate("state.dataset.preview[0].time") == 2361
+        assert page.evaluate("state.dataset.preview[1].status") == "None"
+        assert "2,361 = 2361" in page.locator("#datasetIntegrityWarning").inner_text()
+        page.locator("#eventColumn").select_option("status")
+        page.locator("#eventPositiveValue").select_option(label="Relapse")
+        page.locator("#runKmButton").click()
+        page.wait_for_function("() => !document.getElementById('downloadKmSummaryButton').disabled")
+        assert "N=2, events=1, censored=1" in page.locator("#kmMetaBanner").inner_text()
+        page.set_viewport_size({"width": 390, "height": 844})
+        page.locator(".upload-options > summary").click()
+        assert page.locator(".upload-options-panel").evaluate(
+            "node => { const r = node.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }"
+        )
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        browser.close()
+
+
 def test_simple_navigation_preserves_data_and_saves_current_analysis(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as api:

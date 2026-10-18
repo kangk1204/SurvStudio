@@ -27,15 +27,17 @@ def test_csv_preserves_all_none_outcomes_before_event_mapping() -> None:
     assert frame["status"].value_counts().to_dict() == {"None": 40, "Dead": 20}
     assert frame["status"].notna().sum() == 60
     assert frame["treatment"].eq("None").all()
-    # Until the user specifies what None means, a controlled mapping error is safer
-    # than silently producing an all-event analysis from only the 20 deaths.
-    with pytest.raises(ValueError, match="unrecognized tokens"):
-        coerce_event(frame["status"], event_positive_value="Dead")
-    frame["status"] = frame["status"].replace("None", "Alive")
+    # A literal None category is retained; only an explicit observed event label
+    # confirms its use as the opposite (censored) state in this two-label column.
+    with pytest.raises(ValueError, match="literal 'None'.*not assumed"):
+        coerce_event(frame["status"])
     result = compute_km_analysis(frame, "time", "status", event_positive_value="Dead")
     assert result["cohort"]["n"] == 60
     assert result["cohort"]["events"] == 20
     assert result["cohort"]["censored"] == 40
+    assert result["cohort"]["event_coding"]["event_positive_value"] == "Dead"
+    assert result["cohort"]["event_coding"]["note"] in result["scientific_summary"]["cautions"]
+    assert frame["status"].eq("None").sum() == 40
 
 
 def test_csv_and_excel_preserve_literal_none_categories() -> None:
