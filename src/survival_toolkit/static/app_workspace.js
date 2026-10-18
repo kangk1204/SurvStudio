@@ -561,10 +561,23 @@ function queueVisiblePlotResize() {
 function waitForRenderFrames(count = 1) {
   const frames = Math.max(1, Number(count) || 1);
   return new Promise((resolve) => {
+    let finished = false;
+    let frameId = null;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(timeoutId);
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      resolve();
+    };
+    // Background browsers may stop animation frames. Rendering must not hold up
+    // completed results, autosave restoration or the analysis busy indicator.
+    const timeoutId = window.setTimeout(finish, Math.max(100, frames * 50));
     const step = (remaining) => {
-      requestAnimationFrame(() => {
+      frameId = requestAnimationFrame(() => {
+        if (finished) return;
         if (remaining <= 1) {
-          resolve();
+          finish();
           return;
         }
         step(remaining - 1);
@@ -578,7 +591,9 @@ async function stabilizePlotsBeforeBanner(plots = [], banner, { maxAttempts = 12
   const visiblePlots = plots.filter((plot) => plot && !plot.closest(".hidden"));
   if (!visiblePlots.length || !banner) return;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (document.hidden) return;
     await waitForRenderFrames(2);
+    if (document.hidden) return;
     await Promise.all(visiblePlots.map(async (plot) => {
       if (!plot?.data?.length || !plotIsDisplayed(plot)) return;
       try {

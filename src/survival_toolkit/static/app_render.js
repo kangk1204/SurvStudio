@@ -586,6 +586,21 @@ function exportColumnsFromRows(rows) {
   return ordered;
 }
 
+// JSON object key order is not a table schema: saved responses can have sorted keys.
+// Keep analysis columns in their original reading order and retain new public fields.
+function analysisTableColumns(rows, tableType) {
+  const orders = {
+    km_summary: ["Group", "N", "Events", "Censored", "Median survival", "Median CI lower", "Median CI upper", "RMST", "RMST SE", "RMST CI lower", "RMST CI upper"],
+    km_pairwise: ["Comparison", "Chi-square", "P value", "BH adjusted p", "Note"],
+    cox_results: ["Variable", "Label", "Reference", "Beta", "Hazard ratio", "CI lower", "CI upper", "SE", "Z", "P value"],
+    cox_diagnostics: ["Term", "Schoenfeld rho", "Chi-square", "P value"],
+  };
+  const columns = exportColumnsFromRows(rows);
+  const preferred = ownEntry(orders, tableType) || [];
+  const present = new Set(columns), known = new Set(preferred);
+  return [...preferred.filter((column) => present.has(column)), ...columns.filter((column) => !known.has(column)).sort()];
+}
+
 function exportNotesFromScientificSummary(summary, extraNotes = []) {
   const notes = [];
   if (summary?.headline) notes.push(summary.headline);
@@ -647,7 +662,7 @@ function buildCoxTableExportPayload(rows, caption, resultPayload = null) {
   }
   return {
     rows: rows || [],
-    columns: exportColumnsFromRows(rows || []),
+    columns: analysisTableColumns(rows, (rows || []).some((row) => Object.prototype.hasOwnProperty.call(row || {}, "Term")) ? "cox_diagnostics" : "cox_results"),
     format: "csv",
     style: "plain",
     caption,
@@ -688,7 +703,7 @@ function buildKmTableExportPayload(rows, caption, resultPayload = null, { includ
   }
   return {
     rows: rows || [],
-    columns: exportColumnsFromRows(rows || []),
+    columns: analysisTableColumns(rows, includePairwiseGuardrail || (rows || []).some((row) => Object.prototype.hasOwnProperty.call(row || {}, "Comparison")) ? "km_pairwise" : "km_summary"),
     format: "csv",
     style: "plain",
     caption,

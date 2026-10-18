@@ -67,16 +67,29 @@ def test_browser_reload_and_server_restart_restore_exact_km_and_ml_without_fitti
         page.wait_for_function("() => savedWorkState.enabled")
         page.locator("#loadExampleButton").click()
         page.locator("#workspace").wait_for(state="visible")
+        page.locator("#groupColumn").select_option("stage")
         page.locator("#runKmButton").click()
         page.wait_for_function("() => Boolean(state.km)")
+        page.wait_for_function("() => !isScopeBusy('km')")
+        # A populated result does not prove the click completed: errors after rendering
+        # are caught by withLoading and otherwise escape this save/restore test.
+        assert page.locator("#toastContainer .toast-error").count() == 0
+        assert "Kaplan-Meier analysis complete. Risk table shows" in page.locator("#toastContainer").inner_text()
         _saved(page)
         before = page.evaluate("() => ({dataset: state.dataset.dataset_id, hash: state.dataset.dataset_hash, km: state.km, controls: captureControlSnapshot()})")
+        header_selectors = ["#kmSummaryShell th", "#kmPairwiseShell th", "#kmRiskShell th"]
+        headers = [page.locator(selector).evaluate_all("nodes => nodes.map(node => node.title)") for selector in header_selectors]
+        assert headers[0][:4] == ["Group", "N", "Events", "Censored"]
+        assert headers[1][0] == "Comparison"
+        point_count = max(len(before["km"]["analysis"]["risk_table"]["columns"]) - 1, 0)
+        assert f"Risk table shows {point_count} time points." in page.locator("#toastContainer").inner_text()
         assert len(analyses) == 1
         page.reload()
         page.wait_for_function("() => Boolean(state.km) && !savedWorkState.restoring")
         assert page.evaluate("Object.fromEntries(Object.entries(state.km).filter(([key]) => key !== 'saved_result'))") == {key: value for key, value in before["km"].items() if key != "saved_result"}
         assert page.evaluate("state.km.saved_result.result_id") == before["km"]["saved_result"]["result_id"]
         assert page.evaluate("state.dataset.dataset_id") == before["dataset"]
+        assert [page.locator(selector).evaluate_all("nodes => nodes.map(node => node.title)") for selector in header_selectors] == headers
         assert len(analyses) == 1
         # A fixed response fixture exercises the complete single-model renderer and screen restore;
         # no model fitting occurs in this browser test.
@@ -102,6 +115,7 @@ def test_browser_reload_and_server_restart_restore_exact_km_and_ml_without_fitti
         assert page.evaluate("state.ml") == ml
         assert page.evaluate("state.ml.exploratory.withheld_p") is None
         assert page.evaluate("state.ml.analysis.model_stats.c_index") == 0
+        assert [page.locator(selector).evaluate_all("nodes => nodes.map(node => node.title)") for selector in header_selectors] == headers
         assert len(analyses) == 1
         page.locator("#savedWorkButton").click()
         page.locator("#savedWorkList .saved-work-item").first.wait_for()
@@ -173,16 +187,34 @@ def test_browser_history_restores_nondefault_model_and_seed_settings(durable_bro
         endpoint = page.evaluate("() => ({time_column: refs.timeColumn.value, event_column: refs.eventColumn.value, event_positive_value: refs.eventPositiveValue.value})")
         config = {"dataset_id": dataset["dataset_id"], **endpoint, "model_type": "lasso_cox", "features": ["age"], "categorical_features": [], "random_state": 73, "evaluation_strategy": "holdout", "n_estimators": 170, "learning_rate": 0.07, "compute_shap": False, "shap_safe_mode": True}
         # Endpoint exists only in this test launcher; it saves a fixed response, not a fitted model.
-        payload = {"dataset_hash": dataset["dataset_hash"], "request_config": config, "analysis": {"model_stats": {"c_index": 0.6123456789, "evaluation_mode": "holdout", "n_patients": 360, "n_features": 1}}, "importance_figure": None, "shap_figure": None}
+        payload = {"dataset_hash": dataset["dataset_hash"], "request_config": config, "analysis": {"model_stats": {"c_index": 0.6123456789, "evaluation_mode": "holdout", "n_patients": 360, "n_features": 1}}, "importance_figure": {"data": [{"type": "bar", "x": [0.1], "y": ["age"], "orientation": "h"}], "layout": {"height": 360}}, "shap_figure": None}
         response = page.request.post(url + "/_test/store-result", data={"dataset_id": dataset["dataset_id"], "route": "/api/ml-model", "payload": payload})
         assert response.ok, response.text()
         record = response.json()
+        page.evaluate("""() => {
+          const render = renderMlModelResult, wait = waitForRenderFrames;
+          window.__pausedFrameRequests = 0;
+          // Pause only the stabilization frame request; Plotly still draws the actual figure.
+          waitForRenderFrames = (count) => {
+            const raf = window.requestAnimationFrame;
+            window.requestAnimationFrame = () => { window.__pausedFrameRequests += 1; return 0; };
+            try { return wait(count); } finally { window.requestAnimationFrame = raf; }
+          };
+          renderMlModelResult = (...args) => {
+            reviewBenchmarkModel('lasso_cox');
+            return render(...args);
+          };
+        }""")
         page.evaluate("async (args) => await reopenSavedWorkspace(args.id, {resultId: args.result})", {"id": dataset["dataset_id"], "result": record["result_id"]})
+        assert page.evaluate("window.__pausedFrameRequests") > 0
         assert page.locator("#mlModelType").input_value() == "lasso_cox"
         assert page.locator("#mlRandomSeed").input_value() == "73"
         assert page.locator("#dlRandomSeed").input_value() == "73"
         assert page.evaluate("Boolean(currentGoalResult('ml'))") is True
         assert page.evaluate("state.ml.analysis.model_stats.c_index") == 0.6123456789
+        assert page.evaluate("state.ml.importance_figure") == payload["importance_figure"]
+        assert "restored saved result" in page.locator("#mlMetaBanner").inner_text()
+        assert "saveds" not in page.locator("#mlMetaBanner").inner_text()
         browser.close()
 
 
