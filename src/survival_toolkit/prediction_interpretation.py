@@ -83,14 +83,19 @@ def apply_prediction_interpretation(result):
         summary = result.get(key)
         if not isinstance(summary, dict):
             continue
-        summary["status"] = "caution"
-        summary["headline"] = (
+        previous_headline = str(summary.get("headline", ""))
+        existing_no_rank = previous_headline.startswith("No ") and "rank" in previous_headline.lower()
+        if summary.get("status") != "review":
+            summary["status"] = "caution"
+        headline = (
             "Some scores are exploratory and excluded from model ranking. Review the evaluation limits below."
             if rows is not None else "This is an exploratory score; it does not establish predictive performance."
         )
+        if not existing_no_rank:
+            summary["headline"] = headline
         # Old positive judgments and a selected top model must not survive a hold.
         summary["strengths"] = []
-        summary["metrics"] = [m for m in summary.get("metrics", []) if not any(
+        summary["metrics"] = [m for m in summary.get("metrics", []) if m.get("value") is None or not any(
             word in str(m.get("label", "")).lower() for word in ("top", "best", "rank"))]
         summary.setdefault("cautions", []).extend(n for n in notes if n not in summary.get("cautions", []))
         summary.setdefault("next_steps", []).append("Use more events and held-out evaluation before comparing model performance.")
@@ -102,5 +107,5 @@ def apply_prediction_interpretation(result):
             if isinstance(value, list):
                 for row in value:
                     if isinstance(row, dict) and row.get("Model") in ranks and "Rank" in row:
-                        row["Rank"] = ranks[row["Model"]]
+                        row["Rank"] = ranks[row["Model"]] if ranks[row["Model"]] is not None else "Not ranked"
     result["performance_interpretation_notes"] = notes

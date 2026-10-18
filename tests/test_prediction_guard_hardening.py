@@ -150,7 +150,7 @@ def test_comparison_notes_retain_missing_id_coverage_and_raw_input():
     result = model(df, "time", "event", ["marker"])
     assert calls == [True]
     assert "only recorded IDs" in result["comparison_table"][0]["input_notes"]
-    assert result["input_audit"]["version"] == "prediction-input/3"
+    assert result["input_audit"]["version"] == "prediction-input/4"
     pd.testing.assert_frame_equal(df, before)
 
 

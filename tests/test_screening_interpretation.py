@@ -76,7 +76,7 @@ def test_high_score_is_preserved_but_not_ranked_with_sparse_or_apparent_evaluati
     assert not row["comparable_for_ranking"] and not result["ranking_complete"]
     assert result["scientific_summary"]["status"] == "caution"
     assert not result["scientific_summary"]["strengths"]
-    assert result["manuscript_tables"]["model_performance_table"][0]["Rank"] is None
+    assert result["manuscript_tables"]["model_performance_table"][0]["Rank"] == "Not ranked"
 
 
 def test_repeated_cv_uses_smallest_fold_not_rounded_mean():
@@ -121,6 +121,6 @@ def test_one_event_api_keeps_scores_without_a_winner():
     result = response.json()["analysis"]
     assert result["comparison_table"]
     assert all(row["rank"] is None for row in result["comparison_table"])
-    assert all(row["Rank"] is None for row in result["manuscript_tables"]["model_performance_table"])
+    assert all(row["Rank"] == "Not ranked" for row in result["manuscript_tables"]["model_performance_table"])
     assert result["scientific_summary"]["status"] == "caution"
     assert not any("above chance" in s for s in result["scientific_summary"]["strengths"])
