@@ -4,6 +4,9 @@
 Upload a patient table or choose a sample, run an analysis, and save the results.
 A local installation keeps your data on your computer.
 
+**Platforms:** macOS, Ubuntu and Windows. Windows 11 users can also use
+[WSL 2 with Ubuntu](docs/installation.md#windows-11-with-wsl-2-ubuntu).
+
 ![SurvStudio survival analysis workspace](github_images/hero.png)
 
 [Beginner walkthrough](docs/getting-started.md) · [See all screenshots](docs/screenshots.md) · [User guide](docs/user-guide.md)
@@ -20,6 +23,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 ```
 
 Close PowerShell and open it again.
+For WSL, install and run SurvStudio inside **Ubuntu**, using the Linux commands below.
 
 </details>
 

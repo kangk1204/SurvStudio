@@ -18,6 +18,46 @@ On an Apple silicon Mac, run `xcode-select --install` if Apple's command-line to
 On an ARM Linux machine, a source dependency may need a compiler; on Ubuntu, install it with
 `sudo apt install build-essential`.
 
+## Supported platforms
+
+Installation, command-line and analysis tests run in CI on **macOS, Ubuntu and Windows**.
+Python 3.12 is recommended for the install command above. Ubuntu is also the environment used
+by the hosted research server. These checks cover CPU execution; a GPU is optional.
+
+Windows 11 users can run the app directly in PowerShell or inside **WSL 2 with Ubuntu**.
+WSL uses the Linux installation below. It is not a separate CI target, so the native Windows
+CI result should not be read as a completed Windows 11/WSL test.
+
+## Windows 11 with WSL 2 (Ubuntu)
+
+If Ubuntu is not installed, open **PowerShell as administrator** and run:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Restart Windows if prompted, then open **Ubuntu** and create its Linux user account.
+In PowerShell, `wsl --list --verbose` shows the installed distributions and their WSL versions.
+See Microsoft's [WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
+
+Run these commands in the **Ubuntu terminal**:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Close and reopen Ubuntu, then install and start the app:
+
+```bash
+uv tool install --python 3.12 "survstudio[all] @ https://github.com/kangk1204/SurvStudio/archive/refs/heads/main.zip"
+survstudio
+```
+
+Open **http://127.0.0.1:8000** in your Windows browser. Keep Ubuntu running while using the app.
+Microsoft documents [Windows browser access to apps in WSL](https://learn.microsoft.com/en-us/windows/wsl/networking).
+Use the browser's file picker to upload your data. Keep the default saved-work directory
+inside Ubuntu; Windows and WSL installations use separate Python environments and saved work.
+
 ## Smaller install
 
 For CSV/TSV input and classical survival analysis:
