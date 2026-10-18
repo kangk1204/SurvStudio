@@ -133,7 +133,10 @@ async function renderMlModelResult(payload, { elapsedSeconds = "saved" } = {}) {
     : (payload.shap_result?.method === "kernel"
     ? ` (${formatValue(payload.shap_result.n_samples)} eval / ${formatValue(payload.shap_result.background_samples)} bg)`
     : "");
-  refs.mlMetaBanner.textContent = `${modelLabel}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s`;
+  const timingNote = Number.isFinite(Number(elapsedSeconds))
+    ? `time=${elapsedSeconds}s`
+    : "restored saved result";
+  refs.mlMetaBanner.textContent = `${modelLabel}: ${mlMetricLabel}=${formatValue(stats.c_index)}, eval=${formatValue(mlEvaluationMode)}, N=${formatValue(stats.n_patients)}, features=${formatValue(stats.n_features)}, SHAP=${shapStatus}${shapApproximationNote}, ${timingNote}`;
   if (payload.shap_result?.safe_mode) {
     showToast(
       `SHAP was computed on a reduced companion model (${formatValue(payload.shap_result?.companion_model?.selected_feature_count_raw)} raw features) because the full encoded matrix was too wide.`,
@@ -512,7 +515,10 @@ async function renderDlModelResult(payload, { elapsedSeconds = "saved" } = {}) {
   // Label the banner with the model that was actually trained, not the live dropdown.
   const trainedModelType = String(payload.request_config?.model_type || modelType);
   const trainedModelTag = trainedModelType.toUpperCase();
-  refs.dlMetaBanner.textContent = `${trainedModelTag}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlBestMonitorSuffix}${dlTrainingStatus}${dlSeedSuffix}, time=${elapsedSeconds}s`;
+  const timingNote = Number.isFinite(Number(elapsedSeconds))
+    ? `time=${elapsedSeconds}s`
+    : "restored saved result";
+  refs.dlMetaBanner.textContent = `${trainedModelTag}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlBestMonitorSuffix}${dlTrainingStatus}${dlSeedSuffix}, ${timingNote}`;
   renderBenchmarkBoard();
 }
 

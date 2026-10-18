@@ -732,7 +732,9 @@ def test_frontend_explains_long_ml_runtime_before_fetch() -> None:
     assert 'const shapStatus = !mlModelSupportsShap(selectedModelType)' in text
     assert '? \"safe-mode\"' in text
     assert '? "approx-screening"' in text
-    assert "SHAP=${shapStatus}${shapApproximationNote}, time=${elapsedSeconds}s" in text
+    assert "SHAP=${shapStatus}${shapApproximationNote}, ${timingNote}" in text
+    assert "time=${elapsedSeconds}s" in text
+    assert '"restored saved result"' in text
     assert "Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival" in text
     assert "Screening Cox PH and, when available, LASSO-Cox, Random Survival Forest, and Gradient Boosted Survival on one shared evaluation path." in text
     assert "Screening top model=" in text

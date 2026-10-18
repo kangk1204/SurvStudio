@@ -180,16 +180,34 @@ def test_browser_history_restores_nondefault_model_and_seed_settings(durable_bro
         endpoint = page.evaluate("() => ({time_column: refs.timeColumn.value, event_column: refs.eventColumn.value, event_positive_value: refs.eventPositiveValue.value})")
         config = {"dataset_id": dataset["dataset_id"], **endpoint, "model_type": "lasso_cox", "features": ["age"], "categorical_features": [], "random_state": 73, "evaluation_strategy": "holdout", "n_estimators": 170, "learning_rate": 0.07, "compute_shap": False, "shap_safe_mode": True}
         # Endpoint exists only in this test launcher; it saves a fixed response, not a fitted model.
-        payload = {"dataset_hash": dataset["dataset_hash"], "request_config": config, "analysis": {"model_stats": {"c_index": 0.6123456789, "evaluation_mode": "holdout", "n_patients": 360, "n_features": 1}}, "importance_figure": None, "shap_figure": None}
+        payload = {"dataset_hash": dataset["dataset_hash"], "request_config": config, "analysis": {"model_stats": {"c_index": 0.6123456789, "evaluation_mode": "holdout", "n_patients": 360, "n_features": 1}}, "importance_figure": {"data": [{"type": "bar", "x": [0.1], "y": ["age"], "orientation": "h"}], "layout": {"height": 360}}, "shap_figure": None}
         response = page.request.post(url + "/_test/store-result", data={"dataset_id": dataset["dataset_id"], "route": "/api/ml-model", "payload": payload})
         assert response.ok, response.text()
         record = response.json()
+        page.evaluate("""() => {
+          const render = renderMlModelResult, wait = waitForRenderFrames;
+          window.__pausedFrameRequests = 0;
+          // Pause only the stabilization frame request; Plotly still draws the actual figure.
+          waitForRenderFrames = (count) => {
+            const raf = window.requestAnimationFrame;
+            window.requestAnimationFrame = () => { window.__pausedFrameRequests += 1; return 0; };
+            try { return wait(count); } finally { window.requestAnimationFrame = raf; }
+          };
+          renderMlModelResult = (...args) => {
+            reviewBenchmarkModel('lasso_cox');
+            return render(...args);
+          };
+        }""")
         page.evaluate("async (args) => await reopenSavedWorkspace(args.id, {resultId: args.result})", {"id": dataset["dataset_id"], "result": record["result_id"]})
+        assert page.evaluate("window.__pausedFrameRequests") > 0
         assert page.locator("#mlModelType").input_value() == "lasso_cox"
         assert page.locator("#mlRandomSeed").input_value() == "73"
         assert page.locator("#dlRandomSeed").input_value() == "73"
         assert page.evaluate("Boolean(currentGoalResult('ml'))") is True
         assert page.evaluate("state.ml.analysis.model_stats.c_index") == 0.6123456789
+        assert page.evaluate("state.ml.importance_figure") == payload["importance_figure"]
+        assert "restored saved result" in page.locator("#mlMetaBanner").inner_text()
+        assert "saveds" not in page.locator("#mlMetaBanner").inner_text()
         browser.close()
 
 
