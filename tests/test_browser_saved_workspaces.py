@@ -69,8 +69,15 @@ def test_browser_reload_and_server_restart_restore_exact_km_and_ml_without_fitti
         page.locator("#workspace").wait_for(state="visible")
         page.locator("#runKmButton").click()
         page.wait_for_function("() => Boolean(state.km)")
+        page.wait_for_function("() => !isScopeBusy('km')")
+        # A populated result does not prove the click completed: errors after rendering
+        # are caught by withLoading and otherwise escape this save/restore test.
+        assert page.locator("#toastContainer .toast-error").count() == 0
+        assert "Kaplan-Meier analysis complete. Risk table shows" in page.locator("#toastContainer").inner_text()
         _saved(page)
         before = page.evaluate("() => ({dataset: state.dataset.dataset_id, hash: state.dataset.dataset_hash, km: state.km, controls: captureControlSnapshot()})")
+        point_count = max(len(before["km"]["analysis"]["risk_table"]["columns"]) - 1, 0)
+        assert f"Risk table shows {point_count} time points." in page.locator("#toastContainer").inner_text()
         assert len(analyses) == 1
         page.reload()
         page.wait_for_function("() => Boolean(state.km) && !savedWorkState.restoring")

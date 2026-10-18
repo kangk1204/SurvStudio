@@ -997,8 +997,9 @@ async function runKaplanMeier() {
   if (!requestTokenMatches("km", requestToken) || state.dataset?.dataset_id !== datasetId) return;
   loading.finish();
   await renderKaplanMeierResult(payload);
+  const riskTablePointCount = Math.max((payload?.analysis?.risk_table?.columns || []).length - 1, 0);
   revealCompletedResultIfCurrent("km", {
-    successMessage: `Kaplan-Meier analysis complete. Risk table shows ${formatValue(Math.max((kmRiskTable.columns || []).length - 1, 0))} time points.`,
+    successMessage: `Kaplan-Meier analysis complete. Risk table shows ${formatValue(riskTablePointCount)} time points.`,
     backgroundMessage: "Kaplan-Meier finished in the background. Switch back when you are ready to review the updated curve.",
   });
 }
