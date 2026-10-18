@@ -48,6 +48,7 @@ _APP_JS_PARTS = (
     "app_models.js",
     "app_markers.js",
     "app_patterns.js",
+    "app_saved_work.js",
     "app.js",
 )
 
@@ -4579,7 +4580,7 @@ def test_frontend_ml_compare_forwards_visible_hyperparameters() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
     run_compare_start = app_js.index("async function runCompareModels({ suppressCompletionToast = false, compareGroupId = null, compareSource = \"single_family_compare\" } = {})")
-    run_compare_end = app_js.index("state.ml = payload;", run_compare_start)
+    run_compare_end = app_js.index("await renderMlComparisonResult(payload);", run_compare_start)
     run_compare_body = app_js[run_compare_start:run_compare_end]
 
     assert '...mlModelRequestFields("compare"),' in run_compare_body

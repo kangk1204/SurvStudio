@@ -1,7 +1,7 @@
 # SurvStudio in a container.
 #
 #   docker build -t survstudio .
-#   docker run --rm -p 127.0.0.1:8000:8000 survstudio
+#   docker run --rm -p 127.0.0.1:8000:8000 -v survstudio-data:/home/survstudio/saved-work survstudio
 #
 # then open http://localhost:8000. The server binds every interface inside the container,
 # so publish the port on 127.0.0.1 as above; `-p 8000:8000` would expose it to your network.
@@ -30,13 +30,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    SURVSTUDIO_CONTAINER=1
+    SURVSTUDIO_CONTAINER=1 \
+    SURVSTUDIO_STATE_DIR=/home/survstudio/saved-work
 
 ARG EXTRAS=formats,ml
 RUN --mount=type=bind,from=wheels,source=/wheels,target=/wheels \
     pip install --no-index --find-links=/wheels "survstudio[${EXTRAS}]"
 
-RUN useradd --create-home --uid 10001 survstudio
+RUN useradd --create-home --uid 10001 survstudio \
+    && install -d -m 0700 -o survstudio -g survstudio /home/survstudio/saved-work
 USER survstudio
 WORKDIR /home/survstudio
 

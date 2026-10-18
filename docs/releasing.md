@@ -48,7 +48,7 @@ python -m pip install dist/survstudio-*.whl
 survstudio inspect examples/gbsg2_jco1994_upload_ready.csv
 
 docker build -t survstudio .
-docker run --rm -p 127.0.0.1:8000:8000 survstudio
+docker run --rm -p 127.0.0.1:8000:8000 -v survstudio-data:/home/survstudio/saved-work survstudio
 ```
 
 ## After the first release

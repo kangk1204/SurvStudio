@@ -84,6 +84,8 @@ making the prediction. Do not select patient IDs, follow-up time or outcome-deri
 | **Table 1** | Describe the patients | Overall or grouped summary table |
 
 Use **Save results** to export the current result. **More analyses** opens Markers and Table 1.
+Uploads and completed results are saved automatically on the server. Use **Saved work** to reopen them after a restart.
+[Saved work and backups](docs/saved-work.md)
 Earlier interfaces use **Cox model**, **Prediction models** and an **Export** menu.
 [Follow one example through curves, Cox and ML/DL](docs/getting-started.md#try-one-example-from-start-to-finish)
 

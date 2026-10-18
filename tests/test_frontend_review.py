@@ -39,7 +39,7 @@ const vm = require("vm");
 const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 const SCRIPT_ORDER = [
   "app_shell.js", "app_downloads.js", "app_benchmark.js", "app_core.js", "app_workspace.js", "app_columns.js",
-  "app_render.js", "app_predictive.js", "app_analyses.js", "app_models.js", "app_markers.js", "app_patterns.js", "app.js",
+  "app_render.js", "app_predictive.js", "app_analyses.js", "app_models.js", "app_markers.js", "app_patterns.js", "app_saved_work.js", "app.js",
 ];
 
 function decodeEntities(text) {
@@ -515,7 +515,9 @@ function createPage(staticDir, templatePath) {
     request.json = () => JSON.parse(request.body || "{}");
     requests.push(request);
     const handler = page.fetchHandler;
-    const answer = handler ? handler(request) : { status: 500, body: { detail: `No stub for ${request.url}` } };
+    const answer = handler ? handler(request) : (request.url.endsWith("/api/saved-workspaces")
+      ? { status: 200, body: { autosave: false, datasets: [] } }
+      : { status: 500, body: { detail: `No stub for ${request.url}` } });
     return new Promise((resolve, reject) => {
       const abortError = () => {
         const error = new Error("The operation was aborted.");

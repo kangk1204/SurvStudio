@@ -20,6 +20,7 @@
     <script src="../static/app_models.js?v={{ static_version }}" defer></script>
     <script src="../static/app_markers.js?v={{ static_version }}" defer></script>
     <script src="../static/app_patterns.js?v={{ static_version }}" defer></script>
+    <script src="../static/app_saved_work.js?v={{ static_version }}" defer></script>
     <script src="../static/app.js?v={{ static_version }}" defer></script>
   </head>
   <body class="simple-view"{% if api_base %} data-api-base="{{ api_base }}"{% endif %}>
@@ -31,6 +32,8 @@
       </a>
       <div class="header-right">
         <span class="dataset-badge hidden" id="datasetBadge"></span>
+        <span id="autosaveStatus" class="autosave-status" role="status" aria-live="polite">Checking saved work…</span>
+        <button id="savedWorkButton" class="button ghost compact-btn" type="button" aria-controls="savedWorkPanel" aria-expanded="false">Saved work</button>
         <details class="upload-options">
           <summary>Upload options</summary>
           <div class="upload-options-panel">
@@ -56,6 +59,11 @@
     <div class="runtime-banner runtime-banner-warning dataset-integrity-warning hidden" id="datasetIntegrityWarning" role="alert"></div>
     {% if hosted %}<div class="hosting-note" role="note">Private research workspace. Files are analysed on your research server. Connect Tailscale before using this page.</div>{% endif %}
 
+    <section id="savedWorkPanel" class="saved-work-panel hidden" aria-label="Saved work">
+      <div class="section-heading"><h2>Saved work</h2><button id="closeSavedWorkButton" class="button ghost compact-btn" type="button">Close</button></div>
+      <p>Uploads and completed results stay on this server. Reopen them without running the analysis again.</p>
+      <div id="savedWorkList" aria-live="polite"></div>
+    </section>
     <section class="landing" id="landing">
       <div class="landing-card">
         <div class="landing-hero">

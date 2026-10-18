@@ -736,7 +736,7 @@ def matrix_frame(
 
 
 class MarkerMatrixStore:
-    """A few uploaded matrices, dropped after ``ttl_seconds`` without use or when the byte budget is full."""
+    """A bounded matrix cache, optionally restored from private durable storage."""
 
     def __init__(self, *, max_items: int = 4, max_bytes: int = 800 * 1024 * 1024, ttl_seconds: int = 3600) -> None:
         self._items: OrderedDict[str, tuple[MarkerMatrix, float]] = OrderedDict()
@@ -744,6 +744,37 @@ class MarkerMatrixStore:
         self._max_bytes = max_bytes
         self._ttl_seconds = ttl_seconds
         self._lock = threading.Lock()
+        self._persistence: Any | None = None
+
+    def bind_persistence(self, backend: Any) -> None:
+        with self._lock:
+            for matrix_id, (matrix, _) in self._items.items():
+                backend.save_matrix(matrix_id, matrix, import_existing=True)
+            self._persistence = backend
+
+    def unbind_persistence(self) -> None:
+        with self._lock:
+            self._persistence = None
+
+    def list_saved_matrices(self) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._persistence is not None:
+                return self._persistence.list_matrices()
+            return [{"matrix_id": matrix_id, "filename": matrix.filename,
+                     "markers": len(matrix.marker_names), "samples": len(matrix.sample_keys),
+                     "fingerprint": matrix.fingerprint}
+                    for matrix_id, (matrix, _) in self._items.items()]
+
+    def _trim(self, *, keep: str | None = None) -> None:
+        while len(self._items) > self._max_items or sum(item.values.nbytes for item, _ in self._items.values()) > self._max_bytes:
+            victim = next((key for key in self._items if key != keep), None)
+            if victim is None:
+                # An oversized matrix may be returned directly after reading
+                # its durable copy, but must not defeat the RAM cache budget.
+                victim = keep if keep in self._items else next(iter(self._items), None)
+                if victim is None:
+                    break
+            del self._items[victim]
 
     def _expire(self, now: float) -> None:
         for key in [key for key, (_, used) in self._items.items() if now - used > self._ttl_seconds]:
@@ -755,10 +786,11 @@ class MarkerMatrixStore:
         matrix_id = secrets.token_hex(12)
         with self._lock:
             now = time.monotonic()
+            if self._persistence is not None:
+                self._persistence.save_matrix(matrix_id, matrix)
             self._expire(now)
             self._items[matrix_id] = (matrix, now)
-            while len(self._items) > self._max_items or sum(item.values.nbytes for item, _ in self._items.values()) > self._max_bytes:
-                self._items.popitem(last=False)
+            self._trim(keep=matrix_id)
         return matrix_id
 
     def get(self, matrix_id: str) -> MarkerMatrix:
@@ -766,12 +798,19 @@ class MarkerMatrixStore:
             now = time.monotonic()
             self._expire(now)
             item = self._items.get(matrix_id)
+            if item is None and self._persistence is not None:
+                restored = self._persistence.load_matrix(matrix_id)
+                if restored is not None:
+                    item = (restored, now)
             if item is None:
-                raise NotFoundError("The marker matrix has expired or was removed; attach the file again.")
+                raise NotFoundError("The marker matrix was not found; attach the file again.")
             self._items[matrix_id] = (item[0], now)
             self._items.move_to_end(matrix_id)
+            self._trim(keep=matrix_id)
             return item[0]
 
     def remove(self, matrix_id: str) -> None:
         with self._lock:
+            if self._persistence is not None:
+                self._persistence.delete_matrix(matrix_id)
             self._items.pop(matrix_id, None)

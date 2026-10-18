@@ -2,6 +2,7 @@
 
 ## 0.4.0.dev0 — Unreleased
 
+- Uploads, marker matrices and completed analyses save automatically in a private local workspace. **Saved work** reopens saved results after cache expiry or a server restart without rerunning analysis. Explicit deletion remains separate from memory eviction; failed writes do not show a saved confirmation.
 - Guided browser controls for survival curves, adjusted risk factors and shared ML/DL comparisons, with candidate summaries first and detailed marker statistics under the detail controls.
 - Training-only preprocessing and outcome-pattern review before prediction fitting, with recorded review retained in saved results.
 - Versioned marker diagnostics, linear or restricted cubic spline clinical adjustment and recipe v3. Required diagnostic failures withhold standard marker conclusions and propagate through exports and external evaluation; older recipe predictions remain compatible.

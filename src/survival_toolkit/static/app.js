@@ -594,6 +594,7 @@ function shouldRevealCompletedResult(goal) {
 }
 
 function revealCompletedResultIfCurrent(goal, { mode = "single", successMessage = "", backgroundMessage = "" } = {}) {
+  queueSavedWorkspace();
   const shouldReveal = shouldRevealCompletedResult(goal);
   if (shouldReveal) {
     activateTab(goal);
@@ -719,6 +720,7 @@ function initKeyboardShortcuts() {
 }
 
 function goHome({ syncHistory = true, historyMode = "replace" } = {}) {
+  if (state.dataset && !savedWorkState.restoring) void saveCurrentWorkspace();
   // Leaving the workspace makes every pending request obsolete: dataset loads, derives, and runs of any
   // kind (a running ML or DL job would otherwise finish into an empty workspace).
   invalidateRequestTokens(Object.keys(runtime.requestTokens));
@@ -1261,3 +1263,4 @@ updateDlEvaluationControls();
 syncDeriveToggleButton();
 initPlotResizeObserver();
 initializeRuntime();
+initSavedWorkspaces();

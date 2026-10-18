@@ -5,6 +5,7 @@ import contextvars
 import copy
 import csv
 import functools
+import getpass
 import hashlib
 import io
 import ipaddress
@@ -436,7 +437,44 @@ async def _workspace_lifespan(application):
         receipt_path = os.environ.get("SURVSTUDIO_WORKSPACE_RESTORE_RECEIPT", "")
         if receipt_path:
             write_workspace_receipt(receipt_path, receipt)
-    yield
+    persistence = None
+    autosave = os.environ.get("SURVSTUDIO_AUTOSAVE", "on").strip().lower() not in {"0", "off", "false"}
+    try:
+        if autosave:
+            from survival_toolkit.durable_workspace import DurableWorkspace
+            configured = os.environ.get("SURVSTUDIO_STATE_DIR", "").strip()
+            if configured:
+                state_dir = Path(configured).expanduser()
+            elif os.name == "nt":
+                state_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "SurvStudio" / "state"
+            elif platform.system() == "Darwin":
+                state_dir = Path.home() / "Library" / "Application Support" / "SurvStudio" / "state"
+            else:
+                state_dir = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "survstudio"
+            owner = (os.environ.get("SURVSTUDIO_WORKSPACE_OWNER", "")
+                     or os.environ.get("SURVSTUDIO_SITE_LOGIN", "")
+                     or (f"local:{os.getuid()}" if hasattr(os, "getuid") else f"local:{getpass.getuser()}:{hashlib.sha256(str(Path.home()).encode()).hexdigest()[:16]}"))
+            persistence = DurableWorkspace(state_dir, owner)
+            store.bind_persistence(persistence)
+            marker_matrices.bind_persistence(persistence)
+            _ml_artifact_cache.bind_persistence(persistence)
+        source_digest = hashlib.sha256()
+        for source_file in sorted(BASE_DIR.rglob("*.py")):
+            source_digest.update(source_file.relative_to(BASE_DIR).as_posix().encode())
+            source_digest.update(source_file.read_bytes())
+        application.state.durable_source = {
+            "version": SURVSTUDIO_VERSION, "source": os.environ.get("SURVSTUDIO_SITE_SOURCE", ""),
+            "source_sha256": source_digest.hexdigest(),
+        }
+        application.state.durable_workspace = persistence
+        yield
+    finally:
+        store.unbind_persistence()
+        marker_matrices.unbind_persistence()
+        _ml_artifact_cache.bind_persistence(None)
+        application.state.durable_workspace = None
+        if persistence is not None:
+            persistence.close()
 
 
 app = FastAPI(
@@ -773,6 +811,14 @@ class _MlArtifactCache:
         self._items: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
         self._sizes: dict[tuple[str, str], int] = {}
         self._lock = threading.RLock()
+        self._persistence = None
+
+    def bind_persistence(self, persistence) -> None:
+        with self._lock:
+            if persistence is not None:
+                for (dataset_id, model_type), artifact in self._items.items():
+                    persistence.save_artifact((dataset_id, model_type), artifact, import_existing=True)
+            self._persistence = persistence
 
     @staticmethod
     def _copy_frame(frame: Any) -> Any:
@@ -805,16 +851,15 @@ class _MlArtifactCache:
     ) -> None:
         artifact_bytes = _estimate_artifact_bytes(result)
         cache_key = (dataset_id, model_type)
+        artifact = {"signature": copy.deepcopy(signature), "result": self._copy_result(result)}
+        if self._persistence is not None:
+            self._persistence.save_artifact((dataset_id, model_type), artifact)
         if artifact_bytes > self._max_bytes:
             with self._lock:
                 # Never serve an older artifact for a key whose latest fit was not cached.
                 self._items.pop(cache_key, None)
                 self._sizes.pop(cache_key, None)
             return
-        artifact = {
-            "signature": copy.deepcopy(signature),
-            "result": self._copy_result(result),
-        }
         with self._lock:
             self._items[cache_key] = artifact
             self._sizes[cache_key] = artifact_bytes
@@ -838,7 +883,9 @@ class _MlArtifactCache:
         with self._lock:
             cache_key = (dataset_id, model_type)
             cached = self._items.get(cache_key)
-            if cached is not None:
+            if cached is None and self._persistence is not None:
+                cached = self._persistence.load_artifact((dataset_id, model_type))
+            if cached is not None and cache_key in self._items:
                 self._items.move_to_end(cache_key)
             if not cached or cached.get("signature") != signature:
                 return None
@@ -986,7 +1033,33 @@ async def _run_dataset_job(
                 reject_ambiguous_censor_event_column(_get_stored_dataset(dataset_id).dataframe, event_column)
             return job()
 
-        return await _run_job(guarded_job, request=request, heavy=heavy)
+        payload = await _run_job(guarded_job, request=request, heavy=heavy)
+        persistence = getattr(app.state, "durable_workspace", None)
+        route = request.url.path if request is not None else ""
+        if persistence is not None and route in _SAVED_ANALYSIS_ROUTES:
+            # Persist the complete public response before acknowledging success. A failed write
+            # must not be presented to the user as an automatically saved analysis.
+            saved_dataset_id = dataset_id
+            if route == "/api/discover-signature" and isinstance(payload, dict):
+                saved_dataset_id = payload.get("dataset_id", dataset_id)
+            if route == "/api/marker-validation" and isinstance(payload, dict):
+                saved_dataset_id = payload.get("request_config", {}).get("development_dataset_id") or dataset_id
+            metadata = await run_in_threadpool(
+                functools.partial(persistence.save_result, saved_dataset_id, route, payload,
+                                  source_version=json.dumps(getattr(app.state, "durable_source", {"version": SURVSTUDIO_VERSION}), sort_keys=True),
+                                  controls=payload.get("request_config") if isinstance(payload, dict) else None,
+                                  expected_dataset_hash=payload.get("dataset_hash") if isinstance(payload, dict) and route != "/api/marker-validation" else None))
+            if isinstance(payload, dict):
+                payload["saved_result"] = metadata
+        return payload
+
+
+_SAVED_ANALYSIS_ROUTES = frozenset({
+    "/api/kaplan-meier", "/api/cox", "/api/cohort-table", "/api/discover-signature",
+    "/api/optimal-cutpoint", "/api/ml-model", "/api/deep-model", "/api/predictor-patterns",
+    "/api/time-dependent-importance", "/api/counterfactual", "/api/pdp",
+    "/api/marker-evaluation", "/api/marker-validation",
+})
 
 
 # ── Request models ──────────────────────────────────────────────
@@ -1318,6 +1391,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
 
 
 class MarkerValidationRequest(_EventPositiveValueRequestModel):
+    development_dataset_id: str | None = None
     # The external cohort; the recipe comes from a marker evaluation of another dataset.
     dataset_id: str
     recipe: dict[str, Any]
@@ -1736,6 +1810,9 @@ def dataset_response(dataset_id: str) -> dict[str, Any]:
     payload["preset_eligible"] = stored.source == "builtin_demo"
     payload["preset_name"] = str(stored.metadata.get("preset_name")) if stored.metadata.get("preset_name") else None
     payload["derived_column_provenance"] = dict(stored.metadata.get("derived_column_provenance", {}))
+    attached = stored.metadata.get("attached_marker_matrix")
+    if isinstance(attached, dict) and any(row.get("matrix_id") == attached.get("matrix_id") for row in marker_matrices.list_saved_matrices()):
+        payload["attached_marker_matrix"] = dict(attached)
     payload["dataset_hash"] = str(stored.metadata.get("dataset_hash") or "")
     return _json_ready(payload)
 
@@ -2963,6 +3040,10 @@ def fail_bad_request(exc: Exception) -> NoReturn:
 
     if isinstance(exc, HTTPException):
         raise exc
+    from survival_toolkit.durable_workspace import DurableWorkspaceError
+    if isinstance(exc, DurableWorkspaceError) and getattr(app.state, "durable_workspace", None) is not None:
+        logger.error("Automatic saving or restoration failed", exc_info=(type(exc), exc, exc.__traceback__))
+        raise HTTPException(status_code=503, detail="Automatic saving or restoration failed. Your existing saved work was retained. Check server storage and permissions before continuing; this request was not confirmed as saved.") from exc
     if isinstance(exc, JobCancelledError):
         # 499 (client closed request): the page abandoned this request, nobody reads the body.
         logger.info("Request cancelled by its client: %s", exc)
@@ -3958,7 +4039,7 @@ async def upload_marker_matrix(
                     f"Only {summary['n_matched']} patients of the dataset are in the matrix; at least 10 are needed. "
                     f"The IDs in '{id_column}' must be written exactly as in the matrix."
                 )
-            return {
+            payload = {
                 "matrix_id": marker_matrices.add(matrix),
                 "filename": filename,
                 "orientation": matrix.orientation,
@@ -3969,6 +4050,8 @@ async def upload_marker_matrix(
                 "id_note": matrix.id_note,
                 **summary,
             }
+            store.update_metadata(dataset_id, {**stored.metadata, "attached_marker_matrix": payload})
+            return payload
 
         # Parsing a matrix of up to 200 MB is heavy work: it queues with the other heavy jobs, holds the
         # dataset, and never starts (or stops at the reader's checkpoints) once the page has gone away.
@@ -3983,10 +4066,41 @@ async def upload_marker_matrix(
             _remove_temporary_upload(temp_path)
 
 
+@app.get("/api/saved-marker-matrices")
+async def saved_marker_matrices() -> dict[str, Any]:
+    return {"matrices": await run_in_threadpool(marker_matrices.list_saved_matrices)}
+
+
+@app.get("/api/marker-matrix/{matrix_id}")
+async def marker_matrix_metadata(matrix_id: str) -> dict[str, Any]:
+    rows = await run_in_threadpool(marker_matrices.list_saved_matrices)
+    row = next((item for item in rows if item["matrix_id"] == matrix_id), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail="This marker file is no longer saved. Reattach the original file before rerunning its analysis.")
+    return row
+
+
 @app.delete("/api/marker-matrix/{matrix_id}")
-async def remove_marker_matrix(matrix_id: str) -> dict[str, Any]:
-    marker_matrices.remove(matrix_id)
-    return {"removed": True}
+async def remove_marker_matrix(matrix_id: str, dataset_id: str | None = None) -> dict[str, Any]:
+    try:
+        def _remove():
+            # Clear bindings first. A failed write leaves the matrix itself untouched; a later
+            # failed deletion retains its data rather than leaving a binding to a missing file.
+            candidates = {row["dataset_id"] for row in store.list_saved_datasets()
+                          if row.get("attached_marker_matrix_id") == matrix_id}
+            if dataset_id:
+                candidates.add(dataset_id)
+            for bound_id in candidates:
+                stored = _get_stored_dataset(bound_id)
+                if stored.metadata.get("attached_marker_matrix", {}).get("matrix_id") == matrix_id:
+                    metadata = dict(stored.metadata)
+                    metadata.pop("attached_marker_matrix", None)
+                    store.update_metadata(bound_id, metadata)
+            marker_matrices.remove(matrix_id)
+        await run_in_threadpool(_remove)
+        return {"removed": True}
+    except Exception as exc:
+        fail_bad_request(exc)
 
 
 @app.post("/api/load-example")
@@ -4030,9 +4144,132 @@ async def get_dataset(dataset_id: str) -> dict[str, Any]:
         fail_bad_request(exc)
 
 
+def _durable_workspace():
+    persistence = getattr(app.state, "durable_workspace", None)
+    if persistence is None:
+        raise HTTPException(status_code=409, detail="Automatic saving is off. Results are available only in this running session; download them before leaving.")
+    return persistence
+
+
+@app.get("/api/saved-workspaces")
+async def saved_workspaces() -> dict[str, Any]:
+    persistence = getattr(app.state, "durable_workspace", None)
+    if persistence is None:
+        return {"autosave": False, "datasets": []}
+    datasets = await run_in_threadpool(store.list_saved_datasets)
+    counts = {}
+    for result in await run_in_threadpool(persistence.list_results):
+        counts[result["dataset_id"]] = counts.get(result["dataset_id"], 0) + 1
+    snapshots = {row["dataset_id"]: row.get("created_at") for row in await run_in_threadpool(persistence.list_snapshots)}
+    return {"autosave": True, "datasets": [{**row, "result_count": counts.get(row["dataset_id"], 0), "snapshot_saved_at": snapshots.get(row["dataset_id"])} for row in datasets]}
+
+
+@app.get("/api/saved-workspaces/{dataset_id}")
+async def saved_workspace(dataset_id: str) -> dict[str, Any]:
+    persistence = _durable_workspace()
+    try:
+        dataset = await run_in_threadpool(dataset_response, dataset_id)
+        snapshot = await run_in_threadpool(persistence.load_snapshot, dataset_id)
+        results = await run_in_threadpool(persistence.list_results, dataset_id)
+        snapshot_metadata = next((row for row in await run_in_threadpool(persistence.list_snapshots) if row["dataset_id"] == dataset_id), {})
+        return {"dataset": dataset, "snapshot": snapshot, "snapshot_saved_at": snapshot_metadata.get("created_at"), "results": results, "autosave": True}
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+@app.get("/api/saved-results/{result_id}")
+async def saved_result(result_id: str) -> dict[str, Any]:
+    try:
+        result = await run_in_threadpool(_durable_workspace().load_result, result_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="This saved result was not found.")
+        return result
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
+class SavedWorkspaceSnapshotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal[1] = 1
+    workspace: dict[str, Any]
+
+
+@app.post("/api/saved-workspaces/{dataset_id}/snapshot")
+async def save_workspace_snapshot(dataset_id: str, body: SavedWorkspaceSnapshotRequest) -> dict[str, Any]:
+    try:
+        persistence = _durable_workspace()
+        await run_in_threadpool(store.get, dataset_id, copy_dataframe=False)
+        allowed = {"dataset_id", "dataset_hash", "controls", "results", "compareCache", "resultPreference",
+                   "predictiveFamily", "workbenchRevealed", "predictiveWorkbenchIntent", "tab", "markerMatrix",
+                   "derivedColumnProvenance", "lastDerivedGroup", "pattern", "savedValidationFile", "benchmarkIntervals"}
+        if set(body.workspace) - allowed or not isinstance(body.workspace.get("controls", {}), dict):
+            raise HTTPException(status_code=400, detail="This saved workspace format is not supported.")
+        results = body.workspace.get("results", {})
+        if not isinstance(results, dict) or set(results) - {"km", "cox", "cohort", "signature", "ml", "dl", "markers", "markerValidation"}:
+            raise HTTPException(status_code=400, detail="This workspace contains an unknown result section.")
+        current = await run_in_threadpool(store.get, dataset_id, copy_dataframe=False)
+        candidates = list(results.items())
+        pattern = body.workspace.get("pattern")
+        if pattern is not None:
+            if not isinstance(pattern, dict) or set(pattern) - {"payload", "signature", "config"}:
+                raise HTTPException(status_code=400, detail="This saved predictor comparison format is invalid.")
+            if pattern.get("config") is not None and not isinstance(pattern["config"], dict):
+                raise HTTPException(status_code=400, detail="Saved predictor comparison settings are invalid.")
+            if pattern.get("payload") is not None:
+                candidates.append(("patterns", pattern["payload"]))
+        intervals = body.workspace.get("benchmarkIntervals")
+        if intervals is not None and (not isinstance(intervals, dict) or set(intervals) - {"key", "status", "result"}
+                                      or intervals.get("status") != "ready" or not isinstance(intervals.get("result"), dict)):
+            raise HTTPException(status_code=400, detail="Only completed comparison intervals can be saved.")
+        preference = body.workspace.get("resultPreference", {})
+        if not isinstance(preference, dict) or set(preference) - {"ml", "dl"} or any(value not in ("single", "compare") for value in preference.values()):
+            raise HTTPException(status_code=400, detail="This saved result selection is invalid.")
+        if body.workspace.get("predictiveFamily", "ml") not in ("ml", "dl"):
+            raise HTTPException(status_code=400, detail="This saved model family is invalid.")
+        if body.workspace.get("tab", "km") not in ("km", "cox", "markers", "tables", "benchmark", "ml", "dl"):
+            raise HTTPException(status_code=400, detail="This saved analysis section is invalid.")
+        if "workbenchRevealed" in body.workspace and not isinstance(body.workspace["workbenchRevealed"], bool):
+            raise HTTPException(status_code=400, detail="The saved workbench state must be true or false.")
+        cache = body.workspace.get("compareCache", {})
+        if not isinstance(cache, dict) or set(cache) - {"ml", "dl", "unified"}:
+            raise HTTPException(status_code=400, detail="This workspace comparison cache is invalid.")
+        candidates.extend((name, value) for name, value in cache.items() if name != "unified")
+        unified = cache.get("unified")
+        if unified is not None:
+            if not isinstance(unified, dict) or set(unified) - {"ml", "dl", "group_id"}:
+                raise HTTPException(status_code=400, detail="This unified comparison format is invalid.")
+            candidates.extend((name, value) for name, value in unified.items() if name != "group_id")
+        for name, value in candidates:
+            if value is None:
+                continue
+            if not isinstance(value, dict):
+                raise HTTPException(status_code=400, detail="Saved analysis sections must be objects.")
+            config = value.get("request_config") or {}
+            if not isinstance(config, dict):
+                raise HTTPException(status_code=400, detail="Saved analysis settings are invalid.")
+            associated_id = (config.get("development_dataset_id") or config.get("dataset_id")) if name == "markerValidation" else config.get("dataset_id")
+            if name == "signature":
+                associated_id = value.get("result_dataset_id") or associated_id
+            if associated_id and associated_id != dataset_id:
+                raise HTTPException(status_code=400, detail="A saved result belongs to another dataset.")
+            if name != "markerValidation" and value.get("dataset_hash") and value["dataset_hash"] != current.metadata.get("dataset_hash"):
+                raise HTTPException(status_code=409, detail="A saved result belongs to an earlier dataset revision.")
+        if body.workspace.get("dataset_hash") != current.metadata.get("dataset_hash"):
+            raise HTTPException(status_code=409, detail="The dataset changed. Reopen its current saved workspace before saving this screen.")
+        snapshot = {"schema_version": 1, "workspace": body.workspace}
+        if body.workspace.get("dataset_id") != dataset_id:
+            raise HTTPException(status_code=400, detail="The saved workspace belongs to another dataset.")
+        if len(json.dumps(snapshot, allow_nan=False).encode("utf-8")) > 64 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="This workspace is too large to save as one screen. Completed analysis results remain saved separately.")
+        receipt = await run_in_threadpool(persistence.save_snapshot, dataset_id, snapshot)
+        return {"status": "saved", "receipt": receipt}
+    except Exception as exc:
+        fail_bad_request(exc)
+
+
 @app.delete("/api/dataset/{dataset_id}")
 async def delete_dataset(dataset_id: str) -> dict[str, str]:
-    """Free a stored dataset (and its cached models) before its idle expiry."""
+    """Explicitly delete a dataset and its saved results; idle eviction only releases memory."""
     try:
         await run_in_threadpool(store.delete, dataset_id)
         return {"status": "deleted", "dataset_id": dataset_id}
@@ -5574,6 +5811,8 @@ async def marker_evaluation(request_model: MarkerEvaluationRequest, request: Req
 @app.post("/api/marker-validation")
 async def marker_validation(request_model: MarkerValidationRequest, request: Request) -> dict[str, Any]:
     try:
+        if request_model.development_dataset_id:
+            _get_stored_dataset(request_model.development_dataset_id)
         from survival_toolkit.plots import build_marker_replication_figure
 
         stored = _get_stored_dataset(request_model.dataset_id)
