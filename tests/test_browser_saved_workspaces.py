@@ -67,6 +67,7 @@ def test_browser_reload_and_server_restart_restore_exact_km_and_ml_without_fitti
         page.wait_for_function("() => savedWorkState.enabled")
         page.locator("#loadExampleButton").click()
         page.locator("#workspace").wait_for(state="visible")
+        page.locator("#groupColumn").select_option("stage")
         page.locator("#runKmButton").click()
         page.wait_for_function("() => Boolean(state.km)")
         page.wait_for_function("() => !isScopeBusy('km')")
@@ -76,6 +77,10 @@ def test_browser_reload_and_server_restart_restore_exact_km_and_ml_without_fitti
         assert "Kaplan-Meier analysis complete. Risk table shows" in page.locator("#toastContainer").inner_text()
         _saved(page)
         before = page.evaluate("() => ({dataset: state.dataset.dataset_id, hash: state.dataset.dataset_hash, km: state.km, controls: captureControlSnapshot()})")
+        header_selectors = ["#kmSummaryShell th", "#kmPairwiseShell th", "#kmRiskShell th"]
+        headers = [page.locator(selector).evaluate_all("nodes => nodes.map(node => node.title)") for selector in header_selectors]
+        assert headers[0][:4] == ["Group", "N", "Events", "Censored"]
+        assert headers[1][0] == "Comparison"
         point_count = max(len(before["km"]["analysis"]["risk_table"]["columns"]) - 1, 0)
         assert f"Risk table shows {point_count} time points." in page.locator("#toastContainer").inner_text()
         assert len(analyses) == 1
@@ -84,6 +89,7 @@ def test_browser_reload_and_server_restart_restore_exact_km_and_ml_without_fitti
         assert page.evaluate("Object.fromEntries(Object.entries(state.km).filter(([key]) => key !== 'saved_result'))") == {key: value for key, value in before["km"].items() if key != "saved_result"}
         assert page.evaluate("state.km.saved_result.result_id") == before["km"]["saved_result"]["result_id"]
         assert page.evaluate("state.dataset.dataset_id") == before["dataset"]
+        assert [page.locator(selector).evaluate_all("nodes => nodes.map(node => node.title)") for selector in header_selectors] == headers
         assert len(analyses) == 1
         # A fixed response fixture exercises the complete single-model renderer and screen restore;
         # no model fitting occurs in this browser test.
@@ -109,6 +115,7 @@ def test_browser_reload_and_server_restart_restore_exact_km_and_ml_without_fitti
         assert page.evaluate("state.ml") == ml
         assert page.evaluate("state.ml.exploratory.withheld_p") is None
         assert page.evaluate("state.ml.analysis.model_stats.c_index") == 0
+        assert [page.locator(selector).evaluate_all("nodes => nodes.map(node => node.title)") for selector in header_selectors] == headers
         assert len(analyses) == 1
         page.locator("#savedWorkButton").click()
         page.locator("#savedWorkList .saved-work-item").first.wait_for()

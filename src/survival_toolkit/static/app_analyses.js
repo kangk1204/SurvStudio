@@ -959,10 +959,10 @@ async function renderKaplanMeierResult(payload) {
   await Plotly.newPlot(refs.kmPlot, kmFigure.data || [], responsivePlotLayout(refs.kmPlot, kmFigure.layout || {}), plotConfig("km_curve"));
   markPlotResult(refs.kmPlot, payload);
   stabilizePlotShellHeight(refs.kmPlot);
-  renderTable(refs.kmSummaryShell, kmAnalysis.summary_table);
+  renderTable(refs.kmSummaryShell, kmAnalysis.summary_table, analysisTableColumns(kmAnalysis.summary_table, "km_summary"));
   renderTable(refs.kmRiskShell, kmRiskTable.rows, kmRiskTable.columns);
   flashPresetTargets([refs.kmRiskShell]);
-  renderTable(refs.kmPairwiseShell, kmAnalysis.pairwise_table);
+  renderTable(refs.kmPairwiseShell, kmAnalysis.pairwise_table, analysisTableColumns(kmAnalysis.pairwise_table, "km_pairwise"));
   renderInsightBoard(refs.kmInsightBoard, kmSummary, "Run KM to generate an interpretation panel.");
   refs.kmMetaBanner.textContent = `N=${formatValue(cohort.n)}, events=${formatValue(cohort.events)}, censored=${formatValue(cohort.censored)}, median follow-up=${formatValue(cohort.median_follow_up)} ${(payload.request_config?.time_unit_label || DEFAULT_TIME_UNIT_LABEL)}${test ? `, ${test.test} ${pValuePhrase(test.p_value)}` : ""}`;
   syncDownloadButtonAvailability();
@@ -1138,8 +1138,8 @@ async function renderCoxResult(payload) {
     clearPlotShell(refs.coxDiagnosticsPlot, '<div class="empty-state plot-empty"><span>Scaled Schoenfeld residual screening was unavailable for this fit.</span></div>');
   }
   await renderCoxMartingalePlot(runtime.coxMartingaleTerm);
-  renderTable(refs.coxResultsShell, coxAnalysis.results_table);
-  renderTable(refs.coxDiagnosticsShell, coxAnalysis.diagnostics_table, exportColumnsFromRows(coxAnalysis.diagnostics_table));
+  renderTable(refs.coxResultsShell, coxAnalysis.results_table, analysisTableColumns(coxAnalysis.results_table, "cox_results"));
+  renderTable(refs.coxDiagnosticsShell, coxAnalysis.diagnostics_table, analysisTableColumns(coxAnalysis.diagnostics_table, "cox_diagnostics"));
   renderInsightBoard(refs.coxInsightBoard, coxSummary, "Run Cox PH to review diagnostics.");
   const coxMetricLabel = stats.c_index_label || ((stats.evaluation_mode === "apparent") ? "Apparent C-index" : "C-index");
   const hasReportedCoxMetric = stats.c_index != null && stats.evaluation_mode !== "stratified_not_reported";
