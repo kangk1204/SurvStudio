@@ -524,9 +524,18 @@ def _numeric_block(frame: pd.DataFrame, what: str) -> np.ndarray:
             )
         frame = frame.copy()
         frame[text_columns] = converted
-    values = frame.to_numpy(dtype=np.float32, copy=True)
-    values[~np.isfinite(values)] = np.nan
-    return values
+    # Missing values and infinite measurements have different analysis rules. Keep
+    # +/-Inf so the shared marker-cohort checks exclude those markers with a reason,
+    # rather than silently median-imputing them as if they were missing.
+    values = frame.to_numpy(dtype=np.float64, copy=False, na_value=np.nan)
+    limit = np.finfo(np.float32).max
+    out_of_range = np.isfinite(values) & ((values > limit) | (values < -limit))
+    if out_of_range.any():
+        raise UserInputError(
+            "The matrix contains finite values outside the supported float32 range. "
+            "Rescale these measurements before attaching the matrix; no values were imputed."
+        )
+    return values.astype(np.float32)
 
 
 def read_marker_matrix(path: str | Path, filename: str, *, patient_ids: Sequence[Any], orientation: str = "auto") -> MarkerMatrix:

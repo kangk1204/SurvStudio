@@ -89,6 +89,7 @@ const refs = {
   workspace: document.getElementById("workspace"),
   datasetBadge: document.getElementById("datasetBadge"),
   datasetFile: document.getElementById("datasetFile"),
+  uploadNumberFormat: document.getElementById("uploadNumberFormat"),
   uploadButton: document.getElementById("uploadButton"),
   shutdownButton: document.getElementById("shutdownButton"),
   loadTcgaUploadReadyButton: document.getElementById("loadTcgaUploadReadyButton"),

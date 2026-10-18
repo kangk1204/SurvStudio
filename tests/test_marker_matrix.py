@@ -353,3 +353,57 @@ def test_text_matrices_are_bounded_before_pandas_parses_them(tmp_path: Path, mon
     _expression([f"P{index:03d}" for index in range(30)], n_genes=20).to_csv(cells, sep="\t", index_label="gene")
     with pytest.raises(UserInputError, match="at most 500 values"):
         read_marker_matrix(cells, "cells.tsv", patient_ids=["P000"])
+
+
+@pytest.mark.parametrize("orientation", ["markers_in_rows", "samples_in_rows"])
+@pytest.mark.parametrize("suffix,separator", [(".csv", ","), (".tsv", "\t")])
+def test_infinite_markers_are_excluded_equally_for_matrix_and_ordinary_table(tmp_path, orientation, suffix, separator):
+    from survival_toolkit.marker_evaluation import prepare_marker_cohort
+
+    clinical = _clinical(40)
+    patients = clinical["patient_id"].tolist()
+    genes = _expression(patients, n_genes=3)
+    # Seven measured infinities are not seven missing measurements eligible for imputation.
+    genes.iloc[0, :7] = [np.inf, -np.inf, np.inf, -np.inf, np.inf, -np.inf, np.inf]
+    genes.iloc[1, [2, 8]] = np.nan
+    uploaded = genes if orientation == "markers_in_rows" else genes.T
+    path = tmp_path / ("expression" + suffix)
+    uploaded.to_csv(path, sep=separator, index_label="gene" if orientation == "markers_in_rows" else "sample")
+    matrix = read_marker_matrix(path, path.name, patient_ids=patients, orientation=orientation)
+    assert matrix.values.dtype == np.float32
+    assert np.isposinf(matrix.values[:, 0]).sum() == 4
+    assert np.isneginf(matrix.values[:, 0]).sum() == 3
+    assert np.isnan(matrix.values[:, 1]).sum() == 2
+    joined = matrix_frame(clinical, matrix, id_column="patient_id", columns=["os_time", "os_event", "age"])
+    ordinary = pd.concat([clinical.reset_index(drop=True), genes.T.reset_index(drop=True)], axis=1)
+    settings = dict(time_column="os_time", event_column="os_event", marker_columns=list(genes.index))
+    actual = prepare_marker_cohort(joined, **settings)
+    expected = prepare_marker_cohort(ordinary, **settings)
+    assert actual.dropped_markers == expected.dropped_markers == [
+        {"marker": "GENE0", "reason": "infinite values", "n_infinite": 7}]
+    assert actual.marker_names == expected.marker_names == ["GENE1", "GENE2"]
+    assert actual.notes == expected.notes
+    np.testing.assert_allclose(actual.markers, expected.markers, rtol=1e-6, atol=1e-7)
+    assert np.isnan(actual.markers[:, 0]).sum() == 2
+    # Missing measurements remain missing until a training-only transform learns its median.
+    from survival_toolkit.marker_evaluation import _column_medians, _impute
+    train = actual.markers[:20]
+    test = actual.markers[20:]
+    medians = _column_medians(train)
+    imputed = _impute(train, medians)
+    assert imputed[2, 0] == imputed[8, 0] == np.nanmedian(train[:, 0])
+    np.testing.assert_array_equal(_impute(test, medians), test)
+    assert np.isnan(actual.markers[2, 0]) and np.isnan(actual.markers[8, 0])
+
+
+@pytest.mark.parametrize("overflow", [1e39, -1e39])
+@pytest.mark.parametrize("orientation", ["markers_in_rows", "samples_in_rows"])
+def test_finite_matrix_overflow_is_rejected_before_float32_conversion(tmp_path, overflow, orientation):
+    clinical = _clinical()
+    patients = clinical["patient_id"].tolist()
+    genes = _expression(patients)
+    genes.iloc[0, 0] = overflow
+    path = tmp_path / "expression.tsv"
+    (genes if orientation == "markers_in_rows" else genes.T).to_csv(path, sep="\t", index_label="id")
+    with pytest.raises(UserInputError, match="finite values outside.*float32 range.*Rescale"):
+        read_marker_matrix(path, path.name, patient_ids=patients, orientation=orientation)

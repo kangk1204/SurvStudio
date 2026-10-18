@@ -31,6 +31,18 @@
       </a>
       <div class="header-right">
         <span class="dataset-badge hidden" id="datasetBadge"></span>
+        <details class="upload-options">
+          <summary>Upload options</summary>
+          <div class="upload-options-panel">
+            <label for="uploadNumberFormat">Number format (CSV / TSV)</label>
+            <select id="uploadNumberFormat">
+              <option value="auto">Automatic — pause if ambiguous</option>
+              <option value="decimal_dot">Decimal point: 2,361 = 2361</option>
+              <option value="decimal_comma">Decimal comma: 2,361 = 2.361</option>
+            </select>
+            <small>Choose before selecting a file. Use Automatic for Excel or Parquet.</small>
+          </div>
+        </details>
         <div class="upload-inline">
           <input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet" />
           <button class="button ghost compact-btn" id="uploadButton" type="button">Upload</button>
@@ -1095,7 +1107,7 @@
             </div>
             <div class="selection-card">
               <div class="selection-card-head">
-                <h3>Adjust for <button class="help-dot" type="button" data-tooltip="Clinical covariates. Markers are then judged on what they add beyond them.">?</button></h3>
+                <h3>Adjust for <button class="help-dot" type="button" data-tooltip="Clinical covariates. Markers are judged on what they add beyond them. Categorical selections in Risk factors also apply here.">?</button></h3>
               </div>
               <input class="selection-search" id="markerClinicalSearchInput" type="search" placeholder="Search clinical covariates" aria-label="Search clinical covariates" />
               <label><span>Clinical model</span><select id="markerClinicalBasis">

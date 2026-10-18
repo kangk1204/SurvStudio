@@ -80,8 +80,10 @@ function modelFeatureCandidateColumns() {
 function sharedModelCategoricalCandidates() {
   if (!state.dataset) return [];
   const availableFeatures = new Set(modelFeatureCandidateColumns());
+  const numericReview = new Set(state.dataset.numeric_review_columns || []);
   return state.dataset.columns
     .filter((column) => availableFeatures.has(column.name))
+    .filter((column) => !numericReview.has(column.name))
     .filter((column) => ["categorical", "binary"].includes(column.kind) || (column.n_unique != null && column.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD))
     .map((column) => column.name);
 }
@@ -95,10 +97,7 @@ function refreshVariableSelections({ useDefaults = false } = {}) {
   const kept = (container, defaults) => (useDefaults
     ? defaults
     : selectedCheckboxValues(container).filter((value) => availableCovariates.includes(value)));
-  const defaultCategoricals = state.dataset.columns
-    .filter((c) => ["categorical", "binary"].includes(c.kind) || (c.n_unique != null && c.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD))
-    .map((c) => c.name)
-    .filter((name) => availableCovariates.includes(name));
+  const defaultCategoricals = sharedModelCategoricalCandidates();
   const defaultModelFeatures = availableCovariates.slice(0, DEFAULT_MODEL_FEATURE_SELECTION_LIMIT);
   // Every previous selection is read before any list is rebuilt.
   const covariates = kept(refs.covariateChecklist, availableCovariates.slice(0, 4));

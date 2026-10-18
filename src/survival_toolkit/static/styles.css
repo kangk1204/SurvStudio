@@ -308,6 +308,22 @@ body {
   background: var(--teal);
 }
 
+.upload-options { position: relative; font-size: 0.85rem; }
+.upload-options > summary { cursor: pointer; padding: 0.65rem; }
+.upload-options-panel {
+  position: absolute; right: 0; top: calc(100% + 0.5rem); z-index: 120;
+  width: min(320px, calc(100vw - 32px)); padding: 1rem;
+  background: var(--surface, #fff); border: 1px solid var(--border, #ddd);
+  border-radius: 12px; box-shadow: 0 8px 24px #0002;
+  display: grid; gap: 0.65rem;
+}
+.upload-options-panel select { width: 100%; min-width: 0; }
+.upload-options-panel small { line-height: 1.5; }
+@media (max-width: 600px) {
+  .header-right { position: relative; }
+  .upload-options { position: static; }
+  .upload-options-panel { left: 0; right: auto; width: min(320px, calc(100vw - 48px)); }
+}
 .upload-inline input {
   display: none;
 }

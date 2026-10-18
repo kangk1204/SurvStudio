@@ -39,7 +39,8 @@ def _grouped_time_frame(n: int = 60) -> pd.DataFrame:
     days = rng.integers(30, 3000, n)
     return pd.DataFrame({
         # Excel-style thousands separators on the long follow-up times.
-        "os_days": [f"{int(value):,}" if value >= 1000 else str(int(value)) for value in days],
+        # The decimal part makes the thousands convention explicit for API text inputs.
+        "os_days": [f"{int(value):,}.0" if value >= 1000 else str(int(value)) for value in days],
         "os_event": rng.integers(0, 2, n),
         "age": rng.normal(60, 10, n),
     })

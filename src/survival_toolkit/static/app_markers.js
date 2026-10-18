@@ -159,7 +159,10 @@ function refreshMarkerSelections({ useDefaults = false } = {}) {
 function currentMarkerSelections() {
   const markers = markerMatrixAttached() ? [] : selectedCheckboxValues(refs.markerChecklist);
   const clinical = selectedCheckboxValues(refs.markerClinicalChecklist).filter((value) => !markers.includes(value));
-  const categoricalCandidates = new Set(sharedModelCategoricalCandidates());
+  const categoricalCandidates = new Set([
+    ...sharedModelCategoricalCandidates(),
+    ...selectedCheckboxValues(refs.categoricalChecklist),
+  ]);
   return { markers, clinical, categorical: clinical.filter((value) => categoricalCandidates.has(value)) };
 }
 

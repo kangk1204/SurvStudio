@@ -332,7 +332,7 @@
       const visibleFamilies = Array.isArray(board?.visibleFamilies) ? board.visibleFamilies : [];
       if (!(visibleFamilies.includes("ml") && visibleFamilies.includes("dl"))) return [];
       return [
-        "Cross-family partial-likelihood models do not share one tie method: Cox PH and LASSO-Cox use Efron, whereas DeepSurv, Survival Transformer, and Survival VAE use Breslow. Treat small cross-family C-index gaps cautiously when many event times are tied.",
+        "Cross-family partial-likelihood models do not share one tie method: Cox PH uses Efron; LASSO-Cox, DeepSurv, Survival Transformer, and Survival VAE use Breslow. Treat small cross-family C-index gaps cautiously when many event times are tied.",
         "ML comparison rows may include IBS / Brier Skill Score, but DL comparison rows currently report C-index only, so calibration/error comparisons are not symmetric across families.",
       ];
     }
