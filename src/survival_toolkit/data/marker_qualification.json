@@ -13,7 +13,7 @@
     "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
     "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
     "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
-    "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c"
+    "src/survival_toolkit/analysis.py": "0c51e23da5cf295a68617abd23850194f6f1f919233f52013c2cfcefc939f11f"
   },
   "qualification_dimensions": {
     "n": 180,
@@ -367,7 +367,7 @@
         "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
         "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
         "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
-        "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c"
+        "src/survival_toolkit/analysis.py": "0c51e23da5cf295a68617abd23850194f6f1f919233f52013c2cfcefc939f11f"
       },
       "qualification_dimensions": {
         "n": 180,
@@ -539,6 +539,35 @@
             }
           ]
         }
+      },
+      "previous_integration_kernel_source_hashes": {
+        "src/survival_toolkit/clinical_basis.py": "e4384eca71cb0a0b39819a3265241b9cc5bf443bd279127b518f9397e2604ce3",
+        "src/survival_toolkit/marker_diagnostics.py": "af2b425f8b066bca2190f9f63d1b888aaf99b003c44df0f108c94be9bcb57a6d",
+        "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
+        "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
+        "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
+        "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c"
+      },
+      "source_verification": {
+        "kind": "reviewed numeric-input source equivalence; not a new confirmation study",
+        "base_git_revision": "302b70eb97297df86ee34e484f9afadbad2f13a7",
+        "evidence_sha256": "2fc4ec9d5c31cc64754fedbce36ecd7f6dfe3be294380757b1697082c9513b0d",
+        "scope": "Five bound modules are byte-identical. Existing statistical definitions and the numeric survival-time branch in analysis.py are unchanged; changes concern file parsing, profile review and text time handling.",
+        "historical_study_results_and_criteria_changed": false,
+        "fresh_R_agreement": {
+          "quantities": 189,
+          "passed": true,
+          "atol": 1e-06,
+          "rtol": 1e-07
+        },
+        "clinical_reference": {
+          "quantities": 14,
+          "passed": true,
+          "atol": 1e-06,
+          "basis": "Previously independent Hmisc/R matrices; current Python checked against frozen references and fresh R Cox/PH/LR/HC3/calibration. Hmisc basis not regenerated in this local run."
+        },
+        "qualification_scope_changed": false,
+        "runtime_source_binding": "Exact whole-file SHA-256 comparison retained; unknown changes remain not_evaluated."
       }
     },
     "marker-inference/3": {
@@ -560,5 +589,34 @@
         }
       }
     }
+  },
+  "previous_integration_kernel_source_hashes": {
+    "src/survival_toolkit/clinical_basis.py": "e4384eca71cb0a0b39819a3265241b9cc5bf443bd279127b518f9397e2604ce3",
+    "src/survival_toolkit/marker_diagnostics.py": "af2b425f8b066bca2190f9f63d1b888aaf99b003c44df0f108c94be9bcb57a6d",
+    "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
+    "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
+    "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
+    "src/survival_toolkit/analysis.py": "cc4e3c5e3cf7475d9f92cb404a636b24a09b0fb5c79330ed9fb7d215c0dc8f0c"
+  },
+  "source_verification": {
+    "kind": "reviewed numeric-input source equivalence; not a new confirmation study",
+    "base_git_revision": "302b70eb97297df86ee34e484f9afadbad2f13a7",
+    "evidence_sha256": "2fc4ec9d5c31cc64754fedbce36ecd7f6dfe3be294380757b1697082c9513b0d",
+    "scope": "Five bound modules are byte-identical. Existing statistical definitions and the numeric survival-time branch in analysis.py are unchanged; changes concern file parsing, profile review and text time handling.",
+    "historical_study_results_and_criteria_changed": false,
+    "fresh_R_agreement": {
+      "quantities": 189,
+      "passed": true,
+      "atol": 1e-06,
+      "rtol": 1e-07
+    },
+    "clinical_reference": {
+      "quantities": 14,
+      "passed": true,
+      "atol": 1e-06,
+      "basis": "Previously independent Hmisc/R matrices; current Python checked against frozen references and fresh R Cox/PH/LR/HC3/calibration. Hmisc basis not regenerated in this local run."
+    },
+    "qualification_scope_changed": false,
+    "runtime_source_binding": "Exact whole-file SHA-256 comparison retained; unknown changes remain not_evaluated."
   }
 }

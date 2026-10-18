@@ -239,7 +239,7 @@ def test_ambiguous_columns_in_a_file_with_both_decimal_marks_are_refused() -> No
 
 
 def test_quoted_comma_thousands_with_a_missing_marker_load_as_numbers() -> None:
-    values = ["1,234", "2,500", "3,750", "1,020", "4,410", "2,205", "1,860", "3,125", "2,990", "[Not Available]"]
+    values = ["1,234.0", "2,500", "3,750", "1,020", "4,410", "2,205", "1,860", "3,125", "2,990", "[Not Available]"]
     rows = ["time,event,age"] + [f'"{value}",{i % 2},{50 + i}' for i, value in enumerate(values)]
     frame = load_dataframe("\n".join(rows).encode(), "data.csv")
     assert frame["time"].tolist()[:3] == [1234.0, 2500.0, 3750.0] and np.isnan(frame["time"].iloc[-1])
@@ -252,9 +252,9 @@ def test_numbers_with_separators_are_never_taken_for_calendar_dates() -> None:
     comma_decimals = pd.Series(["12,5", "7,25", "30,1", "4,75", "-", "18,2"], dtype=object)
     analysis._reject_calendar_date_time_column(comma_decimals, "os_months")  # no "calendar dates" error
     frame = pd.DataFrame({"os_months": comma_decimals, "os_event": [1, 0, 1, 0, 1, 1]})
-    with pytest.raises(ValueError, match='not numbers, such as "12,5"'):
-        compute_km_analysis(frame, "os_months", "os_event")
-    grouped = pd.Series(["1,234", "2,500", "3,750", "1,020", "[Not Available]", "2,205"], dtype=object)
+    decimal_km = compute_km_analysis(frame, "os_months", "os_event")
+    assert decimal_km["cohort"]["n"] == 5 and decimal_km["cohort"]["time_max"] == pytest.approx(30.1)
+    grouped = pd.Series(["1,234.0", "2,500", "3,750", "1,020", "[Not Available]", "2,205"], dtype=object)
     frame = pd.DataFrame({"os_days": grouped, "os_event": [1, 0, 1, 0, 1, 1]})
     km = compute_km_analysis(frame, "os_days", "os_event")
     assert km["cohort"]["n"] == 5 and km["cohort"]["time_max"] == pytest.approx(3750.0)

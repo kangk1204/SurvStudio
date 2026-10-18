@@ -93,6 +93,9 @@ def test_comma_csv_parses_quoted_thousands_separators_and_keeps_every_patient() 
     days = rng.exponential(900, n).round().astype(int) + 1
     events = rng.integers(0, 2, n)
     cells = [f'"{value:,}"' if value >= 1000 else str(value) for value in days]
+    # A decimal part establishes the grouping convention; "1,234" alone is ambiguous.
+    grouped_position = next(index for index, value in enumerate(days) if value >= 1000)
+    cells[grouped_position] = f'"{days[grouped_position]:,}.0"'
     text = "days_to_last_follow_up_or_death,vital_status\n" + "\n".join(
         f"{cell},{'Dead' if event else 'Alive'}" for cell, event in zip(cells, events, strict=True)
     )

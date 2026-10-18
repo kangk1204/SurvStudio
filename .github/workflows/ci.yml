@@ -197,5 +197,5 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Run browser E2E smoke test
-        run: pytest -q tests/test_browser_e2e.py tests/test_guarded_marker_surfaces.py tests/test_v3_marker_surfaces.py
+      - name: Run browser E2E and beginner workflows
+        run: pytest -q tests/test_browser_e2e.py tests/test_beginner_survstudio_flows.py tests/test_guarded_marker_surfaces.py tests/test_v3_marker_surfaces.py

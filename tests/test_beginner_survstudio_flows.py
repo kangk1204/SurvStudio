@@ -137,6 +137,13 @@ def _open_predictive_workbench(page, model_key: str | None = None) -> None:
         )
 
 
+def _open_comparison_settings(page) -> None:
+    settings = page.locator("#comparisonSettings")
+    if settings.get_attribute("open") is None:
+        settings.locator(":scope > summary").click()
+    assert page.locator("#mlEvaluationStrategy").is_visible()
+
+
 def test_beginner_example_walkthrough_runs_tabs_and_updates_feedback(browser_server: str) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
 
@@ -265,6 +272,8 @@ def test_beginner_ml_compare_options_toggle_cv_inputs_and_finish_with_visible_fe
 
             _open_predictive_workbench(page)
 
+            _open_comparison_settings(page)
+
             assert page.locator("#mlCvFoldsWrap").evaluate("(node) => node.classList.contains('hidden')")
             assert page.locator("#mlCvRepeatsWrap").evaluate("(node) => node.classList.contains('hidden')")
 
@@ -337,6 +346,37 @@ def test_beginner_dl_single_run_keeps_feedback_visible_and_hides_cv_controls(bro
         if _is_playwright_environment_error(exc):
             pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
         raise
+
+
+def test_numeric_text_review_preserves_values_and_avoids_automatic_category_selection(browser_server: str, tmp_path: Path) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    source = tmp_path / "numeric_missing.csv"
+    rows = [f"{i + 1},{i % 2},{'unknown' if i < 3 else 30 + i * 0.5}" for i in range(80)]
+    source.write_text("time,event,age\n" + "\n".join(rows), encoding="utf-8")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page(viewport={"width": 1280, "height": 1000})
+        page.goto(browser_server, wait_until="networkidle")
+        page.locator("#datasetFile").set_input_files(str(source))
+        _wait_for_workspace(page)
+        banner = page.locator("#datasetIntegrityWarning")
+        assert banner.is_visible()
+        assert 'age: 3 text values ["unknown" (3)]' in banner.inner_text()
+        assert "Original values were retained" in banner.inner_text()
+        assert page.evaluate("state.dataset.n_rows") == 80
+        assert page.evaluate("state.dataset.preview[0].age") == "unknown"
+        assert not page.locator("#categoricalChecklist input[value='age']").is_checked()
+        assert not page.locator("#modelCategoricalChecklist input[value='age']").is_checked()
+        page.locator('[data-tab="cox"]').click()
+        assert banner.is_visible()
+        assert "replace them with blank cells" in banner.inner_text()
+        page.locator("#categoricalChecklist input[value='age']").check()
+        assert page.locator("#categoricalChecklist input[value='age']").is_checked()
+        page.locator("#additionalAnalysesButton").click()
+        page.locator("#tab-markers").click()
+        page.locator("#markerClinicalChecklist input[value='age']").check()
+        assert page.evaluate("currentMarkerSelections().categorical.includes('age')")
+        browser.close()
 
 
 def test_simple_navigation_preserves_data_and_saves_current_analysis(browser_server: str) -> None:

@@ -4173,7 +4173,7 @@ def test_derive_group_event_positive_value_defaults_match_other_survival_endpoin
     ml_default = MLModelRequest(
         dataset_id="d", time_column="t", event_column="e", features=["age"], model_type="rsf"
     ).event_positive_value
-    assert derive_default == km_default == cox_default == ml_default == 1
+    assert derive_default is km_default is cox_default is ml_default is None
 
     frame = make_example_dataset(seed=11, n_patients=120)
     frame["os_event"] = frame["os_event"].map({0: 2, 1: 1})  # 1 = event, 2 = censored
@@ -4190,8 +4190,23 @@ def test_derive_group_event_positive_value_defaults_match_other_survival_endpoin
             "new_column_name": "age_opt_default_event",
         },
     )
-    assert derived.status_code == 200, derived.text[:300]
-    assert derived.json()["derive_summary"]["recipe"]["event_positive_value"] == 1
+    assert derived.status_code == 400, derived.text[:300]
+    assert "Could not infer event coding" in derived.json()["detail"]
+    explicit = client.post(
+        "/api/derive-group",
+        json={
+            "dataset_id": stored.dataset_id,
+            "source_column": "age",
+            "method": "optimal_cutpoint",
+            "time_column": "os_months",
+            "event_column": "os_event",
+            "event_positive_value": 1,
+            "permutation_iterations": 0,
+            "new_column_name": "age_opt_explicit_event",
+        },
+    )
+    assert explicit.status_code == 200, explicit.text[:300]
+    assert explicit.json()["derive_summary"]["recipe"]["event_positive_value"] == 1
 
 
 def test_derive_group_rejects_existing_column_name_collision() -> None:

@@ -29,7 +29,7 @@ from statsmodels.duration.survfunc import SurvfuncRight, survdiff
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
 from survival_toolkit.concurrency import raise_if_cancelled, suppressed_warnings
-from survival_toolkit.encoding import numeric_text_values, reject_numeric_text_features
+from survival_toolkit.encoding import numeric_text_contamination, numeric_text_values, reject_numeric_text_features
 from survival_toolkit.errors import ColumnNotFoundError, must_propagate, user_input_boundary
 
 TRUE_TOKENS = {
@@ -319,9 +319,9 @@ def make_unique_columns(columns: Iterable[Any]) -> list[str]:
 
 _CSV_DELIMITER_CANDIDATES = ",;\t|"
 # A number written with "," thousands separators and an optional "." decimal part ("12,345.5").
-_COMMA_GROUPED_NUMBER_PATTERN = re.compile(r"^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$")
+_COMMA_GROUPED_NUMBER_PATTERN = re.compile(r"^[+-]?[1-9]\d{0,2}(,\d{3})+(\.\d+)?$")
 # A value of a column formatted with "," thousands separators (plain numbers are allowed too).
-_COMMA_THOUSANDS_VALUE_PATTERN = re.compile(r"^[+-]?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$")
+_COMMA_THOUSANDS_VALUE_PATTERN = re.compile(r"^[+-]?([1-9]\d{0,2}(,\d{3})+|\d+)(\.\d+)?$")
 # Shapes of number text in files not separated by commas. "1.234" and "1,234" (a non-zero lead of
 # one to three digits and one group of three) read either as a decimal or as a thousands-grouped
 # integer; each other shape reads one way only.
@@ -374,6 +374,13 @@ _MISSING_VALUE_TOKENS = {
     "[unknown]",
     "[discrepancy]",
 }
+# Preserve literal category labels before their role is known. In particular, "None" can
+# mean no event; pandas' default NA vocabulary would erase it before event coding runs.
+# Retain the conventional file NA spellings, with "None" deliberately excluded.
+_FILE_NA_VALUES = [
+    "", "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan",
+    "1.#IND", "1.#QNAN", "<NA>", "N/A", "NA", "NULL", "NaN", "n/a", "nan", "null",
+]
 # Bytes inspected to pick the text encoding and the delimiter; the full file is then
 # parsed by pandas in streaming mode instead of being decoded into one Python string.
 _TEXT_SNIFF_BYTES = 1024 * 1024
@@ -764,7 +771,10 @@ def _parse_delimited_text(
     """
     def _read(**kwargs: Any) -> pd.DataFrame:
         with open_source() as handle:
-            return pd.read_csv(handle, sep=delimiter, encoding=encoding, encoding_errors="strict", **kwargs)
+            return pd.read_csv(
+                handle, sep=delimiter, encoding=encoding, encoding_errors="strict",
+                keep_default_na=False, na_values=_FILE_NA_VALUES, **kwargs,
+            )
 
     try:
         header = _read(nrows=0)
@@ -888,6 +898,7 @@ def _set_parsed_column(frame: pd.DataFrame, column: Any, numbers: pd.Series) -> 
     parsed_values = parsed.to_numpy(dtype=float, na_value=np.nan)
     if not bool(np.isfinite(parsed_values).all()):
         return False
+    _record_numeric_missing_normalization(frame, column, frame[column].index.difference(parsed.index))
     integers = (
         len(parsed_values) == len(frame)
         and not bool(numbers.str.contains(".", regex=False).any())
@@ -902,6 +913,46 @@ def _set_parsed_column(frame: pd.DataFrame, column: Any, numbers: pd.Series) -> 
     return True
 
 
+def _record_numeric_missing_normalization(frame: pd.DataFrame, column: Any, indices: pd.Index) -> None:
+    """Record nonblank text converted to missing in an otherwise numeric column."""
+    original = frame.loc[indices, column].dropna().astype(str).str.strip()
+    if original.empty:
+        return
+    counts = original.value_counts(sort=False)
+    details = {
+        "column": str(column),
+        "count": int(len(original)),
+        "tokens": {str(token): int(count) for token, count in counts.items()},
+        "action": "numeric_missing_tokens",
+    }
+    frame.attrs.setdefault("input_normalization", []).append(details)
+
+
+def _numeric_text_input_reviews(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    """Describe potentially numeric text without changing a category or assuming its role.
+
+    A mostly numeric column can still be a legitimate set of category codes. Keep every
+    original value, and ask the user to clean a numeric feature or explicitly mark categories.
+    The shared model feature checks refuse unreviewed numeric contamination before fitting.
+    """
+    reviews: list[dict[str, Any]] = []
+    for column in frame.columns:
+        series = frame[column]
+        if numeric_text_contamination(series) is None:
+            continue
+        text = series.dropna().astype(str).str.strip()
+        numeric = pd.to_numeric(text, errors="coerce")
+        finite = pd.Series(np.isfinite(numeric.to_numpy(dtype=float, na_value=np.nan)), index=text.index)
+        counts = text[~finite].value_counts(sort=False)
+        reviews.append({
+            "column": str(column),
+            "count": int((~finite).sum()),
+            "tokens": {str(token): int(count) for token, count in counts.items()},
+            "action": "numeric_text_review",
+        })
+    return reviews
+
+
 def _convert_formatted_number_columns(
     frame: pd.DataFrame,
     *,
@@ -913,9 +964,7 @@ def _convert_formatted_number_columns(
     Missing-value markers ("NA", "-", "[Not Available]") are left out of every test and become
     missing values in a converted column, so a stray marker never changes how the numbers read.
 
-    * In comma-separated files, a column of quoted numbers with thousands separators
-      ("1,234", as Excel exports formatted numbers) is parsed as numbers.
-    * In other files (European ";" exports, tab-separated text), a column whose values are all
+    * A column whose values are all
       numbers is read with its own decimal mark when one of its values shows it ("12,5" or
       "1.234,5" for ",", "12.5" or "1,234.5" for "."). A column of values such as "1,234" or
       "1.234", which read either way, follows the file: the decimal mark its other columns
@@ -928,18 +977,6 @@ def _convert_formatted_number_columns(
     Dot-decimal columns without "," values and other text (dotted dates such as "01.02.2020")
     are left as read. A column is converted only when every value parses.
     """
-    if delimiter == ",":
-        for column in list(frame.columns):
-            series = frame[column]
-            if not _is_text_series(series):
-                continue
-            text = _number_text(series)
-            if text.empty or not bool(text.str.contains(",", regex=False).any()):
-                continue
-            if bool(text.str.fullmatch(_COMMA_THOUSANDS_VALUE_PATTERN).all()):
-                _set_parsed_column(frame, column, text.str.replace(",", "", regex=False))
-        return frame
-
     shaped: dict[Any, tuple[pd.Series, set[str]]] = {}
     dot_columns: list[Any] = []  # columns whose own values show "." as the decimal mark
     float_candidates: list[Any] = []
@@ -1003,7 +1040,10 @@ def _convert_formatted_number_columns(
     ambiguous: list[Any] = []
     for column, (text, shapes) in shaped.items():
         if "dot" in shapes and "comma" in shapes:
-            continue  # both decimal marks in one column: left as read
+            raise ValueError(
+                f'Column "{column}" mixes decimal marks or number formats. '
+                "Use one decimal mark and remove thousands separators before uploading."
+            )
         mark = _own_mark(shapes) or file_mark
         if mark is None:
             if mixed_evidence is None and "ambiguous_comma" not in shapes:
@@ -1030,7 +1070,7 @@ def _read_excel_frame(source: io.BytesIO | str | Path, **kwargs: Any) -> pd.Data
     an unreadable file.
     """
     try:
-        return pd.read_excel(source, **kwargs)
+        return pd.read_excel(source, keep_default_na=False, na_values=_FILE_NA_VALUES, **kwargs)
     except MemoryError:
         raise
     except Exception as exc:
@@ -2223,6 +2263,7 @@ def profile_dataframe(df: pd.DataFrame, dataset_id: str, filename: str) -> dict[
     )
 
     source_encoding = df.attrs.get("source_encoding")
+    input_review = _numeric_text_input_reviews(df)
     return {
         "dataset_id": dataset_id,
         "filename": filename,
@@ -2240,6 +2281,9 @@ def profile_dataframe(df: pd.DataFrame, dataset_id: str, filename: str) -> dict[
         "model_feature_candidate_count": len(model_feature_candidates),
         "suggestions": suggestions,
         "duplicate_identifier_columns": detect_duplicate_identifier_columns(df),
+        "input_normalization": list(df.attrs.get("input_normalization", [])),
+        "numeric_review_columns": [review["column"] for review in input_review],
+        "input_review": input_review,
     }
 
 
@@ -2463,14 +2507,21 @@ def _validate_event_column_choice(df: pd.DataFrame, event_column: str) -> None:
 def _coerce_survival_time_values(series: pd.Series, time_column: str) -> pd.Series:
     """Follow-up times as floats; text that is not a number is an error, never "missing".
 
-    Numbers written with thousands separators ("1,234", as Excel exports formatted numbers)
-    are parsed, and common missing-value markers ("NA", "[Not Available]") are missing.
-    Anything else (for example "12 months" or a decimal comma "12,5") is refused with
+    Formatted numbers use the same column-wide convention checks as file uploads. A lone
+    "1,234" is ambiguous; "1,234.5" identifies thousands grouping, and "0,113" is decimal.
+    Common missing-value markers ("NA", "[Not Available]") are missing.
+    Anything else (for example "12 months") is refused with
     examples, instead of silently dropping those patients as rows with missing time.
     """
     if is_bool_dtype(series) or is_numeric_dtype(series):
         numeric = pd.to_numeric(series, errors="coerce")
         return pd.Series(numeric.to_numpy(dtype=float, na_value=np.nan), index=series.index)
+    # Formatting conversion matches positions, so duplicate caller indices must not be
+    # used as lookup keys. Restore the original index after parsing, without dropping rows.
+    formatted = pd.DataFrame({time_column: series.reset_index(drop=True)})
+    _convert_formatted_number_columns(formatted, delimiter="\t")
+    if is_numeric_dtype(formatted[time_column]):
+        return pd.Series(formatted[time_column].to_numpy(dtype=float), index=series.index, name=series.name)
     numeric = pd.to_numeric(series, errors="coerce")
     values = pd.Series(numeric.to_numpy(dtype=float, na_value=np.nan), index=series.index)
     failed = (series.notna() & values.isna()).to_numpy(dtype=bool)
@@ -2479,7 +2530,12 @@ def _coerce_survival_time_values(series: pd.Series, time_column: str) -> pd.Seri
     text = series[failed].astype(str).str.strip()
     positions = np.flatnonzero(failed)
     stripped_numbers = pd.to_numeric(text, errors="coerce")
-    grouped = text.str.fullmatch(_COMMA_GROUPED_NUMBER_PATTERN).to_numpy(dtype=bool, na_value=False)
+    # A mixed column with unexpected words is not eligible for formatted-number inference.
+    # Unambiguous thousands grouping can still be recovered so the error names the bad words.
+    grouped = (
+        text.str.fullmatch(_COMMA_GROUPED_NUMBER_PATTERN)
+        & (text.str.contains(".", regex=False) | text.str.count(",").gt(1))
+    ).to_numpy(dtype=bool, na_value=False)
     grouped_numbers = pd.to_numeric(text.str.replace(",", "", regex=False), errors="coerce")
     recovered = np.where(grouped, grouped_numbers.to_numpy(dtype=float, na_value=np.nan), stripped_numbers.to_numpy(dtype=float, na_value=np.nan))
     missing_like = text.str.lower().isin(_MISSING_VALUE_TOKENS).to_numpy(dtype=bool)

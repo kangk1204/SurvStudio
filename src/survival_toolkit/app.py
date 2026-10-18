@@ -49,6 +49,7 @@ from survival_toolkit.analysis import (
     _model_feature_candidate_columns_from_metadata,
     _profile_dataframe_column,
     _survival_outcome_like_columns,
+    coerce_event,
     compute_cohort_table,
     compute_cox_analysis,
     compute_km_analysis,
@@ -1008,9 +1009,9 @@ class DeriveGroupRequest(_EventPositiveValueRequestModel):
     upper_label: str = Field(default="High", max_length=100)
     time_column: str | None = None
     event_column: str | None = None
-    # Same default as the KM/Cox/ML endpoints, so an outcome-informed cutpoint uses the same
-    # event coding as the analyses it feeds (the UI always sends the selected value explicitly).
-    event_positive_value: Any = 1
+    # Infer only recognized event/censor labels or 0/1. Other codes require an explicit choice
+    # on every analysis route (the UI always sends its selected value).
+    event_positive_value: Any = None
     min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
     permutation_iterations: int = Field(default=500, ge=0, le=500)
     random_seed: int = Field(default=20260311, ge=0, le=2**32 - 1)
@@ -1056,7 +1057,7 @@ class KaplanMeierRequest(_EventPositiveValueRequestModel):
     time_column: str
     event_column: str
     group_column: str | None = None
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     time_unit_label: str = Field(default="Months", max_length=40)
     confidence_level: float = Field(default=0.95, gt=0.5, lt=0.999)
     max_time: float | None = Field(default=None, gt=0)
@@ -1079,7 +1080,7 @@ class CoxRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     covariates: list[str] = Field(max_length=200)
     categorical_covariates: list[str] = Field(default_factory=list, max_length=200)
     strata_columns: list[str] = Field(default_factory=list, max_length=200)
@@ -1108,7 +1109,7 @@ class CohortTableRequest(_EventPositiveValueRequestModel):
     # cohort (rows with valid time/event and non-negative time) instead of the whole upload.
     time_column: str | None = None
     event_column: str | None = None
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
 
     @field_validator("variables", mode="before")
     @classmethod
@@ -1126,7 +1127,7 @@ class SignatureSearchRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     candidate_columns: list[str] = Field(max_length=_MAX_UPLOAD_COLUMNS)
     max_combination_size: int = Field(default=3, ge=1, le=4)
     top_k: int = Field(default=15, ge=3, le=50)
@@ -1168,7 +1169,7 @@ class MLModelRequest(_FeatureSelectionRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     features: list[str] = Field(max_length=1000)
     categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     model_type: Literal["rsf", "gbs", "lasso_cox", "compare"]
@@ -1193,7 +1194,7 @@ class DeepModelRequest(_FeatureSelectionRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     features: list[str] = Field(max_length=1000)
     categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     model_type: Literal["deepsurv", "deephit", "mtlr", "transformer", "vae", "compare"]
@@ -1242,7 +1243,7 @@ class OptimalCutpointRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     variable: str
     min_group_fraction: float = Field(default=0.1, gt=0.02, lt=0.45)
     permutation_iterations: int = Field(default=500, ge=0, le=500)
@@ -1252,7 +1253,7 @@ class MarkerEvaluationRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     marker_columns: list[str] = Field(default_factory=list, max_length=_MAX_UPLOAD_COLUMNS)
     # An attached marker matrix (POST /api/marker-matrix) replaces marker_columns; its patients are
     # matched to this dataset through marker_matrix_id_column.
@@ -1321,7 +1322,7 @@ class MarkerValidationRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     recipe: dict[str, Any]
     column_mapping: dict[str, str] = Field(default_factory=dict, max_length=_MAX_UPLOAD_COLUMNS)
-    # None applies the recipe's own event coding.
+    # None retains the recipe coding only when the external labels are unambiguous.
     event_positive_value: Any = None
     horizon: float | None = Field(default=None, gt=0.0)
     alpha: float = Field(default=0.05, gt=0.0, lt=0.5)
@@ -1821,6 +1822,12 @@ def _reject_survival_outcome_feature_columns(
     context: str,
 ) -> None:
     reject_ambiguous_censor_event_column(stored.dataframe, event_column)
+    if event_column in stored.dataframe.columns:
+        # Reject an ambiguous outcome before fitting or loading optional model packages.
+        try:
+            coerce_event(stored.dataframe[event_column], event_positive_value=event_positive_value)
+        except ValueError as exc:
+            raise UserInputError(str(exc)) from exc
     forbidden = {str(time_column), str(event_column)}
     forbidden.update(str(column) for column in _survival_outcome_like_columns(stored.dataframe))
     forbidden.update(
@@ -4898,7 +4905,7 @@ class TimeDependentImportanceRequest(_FeatureSelectionRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     features: list[str] = Field(max_length=1000)
     categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     eval_times: list[float] | None = Field(default=None, max_length=100)
@@ -4914,7 +4921,7 @@ class CounterfactualRequest(_FeatureSelectionRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     features: list[str] = Field(max_length=1000)
     categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     target_feature: str
@@ -4957,7 +4964,7 @@ class PDPRequest(_FeatureSelectionRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     features: list[str] = Field(max_length=1000)
     categorical_features: list[str] = Field(default_factory=list, max_length=1000)
     target_feature: str
@@ -4984,7 +4991,7 @@ class PredictorPatternRequest(_EventPositiveValueRequestModel):
     dataset_id: str
     time_column: str
     event_column: str
-    event_positive_value: Any = 1
+    event_positive_value: Any = None
     clinical_features: list[str] = Field(min_length=1, max_length=1000)
     added_features: list[str] = Field(min_length=1, max_length=1000)
     categorical_features: list[str] = Field(default_factory=list, max_length=1000)
@@ -5407,6 +5414,18 @@ def _reject_leaky_validation_columns(
 
     time_column = external(outcome["time_column"])
     event_column = external(outcome["event_column"])
+    if event_positive_value is None and event_column in stored.dataframe.columns:
+        # A development recipe does not establish the meaning of numeric codes in a new
+        # cohort. Preserve its locked prediction, but require a choice for ambiguous
+        # external outcomes instead of silently inheriting (for example) 1 = event.
+        try:
+            coerce_event(stored.dataframe[event_column])
+        except ValueError as exc:
+            raise UserInputError(
+                f"The external event column '{event_column}' needs an explicit event-positive value. "
+                "Check its source definition and set event_positive_value for this dataset. "
+                + str(exc)
+            ) from exc
     # One role per recipe column, so two locked columns mapped onto one external column clash too.
     inputs: list[tuple[str, list[str]]] = [
         *[(f"marker {name}", [external(name)]) for name in markers],

@@ -244,7 +244,15 @@ function renderDatasetIntegrityWarning() {
   const banner = refs.datasetIntegrityWarning;
   if (!banner) return;
   const duplicates = state.dataset ? duplicateIdentifierColumns() : [];
-  if (!duplicates.length) {
+  const normalizations = state.dataset?.input_normalization ?? state.dataset?.profile?.input_normalization;
+  const numericMissing = Array.isArray(normalizations)
+    ? normalizations.filter((entry) => entry?.action === "numeric_missing_tokens" && Number(entry.count) > 0)
+    : [];
+  const reviews = state.dataset?.input_review ?? state.dataset?.profile?.input_review;
+  const numericReview = Array.isArray(reviews)
+    ? reviews.filter((entry) => entry?.action === "numeric_text_review" && Number(entry.count) > 0)
+    : [];
+  if (!duplicates.length && !numericMissing.length && !numericReview.length) {
     banner.textContent = "";
     banner.classList.add("hidden");
     return;
@@ -255,10 +263,31 @@ function renderDatasetIntegrityWarning() {
     return `${column} repeats ${count(entry.n_repeated_ids)} ID${Number(entry.n_repeated_ids) === 1 ? "" : "s"} `
       + `(${count(entry.n_rows)} rows vs ${count(entry.n_unique)} unique; ${count(entry.n_extra_rows)} extra rows)`;
   });
-  // textContent keeps column names from the uploaded file inert.
-  banner.textContent = `Possible repeated subjects: ${details.join("; ")}. `
-    + "If rows belong to the same subject, survival estimates double-count them and train/test splits can leak the same subject; "
-    + "keep one row per subject before analysis.";
+  const messages = [];
+  if (duplicates.length) {
+    messages.push(`Possible repeated subjects: ${details.join("; ")}. `
+      + "If rows belong to the same subject, survival estimates double-count them and train/test splits can leak the same subject; "
+      + "keep one row per subject before analysis.");
+  }
+  if (numericMissing.length) {
+    const changes = numericMissing.map((entry) => {
+      const tokens = Object.entries(entry.tokens || {}).map(([token, n]) => `"${token}" (${count(n)})`).join(", ");
+      return `${String(entry.column)}: ${count(entry.count)} value${Number(entry.count) === 1 ? "" : "s"}${tokens ? ` [${tokens}]` : ""}`;
+    });
+    messages.push(`Missing-value text in numeric columns was read as missing: ${changes.join("; ")}. `
+      + "Check these values in your source file before analysis; the original rows were retained.");
+  }
+  if (numericReview.length) {
+    const details = numericReview.map((entry) => {
+      const tokens = Object.entries(entry.tokens || {}).map(([token, n]) => `"${token}" (${count(n)})`).join(", ");
+      return `${String(entry.column)}: ${count(entry.count)} text value${Number(entry.count) === 1 ? "" : "s"}${tokens ? ` [${tokens}]` : ""}`;
+    });
+    messages.push(`Review mostly numeric columns: ${details.join("; ")}. `
+      + "Original values were retained. If these are missing measurements, replace them with blank cells and upload again. "
+      + "If they are category labels, mark the column as categorical.");
+  }
+  // textContent keeps uploaded column names and tokens inert.
+  banner.textContent = messages.join(" ");
   banner.classList.remove("hidden");
 }
 
