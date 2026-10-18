@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-GUARD_VERSION = "prediction-input/3"
+GUARD_VERSION = "prediction-input/4"
 _PROXY_CONTEXT: ContextVar[dict | None] = ContextVar("survstudio_proxy_context", default=None)
 AVAILABILITY_NOTE = (
     "Use only variables available at the time you intend to predict risk. "
@@ -221,6 +221,12 @@ def prediction_input_audit(df: pd.DataFrame, time_column: str, event_column: str
             "Raw data have not been changed."
         )
     duplicates, identifier_checks = _predictive_identifier_checks(df)
+    selected_ids = [item["column"] for item in identifier_checks if item["column"] in features]
+    if selected_ids:
+        raise ValueError("Patient identifier columns cannot be used as ML/DL predictors: "
+                         + ", ".join(selected_ids)
+                         + ". Keep IDs for record matching, but remove them from predictor selection. "
+                         "Uploaded data have not been changed.")
     if duplicates:
         finding = duplicates[0]
         raise ValueError(
@@ -388,6 +394,8 @@ def guarded_prediction_inputs(function):
         tables = result.get("manuscript_tables")
         if isinstance(tables, dict):
             tables.setdefault("table_notes", []).extend(note for note in notes if note not in tables.get("table_notes", []))
+        from survival_toolkit.prediction_interpretation import apply_prediction_interpretation
+        apply_prediction_interpretation(result)
         return result
 
     return run

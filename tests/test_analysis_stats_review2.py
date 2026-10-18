@@ -107,7 +107,7 @@ def test_signature_search_keeps_the_hazard_ratio_of_a_strong_rare_rule() -> None
     )
     _, _, payload = discover_feature_signature(
         frame, "os_months", "os_event", ["mut", "noise1", "noise2"], max_combination_size=1,
-        bootstrap_iterations=0, random_seed=1,
+        bootstrap_iterations=0, permutation_iterations=39, random_seed=1,
     )
     best = payload["best_split"]
     assert best["Signature"] == 'mut == "mutant"'
@@ -195,7 +195,7 @@ def test_bootstrap_support_is_not_capped_for_a_rule_at_the_minimum_group_size() 
     # about half of the resamples, which then counted as failures (consistency ~0.5 < 0.6).
     _, _, payload = discover_feature_signature(
         _boundary_signature_frame(30), "os_months", "os_event", ["mut"], max_combination_size=1,
-        bootstrap_iterations=30, bootstrap_sample_fraction=0.8, random_seed=1,
+        bootstrap_iterations=30, bootstrap_sample_fraction=0.8, permutation_iterations=39, random_seed=1,
     )
     assert payload["search_space"]["min_group_size"] == 30
     best = payload["best_split"]

@@ -4727,7 +4727,7 @@ def _signature_scientific_summary(
     search_space: dict[str, Any],
 ) -> dict[str, Any]:
     strengths = [
-        "Signatures are ordered by the significance rule first (BH-adjusted p, CI excluding 1, and any enabled permutation, bootstrap, and resampling filters), then by the heuristic stability score.",
+        "Signatures are ordered by the screening rule first (full-family BH-adjusted p, a completed search-adjusted permutation test, CI excluding 1, and any enabled stability filters), then by the heuristic stability score.",
     ]
     cautions: list[str] = []
     next_steps: list[str] = []
@@ -4742,8 +4742,8 @@ def _signature_scientific_summary(
 
     if permutation_iterations > 0:
         strengths.append(
-            "Permutation p-values are search-adjusted: each shuffle re-scores every tested signature that meets the group-size rule "
-            "(applying the event rule within the shuffle) and keeps the maximum statistic (Westfall-Young), so they account for selecting the best rule."
+            "Permutation p-values are search-adjusted: each shuffle re-scores every size-feasible signature "
+            "(applying the event rule within the shuffle) and keeps the maximum statistic. Their interpretation depends on exchangeability under the null; this is not a universal error-control guarantee."
         )
         # The p-value is (exceedances + 1) / (valid shuffles + 1), so its floor follows the
         # shuffles that produced a statistic, not the number requested.
@@ -4809,10 +4809,10 @@ def _signature_scientific_summary(
         standing_notes.append(
             "Signature discovery uses the analyzable subset after dropping missing candidate values; changing the candidate set can change the search cohort."
         )
-    if permutation_iterations == 0 and validation_iterations == 0:
+    if permutation_iterations == 0:
         cautions.append(
             "Because the signature is selected from many tested rules in the same cohort, "
-            "reported p-values (including BH-adjusted) can be optimistic; enable search-adjusted permutations and validate externally."
+            "reported p-values (including BH-adjusted) can be optimistic and are exploratory. No signature is labeled significant without search-adjusted permutations; within-cohort resampling does not replace this test."
         )
     if not is_significant:
         cautions.append("Top-ranked signature remains exploratory under the current significance rules.")
@@ -4847,7 +4847,7 @@ def _signature_scientific_summary(
         cautions.append("Permutation screening did not yield any valid resamples, so the empirical p-value is unavailable.")
     elif permutation_iterations > 0 and permutation_skipped_resamples > 0:
         cautions.append(
-            f"Permutation screening used {permutation_valid_resamples} valid shuffles and skipped {permutation_skipped_resamples}, so the empirical p-value is based on fewer resamples than requested."
+            f"Permutation screening used {permutation_valid_resamples} valid shuffles and skipped {permutation_skipped_resamples}, so the raw empirical p-value is exploratory and no signature can pass the screening rule."
         )
 
     has_internal_confirmation = (
@@ -5668,12 +5668,12 @@ def _signature_is_significant(
     require_bootstrap_consistency: bool,
     min_bootstrap_consistency: float,
 ) -> bool:
-    bh_p = float(row["BH adjusted p"])
-    if bh_p > significance_level:
+    bh_p = _safe_float(row.get("BH adjusted p"))
+    if bh_p is None or bh_p > significance_level:
         return False
 
-    permutation_p = row.get("Permutation p")
-    if require_permutation and permutation_p is None:
+    permutation_p = _safe_float(row.get("Permutation p"))
+    if require_permutation and (permutation_p is None or int(row.get("Permutation skipped resamples") or 0) > 0):
         return False
     if permutation_p is not None and float(permutation_p) > significance_level:
         return False
@@ -6544,7 +6544,7 @@ def _add_signature_robustness_metrics(
         return _signature_is_significant(
             row,
             significance_level=significance_level,
-            require_permutation=permutation_iterations > 0,
+            require_permutation=True,
             require_validation=validation_iterations > 0,
             min_validation_support=0.5,
             require_bootstrap_consistency=bootstrap_iterations > 0,
@@ -6728,7 +6728,10 @@ def discover_feature_signature(
     if not rows:
         raise ValueError("No analyzable feature combinations passed minimum group/event requirements.")
 
-    adjusted = _bh_adjust([row["P value"] for row in rows])
+    # Define multiplicity before the outcome-dependent event filter. Untestable
+    # size-feasible rules remain in the family with p=1 (as in R p.adjust(n=...)).
+    family_size = len(screen.family)
+    adjusted = _bh_adjust([row["P value"] for row in rows] + [1.0] * (family_size - len(rows)))[:len(rows)]
     for row, adj in zip(rows, adjusted, strict=True):
         row["BH adjusted p"] = adj
 
@@ -6820,7 +6823,10 @@ def discover_feature_signature(
             sum(int(row.get("Validation skipped folds") or 0) for row in rows)
         ),
         "significance_level": float(significance_level),
-        "permutation_required_for_significance": bool(permutation_iterations > 0),
+        "permutation_required_for_significance": True,
+        "bh_family_size": family_size,
+        "inference_status": "exploratory" if permutation_iterations == 0 else "assumption_dependent",
+        "significance_policy": "signature-screening/2",
         "validation_required_for_significance": bool(validation_iterations > 0),
         "validation_min_support": 0.5,
         "bootstrap_min_direction_consistency": 0.6,
@@ -6843,6 +6849,9 @@ def discover_feature_signature(
         "negative_label": "Signature-",
         "statistically_significant": bool(best_row.get("Statistically significant")),
         "outcome_informed": True,
+        "inference_status": search_space["inference_status"],
+        "significance_policy": search_space["significance_policy"],
+        "bh_family_size": family_size,
         "random_seed": int(random_seed),
     }
 

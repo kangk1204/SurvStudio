@@ -4,7 +4,7 @@ type: software
 title: "SurvStudio"
 abstract: >-
   A local survival analysis workbench: Kaplan-Meier curves, Cox models, prognostic
-  marker evaluation with family-wise error control, subsample stability and locked
+  marker evaluation with assumption-dependent multiplicity adjustments, subsample stability and locked
   external validation, and machine-learning and deep-learning survival models compared
   on the same patient splits, with REMARK and TRIPOD+AI reporting checklists.
 authors:
@@ -13,8 +13,7 @@ authors:
 repository-code: "https://github.com/kangk1204/SurvStudio"
 url: "https://github.com/kangk1204/SurvStudio"
 license: MIT
-version: "0.3.0"
-date-released: "2026-09-30"
+version: "0.4.0.dev0"
 keywords:
   - survival analysis
   - Kaplan-Meier

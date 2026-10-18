@@ -206,10 +206,14 @@ def test_repeated_cv_skips_folds_without_a_comparable_pair_for_every_model_alike
     assert result["n_skipped_folds"] == 12 and len(result["skipped_folds"]) == 12
     assert all(ml._has_comparable_pair(fold["time"], fold["event"]) for fold in seen)
     assert result["evaluation_mode"] == "repeated_cv"
-    assert result["errors"] == [] and result["excluded_models"] == [] and result["ranking_complete"] is True
+    assert result["errors"] == []
+    # Numerical fold estimates survive, but sparse-event scores are not ranked.
+    assert result["excluded_models"] == sorted(row["model"] for row in result["comparison_table"])
+    assert result["ranking_complete"] is False
     for row in result["comparison_table"]:
         assert row["c_index"] is not None and row["n_evaluations"] == 3 and row["evaluation_mode"] == "repeated_cv"
-    assert [row["Rank"] for row in result["manuscript_tables"]["model_performance_table"]] == [1, 2, 3, 4]
+    assert all(row["rank"] is None for row in result["comparison_table"])
+    assert {row["Rank"] for row in result["manuscript_tables"]["model_performance_table"]} == {"Not ranked"}
     cautions = result["scientific_summary"]["cautions"]
     assert any(text.startswith("12 of 15 cross-validation test folds had no comparable pair") for text in cautions)
     assert not any("failed or fell back" in text for text in cautions)

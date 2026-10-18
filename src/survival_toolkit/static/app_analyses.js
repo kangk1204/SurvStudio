@@ -1017,11 +1017,11 @@ function renderSignatureResult(analysis) {
       ${cell("Best signature", best.Signature || "NA")}
       ${cell("HR (sig+ vs -)", formatValue(best["Hazard ratio (signature+ vs -)"]))}
       ${cell("BH-adjusted p", formatPValue(best["BH adjusted p"]))}
-      ${cell("Significant", best["Statistically significant"] ? "Yes" : "No")}
+      ${cell("Screening result", best["Statistically significant"] ? "Passed; external validation needed" : (search.permutation_iterations ? "Exploratory candidate" : "Exploratory; run permutations"))}
       ${cell("Stability", formatValue(best["Stability score"]))}
       ${cell("Bootstrap support", formatValue(best["Bootstrap support (p<alpha)"]))}
       ${cell("Direction consistency", formatValue(best["Bootstrap HR direction consistency"]))}
-      ${cell("Validation support", formatValue(best["Validation support (p<alpha)"]))}
+      ${cell("Within-cohort support", formatValue(best["Validation support (p<alpha)"]))}
       ${cell("Permutation p", formatPValue(best["Permutation p"]))}
       ${cell("Tested", formatValue(search.tested_combinations))}
       ${cell("Significant combos", formatValue(search.significant_signatures))}
