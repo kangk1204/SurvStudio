@@ -609,7 +609,7 @@ def test_frontend_shared_model_features_auto_mark_categorical_candidates() -> No
     assert "const AUTO_CATEGORICAL_UNIQUE_THRESHOLD = 6;" in text
     assert "function sharedModelCategoricalCandidates()" in text
     assert "column.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD" in text
-    assert "c.n_unique <= AUTO_CATEGORICAL_UNIQUE_THRESHOLD" in text
+    assert "const defaultCategoricals = sharedModelCategoricalCandidates();" in text
     assert "const autoCategoricalCandidates = new Set(sharedModelCategoricalCandidates());" in text
     assert "const preservedMlCategoricals = clearCategoricals" in text
     assert "const preservedDlCategoricals = clearCategoricals" in text
