@@ -2261,10 +2261,12 @@ def test_browser_markers_tab_evaluates_an_attached_marker_matrix(browser_server:
             assert "SIGNAL" in page.locator("#markersTableShell tbody tr").nth(0).inner_text()
 
             page.locator("#removeMarkerMatrixButton").click()
-            assert page.locator("#markerMatrixStatus").is_hidden()
+            # Removal persists the detach before updating the screen. Wait for that response and
+            # the resulting settings refresh before inspecting controls.
+            page.locator("#markerMatrixStatus").wait_for(state="hidden")
+            page.wait_for_function("document.querySelector('[data-run-status=\"markers\"]').textContent === 'Settings changed'")
             assert page.locator("#selectAllMarkersButton").is_enabled()
             assert page.locator("#runMarkersButton").is_disabled()
-            page.wait_for_function("document.querySelector('[data-run-status=\"markers\"]').textContent === 'Settings changed'")
 
             browser.close()
     except Exception as exc:  # pragma: no cover - environment-dependent skip path
