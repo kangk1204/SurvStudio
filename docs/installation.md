@@ -25,8 +25,10 @@ Python 3.12 is recommended for the install command above. Ubuntu is also the env
 by the hosted research server. These checks cover CPU execution; a GPU is optional.
 
 Windows 11 users can run the app directly in PowerShell or inside **WSL 2 with Ubuntu**.
-WSL uses the Linux installation below. It is not a separate CI target, so the native Windows
-CI result should not be read as a completed Windows 11/WSL test.
+WSL uses the Linux installation below. A separate manual check on **Windows 11 Pro x64,
+Ubuntu 24.04.5, WSL 2 and Python 3.12.3** passed a fresh `[all]` installation, the three
+bundled KM/Cox examples, all nine ML/DL models, result restoration after restart and Windows
+localhost access in Edge. This check used CPU execution. WSL is not a separate CI target.
 
 ## Windows 11 with WSL 2 (Ubuntu)
 
@@ -54,6 +56,7 @@ survstudio
 ```
 
 Open **http://127.0.0.1:8000** in your Windows browser. Keep Ubuntu running while using the app.
+The full install may download several gigabytes for PyTorch; keep the terminal open until it finishes.
 Microsoft documents [Windows browser access to apps in WSL](https://learn.microsoft.com/en-us/windows/wsl/networking).
 Use the browser's file picker to upload your data. Keep the default saved-work directory
 inside Ubuntu; Windows and WSL installations use separate Python environments and saved work.

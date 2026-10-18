@@ -5,7 +5,8 @@ Upload a patient table or choose a sample, run an analysis, and save the results
 A local installation keeps your data on your computer.
 
 **Platforms:** macOS, Ubuntu and Windows. Windows 11 users can also use
-[WSL 2 with Ubuntu](docs/installation.md#windows-11-with-wsl-2-ubuntu).
+[WSL 2 with Ubuntu](docs/installation.md#windows-11-with-wsl-2-ubuntu), verified with the bundled examples
+and all nine models.
 
 ![SurvStudio survival analysis workspace](github_images/hero.png)
 
