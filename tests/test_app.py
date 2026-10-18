@@ -7288,7 +7288,9 @@ def test_marker_frontend_runs_the_evaluation_and_validates_the_locked_model() ->
         assert f"{field}:" in fields
     validation = text.split("async function runMarkerValidation() {", 1)[1].split("\n}\n", 1)[0]
     assert "const fields = markerValidationRequestFields();" in validation
-    assert "body:JSON.stringify({dataset_id:external.dataset_id,recipe,...fields})" in "".join(validation.split())
+    # Recovery groups validation under the development workspace; explicit
+    # deletion also follows the separate external-input relationship.
+    assert "body:JSON.stringify({dataset_id:external.dataset_id,development_dataset_id:sourceDatasetId,recipe,...fields})" in "".join(validation.split())
     # Node frontend regressions verify the actual request's defaults, custom values and invalid-input rejection.
     assert 'withLoading(refs.runMarkersButton, runMarkerEvaluation, "markers")' in text
     assert 'if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];' in text
