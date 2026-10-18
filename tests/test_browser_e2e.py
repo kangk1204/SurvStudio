@@ -2457,3 +2457,19 @@ def test_browser_design_check_page_flags_a_single_cohort_best_of_101_design(brow
         if _is_playwright_environment_error(exc):
             pytest.skip(f"Playwright browser test unavailable in this environment: {exc}")
         raise
+
+
+def test_browser_signature_without_permutations_is_labeled_exploratory(browser_server: str):
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as api:
+        browser = _launch_browser(api)
+        page = browser.new_page()
+        page.goto(browser_server)
+        page.evaluate("""() => renderSignatureResult({results_table: [],
+            best_split: {Signature: 'gene > 1', 'Statistically significant': false},
+            search_space: {permutation_iterations: 0, significant_signatures: 0}})""")
+        summary = page.locator('#signatureSummary').text_content()
+        assert 'Exploratory; run permutations' in summary
+        assert 'Within-cohort support' in summary
+        assert 'Validation support' not in summary
+        browser.close()

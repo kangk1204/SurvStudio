@@ -25,6 +25,12 @@ BOUND_FILES = tuple(PREFIX + name + ".py" for name in (
 ANALYSIS = PREFIX + "analysis.py"
 # Exact reviewed ASTs, not permission to change arbitrary code under these names.
 REVIEWED_DEFINITION_SHA256 = {
+    '_signature_scientific_summary': '3d6dfaaa0d4910d3ca470b49baceb71152e6e34b34d3443a4c18ce7f8dd52ee7',
+    '_signature_is_significant': '2e2e9a1b055d862dec3b672ce47b6b8bc6c7f4cc9bdc3b81878d1a6be504c31f',
+    '_add_signature_robustness_metrics': 'a6329946834573374211f386c2cab58c9efe7870eb2ba643ad7acc9e1fc9d50b',
+    '_add_signature_robustness_metrics._is_significant': '3501e1b5c72e30fbafb4f72cd206ee334cd1bd3d25bd7af8fa981b40167d50bd',
+    'discover_feature_signature': '4b054a9b1017afd2bd109850b122e2ca09b9e0657509d55018c545a1abbfe611',
+
     "_ambiguous_number_message": "0c66beccc23927fda4e5edcb0b8bc7bb87a7509967bfbbb76fc888f9e3fa51de",
     "_coerce_survival_time_values": "20b4d1cfae0e0cdae883fbf78ad2f975777c10932ca3595aef9b22727bacb072",
     "_cohort_frame": "8f17525d9b722c0a99cd42b12bd8450487007e175c15f673bdbd324dfee04521",
@@ -230,7 +236,7 @@ def verify_sources(baseline_sources, candidate_sources):
         "reviewed_candidate_definition_sha256": {name: _ast_hash(after[name]) for name in sorted(set(changed + added))},
         "module_setup": {"changed": setup_changed, "candidate_ast_sha256": _ast_hash(_module_setup(after_tree))},
         "protected_ast_checks": checks, "analysis_imports_from_bound_modules": imports,
-        "scope": "Numeric time and event paths; unchanged bound numerical modules; cohort and Cox ASTs after exact optional event-coding metadata removal. Reviewed parsing, label policies, notices and summaries are explicitly changed.",
+        "scope": "Numeric time and event paths; unchanged bound numerical modules; cohort and Cox ASTs after exact optional event-coding metadata removal. Reviewed parsing, label policies, notices and summaries are explicitly changed. Separate legacy combination-search multiplicity and interpretation changes do not alter the marker-evaluation kernel.",
         "limitations": ["This is source-scope verification, not numerical validation or a new confirmation study.",
                         "Whole event/cohort functions are not claimed byte-identical. Text-file conventions and literal-label mappings require their own tests.",
                         "Historical study criteria and results are not rerun or amended by this tool."],

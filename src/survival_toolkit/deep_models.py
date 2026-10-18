@@ -1887,7 +1887,7 @@ def _scientific_summary_dl(
     elif c_val < 0.65:
         cautions.append(f"{metric_name} ({c_val:.3f}) indicates moderate discrimination.")
         next_steps.append("Validate on held-out data; consider ensemble approaches.")
-    elif c_val >= 0.70:
+    elif c_val >= 0.70 and evaluation_mode in {"holdout", "repeated_cv"} and train_events is not None and train_events >= 10:
         strengths.append(
             "C-index is well above chance-level ranking (0.50), which can be useful for screening if independent validation agrees."
         )

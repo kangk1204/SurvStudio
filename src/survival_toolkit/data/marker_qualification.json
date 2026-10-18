@@ -13,7 +13,7 @@
     "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
     "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
     "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
-    "src/survival_toolkit/analysis.py": "d798240b550f56bff8661f5954bf461a88f187a91e54089ecb34bc6ef269715e"
+    "src/survival_toolkit/analysis.py": "17294ee15fc7ef2507537c29ffacf55d6baea25998969dc20dfb6ba70f50d273"
   },
   "qualification_dimensions": {
     "n": 180,
@@ -367,7 +367,7 @@
         "src/survival_toolkit/marker_evaluation.py": "cf275d4f4d359ad4caef77ea5d63ea5afd1a02bf293c4c902a1287cdd33934db",
         "src/survival_toolkit/marker_screen.py": "7d639ebc41c63066a3d2dd38fe293835a261ed3e433826b63a99c6ff31f0d937",
         "src/survival_toolkit/encoding.py": "db42057bff751f8fc52408f6410dfd56ea1ea2cdaf14421d4fa489a2172adb7e",
-        "src/survival_toolkit/analysis.py": "d798240b550f56bff8661f5954bf461a88f187a91e54089ecb34bc6ef269715e"
+        "src/survival_toolkit/analysis.py": "17294ee15fc7ef2507537c29ffacf55d6baea25998969dc20dfb6ba70f50d273"
       },
       "qualification_dimensions": {
         "n": 180,
@@ -718,5 +718,11 @@
         "runtime_source_binding": "Exact whole-file SHA-256 comparison retained; unknown changes remain not_evaluated."
       }
     }
-  ]
+  ],
+  "interpretation_source_bridge": {
+    "baseline": "0baa1f0dc89eedbb61289e02426043903c280569",
+    "scope": "Only legacy signature-search screening and its interpretation changed in analysis.py. All marker-evaluation numerical definitions and other bound modules remain unchanged. Original study criteria and results are retained.",
+    "verification": "scripts/verify_input_source_equivalence.py",
+    "analysis_sha256": "17294ee15fc7ef2507537c29ffacf55d6baea25998969dc20dfb6ba70f50d273"
+  }
 }

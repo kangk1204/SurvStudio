@@ -590,7 +590,7 @@ def _scientific_summary_ml(
 
     if c_index is not None:
         strengths.append(f"{metric_name} = {c_index:.3f}.")
-        if c_index >= 0.70:
+        if c_index >= 0.70 and evaluation_mode in {"holdout", "repeated_cv"} and fit_events >= 10 and eval_events >= 4:
             strengths.append(
                 "C-index is well above chance-level ranking (0.50), which can be useful for screening if independent validation agrees."
             )

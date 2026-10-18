@@ -854,9 +854,12 @@ def test_robustness_checks_stop_once_enough_significant_signatures_are_known(mon
 
     monkeypatch.setattr(analysis, "survdiff", lambda times, events, groups: (20.0, 1e-5))
     monkeypatch.setattr(analysis, "_signature_cox_metrics", _fake_cox)
+    # This short-circuit test assumes a completed multiplicity adjustment.
+    monkeypatch.setattr(analysis, "_search_adjusted_permutation_p_values",
+        lambda times, events, family, statistics, **kwargs: (np.full(len(statistics), 0.01), kwargs["n_iterations"]))
     _, _, payload = discover_feature_signature(
         frame, "os_months", "os_event", [f"g{index}" for index in range(10)],
-        max_combination_size=2, top_k=5, bootstrap_iterations=0, random_seed=3,
+        max_combination_size=2, top_k=5, bootstrap_iterations=0, permutation_iterations=99, random_seed=3,
     )
     search = payload["search_space"]
     # Every row passes BH, but the first 80 already hold 5 significant signatures.
